@@ -34,6 +34,24 @@ export function getAIModels() {
 // Builtin models. VertexAI doesn't provide an API to list models. so we have to hardcode them here.
 export const BuiltinModels: AIModel<string>[] = [
     {
+        id: "gemini-1.5-flash-001",
+        name: "Gemini Pro 1.5 Flash 001",
+        provider: "vertexai",
+        owner: "google",
+        type: ModelType.MultiModal,
+        can_stream: true,
+        is_multimodal: true
+    },
+    {
+        id: "gemini-1.5-flash-002",
+        name: "Gemini Pro 1.5 Flash 002",
+        provider: "vertexai",
+        owner: "google",
+        type: ModelType.MultiModal,
+        can_stream: true,
+        is_multimodal: true
+    },
+    {
         id: "gemini-1.5-flash",
         name: "Gemini Pro 1.5 Flash",
         provider: "vertexai",
@@ -41,7 +59,24 @@ export const BuiltinModels: AIModel<string>[] = [
         type: ModelType.MultiModal,
         can_stream: true,
         is_multimodal: true
-
+    },
+    {
+        id: "gemini-1.5-pro-001",
+        name: "Gemini Pro 1.5 Pro 001",
+        provider: "vertexai",
+        owner: "google",
+        type: ModelType.MultiModal,
+        can_stream: true,
+        is_multimodal: true
+    },
+    {
+        id: "gemini-1.5-pro-002",
+        name: "Gemini Pro 1.5 Pro 002",
+        provider: "vertexai",
+        owner: "google",
+        type: ModelType.MultiModal,
+        can_stream: true,
+        is_multimodal: true
     },
     {
         id: "gemini-1.5-pro",
@@ -51,7 +86,6 @@ export const BuiltinModels: AIModel<string>[] = [
         type: ModelType.MultiModal,
         can_stream: true,
         is_multimodal: true
-
     },
     {
         id: "gemini-1.0-pro",
@@ -61,29 +95,15 @@ export const BuiltinModels: AIModel<string>[] = [
         type: ModelType.Text,
         can_stream: true,
     },
-    {
-        id: "tablextembedding-gecko",
-        name: "Gecko Text Embeddings",
-        provider: "vertexai",
-        owner: "google",
-        type: ModelType.Embedding,
-    },
-    {
-        id: "textembedding-gecko-multilingual",
-        name: "Gecko Multilingual Text Embeddings",
-        provider: "vertexai",
-        owner: "google",
-        type: ModelType.Embedding,
-    },
-
-
-
 ]
 
-
-
+// Must be updated when adding new models
 const Models: Record<string, ModelDefinition> = {
+    "gemini-1.5-flash-002": new GeminiModelDefinition("gemini-1.5-flash-002"),
+    "gemini-1.5-flash-001": new GeminiModelDefinition("gemini-1.5-flash-001"),
     "gemini-1.5-flash": new GeminiModelDefinition("gemini-1.5-flash"),
+    "gemini-1.5-pro-002": new GeminiModelDefinition("gemini-1.5-pro-002"),
+    "gemini-1.5-pro-001": new GeminiModelDefinition("gemini-1.5-pro-001"),
     "gemini-1.5-pro": new GeminiModelDefinition("gemini-1.5-pro"),
     "gemini-1.0-pro": new GeminiModelDefinition(),
 }
