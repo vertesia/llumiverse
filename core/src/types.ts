@@ -35,7 +35,7 @@ export interface EmbeddingsResult {
 }
 
 export interface ResultValidationError {
-    code: 'validation_error' | 'json_error';
+    code: 'validation_error' | 'json_error' | 'content_policy_violation';
     message: string;
     data?: string;
 }
@@ -72,6 +72,12 @@ export interface Completion<ResultT = any> {
      * The original response. Only included if the option include_original_response is set to true and the request is made using execute. Not supported when streaming.
      */
     original_response?: Record<string, any>;
+
+}
+
+export interface ImageGeneration {
+
+    images?: string[];
 
 }
 
@@ -163,6 +169,22 @@ export interface ExecutionOptions extends PromptOptions, ModelOptions {
      * It is ignored on streaming requests
      */
     include_original_response?: boolean;
+
+    output_modality?: Modalities
+}
+
+export interface ImageGenExecutionOptions extends ExecutionOptions {
+
+    output_modality: Modalities.image;
+    width?: number;
+    height?: number;
+    quality?: "low" | "standard" | "high"
+
+    generation_type: "text-to-image" | "inpainting" | "outpainting" | "colorization"
+
+    input_image_use: "variation" | "inspiration" | "none"
+
+
 }
 
 // ============== Prompts ===============
@@ -183,6 +205,13 @@ export interface ExecutionTokenUsage {
     prompt?: number;
     result?: number;
     total?: number;
+}
+
+export enum Modalities {
+    text = "text",
+    image = "image",
+    video = "video",
+    audio = "audio"
 }
 
 

@@ -9,4 +9,5 @@ export * from "./test/index.js";
 export * from "./togetherai/index.js";
 export * from "./vertexai/index.js";
 export * from "./watsonx/index.js";
+export * from "./xai/index.js";
 

@@ -1,11 +1,12 @@
 import { Bedrock, CreateModelCustomizationJobCommand, FoundationModelSummary, GetModelCustomizationJobCommand, GetModelCustomizationJobCommandOutput, ModelCustomizationJobStatus, StopModelCustomizationJobCommand } from "@aws-sdk/client-bedrock";
 import { BedrockRuntime, InvokeModelCommandOutput, ResponseStream } from "@aws-sdk/client-bedrock-runtime";
 import { S3Client } from "@aws-sdk/client-s3";
-import { AIModel, AbstractDriver, Completion, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, PromptOptions, PromptSegment, CompletionChunkObject, TrainingJob, TrainingJobStatus, TrainingOptions, ExecutionTokenUsage } from "@llumiverse/core";
+import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, ExecutionTokenUsage, ImageGeneration, ImageGenExecutionOptions, Modalities, PromptOptions, PromptSegment, TrainingJob, TrainingJobStatus, TrainingOptions } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { ClaudeMessagesPrompt, formatClaudePrompt, formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
 import { AwsCredentialIdentity, Provider } from "@smithy/types";
 import mnemonist from "mnemonist";
+import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
 import { AI21JurassicRequestPayload, AmazonRequestPayload, ClaudeRequestPayload, CohereCommandRPayload, CohereRequestPayload, LLama3RequestPayload, MistralPayload, NovaPayload } from "./payloads.js";
 import { forceUploadFile } from "./s3.js";
 
@@ -40,7 +41,7 @@ export interface BedrockDriverOptions extends DriverOptions {
     credentials?: AwsCredentialIdentity | Provider<AwsCredentialIdentity>;
 }
 
-export type BedrockPrompt = string | ClaudeMessagesPrompt | NovaMessagesPrompt;
+export type BedrockPrompt = string | ClaudeMessagesPrompt | NovaMessagesPrompt | PromptSegment[];
 
 export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockPrompt> {
 
@@ -328,7 +329,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const decoder = new TextDecoder();
         const body = decoder.decode(response.body);
         const result = JSON.parse(body);
-        
+
         return BedrockDriver.getExtractedCompletionChunk(result, prompt);
     }
 
@@ -336,7 +337,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         const payload = this.preparePayload(prompt, options);
         const executor = this.getExecutor();
-        
+
         const res = await executor.invokeModel({
             modelId: options.model,
             contentType: "application/json",
@@ -426,7 +427,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             const maxToken = () => {
                 if (options.max_tokens) {
                     return options.max_tokens;
-                
+
                 } else if (contains(options.model, "claude-3-5")) {
                     return 8192;
                 } else {
@@ -511,12 +512,64 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     stopSequences: typeof options.stop_sequence === 'string' ?
                         [options.stop_sequence] : options.stop_sequence,
                 }
-            } as NovaPayload;    
+            } as NovaPayload;
         } else {
             throw new Error("Cannot prepare payload for unknown provider: " + options.model);
         }
 
     }
+
+
+    async requestImageGeneration(prompt: NovaMessagesPrompt, options: ImageGenExecutionOptions): Promise<Completion<ImageGeneration>> {
+
+        if (options.output_modality !== Modalities.image) {
+            throw new Error(`Image generation requires image output_modality`);
+        }
+
+        const executor = this.getExecutor();
+        const taskType = () => {
+            switch (options.generation_type) {
+                case "text-to-image":
+                    if (options.input_image_use === "variation") {
+                        return NovaImageGenerationTaskType.IMAGE_VARIATION;
+                    } else {
+                        return NovaImageGenerationTaskType.TEXT_IMAGE
+                    }
+                default:
+                    return NovaImageGenerationTaskType.TEXT_IMAGE
+            }
+        }
+        this.logger.info("Task type: " + taskType());
+
+        if (typeof prompt === "string" ) {
+            throw  new Error( "Bad prompt format");
+        }
+
+        const payload = await formatNovaImageGenerationPayload(taskType(), prompt, options);
+
+        const res = await executor.invokeModel({
+            modelId: options.model,
+            contentType: "application/json",
+            accept: "application/json",
+            body: JSON.stringify(payload),
+        },
+            {
+                requestTimeout: 60000 * 5
+            });
+
+        const decoder = new TextDecoder();
+        const body = decoder.decode(res.body);
+        const result = JSON.parse(body);
+
+        return {
+            error: result.error,
+            result: {
+                images: result.images,
+            }
+        }
+
+    }
+
 
     async startTraining(dataset: DataSource, options: TrainingOptions): Promise<TrainingJob> {
 
@@ -797,3 +850,5 @@ function novaFinishReason(reason: string | undefined) {
         default: return reason;
     }
 }
+
+

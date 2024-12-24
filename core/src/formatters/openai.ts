@@ -54,7 +54,8 @@ export function formatOpenAILikeTextPrompt(segments: PromptSegment[]): OpenAITex
     return system.concat(user).concat(safety);
 }
 
-export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[]): Promise<OpenAIMessage[]> {
+
+export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[], opts: OpenAIPromptFormatterOptions): Promise<OpenAIMessage[]> {
     const system: OpenAIMessage[] = [];
     const safety: OpenAIMessage[] = [];
     const others: OpenAIMessage[] = [];
@@ -83,12 +84,20 @@ export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[]
         }
 
 
-
         if (msg.role === PromptRole.system) {
             system.push({
                 role: "system",
                 content: parts
             })
+
+
+            if (opts.useToolForFormatting && opts.schema) {
+                system.forEach(s => {
+                    s.content.forEach(c => {
+                        if (c.type === "text") c.text = "TOOL: " + c.text;
+                    })
+                })
+            }
 
         } else if (msg.role === PromptRole.safety) {
             const safetyMsg: OpenAIMessage = {
@@ -109,11 +118,25 @@ export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[]
             })
         }
 
+    }
 
-
+    if (opts.schema && !opts.useToolForFormatting) {
+        system.push({
+            role: "system",
+            content: [{
+                type: "text",
+                text: "IMPORTANT: only answer using JSON, and respecting the schema included below, between the <response_schema> tags. " + `<response_schema>${JSON.stringify(opts.schema)}</response_schema>`
+            }]
+        })
     }
 
     // put system mesages first and safety last
     return system.concat(others).concat(safety);
 
+}
+
+export interface OpenAIPromptFormatterOptions {
+    multimodal?: boolean
+    useToolForFormatting?: boolean
+    schema?: Object
 }

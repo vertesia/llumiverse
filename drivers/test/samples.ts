@@ -1,8 +1,9 @@
-import { DataSource, PromptRole, PromptSegment } from "@llumiverse/core"
-import { JSONSchema4 } from "json-schema"
-import { basename, resolve } from "path"
-import { createReadStream } from "fs"
+import { DataSource, PromptRole, PromptSegment, readStreamAsBase64 } from "@llumiverse/core";
+import { NovaMessagesPrompt } from "@llumiverse/core/formatters";
+import { createReadStream } from "fs";
+import { JSONSchema4 } from "json-schema";
 import { createReadableStreamFromReadable } from "node-web-stream-adapters";
+import { basename, resolve } from "path";
 
 export const testPrompt_color: PromptSegment[] = [
     {
@@ -91,4 +92,62 @@ export const testSchema_animalDescription: JSONSchema4 =
             }
         }
     }
+}
+
+const imgSource = new ImageUrlSource("https://upload.wikimedia.org/wikipedia/commons/b/b2/WhiteCat.jpg")
+
+
+export const testPrompt_textToImage: NovaMessagesPrompt =
+{
+    messages: [{
+        role: PromptRole.user,
+        content: [{
+            text: "A blue sky with a purple unicorn flying, cosplaying flash"
+        }]
+    }]
+}
+
+export const testPrompt_textToImageGuidance: NovaMessagesPrompt =
+{
+    messages: [{
+        role: PromptRole.user,
+        content: [{
+            text: "A blue sky with a purple unicorn flying, cosplaying flash"
+        },
+        {
+            image: {
+                format: "jpeg",
+                source: { bytes: await getImageAsBase64(new ImageUrlSource("https://upload.wikimedia.org/wikipedia/commons/b/b2/WhiteCat.jpg")) }
+            }
+        }
+        ]
+    }]
+}
+
+export const testPrompt_imageVariations: NovaMessagesPrompt =
+{
+    messages: [{
+        role: PromptRole.user,
+        content: [{
+            text: "A purple cat in from of a cathedral"
+        },
+        {
+            image: {
+                format: "jpeg",
+                source: { bytes: await getImageAsBase64(new ImageUrlSource("https://upload.wikimedia.org/wikipedia/commons/b/b2/WhiteCat.jpg")), }
+            }
+        },
+        {
+            image: {
+                format: "jpeg",
+                source: { bytes: await getImageAsBase64(new ImageUrlSource("https://upload.wikimedia.org/wikipedia/commons/thumb/b/bf/Krakow_-_Kosciol_Mariacki.jpg/1000px-Krakow_-_Kosciol_Mariacki.jpg")), }
+            }
+        }
+        ]
+    }]
+}
+
+async function getImageAsBase64(source: DataSource) {
+    const stream = await source.getStream();
+    return readStreamAsBase64(stream);
 }

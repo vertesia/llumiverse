@@ -1,8 +1,8 @@
-import { AIModel, AbstractDriver, ExecutionOptions } from '@llumiverse/core';
+import { AIModel, AbstractDriver, ExecutionOptions, Modalities } from '@llumiverse/core';
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from "vitest";
-import { AzureOpenAIDriver, BedrockDriver, GroqDriver, MistralAIDriver, OpenAIDriver, TogetherAIDriver, VertexAIDriver, WatsonxDriver } from '../src';
+import { AzureOpenAIDriver, BedrockDriver, GroqDriver, MistralAIDriver, OpenAIDriver, TogetherAIDriver, VertexAIDriver, WatsonxDriver, xAIDriver } from '../src';
 import { assertCompletionOk, assertStreamingCompletionOk } from './assertions';
 import { testPrompt_color, testPrompt_describeImage, testSchema_animalDescription, testSchema_color } from './samples';
 
@@ -75,7 +75,7 @@ if (process.env.OPENAI_API_KEY) {
         driver: new OpenAIDriver({
             apiKey: process.env.OPENAI_API_KEY as string
         }),
-        models:[
+        models: [
             "gpt-4o",
             "gpt-3.5-turbo"
         ]
@@ -100,7 +100,7 @@ if (process.env.AZURE_OPENAI_KEY && process.env.AZURE_OPENAI_ENDPOINT) {
             deployment: process.env.AZURE_OPENAI_DEPLOYMENT as string
         }),
         models: AZURE_OPENAI_MODELS
-        })
+    })
 } else {
     console.warn("Azure OpenAI tests are skipped: AZURE_OPENAI_KEY environment variable is not set");
 }
@@ -166,6 +166,20 @@ if (process.env.WATSONX_API_KEY) {
     console.warn("Watsonx tests are skipped: WATSONX_API_KEY environment variable is not set");
 }
 
+if (process.env.XAI_API_KEY) {
+
+    drivers.push({
+        name: "xai",
+        driver: new xAIDriver({
+            apiKey: process.env.XAI_API_KEY as string,
+        }),
+        models: [
+            "grok-beta",
+            "grok-vision-beta"
+        ]
+    })
+}
+
 describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => {
 
     let fetchedModels: AIModel[];
@@ -180,6 +194,7 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
         presence_penalty: 0.1,      //Cohere Command R does not support using presence & frequency penalty at the same time
         frequency_penalty: 0.0,
         stop_sequence: ["adsoiuygsa"],
+        output_modality: Modalities.text,
     };
 
     test(`${name}: list models`, { timeout: TIMEOUT, retry: 1 }, async () => {
@@ -207,25 +222,25 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
     });
 
     test.each(models)(`${name}: execute prompt on %s`, { timeout: TIMEOUT, retry: 3 }, async (model) => {
-        const r = await driver.execute(testPrompt_color, {...test_options, model: model} as ExecutionOptions);
+        const r = await driver.execute(testPrompt_color, { ...test_options, model: model } as ExecutionOptions);
         console.log("Result for execute " + model, JSON.stringify(r));
         assertCompletionOk(r, model, driver);
     });
 
     test.each(models)(`${name}: execute prompt with streaming on %s`, { timeout: TIMEOUT, retry: 3 }, async (model) => {
-        const r = await driver.stream(testPrompt_color, {...test_options, model: model} as ExecutionOptions);
+        const r = await driver.stream(testPrompt_color, { ...test_options, model: model } as ExecutionOptions);
         const out = await assertStreamingCompletionOk(r);
         console.log("Result for streaming " + model, JSON.stringify(out));
     });
 
     test.each(models)(`${name}: execute prompt with schema on %s`, { timeout: TIMEOUT, retry: 3 }, async (model) => {
-        const r = await driver.execute(testPrompt_color, {...test_options, model: model, result_schema: testSchema_color } as ExecutionOptions);
+        const r = await driver.execute(testPrompt_color, { ...test_options, model: model, result_schema: testSchema_color } as ExecutionOptions);
         console.log("Result for execute with schema " + model, JSON.stringify(r.result));
         assertCompletionOk(r, model, driver);
     });
 
     test.each(models)(`${name}: execute prompt with streaming and schema on %s`, { timeout: TIMEOUT, retry: 3 }, async (model) => {
-        const r = await driver.stream(testPrompt_color, {...test_options, model: model, result_schema: testSchema_color } as ExecutionOptions);
+        const r = await driver.stream(testPrompt_color, { ...test_options, model: model, result_schema: testSchema_color } as ExecutionOptions);
         const out = await assertStreamingCompletionOk(r, true);
         console.log("Result for streaming with schema " + model, JSON.stringify(out));
     });
@@ -243,6 +258,7 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
         if (!isMultiModal) return;
 
         const r = await driver.execute(testPrompt_describeImage, {
+            output_modality: Modalities.text,
             model: model,
             temperature: 0.5,
             max_tokens: 1024,
