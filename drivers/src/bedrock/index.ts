@@ -413,7 +413,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
         }
         if (error) {
-            console.warn("Error on canStream check for model " + model, error);
+            console.warn("Error on canStream check for model: " + model + " region detected: " + region, error);
         }
         return canStream;
     }
