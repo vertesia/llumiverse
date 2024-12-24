@@ -14,6 +14,13 @@ const { LRUCache } = mnemonist;
 
 const supportStreamingCache = new LRUCache<string, boolean>(4096);
 
+enum BedrockModelType {
+    FoundationModel = "foundation-model",
+    InferenceProfile = "inference-profile",
+    CustomModel = "custom-model",
+    Unknown = "unknown",
+};
+
 export interface BedrockModelCapabilities {
     name: string;
     canStream: boolean;
@@ -51,6 +58,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
     private _executor?: BedrockRuntime;
     private _service?: Bedrock;
+    private _service_region?: string;
 
     constructor(options: BedrockDriverOptions) {
         super(options);
@@ -70,12 +78,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return this._executor;
     }
 
-    getService() {
-        if (!this._service) {
+    getService(region: string = this.options.region) {
+        if (!this._service || this._service_region != region) {
             this._service = new Bedrock({
-                region: this.options.region,
+                region: region,
                 credentials: this.options.credentials,
             });
+            this._service_region = region;
         }
         return this._service;
     }
@@ -350,31 +359,77 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return completion;
     }
 
+    extractRegion(modelString: string, defaultRegion: string): string {
+        // Match region in full ARN pattern
+        const arnMatch = modelString.match(/arn:aws[^:]*:bedrock:([^:]+):/);
+        if (arnMatch) {
+            return arnMatch[1];
+        }
+        
+        // Match common AWS regions directly in string
+        const regionMatch = modelString.match(/(?:us|eu|ap|sa|ca|me|af)[-](east|west|central|south|north|southeast|southwest|northeast|northwest)[-][1-9]/);
+        if (regionMatch) {
+            return regionMatch[0];
+        }
+    
+        return defaultRegion;
+    }
+
+    private async getCanStream(model: string, type: BedrockModelType): Promise<boolean> {
+        let canStream: boolean = false;
+        let error: any = null;
+        const region = this.extractRegion(model, this.options.region);
+        if (type == BedrockModelType.FoundationModel || type == BedrockModelType.Unknown) {
+            try {
+                const response = await this.getService(region).getFoundationModel({
+                    modelIdentifier: model
+                });
+                canStream = response.modelDetails?.responseStreamingSupported ?? false;
+                return canStream;
+            } catch (e) {
+                error = e;
+            }
+        }
+        if (type == BedrockModelType.InferenceProfile || type == BedrockModelType.Unknown) {
+            try {
+                const response = await this.getService(region).getInferenceProfile({
+                   inferenceProfileIdentifier: model
+                });
+                canStream = await this.getCanStream(response.models?.[0].modelArn ?? "", BedrockModelType.FoundationModel);
+                return canStream;
+            } catch (e) {
+                error = e;
+            }
+        }
+        if (type == BedrockModelType.CustomModel || type == BedrockModelType.Unknown) {
+            try {
+                const response = await this.getService(region).getCustomModel({
+                    modelIdentifier: model
+                });
+                canStream = await this.getCanStream(response.baseModelArn ?? "", BedrockModelType.FoundationModel);
+                return canStream;
+            } catch (e) {
+                error = e;
+            }
+        }
+        if (error) {
+            console.warn("Error on canStream check for model: " + model + " region detected: " + region, error);
+        }
+        return canStream;
+    }
+
     protected async canStream(options: ExecutionOptions): Promise<boolean> {
         let canStream = supportStreamingCache.get(options.model);
         if (canStream == null) {
-            let model = options.model
-            //TODO: replace this temporary hack
-            //with a proper approach for inference profiles
-            //model comes in as inference profile, trying to get the underlying model.
-            if (model.includes("us.amazon.nova")) {
-                //replace us.amazon.nova with amazon.nova
-                if (model.includes("nova-micro-v1:0")) {
-                    model = "amazon.nova-micro-v1:0";
-                } else if (model.includes("nova-lite-v1:0")) {
-                    model = "amazon.nova-lite-v1:0";
-                } else if (model.includes("nova-pro-v1:0")) {
-                    model = "amazon.nova-pro-v1:0";
-                } else if (model.includes("nova-reel-v1:0")) {
-                    model = "amazon.nova-reel-v1:0";
-                } else if (model.includes("nova-canvas-v1:0")) {
-                    model = "amazon.nova-canvas-v1:0";
-                }
+            let type = BedrockModelType.Unknown;
+            if (options.model.includes("foundation-model")) {
+                type = BedrockModelType.FoundationModel;
+            } else if (options.model.includes("inference-profile")) {  
+                type = BedrockModelType.InferenceProfile;
+            } else if (options.model.includes("custom-model")) {
+                type = BedrockModelType.CustomModel;
             }
-            const response = await this.getService().getFoundationModel({
-                modelIdentifier: model
-            });
-            canStream = response.modelDetails?.responseStreamingSupported ?? false;
+            canStream = await this.getCanStream(options.model, type);
             supportStreamingCache.set(options.model, canStream);
         }
         return canStream;

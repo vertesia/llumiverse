@@ -112,16 +112,13 @@ if (process.env.BEDROCK_REGION) {
         driver: new BedrockDriver({
             region: process.env.BEDROCK_REGION as string,
         }),
+        //Use foundation models and inference profiles to test the driver
         models: [
             "anthropic.claude-3-sonnet-20240229-v1:0",
-            "anthropic.claude-v2:1",
-            //"cohere.command-text-v14", EOL
             "mistral.mixtral-8x7b-instruct-v0:1",
             "cohere.command-r-plus-v1:0",
-            "meta.llama3-1-70b-instruct-v1:0",
+            "us.meta.llama3-1-70b-instruct-v1:0",
             "us.amazon.nova-micro-v1:0",
-            //"us.amazon.nova-lite-v1:0",
-            //"us.amazon.nova-pro-v1:0",
         ]
     }
     )
