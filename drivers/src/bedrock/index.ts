@@ -520,7 +520,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
 
-    async requestImageGeneration(prompt: PromptSegment[], options: ImageGenExecutionOptions): Promise<Completion<ImageGeneration>> {
+    async requestImageGeneration(prompt: NovaMessagesPrompt, options: ImageGenExecutionOptions): Promise<Completion<ImageGeneration>> {
 
         if (options.output_modality !== Modalities.image) {
             throw new Error(`Image generation requires image output_modality`);

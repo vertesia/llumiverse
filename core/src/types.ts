@@ -183,6 +183,8 @@ export interface ImageGenExecutionOptions extends ExecutionOptions {
 
     input_image_use: "variation" | "inspiration" | "none"
 
+    quality: "low" | "standard" | "high"
+
 }
 
 // ============== Prompts ===============
