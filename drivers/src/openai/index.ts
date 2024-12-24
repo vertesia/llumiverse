@@ -2,6 +2,7 @@ import {
     AIModel,
     AbstractDriver,
     Completion,
+    CompletionChunkObject,
     DataSource,
     DriverOptions,
     EmbeddingsOptions,
@@ -9,7 +10,6 @@ import {
     ExecutionOptions,
     ExecutionTokenUsage,
     ModelType,
-    CompletionChunkObject,
     TrainingJob,
     TrainingJobStatus,
     TrainingOptions,
@@ -35,7 +35,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     BaseOpenAIDriverOptions,
     OpenAI.Chat.Completions.ChatCompletionMessageParam[]
 > {
-    abstract provider: "azure_openai" | "openai";
+    abstract provider: "azure_openai" | "openai" | "xai";
     abstract service: OpenAI | AzureOpenAI ;
 
     constructor(opts: BaseOpenAIDriverOptions) {
@@ -80,7 +80,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     }
 
     async requestCompletionStream(prompt: OpenAI.Chat.Completions.ChatCompletionMessageParam[], options: ExecutionOptions): Promise<any> {
-        const mapFn = options.result_schema
+        const mapFn = options.result_schema && this.provider !== "xai"
             ? (chunk: OpenAI.Chat.Completions.ChatCompletionChunk) => {
                 return {
                     result: chunk.choices[0]?.delta?.tool_calls?.[0].function?.arguments ?? "",
@@ -118,7 +118,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             frequency_penalty: options.frequency_penalty,
             n: 1,
             max_tokens: options.max_tokens,
-            tools: options.result_schema
+            tools: options.result_schema && this.provider.includes("openai")
                 ? [
                     {
                         function: {
@@ -140,7 +140,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     }
 
     async requestCompletion(prompt: OpenAI.Chat.Completions.ChatCompletionMessageParam[], options: ExecutionOptions): Promise<any> {
-        const functions = options.result_schema
+        const functions = options.result_schema && this.provider.includes("openai")
             ? [
                 {
                     function: {
@@ -166,7 +166,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             n: 1,
             max_tokens: options.max_tokens,
             tools: functions,
-            tool_choice: options.result_schema
+            tool_choice: options.result_schema && this.provider.includes("openai")
                 ? {
                     type: 'function',
                     function: { name: "format_output" }

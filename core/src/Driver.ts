@@ -9,6 +9,7 @@ import { formatLlama2Prompt, formatLlama3Prompt, formatTextPrompt } from "./form
 import {
     AIModel,
     Completion,
+    CompletionChunk,
     CompletionStream,
     DataSource,
     DriverOptions,
@@ -16,14 +17,16 @@ import {
     EmbeddingsResult,
     ExecutionOptions,
     ExecutionResponse,
+    ImageGenExecutionOptions,
+    ImageGeneration,
     Logger,
+    Modalities,
     ModelSearchPayload,
     PromptOptions,
     PromptSegment,
     TrainingJob,
     TrainingOptions,
-    TrainingPromptOptions,
-    CompletionChunk
+    TrainingPromptOptions
 } from "./types.js";
 import { validateResult } from "./validation.js";
 
@@ -144,13 +147,25 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         return this._execute(prompt, options);
     }
 
-    async _execute(prompt: PromptT, options: ExecutionOptions): Promise<ExecutionResponse<PromptT>> {
+    async _execute(prompt: PromptT, options: ExecutionOptions|ImageGenExecutionOptions): Promise<ExecutionResponse<PromptT>> {
         this.logger.debug(
             `[${this.provider}] Executing prompt on ${options.model}`);
         try {
             const start = Date.now();
-            const result = await this.requestCompletion(prompt, options);
-            this.validateResult(result, options);
+            let result;
+
+            switch (options.output_modality) {
+                case Modalities.text:
+                    result = await this.requestCompletion(prompt, options);
+                    this.validateResult(result, options);
+                    break;
+                case Modalities.image:
+                    result = await this.requestImageGeneration(prompt, options as ImageGenExecutionOptions);
+                    break;
+                default:
+                    throw new Error(`Unsupported modality: ${options.output_modality}`)
+            }
+
             const execution_time = Date.now() - start;
             return { ...result, prompt, execution_time };
         } catch (error) {
@@ -215,6 +230,10 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     abstract requestCompletion(prompt: PromptT, options: ExecutionOptions): Promise<Completion>;
 
     abstract requestCompletionStream(prompt: PromptT, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>>;
+
+    async requestImageGeneration(_prompt: PromptT, _options: ImageGenExecutionOptions): Promise<Completion<ImageGeneration>> { //make abstract?
+        throw new Error("Image generation not implemented.");
+    }
 
     //list models available for this environement
     abstract listModels(params?: ModelSearchPayload): Promise<AIModel[]>;

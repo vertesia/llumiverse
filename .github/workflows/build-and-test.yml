@@ -61,6 +61,6 @@ jobs:
         MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-        BEDROCK_REGION: us-west-2
+        BEDROCK_REGION: us-east-1
 
 
