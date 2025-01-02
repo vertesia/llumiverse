@@ -1,6 +1,6 @@
 # Llumiverse - Universal LLM Connectors for Node.js
 
-![Build](https://github.com/becomposable/llumiverse/actions/workflows/node.js.yml/badge.svg)
+![Build](https://github.com/vertesia/llumiverse/actions/workflows/node.js.yml/badge.svg)
 [![npm version](https://badge.fury.io/js/%40llumiverse%2Fcore.svg)](https://badge.fury.io/js/%40llumiverse%2Fcore)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
@@ -292,7 +292,7 @@ The `task_type` parameter is specific to the [textembedding-gecko model](https:/
 ## Contributing
 
 Contributions are welcome!
-Please see [CONTRIBUTING.md](https://github.com/becomposable/llumiverse/blob/main/CONTRIBUTING.md) for more details.
+Please see [CONTRIBUTING.md](https://github.com/vertesia/llumiverse/blob/main/CONTRIBUTING.md) for more details.
 
 
 ## License
