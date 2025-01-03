@@ -32,6 +32,8 @@ if (process.env.BEDROCK_REGION) {
     console.warn("Bedrock tests are skipped: BEDROCK_REGION environment variable is not set");
 }
 
+//TODO: Add vertexai imagen tests
+
 describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => {
 
     
