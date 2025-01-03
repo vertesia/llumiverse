@@ -1,4 +1,4 @@
-import { Content, FinishReason, GenerateContentRequest, HarmBlockThreshold, HarmCategory, InlineDataPart, ModelParams, ResponseSchema, TextPart } from "@google-cloud/vertexai";
+import { Content, FinishReason, GenerateContentRequest, HarmBlockThreshold, HarmCategory, InlineDataPart, ModelParams, TextPart } from "@google-cloud/vertexai";
 import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, ExecutionTokenUsage, PromptOptions, PromptRole, PromptSegment, readStreamAsBase64 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { VertexAIDriver } from "../index.js";
@@ -6,9 +6,8 @@ import { BuiltinModels, ModelDefinition } from "../models.js";
 
 function getGenerativeModel(driver: VertexAIDriver, options: ExecutionOptions, modelParams?: ModelParams) {
 
-    const jsonMode = options.result_schema && options.model.includes("1.5");
-    const jsonModeWithSchema = jsonMode && options.model.includes("pro");
-    const schema: ResponseSchema = options.result_schema as ResponseSchema;
+    //1.0 Ultra does not support JSON output, 1.0 Pro does.
+    const jsonMode = options.result_schema && !(options.model.includes("ultra"));
 
     const model = driver.vertexai.getGenerativeModel({
         model: options.model,
@@ -35,7 +34,6 @@ function getGenerativeModel(driver: VertexAIDriver, options: ExecutionOptions, m
     ], 
         generationConfig: {
             responseMimeType: jsonMode ? "application/json" : "text/plain",
-            responseSchema: jsonModeWithSchema ? schema : undefined,
             candidateCount: modelParams?.generationConfig?.candidateCount ?? 1,
             temperature: options.temperature,
             maxOutputTokens: options.max_tokens,
@@ -82,7 +80,6 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
         const schema = options.result_schema;
         const contents: Content[] = [];
         const safety: string[] = [];
-        const jsonModeInConfig = options.result_schema && options.model.includes("1.5") && options.model.includes("pro");
 
         let lastUserContent: Content | undefined = undefined;
 
@@ -127,7 +124,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
         }
 
         let tools: any = undefined;
-        if (schema && !jsonModeInConfig) {
+        if (schema) {
             safety.push("The answer must be a JSON object using the following JSON Schema:\n" + JSON.stringify(schema));
         }
 
