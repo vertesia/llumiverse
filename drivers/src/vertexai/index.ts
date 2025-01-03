@@ -1,12 +1,15 @@
 import { GenerateContentRequest, VertexAI } from "@google-cloud/vertexai";
-import { AIModel, AbstractDriver, Completion, CompletionChunkObject, DriverOptions, EmbeddingsResult, ExecutionOptions, ModelSearchPayload, PromptOptions, PromptSegment } from "@llumiverse/core";
+import { AIModel, AbstractDriver, Completion, CompletionChunkObject, DriverOptions, EmbeddingsResult, ExecutionOptions, ImageGenExecutionOptions, ImageGeneration, Modalities, ModelSearchPayload, PromptOptions, PromptSegment } from "@llumiverse/core";
 import { FetchClient } from "api-fetch-client";
 import { GoogleAuth, GoogleAuthOptions } from "google-auth-library";
 import { JSONClient } from "google-auth-library/build/src/auth/googleauth.js";
 import { TextEmbeddingsOptions, getEmbeddingsForText } from "./embeddings/embeddings-text.js";
-import { BuiltinModels, getModelDefinition } from "./models.js";
+import { getModelDefinition } from "./models.js";
 import { EmbeddingsOptions } from "@llumiverse/core";
 import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
+import { v1beta1 } from '@google-cloud/aiplatform';
+import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
+import { ImagenModelDefinition } from "./models/imagen.js";
 
 
 export interface VertexAIDriverOptions extends DriverOptions {
@@ -15,18 +18,28 @@ export interface VertexAIDriverOptions extends DriverOptions {
     googleAuthOptions?: GoogleAuthOptions;
 }
 
-export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, GenerateContentRequest> {
+//General Prompt type for VertexAI
+export type VertexAIPrompt = GenerateContentRequest;
+
+export function trimModelName(model: string) {
+    const i = model.lastIndexOf('@');
+    return i > -1 ? model.substring(0, i) : model;
+}
+
+export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, VertexAIPrompt> {
     static PROVIDER = "vertexai";
     provider = VertexAIDriver.PROVIDER;
 
-    //aiplatform: v1.ModelServiceClient;
+    aiplatform: v1beta1.ModelServiceClient;
     vertexai: VertexAI;
     fetchClient: FetchClient;
     authClient: JSONClient | GoogleAuth<JSONClient>;
-
+    anthropicClient: AnthropicVertex | undefined;
+    
     constructor( options: VertexAIDriverOptions) {
         super(options);
-        //this.aiplatform = new v1.ModelServiceClient();
+
+        this.anthropicClient = undefined;
 
         this.authClient = options.googleAuthOptions?.authClient ?? new GoogleAuth(options.googleAuthOptions);
 
@@ -43,43 +56,90 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Genera
             const token = await this.authClient.getAccessToken();
             return `Bearer ${token}`;
         });
-        // this.aiplatform = new v1.ModelServiceClient({
-        //     projectId: this.options.project,
-        //     apiEndpoint: `${this.options.region}-${API_BASE_PATH}`,
-        // });
+        this.aiplatform = new v1beta1.ModelServiceClient({
+            projectId: this.options.project,
+            apiEndpoint: `${this.options.region}-${API_BASE_PATH}`,
+        });
+    }
+
+    public getAnthropicClient() : AnthropicVertex {
+        //Lazy initialisation
+        if (!this.anthropicClient) {
+            this.anthropicClient = new AnthropicVertex({region: "us-east5", projectId: process.env.GOOGLE_PROJECT_ID});
+        }
+        return this.anthropicClient;
     }
 
     protected canStream(options: ExecutionOptions): Promise<boolean> {
+        if (options.output_modality == Modalities.image) {
+            return Promise.resolve(false);
+        }
         return Promise.resolve(getModelDefinition(options.model).model.can_stream === true);
     }
 
-    public createPrompt(segments: PromptSegment[], options: PromptOptions): Promise<GenerateContentRequest> {
+    public createPrompt(segments: PromptSegment[], options: PromptOptions): Promise<VertexAIPrompt> {
         return getModelDefinition(options.model).createPrompt(this, segments, options);
     }
 
-    async requestCompletion(prompt: GenerateContentRequest, options: ExecutionOptions): Promise<Completion<any>> {
+    async requestCompletion(prompt: VertexAIPrompt, options: ExecutionOptions): Promise<Completion<any>> {
         return getModelDefinition(options.model).requestCompletion(this, prompt, options);
     }
-    async requestCompletionStream(prompt: GenerateContentRequest, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+    async requestCompletionStream(prompt: VertexAIPrompt, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         return getModelDefinition(options.model).requestCompletionStream(this, prompt, options);
     }
 
+    async requestImageGeneration(_prompt: GenerateContentRequest, _options: ImageGenExecutionOptions): Promise <Completion<ImageGeneration>> {
+        const splits = _options.model.split("/");
+        const modelName = trimModelName(splits[splits.length - 1]);
+        return new ImagenModelDefinition(modelName).requestImageGeneration(this, _prompt, _options);
+    }
+
     async listModels(_params?: ModelSearchPayload): Promise<AIModel<string>[]> {
-        return BuiltinModels;
-        // try {
-        //     const response = await this.fetchClient.get('/publishers/google/models/gemini-pro');
-        //     console.log('>>>>>>>>', response);
-        // } catch (err: any) {
-        //     console.error('+++++VETREX ERROR++++++', err);
-        //     throw err;
-        // }
+        let models: AIModel<string>[] = [];
+        const modelGarden = new v1beta1.ModelGardenServiceClient({
+            projectId: this.options.project,
+            apiEndpoint: `${this.options.region}-${API_BASE_PATH}`,
+        });
 
-        // TODO uncomment this to use apiplatform instead of the fetch client
-        // const response = await this.aiplatform.listModels({
-        //     parent: `projects/${this.options.project}/locations/${this.options.region}`,
-        // });
+        //Project specific deployed models
+        const [response] = await this.aiplatform.listModels({
+            parent: `projects/${this.options.project}/locations/${this.options.region}`,
+        });
+        models = models.concat(response.map(model => ({
+            id: model.name?.split('/').pop() ?? '',
+            name: model.displayName ?? '',
+            provider: 'vertexai',
+        })));
 
-        return []; //TODO
+        //Model Garden Publisher models - Pretrained models
+        const publishers = ['google', 'anthropic']
+        const supportedModels = {google: ['gemini','imagen'], anthropic: ['claude']}
+
+        for (const publisher of publishers) {
+            const [response] = await modelGarden.listPublisherModels({
+                parent: `publishers/${publisher}`,
+                orderBy: 'name',
+                //filter: `name eq name`,
+                //list_all_versions: 'true',     
+                //As of 27/12/24 list_all_versions is not supported yet, see if https://github.com/googleapis/google-cloud-node/pull/5836 is merged
+            });
+
+            models = models.concat(response.map(model => ({
+                id: model.name ?? '',
+                name: model.name?.split('/').pop() ?? '',
+                provider: 'vertexai',
+                owner: publisher,
+            })).filter(model => {
+                const modelFamily = supportedModels[publisher as keyof typeof supportedModels];
+                for (const family of modelFamily) {
+                    if (model.name.includes(family)) {
+                        return true;
+                    }
+                }
+            }));
+        }
+
+        return models;
     }
 
     validateConnection(): Promise<boolean> {

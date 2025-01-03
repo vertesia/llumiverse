@@ -1,8 +1,8 @@
 import { Content, FinishReason, GenerateContentRequest, HarmBlockThreshold, HarmCategory, InlineDataPart, ModelParams, TextPart } from "@google-cloud/vertexai";
-import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, ExecutionTokenUsage, PromptOptions, PromptRole, PromptSegment, readStreamAsBase64 } from "@llumiverse/core";
+import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, ExecutionTokenUsage, ModelType, PromptOptions, PromptRole, PromptSegment, readStreamAsBase64 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { VertexAIDriver } from "../index.js";
-import { BuiltinModels, ModelDefinition } from "../models.js";
+import { ModelDefinition } from "../models.js";
 
 function getGenerativeModel(driver: VertexAIDriver, options: ExecutionOptions, modelParams?: ModelParams) {
 
@@ -66,17 +66,21 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
 
     model: AIModel
 
-    constructor(modelId: string = "gemini-1.5-pro") {
-
-        const model = BuiltinModels.find(m => m.id === modelId);
-        if (!model) {
-            throw new Error(`Unknown model ${modelId}`);
-        }
-        this.model = model;
-
+    constructor(modelId: string) {
+        this.model = {
+            id: modelId,
+            name: modelId,
+            provider: 'vertexai',
+            type: ModelType.Text,
+            can_stream: true,
+        } as AIModel;
     }
 
     async createPrompt(_driver: VertexAIDriver, segments: PromptSegment[], options: PromptOptions): Promise<GenerateContentRequest> {
+        const splits = options.model.split("/");
+        const modelName = splits[splits.length - 1];
+        options = { ...options, model: modelName };
+        
         const schema = options.result_schema;
         const contents: Content[] = [];
         const safety: string[] = [];
@@ -145,6 +149,10 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
     }
 
     async requestCompletion(driver: VertexAIDriver, prompt: GenerateContentRequest, options: ExecutionOptions): Promise<Completion> {
+        const splits = options.model.split("/");
+        const modelName = splits[splits.length - 1];
+        options = { ...options, model: modelName};
+        
         const model = getGenerativeModel(driver, options);
         const r = await model.generateContent(prompt);
         const response = await r.response;
@@ -182,6 +190,10 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
     }
 
     async requestCompletionStream(driver: VertexAIDriver, prompt: GenerateContentRequest, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+        const splits = options.model.split("/");
+        const modelName = splits[splits.length - 1];
+        options = { ...options, model: modelName};
+        
         const model = getGenerativeModel(driver, options);
         const streamingResp = await model.generateContentStream(prompt);
 

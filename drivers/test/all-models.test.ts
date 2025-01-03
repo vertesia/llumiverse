@@ -28,8 +28,10 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
             region: process.env.GOOGLE_REGION as string,
         }),
         models: [
-            "gemini-1.5-flash",
-            "gemini-1.5-pro",
+            "publishers/google/models/gemini-1.5-pro-002",
+            "gemini-1.5-flash", //legacy id format
+            //"gemini-1.5-pro",
+            "publishers/anthropic/models/claude-3-5-sonnet-v2",
         ]
     })
 }
