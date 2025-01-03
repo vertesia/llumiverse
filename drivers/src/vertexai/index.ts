@@ -130,6 +130,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 provider: 'vertexai',
                 owner: publisher,
             })).filter(model => {
+                if (model.name.includes('gemini-2.0')) {
+                    return false;
+                }
                 const modelFamily = supportedModels[publisher as keyof typeof supportedModels];
                 for (const family of modelFamily) {
                     if (model.name.includes(family)) {
