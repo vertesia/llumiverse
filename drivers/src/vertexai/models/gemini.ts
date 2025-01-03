@@ -7,7 +7,7 @@ import { BuiltinModels, ModelDefinition } from "../models.js";
 function getGenerativeModel(driver: VertexAIDriver, options: ExecutionOptions, modelParams?: ModelParams) {
 
     //1.0 Ultra does not support JSON output, 1.0 Pro does.
-    const jsonMode = options.result_schema && !(options.model.includes("1.0") && options.model.includes("ultra"));
+    const jsonMode = options.result_schema && !(options.model.includes("ultra"));
 
     const model = driver.vertexai.getGenerativeModel({
         model: options.model,
