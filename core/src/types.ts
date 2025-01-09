@@ -1,6 +1,7 @@
-import { JSONSchema4 } from "json-schema";
-import { PromptFormatter } from "./formatters/index.js";
-import { JSONObject } from "./json.js";
+import { JSONSchema4 } from 'json-schema';
+
+import { PromptFormatter } from './formatters/index.js';
+import { JSONObject } from './json.js';
 
 export interface EmbeddingsOptions {
     /**
@@ -209,9 +210,7 @@ export interface ExecutionTokenUsage {
 
 export enum Modalities {
     text = "text",
-    image = "image",
-    video = "video",
-    audio = "audio"
+    image = "image"
 }
 
 
