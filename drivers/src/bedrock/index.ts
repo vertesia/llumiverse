@@ -96,16 +96,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
     protected async formatPrompt(segments: PromptSegment[], opts: PromptOptions): Promise<BedrockPrompt> {
         return await fortmatConversePrompt(segments, opts.result_schema);
-        //TODO move the anthropic test in abstract driver?
-        if (opts.model.includes('anthropic')) {
-            //TODO: need to type better the types aren't checked properly by TS
-            return await formatClaudePrompt(segments, opts.result_schema);
-        } else if (opts.model.includes('nova')) {
-            //TODO: need to type better the types aren't checked properly by TS
-            return await formatNovaPrompt(segments, opts.result_schema);
-        } else {
-            return await super.formatPrompt(segments, opts) as string;
-        }
+        //TODO Amazon Nova Canvas/Reel etc formatting
     }
 
     static getExtractedExecuton(result: ConverseResponse, _prompt?: BedrockPrompt): CompletionChunkObject {
@@ -138,7 +129,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
         }
         return {
-            result: result,
+            result: output,
             token_usage: token_usage,
             finish_reason: stop_reason,
         }
