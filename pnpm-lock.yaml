@@ -11,16 +11,6 @@ overrides:
 importers:
 
   .:
-    dependencies:
-      '@anthropic-ai/sdk':
-        specifier: ^0.33.1
-        version: 0.33.1
-      '@anthropic-ai/vertex-sdk':
-        specifier: ^0.6.1
-        version: 0.6.1
-      '@google-cloud/aiplatform':
-        specifier: ^3.34.0
-        version: 3.34.0
     devDependencies:
       cross-spawn:
         specifier: ^7.0.5
@@ -74,6 +64,12 @@ importers:
 
   drivers:
     dependencies:
+      '@anthropic-ai/sdk':
+        specifier: ^0.33.1
+        version: 0.33.1
+      '@anthropic-ai/vertex-sdk':
+        specifier: ^0.6.1
+        version: 0.6.1
       '@aws-sdk/client-bedrock':
         specifier: ^3.709.0
         version: 3.716.0
@@ -95,6 +91,9 @@ importers:
       '@azure/openai':
         specifier: 2.0.0-beta.2
         version: 2.0.0-beta.2
+      '@google-cloud/aiplatform':
+        specifier: ^3.34.0
+        version: 3.34.0
       '@google-cloud/vertexai':
         specifier: ^1.7.0
         version: 1.9.2
