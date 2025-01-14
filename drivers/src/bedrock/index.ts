@@ -1,9 +1,9 @@
 import { Bedrock, CreateModelCustomizationJobCommand, FoundationModelSummary, GetModelCustomizationJobCommand, GetModelCustomizationJobCommandOutput, ModelCustomizationJobStatus, StopModelCustomizationJobCommand } from "@aws-sdk/client-bedrock";
-import { BedrockRuntime, ConverseRequest, ConverseResponse, ConverseStreamOutput, InferenceConfiguration, Message, SystemContentBlock } from "@aws-sdk/client-bedrock-runtime";
+import { BedrockRuntime, ConverseRequest, ConverseResponse, ConverseStreamOutput, InferenceConfiguration } from "@aws-sdk/client-bedrock-runtime";
 import { S3Client } from "@aws-sdk/client-s3";
 import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, ExecutionTokenUsage, ImageGeneration, ImageGenExecutionOptions, Modalities, PromptOptions, PromptSegment, TrainingJob, TrainingJobStatus, TrainingOptions } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
-import { ClaudeMessagesPrompt, formatClaudePrompt, formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
+import { NovaMessagesPrompt } from "@llumiverse/core/formatters";
 import { AwsCredentialIdentity, Provider } from "@smithy/types";
 import mnemonist from "mnemonist";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
@@ -14,17 +14,23 @@ const { LRUCache } = mnemonist;
 
 const supportStreamingCache = new LRUCache<string, boolean>(4096);
 
-export interface ConversePrompt {
-    messages: Message[];
-    system?: SystemContentBlock[];
-}
-
 enum BedrockModelType {
     FoundationModel = "foundation-model",
     InferenceProfile = "inference-profile",
     CustomModel = "custom-model",
     Unknown = "unknown",
 };
+
+function converseFinishReason(reason: string | undefined) {
+    //Possible values:
+    //end_turn | tool_use | max_tokens | stop_sequence | guardrail_intervened | content_filtered
+    if (!reason) return undefined;
+    switch (reason) {
+        case 'end_turn': return "stop";
+        case 'max_tokens': return "length";
+        default: return reason;
+    }
+}
 
 export interface BedrockModelCapabilities {
     name: string;
@@ -53,7 +59,7 @@ export interface BedrockDriverOptions extends DriverOptions {
     credentials?: AwsCredentialIdentity | Provider<AwsCredentialIdentity>;
 }
 
-export type BedrockPrompt = string | ClaudeMessagesPrompt | NovaMessagesPrompt | PromptSegment[] | ConversePrompt | ConverseRequest;
+export type BedrockPrompt = NovaMessagesPrompt | ConverseRequest;
 
 export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockPrompt> {
 
@@ -107,7 +113,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 result: result.usage?.outputTokens,
                 total: result.usage?.totalTokens,
              },
-            finish_reason: result.stopReason,
+            finish_reason: converseFinishReason(result.stopReason),
         }
     };
 
@@ -131,11 +137,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return {
             result: output,
             token_usage: token_usage,
-            finish_reason: stop_reason,
+            finish_reason: converseFinishReason(stop_reason),
         }
     };
 
-    async requestCompletion(prompt: ConversePrompt, options: ExecutionOptions): Promise<Completion> {
+    async requestCompletion(prompt: ConverseRequest, options: ExecutionOptions): Promise<Completion> {
 
         const payload = this.preparePayload(prompt, options);
         const executor = this.getExecutor();
@@ -227,7 +233,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return canStream;
     }
 
-    async requestCompletionStream(prompt: ConversePrompt, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+    async requestCompletionStream(prompt: ConverseRequest, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         const payload = this.preparePayload(prompt, options);
         const executor = this.getExecutor();
         return executor.converseStream({
@@ -253,7 +259,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
 
 
-    preparePayload(prompt: ConversePrompt, options: ExecutionOptions) {
+    preparePayload(prompt: ConverseRequest, options: ExecutionOptions) {
         return {
             messages: prompt.messages,
             system: prompt.system,
@@ -404,7 +410,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     async listModels(): Promise<AIModel[]> {
         this.logger.debug("[Bedrock] listing models");
         // exclude trainable models since they are not executable
-        const filter = (m: FoundationModelSummary) => m.inferenceTypesSupported?.includes("ON_DEMAND") ?? false;
+        // exclude embedding models, not to be used for typical completions.
+        const filter = (m: FoundationModelSummary) => (m.inferenceTypesSupported?.includes("ON_DEMAND") && !m.outputModalities?.includes("EMBEDDING")) ?? false;
         return this._listModels(filter);
     }
 
