@@ -155,6 +155,12 @@ export async function fortmatConversePrompt(segments: PromptSegment[], schema?: 
     if (schema) {
         safety.push({text: "IMPORTANT: " + getJSONSafetyNotice(schema)});
         system = system.concat(safety);
+
+        //prefill the json
+        messages.push({
+            content: [{text:"```json"}],
+            role: ConversationRole.ASSISTANT
+        });
     }
 
     messages = converseConcatMessages(messages);
