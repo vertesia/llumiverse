@@ -8,7 +8,7 @@ import { AwsCredentialIdentity, Provider } from "@smithy/types";
 import mnemonist from "mnemonist";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
 import { forceUploadFile } from "./s3.js";
-import { converseConcatMessages, converseSystemToMessages, fortmatConversePrompt } from "./converse.js";
+import { converseConcatMessages, converseRemoveJSONprefill, converseSystemToMessages, fortmatConversePrompt } from "./converse.js";
 
 const { LRUCache } = mnemonist;
 
@@ -263,12 +263,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         let additionalField = {};
 
         if (options.model.includes("amazon")) {
-          //Titan models also exists but does not support any additional options
+            //Titan models also exists but does not support any additional options
             if (options.model.includes("nova")) {
                 additionalField = { inferenceConfig: { topK: options.top_k } };
             }
-        }
-        if (options.model.includes("claude")) {
+        } else if (options.model.includes("claude")) {
             //Needs max_tokens to be set
             if (!options.max_tokens) {
                 if (options.model.includes("claude-3-5") || options.model.includes("claude-4")) {
@@ -278,8 +277,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 }
             }
             additionalField = { top_k: options.top_k };
-        }
-        if (options.model.includes("mistral")) {
+        } else if (options.model.includes("meta")) {
+            //If last message is "```json", remove it. Model requires the final message to be a user message
+            prompt.messages = converseRemoveJSONprefill(prompt.messages);
+        } else if (options.model.includes("mistral")) {
             //7B instruct and 8x7B instruct
             if (options.model.includes("7b")) {
                 additionalField = { top_k: options.top_k };
@@ -289,15 +290,18 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     prompt.system = undefined;
                     prompt.messages = converseConcatMessages(prompt.messages);
                 }
+            } else {
+                //Other models such as Mistral Small,Large and Large 2
+                //Support no additional fields.
+                prompt.messages = converseRemoveJSONprefill(prompt.messages);
             }
-            //Other models such as Mistral Small,Large and Large 2
-            //Support no additional fields.
-        }
-        if (options.model.includes("ai21")) {
+        } else if (options.model.includes("ai21")) {
+            //If last message is "```json", remove it. Model requires the final message to be a user message
+            prompt.messages = converseRemoveJSONprefill(prompt.messages);
             if (options.model.includes("jambda")) {
                 additionalField = {
-                presence_penalty: { scale: options.presence_penalty },
-                frequency_penalty: { scale: options.frequency_penalty },
+                    presence_penalty: { scale: options.presence_penalty },
+                    frequency_penalty: { scale: options.frequency_penalty },
                 };
             }
             if (options.model.includes("j2")) {
@@ -312,8 +316,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     prompt.messages = converseConcatMessages(prompt.messages);
                 }
             }
-        }
-        if (options.model.includes("cohere.command")) {
+        } else if (options.model.includes("cohere.command")) {
+            // If last message is "```json", remove it.
+            // Model requires the final message to be a user message or does not support assistant messages
+            prompt.messages = converseRemoveJSONprefill(prompt.messages);
             //Command R and R plus
             if (options.model.includes("cohere.command-r")) {
                 additionalField = {
@@ -332,7 +338,18 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 }
             }
         }
-        
+
+        //If last message is "```json", add corresponding ``` as a stop sequence.
+        if (prompt.messages && prompt.messages.length > 0) {
+            if (prompt.messages[prompt.messages.length - 1].content?.[0].text === "```json") {
+                if (!options.stop_sequence) {
+                    options.stop_sequence = ["```"];
+                } else if (!options.stop_sequence.includes("```")) {
+                    options.stop_sequence.push("```");
+                }
+            }
+        }
+
         return {
             messages: prompt.messages,
             system: prompt.system,
