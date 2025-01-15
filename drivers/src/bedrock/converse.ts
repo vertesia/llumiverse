@@ -46,6 +46,26 @@ async function readStreamAsUint8Array(stream: ReadableStream) : Promise<Uint8Arr
     return Buffer.concat(out);
 }
 
+export function converseConcatMessages(messages: Message[] | undefined): Message[] {
+    if (!messages) return [];
+    //Concatenate messages of the same role. Required to have alternative user and assistant roles
+    for (let i = 0; i < messages.length - 1; i++) {
+        if (messages[i].role === messages[i + 1].role) {
+            messages[i].content = messages[i].content?.concat(...messages[i+1].content || []);
+            messages.splice(i + 1, 1);
+            i--;
+        }
+    }
+    return messages;
+}
+
+export function converseSystemToMessages(system: SystemContentBlock[]): Message {
+    return ({
+        content: [{text: system.map(system => system.text).join('\n').trim()}],
+        role: ConversationRole.USER
+    });
+   
+}
 
 export async function fortmatConversePrompt(segments: PromptSegment[], schema?: JSONSchema4): Promise<ConverseRequest> {
     //Non-const for concat
@@ -123,14 +143,12 @@ export async function fortmatConversePrompt(segments: PromptSegment[], schema?: 
     //Conversations must start with a user message
     //Use the system messages if none are provided
     if (messages.length === 0) {
-        const systemMessage = system.map(system => system.text).join('\n').trim();   
-        if (!systemMessage) {
+        const systemMessage = converseSystemToMessages(system);
+        if (systemMessage?.content && systemMessage.content[0].text) {
+            messages.push(systemMessage);
+        } else {
             throw new Error('Prompt must contain at least one message');
         }
-        messages.push({
-            content: [{text: systemMessage}],
-            role: ConversationRole.USER
-        });
         system = [];
     }
 
@@ -139,14 +157,7 @@ export async function fortmatConversePrompt(segments: PromptSegment[], schema?: 
         system = system.concat(safety);
     }
 
-    //Concatenate messages of the same role. Required to have alternative user and assistant roles
-    for (let i = 0; i < messages.length - 1; i++) {
-        if (messages[i].role === messages[i + 1].role) {
-            messages[i].content = messages[i].content?.concat(...messages[i+1].content || []);
-            messages.splice(i + 1, 1);
-            i--;
-        }
-    }
+    messages = converseConcatMessages(messages);
 
     return {
         modelId: undefined,     //required property, but allowed to be undefined

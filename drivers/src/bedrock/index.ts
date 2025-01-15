@@ -8,7 +8,7 @@ import { AwsCredentialIdentity, Provider } from "@smithy/types";
 import mnemonist from "mnemonist";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
 import { forceUploadFile } from "./s3.js";
-import { fortmatConversePrompt } from "./converse.js";
+import { converseConcatMessages, converseSystemToMessages, fortmatConversePrompt } from "./converse.js";
 
 const { LRUCache } = mnemonist;
 
@@ -107,7 +107,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
     static getExtractedExecuton(result: ConverseResponse, _prompt?: BedrockPrompt): CompletionChunkObject {
         return {
-            result: result.output,
+            result: result.output?.message?.content?.map(c => c.text).join("\n") ?? "",
             token_usage: {
                 prompt: result.usage?.inputTokens,
                 result: result.usage?.outputTokens,
@@ -260,6 +260,79 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
 
     preparePayload(prompt: ConverseRequest, options: ExecutionOptions) {
+        let additionalField = {};
+
+        if (options.model.includes("amazon")) {
+          //Titan models also exists but does not support any additional options
+            if (options.model.includes("nova")) {
+                additionalField = { inferenceConfig: { topK: options.top_k } };
+            }
+        }
+        if (options.model.includes("claude")) {
+            //Needs max_tokens to be set
+            if (!options.max_tokens) {
+                if (options.model.includes("claude-3-5") || options.model.includes("claude-4")) {
+                    options.max_tokens = 8192;
+                } else {
+                    options.max_tokens = 4096;
+                }
+            }
+            additionalField = { top_k: options.top_k };
+        }
+        if (options.model.includes("mistral")) {
+            //7B instruct and 8x7B instruct
+            if (options.model.includes("7b")) {
+                additionalField = { top_k: options.top_k };
+                //Does not support system messages
+                if (prompt.system && prompt.system?.length != 0) {
+                    prompt.messages?.push(converseSystemToMessages(prompt.system));
+                    prompt.system = undefined;
+                    prompt.messages = converseConcatMessages(prompt.messages);
+                }
+            }
+            //Other models such as Mistral Small,Large and Large 2
+            //Support no additional fields.
+        }
+        if (options.model.includes("ai21")) {
+            if (options.model.includes("jambda")) {
+                additionalField = {
+                presence_penalty: { scale: options.presence_penalty },
+                frequency_penalty: { scale: options.frequency_penalty },
+                };
+            }
+            if (options.model.includes("j2")) {
+                additionalField = {
+                    presencePenalty: { scale: options.presence_penalty },
+                    frequencyPenalty: { scale: options.frequency_penalty },
+                };
+                //Does not support system messages
+                if (prompt.system && prompt.system?.length != 0) {
+                    prompt.messages?.push(converseSystemToMessages(prompt.system));
+                    prompt.system = undefined;
+                    prompt.messages = converseConcatMessages(prompt.messages);
+                }
+            }
+        }
+        if (options.model.includes("cohere.command")) {
+            //Command R and R plus
+            if (options.model.includes("cohere.command-r")) {
+                additionalField = {
+                    k: options.top_k,
+                    frequency_penalty: options.frequency_penalty,
+                    presence_penalty: options.presence_penalty,
+                };
+            } else {
+                // Command non-R
+                additionalField = { k: options.top_k };
+                //Does not support system messages
+                if (prompt.system && prompt.system?.length != 0) {
+                    prompt.messages?.push(converseSystemToMessages(prompt.system));
+                    prompt.system = undefined;
+                    prompt.messages = converseConcatMessages(prompt.messages);
+                }
+            }
+        }
+        
         return {
             messages: prompt.messages,
             system: prompt.system,
@@ -270,13 +343,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 topP: options.top_p,
                 stopSequences: options.stop_sequence,
             } as InferenceConfiguration,
-            /*
             additionalModelRequestFields: {
-                "top_k": options.top_k,
-                "presence_penalty": options.presence_penalty,
-                "frequency_penalty": options.frequency_penalty,
+                ...additionalField,
             },
-            */
         } as ConverseRequest;
     }
 
