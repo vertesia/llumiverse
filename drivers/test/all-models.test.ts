@@ -109,11 +109,11 @@ if (process.env.AZURE_OPENAI_KEY && process.env.AZURE_OPENAI_ENDPOINT) {
 
 if (process.env.BEDROCK_REGION) {
     drivers.push({
-      name: "bedrock",
-      driver: new BedrockDriver({
-        region: process.env.BEDROCK_REGION as string,
-      }),
-      //Use foundation models and inference profiles to test the driver
+        name: "bedrock",
+        driver: new BedrockDriver({
+            region: process.env.BEDROCK_REGION as string,
+        }),
+        //Use foundation models and inference profiles to test the driver
         models: [
             "anthropic.claude-3-5-sonnet-20240620-v1:0",
             "us.meta.llama3-3-70b-instruct-v1:0",
