@@ -123,7 +123,7 @@ export interface PromptOptions {
     result_schema?: JSONSchema4;
 }
 
-export interface ModelOptions {
+export interface TextModalityModelOptions {
     temperature?: number;
     max_tokens?: number;
     stop_sequence?: string[];
@@ -163,7 +163,7 @@ export interface ModelOptions {
      */
     frequency_penalty?: number;
 }
-export interface ExecutionOptions extends PromptOptions, ModelOptions {
+export interface ExecutionOptions {
     /**
      * If set to true the original response from the target LLM will be included in the response under the original_response field.
      * This is useful for debugging and for some advanced use cases.
@@ -171,12 +171,18 @@ export interface ExecutionOptions extends PromptOptions, ModelOptions {
      */
     include_original_response?: boolean;
 
-    output_modality?: Modalities
+    output_modality: Modalities
+
 }
 
-export interface ImageGenExecutionOptions extends ExecutionOptions {
+export interface TextGenExecutionOptions extends ExecutionOptions, TextModalityModelOptions, PromptOptions {
 
-    output_modality: Modalities.image;
+    output_modality: Modalities.text;
+
+}
+
+export interface ImageModalityModelOptions {
+
     width?: number;
     height?: number;
     quality?: "low" | "standard" | "high"
@@ -185,6 +191,15 @@ export interface ImageGenExecutionOptions extends ExecutionOptions {
 
     input_image_use: "variation" | "inspiration" | "none"
 
+    num_images?: number;
+
+    seed?: number;
+
+}
+
+export interface ImageGenExecutionOptions extends ExecutionOptions, ImageModalityModelOptions {
+
+    output_modality: Modalities.image;
 
 }
 
