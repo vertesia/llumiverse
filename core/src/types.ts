@@ -123,7 +123,9 @@ export interface PromptOptions {
     result_schema?: JSONSchema4;
 }
 
-export interface TextModalityModelOptions {
+export type ModelOptions = TextModelOptions | ImageModelOptions;
+
+export interface TextModelOptions {
     temperature?: number;
     max_tokens?: number;
     stop_sequence?: string[];
@@ -163,26 +165,9 @@ export interface TextModalityModelOptions {
      */
     frequency_penalty?: number;
 }
-export interface ExecutionOptions {
-    /**
-     * If set to true the original response from the target LLM will be included in the response under the original_response field.
-     * This is useful for debugging and for some advanced use cases.
-     * It is ignored on streaming requests
-     */
-    include_original_response?: boolean;
+export interface ImageModelOptions {
 
-    output_modality: Modalities
-
-}
-
-export interface TextGenExecutionOptions extends ExecutionOptions, TextModalityModelOptions, PromptOptions {
-
-    output_modality: Modalities.text;
-
-}
-
-export interface ImageModalityModelOptions {
-
+    aspect?: number;
     width?: number;
     height?: number;
     quality?: "low" | "standard" | "high"
@@ -194,13 +179,29 @@ export interface ImageModalityModelOptions {
     num_images?: number;
 
     seed?: number;
-
 }
 
-export interface ImageGenExecutionOptions extends ExecutionOptions, ImageModalityModelOptions {
+interface ExecutionOptionsPrototype extends PromptOptions{
+    /**
+     * If set to true the original response from the target LLM will be included in the response under the original_response field.
+     * This is useful for debugging and for some advanced use cases.
+     * It is ignored on streaming requests
+     */
+    include_original_response?: boolean;
+    model_options?: ModelOptions;
+    output_modality: Modalities;
+}
 
+export type ExecutionOptions = TextExecutionOptions | ImageExecutionOptions;
+
+export interface TextExecutionOptions extends ExecutionOptionsPrototype{
+    output_modality: Modalities.text;
+    model_options: TextModelOptions;
+}
+
+export interface ImageExecutionOptions extends ExecutionOptionsPrototype{
     output_modality: Modalities.image;
-
+    model_options: ImageModelOptions;
 }
 
 // ============== Prompts ===============

@@ -1,4 +1,4 @@
-import { AIModel, Completion, ImageGeneration, ImageGenExecutionOptions, Modalities, ModelType } from "@llumiverse/core";
+import { AIModel, Completion, ImageExecutionOptions, ImageGeneration, Modalities, ModelType } from "@llumiverse/core";
 import { VertexAIDriver } from "../index.js";
 
 const projectId = process.env.GOOGLE_PROJECT_ID;
@@ -41,7 +41,7 @@ async function textToImagePayload(prompt: GenerateContentRequest): Promise<strin
     return text;
 }
 
-export function formatImagenImageGenerationPayload(taskType: ImagenImageGenerationTaskType, prompt: GenerateContentRequest, _options: ImageGenExecutionOptions) {
+export function formatImagenImageGenerationPayload(taskType: ImagenImageGenerationTaskType, prompt: GenerateContentRequest, _options: ImageExecutionOptions) {
 
     switch (taskType) {
         case ImagenImageGenerationTaskType.TEXT_IMAGE:
@@ -65,7 +65,7 @@ export class ImagenModelDefinition  {
         } as AIModel;
     }
     
-    async requestImageGeneration(driver: VertexAIDriver, prompt: GenerateContentRequest, options: ImageGenExecutionOptions): Promise<Completion<ImageGeneration>> {
+    async requestImageGeneration(driver: VertexAIDriver, prompt: GenerateContentRequest, options: ImageExecutionOptions): Promise<Completion<ImageGeneration>> {
     
         if (options.output_modality !== Modalities.image) {
             throw new Error(`Image generation requires image output_modality`);
@@ -76,7 +76,7 @@ export class ImagenModelDefinition  {
         }
 
         const taskType = () => {
-            switch (options.generation_type) {
+            switch (options.model_options.generation_type) {
                 case "text-to-image":
                     return ImagenImageGenerationTaskType.TEXT_IMAGE
                 default:

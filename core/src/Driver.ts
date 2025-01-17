@@ -17,13 +17,14 @@ import {
     EmbeddingsResult,
     ExecutionOptions,
     ExecutionResponse,
-    ImageGenExecutionOptions,
+    ImageExecutionOptions,
     ImageGeneration,
     Logger,
     Modalities,
     ModelSearchPayload,
     PromptOptions,
     PromptSegment,
+    TextExecutionOptions,
     TrainingJob,
     TrainingOptions,
     TrainingPromptOptions
@@ -147,7 +148,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         return this._execute(prompt, options);
     }
 
-    async _execute(prompt: PromptT, options: ExecutionOptions|ImageGenExecutionOptions): Promise<ExecutionResponse<PromptT>> {
+    async _execute(prompt: PromptT, options: ExecutionOptions): Promise<ExecutionResponse<PromptT>> {
         this.logger.debug(
             `[${this.provider}] Executing prompt on ${options.model}`);
         try {
@@ -156,14 +157,14 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
             switch (options.output_modality) {
                 case Modalities.text:
-                    result = await this.requestCompletion(prompt, options);
+                    result = await this.requestTextCompletion(prompt, options);
                     this.validateResult(result, options);
                     break;
                 case Modalities.image:
-                    result = await this.requestImageGeneration(prompt, options as ImageGenExecutionOptions);
+                    result = await this.requestImageGeneration(prompt, options);
                     break;
                 default:
-                    throw new Error(`Unsupported modality: ${options.output_modality}`)
+                    throw new Error(`Unsupported modality: ${options['output_modality'] ?? "No modality specified"}`);
             }
 
             const execution_time = Date.now() - start;
@@ -178,7 +179,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     async stream(segments: PromptSegment[], options: ExecutionOptions): Promise<CompletionStream<PromptT>> {
         const prompt = await this.createPrompt(segments, options);
         const canStream = await this.canStream(options);
-        if (canStream) {
+        if (options.output_modality === Modalities.text && canStream) {
             return new DefaultCompletionStream(this, prompt, options);
         } else {
             return new FallbackCompletionStream(this, prompt, options);
@@ -227,11 +228,11 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         return [];
     }
 
-    abstract requestCompletion(prompt: PromptT, options: ExecutionOptions): Promise<Completion>;
+    abstract requestTextCompletion(prompt: PromptT, options: TextExecutionOptions): Promise<Completion>;
 
-    abstract requestCompletionStream(prompt: PromptT, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>>;
+    abstract requestTextCompletionStream(prompt: PromptT, options: TextExecutionOptions): Promise<AsyncIterable<CompletionChunk>>;
 
-    async requestImageGeneration(_prompt: PromptT, _options: ImageGenExecutionOptions): Promise<Completion<ImageGeneration>> { //make abstract?
+    async requestImageGeneration(_prompt: PromptT, _options: ImageExecutionOptions): Promise<Completion<ImageGeneration>> { //make abstract?
         throw new Error("Image generation not implemented.");
     }
 

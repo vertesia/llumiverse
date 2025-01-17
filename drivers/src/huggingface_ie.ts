@@ -9,8 +9,8 @@ import {
     AbstractDriver,
     DriverOptions,
     EmbeddingsResult,
-    ExecutionOptions,
-    CompletionChunkObject
+    CompletionChunkObject,
+    TextExecutionOptions
 } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { FetchClient } from "api-fetch-client";
@@ -66,13 +66,13 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
         return this._executor;
     }
 
-    async requestCompletionStream(prompt: string, options: ExecutionOptions) {
+    async requestTextCompletionStream(prompt: string, options: TextExecutionOptions) {
         const executor = await this.getExecutor(options.model);
         const req = executor.textGenerationStream({
             inputs: prompt,
             parameters: {
-                temperature: options.temperature,
-                max_new_tokens: options.max_tokens,
+                temperature: options.model_options.temperature,
+                max_new_tokens: options.model_options.max_tokens,
             },
         });
         
@@ -94,13 +94,13 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
         });
     }
 
-    async requestCompletion(prompt: string, options: ExecutionOptions) {
+    async requestTextCompletion(prompt: string, options: TextExecutionOptions) {
         const executor = await this.getExecutor(options.model);
         const res = await executor.textGeneration({
             inputs: prompt,
             parameters: {
-                temperature: options.temperature,
-                max_new_tokens: options.max_tokens,
+                temperature: options.model_options.temperature,
+                max_new_tokens: options.model_options.max_tokens,
             },
         });
 

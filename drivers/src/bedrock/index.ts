@@ -1,7 +1,7 @@
 import { Bedrock, CreateModelCustomizationJobCommand, FoundationModelSummary, GetModelCustomizationJobCommand, GetModelCustomizationJobCommandOutput, ModelCustomizationJobStatus, StopModelCustomizationJobCommand } from "@aws-sdk/client-bedrock";
 import { BedrockRuntime, InvokeModelCommandOutput, ResponseStream } from "@aws-sdk/client-bedrock-runtime";
 import { S3Client } from "@aws-sdk/client-s3";
-import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, ExecutionTokenUsage, ImageGeneration, ImageGenExecutionOptions, Modalities, PromptOptions, PromptSegment, TrainingJob, TrainingJobStatus, TrainingOptions } from "@llumiverse/core";
+import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, ExecutionTokenUsage, ImageExecutionOptions, ImageGeneration, Modalities, PromptOptions, PromptSegment, TextExecutionOptions, TrainingJob, TrainingJobStatus, TrainingOptions } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { ClaudeMessagesPrompt, formatClaudePrompt, formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
 import { AwsCredentialIdentity, Provider } from "@smithy/types";
@@ -342,7 +342,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return BedrockDriver.getExtractedCompletionChunk(result, prompt);
     }
 
-    async requestCompletion(prompt: BedrockPrompt, options: ExecutionOptions): Promise<Completion> {
+    async requestTextCompletion(prompt: BedrockPrompt, options: TextExecutionOptions): Promise<Completion> {
 
         const payload = this.preparePayload(prompt, options);
         const executor = this.getExecutor();
@@ -435,7 +435,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return canStream;
     }
 
-    async requestCompletionStream(prompt: BedrockPrompt, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+    async requestTextCompletionStream(prompt: BedrockPrompt, options: TextExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         const payload = this.preparePayload(prompt, options);
         const executor = this.getExecutor();
         return executor.invokeModelWithResponseStream({
@@ -463,25 +463,27 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
 
 
-    preparePayload(prompt: BedrockPrompt, options: ExecutionOptions) {
+    preparePayload(prompt: BedrockPrompt, options: TextExecutionOptions) {
 
         //split arn on / should give provider
         //TODO: check if works with custom models
         //const provider = options.model.split("/")[0];
         const contains = (str: string, substr: string) => str.indexOf(substr) !== -1;
 
+        const model_options = options.model_options || {};
+
         if (contains(options.model, "meta")) {
             return {
                 prompt,
-                temperature: options.temperature,
-                max_gen_len: options.max_tokens,
-                top_p: options.top_p
+                temperature: model_options.temperature,
+                max_gen_len: model_options.max_tokens,
+                top_p: model_options.top_p
             } as LLama3RequestPayload
         } else if (contains(options.model, "claude")) {
 
             const maxToken = () => {
-                if (options.max_tokens) {
-                    return options.max_tokens;
+                if (model_options.max_tokens) {
+                    return model_options.max_tokens;
 
                 } else if (contains(options.model, "claude-3-5")) {
                     return 8192;
@@ -492,80 +494,78 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             return {
                 anthropic_version: "bedrock-2023-05-31",
                 ...(prompt as ClaudeMessagesPrompt),
-                temperature: options.temperature,
+                temperature: model_options.temperature,
                 max_tokens: maxToken(),
-                top_p: options.top_p,
-                top_k: options.top_k,
-                stop_sequences: typeof options.stop_sequence === 'string' ?
-                    [options.stop_sequence] : options.stop_sequence,
+                top_p: model_options.top_p,
+                top_k: model_options.top_k,
+                stop_sequences: model_options.stop_sequence,
             } as ClaudeRequestPayload;
         } else if (contains(options.model, "ai21")) {
             return {
                 prompt: prompt,
-                temperature: options.temperature,
-                maxTokens: options.max_tokens,
-                topP: options.top_p,
-                stopSequences: typeof options.stop_sequence === 'string' ?
-                    [options.stop_sequence] : options.stop_sequence,
-                presencePenalty: { scale: options.presence_penalty },
-                frequencyPenalty: { scale: options.frequency_penalty },
+                temperature: model_options.temperature,
+                maxTokens: model_options.max_tokens,
+                topP: model_options.top_p,
+                stopSequences: model_options.stop_sequence,
+                presencePenalty: { scale: model_options.presence_penalty },
+                frequencyPenalty: { scale: model_options.frequency_penalty },
             } as AI21JurassicRequestPayload;
         } else if (contains(options.model, "command-r-plus")) {
             return {
                 message: prompt as string,
-                max_tokens: options.max_tokens,
-                temperature: options.temperature,
-                p: options.top_p,
-                k: options.top_k,
-                frequency_penalty: options.frequency_penalty,
-                presence_penalty: options.presence_penalty,
-                stop_sequences: typeof options.stop_sequence === 'string' ?
-                    [options.stop_sequence] : options.stop_sequence,
+                max_tokens: model_options.max_tokens,
+                temperature: model_options.temperature,
+                p: model_options.top_p,
+                k: model_options.top_k,
+                frequency_penalty: model_options.frequency_penalty,
+                presence_penalty: model_options.presence_penalty,
+                stop_sequences: typeof model_options.stop_sequence === 'string' ?
+                    [model_options.stop_sequence] : model_options.stop_sequence,
             } as CohereCommandRPayload;
         }
         else if (contains(options.model, "cohere")) {
             return {
                 prompt: prompt,
-                temperature: options.temperature,
-                max_tokens: options.max_tokens,
-                p: options.top_p,
-                k: options.top_k,
-                stop_sequences: typeof options.stop_sequence === 'string' ?
-                    [options.stop_sequence] : options.stop_sequence,
+                temperature: model_options.temperature,
+                max_tokens: model_options.max_tokens,
+                p: model_options.top_p,
+                k: model_options.top_k,
+                stop_sequences: typeof model_options.stop_sequence === 'string' ?
+                    [model_options.stop_sequence] : model_options.stop_sequence,
             } as CohereRequestPayload;
         } else if (contains(options.model, "titan")) {
-            const stop_seq: string[] = (typeof options.stop_sequence === 'string' ?
-                [options.stop_sequence] : options.stop_sequence) ?? [];
+            const stop_seq: string[] = (typeof model_options.stop_sequence === 'string' ?
+                [model_options.stop_sequence] : model_options.stop_sequence) ?? [];
             return {
                 inputText: "User: " + (prompt as string) + "\nBot:", // see https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-text.html#model-parameters-titan-request-response
                 textGenerationConfig: {
-                    temperature: options.temperature,
-                    topP: options.top_p,
-                    maxTokenCount: options.max_tokens,
+                    temperature: model_options.temperature,
+                    topP: model_options.top_p,
+                    maxTokenCount: model_options.max_tokens,
                     stopSequences: ["\n", ...stop_seq],
                 },
             } as AmazonRequestPayload;
         } else if (contains(options.model, "mistral")) {
             return {
                 prompt: prompt,
-                temperature: options.temperature,
-                max_tokens: options.max_tokens,
-                top_k: options.top_k,
-                top_p: options.top_p,
-                stop: typeof options.stop_sequence === 'string' ?
-                    [options.stop_sequence] : options.stop_sequence,
+                temperature: model_options.temperature,
+                max_tokens: model_options.max_tokens,
+                top_k: model_options.top_k,
+                top_p: model_options.top_p,
+                stop: typeof model_options.stop_sequence === 'string' ?
+                    [model_options.stop_sequence] : model_options.stop_sequence,
             } as MistralPayload;
         } else if (contains(options.model, "nova")) {
             return {
                 schemaVersion: "messages-v1",
                 ...(prompt as NovaMessagesPrompt),
                 inferenceConfig: {
-                    temperature: options.temperature,
-                    max_new_tokens: options.max_tokens,
-                    top_p: options.top_p,
-                    top_k: options.top_k,
-                    stopSequences: typeof options.stop_sequence === 'string' ?
-                        [options.stop_sequence] : options.stop_sequence,
+                    temperature: model_options.temperature,
+                    max_new_tokens: model_options.max_tokens,
+                    top_p: model_options.top_p,
+                    top_k: model_options.top_k,
+                    stopSequences: typeof model_options.stop_sequence === 'string' ?
+                        [model_options.stop_sequence] : model_options.stop_sequence,
                 }
             } as NovaPayload;
         } else {
@@ -575,7 +575,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
 
-    async requestImageGeneration(prompt: NovaMessagesPrompt, options: ImageGenExecutionOptions): Promise<Completion<ImageGeneration>> {
+    async requestImageGeneration(prompt: NovaMessagesPrompt, options: ImageExecutionOptions): Promise<Completion<ImageGeneration>> {
 
         if (options.output_modality !== Modalities.image) {
             throw new Error(`Image generation requires image output_modality`);
@@ -583,9 +583,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         const executor = this.getExecutor();
         const taskType = () => {
-            switch (options.generation_type) {
+            switch (options.model_options.generation_type) {
                 case "text-to-image":
-                    if (options.input_image_use === "variation") {
+                    if (options.model_options.input_image_use === "variation") {
                         return NovaImageGenerationTaskType.IMAGE_VARIATION;
                     } else {
                         return NovaImageGenerationTaskType.TEXT_IMAGE

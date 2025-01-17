@@ -1,4 +1,4 @@
-import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, ModelType, PromptOptions, PromptRole, PromptSegment } from "@llumiverse/core";
+import { AIModel, Completion, CompletionChunkObject, ModelType, PromptOptions, PromptRole, PromptSegment, TextExecutionOptions } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { VertexAIDriver } from "../index.js";
 import { ModelDefinition } from "../models.js";
@@ -112,22 +112,23 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         }
     }
 
-    async requestCompletion(driver: VertexAIDriver, prompt: ClaudePrompt, options: ExecutionOptions): Promise<Completion> {
+    async requestTextCompletion(driver: VertexAIDriver, prompt: ClaudePrompt, options: TextExecutionOptions): Promise<Completion> {
         const client = driver.getAnthropicClient();   
 
         const splits = options.model.split("/");
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
+
+        const model_options = options.model_options;
         
         const result = await client.messages.create({
             ...prompt,  // messages, system
-            temperature: options.temperature,
+            temperature: model_options.temperature,
             model: modelName,
-            max_tokens: maxToken(options.max_tokens, modelName),
-            top_p: options.top_p,
-            top_k: options.top_k,
-            stop_sequences: typeof options.stop_sequence === 'string' ?
-                [options.stop_sequence] : options.stop_sequence,
+            max_tokens: maxToken(model_options.max_tokens, modelName),
+            top_p: model_options.top_p,
+            top_k: model_options.top_k,
+            stop_sequences: model_options.stop_sequence,
         });
         
         const text = collectTextParts(result.content);
@@ -143,21 +144,22 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         } as Completion;
     }
 
-    async requestCompletionStream(driver: VertexAIDriver, prompt: ClaudePrompt, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+    async requestTextCompletionStream(driver: VertexAIDriver, prompt: ClaudePrompt, options: TextExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         const client = driver.getAnthropicClient();
         const splits = options.model.split("/");
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
 
+        const model_options = options.model_options;
+
         const response_stream = await client.messages.stream({
             ...prompt,  // messages, system
-            temperature: options.temperature,
+            temperature: model_options.temperature,
             model: modelName,
-            max_tokens: maxToken(options.max_tokens, modelName),
-            top_p: options.top_p,
-            top_k: options.top_k,
-            stop_sequences: typeof options.stop_sequence === 'string' ?
-                [options.stop_sequence] : options.stop_sequence,
+            max_tokens: maxToken(model_options.max_tokens, modelName),
+            top_p: model_options.top_p,
+            top_k: model_options.top_k,
+            stop_sequences: model_options.stop_sequence,
         });
 
         //Streaming does not give information on the input tokens,

@@ -1,4 +1,4 @@
-import { AIModel, AbstractDriver, Completion, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, PromptSegment, CompletionChunk } from "@llumiverse/core";
+import { AIModel, AbstractDriver, Completion, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, PromptSegment, CompletionChunk, TextExecutionOptions } from "@llumiverse/core";
 import { transformSSEStream } from "@llumiverse/core/async";
 import { OpenAITextMessage, formatOpenAILikeTextPrompt, getJSONSafetyNotice } from "@llumiverse/core/formatters";
 import { FetchClient } from "api-fetch-client";
@@ -49,7 +49,7 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
         return undefined
     }
 
-    protected async formatPrompt(segments: PromptSegment[], opts: ExecutionOptions): Promise<OpenAITextMessage[]> {
+    protected async formatPrompt(segments: PromptSegment[], opts: TextExecutionOptions): Promise<OpenAITextMessage[]> {
         const messages = formatOpenAILikeTextPrompt(segments);
         //Add JSON instruction is schema is provided
         if (opts.result_schema) {
@@ -61,13 +61,13 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
         return messages;
     }
 
-    async requestCompletion(messages: OpenAITextMessage[], options: ExecutionOptions): Promise<Completion<any>> {
+    async requestTextCompletion(messages: OpenAITextMessage[], options: TextExecutionOptions): Promise<Completion<any>> {
         const res = await this.client.post('/v1/chat/completions', {
             payload: _makeChatCompletionRequest({
                 model: options.model,
                 messages: messages,
-                maxTokens: options.max_tokens,
-                temperature: options.temperature,
+                maxTokens: options.model_options.max_tokens,
+                temperature: options.model_options.temperature,
                 responseFormat: this.getResponseFormat(options),
             })
         }) as ChatCompletionResponse;
@@ -87,18 +87,18 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
         };
     }
 
-    async requestCompletionStream(messages: OpenAITextMessage[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
+    async requestTextCompletionStream(messages: OpenAITextMessage[], options: TextExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
         const stream = await this.client.post('/v1/chat/completions', {
             payload: _makeChatCompletionRequest({
                 model: options.model,
                 messages: messages,
-                maxTokens: options.max_tokens,
-                temperature: options.temperature,
-                topP: options.top_p,
+                maxTokens: options.model_options.max_tokens,
+                temperature: options.model_options.temperature,
+                topP: options.model_options.top_p,
                 responseFormat: this.getResponseFormat(options),
                 stream: true,
-                stopSequences: typeof options.stop_sequence === 'string' ?
-                [options.stop_sequence] : options.stop_sequence,
+                stopSequences: typeof options.model_options.stop_sequence === 'string' ?
+                [options.model_options.stop_sequence] : options.model_options.stop_sequence,
             }),
             reader: 'sse'
         });

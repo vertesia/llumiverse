@@ -1,7 +1,7 @@
-import { ImageGenExecutionOptions } from "@llumiverse/core";
+import { ImageExecutionOptions } from "@llumiverse/core";
 import { NovaMessage, NovaMessagesPrompt } from "@llumiverse/core/formatters";
 
-async function textToImagePayload(prompt: NovaMessagesPrompt, options: ImageGenExecutionOptions): Promise<NovaTextToImagePayload> {
+async function textToImagePayload(prompt: NovaMessagesPrompt, options: ImageExecutionOptions): Promise<NovaTextToImagePayload> {
 
     const textMessages = prompt.messages.map(m => m.content.map(c => c.text)).flat();
     let text = textMessages.join("\n\n");
@@ -9,7 +9,7 @@ async function textToImagePayload(prompt: NovaMessagesPrompt, options: ImageGenE
 
     const conditionImage = () => {
         const img = getFirstImageFromPrompt(prompt.messages);
-        if (img && options.input_image_use === "inspiration") {
+        if (img && options.model_options.input_image_use === "inspiration") {
             return getFirstImageFromPrompt(prompt.messages);
         }
         return undefined;
@@ -19,9 +19,9 @@ async function textToImagePayload(prompt: NovaMessagesPrompt, options: ImageGenE
     let payload: NovaTextToImagePayload = {
         taskType: NovaImageGenerationTaskType.TEXT_IMAGE,
         imageGenerationConfig: {
-            quality: options.quality === "high" ? "premium" : "standard",
-            width: options.width,
-            height: options.height,
+            quality: options.model_options.quality === "high" ? "premium" : "standard",
+            width: options.model_options.width,
+            height: options.model_options.height,
         },
         textToImageParams: {
             text: text,
@@ -56,7 +56,7 @@ function getAllImagesFromPrompt(prompt: NovaMessage[]) {
     return images;
 }
 
-async function imageVariationPayload(prompt: NovaMessagesPrompt, options: ImageGenExecutionOptions): Promise<NovaImageVariationPayload> {
+async function imageVariationPayload(prompt: NovaMessagesPrompt, options: ImageExecutionOptions): Promise<NovaImageVariationPayload> {
 
     const text = prompt.messages.map(m => m.content).join("\n\n");
     const images = getAllImagesFromPrompt(prompt.messages);
@@ -64,9 +64,9 @@ async function imageVariationPayload(prompt: NovaMessagesPrompt, options: ImageG
     let payload: NovaImageVariationPayload = {
         taskType: NovaImageGenerationTaskType.IMAGE_VARIATION,
         imageGenerationConfig: {
-            quality: options.quality === "high" ? "premium" : "standard",
-            width: options.width,
-            height: options.height,
+            quality: options.model_options.quality === "high" ? "premium" : "standard",
+            width: options.model_options.width,
+            height: options.model_options.height,
         },
         imageVariationParams: {
             images: images ?? [],
@@ -79,7 +79,7 @@ async function imageVariationPayload(prompt: NovaMessagesPrompt, options: ImageG
 }
 
 
-export function formatNovaImageGenerationPayload(taskType: NovaImageGenerationTaskType, prompt: NovaMessagesPrompt, options: ImageGenExecutionOptions) {
+export function formatNovaImageGenerationPayload(taskType: NovaImageGenerationTaskType, prompt: NovaMessagesPrompt, options: ImageExecutionOptions) {
 
     switch (taskType) {
         case NovaImageGenerationTaskType.TEXT_IMAGE:

@@ -6,8 +6,8 @@ import {
     DataSource,
     DriverOptions,
     EmbeddingsResult,
-    ExecutionOptions,
     ModelSearchPayload,
+    TextExecutionOptions,
     TrainingJob,
     TrainingJobStatus,
     TrainingOptions
@@ -63,13 +63,13 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
         };
     }
 
-    async requestCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
+    async requestTextCompletionStream(prompt: string, options: TextExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
         const model = ReplicateDriver.parseModelId(options.model);
         const predictionData = {
             input: {
                 prompt: prompt,
-                max_new_tokens: options.max_tokens,
-                temperature: options.temperature,
+                max_new_tokens: options.model_options.max_tokens,
+                temperature: options.model_options.temperature,
             },
             version: model.version,
             stream: true, //streaming described here https://replicate.com/blog/streaming
@@ -103,13 +103,13 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
         return stream;
     }
 
-    async requestCompletion(prompt: string, options: ExecutionOptions) {
+    async requestTextCompletion(prompt: string, options: TextExecutionOptions) {
         const model = ReplicateDriver.parseModelId(options.model);
         const predictionData = {
             input: {
                 prompt: prompt,
-                max_new_tokens: options.max_tokens,
-                temperature: options.temperature,
+                max_new_tokens: options.model_options.max_tokens,
+                temperature: options.model_options.temperature,
             },
             version: model.version,
             //TODO stream
