@@ -185,14 +185,16 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
 
     let test_options: ExecutionOptions = {
         model: "",
-        max_tokens: 128,
-        temperature: 0.3,
-        top_k: 40,
-        top_p: 0.7,             //Some models do not support top_p = 1.0, set to 0.99 or lower.
-        top_logprobs: 5,        //Currently not supported, option will be ignored
-        presence_penalty: 0.1,      //Cohere Command R does not support using presence & frequency penalty at the same time
-        frequency_penalty: 0.0,
-        stop_sequence: ["adsoiuygsa"],
+        model_options: {
+            max_tokens: 128,
+            temperature: 0.3,
+            top_k: 40,
+            top_p: 0.7,             //Some models do not support top_p = 1.0, set to 0.99 or lower.
+            top_logprobs: 5,        //Currently not supported, option will be ignored
+            presence_penalty: 0.1,      //Cohere Command R does not support using presence & frequency penalty at the same time
+            frequency_penalty: 0.0,
+            stop_sequence: ["adsoiuygsa"],
+        },
         output_modality: Modalities.text,
     };
 
@@ -202,8 +204,6 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
         console.log(r)
         expect(r.length).toBeGreaterThan(0);
     });
-
-
 
     test.each(models)(`${name}: prompt generation for %s`, {}, async (model) => {
         const p = await driver.createPrompt(testPrompt_color, { model })
@@ -259,8 +259,10 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
         const r = await driver.execute(testPrompt_describeImage, {
             output_modality: Modalities.text,
             model: model,
-            temperature: 0.5,
-            max_tokens: 1024,
+            model_options: {
+                temperature: 0.5,
+                max_tokens: 1024,
+            },
             result_schema: testSchema_animalDescription
         })
         console.log("Result", r)
