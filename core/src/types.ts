@@ -167,7 +167,7 @@ export interface TextModelOptions {
 }
 export interface ImageModelOptions {
 
-    aspect?: number;
+    aspect?: string;
     width?: number;
     height?: number;
     quality?: "low" | "standard" | "high"

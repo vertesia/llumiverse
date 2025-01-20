@@ -104,11 +104,12 @@ export class ImagenModelDefinition  {
         const instances = [instanceValue];
 
         const parameter = {
-            sampleCount: 1,
+            sampleCount: options.model_options.num_images,
             // You can't use a seed value and watermark at the same time.
-            // seed: 100,
+            seed: options.model_options.seed ?? 1,
             // addWatermark: false,
-            aspectRatio: '1:1',
+            aspectRatio: options.model_options.aspect ?? '1:1',
+            //negativePrompt: options.model_options.negative_prompt ?? '',
             //safetyFilterLevel: 'block_some',
             //personGeneration: 'allow_adult',
         };
