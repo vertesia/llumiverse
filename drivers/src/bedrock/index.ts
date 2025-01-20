@@ -1,14 +1,14 @@
 import { Bedrock, CreateModelCustomizationJobCommand, FoundationModelSummary, GetModelCustomizationJobCommand, GetModelCustomizationJobCommandOutput, ModelCustomizationJobStatus, StopModelCustomizationJobCommand } from "@aws-sdk/client-bedrock";
-import { BedrockRuntime, InvokeModelCommandOutput, ResponseStream } from "@aws-sdk/client-bedrock-runtime";
+import { BedrockRuntime, ConverseRequest, ConverseResponse, ConverseStreamOutput, InferenceConfiguration } from "@aws-sdk/client-bedrock-runtime";
 import { S3Client } from "@aws-sdk/client-s3";
 import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, ExecutionTokenUsage, ImageGeneration, ImageGenExecutionOptions, Modalities, PromptOptions, PromptSegment, TrainingJob, TrainingJobStatus, TrainingOptions } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
-import { ClaudeMessagesPrompt, formatClaudePrompt, formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
+import { NovaMessagesPrompt } from "@llumiverse/core/formatters";
 import { AwsCredentialIdentity, Provider } from "@smithy/types";
 import mnemonist from "mnemonist";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
-import { AI21JurassicRequestPayload, AmazonRequestPayload, ClaudeRequestPayload, CohereCommandRPayload, CohereRequestPayload, LLama3RequestPayload, MistralPayload, NovaPayload } from "./payloads.js";
 import { forceUploadFile } from "./s3.js";
+import { converseConcatMessages, converseRemoveJSONprefill, converseSystemToMessages, fortmatConversePrompt } from "./converse.js";
 
 const { LRUCache } = mnemonist;
 
@@ -20,6 +20,17 @@ enum BedrockModelType {
     CustomModel = "custom-model",
     Unknown = "unknown",
 };
+
+function converseFinishReason(reason: string | undefined) {
+    //Possible values:
+    //end_turn | tool_use | max_tokens | stop_sequence | guardrail_intervened | content_filtered
+    if (!reason) return undefined;
+    switch (reason) {
+        case 'end_turn': return "stop";
+        case 'max_tokens': return "length";
+        default: return reason;
+    }
+}
 
 export interface BedrockModelCapabilities {
     name: string;
@@ -48,7 +59,7 @@ export interface BedrockDriverOptions extends DriverOptions {
     credentials?: AwsCredentialIdentity | Provider<AwsCredentialIdentity>;
 }
 
-export type BedrockPrompt = string | ClaudeMessagesPrompt | NovaMessagesPrompt | PromptSegment[];
+export type BedrockPrompt = NovaMessagesPrompt | ConverseRequest;
 
 export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockPrompt> {
 
@@ -90,269 +101,56 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     protected async formatPrompt(segments: PromptSegment[], opts: PromptOptions): Promise<BedrockPrompt> {
-        //TODO move the anthropic test in abstract driver?
-        if (opts.model.includes('anthropic')) {
-            //TODO: need to type better the types aren't checked properly by TS
-            return await formatClaudePrompt(segments, opts.result_schema);
-        } else if (opts.model.includes('nova')) {
-            //TODO: need to type better the types aren't checked properly by TS
-            return await formatNovaPrompt(segments, opts.result_schema);
-        } else {
-            return await super.formatPrompt(segments, opts) as string;
-        }
+        return await fortmatConversePrompt(segments, opts.result_schema);
+        //TODO Amazon Nova Canvas/Reel etc formatting
     }
 
-    static getAmazonInvocationMetrics(result: any): ExecutionTokenUsage | undefined {
-        if (result['amazon-bedrock-invocationMetrics']) {
-            return {
-                prompt: result['amazon-bedrock-invocationMetrics'].inputTokenCount,
-                result: result['amazon-bedrock-invocationMetrics'].outputTokenCount,
-                total: result['amazon-bedrock-invocationMetrics'].inputTokenCount + result['amazon-bedrock-invocationMetrics'].outputTokenCount,
-            };
-        }
-        return undefined;
-    }
-
-    //Update this when supporting new models
-    static getExtractedCompletionChunk(result: any, prompt?: BedrockPrompt): CompletionChunkObject {
-        //AWS universal token_usage
-        let token_usage = this.getAmazonInvocationMetrics(result);
-        if (result.generation || result.generation == '') {
-            // LLAMA3
-            if (!token_usage) {
-                token_usage = {
-                    prompt: result.prompt_token_count,
-                    result: result.generation_token_count,
-                    total: result.generation_token_count + result.prompt_token_count,
-                };
-            }
-            return {
-                result: result.generation,
-                finish_reason: result.stop_reason,  //already in "stop" or "length" format
-                token_usage: token_usage,
-            };
-        } else if (result.generations) {
-            // Cohere Command (Non-R)
-            if (!token_usage) {
-                token_usage = {
-                    prompt: result?.meta?.billed_units.input_tokens,
-                    result: result?.meta?.billed_units.output_tokens,
-                    total: result?.meta?.billed_units.input_tokens + result?.meta?.billed_units.output_tokens,
-                }
-            }
-            return {
-                result: result.generations[0].text,
-                finish_reason: cohereFinishReason(result.generations[0].finish_reason),
-                //Token usage not given in AWS docs, but is in cohere docs.
-                token_usage: token_usage
-            };
-        } else if (result.chat_history) {
-            // Cohere Command R
-            if (!token_usage) {
-                token_usage = {
-                    prompt: result?.meta?.billed_units.input_tokens,
-                    result: result?.meta?.billed_units.output_tokens,
-                    total: result?.meta?.billed_units.input_tokens + result?.meta?.billed_units.output_tokens,
-                }
-            }
-            return {
-                result: result.text,
-                finish_reason: cohereFinishReason(result.finish_reason),
-                token_usage: token_usage,
-            };
-        } else if (result.event_type) {
-            // Cohere Command R streaming
-            return {
-                result: result.text,
-                finish_reason: cohereFinishReason(result.finish_reason),
-                token_usage: token_usage,
-            };
-        } else if (result.completions) {
-            // A21 Jurassic
-            if (!token_usage) {
-                token_usage = {
-                    prompt: result.prompt.tokens.length,
-                    result: result.completions[0].data.tokens.length,
-                    total: result.prompt.tokens.length + result.completions[0].data.tokens.length,
-                }
-            }
-            return {
-                result: result.completions[0].data?.text,
-                finish_reason: a21FinishReason(result.completions[0].finishReason?.reason),
-                token_usage: token_usage,
-            };
-        } else if (result.content) {
-            // Claude
-            if (!token_usage) {
-                token_usage = {
-                    prompt: result.usage?.input_tokens,
-                    result: result.usage?.output_tokens,
-                    total: result.usage?.input_tokens + result.usage?.output_tokens,
-                }
-            }
-            let res: string = "";
-            if (prompt) {
-                //if last prompt.messages is {, add { to the response
-                const p = prompt as ClaudeMessagesPrompt;
-                const lastMessage = (p as ClaudeMessagesPrompt).messages[p.messages.length - 1];
-                res = lastMessage.content[0].text === '{' ? '{' + (result.content[0]?.text ?? '') : (result.content[0]?.text ?? '');
-            } else {
-                res = result.content[0].text
-            }
-            return {
-                result: res,
-                finish_reason: claudeFinishReason(result.stop_reason),
-                token_usage: token_usage,
-            };
-        }
-        else if (result.delta || result.type) { // claude-v2:1 when streaming
-            if (!token_usage) {
-                token_usage = {
-                    prompt: result.usage?.input_tokens,
-                    result: result.usage?.output_tokens,
-                    total: result.usage?.input_tokens + result.usage?.output_tokens,
-                }
-            }
-            let res: string = "";
-            if (result.type == 'content_block_start') {
-                if (prompt) {
-                    //if last prompt.messages is {, add { to the response
-                    const p = prompt as ClaudeMessagesPrompt;
-                    const lastMessage = (p as ClaudeMessagesPrompt).messages[p.messages.length - 1];
-                    res = lastMessage.content[0].text === '{' ? '{' + (result?.content_block[0]?.text ?? '') : (result?.content_block[0]?.text ?? '');
-                } else {
-                    res = result.content_block[0]?.text;
-                }
-            } else { // content_block_delta
-                res = result.delta?.text || '';
-            }
-            return {
-                result: res,
-                finish_reason: claudeFinishReason(result.delta?.stop_reason),
-                token_usage: token_usage,
-            };
-        } else if (result.outputs) {
-            // Mistral
-            return {
-                result: result.outputs[0]?.text,
-                finish_reason: result.outputs[0]?.stop_reason, // the stop reason is in the expected format ("stop" and "length")
-                token_usage: token_usage,
-            };
-            //Token usage not supported
-        } else if (result.results) {
-            // Amazon Titan non-streaming
-            if (!token_usage) {
-                token_usage = {
-                    prompt: result.inputTextTokenCount,
-                    result: result.results[0].tokenCount,
-                    total: result.inputTextTokenCount + result.results[0].tokenCount,
-                }
-            }
-            return {
-                result: result.results[0]?.outputText ?? '',
-                finish_reason: titanFinishReason(result.results[0]?.completionReason),
-                token_usage: token_usage,
-            };
-        } else if (result.chunks) {
-            // Amazon Titan streaming
-            const decoder = new TextDecoder();
-            const chunk = decoder.decode(result.chunks);
-            const result_chunk = JSON.parse(chunk);
-            if (!token_usage) {
-                token_usage = {
-                    prompt: result_chunk.inputTextTokenCount,
-                    result: result_chunk.totalOutputTextTokenCount,
-                    total: result_chunk.inputTextTokenCount + result_chunk.totalOutputTextTokenCount,
-                }
-            }
-            return {
-                result: result_chunk.outputText,
-                finish_reason: titanFinishReason(result_chunk.completionReason),
-                token_usage: token_usage,
-            };
-        } else if (result.completion) { // TODO: who uses this?
-            return {
-                result: result.completion,
-                token_usage: token_usage,
-            };
-        } else if (result.output) { // Amazon Nova
-            let res: string = "";
-            if (prompt) {
-                //if last prompt.messages is {, add { to the response
-                const p = prompt as NovaMessagesPrompt;
-                const lastMessage = (p as NovaMessagesPrompt).messages[p.messages.length - 1];
-                res = lastMessage.content[0].text === '{' ? '{' + (result.output.message.content[0].text ?? '') : (result.output.message.content[0].text ?? '');
-            } else {
-                res = result.output.message.content[0].text;
-            }
-            return {
-                result: res,
-                token_usage: {
-                    prompt: result.usage.inputTokens,
-                    result: result.usage.outputTokens,
-                    total: result.usage.totalTokens
-                },
-                finish_reason: novaFinishReason(result.stopReason),
-            };
-        } else if (result.contentBlockDelta) { // Amazon Nova streaming (converse API style)
-            let res: string = "";
-            if (prompt && result.contentBlockDelta.contentBlockIndex == 0) {
-                //if last prompt.messages is {, add { to the response
-                const p = prompt as NovaMessagesPrompt;
-                const lastMessage = (p as NovaMessagesPrompt).messages[p.messages.length - 1];
-                res = lastMessage.content[0].text === '{' ? '{' + (result.contentBlockDelta.delta.text ?? '') : (result.contentBlockDelta.delta.text ?? '');
-            } else {
-                res = result.contentBlockDelta.delta.text;
-            }
-            return {
-                result: res
-            }
-        } else if (result.contentBlockStop) { // Amazon Nova streaming (converse API style) necessary for streaming parsing
-            return {
-                result: "",
-            }
-        } else if (result.messageStart) { // Amazon Nova streaming (converse API style) necessary for streaming parsing
-            return {
-                result: "",
-            }
-        } else if (result.messageStop) { // Amazon Nova streaming (converse API style)
-            return {
-                result: "",
-                finish_reason: novaFinishReason(result.messageStop.stopReason),
-            }
-        } else if (result['amazon-bedrock-invocationMetrics']) { // Amazon Bedrock final response
-            return {
-                result: "",
-                token_usage: token_usage,
-            };
-        } else {    // Fallback
-            return {
-                result: result,
-                token_usage: token_usage,
-            };
+    static getExtractedExecuton(result: ConverseResponse, _prompt?: BedrockPrompt): CompletionChunkObject {
+        return {
+            result: result.output?.message?.content?.map(c => c.text).join("\n") ?? "",
+            token_usage: {
+                prompt: result.usage?.inputTokens,
+                result: result.usage?.outputTokens,
+                total: result.usage?.totalTokens,
+             },
+            finish_reason: converseFinishReason(result.stopReason),
         }
     };
 
-    extractDataFromResponse(prompt: BedrockPrompt, response: InvokeModelCommandOutput): Completion {
+    static getExtractedStream(result: ConverseStreamOutput, _prompt?: BedrockPrompt): CompletionChunkObject {
+        let output: string = "";
+        let stop_reason = "";
+        let token_usage: ExecutionTokenUsage | undefined;
+        if (result.contentBlockDelta) {
+            output = result.contentBlockDelta.delta?.text ?? "";
+        }
+        if (result.messageStop) {
+            stop_reason = result.messageStop.stopReason ?? "";
+        }
+        if (result.metadata) {
+            token_usage = {
+                prompt: result.metadata.usage?.inputTokens,
+                result: result.metadata.usage?.outputTokens,
+                total: result.metadata.usage?.totalTokens,
+            }
+        }
+        return {
+            result: output,
+            token_usage: token_usage,
+            finish_reason: converseFinishReason(stop_reason),
+        }
+    };
 
-        const decoder = new TextDecoder();
-        const body = decoder.decode(response.body);
-        const result = JSON.parse(body);
-
-        return BedrockDriver.getExtractedCompletionChunk(result, prompt);
-    }
-
-    async requestCompletion(prompt: BedrockPrompt, options: ExecutionOptions): Promise<Completion> {
+    async requestCompletion(prompt: ConverseRequest, options: ExecutionOptions): Promise<Completion> {
 
         const payload = this.preparePayload(prompt, options);
         const executor = this.getExecutor();
 
-        const res = await executor.invokeModel({
-            modelId: options.model,
-            contentType: "application/json",
-            body: JSON.stringify(payload),
+        const res = await executor.converse({
+            ...payload,
         });
-        const completion = this.extractDataFromResponse(prompt, res);
+
+        const completion = BedrockDriver.getExtractedExecuton(res, prompt) as Completion;
         if (options.include_original_response) {
             completion.original_response = res;
         }
@@ -435,24 +233,22 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return canStream;
     }
 
-    async requestCompletionStream(prompt: BedrockPrompt, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+    async requestCompletionStream(prompt: ConverseRequest, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         const payload = this.preparePayload(prompt, options);
         const executor = this.getExecutor();
-        return executor.invokeModelWithResponseStream({
-            modelId: options.model,
-            contentType: "application/json",
-            body: JSON.stringify(payload),
+        return executor.converseStream({
+            ...payload,
         }).then((res) => {
+            const stream = res.stream;
 
-            if (!res.body) {
-                throw new Error("Body not found");
+            if (!stream) {
+                throw new Error("[Bedrock] Stream not found in response");
             }
-            const decoder = new TextDecoder();
 
-            return transformAsyncIterator(res.body, (stream: ResponseStream) => {
-                const segment = JSON.parse(decoder.decode(stream.chunk?.bytes));
+            return transformAsyncIterator(stream, (stream: ConverseStreamOutput) => {
+                //const segment = JSON.parse(decoder.decode(stream.chunk?.bytes));
                 //console.log("Debug Segment for model " + options.model, JSON.stringify(segment));
-                return BedrockDriver.getExtractedCompletionChunk(segment, prompt);
+                return BedrockDriver.getExtractedStream(stream, prompt);
             });
 
         }).catch((err) => {
@@ -463,115 +259,111 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
 
 
-    preparePayload(prompt: BedrockPrompt, options: ExecutionOptions) {
+    preparePayload(prompt: ConverseRequest, options: ExecutionOptions) {
+        let additionalField = {};
 
-        //split arn on / should give provider
-        //TODO: check if works with custom models
-        //const provider = options.model.split("/")[0];
-        const contains = (str: string, substr: string) => str.indexOf(substr) !== -1;
-
-        if (contains(options.model, "meta")) {
-            return {
-                prompt,
-                temperature: options.temperature,
-                max_gen_len: options.max_tokens,
-                top_p: options.top_p
-            } as LLama3RequestPayload
-        } else if (contains(options.model, "claude")) {
-
-            const maxToken = () => {
-                if (options.max_tokens) {
-                    return options.max_tokens;
-
-                } else if (contains(options.model, "claude-3-5")) {
-                    return 8192;
+        if (options.model.includes("amazon")) {
+            //Titan models also exists but does not support any additional options
+            if (options.model.includes("nova")) {
+                additionalField = { inferenceConfig: { topK: options.top_k } };
+            }
+        } else if (options.model.includes("claude")) {
+            //Needs max_tokens to be set
+            if (!options.max_tokens) {
+                if (options.model.includes("claude-3-5") || options.model.includes("claude-4")) {
+                    options.max_tokens = 8192;
                 } else {
-                    return 4096
+                    options.max_tokens = 4096;
                 }
             }
-            return {
-                anthropic_version: "bedrock-2023-05-31",
-                ...(prompt as ClaudeMessagesPrompt),
-                temperature: options.temperature,
-                max_tokens: maxToken(),
-                top_p: options.top_p,
-                top_k: options.top_k,
-                stop_sequences: typeof options.stop_sequence === 'string' ?
-                    [options.stop_sequence] : options.stop_sequence,
-            } as ClaudeRequestPayload;
-        } else if (contains(options.model, "ai21")) {
-            return {
-                prompt: prompt,
-                temperature: options.temperature,
-                maxTokens: options.max_tokens,
-                topP: options.top_p,
-                stopSequences: typeof options.stop_sequence === 'string' ?
-                    [options.stop_sequence] : options.stop_sequence,
-                presencePenalty: { scale: options.presence_penalty },
-                frequencyPenalty: { scale: options.frequency_penalty },
-            } as AI21JurassicRequestPayload;
-        } else if (contains(options.model, "command-r-plus")) {
-            return {
-                message: prompt as string,
-                max_tokens: options.max_tokens,
-                temperature: options.temperature,
-                p: options.top_p,
-                k: options.top_k,
-                frequency_penalty: options.frequency_penalty,
-                presence_penalty: options.presence_penalty,
-                stop_sequences: typeof options.stop_sequence === 'string' ?
-                    [options.stop_sequence] : options.stop_sequence,
-            } as CohereCommandRPayload;
-        }
-        else if (contains(options.model, "cohere")) {
-            return {
-                prompt: prompt,
-                temperature: options.temperature,
-                max_tokens: options.max_tokens,
-                p: options.top_p,
-                k: options.top_k,
-                stop_sequences: typeof options.stop_sequence === 'string' ?
-                    [options.stop_sequence] : options.stop_sequence,
-            } as CohereRequestPayload;
-        } else if (contains(options.model, "titan")) {
-            const stop_seq: string[] = (typeof options.stop_sequence === 'string' ?
-                [options.stop_sequence] : options.stop_sequence) ?? [];
-            return {
-                inputText: "User: " + (prompt as string) + "\nBot:", // see https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-text.html#model-parameters-titan-request-response
-                textGenerationConfig: {
-                    temperature: options.temperature,
-                    topP: options.top_p,
-                    maxTokenCount: options.max_tokens,
-                    stopSequences: ["\n", ...stop_seq],
-                },
-            } as AmazonRequestPayload;
-        } else if (contains(options.model, "mistral")) {
-            return {
-                prompt: prompt,
-                temperature: options.temperature,
-                max_tokens: options.max_tokens,
-                top_k: options.top_k,
-                top_p: options.top_p,
-                stop: typeof options.stop_sequence === 'string' ?
-                    [options.stop_sequence] : options.stop_sequence,
-            } as MistralPayload;
-        } else if (contains(options.model, "nova")) {
-            return {
-                schemaVersion: "messages-v1",
-                ...(prompt as NovaMessagesPrompt),
-                inferenceConfig: {
-                    temperature: options.temperature,
-                    max_new_tokens: options.max_tokens,
-                    top_p: options.top_p,
-                    top_k: options.top_k,
-                    stopSequences: typeof options.stop_sequence === 'string' ?
-                        [options.stop_sequence] : options.stop_sequence,
+            additionalField = { top_k: options.top_k };
+        } else if (options.model.includes("meta")) {
+            //If last message is "```json", remove it. Model requires the final message to be a user message
+            prompt.messages = converseRemoveJSONprefill(prompt.messages);
+        } else if (options.model.includes("mistral")) {
+            //7B instruct and 8x7B instruct
+            if (options.model.includes("7b")) {
+                additionalField = { top_k: options.top_k };
+                //Does not support system messages
+                if (prompt.system && prompt.system?.length != 0) {
+                    prompt.messages?.push(converseSystemToMessages(prompt.system));
+                    prompt.system = undefined;
+                    prompt.messages = converseConcatMessages(prompt.messages);
                 }
-            } as NovaPayload;
-        } else {
-            throw new Error("Cannot prepare payload for unknown provider: " + options.model);
+            } else {
+                //Other models such as Mistral Small,Large and Large 2
+                //Support no additional fields.
+                prompt.messages = converseRemoveJSONprefill(prompt.messages);
+            }
+        } else if (options.model.includes("ai21")) {
+            //If last message is "```json", remove it. Model requires the final message to be a user message
+            prompt.messages = converseRemoveJSONprefill(prompt.messages);
+            if (options.model.includes("jambda")) {
+                additionalField = {
+                    presence_penalty: { scale: options.presence_penalty },
+                    frequency_penalty: { scale: options.frequency_penalty },
+                };
+            }
+            if (options.model.includes("j2")) {
+                additionalField = {
+                    presencePenalty: { scale: options.presence_penalty },
+                    frequencyPenalty: { scale: options.frequency_penalty },
+                };
+                //Does not support system messages
+                if (prompt.system && prompt.system?.length != 0) {
+                    prompt.messages?.push(converseSystemToMessages(prompt.system));
+                    prompt.system = undefined;
+                    prompt.messages = converseConcatMessages(prompt.messages);
+                }
+            }
+        } else if (options.model.includes("cohere.command")) {
+            // If last message is "```json", remove it.
+            // Model requires the final message to be a user message or does not support assistant messages
+            prompt.messages = converseRemoveJSONprefill(prompt.messages);
+            //Command R and R plus
+            if (options.model.includes("cohere.command-r")) {
+                additionalField = {
+                    k: options.top_k,
+                    frequency_penalty: options.frequency_penalty,
+                    presence_penalty: options.presence_penalty,
+                };
+            } else {
+                // Command non-R
+                additionalField = { k: options.top_k };
+                //Does not support system messages
+                if (prompt.system && prompt.system?.length != 0) {
+                    prompt.messages?.push(converseSystemToMessages(prompt.system));
+                    prompt.system = undefined;
+                    prompt.messages = converseConcatMessages(prompt.messages);
+                }
+            }
         }
 
+        //If last message is "```json", add corresponding ``` as a stop sequence.
+        if (prompt.messages && prompt.messages.length > 0) {
+            if (prompt.messages[prompt.messages.length - 1].content?.[0].text === "```json") {
+                if (!options.stop_sequence) {
+                    options.stop_sequence = ["```"];
+                } else if (!options.stop_sequence.includes("```")) {
+                    options.stop_sequence.push("```");
+                }
+            }
+        }
+
+        return {
+            messages: prompt.messages,
+            system: prompt.system,
+            modelId: options.model,
+            inferenceConfig: {
+                maxTokens: options.max_tokens,
+                temperature: options.temperature,
+                topP: options.top_p,
+                stopSequences: options.stop_sequence,
+            } as InferenceConfiguration,
+            additionalModelRequestFields: {
+                ...additionalField,
+            },
+        } as ConverseRequest;
     }
 
 
@@ -704,7 +496,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     async listModels(): Promise<AIModel[]> {
         this.logger.debug("[Bedrock] listing models");
         // exclude trainable models since they are not executable
-        const filter = (m: FoundationModelSummary) => m.inferenceTypesSupported?.includes("ON_DEMAND") ?? false;
+        // exclude embedding models, not to be used for typical completions.
+        const filter = (m: FoundationModelSummary) => (m.inferenceTypesSupported?.includes("ON_DEMAND") && !m.outputModalities?.includes("EMBEDDING")) ?? false;
         return this._listModels(filter);
     }
 
@@ -859,51 +652,3 @@ function jobInfo(job: GetModelCustomizationJobCommandOutput, jobId: string): Tra
         details
     }
 }
-
-
-function claudeFinishReason(reason: string | undefined) {
-    if (!reason) return undefined;
-    switch (reason) {
-        case 'end_turn': return "stop";
-        case 'max_tokens': return "length";
-        default: return reason; //stop_sequence
-    }
-}
-
-function cohereFinishReason(reason: string | undefined) {
-    if (!reason) return undefined;
-    switch (reason) {
-        case 'COMPLETE': return "stop";
-        case 'MAX_TOKENS': return "length";
-        default: return reason;
-    }
-}
-
-function a21FinishReason(reason: string | undefined) {
-    if (!reason) return undefined;
-    switch (reason) {
-        case 'endoftext': return "stop";
-        case 'length': return "length";
-        default: return reason;
-    }
-}
-
-function titanFinishReason(reason: string | undefined) {
-    if (!reason) return undefined;
-    switch (reason) {
-        case 'FINISH': return "stop";
-        case 'LENGTH': return "length";
-        default: return reason;
-    }
-}
-
-function novaFinishReason(reason: string | undefined) {
-    if (!reason) return undefined;
-    switch (reason) {
-        case 'end_turn': return "stop";
-        case 'max_tokens': return "length";
-        default: return reason;
-    }
-}
-
-
