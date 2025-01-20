@@ -6,8 +6,7 @@ import { AzureOpenAIDriver, BedrockDriver, GroqDriver, MistralAIDriver, OpenAIDr
 import { assertCompletionOk, assertStreamingCompletionOk } from './assertions';
 import { testPrompt_color, testPrompt_describeImage, testSchema_animalDescription, testSchema_color } from './samples';
 
-const TIMEOUT = 120 * 1000;
-
+const TIMEOUT = 90 * 1000;
 
 interface TestDriver {
     driver: AbstractDriver;
@@ -116,14 +115,12 @@ if (process.env.BEDROCK_REGION) {
         }),
         //Use foundation models and inference profiles to test the driver
         models: [
-            "anthropic.claude-3-sonnet-20240229-v1:0",
-            "mistral.mixtral-8x7b-instruct-v0:1",
-            "cohere.command-r-plus-v1:0",
-            "us.meta.llama3-1-70b-instruct-v1:0",
+            "anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "us.meta.llama3-3-70b-instruct-v1:0",
             "us.amazon.nova-micro-v1:0",
-        ]
-    }
-    )
+            "ai21.jamba-1-5-mini-v1:0",
+        ],
+    });
 } else {
     console.warn("Bedrock tests are skipped: BEDROCK_REGION environment variable is not set");
 }
