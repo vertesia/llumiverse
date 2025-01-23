@@ -272,6 +272,12 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             if (!options.max_tokens) {
                 if (options.model.includes("claude-3-5") || options.model.includes("claude-4")) {
                     options.max_tokens = 8192;
+
+                    //Bug with AWS Converse Sonnet 3.5, does not effect Haiku.
+                    //See https://github.com/boto/boto3/issues/4279
+                    if (options.model.includes("claude-3-5-sonnet")) {
+                        options.max_tokens = 4096;
+                    }
                 } else {
                     options.max_tokens = 4096;
                 }
