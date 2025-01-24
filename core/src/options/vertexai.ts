@@ -24,7 +24,6 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
             {
                 name: SharedOptions.number_of_images, type: OptionType.numeric, min: 1, max: 4, default: 1,
                 integer: true, description: "Number of Images to generate",
-                refresh: true,
             },
             {
                 name: SharedOptions.seed, type: OptionType.numeric, min: 0, max: 4294967295, default: 12,

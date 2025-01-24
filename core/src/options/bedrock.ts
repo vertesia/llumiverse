@@ -55,44 +55,41 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
 
         let dependentOptions: ModelOptionInfoItem[] = [];
 
-        const taskType = (option as BedrockOptions)?.taskType ?? "TEXT_IMAGE";
-        if (typeof taskType === "string") {
-            switch (taskType) {
-                case "TEXT_IMAGE":
-                    dependentOptions.push(
-                        {
-                            name: "controlMode", type: OptionType.enum, enum: { "CANNY_EDGE": "CANNY_EDGE", "SEGMENTATION": "SEGMENTATION" },
-                            default: "CANNY_EDGE", description: "The control mode of the generated image"
-                        },
-                        { name: "controlStrength", type: OptionType.numeric, min: 0, max: 1, default: 0.7, description: "The control strength of the generated image" },
-                    );
-                    break;
-                case "COLOR_GUIDED_GENERATION":
-                    dependentOptions.push(
-                        { name: "colors", type: OptionType.string_list, value: [], description: "Hexadecimal color values to guide generation" },
-                    )
-                    break;
-                case "IMAGE_VARIATION":
-                    dependentOptions.push(
-                        { name: "similarityStrength", type: OptionType.numeric, min: 0.2, max: 1, default: 0.7, description: "The similarity strength of the generated image" },
-                    )
-                    break;
-                case "INPAINTING":
-                    //No changes
-                    break;
-                case "OUTPAINTING":
-                    dependentOptions.push(
-                        {
-                            name: "outPaintingMode", type: OptionType.enum, enum: { "DEFAULT": "DEFAULT", "PRECISE": "PRECISE" },
-                            default: "default", description: "The outpainting mode of the generated image"
-                        },
-                    )
-                    break;
-                case "BACKGROUND_REMOVAL":
-                    dependentOptions = [];
-                    otherOptions = [];
-                    break;
-            }
+        switch ((option as BedrockOptions)?.taskType ?? "TEXT_IMAGE") {
+            case "TEXT_IMAGE":
+                dependentOptions.push(
+                    {
+                        name: "controlMode", type: OptionType.enum, enum: { "CANNY_EDGE": "CANNY_EDGE", "SEGMENTATION": "SEGMENTATION" },
+                        default: "CANNY_EDGE", description: "The control mode of the generated image"
+                    },
+                    { name: "controlStrength", type: OptionType.numeric, min: 0, max: 1, default: 0.7, description: "The control strength of the generated image" },
+                );
+                break;
+            case "COLOR_GUIDED_GENERATION":
+                dependentOptions.push(
+                    { name: "colors", type: OptionType.string_list, value: [], description: "Hexadecimal color values to guide generation" },
+                )
+                break;
+            case "IMAGE_VARIATION":
+                dependentOptions.push(
+                    { name: "similarityStrength", type: OptionType.numeric, min: 0.2, max: 1, default: 0.7, description: "The similarity strength of the generated image" },
+                )
+                break;
+            case "INPAINTING":
+                //No changes
+                break;
+            case "OUTPAINTING":
+                dependentOptions.push(
+                    {
+                        name: "outPaintingMode", type: OptionType.enum, enum: { "DEFAULT": "DEFAULT", "PRECISE": "PRECISE" },
+                        default: "default", description: "The outpainting mode of the generated image"
+                    },
+                )
+                break;
+            case "BACKGROUND_REMOVAL":
+                dependentOptions = [];
+                otherOptions = [];
+                break;
         }
 
         return {
