@@ -71,8 +71,8 @@ export class ImagenModelDefinition  {
             throw new Error(`Image generation requires image output_modality`);
         }
 
-        if (!options.model.includes('imagen-3.0-generate-001')) {
-            throw new Error(`Model ${options.model} not supported, use imagen-3.0-generate-001`);
+        if (!options.model.includes('imagen-3.0') || !options.model.includes('generate')) {
+            throw new Error(`Model ${options.model} not supported, use imagen-3.0 generate models`);
         }
 
         const taskType = () => {
