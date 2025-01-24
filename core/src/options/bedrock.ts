@@ -7,12 +7,12 @@ export type BedrockOptions = NovaCanvasOptions;
 export interface NovaCanvasOptions {
     _option_id: "bedrock-nova-canvas"
     taskType: "TEXT_IMAGE" | "COLOR_GUIDED_GENERATION" | "IMAGE_VARIATION" | "INPAINTING" | "OUTPAINTING" | "BACKGROUND_REMOVAL";
-    width: number;
-    height: number;
-    quality: "standard" | "premium";
-    cfgScale: number;
-    seed: number;
-    numberOfImages: number;
+    width?: number;
+    height?: number;
+    quality?: "standard" | "premium";
+    cfgScale?: number;
+    seed?: number;
+    numberOfImages?: number;
     controlMode?: "CANNY_EDGE" | "SEGMENTATION";
     controlStrength?: number;
     colors?: string[];

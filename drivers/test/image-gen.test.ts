@@ -42,8 +42,8 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
             model: "amazon.nova-canvas-v1:0",
             output_modality: Modalities.image,
             model_options: {
-                generation_type: "text-to-image",
-                input_image_use: "none",
+                _option_id: "bedrock-nova-canvas",
+                taskType: "TEXT_IMAGE",
             }
         }
         const res = await formatNovaImageGenerationPayload(NovaImageGenerationTaskType.TEXT_IMAGE, testPrompt_textToImage, options)
@@ -61,8 +61,8 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
             model: model,
             output_modality: Modalities.image,
             model_options: {
-                generation_type: "text-to-image",
-                input_image_use: "none",
+                _option_id: "bedrock-nova-canvas",
+                taskType: "TEXT_IMAGE",
             }
         }
 
@@ -81,8 +81,8 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
             model: model,
             output_modality: Modalities.image,
             model_options: {
-                generation_type: "text-to-image",
-                input_image_use: "variation",
+                _option_id: "bedrock-nova-canvas",
+                taskType: "TEXT_IMAGE",
             }
         }
 
@@ -100,9 +100,8 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
             model: model,
             output_modality: Modalities.image,
             model_options: {
-                generation_type: "text-to-image",
-                input_image_use: "inspiration",
-                quality: "standard",
+                _option_id: "bedrock-nova-canvas",
+                taskType: "IMAGE_VARIATION",
             }
         }
 

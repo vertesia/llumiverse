@@ -171,12 +171,11 @@ export function formatNovaImageGenerationPayload(taskType: string, prompt: NovaM
 }
 
 export interface InvokeModelPayloadBase {
-
     taskType: NovaImageGenerationTaskType;
     imageGenerationConfig: {
         width?: number;
         height?: number;
-        quality: "standard" | "premium";
+        quality?: "standard" | "premium";
         cfgScale?: number;
         seed?: number;
         numberOfImages?: number;
@@ -184,7 +183,6 @@ export interface InvokeModelPayloadBase {
 }
 
 export interface NovaTextToImagePayload extends InvokeModelPayloadBase {
-
     textToImageParams: {
         conditionImage?: string;
         controlMode?: "CANNY_EDGE" | "SEGMENTATION";
@@ -192,7 +190,6 @@ export interface NovaTextToImagePayload extends InvokeModelPayloadBase {
         text: string;
         negativeText?: string;
     };
-
 }
 
 

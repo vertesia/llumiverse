@@ -183,11 +183,12 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
     let test_options: ExecutionOptions = {
         model: "",
         model_options: {
+            _option_id: "text-fallback",
             max_tokens: 128,
             temperature: 0.3,
             top_k: 40,
             top_p: 0.7,             //Some models do not support top_p = 1.0, set to 0.99 or lower.
-            top_logprobs: 5,        //Currently not supported, option will be ignored
+         //   top_logprobs: 5,        //Currently not supported, option will be ignored
             presence_penalty: 0.1,      //Cohere Command R does not support using presence & frequency penalty at the same time
             frequency_penalty: 0.0,
             stop_sequence: ["adsoiuygsa"],
@@ -257,6 +258,7 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
             output_modality: Modalities.text,
             model: model,
             model_options: {
+                _option_id: "text-fallback",
                 temperature: 0.5,
                 max_tokens: 1024,
             },
