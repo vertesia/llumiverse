@@ -29,8 +29,8 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                 "Text-To-Image": "TEXT_IMAGE",
                 "Color-Guided-Generation": "COLOR_GUIDED_GENERATION",
                 "Image-Variation": "IMAGE_VARIATION",
-                "Inpainting": "INPAINTING",
-                "Outpainting": "OUTPAINTING",
+            //    "Inpainting": "INPAINTING",    Not implemented yet
+            //    "Outpainting": "OUTPAINTING",
                 "Background-Removal": "BACKGROUND_REMOVAL",
             },
             default: "TEXT_IMAGE",
