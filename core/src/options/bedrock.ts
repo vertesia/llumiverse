@@ -39,8 +39,8 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
         };
 
         let otherOptions: ModelOptionInfoItem[] = [
-            { name: "width", type: OptionType.numeric, min: 320, max: 4096, default: 512, integer: true, description: "The width of the generated image" },
-            { name: "height", type: OptionType.numeric, min: 320, max: 4096, default: 512, integer: true, description: "The height of the generated image" },
+            { name: "width", type: OptionType.numeric, min: 320, max: 4096, default: 512, step: 16, integer: true, description: "The width of the generated image" },
+            { name: "height", type: OptionType.numeric, min: 320, max: 4096, default: 512, step: 16, integer: true, description: "The height of the generated image" },
             {
                 name: "quality",
                 type: OptionType.enum,
@@ -48,7 +48,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                 default: "standard",
                 description: "The quality of the generated image"
             },
-            { name: "cfgScale", type: OptionType.numeric, min: 1.1, max: 10, default: 6.5, integer: false, description: "The scale of the generated image" },
+            { name: "cfgScale", type: OptionType.numeric, min: 1.1, max: 10.0, default: 6.5, step: 0.1, integer: false, description: "The scale of the generated image" },
             { name: "seed", type: OptionType.numeric, min: 0, max: 858993459, default: 12, integer: true, description: "The seed of the generated image" },
             { name: "numberOfImages", type: OptionType.numeric, min: 1, max: 5, default: 1, integer: true, description: "The number of images to generate" },
         ];
