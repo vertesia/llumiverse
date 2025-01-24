@@ -113,11 +113,12 @@ export class ImagenModelDefinition  {
             sampleCount: options.model_options?.number_of_images ?? 1,
             // You can't use a seed value and watermark at the same time.
             seed: options.model_options?.seed ?? 1,
-            // addWatermark: false,
+            addWatermark: options.model_options?.add_watermark,
             aspectRatio: options.model_options?.aspect_ratio ?? '1:1',
             //negativePrompt: options.model_options.negative_prompt ?? '',
-            //safetyFilterLevel: 'block_some',
-            //personGeneration: 'allow_adult',
+            safetySetting: options.model_options?.safety_setting,
+            personGeneration: options.model_options?.person_generation,
+            //enhancePrompt: options.model_options?.enhance_prompt,
         };
         const parameters = helpers.toValue(parameter);
 

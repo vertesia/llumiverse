@@ -24,10 +24,15 @@ async function textToImagePayload(prompt: NovaMessagesPrompt, options: Execution
             quality: options.model_options?.quality,
             width: options.model_options?.width,
             height: options.model_options?.height,
+            numberOfImages: options.model_options?.numberOfImages,
+            seed: options.model_options?.seed,
+            cfgScale: options.model_options?.cfgScale,
         },
         textToImageParams: {
             text: text,
-            conditionImage: conditionImage(options.model_options.controlMode ? true : false)?.source.bytes
+            conditionImage: conditionImage(options.model_options.controlMode ? true : false)?.source.bytes,
+            controlMode: options.model_options.controlMode,
+            controlStrength: options.model_options.controlStrength,
         }
     }
 
@@ -72,10 +77,14 @@ async function imageVariationPayload(prompt: NovaMessagesPrompt, options: Execut
             quality: options.model_options?.quality,
             width: options.model_options?.width,
             height: options.model_options?.height,
+            numberOfImages: options.model_options?.numberOfImages,
+            seed: options.model_options?.seed,
+            cfgScale: options.model_options?.cfgScale,
         },
         imageVariationParams: {
             images: images ?? [],
             text: text,
+            similarityStrength: options.model_options?.similarityStrength,
         }
     }
 
