@@ -2,6 +2,9 @@ import { JSONSchema4 } from 'json-schema';
 
 import { PromptFormatter } from './formatters/index.js';
 import { JSONObject } from './json.js';
+import { TextFallbackOptions } from './options.js';
+import { VertexAIOptions } from './options/vertexai.js';
+import { BedrockOptions } from './options/bedrock.js';
 
 export interface EmbeddingsOptions {
     /**
@@ -123,9 +126,10 @@ export interface PromptOptions {
     result_schema?: JSONSchema4;
 }
 
-export type ModelOptions = TextModelOptions | ImageModelOptions;
+//type ModelOptions = TextModelOptions | ImageModelOptions;
 
-export interface TextModelOptions {
+//interface TextModelOptions {
+/*
     temperature?: number;
     max_tokens?: number;
     stop_sequence?: string[];
@@ -138,34 +142,35 @@ export interface TextModelOptions {
      * - 100 - will lead to more creative and less predictable outputs
      * It will be ignored on OpenAI since it does not support it
      */
-    top_k?: number;
+    //top_k?: number;
 
     /**
      * An alternative to sampling with temperature, called nucleus sampling, where the model considers the results of the tokens with top_p probability mass. So 0.1 means only the tokens comprising the top 10% probability mass are considered.
      * Either use temperature or top_p, not both
      */
-    top_p?: number;
+    //top_p?: number;
 
     /**
      * Currently not supported, will be ignored.
      * Should be an integer.
      * Only supported for OpenAI. Look at OpenAI documentation for more detailsx
      */
-    top_logprobs?: number;
+    //top_logprobs?: number;
 
     /**
      * Number between -2.0 and 2.0. Positive values penalize new tokens based on whether they appear in the text so far, increasing the model's likelihood to talk about new topics.
      * Ignored for models which doesn;t support it
      */
-    presence_penalty?: number;
+    //presence_penalty?: number;
 
     /**
      * Number between -2.0 and 2.0. Positive values penalize new tokens based on their existing frequency in the text so far, decreasing the model's likelihood to repeat the same line verbatim.
      * Ignored for models which doesn;t support it
      */
-    frequency_penalty?: number;
-}
-export interface ImageModelOptions {
+    //frequency_penalty?: number;
+//}
+/*
+interface ImageModelOptions {
 
     aspect?: string;
     width?: number;
@@ -180,8 +185,8 @@ export interface ImageModelOptions {
 
     seed?: number;
 }
-
-interface ExecutionOptionsPrototype extends PromptOptions{
+*/
+export interface ExecutionOptions extends PromptOptions {
     /**
      * If set to true the original response from the target LLM will be included in the response under the original_response field.
      * This is useful for debugging and for some advanced use cases.
@@ -192,16 +197,77 @@ interface ExecutionOptionsPrototype extends PromptOptions{
     output_modality: Modalities;
 }
 
-export type ExecutionOptions = TextExecutionOptions | ImageExecutionOptions;
+//Common names to share between different models
+export enum SharedOptions {
+    //Text
+    max_tokens = "max_tokens",
+    temperature = "temperature",
+    top_p = "top_p",
+    top_k = "top_k",
+    presence_penalty = "presence_penalty",
+    frequency_penalty = "frequency_penalty",
+    stop_sequence = "stop_sequence",
 
-export interface TextExecutionOptions extends ExecutionOptionsPrototype{
-    output_modality: Modalities.text;
-    model_options: TextModelOptions;
+    //Image
+    seed = "seed",
+    number_of_images = "number_of_images",
 }
 
-export interface ImageExecutionOptions extends ExecutionOptionsPrototype{
-    output_modality: Modalities.image;
-    model_options: ImageModelOptions;
+export enum OptionType {
+    numeric = "numeric",
+    enum = "enum",
+    boolean = "boolean",
+    string_list = "string_list"
+}
+
+// ============== Model Options ===============
+
+export type ModelOptions = TextFallbackOptions | VertexAIOptions | BedrockOptions;
+
+// ============== Option Info ===============
+
+export interface ModelOptionsInfo {
+    options: ModelOptionInfoItem[];
+    _options_id: string; //Should follow same ids as ModelOptions
+}
+
+export type ModelOptionInfoItem = NumericOptionInfo | EnumOptionInfo | BooleanOptionInfo | StringListOptionInfo;
+interface OptionInfoPrototype {
+    type: OptionType;
+    name: string;
+    description?: string;
+
+    //If this is true, whether other options apply is dependent on this option
+    //Therefore, if this option is changed, the set of available options should be refreshed.
+    refresh?: boolean;
+}
+
+export interface NumericOptionInfo extends OptionInfoPrototype {
+    type: OptionType.numeric;
+    value?: number;
+    min?: number;
+    max?: number;
+    step?: number;
+    integer?: boolean;
+    default?: number;
+}
+
+export interface EnumOptionInfo extends OptionInfoPrototype {
+    type: OptionType.enum;
+    value?: string;
+    enum: Record<string, string>;
+    default?: string;
+}
+
+export interface BooleanOptionInfo extends OptionInfoPrototype {
+    type: OptionType.boolean;
+    value?: boolean;
+    default?: boolean;
+}
+
+export interface StringListOptionInfo extends OptionInfoPrototype {
+    type: OptionType.string_list;
+    value?: string[];
 }
 
 // ============== Prompts ===============

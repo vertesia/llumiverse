@@ -1,7 +1,7 @@
 import { Bedrock, CreateModelCustomizationJobCommand, FoundationModelSummary, GetModelCustomizationJobCommand, GetModelCustomizationJobCommandOutput, ModelCustomizationJobStatus, StopModelCustomizationJobCommand } from "@aws-sdk/client-bedrock";
 import { BedrockRuntime, ConverseRequest, ConverseResponse, ConverseStreamOutput, InferenceConfiguration } from "@aws-sdk/client-bedrock-runtime";
 import { S3Client } from "@aws-sdk/client-s3";
-import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, ExecutionTokenUsage, ImageExecutionOptions, ImageGeneration, Modalities, PromptOptions, PromptSegment, TextExecutionOptions, TrainingJob, TrainingJobStatus, TrainingOptions } from "@llumiverse/core";
+import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionTokenUsage, ImageGeneration, Modalities, PromptOptions, PromptSegment, ExecutionOptions, TrainingJob, TrainingJobStatus, TrainingOptions } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { NovaMessagesPrompt } from "@llumiverse/core/formatters";
 import { AwsCredentialIdentity, Provider } from "@smithy/types";
@@ -141,7 +141,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
     };
 
-    async requestTextCompletion(prompt: ConverseRequest, options: TextExecutionOptions): Promise<Completion> {
+    async requestTextCompletion(prompt: ConverseRequest, options: ExecutionOptions): Promise<Completion> {
 
         const payload = this.preparePayload(prompt, options);
         const executor = this.getExecutor();
@@ -233,7 +233,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return canStream;
     }
 
-    async requestTextCompletionStream(prompt: ConverseRequest, options: TextExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+    async requestTextCompletionStream(prompt: ConverseRequest, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         const payload = this.preparePayload(prompt, options);
         const executor = this.getExecutor();
         return executor.converseStream({
@@ -257,35 +257,35 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         });
     }
 
+    preparePayload(prompt: ConverseRequest, options: ExecutionOptions) {
+        if (options.model_options?._option_id !== "text-fallback") {
+            throw new Error("Invalid model options");
+        }
 
-
-    preparePayload(prompt: ConverseRequest, options: TextExecutionOptions) {
         let additionalField = {};
-
-        const model_options = options.model_options || {};
 
         if (options.model.includes("amazon")) {
             //Titan models also exists but does not support any additional options
             if (options.model.includes("nova")) {
-                additionalField = { inferenceConfig: { topK: model_options.top_k } };
+                additionalField = { inferenceConfig: { topK: options.model_options?.top_k } };
             }
         } else if (options.model.includes("claude")) {
             //Needs max_tokens to be set
-            if (!model_options.max_tokens) {
+            if (!options.model_options?.max_tokens) {
                 if (options.model.includes("claude-3-5") || options.model.includes("claude-4")) {
-                    model_options.max_tokens = 8192;
+                    options.model_options.max_tokens = 8192;
                 } else {
-                    model_options.max_tokens = 4096;
+                    options.model_options.max_tokens = 4096;
                 }
             }
-            additionalField = { top_k: model_options.top_k };
+            additionalField = { top_k: options.model_options?.top_k };
         } else if (options.model.includes("meta")) {
             //If last message is "```json", remove it. Model requires the final message to be a user message
             prompt.messages = converseRemoveJSONprefill(prompt.messages);
         } else if (options.model.includes("mistral")) {
             //7B instruct and 8x7B instruct
             if (options.model.includes("7b")) {
-                additionalField = { top_k: model_options.top_k };
+                additionalField = { top_k: options.model_options?.top_k };
                 //Does not support system messages
                 if (prompt.system && prompt.system?.length != 0) {
                     prompt.messages?.push(converseSystemToMessages(prompt.system));
@@ -302,14 +302,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             prompt.messages = converseRemoveJSONprefill(prompt.messages);
             if (options.model.includes("jambda")) {
                 additionalField = {
-                    presence_penalty: { scale: model_options.presence_penalty },
-                    frequency_penalty: { scale: model_options.frequency_penalty },
+                    presence_penalty: { scale: options.model_options?.presence_penalty },
+                    frequency_penalty: { scale: options.model_options?.frequency_penalty },
                 };
             }
             if (options.model.includes("j2")) {
                 additionalField = {
-                    presencePenalty: { scale: model_options.presence_penalty },
-                    frequencyPenalty: { scale: model_options.frequency_penalty },
+                    presencePenalty: { scale: options.model_options?.presence_penalty },
+                    frequencyPenalty: { scale: options.model_options?.frequency_penalty },
                 };
                 //Does not support system messages
                 if (prompt.system && prompt.system?.length != 0) {
@@ -325,13 +325,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             //Command R and R plus
             if (options.model.includes("cohere.command-r")) {
                 additionalField = {
-                    k: model_options.top_k,
-                    frequency_penalty: model_options.frequency_penalty,
-                    presence_penalty: model_options.presence_penalty,
+                    k: options.model_options?.top_k,
+                    frequency_penalty: options.model_options?.frequency_penalty,
+                    presence_penalty: options.model_options?.presence_penalty,
                 };
             } else {
                 // Command non-R
-                additionalField = { k: model_options.top_k };
+                additionalField = { k: options.model_options?.top_k };
                 //Does not support system messages
                 if (prompt.system && prompt.system?.length != 0) {
                     prompt.messages?.push(converseSystemToMessages(prompt.system));
@@ -344,10 +344,12 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         //If last message is "```json", add corresponding ``` as a stop sequence.
         if (prompt.messages && prompt.messages.length > 0) {
             if (prompt.messages[prompt.messages.length - 1].content?.[0].text === "```json") {
-                if (!model_options.stop_sequence) {
-                    model_options.stop_sequence = ["```"];
-                } else if (!model_options.stop_sequence.includes("```")) {
-                    model_options.stop_sequence.push("```");
+                let stopSeq = options.model_options?.stop_sequence;
+                if (!stopSeq) {
+                    options.model_options.stop_sequence = ["```"];
+                } else if (!stopSeq.includes("```")) {
+                    stopSeq.push("```");
+                    options.model_options.stop_sequence = stopSeq;
                 }
             }
         }
@@ -357,10 +359,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             system: prompt.system,
             modelId: options.model,
             inferenceConfig: {
-                maxTokens: model_options.max_tokens,
-                temperature: model_options.temperature,
-                topP: model_options.top_p,
-                stopSequences: model_options.stop_sequence,
+                maxTokens: options.model_options?.max_tokens,
+                temperature: options.model_options?.temperature,
+                topP: options.model_options?.top_p,
+                stopSequences: options.model_options?.stop_sequence,
             } as InferenceConfiguration,
             additionalModelRequestFields: {
                 ...additionalField,
@@ -369,32 +371,24 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
 
-    async requestImageGeneration(prompt: NovaMessagesPrompt, options: ImageExecutionOptions): Promise<Completion<ImageGeneration>> {
-
+    async requestImageGeneration(prompt: NovaMessagesPrompt, options: ExecutionOptions): Promise<Completion<ImageGeneration>> {
         if (options.output_modality !== Modalities.image) {
             throw new Error(`Image generation requires image output_modality`);
         }
+        if (options.model_options?._option_id !== "bedrock-nova-canvas") {
+            throw new Error("Invalid model options");
+        }
 
         const executor = this.getExecutor();
-        const taskType = () => {
-            switch (options.model_options.generation_type) {
-                case "text-to-image":
-                    if (options.model_options.input_image_use === "variation") {
-                        return NovaImageGenerationTaskType.IMAGE_VARIATION;
-                    } else {
-                        return NovaImageGenerationTaskType.TEXT_IMAGE
-                    }
-                default:
-                    return NovaImageGenerationTaskType.TEXT_IMAGE
-            }
-        }
-        this.logger.info("Task type: " + taskType());
+        const taskType = options.model_options.taskType ?? NovaImageGenerationTaskType.TEXT_IMAGE;
+
+        this.logger.info("Task type: " + taskType);
 
         if (typeof prompt === "string" ) {
             throw  new Error( "Bad prompt format");
         }
 
-        const payload = await formatNovaImageGenerationPayload(taskType(), prompt, options);
+        const payload = await formatNovaImageGenerationPayload(taskType, prompt, options);
 
         const res = await executor.invokeModel({
             modelId: options.model,
@@ -416,7 +410,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 images: result.images,
             }
         }
-
     }
 
 

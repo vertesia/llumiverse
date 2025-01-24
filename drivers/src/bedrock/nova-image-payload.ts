@@ -1,31 +1,33 @@
-import { ImageExecutionOptions } from "@llumiverse/core";
+import { ExecutionOptions } from "@llumiverse/core";
 import { NovaMessage, NovaMessagesPrompt } from "@llumiverse/core/formatters";
 
-async function textToImagePayload(prompt: NovaMessagesPrompt, options: ImageExecutionOptions): Promise<NovaTextToImagePayload> {
+async function textToImagePayload(prompt: NovaMessagesPrompt, options: ExecutionOptions): Promise<NovaTextToImagePayload> {
+    if (options.model_options?._option_id !== "bedrock-nova-canvas") {
+        throw new Error("Invalid model options");
+    }
 
     const textMessages = prompt.messages.map(m => m.content.map(c => c.text)).flat();
     let text = textMessages.join("\n\n");
     text += prompt.system ? "\n\n\nIMPORTANT: " + prompt.system?.map(m => m.text).join("\n\n") : '';
 
-    const conditionImage = () => {
+    const conditionImage = (conditionImage: boolean) => {
         const img = getFirstImageFromPrompt(prompt.messages);
-        if (img && options.model_options.input_image_use === "inspiration") {
-            return getFirstImageFromPrompt(prompt.messages);
+        if (img && conditionImage) {
+            return img
         }
         return undefined;
     }
 
-
     let payload: NovaTextToImagePayload = {
         taskType: NovaImageGenerationTaskType.TEXT_IMAGE,
         imageGenerationConfig: {
-            quality: options.model_options.quality === "high" ? "premium" : "standard",
-            width: options.model_options.width,
-            height: options.model_options.height,
+            quality: options.model_options?.quality,
+            width: options.model_options?.width,
+            height: options.model_options?.height,
         },
         textToImageParams: {
             text: text,
-            conditionImage: conditionImage()?.source.bytes
+            conditionImage: conditionImage(options.model_options.controlMode ? true : false)?.source.bytes
         }
     }
 
@@ -56,7 +58,10 @@ function getAllImagesFromPrompt(prompt: NovaMessage[]) {
     return images;
 }
 
-async function imageVariationPayload(prompt: NovaMessagesPrompt, options: ImageExecutionOptions): Promise<NovaImageVariationPayload> {
+async function imageVariationPayload(prompt: NovaMessagesPrompt, options: ExecutionOptions): Promise<NovaImageVariationPayload> {
+    if (options.model_options?._option_id !== "bedrock-nova-canvas") {
+        throw new Error("Invalid model options");
+    }
 
     const text = prompt.messages.map(m => m.content).join("\n\n");
     const images = getAllImagesFromPrompt(prompt.messages);
@@ -64,9 +69,9 @@ async function imageVariationPayload(prompt: NovaMessagesPrompt, options: ImageE
     let payload: NovaImageVariationPayload = {
         taskType: NovaImageGenerationTaskType.IMAGE_VARIATION,
         imageGenerationConfig: {
-            quality: options.model_options.quality === "high" ? "premium" : "standard",
-            width: options.model_options.width,
-            height: options.model_options.height,
+            quality: options.model_options?.quality,
+            width: options.model_options?.width,
+            height: options.model_options?.height,
         },
         imageVariationParams: {
             images: images ?? [],
@@ -79,7 +84,7 @@ async function imageVariationPayload(prompt: NovaMessagesPrompt, options: ImageE
 }
 
 
-export function formatNovaImageGenerationPayload(taskType: NovaImageGenerationTaskType, prompt: NovaMessagesPrompt, options: ImageExecutionOptions) {
+export function formatNovaImageGenerationPayload(taskType: string, prompt: NovaMessagesPrompt, options: ExecutionOptions) {
 
     switch (taskType) {
         case NovaImageGenerationTaskType.TEXT_IMAGE:

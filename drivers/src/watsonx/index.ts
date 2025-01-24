@@ -1,4 +1,4 @@
-import { AIModel, AbstractDriver, Completion, DriverOptions, EmbeddingsOptions, EmbeddingsResult, CompletionChunk, TextExecutionOptions } from "@llumiverse/core";
+import { AIModel, AbstractDriver, Completion, DriverOptions, EmbeddingsOptions, EmbeddingsResult, CompletionChunk, ExecutionOptions } from "@llumiverse/core";
 import { transformSSEStream } from "@llumiverse/core/async";
 import { FetchClient } from "api-fetch-client";
 import { GenerateEmbeddingPayload, GenerateEmbeddingResponse, WatsonAuthToken, WatsonxListModelResponse, WatsonxModelSpec, WatsonxTextGenerationPayload, WatsonxTextGenerationResponse } from "./interfaces.js";
@@ -29,12 +29,15 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
         this.fetchClient = new FetchClient(this.endpoint_url).withAuthCallback(async () => this.getAuthToken().then(token => `Bearer ${token}`));
     }
 
-    async requestTextCompletion(prompt: string, options: TextExecutionOptions): Promise<Completion<any>> {
+    async requestTextCompletion(prompt: string, options: ExecutionOptions): Promise<Completion<any>> {
+        if (options.model_options?._option_id !== "text-fallback") {
+            throw new Error("Invalid model options");
+        }
         const payload: WatsonxTextGenerationPayload = {
             model_id: options.model,
             input: prompt + "\n",
             parameters: {
-                max_new_tokens: options.model_options.max_tokens,
+                max_new_tokens: options.model_options.max_tokens
                 //time_limit: options.time_limit,
             },
             project_id: this.projectId,
@@ -56,13 +59,15 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
         }
     }
 
-    async requestTextCompletionStream(prompt: string, options: TextExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
-
+    async requestTextCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
+        if (options.model_options?._option_id !== "text-fallback") {
+            throw new Error("Invalid model options");
+        }
         const payload: WatsonxTextGenerationPayload = {
             model_id: options.model,
             input: prompt + "\n",
             parameters: {
-                max_new_tokens: options.model_options.max_tokens,
+                max_new_tokens: options.model_options.temperature,
                 //time_limit: options.time_limit,
             },
             project_id: this.projectId,

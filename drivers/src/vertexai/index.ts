@@ -1,5 +1,5 @@
 import { GenerateContentRequest, VertexAI } from "@google-cloud/vertexai";
-import { AIModel, AbstractDriver, Completion, CompletionChunkObject, DriverOptions, EmbeddingsResult, ExecutionOptions, ImageExecutionOptions, ImageGeneration, Modalities, ModelSearchPayload, PromptOptions, PromptSegment, TextExecutionOptions } from "@llumiverse/core";
+import { AIModel, AbstractDriver, Completion, CompletionChunkObject, DriverOptions, EmbeddingsResult, ExecutionOptions, ImageGeneration, Modalities, ModelSearchPayload, PromptOptions, PromptSegment } from "@llumiverse/core";
 import { FetchClient } from "api-fetch-client";
 import { GoogleAuth, GoogleAuthOptions } from "google-auth-library";
 import { JSONClient } from "google-auth-library/build/src/auth/googleauth.js";
@@ -81,14 +81,14 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return getModelDefinition(options.model).createPrompt(this, segments, options);
     }
 
-    async requestTextCompletion(prompt: VertexAIPrompt, options: TextExecutionOptions): Promise<Completion<any>> {
+    async requestTextCompletion(prompt: VertexAIPrompt, options: ExecutionOptions): Promise<Completion<any>> {
         return getModelDefinition(options.model).requestTextCompletion(this, prompt, options);
     }
-    async requestTextCompletionStream(prompt: VertexAIPrompt, options: TextExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+    async requestTextCompletionStream(prompt: VertexAIPrompt, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         return getModelDefinition(options.model).requestTextCompletionStream(this, prompt, options);
     }
 
-    async requestImageGeneration(_prompt: GenerateContentRequest, _options: ImageExecutionOptions): Promise <Completion<ImageGeneration>> {
+    async requestImageGeneration(_prompt: GenerateContentRequest, _options: ExecutionOptions): Promise <Completion<ImageGeneration>> {
         const splits = _options.model.split("/");
         const modelName = trimModelName(splits[splits.length - 1]);
         return new ImagenModelDefinition(modelName).requestImageGeneration(this, _prompt, _options);

@@ -1,13 +1,17 @@
 import { Content, FinishReason, GenerateContentRequest, HarmBlockThreshold, HarmCategory, InlineDataPart, ModelParams, TextPart } from "@google-cloud/vertexai";
-import { AIModel, Completion, CompletionChunkObject, ExecutionTokenUsage, ModelType, PromptOptions, PromptRole, PromptSegment, readStreamAsBase64, TextExecutionOptions } from "@llumiverse/core";
+import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, ExecutionTokenUsage, ModelType, PromptOptions, PromptRole, PromptSegment, readStreamAsBase64 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { VertexAIDriver } from "../index.js";
 import { ModelDefinition } from "../models.js";
 
-function getGenerativeModel(driver: VertexAIDriver, options: TextExecutionOptions, modelParams?: ModelParams) {
+function getGenerativeModel(driver: VertexAIDriver, options: ExecutionOptions, modelParams?: ModelParams) {
 
     //1.0 Ultra does not support JSON output, 1.0 Pro does.
     const jsonMode = options.result_schema && !(options.model.includes("ultra"));
+
+    if (options.model_options?._option_id !== "text-fallback") {
+        throw new Error("Invalid model options");
+    }
 
     const model_options = options.model_options;
 
@@ -37,12 +41,12 @@ function getGenerativeModel(driver: VertexAIDriver, options: TextExecutionOption
         generationConfig: {
             responseMimeType: jsonMode ? "application/json" : "text/plain",
             candidateCount: modelParams?.generationConfig?.candidateCount ?? 1,
-            temperature: model_options.temperature,
-            maxOutputTokens: model_options.max_tokens,
-            topP: model_options.top_p,
-            topK: model_options.top_k,
-            frequencyPenalty: model_options.frequency_penalty,
-            stopSequences: model_options.stop_sequence,
+            temperature: model_options?.temperature,
+            maxOutputTokens: model_options?.max_tokens,
+            topP: model_options?.top_p,
+            topK: model_options?.top_k,
+            frequencyPenalty: model_options?.frequency_penalty,
+            stopSequences: model_options?.stop_sequence,
         },
     });
 
@@ -149,7 +153,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
         return { contents, tools } as GenerateContentRequest;
     }
 
-    async requestTextCompletion(driver: VertexAIDriver, prompt: GenerateContentRequest, options: TextExecutionOptions): Promise<Completion> {
+    async requestTextCompletion(driver: VertexAIDriver, prompt: GenerateContentRequest, options: ExecutionOptions): Promise<Completion> {
         const splits = options.model.split("/");
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName};
@@ -190,10 +194,10 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
         } as Completion;
     }
 
-    async requestTextCompletionStream(driver: VertexAIDriver, prompt: GenerateContentRequest, options: TextExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+    async requestTextCompletionStream(driver: VertexAIDriver, prompt: GenerateContentRequest, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         const splits = options.model.split("/");
         const modelName = splits[splits.length - 1];
-        options = { ...options, model: modelName};
+        options = { ...options, model: modelName };
         
         const model = getGenerativeModel(driver, options);
         const streamingResp = await model.generateContentStream(prompt);

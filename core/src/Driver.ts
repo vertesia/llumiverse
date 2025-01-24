@@ -17,14 +17,12 @@ import {
     EmbeddingsResult,
     ExecutionOptions,
     ExecutionResponse,
-    ImageExecutionOptions,
     ImageGeneration,
     Logger,
     Modalities,
     ModelSearchPayload,
     PromptOptions,
     PromptSegment,
-    TextExecutionOptions,
     TrainingJob,
     TrainingOptions,
     TrainingPromptOptions
@@ -222,11 +220,11 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         return [];
     }
 
-    abstract requestTextCompletion(prompt: PromptT, options: TextExecutionOptions): Promise<Completion>;
+    abstract requestTextCompletion(prompt: PromptT, options: ExecutionOptions): Promise<Completion>;
 
-    abstract requestTextCompletionStream(prompt: PromptT, options: TextExecutionOptions): Promise<AsyncIterable<CompletionChunk>>;
+    abstract requestTextCompletionStream(prompt: PromptT, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>>;
 
-    async requestImageGeneration(_prompt: PromptT, _options: ImageExecutionOptions): Promise<Completion<ImageGeneration>> { //make abstract?
+    async requestImageGeneration(_prompt: PromptT, _options: ExecutionOptions): Promise<Completion<ImageGeneration>> { //make abstract?
         throw new Error("Image generation not implemented.");
     }
 

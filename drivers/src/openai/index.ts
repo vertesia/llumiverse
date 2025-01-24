@@ -9,11 +9,11 @@ import {
     EmbeddingsResult,
     ExecutionTokenUsage,
     ModelType,
-    TextExecutionOptions,
+    ExecutionOptions,
     TrainingJob,
     TrainingJobStatus,
     TrainingOptions,
-    TrainingPromptOptions
+    TrainingPromptOptions,
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { formatOpenAILikeMultimodalPrompt } from "@llumiverse/core/formatters";
@@ -45,7 +45,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     }
 
     extractDataFromResponse(
-        options: TextExecutionOptions,
+        options: ExecutionOptions,
         result: OpenAI.Chat.Completions.ChatCompletion
     ): Completion {
         const tokenInfo: ExecutionTokenUsage = {
@@ -79,7 +79,11 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         };
     }
 
-    async requestTextCompletionStream(prompt: OpenAI.Chat.Completions.ChatCompletionMessageParam[], options: TextExecutionOptions): Promise<any> {
+    async requestTextCompletionStream(prompt: OpenAI.Chat.Completions.ChatCompletionMessageParam[], options: ExecutionOptions): Promise<any> {
+        if (options.model_options?._option_id !== "text-fallback") {
+            throw new Error("Invalid model options");
+        }
+
         const mapFn = options.result_schema && this.provider !== "xai"
             ? (chunk: OpenAI.Chat.Completions.ChatCompletionChunk) => {
                 return {
@@ -104,22 +108,20 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                 } as CompletionChunkObject;
             };
         
-        const model_options = options.model_options;
-
         //TODO: OpenAI o1 support requires max_completions_tokens
         const stream = (await this.service.chat.completions.create({
             stream: true,
             stream_options: {include_usage: true},
             model: options.model,
             messages: prompt,
-            temperature: model_options.temperature,
-            top_p: model_options.top_p,
+            temperature: options.model_options?.temperature,
+            top_p: options.model_options?.top_p,
             //top_logprobs: options.top_logprobs,       //Logprobs output currently not supported
             //logprobs: options.top_logprobs ? true : false,
-            presence_penalty: model_options.presence_penalty,
-            frequency_penalty: model_options.frequency_penalty,
+            presence_penalty: options.model_options?.presence_penalty,
+            frequency_penalty: options.model_options?.frequency_penalty,
             n: 1,
-            max_tokens: model_options.max_tokens,
+            max_tokens: options.model_options?.max_tokens,
             tools: options.result_schema && this.provider.includes("openai")
                 ? [
                     {
@@ -141,7 +143,11 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         return asyncMap(stream, mapFn);
     }
 
-    async requestTextCompletion(prompt: OpenAI.Chat.Completions.ChatCompletionMessageParam[], options: TextExecutionOptions): Promise<any> {
+    async requestTextCompletion(prompt: OpenAI.Chat.Completions.ChatCompletionMessageParam[], options: ExecutionOptions): Promise<any> {
+        if (options.model_options?._option_id !== "text-fallback") {
+            throw new Error("Invalid model options");
+        }
+        
         const functions = options.result_schema && this.provider.includes("openai")
             ? [
                 {
@@ -154,21 +160,19 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             ]
             : undefined;
         
-        const model_options = options.model_options;
-
         //TODO: OpenAI o1 support requires max_completions_tokens
         const res = await this.service.chat.completions.create({
             stream: false,
             model: options.model,
             messages: prompt,
-            temperature: model_options.temperature,
-            top_p: model_options.top_p,
+            temperature: options.model_options?.temperature,
+            top_p: options.model_options?.top_p,
             //top_logprobs: options.top_logprobs,       //Logprobs output currently not supported
             //logprobs: options.top_logprobs ? true : false,
-            presence_penalty: model_options.presence_penalty,
-            frequency_penalty: model_options.frequency_penalty,
+            presence_penalty: options.model_options?.presence_penalty,
+            frequency_penalty: options.model_options?.frequency_penalty,
             n: 1,
-            max_tokens: model_options.max_tokens,
+            max_tokens: options.model_options?.max_tokens,
             tools: functions,
             tool_choice: options.result_schema && this.provider.includes("openai")
                 ? {

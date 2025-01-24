@@ -1,5 +1,5 @@
 import { AbstractDriver } from "./Driver.js";
-import { CompletionStream, DriverOptions, ExecutionOptions, ExecutionResponse, ExecutionTokenUsage, TextExecutionOptions } from "./types.js";
+import { CompletionStream, DriverOptions, ExecutionOptions, ExecutionResponse, ExecutionTokenUsage } from "./types.js";
 
 export class DefaultCompletionStream<PromptT = any> implements CompletionStream<PromptT> {
 
@@ -8,7 +8,7 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
 
     constructor(public driver: AbstractDriver<DriverOptions, PromptT>,
         public prompt: PromptT,
-        public options: TextExecutionOptions) {
+        public options: ExecutionOptions) {
         this.chunks = [];
     }
 

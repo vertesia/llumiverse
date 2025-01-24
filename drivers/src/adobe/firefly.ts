@@ -3,11 +3,10 @@ import {
     Completion,
     CompletionChunk, DriverOptions, EmbeddingsOptions,
     EmbeddingsResult,
-    ImageExecutionOptions,
+    ExecutionOptions,
     ImageGeneration,
     ModelSearchPayload,
-    PromptSegment,
-    TextExecutionOptions
+    PromptSegment
 } from "@llumiverse/core";
 
 interface FireflyImageSource {
@@ -92,15 +91,15 @@ export class FireflyDriver extends AbstractDriver<FireflyDriverOptions> {
         this.endpoint = options.endpoint || "https://firefly-api.adobe.io/v3";
     }
 
-    async requestTextCompletion(_prompt: string, _options: TextExecutionOptions): Promise<Completion> {
+    async requestTextCompletion(_prompt: string, _options: ExecutionOptions): Promise<Completion> {
         throw new Error("Text completion not supported by Firefly");
     }
 
-    async requestTextCompletionStream(_prompt: string, _options: TextExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
+    async requestTextCompletionStream(_prompt: string, _options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
         throw new Error("Text completion streaming not supported by Firefly");
     }
 
-    async requestImageGeneration(segments: PromptSegment[], options: ImageExecutionOptions): Promise<Completion<ImageGeneration>> {
+    async requestImageGeneration(segments: PromptSegment[], options: ExecutionOptions): Promise<Completion<ImageGeneration>> {
         this.logger.debug(`[${this.provider}] Generating image with model ${options.model}`);
         const prompt = segments.map(s => s.content).join("\n\n");
     

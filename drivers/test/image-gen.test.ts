@@ -1,4 +1,4 @@
-import { AbstractDriver, ImageExecutionOptions, Modalities } from "@llumiverse/core";
+import { AbstractDriver, ExecutionOptions, Modalities } from "@llumiverse/core";
 import "dotenv/config";
 import fs from "fs";
 import { describe, expect, test } from "vitest";
@@ -38,7 +38,7 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
 
     
     test("generate a prompt Nova canvas", async () => {
-        const options: ImageExecutionOptions = {
+        const options: ExecutionOptions = {
             model: "amazon.nova-canvas-v1:0",
             output_modality: Modalities.image,
             model_options: {
@@ -57,7 +57,7 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
 
         console.log(`Testing model ${model}`);
 
-        const options: ImageExecutionOptions = {
+        const options: ExecutionOptions = {
             model: model,
             output_modality: Modalities.image,
             model_options: {
@@ -77,7 +77,7 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
 
         console.log(`Testing model ${model}`);
 
-        const options: ImageExecutionOptions = {
+        const options: ExecutionOptions = {
             model: model,
             output_modality: Modalities.image,
             model_options: {
@@ -96,7 +96,7 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
 
     test.each(models)(`${name}: text to image variation`, {timeout: 300*1000}, async (model) => {
 
-        const options: ImageExecutionOptions = {
+        const options: ExecutionOptions = {
             model: model,
             output_modality: Modalities.image,
             model_options: {

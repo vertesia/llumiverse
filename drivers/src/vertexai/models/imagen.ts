@@ -1,4 +1,4 @@
-import { AIModel, Completion, ImageExecutionOptions, ImageGeneration, Modalities, ModelType } from "@llumiverse/core";
+import { AIModel, Completion, ExecutionOptions, ImageGeneration, Modalities, ModelType } from "@llumiverse/core";
 import { VertexAIDriver } from "../index.js";
 
 const projectId = process.env.GOOGLE_PROJECT_ID;
@@ -41,7 +41,7 @@ async function textToImagePayload(prompt: GenerateContentRequest): Promise<strin
     return text;
 }
 
-export function formatImagenImageGenerationPayload(taskType: ImagenImageGenerationTaskType, prompt: GenerateContentRequest, _options: ImageExecutionOptions) {
+export function formatImagenImageGenerationPayload(taskType: ImagenImageGenerationTaskType, prompt: GenerateContentRequest, _options: ExecutionOptions) {
 
     switch (taskType) {
         case ImagenImageGenerationTaskType.TEXT_IMAGE:
@@ -65,7 +65,10 @@ export class ImagenModelDefinition  {
         } as AIModel;
     }
     
-    async requestImageGeneration(driver: VertexAIDriver, prompt: GenerateContentRequest, options: ImageExecutionOptions): Promise<Completion<ImageGeneration>> {
+    async requestImageGeneration(driver: VertexAIDriver, prompt: GenerateContentRequest, options: ExecutionOptions): Promise<Completion<ImageGeneration>> {
+        if (options.model_options?._option_id !== "vertexai-imagen") {
+            throw new Error("Invalid model options");
+        }
     
         if (options.output_modality !== Modalities.image) {
             throw new Error(`Image generation requires image output_modality`);
@@ -75,15 +78,18 @@ export class ImagenModelDefinition  {
             throw new Error(`Model ${options.model} not supported, use imagen-3.0-generate-001`);
         }
 
-        const taskType = () => {
-            switch (options.model_options.generation_type) {
+        const taskType = ImagenImageGenerationTaskType.TEXT_IMAGE;
+         /*   
+            () => {
+            switch (options.model_options?) {
                 case "text-to-image":
                     return ImagenImageGenerationTaskType.TEXT_IMAGE
                 default:
                     return ImagenImageGenerationTaskType.TEXT_IMAGE
             }
         }
-        driver.logger.info("Task type: " + taskType());
+        */
+        driver.logger.info("Task type: " + taskType);
 
         if (typeof prompt === "string") {
             throw new Error("Bad prompt format");
@@ -95,7 +101,7 @@ export class ImagenModelDefinition  {
         const endpoint = `projects/${projectId}/locations/${location}/publishers/google/models/imagen-3.0-generate-001`;
 
         const promptText = {
-            prompt: await formatImagenImageGenerationPayload(taskType(), prompt, options)
+            prompt: await formatImagenImageGenerationPayload(taskType, prompt, options)
         };
 
         console.log('Prompt Text:', JSON.stringify(promptText));
@@ -104,11 +110,11 @@ export class ImagenModelDefinition  {
         const instances = [instanceValue];
 
         const parameter = {
-            sampleCount: options.model_options.num_images,
+            sampleCount: options.model_options?.number_of_images ?? 1,
             // You can't use a seed value and watermark at the same time.
-            seed: options.model_options.seed ?? 1,
+            seed: options.model_options?.seed ?? 1,
             // addWatermark: false,
-            aspectRatio: options.model_options.aspect ?? '1:1',
+            aspectRatio: options.model_options?.aspect_ratio ?? '1:1',
             //negativePrompt: options.model_options.negative_prompt ?? '',
             //safetyFilterLevel: 'block_some',
             //personGeneration: 'allow_adult',
