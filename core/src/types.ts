@@ -126,66 +126,6 @@ export interface PromptOptions {
     result_schema?: JSONSchema4;
 }
 
-//type ModelOptions = TextModelOptions | ImageModelOptions;
-
-//interface TextModelOptions {
-/*
-    temperature?: number;
-    max_tokens?: number;
-    stop_sequence?: string[];
-
-    /**
-     * restricts the selection of tokens to the “k” most likely options, based on their probabilities
-     * Lower values make the model more deterministic, more focused. Examples:
-     * - 10 - result will be highly controlled anc contextually relevant
-     * - 50 - result will be more creative but maintaining a balance between control and creativity
-     * - 100 - will lead to more creative and less predictable outputs
-     * It will be ignored on OpenAI since it does not support it
-     */
-    //top_k?: number;
-
-    /**
-     * An alternative to sampling with temperature, called nucleus sampling, where the model considers the results of the tokens with top_p probability mass. So 0.1 means only the tokens comprising the top 10% probability mass are considered.
-     * Either use temperature or top_p, not both
-     */
-    //top_p?: number;
-
-    /**
-     * Currently not supported, will be ignored.
-     * Should be an integer.
-     * Only supported for OpenAI. Look at OpenAI documentation for more detailsx
-     */
-    //top_logprobs?: number;
-
-    /**
-     * Number between -2.0 and 2.0. Positive values penalize new tokens based on whether they appear in the text so far, increasing the model's likelihood to talk about new topics.
-     * Ignored for models which doesn;t support it
-     */
-    //presence_penalty?: number;
-
-    /**
-     * Number between -2.0 and 2.0. Positive values penalize new tokens based on their existing frequency in the text so far, decreasing the model's likelihood to repeat the same line verbatim.
-     * Ignored for models which doesn;t support it
-     */
-    //frequency_penalty?: number;
-//}
-/*
-interface ImageModelOptions {
-
-    aspect?: string;
-    width?: number;
-    height?: number;
-    quality?: "low" | "standard" | "high"
-
-    generation_type: "text-to-image" | "inpainting" | "outpainting" | "colorization"
-
-    input_image_use: "variation" | "inspiration" | "none"
-
-    num_images?: number;
-
-    seed?: number;
-}
-*/
 export interface ExecutionOptions extends PromptOptions {
     /**
      * If set to true the original response from the target LLM will be included in the response under the original_response field.
