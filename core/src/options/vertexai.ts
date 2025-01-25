@@ -69,7 +69,7 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
             ];
 
             return {
-                _options_id: "vertexai-imagen",
+                _option_id: "vertexai-imagen",
                 options: [
                     ...commonOptions,
                     ...modeOptions,
@@ -100,7 +100,7 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
             ];
 
             return {
-                _options_id: "vertexai-imagen",
+                _option_id: "vertexai-imagen",
                 options: [
                     ...commonOptions,
                     ...modeOptions,

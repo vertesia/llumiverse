@@ -168,7 +168,7 @@ export type ModelOptions = TextFallbackOptions | VertexAIOptions | BedrockOption
 
 export interface ModelOptionsInfo {
     options: ModelOptionInfoItem[];
-    _options_id: string; //Should follow same ids as ModelOptions
+    _option_id: string; //Should follow same ids as ModelOptions
 }
 
 export type ModelOptionInfoItem = NumericOptionInfo | EnumOptionInfo | BooleanOptionInfo | StringListOptionInfo;
@@ -208,6 +208,7 @@ export interface BooleanOptionInfo extends OptionInfoPrototype {
 export interface StringListOptionInfo extends OptionInfoPrototype {
     type: OptionType.string_list;
     value?: string[];
+    default?: string[];
 }
 
 // ============== Prompts ===============

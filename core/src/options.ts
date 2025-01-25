@@ -14,7 +14,7 @@ export interface TextFallbackOptions {
 }
 
 export const textOptionsFallback: ModelOptionsInfo = {
-    _options_id: "text-fallback",
+    _option_id: "text-fallback",
     options: [
         {
             name: "max_tokens", type: OptionType.numeric, min: 1, max: 8192, default: 512,

@@ -93,7 +93,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
         }
 
         return {
-            _options_id: "bedrock-nova-canvas",
+            _option_id: "bedrock-nova-canvas",
             options: [
                 tasktypeList,
                 ...otherOptions,
