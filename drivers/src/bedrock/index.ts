@@ -3,7 +3,7 @@ import { BedrockRuntime, ConverseRequest, ConverseResponse, ConverseStreamOutput
 import { S3Client } from "@aws-sdk/client-s3";
 import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionTokenUsage, ImageGeneration, Modalities, PromptOptions, PromptSegment, ExecutionOptions, TrainingJob, TrainingJobStatus, TrainingOptions } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
-import { NovaMessagesPrompt } from "@llumiverse/core/formatters";
+import { formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
 import { AwsCredentialIdentity, Provider } from "@smithy/types";
 import mnemonist from "mnemonist";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
@@ -101,8 +101,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     protected async formatPrompt(segments: PromptSegment[], opts: PromptOptions): Promise<BedrockPrompt> {
+        if (opts.model.includes("canvas")) {
+            return await formatNovaPrompt(segments, opts.result_schema);
+        }
         return await fortmatConversePrompt(segments, opts.result_schema);
-        //TODO Amazon Nova Canvas/Reel etc formatting
     }
 
     static getExtractedExecuton(result: ConverseResponse, _prompt?: BedrockPrompt): CompletionChunkObject {
