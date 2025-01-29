@@ -25,7 +25,8 @@ async function textToImagePayload(prompt: NovaMessagesPrompt, options: ImageGenE
         },
         textToImageParams: {
             text: text,
-            conditionImage: conditionImage()?.source.bytes
+            conditionImage: conditionImage()?.source.bytes,
+            negativeText: prompt.negative,
         }
     }
 
@@ -71,6 +72,7 @@ async function imageVariationPayload(prompt: NovaMessagesPrompt, options: ImageG
         imageVariationParams: {
             images: images ?? [],
             text: text,
+            negativeText: prompt.negative,
         }
     }
 
