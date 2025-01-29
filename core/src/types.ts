@@ -194,6 +194,8 @@ export enum PromptRole {
     system = "system",
     user = "user",
     assistant = "assistant",
+    negative = "negative",
+    mask = "mask",
 }
 
 export interface PromptSegment {

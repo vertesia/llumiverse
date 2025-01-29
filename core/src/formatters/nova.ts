@@ -85,7 +85,7 @@ export async function formatNovaPrompt(segments: PromptSegment[], schema?: JSONS
             //Maybe can remove for nova?
             //concatenate messages of the same role (Claude requires alternative user and assistant roles)
             messages[messages.length - 1].content.push(...parts);
-        } else {
+        } else if (segment.role !== PromptRole.negative && segment.role !== PromptRole.mask) {
             messages.push({
                 role: segment.role,
                 content: parts
