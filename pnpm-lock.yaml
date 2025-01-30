@@ -7,6 +7,7 @@ settings:
 overrides:
   rollup: ^4.27.4
   cross-spawn: ^7.0.5
+  vite@>= 5.0.0, <= 5.4.11: ^5.4.12
 
 importers:
 
