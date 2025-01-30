@@ -2,6 +2,7 @@ import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, PromptOpt
 import { VertexAIDriver , trimModelName} from "./index.js";
 import { GeminiModelDefinition } from "./models/gemini.js";
 import { ClaudeModelDefinition } from "./models/claude.js";
+import { MistralModelDefinition } from "./models/mistral.js";
 
 export interface ModelDefinition<PromptT = any> {
     model: AIModel;
@@ -20,6 +21,8 @@ export function getModelDefinition(model: string): ModelDefinition {
         return new ClaudeModelDefinition(modelName);
     } else if (publisher?.includes("google")) {
         return new GeminiModelDefinition(modelName);
+    } else if (publisher?.includes("mistralai")) {
+        return new MistralModelDefinition(modelName);
     }
 
     //Fallback, assume it is Gemini.

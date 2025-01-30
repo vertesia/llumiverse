@@ -112,8 +112,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         })));
 
         //Model Garden Publisher models - Pretrained models
-        const publishers = ['google', 'anthropic']
-        const supportedModels = {google: ['gemini','imagen'], anthropic: ['claude']}
+        const publishers = ['google', 'anthropic', 'mistralai'];
+        const supportedModels = {google: ['gemini','imagen'], anthropic: ['claude'], mistralai: ['mistral']};
 
         for (const publisher of publishers) {
             const [response] = await modelGarden.listPublisherModels({
