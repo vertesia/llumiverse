@@ -78,6 +78,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     public createPrompt(segments: PromptSegment[], options: PromptOptions): Promise<VertexAIPrompt> {
+        if (options.model.includes("imagen")) {
+            return new ImagenModelDefinition(options.model).createPrompt(this, segments, options);
+        }
         return getModelDefinition(options.model).createPrompt(this, segments, options);
     }
 
