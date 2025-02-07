@@ -52,9 +52,11 @@
     "rimraf": "^6.0.0",
     "ts-dual-module": "^0.6.3",
     "typescript": "^5.6.2",
-    "vitest": "^2.0.0"
+    "vitest": "^2.1.9"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.33.1",
+    "@anthropic-ai/vertex-sdk": "^0.6.1",
     "@aws-sdk/client-bedrock": "^3.709.0",
     "@aws-sdk/client-bedrock-runtime": "^3.709.0",
     "@aws-sdk/client-s3": "^3.709.0",
@@ -62,6 +64,7 @@
     "@aws-sdk/lib-storage": "^3.709.0",
     "@azure/identity": "^4.4.1",
     "@azure/openai": "2.0.0-beta.2",
+    "@google-cloud/aiplatform": "^3.34.0",
     "@google-cloud/vertexai": "^1.7.0",
     "@huggingface/inference": "2.6.7",
     "@llumiverse/core": "workspace:*",
@@ -74,10 +77,7 @@
     "mnemonist": "^0.39.8",
     "node-web-stream-adapters": "^0.1.0",
     "openai": "^4.61.1",
-    "replicate": "^0.33.0",
-    "@anthropic-ai/sdk": "^0.33.1",
-    "@anthropic-ai/vertex-sdk": "^0.6.1",
-    "@google-cloud/aiplatform": "^3.34.0"
+    "replicate": "^0.33.0"
   },
   "ts_dual_module": {
     "outDir": "lib"
