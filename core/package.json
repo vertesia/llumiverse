@@ -74,7 +74,7 @@
         "rimraf": "^6.0.0",
         "ts-dual-module": "^0.6.3",
         "typescript": "^5.4.2",
-        "vitest": "^2.0.0"
+        "vitest": "^2.1.9"
     },
     "dependencies": {
         "@types/node": "^22.5.0",
