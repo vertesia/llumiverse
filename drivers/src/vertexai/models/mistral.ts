@@ -1,8 +1,10 @@
+import { MistralGoogleCloud } from "@mistralai/mistralai-gcp";
 import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, ModelType, PromptOptions, PromptRole, PromptSegment } from "@llumiverse/core";
 import { VertexAIDriver } from "../index.js";
 import { ModelDefinition } from "../models.js";
 import { asyncMap } from "@llumiverse/core/async";
 import { logger } from "@azure/identity";
+// import { FetchClient } from "api-fetch-client";
 
 interface VertexAIMistralMessage {
     role: 'user' | 'assistant' | 'system';
@@ -14,22 +16,24 @@ interface VertexAIMistralMessage {
 }
 
 interface VertexAIMistralResponse {
-    id: string;
-    object: string;
-    created: number;
-    model: string;
-    choices: Array<{
-        index: number;
-        message: VertexAIMistralMessage;
-        finish_reason: string;
-        delta?: {
-            content?: string;
+    data: {
+        id: string;
+        object: string;
+        created: number;
+        model: string;
+        choices: Array<{
+            index: number;
+            message: VertexAIMistralMessage;
+            finishReason: string;
+            delta?: {
+                content?: string;
+            };
+        }>;
+        usage: {
+            promptTokens: number;
+            completionTokens: number;
+            totalTokens: number;
         };
-    }>;
-    usage: {
-        prompt_tokens: number;
-        completion_tokens: number;
-        total_tokens: number;
     };
 }
 
@@ -46,11 +50,16 @@ interface VertexAIMistralRequest {
     response_format?: { type: 'text' | 'json_object' };
 }
 
+
+const client = new MistralGoogleCloud({
+    region: "us-central1",
+    projectId: process.env.GOOGLE_PROJECT_ID as string,
+});
+
 function getMistralModel(driver: VertexAIDriver, options: ExecutionOptions): VertexAIMistralRequest {
     const splits = options.model.split("/");
     const modelName = splits[splits.length - 1];
 
-    logger.info(`Using Mistral model: ${modelName}`);
     logger.info(`Using Mistral driver: ${driver}`);
 
     return {
@@ -86,7 +95,6 @@ export class MistralModelDefinition implements ModelDefinition<VertexAIMistralMe
 
         //Loop over segments, to process prompt
         for (const msg of segments) {
-            logger.info(`Processing message: ${JSON.stringify(msg)}`);
             if (msg.role === PromptRole.safety) {
                 safety.push(msg.content as string);
             } else {
@@ -110,21 +118,16 @@ export class MistralModelDefinition implements ModelDefinition<VertexAIMistralMe
 
         //If a schema is provided, tell the model to follow it.
         if (options.result_schema) {
-            safety.push("The answer must be a JSON object using the following JSON Schema:\n" +
-                JSON.stringify(options.result_schema));
+            safety.push(
+                `The answer must be a JSON object using the following JSON Schema: ${JSON.stringify(options.result_schema)}`
+            );
         }
 
-        // put system mesages first and safety last
         if (safety.length > 0) {
-            const safetyContent = safety.join('\n');
-            if (lastUserMessage) {
-                lastUserMessage.content += '\n' + safetyContent;
-            } else {
-                contents.push({
-                    role: 'system',
-                    content: safetyContent
-                });
-            }
+            safety.map((s) => contents.push({
+                role: 'system',
+                content: s
+            }));
         }
 
         return contents;
@@ -132,44 +135,44 @@ export class MistralModelDefinition implements ModelDefinition<VertexAIMistralMe
 
     async requestCompletion(driver: VertexAIDriver, prompt: VertexAIMistralMessage[], options: ExecutionOptions): Promise<Completion> {
         //Use the fetch client to access the model
-        const client = driver.fetchClient;
+        // const client = driver.fetchClient;
         const request = getMistralModel(driver, options);
         request.messages = prompt;
-        request.stream = false;
 
-        const response = await client.post('/v1/chat/completions', { payload: request });
+        console.log(request);
+        
+        const response = await client.chat.complete(request);
+        if (response.choices && response.choices.length > 0) {
+            console.log(response.choices[0]);
+        }
 
         return {
-            result: response.choices[0].message.content,
-            token_usage: {
-                prompt: response.usage.prompt_tokens,
-                result: response.usage.completion_tokens,
-                total: response.usage.total_tokens
+            result: '',
+            token_usage: { 
+                prompt: response.usage?.promptTokens,
+                result: response.usage?.completionTokens,
             },
-            finish_reason: response.choices[0].finish_reason,
-            original_response: options.include_original_response ? response : undefined,
+            finish_reason: 'stop',
         } as Completion;
     }
 
     async requestCompletionStream(driver: VertexAIDriver, prompt: VertexAIMistralMessage[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
-        // return {} as any; //To allow it to build
-        const client = driver.fetchClient;
         const request = getMistralModel(driver, options);
         request.messages = prompt;
-        request.stream = true;
+        console.log(request);
 
-        const response = await client.post('/v1/chat/completions', { payload: request });
+        const response = await client.chat.stream(request);
 
-        const stream = asyncMap(response, async (chunk: VertexAIMistralResponse) => {
+        const stream = asyncMap(response as any, async (chunk: VertexAIMistralResponse) => {
+            const data = chunk.data;
             return {
-                result: chunk.choices[0]?.delta?.content ?? '',
-                token_usage: {
-                    prompt: chunk.usage?.prompt_tokens,
-                    result: chunk.usage?.completion_tokens,
-                    total: chunk.usage?.total_tokens
+                result: data.choices[0]?.delta?.content ?? '',
+                token_usage: { 
+                    prompt: data.usage?.promptTokens,
+                    result: data.usage?.completionTokens,
                 },
-                finish_reason: chunk.choices[0]?.finish_reason
-            };
+                finish_reason: data.choices[0]?.finishReason,
+            } as CompletionChunkObject;
         });
 
         return stream;
