@@ -51,8 +51,8 @@ interface VertexAIMistralRequest {
 
 
 const client = new MistralGoogleCloud({
-    region: "us-central1",
-    projectId: process.env.GOOGLE_PROJECT_ID as string,
+    region: process.env.GOOGLE_REGION,
+    projectId: process.env.GOOGLE_PROJECT_ID
 });
 
 function getMistralModel(driver: VertexAIDriver, options: ExecutionOptions): VertexAIMistralRequest {
@@ -134,63 +134,29 @@ export class MistralModelDefinition implements ModelDefinition<VertexAIMistralMe
 
     async requestCompletion(driver: VertexAIDriver, prompt: VertexAIMistralMessage[], options: ExecutionOptions): Promise<Completion> {
         //Use the fetch client to access the model
-        const client = driver.fetchClient;
+        // const client = driver.fetchClient;
         const request = getMistralModel(driver, options);
         request.messages = prompt;
         request.stream = false;
 
-
-        const mistral_sdk = new MistralGoogleCloud({
-            region: process.env.GOOGLE_REGION,
-            projectId: process.env.GOOGLE_PROJECT_ID
-        });
-
-        const response = await mistral_sdk.chat.complete({
-            model: "mistral-large-2411",
-            messages: [
-                {
-                    role: "user",
-                    content: "Who is the best French painter? Answer in one short sentence.",
-                },
-            ],
-        });
+        const response = await client.chat.complete(request);
 
         return {
-            result: response
-            // result: response.choices[0].message.content,
-            // token_usage: {
-            //     prompt: response.usage.prompt_tokens,
-            //     result: response.usage.completion_tokens,
-            //     total: response.usage.total_tokens
-            // },
-            // finish_reason: response.choices[0].finish_reason,
-            // original_response: options.include_original_response ? response : undefined,
+            result: response,
+            token_usage: {
+                prompt: response.usage.promptTokens,
+                result: response.usage.completionTokens,
+                total: response.usage.totalTokens
+            },
+            finish_reason: response?.choices?.[0]?.finishReason ?? undefined,
         };
     }
 
     async requestCompletionStream(driver: VertexAIDriver, prompt: VertexAIMistralMessage[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         const request = getMistralModel(driver, options);
         request.messages = prompt;
-        console.log(request);
 
-        console.log(request);
-
-        const mistral_sdk = new MistralGoogleCloud({
-            region: process.env.GOOGLE_REGION,
-            projectId: process.env.GOOGLE_PROJECT_ID
-        });
-
-        const eventStream = await mistral_sdk.chat.stream({
-            model: "mistral-large-2411",
-            stream: true,
-            messages: [
-                {
-                    role: "user",
-                    content: "Who is the best French painter? Answer in one short sentence.",
-                },
-            ],
-            responseFormat: { type: 'json_object' }
-        });
+        const eventStream = await client.chat.stream(request);
 
         // Create an async generator to process the stream
         async function* generateChunks(): AsyncGenerator<CompletionChunkObject> {
