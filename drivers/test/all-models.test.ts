@@ -31,6 +31,7 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
             "gemini-1.5-flash", //legacy id format
             //"gemini-1.5-pro",
             "publishers/anthropic/models/claude-3-5-sonnet-v2",
+            "publishers/mistralai/models/mistral-large-2411"
         ]
     })
 }

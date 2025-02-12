@@ -2,9 +2,7 @@ import { MistralGoogleCloud } from "@mistralai/mistralai-gcp";
 import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, ModelType, PromptOptions, PromptRole, PromptSegment } from "@llumiverse/core";
 import { VertexAIDriver } from "../index.js";
 import { ModelDefinition } from "../models.js";
-import { asyncMap } from "@llumiverse/core/async";
 import { logger } from "@azure/identity";
-// import { FetchClient } from "api-fetch-client";
 
 interface VertexAIMistralMessage {
     role: 'user' | 'assistant' | 'system';
@@ -15,27 +13,28 @@ interface VertexAIMistralMessage {
     tool_calls?: string[];
 }
 
-interface VertexAIMistralResponse {
-    data: {
-        id: string;
-        object: string;
-        created: number;
-        model: string;
-        choices: Array<{
-            index: number;
-            message: VertexAIMistralMessage;
-            finishReason: string;
-            delta?: {
-                content?: string;
-            };
-        }>;
-        usage: {
-            promptTokens: number;
-            completionTokens: number;
-            totalTokens: number;
-        };
-    };
-}
+//One of the benefits of using a client SDK, is we can use their types directly
+//In this case if you get the type of "event" from the eventStream, 
+//Right click, go to type definition. That will give you the format.
+// interface VertexAIMistralResponse {
+//     id: string;
+//     object: string;
+//     created: number;
+//     model: string;
+//     choices: Array<{
+//         index: number;
+//         message: VertexAIMistralMessage;
+//         finish_reason: string;
+//         delta?: {
+//             content?: string;
+//         };
+//     }>;
+//     usage: {
+//         prompt_tokens: number;
+//         completion_tokens: number;
+//         total_tokens: number;
+//     };
+// }
 
 interface VertexAIMistralRequest {
     model: string;
@@ -135,25 +134,38 @@ export class MistralModelDefinition implements ModelDefinition<VertexAIMistralMe
 
     async requestCompletion(driver: VertexAIDriver, prompt: VertexAIMistralMessage[], options: ExecutionOptions): Promise<Completion> {
         //Use the fetch client to access the model
-        // const client = driver.fetchClient;
+        const client = driver.fetchClient;
         const request = getMistralModel(driver, options);
         request.messages = prompt;
+        request.stream = false;
 
-        console.log(request);
-        
-        const response = await client.chat.complete(request);
-        if (response.choices && response.choices.length > 0) {
-            console.log(response.choices[0]);
-        }
+
+        const mistral_sdk = new MistralGoogleCloud({
+            region: process.env.GOOGLE_REGION,
+            projectId: process.env.GOOGLE_PROJECT_ID
+        });
+
+        const response = await mistral_sdk.chat.complete({
+            model: "mistral-large-2411",
+            messages: [
+                {
+                    role: "user",
+                    content: "Who is the best French painter? Answer in one short sentence.",
+                },
+            ],
+        });
 
         return {
-            result: '',
-            token_usage: { 
-                prompt: response.usage?.promptTokens,
-                result: response.usage?.completionTokens,
-            },
-            finish_reason: 'stop',
-        } as Completion;
+            result: response
+            // result: response.choices[0].message.content,
+            // token_usage: {
+            //     prompt: response.usage.prompt_tokens,
+            //     result: response.usage.completion_tokens,
+            //     total: response.usage.total_tokens
+            // },
+            // finish_reason: response.choices[0].finish_reason,
+            // original_response: options.include_original_response ? response : undefined,
+        };
     }
 
     async requestCompletionStream(driver: VertexAIDriver, prompt: VertexAIMistralMessage[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
@@ -161,20 +173,50 @@ export class MistralModelDefinition implements ModelDefinition<VertexAIMistralMe
         request.messages = prompt;
         console.log(request);
 
-        const response = await client.chat.stream(request);
+        console.log(request);
 
-        const stream = asyncMap(response as any, async (chunk: VertexAIMistralResponse) => {
-            const data = chunk.data;
-            return {
-                result: data.choices[0]?.delta?.content ?? '',
-                token_usage: { 
-                    prompt: data.usage?.promptTokens,
-                    result: data.usage?.completionTokens,
-                },
-                finish_reason: data.choices[0]?.finishReason,
-            } as CompletionChunkObject;
+        const mistral_sdk = new MistralGoogleCloud({
+            region: process.env.GOOGLE_REGION,
+            projectId: process.env.GOOGLE_PROJECT_ID
         });
 
-        return stream;
+        const eventStream = await mistral_sdk.chat.stream({
+            model: "mistral-large-2411",
+            stream: true,
+            messages: [
+                {
+                    role: "user",
+                    content: "Who is the best French painter? Answer in one short sentence.",
+                },
+            ],
+            responseFormat: { type: 'json_object' }
+        });
+
+        // Create an async generator to process the stream
+        async function* generateChunks(): AsyncGenerator<CompletionChunkObject> {
+            try {
+                for await (const chunk of eventStream) {
+                    // Extract the content from the chunk while handling potential undefined values
+                    const content = chunk?.data?.choices?.[0]?.delta?.content ?? undefined;
+                    if (content) {
+                        yield {
+                            result: content,
+                            // Optional fields that may not be available in streaming mode
+                            finish_reason: chunk?.data?.choices?.[0]?.finishReason ?? undefined,
+                            token_usage: chunk?.data?.usage ? {
+                                prompt: chunk?.data?.usage?.promptTokens ?? undefined,
+                                result: chunk?.data?.usage?.completionTokens ?? undefined,
+                                total: chunk?.data?.usage?.totalTokens ?? undefined
+                            } : undefined
+                        };
+                    }
+                }
+            } catch (err) {
+                // Log error but don't throw to maintain stream
+                logger.error('Error processing Mistral stream chunk:', err);
+            }
+        }
+
+        return generateChunks();
     }
 }
