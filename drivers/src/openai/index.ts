@@ -37,7 +37,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     OpenAI.Chat.Completions.ChatCompletionMessageParam[]
 > {
     abstract provider: "azure_openai" | "openai" | "xai";
-    abstract service: OpenAI | AzureOpenAI ;
+    abstract service: OpenAI | AzureOpenAI;
 
     constructor(opts: BaseOpenAIDriverOptions) {
         super(opts);
@@ -66,7 +66,8 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             }
         }
 
-        const useTools: boolean = !isNonStructureSupporting(options.model);
+        const useTools: boolean = !isNonStructureSupporting(options.model)
+            && !options.model.includes("chatgpt-4o");
         let data = undefined;
         if (useTools) {
             //we have a schema: get the content and return after validation
@@ -88,7 +89,8 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
     async requestCompletionStream(prompt: OpenAI.Chat.Completions.ChatCompletionMessageParam[], options: ExecutionOptions): Promise<any> {
 
-        const useTools : boolean = !isNonStructureSupporting(options.model);
+        const useTools: boolean = !isNonStructureSupporting(options.model)
+            && !options.model.includes("chatgpt-4o");
 
         const mapFn = (chunk: OpenAI.Chat.Completions.ChatCompletionChunk) => {
             let result = undefined
@@ -114,7 +116,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         //TODO: OpenAI o1 support requires max_completions_tokens
         const stream = (await this.service.chat.completions.create({
             stream: true,
-            stream_options: {include_usage: true},
+            stream_options: { include_usage: true },
             model: options.model,
             messages: prompt,
             temperature: options.temperature,
@@ -161,7 +163,8 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         
         convertRoles(prompt, options.model);
 
-        const useTools: boolean = !isNonStructureSupporting(options.model);
+        const useTools: boolean = !isNonStructureSupporting(options.model)
+            && !options.model.includes("chatgpt-4o");
 
         //TODO: OpenAI o1 support requires max_completions_tokens
         const res = await this.service.chat.completions.create({
