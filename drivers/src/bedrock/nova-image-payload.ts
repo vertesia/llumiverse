@@ -42,7 +42,7 @@ async function textToImagePayload(prompt: NovaMessagesPrompt, options: Execution
     }
 
     const payload: NovaTextToImagePayload = {
-        taskType: NovaImageGenerationTaskType.TEXT_IMAGE,
+        taskType: NovaImageGenerationTaskType.TEXT_IMAGE,   // Always TEXT_IMAGE, as TEXT_IMAGE_WITH_IMAGE_CONDITIONING is only an internal marker.
         imageGenerationConfig: {
             quality: options.model_options?.quality,
             width: options.model_options?.width,
@@ -154,6 +154,8 @@ export function formatNovaImageGenerationPayload(taskType: string, prompt: NovaM
     switch (taskType) {
         case NovaImageGenerationTaskType.TEXT_IMAGE:
             return textToImagePayload(prompt, options);
+        case NovaImageGenerationTaskType.TEXT_IMAGE_WITH_IMAGE_CONDITIONING:
+            return textToImagePayload(prompt, options);
         case NovaImageGenerationTaskType.COLOR_GUIDED_GENERATION:
             return colorGuidedGenerationPayload(prompt, options);
         case NovaImageGenerationTaskType.IMAGE_VARIATION:
@@ -241,6 +243,7 @@ export interface NovaBackgroundRemovalPayload {
 
 export enum NovaImageGenerationTaskType {
     TEXT_IMAGE = "TEXT_IMAGE",
+    TEXT_IMAGE_WITH_IMAGE_CONDITIONING = "TEXT_IMAGE_WITH_IMAGE_CONDITIONING",
     COLOR_GUIDED_GENERATION = "COLOR_GUIDED_GENERATION",
     IMAGE_VARIATION = "IMAGE_VARIATION",
     INPAINTING = "INPAINTING",

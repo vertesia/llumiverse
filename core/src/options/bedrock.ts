@@ -6,7 +6,7 @@ export type BedrockOptions = NovaCanvasOptions;
 
 export interface NovaCanvasOptions {
     _option_id: "bedrock-nova-canvas"
-    taskType: "TEXT_IMAGE" | "COLOR_GUIDED_GENERATION" | "IMAGE_VARIATION" | "INPAINTING" | "OUTPAINTING" | "BACKGROUND_REMOVAL";
+    taskType: "TEXT_IMAGE" | "TEXT_IMAGE_WITH_IMAGE_CONDITIONING" | "COLOR_GUIDED_GENERATION" | "IMAGE_VARIATION" | "INPAINTING" | "OUTPAINTING" | "BACKGROUND_REMOVAL";
     width?: number;
     height?: number;
     quality?: "standard" | "premium";
@@ -27,6 +27,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
             type: OptionType.enum,
             enum: {
                 "Text-To-Image": "TEXT_IMAGE",
+                "Text-To-Image-with-Image-Conditioning": "TEXT_IMAGE_WITH_IMAGE_CONDITIONING",
                 "Color-Guided-Generation": "COLOR_GUIDED_GENERATION",
                 "Image-Variation": "IMAGE_VARIATION",
             //    "Inpainting": "INPAINTING",    Not implemented yet
@@ -56,7 +57,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
         let dependentOptions: ModelOptionInfoItem[] = [];
 
         switch ((option as BedrockOptions)?.taskType ?? "TEXT_IMAGE") {
-            case "TEXT_IMAGE":
+            case "TEXT_IMAGE_WITH_IMAGE_CONDITIONING":
                 dependentOptions.push(
                     {
                         name: "controlMode", type: OptionType.enum, enum: { "CANNY_EDGE": "CANNY_EDGE", "SEGMENTATION": "SEGMENTATION" },
