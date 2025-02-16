@@ -66,18 +66,18 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             }
         }
 
-        const useTools: boolean = !isNonStructureSupporting(options.model)
-            && !options.model.includes("chatgpt-4o");
+        const useTools: boolean = !isNonStructureSupporting(options.model);
         let data = undefined;
         if (useTools) {
             //we have a schema: get the content and return after validation
-            data = choice?.message.tool_calls?.[0].function.arguments ?? undefined;
-            if (!data) {
-                this.logger?.error("[OpenAI] Response is not valid", result);
-                throw new Error("Response is not valid: no data");
-            }
+            data = choice?.message.tool_calls?.[0].function.arguments ?? choice.message.content ?? undefined;
         } else {
             data = choice.message.content ?? undefined;
+        }
+
+        if (!data) {
+            this.logger?.error("[OpenAI] Response is not valid", result);
+            throw new Error("Response is not valid: no data");
         }
 
         return {
@@ -89,8 +89,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
     async requestCompletionStream(prompt: OpenAI.Chat.Completions.ChatCompletionMessageParam[], options: ExecutionOptions): Promise<any> {
 
-        const useTools: boolean = !isNonStructureSupporting(options.model)
-            && !options.model.includes("chatgpt-4o");
+        const useTools: boolean = !isNonStructureSupporting(options.model);
 
         const mapFn = (chunk: OpenAI.Chat.Completions.ChatCompletionChunk) => {
             let result = undefined
@@ -163,8 +162,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         
         convertRoles(prompt, options.model);
 
-        const useTools: boolean = !isNonStructureSupporting(options.model)
-            && !options.model.includes("chatgpt-4o");
+        const useTools: boolean = !isNonStructureSupporting(options.model);
 
         //TODO: OpenAI o1 support requires max_completions_tokens
         const res = await this.service.chat.completions.create({
@@ -196,6 +194,16 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             completion.original_response = res;
         }
         return completion;
+    }
+
+    protected canStream(_options: ExecutionOptions): Promise<boolean> {
+        if (_options.model.includes("o1")
+            && !(_options.model.includes("mini") || _options.model.includes("preview"))) {
+            //o1 full does not support streaming
+            //TODO: Update when OpenAI adds support for streaming, last check 16/02/2025
+            return Promise.resolve(false);
+        }
+        return Promise.resolve(true);
     }
 
     createTrainingPrompt(options: TrainingPromptOptions): Promise<string> {
@@ -329,6 +337,7 @@ function convertRoles(messages: OpenAI.Chat.Completions.ChatCompletionMessagePar
                 }
             }
         } else {
+            //Models newer than o1 use developer role
             for (const message of messages) {
                 if (message.role === 'system') {
                     (message.role as any) = 'developer';
@@ -340,5 +349,6 @@ function convertRoles(messages: OpenAI.Chat.Completions.ChatCompletionMessagePar
 }
 
 function isNonStructureSupporting(model: string): boolean {
-    return model.includes("o1-mini") || model.includes("o1-preview");
+    return model.includes("o1-mini") || model.includes("o1-preview")
+        || model.includes("chatgpt-4o");
 }
