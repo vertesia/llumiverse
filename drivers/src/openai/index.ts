@@ -147,6 +147,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                     type: 'function',
                     function: { name: "format_output" }
                 } : undefined : undefined,
+            stop: options.model_options?.stop_sequence,
         })) as Stream<OpenAI.Chat.Completions.ChatCompletionChunk>;
 
         return asyncMap(stream, mapFn);
@@ -192,6 +193,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                     type: 'function',
                     function: { name: "format_output" }
                 } : undefined : undefined,
+            stop: options.model_options?.stop_sequence,
             // functions: functions,
             // function_call: options.result_schema
             //     ? { name: "format_output" }
