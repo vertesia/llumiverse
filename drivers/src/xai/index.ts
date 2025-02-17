@@ -44,7 +44,7 @@ export class xAIDriver extends BaseOpenAIDriver {
             useToolForFormatting: false,
         }
 
-        const p = await formatOpenAILikeMultimodalPrompt(segments, options) as OpenAI.Chat.Completions.ChatCompletionMessageParam[];
+        const p = await formatOpenAILikeMultimodalPrompt(segments, {...options, ...opts}) as OpenAI.Chat.Completions.ChatCompletionMessageParam[];
 
         return p;
 
