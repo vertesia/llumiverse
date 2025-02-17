@@ -14,6 +14,7 @@ import {
     TrainingJobStatus,
     TrainingOptions,
     TrainingPromptOptions,
+    TextFallbackOptions,
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { formatOpenAILikeMultimodalPrompt } from "@llumiverse/core/formatters";
@@ -81,8 +82,9 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
     async requestTextCompletionStream(prompt: OpenAI.Chat.Completions.ChatCompletionMessageParam[], options: ExecutionOptions): Promise<any> {
         if (options.model_options?._option_id !== "text-fallback") {
-            throw new Error("Invalid model options");
+            this.logger.warn("Invalid model options", options.model_options);
         }
+        options.model_options = options.model_options as TextFallbackOptions;
 
         const mapFn = options.result_schema && this.provider !== "xai"
             ? (chunk: OpenAI.Chat.Completions.ChatCompletionChunk) => {
@@ -145,9 +147,9 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
     async requestTextCompletion(prompt: OpenAI.Chat.Completions.ChatCompletionMessageParam[], options: ExecutionOptions): Promise<any> {
         if (options.model_options?._option_id !== "text-fallback") {
-            throw new Error("Invalid model options");
+            this.logger.warn("Invalid model options", options.model_options);
         }
-        
+        options.model_options = options.model_options as TextFallbackOptions;
         const functions = options.result_schema && this.provider.includes("openai")
             ? [
                 {

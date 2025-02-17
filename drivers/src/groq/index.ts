@@ -1,4 +1,4 @@
-import { AIModel, AbstractDriver, Completion, DriverOptions, EmbeddingsOptions, EmbeddingsResult, PromptSegment, CompletionChunkObject, ExecutionOptions } from "@llumiverse/core";
+import { AIModel, AbstractDriver, Completion, DriverOptions, EmbeddingsOptions, EmbeddingsResult, PromptSegment, CompletionChunkObject, ExecutionOptions, TextFallbackOptions } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { OpenAITextMessage, formatOpenAILikeTextPrompt, getJSONSafetyNotice } from "@llumiverse/core/formatters";
 import Groq from "groq-sdk";
@@ -60,8 +60,9 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, OpenAITextMess
 
     async requestTextCompletion(messages: OpenAITextMessage[], options: ExecutionOptions): Promise<Completion<any>> {
         if (options.model_options?._option_id !== "text-fallback") {
-            throw new Error("Invalid model options");
+            this.logger.warn("Invalid model options", options.model_options);
         }
+        options.model_options = options.model_options as TextFallbackOptions;
 
         const res = await this.client.chat.completions.create({
             model: options.model,
@@ -94,8 +95,9 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, OpenAITextMess
 
     async requestTextCompletionStream(messages: OpenAITextMessage[], options: ExecutionOptions): Promise < AsyncIterable < CompletionChunkObject >> {
         if (options.model_options?._option_id !== "text-fallback") {
-            throw new Error("Invalid model options");
+            this.logger.warn("Invalid model options", options.model_options);
         }
+        options.model_options = options.model_options as TextFallbackOptions;
 
         const res = await this.client.chat.completions.create({
             model: options.model,

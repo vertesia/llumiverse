@@ -1,4 +1,4 @@
-import { AIModel, AbstractDriver, Completion, DriverOptions, EmbeddingsResult, CompletionChunk, ExecutionOptions } from "@llumiverse/core";
+import { AIModel, AbstractDriver, Completion, DriverOptions, EmbeddingsResult, CompletionChunk, ExecutionOptions, TextFallbackOptions } from "@llumiverse/core";
 import { transformSSEStream } from "@llumiverse/core/async";
 import { FetchClient } from "api-fetch-client";
 import { TextCompletion, TogetherModelInfo } from "./interfaces.js";
@@ -31,8 +31,10 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
 
     async requestTextCompletion(prompt: string, options: ExecutionOptions): Promise<Completion<any>> {
         if (options.model_options?._option_id !== "text-fallback") {
-            throw new Error("Invalid model options");
+            this.logger.warn("Invalid model options", options.model_options);
         }
+        options.model_options = options.model_options as TextFallbackOptions;
+
         const stop_seq = options.model_options?.stop_sequence ?? [];
 
         const res = await this.fetchClient.post('/v1/completions', {
@@ -71,8 +73,9 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
 
     async requestTextCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
         if (options.model_options?._option_id !== "text-fallback") {
-            throw new Error("Invalid model options");
+            this.logger.warn("Invalid model options", options.model_options);
         }
+        options.model_options = options.model_options as TextFallbackOptions;
 
         const stop_seq = options.model_options?.stop_sequence ?? [];
         const stream = await this.fetchClient.post('/v1/completions', {

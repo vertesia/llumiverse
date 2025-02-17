@@ -11,6 +11,7 @@ import {
     TrainingJob,
     TrainingJobStatus,
     TrainingOptions,
+    TextFallbackOptions,
 } from "@llumiverse/core";
 import { EventStream } from "@llumiverse/core/async";
 import EventSource from "eventsource";
@@ -65,8 +66,10 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
 
     async requestTextCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
         if (options.model_options?._option_id !== "text-fallback") {
-            throw new Error("Invalid model options");
+            this.logger.warn("Invalid model options", options.model_options);
         }
+        options.model_options = options.model_options as TextFallbackOptions;
+        
         const model = ReplicateDriver.parseModelId(options.model);
         const predictionData = {
             input: {
@@ -108,8 +111,9 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
 
     async requestTextCompletion(prompt: string, options: ExecutionOptions) {
         if (options.model_options?._option_id !== "text-fallback") {
-            throw new Error("Invalid model options");
+            this.logger.warn("Invalid model options", options.model_options);
         }
+        options.model_options = options.model_options as TextFallbackOptions;
         const model = ReplicateDriver.parseModelId(options.model);
         const predictionData = {
             input: {

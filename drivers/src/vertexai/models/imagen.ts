@@ -12,6 +12,7 @@ const { PredictionServiceClient } = aiplatform.v1;
 // Import the helper module for converting arbitrary protobuf.Value objects
 import { helpers } from '@google-cloud/aiplatform';
 import { Content, GenerateContentRequest, InlineDataPart, TextPart } from "@google-cloud/vertexai";
+import { ImagenOptions } from "../../../../core/src/options/vertexai.js";
 
 interface IPredictRequest {
     endpoint: string;
@@ -139,8 +140,9 @@ export class ImagenModelDefinition  {
     
     async requestImageGeneration(driver: VertexAIDriver, prompt: GenerateContentRequest, options: ExecutionOptions): Promise<Completion<ImageGeneration>> {
         if (options.model_options?._option_id !== "vertexai-imagen") {
-            throw new Error("Invalid model options");
+            driver.logger.warn("Invalid model options", options.model_options);
         }
+        options.model_options = options.model_options as ImagenOptions;
         
         if (options.output_modality !== Modalities.image) {
             throw new Error(`Image generation requires image output_modality`);

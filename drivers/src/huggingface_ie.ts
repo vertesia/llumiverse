@@ -11,6 +11,7 @@ import {
     EmbeddingsResult,
     CompletionChunkObject,
     ExecutionOptions,
+    TextFallbackOptions,
 } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { FetchClient } from "api-fetch-client";
@@ -68,8 +69,9 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
 
     async requestTextCompletionStream(prompt: string, options: ExecutionOptions) {
         if (options.model_options?._option_id !== "text-fallback") {
-            throw new Error("Invalid model options");
+            this.logger.warn("Invalid model options", options.model_options);
         }
+        options.model_options = options.model_options as TextFallbackOptions;
 
         const executor = await this.getExecutor(options.model);
         const req = executor.textGenerationStream({
@@ -83,7 +85,7 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
 
         return transformAsyncIterator(req, (val: TextGenerationStreamOutput) => {
             //special like <s> are not part of the result
-            if (val.token.special) return {result:""};
+            if (val.token.special) return { result: "" };
             let finish_reason = val.details?.finish_reason as string;
             if (finish_reason === "eos_token") {
                 finish_reason = "stop";
@@ -91,7 +93,7 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
             return {
                 result: val.token.text ?? '',
                 finish_reason: finish_reason,
-                token_usage:{
+                token_usage: {
                     result: val.details?.generated_tokens ?? 0,
                 }
             } as CompletionChunkObject;
@@ -100,8 +102,9 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
 
     async requestTextCompletion(prompt: string, options: ExecutionOptions) {
         if (options.model_options?._option_id !== "text-fallback") {
-            throw new Error("Invalid model options");
+            this.logger.warn("Invalid model options", options.model_options);
         }
+        options.model_options = options.model_options as TextFallbackOptions;
     
         const executor = await this.getExecutor(options.model);
         const res = await executor.textGeneration({

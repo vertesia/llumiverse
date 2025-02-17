@@ -1,7 +1,7 @@
 import { Bedrock, CreateModelCustomizationJobCommand, FoundationModelSummary, GetModelCustomizationJobCommand, GetModelCustomizationJobCommandOutput, ModelCustomizationJobStatus, StopModelCustomizationJobCommand } from "@aws-sdk/client-bedrock";
 import { BedrockRuntime, ConverseRequest, ConverseResponse, ConverseStreamOutput, InferenceConfiguration } from "@aws-sdk/client-bedrock-runtime";
 import { S3Client } from "@aws-sdk/client-s3";
-import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionTokenUsage, ImageGeneration, Modalities, PromptOptions, PromptSegment, ExecutionOptions, TrainingJob, TrainingJobStatus, TrainingOptions } from "@llumiverse/core";
+import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionTokenUsage, ImageGeneration, Modalities, PromptOptions, PromptSegment, ExecutionOptions, TrainingJob, TrainingJobStatus, TrainingOptions, TextFallbackOptions } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
 import { AwsCredentialIdentity, Provider } from "@smithy/types";
@@ -9,6 +9,7 @@ import mnemonist from "mnemonist";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
 import { forceUploadFile } from "./s3.js";
 import { converseConcatMessages, converseRemoveJSONprefill, converseSystemToMessages, fortmatConversePrompt } from "./converse.js";
+import { NovaCanvasOptions } from "../../../core/src/options/bedrock.js";
 
 const { LRUCache } = mnemonist;
 
@@ -261,8 +262,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
     preparePayload(prompt: ConverseRequest, options: ExecutionOptions) {
         if (options.model_options?._option_id !== "text-fallback") {
-            throw new Error("Invalid model options");
+            this.logger.warn("Invalid model options", options.model_options);
         }
+        options.model_options = options.model_options as TextFallbackOptions;
 
         let additionalField = {};
 
@@ -384,8 +386,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             throw new Error(`Image generation requires image output_modality`);
         }
         if (options.model_options?._option_id !== "bedrock-nova-canvas") {
-            throw new Error("Invalid model options");
+            this.logger.warn("Invalid model options", options.model_options);
         }
+        options.model_options = options.model_options as NovaCanvasOptions;
 
         const executor = this.getExecutor();
         const taskType = options.model_options.taskType ?? NovaImageGenerationTaskType.TEXT_IMAGE;

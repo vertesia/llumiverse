@@ -1,5 +1,5 @@
 import { Content, FinishReason, GenerateContentRequest, HarmBlockThreshold, HarmCategory, InlineDataPart, ModelParams, TextPart } from "@google-cloud/vertexai";
-import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, ExecutionTokenUsage, ModelType, PromptOptions, PromptRole, PromptSegment, readStreamAsBase64 } from "@llumiverse/core";
+import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, ExecutionTokenUsage, ModelType, PromptOptions, PromptRole, PromptSegment, readStreamAsBase64, TextFallbackOptions } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { VertexAIDriver } from "../index.js";
 import { ModelDefinition } from "../models.js";
@@ -10,8 +10,9 @@ function getGenerativeModel(driver: VertexAIDriver, options: ExecutionOptions, m
     const jsonMode = options.result_schema && !(options.model.includes("ultra"));
 
     if (options.model_options?._option_id !== "text-fallback") {
-        throw new Error("Invalid model options");
+        driver.logger.warn("Invalid model options", options.model_options);
     }
+    options.model_options = options.model_options as TextFallbackOptions;
 
     const model_options = options.model_options;
 
