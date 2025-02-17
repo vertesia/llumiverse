@@ -5,6 +5,7 @@ import { JSONObject } from './json.js';
 import { TextFallbackOptions } from './options.js';
 import { VertexAIOptions } from './options/vertexai.js';
 import { BedrockOptions } from './options/bedrock.js';
+import { OpenAiOptions } from './options/openai.js';
 
 export interface EmbeddingsOptions {
     /**
@@ -162,7 +163,7 @@ export enum OptionType {
 
 // ============== Model Options ===============
 
-export type ModelOptions = TextFallbackOptions | VertexAIOptions | BedrockOptions;
+export type ModelOptions = TextFallbackOptions | VertexAIOptions | BedrockOptions | OpenAiOptions;
 
 // ============== Option Info ===============
 
