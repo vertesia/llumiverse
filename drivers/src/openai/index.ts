@@ -14,7 +14,6 @@ import {
     TrainingJobStatus,
     TrainingOptions,
     TrainingPromptOptions,
-    TextFallbackOptions,
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { formatOpenAILikeMultimodalPrompt } from "@llumiverse/core/formatters";
@@ -89,10 +88,9 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     }
 
     async requestTextCompletionStream(prompt: OpenAI.Chat.Completions.ChatCompletionMessageParam[], options: ExecutionOptions): Promise<any> {
-        if (options.model_options?._option_id !== "text-fallback") {
+        if (options.model_options?._option_id !== "openai-text" && options.model_options?._option_id !== "openai-thinking") {
             this.logger.warn("Invalid model options", options.model_options);
         }
-        options.model_options = options.model_options as TextFallbackOptions;
 
         const useTools: boolean = !isNonStructureSupporting(options.model);
 
@@ -116,21 +114,24 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         };
         
         convertRoles(prompt, options.model);
+    
+        const model_options = options.model_options as any;
+        insert_image_detail(prompt, model_options?.image_detail ?? "auto");
 
-        //TODO: OpenAI o1 support requires max_completions_tokens
         const stream = (await this.service.chat.completions.create({
             stream: true,
             stream_options: { include_usage: true },
             model: options.model,
             messages: prompt,
-            temperature: options.model_options?.temperature,
-            top_p: options.model_options?.top_p,
+            reasoning_effort: model_options?.reasoning_effort,
+            temperature: model_options?.temperature,
+            top_p: model_options?.top_p,
             //top_logprobs: options.top_logprobs,       //Logprobs output currently not supported
             //logprobs: options.top_logprobs ? true : false,
-            presence_penalty: options.model_options?.presence_penalty,
-            frequency_penalty: options.model_options?.frequency_penalty,
+            presence_penalty: model_options?.presence_penalty,
+            frequency_penalty: model_options?.frequency_penalty,
             n: 1,
-            max_completion_tokens: options.model_options?.max_tokens, //TODO: use max_tokens for older models, currently relying on OpenAI to handle it
+            max_completion_tokens: model_options?.max_tokens, //TODO: use max_tokens for older models, currently relying on OpenAI to handle it
             tools: useTools ? options.result_schema && this.provider.includes("openai")
                 ? [
                     {
@@ -147,17 +148,17 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                     type: 'function',
                     function: { name: "format_output" }
                 } : undefined : undefined,
-            stop: options.model_options?.stop_sequence,
+            stop: model_options?.stop_sequence,
         })) as Stream<OpenAI.Chat.Completions.ChatCompletionChunk>;
 
         return asyncMap(stream, mapFn);
     }
 
     async requestTextCompletion(prompt: OpenAI.Chat.Completions.ChatCompletionMessageParam[], options: ExecutionOptions): Promise<any> {
-        if (options.model_options?._option_id !== "text-fallback") {
+        if (options.model_options?._option_id !== "openai-text" && options.model_options?._option_id !== "openai-thinking") {
             this.logger.warn("Invalid model options", options.model_options);
         }
-        options.model_options = options.model_options as TextFallbackOptions;
+
         const functions = options.result_schema && this.provider.includes("openai")
             ? [
                 {
@@ -171,29 +172,30 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             : undefined;
         
         convertRoles(prompt, options.model);
-
         const useTools: boolean = !isNonStructureSupporting(options.model);
+        const model_options = options.model_options as any;
+        insert_image_detail(prompt, model_options?.image_detail ?? "auto");
 
-        //TODO: OpenAI o1 support requires max_completions_tokens
         const res = await this.service.chat.completions.create({
             stream: false,
             model: options.model,
             messages: prompt,
-            temperature: options.model_options?.temperature,
-            top_p: options.model_options?.top_p,
+            reasoning_effort: model_options?.reasoning_effort,
+            temperature: model_options?.temperature,
+            top_p: model_options?.top_p,
             //top_logprobs: options.top_logprobs,       //Logprobs output currently not supported
             //logprobs: options.top_logprobs ? true : false,
-            presence_penalty: options.model_options?.presence_penalty,
-            frequency_penalty: options.model_options?.frequency_penalty,
+            presence_penalty: model_options?.presence_penalty,
+            frequency_penalty: model_options?.frequency_penalty,
             n: 1,
-            max_completion_tokens: options.model_options.max_tokens, //TODO: use max_tokens for older models, currently relying on OpenAI to handle it
+            max_completion_tokens: model_options?.max_tokens, //TODO: use max_tokens for older models, currently relying on OpenAI to handle it
             tools: useTools ? functions : undefined,
             tool_choice: useTools ? options.result_schema && this.provider.includes("openai")
                 ? {
                     type: 'function',
                     function: { name: "format_output" }
                 } : undefined : undefined,
-            stop: options.model_options?.stop_sequence,
+            stop: model_options?.stop_sequence,
             // functions: functions,
             // function_call: options.result_schema
             //     ? { name: "format_output" }
@@ -335,6 +337,24 @@ function jobInfo(job: OpenAI.FineTuning.Jobs.FineTuningJob): TrainingJob {
         status,
         details
     }
+}
+
+function insert_image_detail(messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[], detail_level: string): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
+    if (detail_level == "auto" || detail_level == "low" || detail_level == "high") {
+        for (const message of messages) {
+            if (message.role !== 'assistant' && message.content) {
+                for (const part of message.content) {
+                    if (typeof part === "string") {
+                        continue;
+                    }
+                    if (part.type === 'image_url') {
+                        part.image_url = { ...part.image_url, detail: detail_level };
+                    }
+                }
+            }
+        }
+    }
+    return messages;
 }
 
 function convertRoles(messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[], model: string): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {

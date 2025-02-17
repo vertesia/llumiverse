@@ -19,6 +19,7 @@ export interface OpenAiTextOptions {
     top_p?: number,
     presence_penalty?: number,
     frequency_penalty?: number,
+    stop_sequence?: string[],
     image_detail?: "low" | "high" | "auto",
 }
 
@@ -115,6 +116,10 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
             {
                 name: "frequency_penalty", type: OptionType.numeric, min: -2.0, max: 2.0, default: 0,
                 integer: false, step: 0.1, description: "Penalise tokens based on their frequency in the text"
+            },
+            {
+                name: SharedOptions.stop_sequence, type: OptionType.string_list, value: [],
+                description: "The generation will halt if one of the stop sequences is output",
             }
         ]
 

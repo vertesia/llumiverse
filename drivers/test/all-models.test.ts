@@ -181,11 +181,17 @@ function getTestOptions(model: string): ExecutionOptions {
     if (model == "o1-mini") {
         return {
             model: model,
+            model_options: {
+                _option_id: "openai-thinking",
+                max_tokens: 512,
+                reasoning_effort: "low",
+                stop_sequence: ["adsoiuygsa"],
+            },
             output_modality: Modalities.text,
         };
     }
 
-    let test_options: ExecutionOptions = {
+    return {
         model: model,
         model_options: {
             _option_id: "text-fallback",
@@ -200,7 +206,6 @@ function getTestOptions(model: string): ExecutionOptions {
         },
         output_modality: Modalities.text,
     };
-    return test_options;
 }
 
 describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => {
