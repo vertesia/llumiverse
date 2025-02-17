@@ -31,7 +31,6 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
             },
     ] : [];
     
-
     if (model.includes("o1") || model.includes("o3")) {
         //Is thinking text model
         let max_tokens_limit = 4096;
@@ -106,15 +105,15 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
                 integer: false, step: 0.1, description: "A higher temperature biases toward less likely tokens, making the model more creative"
             },
             {
-                name: "top_p", type: OptionType.numeric, min: 0, max: 1, default: 1,
+                name: "top_p", type: OptionType.numeric, min: 0, max: 1,
                 integer: false, step: 0.1, description: "Limits token sampling to the cumulative probability of the top p tokens"
             },
             {
-                name: "presence_penalty", type: OptionType.numeric, min: -2.0, max: 2.0, default: 0,
+                name: "presence_penalty", type: OptionType.numeric, min: -2.0, max: 2.0,
                 integer: false, step: 0.1, description: "Penalise tokens if they appear at least once in the text"
             },
             {
-                name: "frequency_penalty", type: OptionType.numeric, min: -2.0, max: 2.0, default: 0,
+                name: "frequency_penalty", type: OptionType.numeric, min: -2.0, max: 2.0,
                 integer: false, step: 0.1, description: "Penalise tokens based on their frequency in the text"
             },
             {
@@ -145,5 +144,5 @@ function isO1Full(model: string): boolean {
 }
 
 function isVisionModel(model: string): boolean {
-    return model.includes("gpt-4o") || isO1Full(model);
+    return model.includes("gpt-4o") || isO1Full(model) || model.includes("gpt-4-turbo");
 }
