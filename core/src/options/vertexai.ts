@@ -8,14 +8,15 @@ export interface ImagenOptions {
     _option_id: "vertexai-imagen"
     number_of_images?: number;
     seed?: number;
-    person_generation?: "dont_allow" | "random" | "allow_all";
-    safety_setting?: "block_none" | "block_only_high" | "block_medium_and_above" | "block_low_and_above";
+    person_generation?: "dont_allow" | "allow_adults" | "allow_all";
+    safety_setting?: "block_none" | "block_only_high" | "block_medium_and_above" | "block_low_and_above"; //The "off" option does not seem to work for Imagen 3, might be only for text models
     image_file_type?: "image/jpeg" | "image/png";
     jpeg_compression_quality?: number;
-    aspect_ratio?: "1:1" | "4:3" | "16:9";
+    aspect_ratio?: "1:1" | "4:3" | "3:4" | "16:9" | "9:16" ;
     add_watermark?: boolean;
     edit_mode?: "EDIT_MODE_INPAINT_REMOVAL" | "EDIT_MODE_INPAINT_INSERTION" | "EDIT_MODE_BGSWAP" | "EDIT_MODE_OUTPAINT";
     guidance_scale?: number;
+    enhance_prompt?: boolean;
 }
 
 export function getVertexAiOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
@@ -30,12 +31,12 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
                 integer: true, description: "The seed of the generated image"
             },
             {
-                name: "person_generation", type: OptionType.enum, enum: { "Disallow the inclusion of people or faces in images": "dont_allow", "Allow generation of adults only": "random", "Allow generation of people of all ages": "allow_all" },
-                default: "allow_adult", description: "The type of person to generate"
+                name: "person_generation", type: OptionType.enum, enum: { "Disallow the inclusion of people or faces in images": "dont_allow", "Allow generation of adults only": "allow_adults", "Allow generation of people of all ages": "allow_all" },
+                default: "allow_adult", description: "The safety setting for allowing the generation of people in the image"
             },
             {
                 name: "safety_setting", type: OptionType.enum, enum: { "Block very few problematic prompts and responses": "block_none", "Block only few problematic prompts and responses": "block_only_high", "Block some problematic prompts and responses": "block_medium_and_above", "Strictest filtering": "block_low_and_above" },
-                default: "block_medium_and_above", description: "The safety setting for the generated image"
+                default: "block_medium_and_above", description: "The overall safety setting"
             },
         ];
 
@@ -59,14 +60,20 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
         if (model.includes("generate")) {
             const modeOptions: ModelOptionInfoItem[] = [
                 {
-                    name: "aspect_ratio", type: OptionType.enum, enum: { "1:1": "1:1", "4:3": "4:3", "16:9": "16:9" },
+                    name: "aspect_ratio", type: OptionType.enum, enum: { "1:1": "1:1", "4:3": "4:3", "3:4": "3:4", "16:9": "16:9" ,"9:16": "9:16" },
                     default: "1:1", description: "The aspect ratio of the generated image"
                 },
                 {
-                    name: "add_watermark", type: OptionType.boolean, default: true, description: "Add an invisible watermark to the generated image, useful for detection of AI images"
+                    name: "add_watermark", type: OptionType.boolean, default: false, description: "Add an invisible watermark to the generated image, useful for detection of AI images"
                 },
                 
             ];
+
+            const enhanceOptions: ModelOptionInfoItem[] = !model.includes("generate-001") ? [
+                {
+                    name: "enhance_prompt", type: OptionType.boolean, default: true, description: "VertexAI automatically rewrites the prompt to better reflect the prompt's intent."
+                },
+            ] : [];
 
             return {
                 _option_id: "vertexai-imagen",
@@ -74,6 +81,7 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
                     ...commonOptions,
                     ...modeOptions,
                     ...outputOptions,
+                    ...enhanceOptions,
                 ]
             };
         }
