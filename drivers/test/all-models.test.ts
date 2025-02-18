@@ -183,7 +183,7 @@ function getTestOptions(model: string): ExecutionOptions {
             model: model,
             model_options: {
                 _option_id: "openai-thinking",
-                max_tokens: 512,
+                max_tokens: 2048,
                 stop_sequence: ["adsoiuygsa"],
             },
             output_modality: Modalities.text,
