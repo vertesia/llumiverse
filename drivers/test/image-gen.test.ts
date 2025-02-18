@@ -1,4 +1,4 @@
-import { AbstractDriver, ImageGenExecutionOptions, Modalities } from "@llumiverse/core";
+import { AbstractDriver, ExecutionOptions, Modalities } from "@llumiverse/core";
 import "dotenv/config";
 import fs from "fs";
 import { describe, expect, test } from "vitest";
@@ -38,11 +38,13 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
 
     
     test("generate a prompt Nova canvas", async () => {
-        const options: ImageGenExecutionOptions = {
-            output_modality: Modalities.image,
-            generation_type: "text-to-image",
-            input_image_use: "none",
+        const options: ExecutionOptions = {
             model: "amazon.nova-canvas-v1:0",
+            output_modality: Modalities.image,
+            model_options: {
+                _option_id: "bedrock-nova-canvas",
+                taskType: "TEXT_IMAGE",
+            }
         }
         const res = await formatNovaImageGenerationPayload(NovaImageGenerationTaskType.TEXT_IMAGE, testPrompt_textToImage, options)
         expect(res).toBeDefined();
@@ -55,11 +57,13 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
 
         console.log(`Testing model ${model}`);
 
-        const options: ImageGenExecutionOptions = {
-            output_modality: Modalities.image,
-            generation_type: "text-to-image",
-            input_image_use: "none",
+        const options: ExecutionOptions = {
             model: model,
+            output_modality: Modalities.image,
+            model_options: {
+                _option_id: "bedrock-nova-canvas",
+                taskType: "TEXT_IMAGE",
+            }
         }
 
         const res = await driver.requestImageGeneration(testPrompt_textToImage, options);
@@ -73,11 +77,13 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
 
         console.log(`Testing model ${model}`);
 
-        const options: ImageGenExecutionOptions = {
-            output_modality: Modalities.image,
-            generation_type: "text-to-image",
-            input_image_use: "variation",
+        const options: ExecutionOptions = {
             model: model,
+            output_modality: Modalities.image,
+            model_options: {
+                _option_id: "bedrock-nova-canvas",
+                taskType: "TEXT_IMAGE",
+            }
         }
 
         const res = await driver.requestImageGeneration(testPrompt_textToImageGuidance, options);
@@ -85,19 +91,18 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
         expect(res.result).toHaveProperty("images");
         expect(res.result.images).toHaveLength(1);
         saveImagesToOutput(res.result.images, `text-to-image-guidance-${model}`);
-
-
     });
 
 
     test.each(models)(`${name}: text to image variation`, {timeout: 300*1000}, async (model) => {
 
-        const options: ImageGenExecutionOptions = {
-            output_modality: Modalities.image,
-            generation_type: "text-to-image",
-            input_image_use: "inspiration",
-            quality: "standard",
+        const options: ExecutionOptions = {
             model: model,
+            output_modality: Modalities.image,
+            model_options: {
+                _option_id: "bedrock-nova-canvas",
+                taskType: "IMAGE_VARIATION",
+            }
         }
 
         const res = await driver.requestImageGeneration(testPrompt_imageVariations, options);

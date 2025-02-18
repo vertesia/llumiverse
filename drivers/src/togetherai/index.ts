@@ -1,4 +1,4 @@
-import { AIModel, AbstractDriver, Completion, DriverOptions, EmbeddingsResult, ExecutionOptions, CompletionChunk } from "@llumiverse/core";
+import { AIModel, AbstractDriver, Completion, DriverOptions, EmbeddingsResult, CompletionChunk, ExecutionOptions, TextFallbackOptions } from "@llumiverse/core";
 import { transformSSEStream } from "@llumiverse/core/async";
 import { FetchClient } from "api-fetch-client";
 import { TextCompletion, TogetherModelInfo } from "./interfaces.js";
@@ -29,23 +29,26 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
             } : undefined;
     }
 
-    async requestCompletion(prompt: string, options: ExecutionOptions): Promise<Completion<any>> {
+    async requestTextCompletion(prompt: string, options: ExecutionOptions): Promise<Completion<any>> {
+        if (options.model_options?._option_id !== "text-fallback") {
+            this.logger.warn("Invalid model options", options.model_options);
+        }
+        options.model_options = options.model_options as TextFallbackOptions;
 
-        const stop_seq = typeof options.stop_sequence == 'string' ? 
-            [options.stop_sequence] : options.stop_sequence ?? [];
+        const stop_seq = options.model_options?.stop_sequence ?? [];
 
         const res = await this.fetchClient.post('/v1/completions', {
             payload: {
                 model: options.model,
                 prompt: prompt,
                 response_format: this.getResponseFormat(options),
-                max_tokens: options.max_tokens,
-                temperature: options.temperature,
-                top_p: options.top_p,
-                top_k: options.top_k,
+                max_tokens: options.model_options?.max_tokens,
+                temperature: options.model_options?.temperature,
+                top_p: options.model_options?.top_p,
+                top_k: options.model_options?.top_k,
                 //logprobs: options.top_logprobs,       //Logprobs output currently not supported
-                frequency_penalty: options.frequency_penalty,
-                presence_penalty: options.presence_penalty,
+                frequency_penalty: options.model_options?.frequency_penalty,
+                presence_penalty: options.model_options?.presence_penalty,
                 stop: [
                     "</s>",
                     "[/INST]",
@@ -68,22 +71,25 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
         }
     }
 
-    async requestCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
-        const stop_seq = typeof options.stop_sequence == 'string' ? 
-            [options.stop_sequence] : options.stop_sequence ?? [];
+    async requestTextCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
+        if (options.model_options?._option_id !== "text-fallback") {
+            this.logger.warn("Invalid model options", options.model_options);
+        }
+        options.model_options = options.model_options as TextFallbackOptions;
 
+        const stop_seq = options.model_options?.stop_sequence ?? [];
         const stream = await this.fetchClient.post('/v1/completions', {
             payload: {
                 model: options.model,
                 prompt: prompt,
-                max_tokens: options.max_tokens,
-                temperature: options.temperature,
+                max_tokens: options.model_options?.max_tokens,
+                temperature: options.model_options?.temperature,
                 response_format: this.getResponseFormat(options),
-                top_p: options.top_p,
-                top_k: options.top_k,
+                top_p: options.model_options?.top_p,
+                top_k: options.model_options?.top_k,
                 //logprobs: options.top_logprobs,       //Logprobs output currently not supported
-                frequency_penalty: options.frequency_penalty,
-                presence_penalty: options.presence_penalty,
+                frequency_penalty: options.model_options?.frequency_penalty,
+                presence_penalty: options.model_options?.presence_penalty,
                 stream: true,
                 stop: [
                     "</s>",

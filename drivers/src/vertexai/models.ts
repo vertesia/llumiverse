@@ -1,4 +1,4 @@
-import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, PromptOptions, PromptSegment } from "@llumiverse/core";
+import { AIModel, Completion, CompletionChunkObject, PromptOptions, PromptSegment, ExecutionOptions } from "@llumiverse/core";
 import { VertexAIDriver , trimModelName} from "./index.js";
 import { GeminiModelDefinition } from "./models/gemini.js";
 import { ClaudeModelDefinition } from "./models/claude.js";
@@ -7,8 +7,8 @@ export interface ModelDefinition<PromptT = any> {
     model: AIModel;
     versions?: string[]; // the versions of the model that are available. ex: ['001', '002']
     createPrompt: (driver: VertexAIDriver, segments: PromptSegment[], options: PromptOptions) => Promise<PromptT>;
-    requestCompletion: (driver: VertexAIDriver, prompt: PromptT, options: ExecutionOptions) => Promise<Completion>;
-    requestCompletionStream: (driver: VertexAIDriver, promp: PromptT, options: ExecutionOptions) => Promise<AsyncIterable<CompletionChunkObject>>;
+    requestTextCompletion: (driver: VertexAIDriver, prompt: PromptT, options: ExecutionOptions) => Promise<Completion>;
+    requestTextCompletionStream: (driver: VertexAIDriver, promp: PromptT, options: ExecutionOptions) => Promise<AsyncIterable<CompletionChunkObject>>;
 }
 
 export function getModelDefinition(model: string): ModelDefinition {

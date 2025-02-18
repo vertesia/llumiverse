@@ -70,8 +70,11 @@ export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[]
                 const stream = await file.getStream();
                 const data = await readStreamAsBase64(stream);
                 parts.push({
-                    image_url: { url: `data:${file.mime_type || "image/jpeg"};base64,${data}` },
-                    type: "image_url"
+                    type: "image_url",
+                    image_url: {
+                        url: `data:${file.mime_type || "image/jpeg"};base64,${data}`,
+                        //detail: "auto"  //This is modified just before execution to "low" | "high" | "auto"
+                    },
                 })
             }
         }

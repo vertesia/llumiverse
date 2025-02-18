@@ -6,11 +6,12 @@ import {
     DataSource,
     DriverOptions,
     EmbeddingsResult,
-    ExecutionOptions,
     ModelSearchPayload,
+    ExecutionOptions,
     TrainingJob,
     TrainingJobStatus,
-    TrainingOptions
+    TrainingOptions,
+    TextFallbackOptions,
 } from "@llumiverse/core";
 import { EventStream } from "@llumiverse/core/async";
 import EventSource from "eventsource";
@@ -63,13 +64,18 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
         };
     }
 
-    async requestCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
+    async requestTextCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
+        if (options.model_options?._option_id !== "text-fallback") {
+            this.logger.warn("Invalid model options", options.model_options);
+        }
+        options.model_options = options.model_options as TextFallbackOptions;
+        
         const model = ReplicateDriver.parseModelId(options.model);
         const predictionData = {
             input: {
                 prompt: prompt,
-                max_new_tokens: options.max_tokens,
-                temperature: options.temperature,
+                max_new_tokens: options.model_options?.max_tokens,
+                temperature: options.model_options?.temperature,
             },
             version: model.version,
             stream: true, //streaming described here https://replicate.com/blog/streaming
@@ -103,13 +109,17 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
         return stream;
     }
 
-    async requestCompletion(prompt: string, options: ExecutionOptions) {
+    async requestTextCompletion(prompt: string, options: ExecutionOptions) {
+        if (options.model_options?._option_id !== "text-fallback") {
+            this.logger.warn("Invalid model options", options.model_options);
+        }
+        options.model_options = options.model_options as TextFallbackOptions;
         const model = ReplicateDriver.parseModelId(options.model);
         const predictionData = {
             input: {
                 prompt: prompt,
-                max_new_tokens: options.max_tokens,
-                temperature: options.temperature,
+                max_new_tokens: options.model_options?.max_tokens,
+                temperature: options.model_options?.temperature,
             },
             version: model.version,
             //TODO stream

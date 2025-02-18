@@ -1,4 +1,4 @@
-import { AIModel, Completion, ImageGeneration, ImageGenExecutionOptions, Modalities, ModelType, PromptOptions, PromptRole, PromptSegment, readStreamAsBase64 } from "@llumiverse/core";
+import { AIModel, Completion, ImageGeneration, Modalities, ModelType, PromptOptions, PromptRole, PromptSegment, readStreamAsBase64, ExecutionOptions } from "@llumiverse/core";
 import { VertexAIDriver } from "../index.js";
 
 const projectId = process.env.GOOGLE_PROJECT_ID;
@@ -12,6 +12,7 @@ const { PredictionServiceClient } = aiplatform.v1;
 // Import the helper module for converting arbitrary protobuf.Value objects
 import { helpers } from '@google-cloud/aiplatform';
 import { Content, GenerateContentRequest, InlineDataPart, TextPart } from "@google-cloud/vertexai";
+import { ImagenOptions } from "../../../../core/src/options/vertexai.js";
 
 interface IPredictRequest {
     endpoint: string;
@@ -41,7 +42,7 @@ async function textToImagePayload(prompt: GenerateContentRequest): Promise<strin
     return text;
 }
 
-export function formatImagenImageGenerationPayload(taskType: ImagenImageGenerationTaskType, prompt: GenerateContentRequest, _options: ImageGenExecutionOptions) {
+export function formatImagenImageGenerationPayload(taskType: ImagenImageGenerationTaskType, prompt: GenerateContentRequest, _options: ExecutionOptions) {
 
     switch (taskType) {
         case ImagenImageGenerationTaskType.TEXT_IMAGE:
@@ -137,7 +138,11 @@ export class ImagenModelDefinition  {
         return { contents, tools } as GenerateContentRequest;
     }
     
-    async requestImageGeneration(driver: VertexAIDriver, prompt: GenerateContentRequest, options: ImageGenExecutionOptions): Promise<Completion<ImageGeneration>> {
+    async requestImageGeneration(driver: VertexAIDriver, prompt: GenerateContentRequest, options: ExecutionOptions): Promise<Completion<ImageGeneration>> {
+        if (options.model_options?._option_id !== "vertexai-imagen") {
+            driver.logger.warn("Invalid model options", options.model_options);
+        }
+        options.model_options = options.model_options as ImagenOptions;
         
         if (options.output_modality !== Modalities.image) {
             throw new Error(`Image generation requires image output_modality`);
@@ -147,15 +152,18 @@ export class ImagenModelDefinition  {
             throw new Error(`Model ${options.model} not supported, use imagen-3.0 generate models`);
         }
 
-        const taskType = () => {
-            switch (options.generation_type) {
+        const taskType = ImagenImageGenerationTaskType.TEXT_IMAGE;
+         /*   
+            () => {
+            switch (options.model_options?) {
                 case "text-to-image":
                     return ImagenImageGenerationTaskType.TEXT_IMAGE
                 default:
                     return ImagenImageGenerationTaskType.TEXT_IMAGE
             }
         }
-        driver.logger.info("Task type: " + taskType());
+        */
+        driver.logger.info("Task type: " + taskType);
 
         if (typeof prompt === "string") {
             throw new Error("Bad prompt format");
@@ -165,20 +173,22 @@ export class ImagenModelDefinition  {
         const endpoint = `projects/${projectId}/locations/${location}/publishers/google/models/imagen-3.0-generate-001`;
 
         const promptText = {
-            prompt: await formatImagenImageGenerationPayload(taskType(), prompt, options)
+            prompt: await formatImagenImageGenerationPayload(taskType, prompt, options)
         };
 
         const instanceValue = helpers.toValue(promptText);
         const instances = [instanceValue];
 
         const parameter = {
-            sampleCount: 1,
+            sampleCount: options.model_options?.number_of_images ?? 1,
             // You can't use a seed value and watermark at the same time.
-            // seed: 100,
-            // addWatermark: false,
-            aspectRatio: '1:1',
-            //safetyFilterLevel: 'block_some',
-            //personGeneration: 'allow_adult',
+            seed: options.model_options?.seed ?? 1,
+            addWatermark: options.model_options?.add_watermark,
+            aspectRatio: options.model_options?.aspect_ratio ?? '1:1',
+            //negativePrompt: options.model_options.negative_prompt ?? '',
+            safetySetting: options.model_options?.safety_setting,
+            personGeneration: options.model_options?.person_generation,
+            //enhancePrompt: options.model_options?.enhance_prompt,
         };
         const parameters = helpers.toValue(parameter);
 

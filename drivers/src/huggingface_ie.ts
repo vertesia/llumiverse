@@ -9,8 +9,9 @@ import {
     AbstractDriver,
     DriverOptions,
     EmbeddingsResult,
+    CompletionChunkObject,
     ExecutionOptions,
-    CompletionChunkObject
+    TextFallbackOptions,
 } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { FetchClient } from "api-fetch-client";
@@ -66,20 +67,25 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
         return this._executor;
     }
 
-    async requestCompletionStream(prompt: string, options: ExecutionOptions) {
+    async requestTextCompletionStream(prompt: string, options: ExecutionOptions) {
+        if (options.model_options?._option_id !== "text-fallback") {
+            this.logger.warn("Invalid model options", options.model_options);
+        }
+        options.model_options = options.model_options as TextFallbackOptions;
+
         const executor = await this.getExecutor(options.model);
         const req = executor.textGenerationStream({
             inputs: prompt,
             parameters: {
-                temperature: options.temperature,
-                max_new_tokens: options.max_tokens,
+                temperature: options.model_options?.temperature,
+                max_new_tokens: options.model_options?.max_tokens,
             },
         });
         
 
         return transformAsyncIterator(req, (val: TextGenerationStreamOutput) => {
             //special like <s> are not part of the result
-            if (val.token.special) return {result:""};
+            if (val.token.special) return { result: "" };
             let finish_reason = val.details?.finish_reason as string;
             if (finish_reason === "eos_token") {
                 finish_reason = "stop";
@@ -87,20 +93,25 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
             return {
                 result: val.token.text ?? '',
                 finish_reason: finish_reason,
-                token_usage:{
+                token_usage: {
                     result: val.details?.generated_tokens ?? 0,
                 }
             } as CompletionChunkObject;
         });
     }
 
-    async requestCompletion(prompt: string, options: ExecutionOptions) {
+    async requestTextCompletion(prompt: string, options: ExecutionOptions) {
+        if (options.model_options?._option_id !== "text-fallback") {
+            this.logger.warn("Invalid model options", options.model_options);
+        }
+        options.model_options = options.model_options as TextFallbackOptions;
+    
         const executor = await this.getExecutor(options.model);
         const res = await executor.textGeneration({
             inputs: prompt,
             parameters: {
-                temperature: options.temperature,
-                max_new_tokens: options.max_tokens,
+                temperature: options.model_options?.temperature,
+                max_new_tokens: options.model_options?.max_tokens,
             },
         });
 
