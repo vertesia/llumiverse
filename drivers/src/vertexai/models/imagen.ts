@@ -148,10 +148,6 @@ export class ImagenModelDefinition  {
             throw new Error(`Image generation requires image output_modality`);
         }
 
-        if (!options.model.includes('imagen-3.0') || !options.model.includes('generate')) {
-            throw new Error(`Model ${options.model} not supported, use imagen-3.0 generate models`);
-        }
-
         const taskType = ImagenImageGenerationTaskType.TEXT_IMAGE;
          /*   
             () => {
@@ -180,15 +176,17 @@ export class ImagenModelDefinition  {
         const instances = [instanceValue];
 
         const parameter = {
-            sampleCount: options.model_options?.number_of_images ?? 1,
+            sampleCount: options.model_options?.number_of_images,
             // You can't use a seed value and watermark at the same time.
-            seed: options.model_options?.seed ?? 1,
+            seed: options.model_options?.seed,
             addWatermark: options.model_options?.add_watermark,
-            aspectRatio: options.model_options?.aspect_ratio ?? '1:1',
+            aspectRatio: options.model_options?.aspect_ratio,
             //negativePrompt: options.model_options.negative_prompt ?? '',
             safetySetting: options.model_options?.safety_setting,
             personGeneration: options.model_options?.person_generation,
-            //enhancePrompt: options.model_options?.enhance_prompt,
+            enhancePrompt: options.model_options?.enhance_prompt,
+            includeSafetyAttributes: true,
+            includeRaiReason: true,
         };
         const parameters = helpers.toValue(parameter);
 
@@ -202,13 +200,15 @@ export class ImagenModelDefinition  {
         const [response] = await predictionServiceClient.predict(request);
         const predictions = response.predictions;
 
+        console.log("Response: ", JSON.stringify(response));
+
         if (!predictions) {
             throw new Error('No predictions found');
         }
 
         // Extract base64 encoded images from predictions
         const images : string[] = predictions.map(prediction =>
-            prediction.structValue?.fields?.bytesBase64Encoded.stringValue ?? ''
+            prediction.structValue?.fields?.bytesBase64Encoded?.stringValue ?? ''
         );
 
         return {
