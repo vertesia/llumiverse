@@ -1,23 +1,69 @@
-import { AIModel, Completion, ImageGeneration, Modalities, ModelType, PromptOptions, PromptRole, PromptSegment, readStreamAsBase64, ExecutionOptions } from "@llumiverse/core";
+import { AIModel, Completion, ImageGeneration, Modalities, ModelType, PromptOptions, PromptRole, PromptSegment, ExecutionOptions } from "@llumiverse/core";
 import { VertexAIDriver } from "../index.js";
 
 const projectId = process.env.GOOGLE_PROJECT_ID;
 const location = 'us-central1';
 
-import aiplatform from '@google-cloud/aiplatform';
+import aiplatform, { protos } from '@google-cloud/aiplatform';
 
 // Imports the Google Cloud Prediction Service Client library
 const { PredictionServiceClient } = aiplatform.v1;
 
 // Import the helper module for converting arbitrary protobuf.Value objects
 import { helpers } from '@google-cloud/aiplatform';
-import { Content, GenerateContentRequest, InlineDataPart, TextPart } from "@google-cloud/vertexai";
 import { ImagenOptions } from "../../../../core/src/options/vertexai.js";
 
-interface IPredictRequest {
-    endpoint: string;
-    instances: any[];
-    parameters: any;
+interface ImagenBaseReference {
+    referenceType: "REFERENCE_TYPE_RAW" | "REFERENCE_TYPE_MASK" | "REFERENCE_TYPE_SUBJECT" |
+        "REFERENCE_TYPE_CONTROL" | "REFERENCE_TYPE_STYLE";
+    referenceId: number;
+    referenceImage: {
+        bytesBase64Encoded: string; //10MB max
+    }
+}
+
+interface ImagenReferenceRaw extends ImagenBaseReference {
+    referenceType: "REFERENCE_TYPE_RAW";
+}
+
+interface ImagenReferenceMask extends ImagenBaseReference {
+    referenceType: "REFERENCE_TYPE_MASK";
+    maskImageConfig: {
+        maskMode?: "MASK_MODE_USER_PROVIDED" | "MASK_MODE_BACKGROUND" | "MASK_MODE_FOREGROUND" | "MASK_MODE_SEMANTIC";
+        maskClasses?: number[]; //Used for MASK_MODE_SEMANTIC, based on https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/imagen-api-customization#segment-ids
+        dilation?: number; //Recommendation depends on mode: Inpaint: 0.01, BGSwap: 0.0, Outpaint: 0.01-0.03
+    }
+}
+
+interface ImagenReferenceSubject extends ImagenBaseReference {
+    referenceType: "REFERENCE_TYPE_SUBJECT";
+    subjectImageConfig: {
+        subjectDescription: string;
+        subjectType: "SUBJECT_TYPE_PERSON" | "SUBJECT_TYPE_ANIMAL" | "SUBJECT_TYPE_PRODUCT" | "SUBJECT_TYPE_DEFAULT";
+    }
+}
+
+interface ImagenReferenceControl extends ImagenBaseReference {
+    referenceType: "REFERENCE_TYPE_CONTROL";
+    controlImageConfig: {
+        controlType: "CONTROL_TYPE_FACE_MESH" | "CONTROL_TYPE_CANNY" | "CONTROL_TYPE_SCRIBBLE";
+        enableControlImageComputation?: boolean; //If true, the model will compute the control image
+    }
+}
+
+interface ImagenReferenceStyle extends ImagenBaseReference {
+    referenceType: "REFERENCE_TYPE_STYLE";
+    styleImageConfig: {
+        styleDescription?: string;
+    }
+}
+
+type ImagenMessage = ImagenReferenceRaw | ImagenReferenceMask | ImagenReferenceSubject | ImagenReferenceControl | ImagenReferenceStyle;
+
+export interface ImagenPrompt {
+    prompt: string;
+    referenceImages?: ImagenMessage[];
+    subjectDescription?: string; //Used for image customization to describe in the reference image
 }
 
 // Specifies the location of the api endpoint
@@ -31,22 +77,33 @@ const predictionServiceClient = new PredictionServiceClient(clientOptions);
 //TODO: Add more task types
 export enum ImagenImageGenerationTaskType {
     TEXT_IMAGE = "TEXT_IMAGE",
+    EDIT_MODE_INPAINT_REMOVAL = "EDIT_MODE_INPAINT_REMOVAL",
+    EDIT_MODE_INPAINT_INSERTION = "EDIT_MODE_INPAINT_INSERTION",
+    EDIT_MODE_BGSWAP = "EDIT_MODE_BGSWAP",
+    EDIT_MODE_OUTPAINT = "EDIT_MODE_OUTPAINT",
 }
 
-async function textToImagePayload(prompt: GenerateContentRequest): Promise<string> {
-    // Extract text from prompt
-    const textMessages: string[] = prompt.contents.map(content => content.parts.map(part => part.text).join(''));
-    
-    const text = textMessages.join("\n\n");
-
-    return text;
-}
-
-export function formatImagenImageGenerationPayload(taskType: ImagenImageGenerationTaskType, prompt: GenerateContentRequest, _options: ExecutionOptions) {
-
+function getImagenParameters(taskType: string, options: ImagenOptions) {
     switch (taskType) {
+        case ImagenImageGenerationTaskType.EDIT_MODE_INPAINT_REMOVAL:
+        case ImagenImageGenerationTaskType.EDIT_MODE_INPAINT_INSERTION:
+        case ImagenImageGenerationTaskType.EDIT_MODE_BGSWAP:
+        case ImagenImageGenerationTaskType.EDIT_MODE_OUTPAINT:
         case ImagenImageGenerationTaskType.TEXT_IMAGE:
-            return textToImagePayload(prompt);
+            return {
+                sampleCount: options?.number_of_images,
+                // You can't use a seed value and watermark at the same time.
+                seed: options?.seed,
+                addWatermark: options?.add_watermark,
+                aspectRatio: options?.aspect_ratio,
+                //negativePrompt: options.model_options.negative_prompt ?? '',
+                safetySetting: options?.safety_setting,
+                personGeneration: options?.person_generation,
+                enhancePrompt: options?.enhance_prompt,
+                //TODO: Add more safety and prompt rejection information
+                //includeSafetyAttributes: true,
+                //includeRaiReason: true,
+            };
         default:
             throw new Error("Task type not supported");
     }
@@ -63,82 +120,44 @@ export class ImagenModelDefinition  {
             provider: 'vertexai',
             type: ModelType.Image,
             can_stream: false,
-        } as AIModel;
+        };
     }
 
-    async createPrompt(_driver: VertexAIDriver, segments: PromptSegment[], options: PromptOptions): Promise<GenerateContentRequest> {
+    async createPrompt(_driver: VertexAIDriver, segments: PromptSegment[], options: PromptOptions): Promise<ImagenPrompt> {
         const splits = options.model.split("/");
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
-        
-        const schema = options.result_schema;
-        const contents: Content[] = [];
-        const safety: string[] = [];
 
-        let lastUserContent: Content | undefined = undefined;
+        const prompt: ImagenPrompt = {
+            prompt: "",
+        }
+
+        //Collect text prompts, Imagen does not support roles, so everything gets merged together 
+        // however we still respect our typical pattern. System First, Safety Last.
+        const system: PromptSegment[] = [];
+        const user: PromptSegment[] = [];
+        const safety: PromptSegment[] = [];
 
         for (const msg of segments) {
-
             if (msg.role === PromptRole.safety) {
-                safety.push(msg.content);
+                safety.push(msg);
+            } else if (msg.role === PromptRole.system) {
+                system.push(msg);
             } else {
-                let fileParts: InlineDataPart[] | undefined;
-                if (msg.files) {
-                    fileParts = [];
-                    for (const f of msg.files) {
-                        const stream = await f.getStream();
-                        const data = await readStreamAsBase64(stream);
-                        fileParts.push({
-                            inlineData: {
-                                data,
-                                mimeType: f.mime_type!
-                            }
-                        });
-                    }
-                }
-
-                const role = msg.role === PromptRole.assistant ? "model" : "user";
-
-                if (lastUserContent && lastUserContent.role === role) {
-                    lastUserContent.parts.push({ text: msg.content } as TextPart);
-                    fileParts?.forEach(p => lastUserContent?.parts.push(p));
-                } else {
-                    const content: Content = {
-                        role,
-                        parts: [{ text: msg.content } as TextPart],
-                    }
-                    fileParts?.forEach(p => content.parts.push(p));
-
-                    if (role === 'user') {
-                        lastUserContent = content;
-                    }
-                    contents.push(content);
-                }
+                //Everything else is assumed to be user or user adjacent.
+                user.push(msg);
             }
         }
 
-        let tools: any = undefined;
-        if (schema) {
-            safety.push("The answer must be a JSON object using the following JSON Schema:\n" + JSON.stringify(schema));
-        }
+        //Extract the text from the segments
+        prompt.prompt += system.map(msg => msg.content).join("\n\n") + "\n\n";
+        prompt.prompt += user.map(msg => msg.content).join("\n\n") + "\n\n";
+        prompt.prompt += safety.map(msg => msg.content).join("\n\n");
 
-        if (safety.length > 0) {
-            const content = safety.join('\n');
-            if (lastUserContent) {
-                lastUserContent.parts.push({ text: content } as TextPart);
-            } else {
-                contents.push({
-                    role: 'user',
-                    parts: [{ text: content } as TextPart],
-                })
-            }
-        }
-
-        // put system mesages first and safety last
-        return { contents, tools } as GenerateContentRequest;
+        return prompt
     }
     
-    async requestImageGeneration(driver: VertexAIDriver, prompt: GenerateContentRequest, options: ExecutionOptions): Promise<Completion<ImageGeneration>> {
+    async requestImageGeneration(driver: VertexAIDriver, prompt: ImagenPrompt, options: ExecutionOptions): Promise<Completion<ImageGeneration>> {
         if (options.model_options?._option_id !== "vertexai-imagen") {
             driver.logger.warn("Invalid model options", options.model_options);
         }
@@ -148,59 +167,30 @@ export class ImagenModelDefinition  {
             throw new Error(`Image generation requires image output_modality`);
         }
 
-        const taskType = ImagenImageGenerationTaskType.TEXT_IMAGE;
-         /*   
-            () => {
-            switch (options.model_options?) {
-                case "text-to-image":
-                    return ImagenImageGenerationTaskType.TEXT_IMAGE
-                default:
-                    return ImagenImageGenerationTaskType.TEXT_IMAGE
-            }
-        }
-        */
+        const taskType : string = options.model_options.edit_mode ?? ImagenImageGenerationTaskType.TEXT_IMAGE;
+        
         driver.logger.info("Task type: " + taskType);
 
-        if (typeof prompt === "string") {
-            throw new Error("Bad prompt format");
-        }
+        const modelName = options.model.split("/").pop() ?? '';
 
         // Configure the parent resource
-        const endpoint = `projects/${projectId}/locations/${location}/publishers/google/models/imagen-3.0-generate-001`;
+        const endpoint = `projects/${projectId}/locations/${location}/publishers/google/models/${modelName}`;
 
-        const promptText = {
-            prompt: await formatImagenImageGenerationPayload(taskType, prompt, options)
-        };
-
-        const instanceValue = helpers.toValue(promptText);
+        const instanceValue = helpers.toValue(prompt) ?? {};
         const instances = [instanceValue];
 
-        const parameter = {
-            sampleCount: options.model_options?.number_of_images,
-            // You can't use a seed value and watermark at the same time.
-            seed: options.model_options?.seed,
-            addWatermark: options.model_options?.add_watermark,
-            aspectRatio: options.model_options?.aspect_ratio,
-            //negativePrompt: options.model_options.negative_prompt ?? '',
-            safetySetting: options.model_options?.safety_setting,
-            personGeneration: options.model_options?.person_generation,
-            enhancePrompt: options.model_options?.enhance_prompt,
-            includeSafetyAttributes: true,
-            includeRaiReason: true,
-        };
+        const parameter = getImagenParameters(taskType, options.model_options);
         const parameters = helpers.toValue(parameter);
 
-        const request = {
+        const request: protos.google.cloud.aiplatform.v1.IPredictRequest = {
             endpoint,
             instances,
             parameters,
-        } as IPredictRequest;
+        };
 
         // Predict request
         const [response] = await predictionServiceClient.predict(request);
         const predictions = response.predictions;
-
-        console.log("Response: ", JSON.stringify(response));
 
         if (!predictions) {
             throw new Error('No predictions found');
@@ -214,7 +204,7 @@ export class ImagenModelDefinition  {
         return {
             result: {
                 images
-            }
+            },
         };
     }
 }

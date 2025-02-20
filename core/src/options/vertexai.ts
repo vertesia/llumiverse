@@ -6,6 +6,8 @@ export type VertexAIOptions = ImagenOptions;
 
 export interface ImagenOptions {
     _option_id: "vertexai-imagen"
+
+    //General and generate options
     number_of_images?: number;
     seed?: number;
     person_generation?: "dont_allow" | "allow_adults" | "allow_all";
@@ -14,9 +16,13 @@ export interface ImagenOptions {
     jpeg_compression_quality?: number;
     aspect_ratio?: "1:1" | "4:3" | "3:4" | "16:9" | "9:16" ;
     add_watermark?: boolean;
+    enhance_prompt?: boolean;
+
+    //Capability options
     edit_mode?: "EDIT_MODE_INPAINT_REMOVAL" | "EDIT_MODE_INPAINT_INSERTION" | "EDIT_MODE_BGSWAP" | "EDIT_MODE_OUTPAINT";
     guidance_scale?: number;
-    enhance_prompt?: boolean;
+    base_steps?: number;
+    mask_dilation?: number;
 }
 
 export function getVertexAiOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
@@ -58,7 +64,9 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
             outputOptions.push(jpegQuality);
         }
         if (model.includes("generate")) {
-            const modeOptions: ModelOptionInfoItem[] = [
+            //Generate models
+            const modeOptions: ModelOptionInfoItem[]
+                = [
                 {
                     name: "aspect_ratio", type: OptionType.enum, enum: { "1:1": "1:1", "4:3": "4:3", "3:4": "3:4", "16:9": "16:9" ,"9:16": "9:16" },
                     default: "1:1", description: "The aspect ratio of the generated image"
@@ -86,6 +94,7 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
             };
         }
         if (model.includes("capability")) {
+            //Edit models
             let guidanceScaleDefault = 75;
             if ((option as ImagenOptions).edit_mode === "EDIT_MODE_INPAINT_INSERTION") {
                 guidanceScaleDefault = 60;
@@ -100,6 +109,8 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
                         "Background Swap": "EDIT_MODE_BGSWAP",
                         "Outpaint": "EDIT_MODE_OUTPAINT",
                     },
+                    default: "EDIT_MODE_INPAINT_REMOVAL",
+                    description: "The editing mode"
                 },
                 {
                     name: "guidance_scale", type: OptionType.numeric, min: 0, max: 500, default: guidanceScaleDefault,
