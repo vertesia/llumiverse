@@ -1,4 +1,4 @@
-import { AIModel, Completion, ImageGeneration, Modalities, ModelType, PromptOptions, PromptRole, PromptSegment, ExecutionOptions, readStreamAsBase64 } from "@llumiverse/core";
+import { AIModel, Completion, ImageGeneration, Modalities, ModelType, PromptRole, PromptSegment, ExecutionOptions, readStreamAsBase64 } from "@llumiverse/core";
 import { VertexAIDriver } from "../index.js";
 
 const projectId = process.env.GOOGLE_PROJECT_ID;
@@ -26,12 +26,15 @@ interface ImagenReferenceRaw extends ImagenBaseReference {
     referenceType: "REFERENCE_TYPE_RAW";
 }
 
-interface ImagenReferenceMask extends ImagenBaseReference {
+interface ImagenReferenceMask extends Omit<ImagenBaseReference, "referenceImage"> {
     referenceType: "REFERENCE_TYPE_MASK";
     maskImageConfig: {
         maskMode?: "MASK_MODE_USER_PROVIDED" | "MASK_MODE_BACKGROUND" | "MASK_MODE_FOREGROUND" | "MASK_MODE_SEMANTIC";
         maskClasses?: number[]; //Used for MASK_MODE_SEMANTIC, based on https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/imagen-api-customization#segment-ids
         dilation?: number; //Recommendation depends on mode: Inpaint: 0.01, BGSwap: 0.0, Outpaint: 0.01-0.03
+    }   
+    referenceImage?: {  //Only used for MASK_MODE_USER_PROVIDED
+        bytesBase64Encoded: string; //10MB max
     }
 }
 
@@ -144,7 +147,7 @@ export class ImagenModelDefinition  {
         };
     }
 
-    async createPrompt(_driver: VertexAIDriver, segments: PromptSegment[], options: PromptOptions): Promise<ImagenPrompt> {
+    async createPrompt(_driver: VertexAIDriver, segments: PromptSegment[], options: ExecutionOptions): Promise<ImagenPrompt> {
         const splits = options.model.split("/");
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
@@ -174,12 +177,24 @@ export class ImagenModelDefinition  {
                     if (img.mime_type?.includes("image")) {
                         if (!prompt.referenceImages) {
                             prompt.referenceImages = [];
+                            prompt.referenceImages.push({
+                                referenceType: "REFERENCE_TYPE_RAW",
+                                referenceId: 0,
+                                referenceImage: {
+                                    bytesBase64Encoded: await readStreamAsBase64(await img.getStream()),
+                                }
+                            });
                         }
+                        const mask_mode = (options.model_options as ImagenOptions)?.mask_mode;
                         prompt.referenceImages.push({
-                            referenceType: "REFERENCE_TYPE_RAW",
-                            referenceId: 0,
-                            referenceImage: {
+                            referenceType: "REFERENCE_TYPE_MASK",
+                            referenceId: 1,
+                            referenceImage: mask_mode === "MASK_MODE_USER_PROVIDED" ? {
                                 bytesBase64Encoded: await readStreamAsBase64(await img.getStream()),
+                            } : undefined,
+                            maskImageConfig: {
+                                maskMode: mask_mode,
+                                dilation: (options?.model_options as ImagenOptions)?.mask_dilation,
                             }
                         });
                     }
@@ -188,10 +203,8 @@ export class ImagenModelDefinition  {
         }
 
         //Extract the text from the segments
-        prompt.prompt += system.join("\n\n") + "\n\n";
-        prompt.prompt += user.join("\n\n") + "\n\n";
-        prompt.prompt += safety.join("\n\n");
-
+        prompt.prompt += system.join("\n\n") + "\n\n" + user.join("\n\n") + "\n\n" + safety.join("\n\n");
+            
         return prompt
     }
     
