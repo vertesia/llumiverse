@@ -22,7 +22,10 @@ export interface ImagenOptions {
     edit_mode?: "EDIT_MODE_INPAINT_REMOVAL" | "EDIT_MODE_INPAINT_INSERTION" | "EDIT_MODE_BGSWAP" | "EDIT_MODE_OUTPAINT";
     guidance_scale?: number;
     base_steps?: number;
+    mask_mode?: "MASK_MODE_USER_PROVIDED" | "MASK_MODE_BACKGROUND" | "MASK_MODE_FOREGROUND" | "MASK_MODE_SEMANTIC";
     mask_dilation?: number;
+    mask_class?: number[];
+
 }
 
 export function getVertexAiOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
@@ -113,17 +116,40 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
                     description: "The editing mode"
                 },
                 {
+                    name: "mask_mode", type: OptionType.enum,
+                    enum: {
+                        "MASK_MODE_USER_PROVIDED": "MASK_MODE_USER_PROVIDED",
+                        "MASK_MODE_BACKGROUND": "MASK_MODE_BACKGROUND",
+                        "MASK_MODE_FOREGROUND": "MASK_MODE_FOREGROUND",
+                        "MASK_MODE_SEMANTIC": "MASK_MODE_SEMANTIC",
+                    },
+                    default: "MASK_MODE_USER_PROVIDED",
+                    description: "How should the mask for the generation be provided"
+                },
+                {
+                    name: "mask_dilation", type: OptionType.numeric, min: 0, max: 1, default: 0.01,
+                    integer: true, description: "The mask dilation, grows the mask by a percetage of image width to compensate for imprecise masks."
+                },
+                {
                     name: "guidance_scale", type: OptionType.numeric, min: 0, max: 500, default: guidanceScaleDefault,
                     integer: true, description: "The scale of the guidance image"
                 }
             ];
 
+            const maskClassOptions: ModelOptionInfoItem[] = ((option as ImagenOptions).mask_mode === "MASK_MODE_SEMANTIC") ? [
+                {
+                    name: "mask_class", type: OptionType.string_list, default: [],
+                    description: "Input Class IDs. Create a mask based on image class, based on https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/imagen-api-customization#segment-ids"
+                }
+            ] : [];
+
             return {
                 _option_id: "vertexai-imagen",
                 options: [
-                    ...commonOptions,
                     ...modeOptions,
+                    ...commonOptions,
                     ...outputOptions,
+                    ...maskClassOptions,
                 ]
             };
         }
