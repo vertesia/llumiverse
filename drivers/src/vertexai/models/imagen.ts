@@ -1,4 +1,4 @@
-import { AIModel, Completion, ImageGeneration, Modalities, ModelType, PromptOptions, PromptRole, PromptSegment, ExecutionOptions } from "@llumiverse/core";
+import { AIModel, Completion, ImageGeneration, Modalities, ModelType, PromptOptions, PromptRole, PromptSegment, ExecutionOptions, readStreamAsBase64 } from "@llumiverse/core";
 import { VertexAIDriver } from "../index.js";
 
 const projectId = process.env.GOOGLE_PROJECT_ID;
@@ -84,25 +84,46 @@ export enum ImagenImageGenerationTaskType {
 }
 
 function getImagenParameters(taskType: string, options: ImagenOptions) {
+    const commonParameters = {
+        sampleCount: options?.number_of_images,
+        seed: options?.seed,
+        safetySetting: options?.safety_setting,
+        personGeneration: options?.person_generation,
+        //TODO: Add more safety and prompt rejection information
+        //includeSafetyAttributes: true,
+        //includeRaiReason: true,
+    };
     switch (taskType) {
         case ImagenImageGenerationTaskType.EDIT_MODE_INPAINT_REMOVAL:
+            return {
+                ...commonParameters,
+                editMode: "EDIT_MODE_INPAINT_REMOVAL",
+            }
         case ImagenImageGenerationTaskType.EDIT_MODE_INPAINT_INSERTION:
+            return {
+                ...commonParameters,
+                editMode: "EDIT_MODE_INPAINT_INSERTION",
+            }
         case ImagenImageGenerationTaskType.EDIT_MODE_BGSWAP:
+            return {
+                ...commonParameters,
+                editMode: "EDIT_MODE_BGSWAP",
+            }
         case ImagenImageGenerationTaskType.EDIT_MODE_OUTPAINT:
+            return {
+                ...commonParameters,
+                editMode: "EDIT_MODE_OUTPAINT",
+                editConfig: {
+                    baseSteps: options?.base_steps,
+                },
+            }
         case ImagenImageGenerationTaskType.TEXT_IMAGE:
             return {
-                sampleCount: options?.number_of_images,
+                ...commonParameters,
                 // You can't use a seed value and watermark at the same time.
-                seed: options?.seed,
-                addWatermark: options?.add_watermark,
+                addWatermark: options?.add_watermark, 
                 aspectRatio: options?.aspect_ratio,
-                //negativePrompt: options.model_options.negative_prompt ?? '',
-                safetySetting: options?.safety_setting,
-                personGeneration: options?.person_generation,
                 enhancePrompt: options?.enhance_prompt,
-                //TODO: Add more safety and prompt rejection information
-                //includeSafetyAttributes: true,
-                //includeRaiReason: true,
             };
         default:
             throw new Error("Task type not supported");
@@ -134,25 +155,42 @@ export class ImagenModelDefinition  {
 
         //Collect text prompts, Imagen does not support roles, so everything gets merged together 
         // however we still respect our typical pattern. System First, Safety Last.
-        const system: PromptSegment[] = [];
-        const user: PromptSegment[] = [];
-        const safety: PromptSegment[] = [];
+        const system: string[] = [];
+        const user: string[] = [];
+        const safety: string[] = [];
 
         for (const msg of segments) {
             if (msg.role === PromptRole.safety) {
-                safety.push(msg);
+                safety.push(msg.content);
             } else if (msg.role === PromptRole.system) {
-                system.push(msg);
+                system.push(msg.content);
             } else {
                 //Everything else is assumed to be user or user adjacent.
-                user.push(msg);
+                user.push(msg.content);
+            }
+            if (msg.files) {
+                //Get images from messages
+                for (const img of msg.files) {
+                    if (img.mime_type?.includes("image")) {
+                        if (!prompt.referenceImages) {
+                            prompt.referenceImages = [];
+                        }
+                        prompt.referenceImages.push({
+                            referenceType: "REFERENCE_TYPE_RAW",
+                            referenceId: 0,
+                            referenceImage: {
+                                bytesBase64Encoded: await readStreamAsBase64(await img.getStream()),
+                            }
+                        });
+                    }
+                }
             }
         }
 
         //Extract the text from the segments
-        prompt.prompt += system.map(msg => msg.content).join("\n\n") + "\n\n";
-        prompt.prompt += user.map(msg => msg.content).join("\n\n") + "\n\n";
-        prompt.prompt += safety.map(msg => msg.content).join("\n\n");
+        prompt.prompt += system.join("\n\n") + "\n\n";
+        prompt.prompt += user.join("\n\n") + "\n\n";
+        prompt.prompt += safety.join("\n\n");
 
         return prompt
     }
