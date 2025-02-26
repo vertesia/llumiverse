@@ -1,4 +1,4 @@
-import { AIModel, AbstractDriver, Completion, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, PromptSegment, CompletionChunkObject } from "@llumiverse/core";
+import { AIModel, AbstractDriver, Completion, DriverOptions, EmbeddingsOptions, EmbeddingsResult, PromptSegment, CompletionChunkObject, ExecutionOptions, TextFallbackOptions } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { OpenAITextMessage, formatOpenAILikeTextPrompt, getJSONSafetyNotice } from "@llumiverse/core/formatters";
 import Groq from "groq-sdk";
@@ -58,19 +58,22 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, OpenAITextMess
         return messages;
     }
 
-    async requestCompletion(messages: OpenAITextMessage[], options: ExecutionOptions): Promise<Completion<any>> {
-
+    async requestTextCompletion(messages: OpenAITextMessage[], options: ExecutionOptions): Promise<Completion<any>> {
+        if (options.model_options?._option_id !== "text-fallback") {
+            this.logger.warn("Invalid model options", options.model_options);
+        }
+        options.model_options = options.model_options as TextFallbackOptions;
 
         const res = await this.client.chat.completions.create({
             model: options.model,
             messages: messages,
-            max_tokens: options.max_tokens,
-            temperature: options.temperature,
-            top_p: options.top_p,
+            max_tokens: options.model_options?.max_tokens,
+            temperature: options.model_options?.temperature,
+            top_p: options.model_options?.top_p,
             //top_logprobs: options.top_logprobs,       //Logprobs output currently not supported
             //logprobs: options.top_logprobs ? true : false,
-            presence_penalty: options.presence_penalty,
-            frequency_penalty: options.frequency_penalty,
+            presence_penalty: options.model_options?.presence_penalty,
+            frequency_penalty: options.model_options?.frequency_penalty,
             response_format: this.getResponseFormat(options),
         });
 
@@ -90,19 +93,22 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, OpenAITextMess
         };
     }
 
-    async requestCompletionStream(messages: OpenAITextMessage[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+    async requestTextCompletionStream(messages: OpenAITextMessage[], options: ExecutionOptions): Promise < AsyncIterable < CompletionChunkObject >> {
+        if (options.model_options?._option_id !== "text-fallback") {
+            this.logger.warn("Invalid model options", options.model_options);
+        }
+        options.model_options = options.model_options as TextFallbackOptions;
 
         const res = await this.client.chat.completions.create({
             model: options.model,
             messages: messages,
-            max_tokens: options.max_tokens,
-            temperature: options.temperature,
-            top_p: options.top_p,
+            max_tokens: options.model_options?.max_tokens,
+            temperature: options.model_options?.temperature,
+            top_p: options.model_options?.top_p,
             //top_logprobs: options.top_logprobs,       //Logprobs output currently not supported
             //logprobs: options.top_logprobs ? true : false,
-            presence_penalty: options.presence_penalty,
-            frequency_penalty: options.frequency_penalty,
-            response_format: this.getResponseFormat(options),
+            presence_penalty: options.model_options?.presence_penalty,
+            frequency_penalty: options.model_options?.frequency_penalty,
             stream: true,
         });
 

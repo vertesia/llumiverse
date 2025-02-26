@@ -1,4 +1,4 @@
-import { PromptRole } from "../index.js";
+import { PromptRole, PromptOptions } from "../index.js";
 import { readStreamAsBase64 } from "../stream.js";
 import { PromptSegment } from "../types.js";
 
@@ -55,7 +55,7 @@ export function formatOpenAILikeTextPrompt(segments: PromptSegment[]): OpenAITex
 }
 
 
-export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[], opts: OpenAIPromptFormatterOptions): Promise<OpenAIMessage[]> {
+export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[], opts: PromptOptions & OpenAIPromptFormatterOptions): Promise<OpenAIMessage[]> {
     const system: OpenAIMessage[] = [];
     const safety: OpenAIMessage[] = [];
     const others: OpenAIMessage[] = [];
@@ -70,8 +70,11 @@ export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[]
                 const stream = await file.getStream();
                 const data = await readStreamAsBase64(stream);
                 parts.push({
-                    image_url: { url: `data:${file.mime_type || "image/jpeg"};base64,${data}` },
-                    type: "image_url"
+                    type: "image_url",
+                    image_url: {
+                        url: `data:${file.mime_type || "image/jpeg"};base64,${data}`,
+                        //detail: "auto"  //This is modified just before execution to "low" | "high" | "auto"
+                    },
                 })
             }
         }
@@ -120,12 +123,12 @@ export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[]
 
     }
 
-    if (opts.schema && !opts.useToolForFormatting) {
+    if (opts.result_schema && !opts.useToolForFormatting) {
         system.push({
             role: "system",
             content: [{
                 type: "text",
-                text: "IMPORTANT: only answer using JSON, and respecting the schema included below, between the <response_schema> tags. " + `<response_schema>${JSON.stringify(opts.schema)}</response_schema>`
+                text: "IMPORTANT: only answer using JSON, and respecting the schema included below, between the <response_schema> tags. " + `<response_schema>${JSON.stringify(opts.result_schema)}</response_schema>`
             }]
         })
     }

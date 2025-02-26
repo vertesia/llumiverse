@@ -78,7 +78,8 @@ if (process.env.OPENAI_API_KEY) {
         }),
         models: [
             "gpt-4o",
-            "gpt-3.5-turbo"
+            "gpt-3.5-turbo",
+            "o1-mini",
         ]
     }
     )
@@ -176,22 +177,39 @@ if (process.env.XAI_API_KEY) {
     })
 }
 
+function getTestOptions(model: string): ExecutionOptions {
+    if (model == "o1-mini") {
+        return {
+            model: model,
+            model_options: {
+                _option_id: "openai-thinking",
+                max_tokens: 2048,
+                stop_sequence: ["adsoiuygsa"],
+            },
+            output_modality: Modalities.text,
+        };
+    }
+
+    return {
+        model: model,
+        model_options: {
+            _option_id: "text-fallback",
+            max_tokens: 128,
+            temperature: 0.3,
+            top_k: 40,
+            top_p: 0.7,             //Some models do not support top_p = 1.0, set to 0.99 or lower.
+            //   top_logprobs: 5,        //Currently not supported, option will be ignored
+            presence_penalty: 0.1,      //Cohere Command R does not support using presence & frequency penalty at the same time
+            frequency_penalty: -0.1,
+            stop_sequence: ["adsoiuygsa"],
+        },
+        output_modality: Modalities.text,
+    };
+}
+
 describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => {
 
     let fetchedModels: AIModel[];
-
-    let test_options: ExecutionOptions = {
-        model: "",
-        max_tokens: 128,
-        temperature: 0.3,
-        top_k: 40,
-        top_p: 0.7,             //Some models do not support top_p = 1.0, set to 0.99 or lower.
-        top_logprobs: 5,        //Currently not supported, option will be ignored
-        presence_penalty: 0.1,      //Cohere Command R does not support using presence & frequency penalty at the same time
-        frequency_penalty: 0.0,
-        stop_sequence: ["adsoiuygsa"],
-        output_modality: Modalities.text,
-    };
 
     test(`${name}: list models`, { timeout: TIMEOUT, retry: 1 }, async () => {
         const r = await driver.listModels();
@@ -199,8 +217,6 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
         console.log(r)
         expect(r.length).toBeGreaterThan(0);
     });
-
-
 
     test.each(models)(`${name}: prompt generation for %s`, {}, async (model) => {
         const p = await driver.createPrompt(testPrompt_color, { model })
@@ -217,26 +233,26 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
         expect(p).toBeDefined();
     });
 
-    test.each(models)(`${name}: execute prompt on %s`, { timeout: TIMEOUT, retry: 3 }, async (model) => {
-        const r = await driver.execute(testPrompt_color, { ...test_options, model: model } as ExecutionOptions);
+    test.each(models)(`${name}: execute prompt on %s`, { timeout: TIMEOUT, retry: 2 }, async (model) => {
+        const r = await driver.execute(testPrompt_color, getTestOptions(model));
         console.log("Result for execute " + model, JSON.stringify(r));
         assertCompletionOk(r, model, driver);
     });
 
-    test.each(models)(`${name}: execute prompt with streaming on %s`, { timeout: TIMEOUT, retry: 3 }, async (model) => {
-        const r = await driver.stream(testPrompt_color, { ...test_options, model: model } as ExecutionOptions);
+    test.each(models)(`${name}: execute prompt with streaming on %s`, { timeout: TIMEOUT, retry: 2 }, async (model) => {
+        const r = await driver.stream(testPrompt_color, getTestOptions(model));
         const out = await assertStreamingCompletionOk(r);
         console.log("Result for streaming " + model, JSON.stringify(out));
     });
 
-    test.each(models)(`${name}: execute prompt with schema on %s`, { timeout: TIMEOUT, retry: 3 }, async (model) => {
-        const r = await driver.execute(testPrompt_color, { ...test_options, model: model, result_schema: testSchema_color } as ExecutionOptions);
+    test.each(models)(`${name}: execute prompt with schema on %s`, { timeout: TIMEOUT, retry: 2 }, async (model) => {
+        const r = await driver.execute(testPrompt_color, { ...getTestOptions(model), result_schema: testSchema_color });
         console.log("Result for execute with schema " + model, JSON.stringify(r.result));
         assertCompletionOk(r, model, driver);
     });
 
-    test.each(models)(`${name}: execute prompt with streaming and schema on %s`, { timeout: TIMEOUT, retry: 3 }, async (model) => {
-        const r = await driver.stream(testPrompt_color, { ...test_options, model: model, result_schema: testSchema_color } as ExecutionOptions);
+    test.each(models)(`${name}: execute prompt with streaming and schema on %s`, { timeout: TIMEOUT, retry: 2 }, async (model) => {
+        const r = await driver.stream(testPrompt_color, { ...getTestOptions(model), result_schema: testSchema_color });
         const out = await assertStreamingCompletionOk(r, true);
         console.log("Result for streaming with schema " + model, JSON.stringify(out));
     });
@@ -256,8 +272,11 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
         const r = await driver.execute(testPrompt_describeImage, {
             output_modality: Modalities.text,
             model: model,
-            temperature: 0.5,
-            max_tokens: 1024,
+            model_options: {
+                _option_id: "text-fallback",
+                temperature: 0.5,
+                max_tokens: 1024,
+            },
             result_schema: testSchema_animalDescription
         })
         console.log("Result", r)

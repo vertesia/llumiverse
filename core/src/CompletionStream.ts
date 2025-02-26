@@ -25,7 +25,7 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
         );
 
         const start = Date.now();
-        const stream = await this.driver.requestCompletionStream(this.prompt, this.options);
+        const stream = await this.driver.requestTextCompletionStream(this.prompt, this.options);
 
         let finish_reason: string | undefined = undefined;
         let promptTokens: number = 0;
