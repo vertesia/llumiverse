@@ -1,5 +1,5 @@
 import { GenerateContentRequest, VertexAI } from "@google-cloud/vertexai";
-import { AIModel, AbstractDriver, Completion, CompletionChunkObject, DriverOptions, EmbeddingsResult, ExecutionOptions, ImageGeneration, Modalities, ModelSearchPayload, PromptOptions, PromptSegment } from "@llumiverse/core";
+import { AIModel, AbstractDriver, Completion, CompletionChunkObject, DriverOptions, EmbeddingsResult, ExecutionOptions, ImageGeneration, Modalities, ModelSearchPayload, PromptSegment } from "@llumiverse/core";
 import { FetchClient } from "api-fetch-client";
 import { GoogleAuth, GoogleAuthOptions } from "google-auth-library";
 import { JSONClient } from "google-auth-library/build/src/auth/googleauth.js";
@@ -9,7 +9,7 @@ import { EmbeddingsOptions } from "@llumiverse/core";
 import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
 import { v1beta1 } from '@google-cloud/aiplatform';
 import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
-import { ImagenModelDefinition } from "./models/imagen.js";
+import { ImagenModelDefinition, ImagenPrompt } from "./models/imagen.js";
 
 
 export interface VertexAIDriverOptions extends DriverOptions {
@@ -19,7 +19,7 @@ export interface VertexAIDriverOptions extends DriverOptions {
 }
 
 //General Prompt type for VertexAI
-export type VertexAIPrompt = GenerateContentRequest;
+export type VertexAIPrompt = GenerateContentRequest | ImagenPrompt;
 
 export function trimModelName(model: string) {
     const i = model.lastIndexOf('@');
@@ -77,7 +77,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return Promise.resolve(getModelDefinition(options.model).model.can_stream === true);
     }
 
-    public createPrompt(segments: PromptSegment[], options: PromptOptions): Promise<VertexAIPrompt> {
+    public createPrompt(segments: PromptSegment[], options: ExecutionOptions): Promise<VertexAIPrompt> {
         if (options.model.includes("imagen")) {
             return new ImagenModelDefinition(options.model).createPrompt(this, segments, options);
         }
@@ -91,7 +91,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return getModelDefinition(options.model).requestTextCompletionStream(this, prompt, options);
     }
 
-    async requestImageGeneration(_prompt: GenerateContentRequest, _options: ExecutionOptions): Promise <Completion<ImageGeneration>> {
+    async requestImageGeneration(_prompt: ImagenPrompt, _options: ExecutionOptions): Promise <Completion<ImageGeneration>> {
         const splits = _options.model.split("/");
         const modelName = trimModelName(splits[splits.length - 1]);
         return new ImagenModelDefinition(modelName).requestImageGeneration(this, _prompt, _options);

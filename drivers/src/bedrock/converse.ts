@@ -155,7 +155,7 @@ export async function fortmatConversePrompt(segments: PromptSegment[], schema?: 
             system.push({ text: segment.content });
         } else if (segment.role === PromptRole.safety) {
             safety.push({ text: segment.content });
-        } else {
+        } else if (segment.role !== PromptRole.negative && segment.role !== PromptRole.mask) {
             //User or Assistant
             messages = messages.concat(parts);
         }
