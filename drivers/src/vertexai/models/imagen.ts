@@ -313,26 +313,23 @@ export class ImagenModelDefinition  {
         // Configure the parent resource
         const endpoint = `projects/${projectId}/locations/${location}/publishers/google/models/${modelName}`;
 
-        let instanceValue = null;
-        try {
-            instanceValue = helpers.toValue(prompt);
-        } catch (e) {
-            throw new Error(`Failed to convert prompt to value: ${e}`);
-        }
+        const instanceValue = helpers.toValue(prompt);
         if (!instanceValue) {
             throw new Error('No instance value found');
         }
         const instances = [instanceValue];
 
-        let parameter = getImagenParameters(taskType, options.model_options);
+        let parameter: any = getImagenParameters(taskType, options.model_options);
         parameter.negativePrompt = prompt.negativePrompt ?? undefined;
 
-        let parameters = undefined;
-        try {
-            parameters = helpers.toValue(parameter);
-        } catch (e) {
-            throw new Error(`Failed to convert parameters to value: ${e}`);
-        }
+        const numberOfImages = options.model_options?.number_of_images ?? 1;
+
+        // Remove all undefined values
+        parameter = Object.fromEntries(
+            Object.entries(parameter).filter(([_, v]) => v !== undefined)
+        ) as any;
+
+        const parameters = helpers.toValue(parameter);
 
         const request: protos.google.cloud.aiplatform.v1.IPredictRequest = {
             endpoint,
@@ -341,7 +338,7 @@ export class ImagenModelDefinition  {
         };
 
         // Predict request
-        const [response] = await predictionServiceClient.predict(request);
+        const [response] = await predictionServiceClient.predict(request, {timeout: 120000 * numberOfImages}); //Extended timeout for image generation
         const predictions = response.predictions;
 
         if (!predictions) {
