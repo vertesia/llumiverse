@@ -67,6 +67,7 @@ export interface ImagenPrompt {
     prompt: string;
     referenceImages?: ImagenMessage[];
     subjectDescription?: string; //Used for image customization to describe in the reference image
+    negativePrompt?: string; //Used for negative prompts
 }
 
 // Specifies the location of the api endpoint
@@ -92,6 +93,7 @@ function getImagenParameters(taskType: string, options: ImagenOptions) {
         seed: options?.seed,
         safetySetting: options?.safety_setting,
         personGeneration: options?.person_generation,
+        negativePrompt: taskType ? undefined : "", //Filled in later from the prompt
         //TODO: Add more safety and prompt rejection information
         //includeSafetyAttributes: true,
         //includeRaiReason: true,
@@ -161,12 +163,15 @@ export class ImagenModelDefinition  {
         const system: string[] = [];
         const user: string[] = [];
         const safety: string[] = [];
+        const negative: string[] = [];
 
         for (const msg of segments) {
             if (msg.role === PromptRole.safety) {
                 safety.push(msg.content);
             } else if (msg.role === PromptRole.system) {
                 system.push(msg.content);
+            } else if (msg.role === PromptRole.negative) {
+                negative.push(msg.content);
             } else {
                 //Everything else is assumed to be user or user adjacent.
                 user.push(msg.content);
@@ -177,33 +182,59 @@ export class ImagenModelDefinition  {
                     if (img.mime_type?.includes("image")) {
                         if (!prompt.referenceImages) {
                             prompt.referenceImages = [];
+                        }
+                        const mask_mode = (options.model_options as ImagenOptions)?.mask_mode;
+                        
+                        //Always required, but only used by customisation. 
+                        //Each ref ID refers to a single "reference", i.e. object. To provide multiple images of a single ref,
+                        //include multiple images in one prompt.
+                        const refId = prompt.referenceImages.length + 1;
+                        
+                        if (msg.role !== PromptRole.mask) {
                             prompt.referenceImages.push({
                                 referenceType: "REFERENCE_TYPE_RAW",
-                                referenceId: 0,
+                                referenceId: refId,
                                 referenceImage: {
                                     bytesBase64Encoded: await readStreamAsBase64(await img.getStream()),
                                 }
                             });
-                        }
-                        const mask_mode = (options.model_options as ImagenOptions)?.mask_mode;
-                        prompt.referenceImages.push({
-                            referenceType: "REFERENCE_TYPE_MASK",
-                            referenceId: 1,
-                            referenceImage: mask_mode === "MASK_MODE_USER_PROVIDED" ? {
-                                bytesBase64Encoded: await readStreamAsBase64(await img.getStream()),
-                            } : undefined,
-                            maskImageConfig: {
-                                maskMode: mask_mode,
-                                dilation: (options?.model_options as ImagenOptions)?.mask_dilation,
+                            //If mask is auto-generated, add a mask reference
+                            if (mask_mode !== "MASK_MODE_USER_PROVIDED") {
+                                prompt.referenceImages.push({
+                                    referenceType: "REFERENCE_TYPE_MASK",
+                                    referenceId: refId,
+                                    maskImageConfig: {
+                                        maskMode: mask_mode,
+                                        dilation: (options?.model_options as ImagenOptions)?.mask_dilation,
+                                    }
+                                });
                             }
-                        });
+                        }
+                        //If mask is user-provided, add a mask reference
+                        if (msg.role === PromptRole.mask && mask_mode === "MASK_MODE_USER_PROVIDED") {
+                            prompt.referenceImages.push({
+                                referenceType: "REFERENCE_TYPE_MASK",
+                                referenceId: refId,
+                                referenceImage: {
+                                    bytesBase64Encoded: await readStreamAsBase64(await img.getStream()),
+                                },
+                                maskImageConfig: {
+                                    maskMode: mask_mode,
+                                    dilation: (options?.model_options as ImagenOptions)?.mask_dilation,
+                                }
+                            });
+                        }
                     }
                 }
             }
         }
 
         //Extract the text from the segments
-        prompt.prompt += system.join("\n\n") + "\n\n" + user.join("\n\n") + "\n\n" + safety.join("\n\n");
+        prompt.prompt += [system.join("\n\n"), user.join("\n\n"), safety.join("\n\n")].join("\n\n");
+
+        prompt.negativePrompt = negative.join(", ");
+
+        console.log(prompt);
             
         return prompt
     }
@@ -230,7 +261,8 @@ export class ImagenModelDefinition  {
         const instanceValue = helpers.toValue(prompt) ?? {};
         const instances = [instanceValue];
 
-        const parameter = getImagenParameters(taskType, options.model_options);
+        let parameter = getImagenParameters(taskType, options.model_options);
+        parameter.negativePrompt = prompt.negativePrompt ?? undefined;
         const parameters = helpers.toValue(parameter);
 
         const request: protos.google.cloud.aiplatform.v1.IPredictRequest = {
