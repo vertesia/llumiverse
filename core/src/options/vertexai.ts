@@ -1,8 +1,25 @@
-import { ModelOptionsInfo, ModelOptionInfoItem, ModelOptions, OptionType, SharedOptions } from "../types.js";
+import { ModelOptionsInfo, ModelOptionInfoItem, OptionType, SharedOptions, ModelOptions } from "../types.js";
 import { textOptionsFallback } from "../options.js";
 
 // Union type of all Bedrock options
 export type VertexAIOptions = ImagenOptions;
+
+export enum ImagenTaskType {
+    TEXT_IMAGE = "TEXT_IMAGE",
+    EDIT_MODE_INPAINT_REMOVAL = "EDIT_MODE_INPAINT_REMOVAL",
+    EDIT_MODE_INPAINT_INSERTION = "EDIT_MODE_INPAINT_INSERTION",
+    EDIT_MODE_BGSWAP = "EDIT_MODE_BGSWAP",
+    EDIT_MODE_OUTPAINT = "EDIT_MODE_OUTPAINT",
+    CUSTOMIZATION_GENERATE = "CUSTOMIZATION_GENERATE",
+    CUSTOMIZATION_EDIT = "CUSTOMIZATION_EDIT",
+}
+
+export enum ImagenMaskMode {
+    MASK_MODE_USER_PROVIDED = "MASK_MODE_USER_PROVIDED",
+    MASK_MODE_BACKGROUND = "MASK_MODE_BACKGROUND",
+    MASK_MODE_FOREGROUND = "MASK_MODE_FOREGROUND",
+    MASK_MODE_SEMANTIC = "MASK_MODE_SEMANTIC",
+}
 
 export interface ImagenOptions {
     _option_id: "vertexai-imagen"
@@ -19,13 +36,17 @@ export interface ImagenOptions {
     enhance_prompt?: boolean;
 
     //Capability options
-    edit_mode?: "EDIT_MODE_INPAINT_REMOVAL" | "EDIT_MODE_INPAINT_INSERTION" | "EDIT_MODE_BGSWAP" | "EDIT_MODE_OUTPAINT";
+    edit_mode?: ImagenTaskType
     guidance_scale?: number;
     base_steps?: number;
-    mask_mode?: "MASK_MODE_USER_PROVIDED" | "MASK_MODE_BACKGROUND" | "MASK_MODE_FOREGROUND" | "MASK_MODE_SEMANTIC";
+    mask_mode?: ImagenMaskMode;
     mask_dilation?: number;
     mask_class?: number[];
-
+    
+    //Customization options
+    controlType: "CONTROL_TYPE_FACE_MESH" | "CONTROL_TYPE_CANNY" | "CONTROL_TYPE_SCRIBBLE";
+    controlImageComputation?: boolean;
+    subjectType: "SUBJECT_TYPE_PERSON" | "SUBJECT_TYPE_ANIMAL" | "SUBJECT_TYPE_PRODUCT" | "SUBJECT_TYPE_DEFAULT";
 }
 
 export function getVertexAiOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
@@ -107,13 +128,15 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
                 {
                     name: "edit_mode", type: OptionType.enum,
                     enum: {
-                        "Inpaint Removal": "EDIT_MODE_INPAINT_REMOVAL",
-                        "Inpaint Insertion": "EDIT_MODE_INPAINT_INSERTION",
-                        "Background Swap": "EDIT_MODE_BGSWAP",
-                        "Outpaint": "EDIT_MODE_OUTPAINT",
+                        "EDIT_MODE_INPAINT_REMOVAL": "EDIT_MODE_INPAINT_REMOVAL",
+                        "EDIT_MODE_INPAINT_INSERTION": "EDIT_MODE_INPAINT_INSERTION",
+                        "EDIT_MODE_BGSWAP": "EDIT_MODE_BGSWAP",
+                        "EDIT_MODE_OUTPAINT": "EDIT_MODE_OUTPAINT",
+                        "CUSTOMIZATION_GENERATE": "CUSTOMIZATION_GENERATE",
+                        "CUSTOMIZATION_EDIT": "CUSTOMIZATION_EDIT",
                     },
                     default: "EDIT_MODE_INPAINT_REMOVAL",
-                    description: "The editing mode"
+                    description: "The editing mode. CUSTOMIZATION options use few-shot learning to generate images based on a few examples."
                 },
                 {
                     name: "mask_mode", type: OptionType.enum,
@@ -143,6 +166,16 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
                 }
             ] : [];
 
+            const customizationOptions: ModelOptionInfoItem[] = (option as ImagenOptions).edit_mode === "CUSTOMIZATION_GENERATE" ? [
+                {
+                    name: "controlType", type: OptionType.enum, enum: { "Face Mesh": "CONTROL_TYPE_FACE_MESH", "Canny": "CONTROL_TYPE_CANNY", "Scribble": "CONTROL_TYPE_SCRIBBLE" },
+                    default: "CONTROL_TYPE_CANNY", description: "Method used to generate the control image"
+                },
+                {
+                    name: "controlImageComputation", type: OptionType.boolean, default: true, description: "Should the control image be computed from the input image, or is it provided"
+                }
+            ] : [];
+
             return {
                 _option_id: "vertexai-imagen",
                 options: [
@@ -150,6 +183,7 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
                     ...commonOptions,
                     ...outputOptions,
                     ...maskClassOptions,
+                    ...customizationOptions,
                 ]
             };
         }

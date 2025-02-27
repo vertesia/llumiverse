@@ -22,6 +22,23 @@ interface ImagenBaseReference {
     }
 }
 
+export enum ImagenTaskType {
+    TEXT_IMAGE = "TEXT_IMAGE",
+    EDIT_MODE_INPAINT_REMOVAL = "EDIT_MODE_INPAINT_REMOVAL",
+    EDIT_MODE_INPAINT_INSERTION = "EDIT_MODE_INPAINT_INSERTION",
+    EDIT_MODE_BGSWAP = "EDIT_MODE_BGSWAP",
+    EDIT_MODE_OUTPAINT = "EDIT_MODE_OUTPAINT",
+    CUSTOMIZATION_GENERATE = "CUSTOMIZATION_GENERATE",
+    CUSTOMIZATION_EDIT = "CUSTOMIZATION_EDIT",
+}
+
+export enum ImagenMaskMode {
+    MASK_MODE_USER_PROVIDED = "MASK_MODE_USER_PROVIDED",
+    MASK_MODE_BACKGROUND = "MASK_MODE_BACKGROUND",
+    MASK_MODE_FOREGROUND = "MASK_MODE_FOREGROUND",
+    MASK_MODE_SEMANTIC = "MASK_MODE_SEMANTIC",
+}
+
 interface ImagenReferenceRaw extends ImagenBaseReference {
     referenceType: "REFERENCE_TYPE_RAW";
 }
@@ -29,7 +46,7 @@ interface ImagenReferenceRaw extends ImagenBaseReference {
 interface ImagenReferenceMask extends Omit<ImagenBaseReference, "referenceImage"> {
     referenceType: "REFERENCE_TYPE_MASK";
     maskImageConfig: {
-        maskMode?: "MASK_MODE_USER_PROVIDED" | "MASK_MODE_BACKGROUND" | "MASK_MODE_FOREGROUND" | "MASK_MODE_SEMANTIC";
+        maskMode?: ImagenMaskMode;
         maskClasses?: number[]; //Used for MASK_MODE_SEMANTIC, based on https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/imagen-api-customization#segment-ids
         dilation?: number; //Recommendation depends on mode: Inpaint: 0.01, BGSwap: 0.0, Outpaint: 0.01-0.03
     }   
@@ -78,14 +95,7 @@ const clientOptions = {
 // Instantiates a client
 const predictionServiceClient = new PredictionServiceClient(clientOptions);
 
-//TODO: Add more task types
-export enum ImagenImageGenerationTaskType {
-    TEXT_IMAGE = "TEXT_IMAGE",
-    EDIT_MODE_INPAINT_REMOVAL = "EDIT_MODE_INPAINT_REMOVAL",
-    EDIT_MODE_INPAINT_INSERTION = "EDIT_MODE_INPAINT_INSERTION",
-    EDIT_MODE_BGSWAP = "EDIT_MODE_BGSWAP",
-    EDIT_MODE_OUTPAINT = "EDIT_MODE_OUTPAINT",
-}
+
 
 function getImagenParameters(taskType: string, options: ImagenOptions) {
     const commonParameters = {
@@ -99,22 +109,22 @@ function getImagenParameters(taskType: string, options: ImagenOptions) {
         //includeRaiReason: true,
     };
     switch (taskType) {
-        case ImagenImageGenerationTaskType.EDIT_MODE_INPAINT_REMOVAL:
+        case ImagenTaskType.EDIT_MODE_INPAINT_REMOVAL:
             return {
                 ...commonParameters,
                 editMode: "EDIT_MODE_INPAINT_REMOVAL",
             }
-        case ImagenImageGenerationTaskType.EDIT_MODE_INPAINT_INSERTION:
+        case ImagenTaskType.EDIT_MODE_INPAINT_INSERTION:
             return {
                 ...commonParameters,
                 editMode: "EDIT_MODE_INPAINT_INSERTION",
             }
-        case ImagenImageGenerationTaskType.EDIT_MODE_BGSWAP:
+        case ImagenTaskType.EDIT_MODE_BGSWAP:
             return {
                 ...commonParameters,
                 editMode: "EDIT_MODE_BGSWAP",
             }
-        case ImagenImageGenerationTaskType.EDIT_MODE_OUTPAINT:
+        case ImagenTaskType.EDIT_MODE_OUTPAINT:
             return {
                 ...commonParameters,
                 editMode: "EDIT_MODE_OUTPAINT",
@@ -122,7 +132,7 @@ function getImagenParameters(taskType: string, options: ImagenOptions) {
                     baseSteps: options?.base_steps,
                 },
             }
-        case ImagenImageGenerationTaskType.TEXT_IMAGE:
+        case ImagenTaskType.TEXT_IMAGE:
             return {
                 ...commonParameters,
                 // You can't use a seed value and watermark at the same time.
@@ -130,6 +140,14 @@ function getImagenParameters(taskType: string, options: ImagenOptions) {
                 aspectRatio: options?.aspect_ratio,
                 enhancePrompt: options?.enhance_prompt,
             };
+        case ImagenTaskType.CUSTOMIZATION_GENERATE:
+            return {
+                ...commonParameters,
+            }
+        case ImagenTaskType.CUSTOMIZATION_EDIT:
+            return {
+                ...commonParameters,
+            }
         default:
             throw new Error("Task type not supported");
     }
@@ -165,6 +183,9 @@ export class ImagenModelDefinition  {
         const safety: string[] = [];
         const negative: string[] = [];
 
+        const mask_mode = (options.model_options as ImagenOptions)?.mask_mode;
+        const imagenOptions = options.model_options as ImagenOptions;
+
         for (const msg of segments) {
             if (msg.role === PromptRole.safety) {
                 safety.push(msg.content);
@@ -178,36 +199,67 @@ export class ImagenModelDefinition  {
             }
             if (msg.files) {
                 //Get images from messages
+                if (!prompt.referenceImages) { 
+                    prompt.referenceImages = [];
+                }
+
+                //Always required, but only used by customisation. 
+                //Each ref ID refers to a single "reference", i.e. object. To provide multiple images of a single ref,
+                //include multiple images in one prompt.
+                const refId = prompt.referenceImages.length + 1;
                 for (const img of msg.files) {
                     if (img.mime_type?.includes("image")) {
-                        if (!prompt.referenceImages) {
-                            prompt.referenceImages = [];
-                        }
-                        const mask_mode = (options.model_options as ImagenOptions)?.mask_mode;
-                        
-                        //Always required, but only used by customisation. 
-                        //Each ref ID refers to a single "reference", i.e. object. To provide multiple images of a single ref,
-                        //include multiple images in one prompt.
-                        const refId = prompt.referenceImages.length + 1;
-                        
                         if (msg.role !== PromptRole.mask) {
-                            prompt.referenceImages.push({
-                                referenceType: "REFERENCE_TYPE_RAW",
-                                referenceId: refId,
-                                referenceImage: {
-                                    bytesBase64Encoded: await readStreamAsBase64(await img.getStream()),
-                                }
-                            });
-                            //If mask is auto-generated, add a mask reference
-                            if (mask_mode !== "MASK_MODE_USER_PROVIDED") {
+                            //Editing based mode requires a reference image
+                            if (imagenOptions?.edit_mode !== "CUSTOMIZATION_GENERATE") {
                                 prompt.referenceImages.push({
-                                    referenceType: "REFERENCE_TYPE_MASK",
+                                    referenceType: "REFERENCE_TYPE_RAW",
                                     referenceId: refId,
-                                    maskImageConfig: {
-                                        maskMode: mask_mode,
-                                        dilation: (options?.model_options as ImagenOptions)?.mask_dilation,
+                                    referenceImage: {
+                                        bytesBase64Encoded: await readStreamAsBase64(await img.getStream()),
                                     }
                                 });
+                                //If mask is auto-generated, add a mask reference
+                                if (mask_mode !== "MASK_MODE_USER_PROVIDED") {
+                                    prompt.referenceImages.push({
+                                        referenceType: "REFERENCE_TYPE_MASK",
+                                        referenceId: refId,
+                                        maskImageConfig: {
+                                            maskMode: mask_mode,
+                                            dilation: imagenOptions?.mask_dilation,
+                                        }
+                                    });
+                                }
+                            }
+                            else if ((options.model_options as ImagenOptions)?.edit_mode === "CUSTOMIZATION_GENERATE") {
+                                //First image is always the control image
+                                if (refId == 1) {
+                                    //Customization generate mode requires a control image
+                                    prompt.referenceImages.push({
+                                        referenceType: "REFERENCE_TYPE_CONTROL",
+                                        referenceId: refId,
+                                        referenceImage: {
+                                            bytesBase64Encoded: await readStreamAsBase64(await img.getStream()),
+                                        },
+                                        controlImageConfig: {
+                                            controlType: imagenOptions?.controlType === "CONTROL_TYPE_FACE_MESH" ? "CONTROL_TYPE_FACE_MESH" : "CONTROL_TYPE_CANNY",
+                                            enableControlImageComputation : imagenOptions?.controlImageComputation,
+                                        }
+                                    });
+                                } else {
+                                    // Subject images
+                                    prompt.referenceImages.push({
+                                        referenceType: "REFERENCE_TYPE_SUBJECT",
+                                        referenceId: refId,
+                                        referenceImage: {
+                                            bytesBase64Encoded: await readStreamAsBase64(await img.getStream()),
+                                        },
+                                        subjectImageConfig: {
+                                            subjectDescription: prompt.subjectDescription ?? msg.content,
+                                            subjectType: imagenOptions?.subjectType ?? "SUBJECT_TYPE_DEFAULT",
+                                        }
+                                    });
+                                }
                             }
                         }
                         //If mask is user-provided, add a mask reference
@@ -220,7 +272,7 @@ export class ImagenModelDefinition  {
                                 },
                                 maskImageConfig: {
                                     maskMode: mask_mode,
-                                    dilation: (options?.model_options as ImagenOptions)?.mask_dilation,
+                                    dilation: imagenOptions?.mask_dilation,
                                 }
                             });
                         }
@@ -232,7 +284,10 @@ export class ImagenModelDefinition  {
         //Extract the text from the segments
         prompt.prompt += [system.join("\n\n"), user.join("\n\n"), safety.join("\n\n")].join("\n\n");
 
-        prompt.negativePrompt = negative.join(", ");
+        //Negative prompt
+        if (negative.length > 0) {
+            prompt.negativePrompt = negative.join(", ");
+        }
 
         console.log(prompt);
             
@@ -249,7 +304,7 @@ export class ImagenModelDefinition  {
             throw new Error(`Image generation requires image output_modality`);
         }
 
-        const taskType : string = options.model_options.edit_mode ?? ImagenImageGenerationTaskType.TEXT_IMAGE;
+        const taskType : string = options.model_options.edit_mode ?? ImagenTaskType.TEXT_IMAGE;
         
         driver.logger.info("Task type: " + taskType);
 
@@ -258,12 +313,26 @@ export class ImagenModelDefinition  {
         // Configure the parent resource
         const endpoint = `projects/${projectId}/locations/${location}/publishers/google/models/${modelName}`;
 
-        const instanceValue = helpers.toValue(prompt) ?? {};
+        let instanceValue = null;
+        try {
+            instanceValue = helpers.toValue(prompt);
+        } catch (e) {
+            throw new Error(`Failed to convert prompt to value: ${e}`);
+        }
+        if (!instanceValue) {
+            throw new Error('No instance value found');
+        }
         const instances = [instanceValue];
 
         let parameter = getImagenParameters(taskType, options.model_options);
         parameter.negativePrompt = prompt.negativePrompt ?? undefined;
-        const parameters = helpers.toValue(parameter);
+
+        let parameters = undefined;
+        try {
+            parameters = helpers.toValue(parameter);
+        } catch (e) {
+            throw new Error(`Failed to convert parameters to value: ${e}`);
+        }
 
         const request: protos.google.cloud.aiplatform.v1.IPredictRequest = {
             endpoint,
