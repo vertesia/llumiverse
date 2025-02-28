@@ -19,7 +19,7 @@
     },
     "license": "MIT",
     "devDependencies": {
-        "@types/eventsource": "^1.1.15",
+        "@types/eventsource": "^3.0.0",
         "@types/json-schema": "^7.0.15",
         "rimraf": "^6.0.0",
         "typescript": "^5.4.2"
@@ -29,5 +29,5 @@
         "@llumiverse/drivers": "workspace:*",
         "dotenv": "^16.4.5"
     },
-    "packageManager": "pnpm@9.7.1"
+    "packageManager": "pnpm@10.5.2"
 }
