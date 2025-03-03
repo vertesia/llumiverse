@@ -61,7 +61,7 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
                 integer: true, description: "The seed of the generated image"
             },
             {
-                name: "person_generation", type: OptionType.enum, enum: { "Disallow the inclusion of people or faces in images": "dont_allow", "Allow generation of adults only": "allow_adults", "Allow generation of people of all ages": "allow_all" },
+                name: "person_generation", type: OptionType.enum, enum: { "Disallow the inclusion of people or faces in images": "dont_allow", "Allow generation of adults only": "allow_adult", "Allow generation of people of all ages": "allow_all" },
                 default: "allow_adult", description: "The safety setting for allowing the generation of people in the image"
             },
             {
