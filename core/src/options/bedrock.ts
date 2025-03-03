@@ -35,6 +35,80 @@ export interface BedrockClaudeOptions extends BaseConverseOptions {
     thinking_budget_tokens?: number;
 }
 
+function getMaxTokensLimit(model: string, option?: ModelOptions): number | undefined {
+    // Claude models
+    if (model.includes("claude")) {
+        if (model.includes("3-7")) {
+            if (option && (option as BedrockClaudeOptions)?.thinking_mode) {
+                return 128000;
+            } else {
+                return 8192;
+            }
+        }
+        else if (model.includes("3-5")) {
+            if (model.includes("claude-3-5-sonnet")) {
+                return 4096;
+            }
+            return 8192;
+        }
+        else {
+            return 4096;
+        }
+    }
+    // Amazon models
+    else if (model.includes("amazon")) {
+        if (model.includes("titan")) {
+            if (model.includes("lite")) {
+                return 4096;
+            } else if (model.includes("express")) {
+                return 8192;
+            } else if (model.includes("premier")) {
+                return 3072;
+            }
+
+        }
+        else if (model.includes("nova")) {
+            return 5000;
+        }
+    }
+    // Mistral models
+    else if (model.includes("mistral")) {
+        if (model.includes("8x7b")) {
+            return 4096;
+        }
+        return 8192;
+    }
+    // AI21 models
+    else if (model.includes("ai21")) {
+        if (model.includes("j2")) {
+            if (model.includes("large") || model.includes("mid") || model.includes("ultra")) {
+                return 8191;
+            }
+            return 2048;
+        }
+        if (model.includes("jamba")) {
+            return 4096;
+        }
+    }
+    // Cohere models
+    else if (model.includes("cohere.command")) {
+        if (model.includes("command-r")) {
+            return 128000;
+        }
+        return 4096;
+    }
+    // Meta models
+    else if (model.includes("llama")) {
+        if (model.includes("3-70b") || model.includes("3-8b")) {
+            return 2048;
+        }
+        return 8192;
+    }
+
+    // Default fallback
+    return undefined;
+}
+
 export function getBedrockOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
     if (model.includes("canvas")) {
         const tasktypeList: ModelOptionInfoItem = {
@@ -45,8 +119,8 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                 "Text-To-Image-with-Image-Conditioning": "TEXT_IMAGE_WITH_IMAGE_CONDITIONING",
                 "Color-Guided-Generation": "COLOR_GUIDED_GENERATION",
                 "Image-Variation": "IMAGE_VARIATION",
-            //    "Inpainting": "INPAINTING",    Not implemented yet
-            //    "Outpainting": "OUTPAINTING",
+                //    "Inpainting": "INPAINTING",    Not implemented yet
+                //    "Outpainting": "OUTPAINTING",
                 "Background-Removal": "BACKGROUND_REMOVAL",
             },
             default: "TEXT_IMAGE",
@@ -117,12 +191,14 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
             ]
         };
     } else {
+        const max_tokens_limit = getMaxTokensLimit(model, option);
         //Not canvas, i.e normal AWS bedrock converse
         const baseConverseOptions: ModelOptionInfoItem[] = [
             {
                 name: "max_tokens",
                 type: OptionType.numeric,
                 min: 1,
+                max: max_tokens_limit,
                 integer: true,
                 step: 200,
                 description: "The maximum number of tokens to generate",
@@ -257,7 +333,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                     description: "A higher frequency penalty encourages the model to use less common words"
                 },
             ];
- 
+
             return {
                 _option_id: "bedrock-ai21",
                 options: [...baseConverseOptions, ...ai21ConverseOptions]
@@ -301,7 +377,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                 }
             }
         }
-        
+
         //Fallback to converse standard.
         return {
             _option_id: "bedrock-converse",
