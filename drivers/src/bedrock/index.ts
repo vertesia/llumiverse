@@ -115,7 +115,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 prompt: result.usage?.inputTokens,
                 result: result.usage?.outputTokens,
                 total: result.usage?.totalTokens,
-             },
+            },
             finish_reason: converseFinishReason(result.stopReason),
         }
     };
@@ -194,7 +194,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if (type == BedrockModelType.InferenceProfile || type == BedrockModelType.Unknown) {
             try {
                 const response = await this.getService(region).getInferenceProfile({
-                   inferenceProfileIdentifier: model
+                    inferenceProfileIdentifier: model
                 });
                 canStream = await this.getCanStream(response.models?.[0].modelArn ?? "", BedrockModelType.FoundationModel);
                 return canStream;
@@ -225,7 +225,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             let type = BedrockModelType.Unknown;
             if (options.model.includes("foundation-model")) {
                 type = BedrockModelType.FoundationModel;
-            } else if (options.model.includes("inference-profile")) {  
+            } else if (options.model.includes("inference-profile")) {
                 type = BedrockModelType.InferenceProfile;
             } else if (options.model.includes("custom-model")) {
                 type = BedrockModelType.CustomModel;
@@ -261,41 +261,38 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     preparePayload(prompt: ConverseRequest, options: ExecutionOptions) {
-        if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", options.model_options);
-        }
-        options.model_options = options.model_options as TextFallbackOptions;
+        const model_options = options.model_options as TextFallbackOptions;
 
         let additionalField = {};
 
         if (options.model.includes("amazon")) {
             //Titan models also exists but does not support any additional options
             if (options.model.includes("nova")) {
-                additionalField = { inferenceConfig: { topK: options.model_options?.top_k } };
+                additionalField = { inferenceConfig: { topK: model_options?.top_k } };
             }
         } else if (options.model.includes("claude")) {
             //Needs max_tokens to be set
-            if (!options.model_options?.max_tokens) {
-                if (options.model.includes("claude-3-5") || options.model.includes("claude-4")) {
-                    options.model_options.max_tokens = 8192;
+            if (!model_options?.max_tokens) {
+                if (options.model.includes("claude-3-5")) {
+                    model_options.max_tokens = 8192;
 
                     //Bug with AWS Converse Sonnet 3.5, does not effect Haiku.
                     //See https://github.com/boto/boto3/issues/4279
                     if (options.model.includes("claude-3-5-sonnet")) {
-                        options.model_options.max_tokens = 4096;
+                        model_options.max_tokens = 4096;
                     }
                 } else {
-                    options.model_options.max_tokens = 4096;
+                    model_options.max_tokens = 4096;
                 }
             }
-            additionalField = { top_k: options.model_options?.top_k };
+            additionalField = { top_k: model_options?.top_k };
         } else if (options.model.includes("meta")) {
             //If last message is "```json", remove it. Model requires the final message to be a user message
             prompt.messages = converseRemoveJSONprefill(prompt.messages);
         } else if (options.model.includes("mistral")) {
             //7B instruct and 8x7B instruct
             if (options.model.includes("7b")) {
-                additionalField = { top_k: options.model_options?.top_k };
+                additionalField = { top_k: model_options?.top_k };
                 //Does not support system messages
                 if (prompt.system && prompt.system?.length != 0) {
                     prompt.messages?.push(converseSystemToMessages(prompt.system));
@@ -310,16 +307,16 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         } else if (options.model.includes("ai21")) {
             //If last message is "```json", remove it. Model requires the final message to be a user message
             prompt.messages = converseRemoveJSONprefill(prompt.messages);
-            if (options.model.includes("jambda")) {
+            if (options.model.includes("jamba")) {
                 additionalField = {
-                    presence_penalty: { scale: options.model_options?.presence_penalty },
-                    frequency_penalty: { scale: options.model_options?.frequency_penalty },
+                    presence_penalty: { scale: model_options?.presence_penalty },
+                    frequency_penalty: { scale: model_options?.frequency_penalty },
                 };
             }
             if (options.model.includes("j2")) {
                 additionalField = {
-                    presencePenalty: { scale: options.model_options?.presence_penalty },
-                    frequencyPenalty: { scale: options.model_options?.frequency_penalty },
+                    presencePenalty: { scale: model_options?.presence_penalty },
+                    frequencyPenalty: { scale: model_options?.frequency_penalty },
                 };
                 //Does not support system messages
                 if (prompt.system && prompt.system?.length != 0) {
@@ -335,13 +332,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             //Command R and R plus
             if (options.model.includes("cohere.command-r")) {
                 additionalField = {
-                    k: options.model_options?.top_k,
-                    frequency_penalty: options.model_options?.frequency_penalty,
-                    presence_penalty: options.model_options?.presence_penalty,
+                    k: model_options?.top_k,
+                    frequency_penalty: model_options?.frequency_penalty,
+                    presence_penalty: model_options?.presence_penalty,
                 };
             } else {
                 // Command non-R
-                additionalField = { k: options.model_options?.top_k };
+                additionalField = { k: model_options?.top_k };
                 //Does not support system messages
                 if (prompt.system && prompt.system?.length != 0) {
                     prompt.messages?.push(converseSystemToMessages(prompt.system));
@@ -354,12 +351,12 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         //If last message is "```json", add corresponding ``` as a stop sequence.
         if (prompt.messages && prompt.messages.length > 0) {
             if (prompt.messages[prompt.messages.length - 1].content?.[0].text === "```json") {
-                let stopSeq = options.model_options?.stop_sequence;
+                let stopSeq = model_options?.stop_sequence;
                 if (!stopSeq) {
-                    options.model_options.stop_sequence = ["```"];
+                    model_options.stop_sequence = ["```"];
                 } else if (!stopSeq.includes("```")) {
                     stopSeq.push("```");
-                    options.model_options.stop_sequence = stopSeq;
+                    model_options.stop_sequence = stopSeq;
                 }
             }
         }
@@ -369,10 +366,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             system: prompt.system,
             modelId: options.model,
             inferenceConfig: {
-                maxTokens: options.model_options?.max_tokens,
-                temperature: options.model_options?.temperature,
-                topP: options.model_options?.top_p,
-                stopSequences: options.model_options?.stop_sequence,
+                maxTokens: model_options?.max_tokens,
+                temperature: model_options?.temperature,
+                topP: model_options?.top_p,
+                stopSequences: model_options?.stop_sequence,
             } as InferenceConfiguration,
             additionalModelRequestFields: {
                 ...additionalField,
@@ -388,15 +385,15 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if (options.model_options?._option_id !== "bedrock-nova-canvas") {
             this.logger.warn("Invalid model options", options.model_options);
         }
-        options.model_options = options.model_options as NovaCanvasOptions;
+        const model_options = options.model_options as NovaCanvasOptions;
 
         const executor = this.getExecutor();
-        const taskType = options.model_options.taskType ?? NovaImageGenerationTaskType.TEXT_IMAGE;
+        const taskType = model_options.taskType ?? NovaImageGenerationTaskType.TEXT_IMAGE;
 
         this.logger.info("Task type: " + taskType);
 
-        if (typeof prompt === "string" ) {
-            throw  new Error( "Bad prompt format");
+        if (typeof prompt === "string") {
+            throw new Error("Bad prompt format");
         }
 
         const payload = await formatNovaImageGenerationPayload(taskType, prompt, options);
@@ -422,7 +419,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
         }
     }
-
 
     async startTraining(dataset: DataSource, options: TrainingOptions): Promise<TrainingJob> {
 
@@ -628,12 +624,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             model: modelID,
             token_count: result.inputTextTokenCount
         };
-
     }
-
 }
-
-
 
 function jobInfo(job: GetModelCustomizationJobCommandOutput, jobId: string): TrainingJob {
     const jobStatus = job.status;
