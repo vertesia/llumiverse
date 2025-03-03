@@ -9,7 +9,7 @@ import mnemonist from "mnemonist";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
 import { forceUploadFile } from "./s3.js";
 import { converseConcatMessages, converseRemoveJSONprefill, converseSystemToMessages, fortmatConversePrompt } from "./converse.js";
-import { NovaCanvasOptions } from "../../../core/src/options/bedrock.js";
+import { BedrockClaudeOptions, NovaCanvasOptions } from "../../../core/src/options/bedrock.js";
 
 const { LRUCache } = mnemonist;
 
@@ -153,10 +153,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             ...payload,
         });
 
-        const completion = BedrockDriver.getExtractedExecuton(res, prompt) as Completion;
-        if (options.include_original_response) {
-            completion.original_response = res;
-        }
+        const completion = {
+            ...BedrockDriver.getExtractedExecuton(res, prompt),
+            original_response: options.include_original_response ? res : undefined,
+        } satisfies Completion;
+
         return completion;
     }
 
@@ -271,6 +272,26 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 additionalField = { inferenceConfig: { topK: model_options?.top_k } };
             }
         } else if (options.model.includes("claude")) {
+            if (options.model.includes("claude-3-7")) {
+                const thinking_options = options.model_options as BedrockClaudeOptions;
+                const thinking = thinking_options?.thinking_mode ?? false;
+                if (!model_options?.max_tokens) {
+                    model_options.max_tokens = thinking ? 128000 : 8192;
+                }
+                additionalField = {
+                    top_k: model_options?.top_k,
+                    reasoning_config: {
+                        type: thinking ? "enabled" : "disabled",
+                        budget_tokens: thinking_options?.thinking_budget_tokens,
+                    }
+                };
+                if(thinking && (thinking_options?.thinking_budget_tokens ?? 0) > 64000){
+                    additionalField = {
+                        ...additionalField,
+                        anthorpic_beta: ["output-128k-2025-02-19"]
+                    };
+                }
+            }
             //Needs max_tokens to be set
             if (!model_options?.max_tokens) {
                 if (options.model.includes("claude-3-5")) {
@@ -370,11 +391,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 temperature: model_options?.temperature,
                 topP: model_options?.top_p,
                 stopSequences: model_options?.stop_sequence,
-            } as InferenceConfiguration,
+            } satisfies InferenceConfiguration,
             additionalModelRequestFields: {
                 ...additionalField,
             },
-        } as ConverseRequest;
+        } satisfies ConverseRequest;
     }
 
 

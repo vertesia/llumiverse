@@ -21,7 +21,7 @@ export interface NovaCanvasOptions {
 }
 
 export interface BaseConverseOptions {
-    _option_id: "bedrock-converse" | string;
+    _option_id: "bedrock-converse" | "bedrock-claude" | "bedrock-nova" | "bedrock-mistral" | "bedrock-ai21" | "bedrock-cohere-command";
     max_tokens?: number;
     temperature?: number;
     top_p?: number;
@@ -161,7 +161,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                     description: "Limits token sampling to the top k tokens"
                 },
             ];
-            if (model.includes("3.7")) {
+            if (model.includes("3-7")) {
                 const claudeModeOptions: ModelOptionInfoItem[] = [
                     {
                         name: "thinking_mode",
