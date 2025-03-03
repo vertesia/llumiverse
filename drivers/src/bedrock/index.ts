@@ -328,12 +328,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         } else if (options.model.includes("ai21")) {
             //If last message is "```json", remove it. Model requires the final message to be a user message
             prompt.messages = converseRemoveJSONprefill(prompt.messages);
-            if (options.model.includes("jamba")) {
-                additionalField = {
-                    presence_penalty: { scale: model_options?.presence_penalty },
-                    frequency_penalty: { scale: model_options?.frequency_penalty },
-                };
-            }
+            //Jamba models support no additional options
+            //Jurassic 2 models do.
             if (options.model.includes("j2")) {
                 additionalField = {
                     presencePenalty: { scale: model_options?.presence_penalty },
