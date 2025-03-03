@@ -120,7 +120,7 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
         if (model.includes("capability")) {
             //Edit models
             let guidanceScaleDefault = 75;
-            if ((option as ImagenOptions).edit_mode === "EDIT_MODE_INPAINT_INSERTION") {
+            if ((option as ImagenOptions)?.edit_mode === "EDIT_MODE_INPAINT_INSERTION") {
                 guidanceScaleDefault = 60;
             }
         
@@ -159,14 +159,14 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
                 }
             ];
 
-            const maskClassOptions: ModelOptionInfoItem[] = ((option as ImagenOptions).mask_mode === "MASK_MODE_SEMANTIC") ? [
+            const maskClassOptions: ModelOptionInfoItem[] = ((option as ImagenOptions)?.mask_mode === "MASK_MODE_SEMANTIC") ? [
                 {
                     name: "mask_class", type: OptionType.string_list, default: [],
                     description: "Input Class IDs. Create a mask based on image class, based on https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/imagen-api-customization#segment-ids"
                 }
             ] : [];
 
-            const customizationOptions: ModelOptionInfoItem[] = (option as ImagenOptions).edit_mode === "CUSTOMIZATION_GENERATE" ? [
+            const customizationOptions: ModelOptionInfoItem[] = (option as ImagenOptions)?.edit_mode === "CUSTOMIZATION_GENERATE" ? [
                 {
                     name: "controlType", type: OptionType.enum, enum: { "Face Mesh": "CONTROL_TYPE_FACE_MESH", "Canny": "CONTROL_TYPE_CANNY", "Scribble": "CONTROL_TYPE_SCRIBBLE" },
                     default: "CONTROL_TYPE_CANNY", description: "Method used to generate the control image"
