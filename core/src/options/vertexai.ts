@@ -2,7 +2,7 @@ import { ModelOptionsInfo, ModelOptionInfoItem, OptionType, SharedOptions, Model
 import { textOptionsFallback } from "../options.js";
 
 // Union type of all Bedrock options
-export type VertexAIOptions = ImagenOptions;
+export type VertexAIOptions = ImagenOptions | VertexAIClaudeOptions;
 
 export enum ImagenTaskType {
     TEXT_IMAGE = "TEXT_IMAGE",
@@ -47,6 +47,17 @@ export interface ImagenOptions {
     controlType: "CONTROL_TYPE_FACE_MESH" | "CONTROL_TYPE_CANNY" | "CONTROL_TYPE_SCRIBBLE";
     controlImageComputation?: boolean;
     subjectType: "SUBJECT_TYPE_PERSON" | "SUBJECT_TYPE_ANIMAL" | "SUBJECT_TYPE_PRODUCT" | "SUBJECT_TYPE_DEFAULT";
+}
+
+export interface VertexAIClaudeOptions {
+    _option_id: "vertexai-claude"
+    max_tokens?: number;
+    temperature?: number;
+    top_p?: number;
+    top_k?: number;
+    stop_sequence?: string[];
+    thinking_mode?: boolean;
+    thinking_budget_tokens?: number;
 }
 
 export function getVertexAiOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
@@ -188,5 +199,97 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
             };
         }
     }
+    else if (model.includes("gemini")) {
+        const max_tokens_limit = getGeminiMaxTokensLimit(model);
+        const excludeOptions = ["max_tokens", "presence_penalty"];
+        let commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
+        if (model.includes("1.5")) {
+            commonOptions = commonOptions.filter((option) => option.name !== "frequency_penalty");
+        }
+        const max_tokens: ModelOptionInfoItem[] = [{
+            name: SharedOptions.max_tokens, type: OptionType.numeric, min: 1, max: max_tokens_limit,
+            integer: true, step: 200, description: "The maximum number of tokens to generate"
+        }];
+        return {
+            _option_id: "vertexai-gemini",
+            options: [
+                ...max_tokens,
+                ...commonOptions,
+            ]
+        };
+    }
+    else if (model.includes("claude")) {
+        const max_tokens_limit = getClaudeMaxTokensLimit(model, option as VertexAIClaudeOptions);
+        const excludeOptions = ["max_tokens", "presence_penalty", "frequency_penalty"];
+        let commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
+        const max_tokens: ModelOptionInfoItem[] = [{
+            name: SharedOptions.max_tokens, type: OptionType.numeric, min: 1, max: max_tokens_limit,
+            integer: true, step: 200, description: "The maximum number of tokens to generate"
+        }];
+
+        if (model.includes("3-7")) {
+            const claudeModeOptions: ModelOptionInfoItem[] = [
+                {
+                    name: "thinking_mode",
+                    type: OptionType.boolean,
+                    default: false,
+                    description: "If true, use the extended reasoning mode"
+                },
+            ];
+            const claudeThinkingOptions: ModelOptionInfoItem[] = (option as VertexAIClaudeOptions)?.thinking_mode ? [
+                {
+                    name: "thinking_budget_tokens",
+                    type: OptionType.numeric,
+                    min: 1024,
+                    default: 4000,
+                    integer: true,
+                    step: 100,
+                    description: "The target number of tokens to use for reasoning, not a hard limit."
+                },
+            ] : [];
+
+            return {
+                _option_id: "vertexai-claude",
+                options: [
+                    ...max_tokens,
+                    ...commonOptions,
+                    ...claudeModeOptions,
+                    ...claudeThinkingOptions,
+                ]
+            };
+        }
+        return {
+            _option_id: "vertexai-claude",
+            options: [
+                ...max_tokens,
+                ...commonOptions,
+            ]
+        };
+    }
     return textOptionsFallback;
 }
+function getGeminiMaxTokensLimit(model: string): number {
+    if (model.includes("thinking")) {
+        return 65536;
+    }
+    if (model.includes("ultra") || model.includes("vision")) {
+        return 2048;
+    }
+    return 8192;
+}
+function getClaudeMaxTokensLimit(model: string, option?: VertexAIClaudeOptions): number {
+    if (model.includes("3-7")) {
+        if (option && option?.thinking_mode) {
+            return 128000;
+        } else {
+            return 8192;
+        }
+    }
+    else if (model.includes("3-5")) {
+        return 8192;
+    }
+    else {
+        return 4096;
+    }
+}
+

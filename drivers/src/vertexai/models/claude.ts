@@ -1,10 +1,11 @@
-import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, ModelType, PromptOptions, PromptRole, PromptSegment, TextFallbackOptions } from "@llumiverse/core";
+import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, ModelType, PromptOptions, PromptRole, PromptSegment } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { VertexAIDriver } from "../index.js";
 import { ModelDefinition } from "../models.js";
 import * as AnthropicAPI from '@anthropic-ai/sdk';
 type MessageParam = AnthropicAPI.Anthropic.MessageParam;
 import { TextBlockParam } from "@anthropic-ai/sdk/resources/index.js";
+import { VertexAIClaudeOptions } from "../../../../core/src/options/vertexai.js";
 
 interface ClaudePrompt {
     messages: MessageParam[];
@@ -117,20 +118,28 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         const splits = options.model.split("/");
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
+        options.model_options = options.model_options as VertexAIClaudeOptions;
 
-        if (options.model_options?._option_id !== "text-fallback") {
+        if (options.model_options?._option_id !== "vertexai-claude") {
             driver.logger.warn("Invalid model options", options.model_options);
         }
-        options.model_options = options.model_options as TextFallbackOptions;
 
         const result = await client.messages.create({
-            ...prompt,  // messages, system
+            messages: prompt.messages,
+            system: prompt.system,
             temperature: options.model_options?.temperature,
             model: modelName,
             max_tokens: maxToken(options.model_options?.max_tokens, modelName),
             top_p: options.model_options?.top_p,
             top_k: options.model_options?.top_k,
             stop_sequences: options.model_options?.stop_sequence,
+            thinking: options.model_options?.thinking_mode ?
+                {
+                    budget_tokens: options.model_options?.thinking_budget_tokens ?? 1024,
+                    type: "enabled"
+                } : {
+                    type: "disabled"
+                }
         });
         
         const text = collectTextParts(result.content);
@@ -151,11 +160,11 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         const splits = options.model.split("/");
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
+        options.model_options = options.model_options as VertexAIClaudeOptions;
 
-        if (options.model_options?._option_id !== "text-fallback") {
+        if (options.model_options?._option_id !== "vertexai-claude") {
             driver.logger.warn("Invalid model options", options.model_options);
         }
-        options.model_options = options.model_options as TextFallbackOptions;
 
         const response_stream = await client.messages.stream({
             ...prompt,  // messages, system
@@ -165,6 +174,13 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
             top_p: options.model_options?.top_p,
             top_k: options.model_options?.top_k,
             stop_sequences: options.model_options?.stop_sequence,
+            thinking: options.model_options?.thinking_mode ?
+                {
+                    budget_tokens: options.model_options?.thinking_budget_tokens ?? 1024,
+                    type: "enabled"
+                } : {
+                    type: "disabled"
+                }
         });
 
         //Streaming does not give information on the input tokens,
