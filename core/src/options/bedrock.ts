@@ -2,7 +2,7 @@ import { ModelOptionsInfo, ModelOptions, OptionType, ModelOptionInfoItem } from 
 import { textOptionsFallback } from "../options.js";
 
 // Union type of all Bedrock options
-export type BedrockOptions = NovaCanvasOptions;
+export type BedrockOptions = NovaCanvasOptions | BaseConverseOptions | BedrockClaudeOptions;
 
 export interface NovaCanvasOptions {
     _option_id: "bedrock-nova-canvas"
@@ -20,6 +20,95 @@ export interface NovaCanvasOptions {
     outPaintingMode?: "DEFAULT" | "PRECISE";
 }
 
+export interface BaseConverseOptions {
+    _option_id: "bedrock-converse" | "bedrock-claude" | "bedrock-nova" | "bedrock-mistral" | "bedrock-ai21" | "bedrock-cohere-command";
+    max_tokens?: number;
+    temperature?: number;
+    top_p?: number;
+    stop_sequence?: string[];
+}
+
+export interface BedrockClaudeOptions extends BaseConverseOptions {
+    _option_id: "bedrock-claude";
+    top_k?: number;
+    thinking_mode?: boolean;
+    thinking_budget_tokens?: number;
+}
+
+function getMaxTokensLimit(model: string, option?: ModelOptions): number | undefined {
+    // Claude models
+    if (model.includes("claude")) {
+        if (model.includes("3-7")) {
+            if (option && (option as BedrockClaudeOptions)?.thinking_mode) {
+                return 128000;
+            } else {
+                return 8192;
+            }
+        }
+        else if (model.includes("3-5")) {
+            if (model.includes("claude-3-5-sonnet")) {
+                return 4096;
+            }
+            return 8192;
+        }
+        else {
+            return 4096;
+        }
+    }
+    // Amazon models
+    else if (model.includes("amazon")) {
+        if (model.includes("titan")) {
+            if (model.includes("lite")) {
+                return 4096;
+            } else if (model.includes("express")) {
+                return 8192;
+            } else if (model.includes("premier")) {
+                return 3072;
+            }
+
+        }
+        else if (model.includes("nova")) {
+            return 5000;
+        }
+    }
+    // Mistral models
+    else if (model.includes("mistral")) {
+        if (model.includes("8x7b")) {
+            return 4096;
+        }
+        return 8192;
+    }
+    // AI21 models
+    else if (model.includes("ai21")) {
+        if (model.includes("j2")) {
+            if (model.includes("large") || model.includes("mid") || model.includes("ultra")) {
+                return 8191;
+            }
+            return 2048;
+        }
+        if (model.includes("jamba")) {
+            return 4096;
+        }
+    }
+    // Cohere models
+    else if (model.includes("cohere.command")) {
+        if (model.includes("command-r")) {
+            return 128000;
+        }
+        return 4096;
+    }
+    // Meta models
+    else if (model.includes("llama")) {
+        if (model.includes("3-70b") || model.includes("3-8b")) {
+            return 2048;
+        }
+        return 8192;
+    }
+
+    // Default fallback
+    return undefined;
+}
+
 export function getBedrockOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
     if (model.includes("canvas")) {
         const tasktypeList: ModelOptionInfoItem = {
@@ -30,8 +119,8 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                 "Text-To-Image-with-Image-Conditioning": "TEXT_IMAGE_WITH_IMAGE_CONDITIONING",
                 "Color-Guided-Generation": "COLOR_GUIDED_GENERATION",
                 "Image-Variation": "IMAGE_VARIATION",
-            //    "Inpainting": "INPAINTING",    Not implemented yet
-            //    "Outpainting": "OUTPAINTING",
+                //    "Inpainting": "INPAINTING",    Not implemented yet
+                //    "Outpainting": "OUTPAINTING",
                 "Background-Removal": "BACKGROUND_REMOVAL",
             },
             default: "TEXT_IMAGE",
@@ -56,7 +145,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
 
         let dependentOptions: ModelOptionInfoItem[] = [];
 
-        switch ((option as BedrockOptions)?.taskType ?? "TEXT_IMAGE") {
+        switch ((option as NovaCanvasOptions)?.taskType ?? "TEXT_IMAGE") {
             case "TEXT_IMAGE_WITH_IMAGE_CONDITIONING":
                 dependentOptions.push(
                     {
@@ -100,6 +189,199 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                 ...otherOptions,
                 ...dependentOptions,
             ]
+        };
+    } else {
+        const max_tokens_limit = getMaxTokensLimit(model, option);
+        //Not canvas, i.e normal AWS bedrock converse
+        const baseConverseOptions: ModelOptionInfoItem[] = [
+            {
+                name: "max_tokens",
+                type: OptionType.numeric,
+                min: 1,
+                max: max_tokens_limit,
+                integer: true,
+                step: 200,
+                description: "The maximum number of tokens to generate",
+            },
+            {
+                name: "temperature",
+                type: OptionType.numeric,
+                min: 0.0,
+                default: 0.7,
+                step: 0.1,
+                description: "A higher temperature biases toward less likely tokens, making the model more creative"
+            },
+            {
+                name: "top_p",
+                type: OptionType.numeric,
+                min: 0,
+                max: 1,
+                step: 0.1,
+                description: "Limits token sampling to the cumulative probability of the top p tokens"
+            },
+            {
+                name: "stop_sequence",
+                type: OptionType.string_list,
+                value: [],
+                description: "The generation will halt if one of the stop sequences is output"
+            }];
+
+        if (model.includes("claude")) {
+            const claudeConverseOptions: ModelOptionInfoItem[] = [
+                {
+                    name: "top_k",
+                    type: OptionType.numeric,
+                    min: 1,
+                    integer: true,
+                    step: 1,
+                    description: "Limits token sampling to the top k tokens"
+                },
+            ];
+            if (model.includes("3-7")) {
+                const claudeModeOptions: ModelOptionInfoItem[] = [
+                    {
+                        name: "thinking_mode",
+                        type: OptionType.boolean,
+                        default: false,
+                        description: "If true, use the extended reasoning mode"
+                    },
+                ];
+                const claudeThinkingOptions: ModelOptionInfoItem[] = (option as BedrockClaudeOptions)?.thinking_mode ? [
+                    {
+                        name: "thinking_budget_tokens",
+                        type: OptionType.numeric,
+                        min: 1024,
+                        default: 4000,
+                        integer: true,
+                        step: 100,
+                        description: "The target number of tokens to use for reasoning, not a hard limit."
+                    },
+                ] : [];
+
+                return {
+                    _option_id: "bedrock-claude",
+                    options: [
+                        ...baseConverseOptions,
+                        ...claudeConverseOptions,
+                        ...claudeModeOptions,
+                        ...claudeThinkingOptions]
+                }
+            }
+            return {
+                _option_id: "bedrock-claude",
+                options: [...baseConverseOptions, ...claudeConverseOptions]
+            }
+        }
+        else if (model.includes("amazon")) {
+            //Titan models also exists but does not support any additional options
+            if (model.includes("nova")) {
+                const novaConverseOptions: ModelOptionInfoItem[] = [
+                    {
+                        name: "top_k",
+                        type: OptionType.numeric,
+                        min: 1,
+                        integer: true,
+                        step: 1,
+                        description: "Limits token sampling to the top k tokens"
+                    },
+                ];
+                return {
+                    _option_id: "bedrock-nova",
+                    options: [...baseConverseOptions, ...novaConverseOptions]
+                }
+            }
+        }
+        else if (model.includes("mistral")) {
+            //7b and 8x7b instruct
+            if (model.includes("7b")) {
+                const mistralConverseOptions: ModelOptionInfoItem[] = [
+                    {
+                        name: "top_k",
+                        type: OptionType.numeric,
+                        min: 1,
+                        integer: true,
+                        step: 1,
+                        description: "Limits token sampling to the top k tokens"
+                    },
+                ];
+                return {
+                    _option_id: "bedrock-mistral",
+                    options: [...baseConverseOptions, ...mistralConverseOptions]
+                }
+            }
+            //Other models such as Mistral Small, Large and Large 2
+            //Support no additional options
+        }
+        else if (model.includes("ai21")) {
+            const ai21ConverseOptions: ModelOptionInfoItem[] = [
+                {
+                    name: "presence_penalty",
+                    type: OptionType.numeric,
+                    min: -2,
+                    max: 2,
+                    default: 0,
+                    step: 0.1,
+                    description: "A higher presence penalty encourages the model to talk about new topics"
+                },
+                {
+                    name: "frequency_penalty",
+                    type: OptionType.numeric,
+                    min: -2,
+                    max: 2,
+                    default: 0,
+                    step: 0.1,
+                    description: "A higher frequency penalty encourages the model to use less common words"
+                },
+            ];
+
+            return {
+                _option_id: "bedrock-ai21",
+                options: [...baseConverseOptions, ...ai21ConverseOptions]
+            }
+        }
+        else if (model.includes("cohere.command")) {
+            const cohereCommandOptions: ModelOptionInfoItem[] = [
+                {
+                    name: "top_k",
+                    type: OptionType.numeric,
+                    min: 1,
+                    integer: true,
+                    step: 1,
+                    description: "Limits token sampling to the top k tokens"
+                },
+            ];
+            if (model.includes("command-r")) {
+                const cohereCommandROptions: ModelOptionInfoItem[] = [
+                    {
+                        name: "frequency_penalty",
+                        type: OptionType.numeric,
+                        min: -2,
+                        max: 2,
+                        default: 0,
+                        step: 0.1,
+                        description: "A higher frequency penalty encourages the model to use less common words"
+                    },
+                    {
+                        name: "presence_penalty",
+                        type: OptionType.numeric,
+                        min: -2,
+                        max: 2,
+                        default: 0,
+                        step: 0.1,
+                        description: "A higher presence penalty encourages the model to talk about new topics"
+                    },
+                ];
+                return {
+                    _option_id: "bedrock-cohere-command",
+                    options: [...baseConverseOptions, ...cohereCommandOptions, ...cohereCommandROptions]
+                }
+            }
+        }
+
+        //Fallback to converse standard.
+        return {
+            _option_id: "bedrock-converse",
+            options: baseConverseOptions
         };
     }
     return textOptionsFallback;
