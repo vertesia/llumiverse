@@ -122,7 +122,7 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
     }
     else if (model.includes("gemini")) {
         const max_tokens_limit = getGeminiMaxTokensLimit(model);
-        const excludeOptions = ["presence_penalty"];
+        const excludeOptions = ["max_tokens", "presence_penalty"];
         let commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
         if (model.includes("1.5")) {
             commonOptions = commonOptions.filter((option) => option.name !== "frequency_penalty");
@@ -134,19 +134,20 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
         return {
             _option_id: "vertexai-gemini",
             options: [
+                ...max_tokens,
                 ...commonOptions,
-                ...max_tokens
             ]
         };
     }
     else if (model.includes("claude")) {
         const max_tokens_limit = getClaudeMaxTokensLimit(model, option as VertexAIClaudeOptions);
-        const excludeOptions = ["presence_penalty", "frequency_penalty"];
+        const excludeOptions = ["max_tokens", "presence_penalty", "frequency_penalty"];
         let commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
         const max_tokens: ModelOptionInfoItem[] = [{
             name: SharedOptions.max_tokens, type: OptionType.numeric, min: 1, max: max_tokens_limit,
             integer: true, step: 200, description: "The maximum number of tokens to generate"
         }];
+
         if (model.includes("3-7")) {
             const claudeModeOptions: ModelOptionInfoItem[] = [
                 {
@@ -171,8 +172,8 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
             return {
                 _option_id: "vertexai-claude",
                 options: [
-                    ...commonOptions,
                     ...max_tokens,
+                    ...commonOptions,
                     ...claudeModeOptions,
                     ...claudeThinkingOptions,
                 ]
@@ -181,8 +182,8 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
         return {
             _option_id: "vertexai-claude",
             options: [
-                ...commonOptions,
                 ...max_tokens,
+                ...commonOptions,
             ]
         };
     }
