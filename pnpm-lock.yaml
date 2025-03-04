@@ -66,11 +66,11 @@ importers:
   drivers:
     dependencies:
       '@anthropic-ai/sdk':
-        specifier: ^0.33.1
-        version: 0.33.1
+        specifier: ^0.39.0
+        version: 0.39.0
       '@anthropic-ai/vertex-sdk':
-        specifier: ^0.6.1
-        version: 0.6.1
+        specifier: ^0.7.0
+        version: 0.7.0
       '@aws-sdk/client-bedrock':
         specifier: ^3.709.0
         version: 3.758.0
@@ -184,11 +184,11 @@ importers:
 
 packages:
 
-  '@anthropic-ai/sdk@0.33.1':
-    resolution: {integrity: sha512-VrlbxiAdVRGuKP2UQlCnsShDHJKWepzvfRCkZMpU+oaUdKLpOfmylLMRojGrAgebV+kDtPjewCVP0laHXg+vsA==}
+  '@anthropic-ai/sdk@0.39.0':
+    resolution: {integrity: sha512-eMyDIPRZbt1CCLErRCi3exlAvNkBtRe+kW5vvJyef93PmNr/clstYgHhtvmkxN82nlKgzyGPCyGxrm0JQ1ZIdg==}
 
-  '@anthropic-ai/vertex-sdk@0.6.1':
-    resolution: {integrity: sha512-Ckw0Dv/LDSt/ct3v19Jwd8gSQEv7ReDreXHrZTuJ+VWytTZW7W7465UG+it6InsT64wHUgsxnh0EYKXw89Tp7Q==}
+  '@anthropic-ai/vertex-sdk@0.7.0':
+    resolution: {integrity: sha512-zNm3hUXgYmYDTyveIxOyxbcnh5VXFkrLo4bSnG6LAfGzW7k3k2iCNDSVKtR9qZrK2BCid7JtVu7jsEKaZ/9dSw==}
 
   '@aws-crypto/crc32@5.2.0':
     resolution: {integrity: sha512-nLbCWqQNgUiwwtFsen1AdzAtvuLRsQS8rYgMuxCrdKf9kOssamGLuPwyTY9wyYblNr9+1XM8v6zoDTPPSIeANg==}
@@ -1890,21 +1890,21 @@ packages:
 
 snapshots:
 
-  '@anthropic-ai/sdk@0.33.1':
+  '@anthropic-ai/sdk@0.39.0':
     dependencies:
       '@types/node': 18.19.79
       '@types/node-fetch': 2.6.12
       abort-controller: 3.0.0
-      agentkeepalive: 4.5.0
+      agentkeepalive: 4.6.0
       form-data-encoder: 1.7.2
       formdata-node: 4.4.1
       node-fetch: 2.7.0
     transitivePeerDependencies:
       - encoding
 
-  '@anthropic-ai/vertex-sdk@0.6.1':
+  '@anthropic-ai/vertex-sdk@0.7.0':
     dependencies:
-      '@anthropic-ai/sdk': 0.33.1
+      '@anthropic-ai/sdk': 0.39.0
       google-auth-library: 9.15.1
     transitivePeerDependencies:
       - encoding
@@ -3191,7 +3191,7 @@ snapshots:
 
   '@types/node-fetch@2.6.12':
     dependencies:
-      '@types/node': 18.19.79
+      '@types/node': 22.13.9
       form-data: 4.0.1
 
   '@types/node@18.19.79':
