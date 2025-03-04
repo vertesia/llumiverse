@@ -83,6 +83,7 @@ async function imageVariationPayload(prompt: NovaMessagesPrompt, options: Execut
         imageVariationParams: {
             images: images ?? [],
             text: text,
+            negativeText: prompt.negative,
             similarityStrength: options.model_options?.similarityStrength,
         }
     }

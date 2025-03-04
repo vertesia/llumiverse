@@ -64,7 +64,7 @@ export interface Driver<PromptT = unknown> {
      */
     createTrainingPrompt(options: TrainingPromptOptions): Promise<string>;
 
-    createPrompt(segments: PromptSegment[], opts: PromptOptions): Promise<PromptT>;
+    createPrompt(segments: PromptSegment[], opts: ExecutionOptions): Promise<PromptT>;
 
     execute(segments: PromptSegment[], options: ExecutionOptions): Promise<ExecutionResponse<PromptT>>;
 
@@ -224,8 +224,9 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     abstract requestTextCompletionStream(prompt: PromptT, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>>;
 
-    async requestImageGeneration(_prompt: PromptT, _options: ExecutionOptions): Promise<Completion<ImageGeneration>> { //make abstract?
+    async requestImageGeneration(_prompt: PromptT, _options: ExecutionOptions): Promise<Completion<ImageGeneration>> {
         throw new Error("Image generation not implemented.");
+        //Cannot be made abstract, as abstract methods are required in the derived class
     }
 
     //list models available for this environement

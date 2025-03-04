@@ -36,7 +36,9 @@ interface NovaMessagePart {
 
 export interface NovaMessagesPrompt {
     system?: NovaSystemMessage[];
-    messages: NovaMessage[]
+    messages: NovaMessage[];
+    negative?: string;
+    mask?: string;
 }
 
 /**
@@ -47,6 +49,8 @@ export async function formatNovaPrompt(segments: PromptSegment[], schema?: JSONS
     const system: string[] = [];
     const safety: string[] = [];
     const messages: NovaMessage[] = [];
+    let negative: string = "";
+    let mask: string = "";
 
     for (const segment of segments) {
 
@@ -85,6 +89,10 @@ export async function formatNovaPrompt(segments: PromptSegment[], schema?: JSONS
             //Maybe can remove for nova?
             //concatenate messages of the same role (Claude requires alternative user and assistant roles)
             messages[messages.length - 1].content.push(...parts);
+        } else if (segment.role === PromptRole.negative) {
+            negative = negative.concat(segment.content, ', ');
+        } else if (segment.role === PromptRole.mask) {
+            mask = mask.concat(segment.content, ' ');
         } else {
             messages.push({
                 role: segment.role,
@@ -126,6 +134,8 @@ export async function formatNovaPrompt(segments: PromptSegment[], schema?: JSONS
     // put system mesages first and safety last
     return {
         system: systemMessage ? [{ text: systemMessage }] : [{ text: "" }],
-        messages
+        messages: messages,
+        negative: negative,
+        mask: mask,
     }
 }
