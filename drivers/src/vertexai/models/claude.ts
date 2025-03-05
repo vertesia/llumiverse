@@ -1,18 +1,18 @@
+import * as AnthropicAPI from '@anthropic-ai/sdk';
+import { TextBlockParam } from "@anthropic-ai/sdk/resources/index.js";
 import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, ModelType, PromptOptions, PromptRole, PromptSegment } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
+import { VertexAIClaudeOptions } from "../../../../core/src/options/vertexai.js";
 import { VertexAIDriver } from "../index.js";
 import { ModelDefinition } from "../models.js";
-import * as AnthropicAPI from '@anthropic-ai/sdk';
 type MessageParam = AnthropicAPI.Anthropic.MessageParam;
-import { TextBlockParam } from "@anthropic-ai/sdk/resources/index.js";
-import { VertexAIClaudeOptions } from "../../../../core/src/options/vertexai.js";
 
 interface ClaudePrompt {
     messages: MessageParam[];
     system: TextBlockParam[];
 }
 
-function getFullModelName(model: string) : string {
+function getFullModelName(model: string): string {
     if (model.includes("claude-3-5-sonnet-v2")) {
         return "claude-3-5-sonnet-v2@20241022"
     } else if (model.includes("claude-3-5-sonnet")) {
@@ -49,7 +49,7 @@ function collectTextParts(content: any) {
     return out.join('\n');
 }
 
-function maxToken(max_tokens: number | undefined, model: string) : number {
+function maxToken(max_tokens: number | undefined, model: string): number {
     const contains = (str: string, substr: string) => str.indexOf(substr) !== -1;
     if (max_tokens) {
         return max_tokens;
@@ -77,18 +77,18 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
     async createPrompt(_driver: VertexAIDriver, segments: PromptSegment[], options: PromptOptions): Promise<ClaudePrompt> {
         // Convert the prompt to the format expected by the Claude API
         const systemSegments: TextBlockParam[] = segments
-        .filter(segment => segment.role === PromptRole.system)
-        .map(segment => ({
-            text: segment.content,
-            type: 'text'
-        }));
+            .filter(segment => segment.role === PromptRole.system)
+            .map(segment => ({
+                text: segment.content,
+                type: 'text'
+            }));
 
         const safetySegments: TextBlockParam[] = segments
-        .filter(segment => segment.role === PromptRole.safety)
-        .map(segment => ({
-            text: segment.content,
-            type: 'text'
-        }));
+            .filter(segment => segment.role === PromptRole.safety)
+            .map(segment => ({
+                text: segment.content,
+                type: 'text'
+            }));
 
         if (options.result_schema) {
             const schemaSegments: TextBlockParam = {
@@ -99,11 +99,11 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         }
 
         const messages: MessageParam[] = segments
-        .filter(segment => segment.role == PromptRole.user || segment.role == PromptRole.assistant)
-        .map(segment => ({
-            role: segment.role !== PromptRole.user ? 'assistant' : 'user',
-            content: segment.content
-        }));
+            .filter(segment => segment.role == PromptRole.user || segment.role == PromptRole.assistant)
+            .map(segment => ({
+                role: segment.role !== PromptRole.user ? 'assistant' : 'user',
+                content: segment.content
+            }));
 
         const system = systemSegments.concat(safetySegments);
 
@@ -114,14 +114,14 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
     }
 
     async requestTextCompletion(driver: VertexAIDriver, prompt: ClaudePrompt, options: ExecutionOptions): Promise<Completion> {
-        const client = driver.getAnthropicClient();   
+        const client = driver.getAnthropicClient();
         const splits = options.model.split("/");
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
         options.model_options = options.model_options as VertexAIClaudeOptions;
 
         if (options.model_options?._option_id !== "vertexai-claude") {
-            driver.logger.warn("Invalid model options", options.model_options);
+            driver.logger.warn("Invalid model options", { options: options.model_options });
         }
 
         const result = await client.messages.create({
@@ -141,7 +141,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                     type: "disabled"
                 }
         });
-        
+
         const text = collectTextParts(result.content);
 
         return {
@@ -154,8 +154,8 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
             finish_reason: claudeFinishReason(result?.stop_reason ?? ''),
         } as Completion;
     }
-    
-    async requestTextCompletionStream(driver: VertexAIDriver, prompt: ClaudePrompt, options: ExecutionOptions): Promise < AsyncIterable < CompletionChunkObject >> {
+
+    async requestTextCompletionStream(driver: VertexAIDriver, prompt: ClaudePrompt, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         const client = driver.getAnthropicClient();
         const splits = options.model.split("/");
         const modelName = splits[splits.length - 1];
@@ -163,7 +163,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         options.model_options = options.model_options as VertexAIClaudeOptions;
 
         if (options.model_options?._option_id !== "vertexai-claude") {
-            driver.logger.warn("Invalid model options", options.model_options);
+            driver.logger.warn("Invalid model options", { options: options.model_options });
         }
 
         const response_stream = await client.messages.stream({

@@ -1,4 +1,4 @@
-import { AIModel, Completion, ImageGeneration, Modalities, ModelType, PromptRole, PromptSegment, ExecutionOptions, readStreamAsBase64 } from "@llumiverse/core";
+import { AIModel, Completion, ExecutionOptions, ImageGeneration, Modalities, ModelType, PromptRole, PromptSegment, readStreamAsBase64 } from "@llumiverse/core";
 import { VertexAIDriver } from "../index.js";
 
 const projectId = process.env.GOOGLE_PROJECT_ID;
@@ -296,7 +296,7 @@ export class ImagenModelDefinition  {
     
     async requestImageGeneration(driver: VertexAIDriver, prompt: ImagenPrompt, options: ExecutionOptions): Promise<Completion<ImageGeneration>> {
         if (options.model_options?._option_id !== "vertexai-imagen") {
-            driver.logger.warn("Invalid model options", options.model_options);
+            driver.logger.warn("Invalid model options", {options: options.model_options });
         }
         options.model_options = options.model_options as ImagenOptions;
         

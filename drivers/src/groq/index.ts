@@ -1,4 +1,4 @@
-import { AIModel, AbstractDriver, Completion, DriverOptions, EmbeddingsOptions, EmbeddingsResult, PromptSegment, CompletionChunkObject, ExecutionOptions, TextFallbackOptions } from "@llumiverse/core";
+import { AIModel, AbstractDriver, Completion, CompletionChunkObject, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, PromptSegment, TextFallbackOptions } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { OpenAITextMessage, formatOpenAILikeTextPrompt, getJSONSafetyNotice } from "@llumiverse/core/formatters";
 import Groq from "groq-sdk";
@@ -60,7 +60,7 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, OpenAITextMess
 
     async requestTextCompletion(messages: OpenAITextMessage[], options: ExecutionOptions): Promise<Completion<any>> {
         if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", options.model_options);
+            this.logger.warn("Invalid model options", {options: options.model_options });
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
@@ -95,7 +95,7 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, OpenAITextMess
 
     async requestTextCompletionStream(messages: OpenAITextMessage[], options: ExecutionOptions): Promise < AsyncIterable < CompletionChunkObject >> {
         if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", options.model_options);
+            this.logger.warn("Invalid model options", {options: options.model_options });
         }
         options.model_options = options.model_options as TextFallbackOptions;
 

@@ -10,7 +10,7 @@ function getGenerativeModel(driver: VertexAIDriver, options: ExecutionOptions, m
     const jsonMode = options.result_schema && !(options.model.includes("ultra"));
 
     if (options.model_options?._option_id !== "text-fallback") {
-        driver.logger.warn("Invalid model options", options.model_options);
+        driver.logger.warn("Invalid model options", {options: options.model_options });
     }
     options.model_options = options.model_options as TextFallbackOptions;
 

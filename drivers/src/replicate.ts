@@ -6,12 +6,12 @@ import {
     DataSource,
     DriverOptions,
     EmbeddingsResult,
-    ModelSearchPayload,
     ExecutionOptions,
+    ModelSearchPayload,
+    TextFallbackOptions,
     TrainingJob,
     TrainingJobStatus,
     TrainingOptions,
-    TextFallbackOptions,
 } from "@llumiverse/core";
 import { EventStream } from "@llumiverse/core/async";
 import EventSource from "eventsource";
@@ -66,7 +66,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
 
     async requestTextCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
         if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", options.model_options);
+            this.logger.warn("Invalid model options", {options: options.model_options });
         }
         options.model_options = options.model_options as TextFallbackOptions;
         
@@ -97,7 +97,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
             } catch (error) {
                 error = JSON.stringify(e);
             }
-            this.logger?.error(e, error, "Error in SSE stream");
+            this.logger?.error("Error in SSE stream", {e, error});
         });
         source.addEventListener("done", () => {
             try {
@@ -111,7 +111,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
 
     async requestTextCompletion(prompt: string, options: ExecutionOptions) {
         if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", options.model_options);
+            this.logger.warn("Invalid model options", {options: options.model_options });
         }
         options.model_options = options.model_options as TextFallbackOptions;
         const model = ReplicateDriver.parseModelId(options.model);

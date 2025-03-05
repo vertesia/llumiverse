@@ -7,9 +7,9 @@ import {
     DriverOptions,
     EmbeddingsOptions,
     EmbeddingsResult,
+    ExecutionOptions,
     ExecutionTokenUsage,
     ModelType,
-    ExecutionOptions,
     TrainingJob,
     TrainingJobStatus,
     TrainingOptions,
@@ -89,7 +89,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
     async requestTextCompletionStream(prompt: OpenAI.Chat.Completions.ChatCompletionMessageParam[], options: ExecutionOptions): Promise<any> {
         if (options.model_options?._option_id !== "openai-text" && options.model_options?._option_id !== "openai-thinking") {
-            this.logger.warn("Invalid model options", options.model_options);
+            this.logger.warn("Invalid model options", {options: options.model_options });
         }
 
         const useTools: boolean = !isNonStructureSupporting(options.model);
@@ -156,7 +156,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
     async requestTextCompletion(prompt: OpenAI.Chat.Completions.ChatCompletionMessageParam[], options: ExecutionOptions): Promise<any> {
         if (options.model_options?._option_id !== "openai-text" && options.model_options?._option_id !== "openai-thinking") {
-            this.logger.warn("Invalid model options", options.model_options);
+            this.logger.warn("Invalid model options", {options: options.model_options });
         }
 
         const functions = options.result_schema && this.provider.includes("openai")

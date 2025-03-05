@@ -7,9 +7,9 @@ import {
     AIModel,
     AIModelStatus,
     AbstractDriver,
+    CompletionChunkObject,
     DriverOptions,
     EmbeddingsResult,
-    CompletionChunkObject,
     ExecutionOptions,
     TextFallbackOptions,
 } from "@llumiverse/core";
@@ -69,7 +69,7 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
 
     async requestTextCompletionStream(prompt: string, options: ExecutionOptions) {
         if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", options.model_options);
+            this.logger.warn("Invalid model options", {options: options.model_options });
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
@@ -102,7 +102,7 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
 
     async requestTextCompletion(prompt: string, options: ExecutionOptions) {
         if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", options.model_options);
+            this.logger.warn("Invalid model options", {options: options.model_options });
         }
         options.model_options = options.model_options as TextFallbackOptions;
     

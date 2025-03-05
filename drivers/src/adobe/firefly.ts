@@ -142,7 +142,7 @@ export class FireflyDriver extends AbstractDriver<FireflyDriverOptions> {
             };
 
         } catch (error: any) {
-            this.logger.error("[Firefly] Image generation failed", error);
+            this.logger.error("[Firefly] Image generation failed", { error });
             return {
                 result: {},
                 error: {
@@ -196,7 +196,7 @@ export class FireflyDriver extends AbstractDriver<FireflyDriverOptions> {
             });
             return response.ok;
         } catch (error) {
-            this.logger.error("[Firefly] Connection validation failed", error);
+            this.logger.error("[Firefly] Connection validation failed", { error });
             return false;
         }
     }
