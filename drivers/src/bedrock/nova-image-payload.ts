@@ -56,6 +56,7 @@ async function textToImagePayload(prompt: NovaMessagesPrompt, options: Execution
             conditionImage: conditionImage(options.model_options.controlMode ? true : false)?.source.bytes,
             controlMode: options.model_options.controlMode,
             controlStrength: options.model_options.controlStrength,
+            negativeText: prompt.negative
         }
     }
 
@@ -123,6 +124,7 @@ async function colorGuidedGenerationPayload(prompt: NovaMessagesPrompt, options:
             colors: options.model_options.colors ?? [],
             text: text,
             referenceImage: conditionImage(options.model_options.controlMode ? true : false)?.source.bytes,
+            negativeText: prompt.negative
         }
     }
 
@@ -150,6 +152,73 @@ async function backgroundRemovalPayload(prompt: NovaMessagesPrompt, options: Exe
     return payload;
 }
 
+async function inpaintingPayload(prompt: NovaMessagesPrompt, options: ExecutionOptions): Promise<NovaInpaintingPayload> {
+    if (options.model_options?._option_id !== "bedrock-nova-canvas") {
+        throw new Error("Invalid model options");
+    }
+
+    const image = getFirstImageFromPrompt(prompt.messages);
+    const maskImage = getFirstImageFromPrompt(prompt.messages);
+
+    if (!image?.source.bytes) {
+        throw new Error("No image found in prompt");
+    }
+
+    const payload: NovaInpaintingPayload = {
+        taskType: NovaImageGenerationTaskType.INPAINTING,
+        imageGenerationConfig: {
+            quality: options.model_options?.quality,
+            width: options.model_options?.width,
+            height: options.model_options?.height,
+            numberOfImages: options.model_options?.numberOfImages,
+            seed: options.model_options?.seed,
+            cfgScale: options.model_options?.cfgScale,
+        },
+        inPaintingParams: {
+            image: image.source.bytes,
+            maskImage: maskImage?.source.bytes,
+            text: prompt.messages.map(m => m.content.map(c => c.text)).flat().join("\n\n"),
+            negativeText: prompt.negative
+        }
+    }
+
+    return payload;
+}
+
+async function outpaintingPayload(prompt: NovaMessagesPrompt, options: ExecutionOptions): Promise<NovaOutpaintingPayload> {
+    if (options.model_options?._option_id !== "bedrock-nova-canvas") {
+        throw new Error("Invalid model options");
+    }
+
+    const image = getFirstImageFromPrompt(prompt.messages);
+    const maskImage = getFirstImageFromPrompt(prompt.messages);
+
+    if (!image?.source.bytes) {
+        throw new Error("No image found in prompt");
+    }
+
+    const payload: NovaOutpaintingPayload = {
+        taskType: NovaImageGenerationTaskType.OUTPAINTING,
+        imageGenerationConfig: {
+            quality: options.model_options?.quality,
+            width: options.model_options?.width,
+            height: options.model_options?.height,
+            numberOfImages: options.model_options?.numberOfImages,
+            seed: options.model_options?.seed,
+            cfgScale: options.model_options?.cfgScale,
+        },
+        outPaintingParams: {
+            image: image.source.bytes,
+            maskImage: maskImage?.source.bytes,
+            text: prompt.messages.map(m => m.content.map(c => c.text)).flat().join("\n\n"),
+            negativeText: prompt.negative,
+            outPaintingMode: options.model_options?.outPaintingMode ?? "DEFAULT"
+        }
+    }
+
+    return payload;
+}
+
 export function formatNovaImageGenerationPayload(taskType: string, prompt: NovaMessagesPrompt, options: ExecutionOptions) {
 
     switch (taskType) {
@@ -162,9 +231,9 @@ export function formatNovaImageGenerationPayload(taskType: string, prompt: NovaM
         case NovaImageGenerationTaskType.IMAGE_VARIATION:
             return imageVariationPayload(prompt, options);
         case NovaImageGenerationTaskType.INPAINTING:
-        //   return inpaintingPayload(prompt, options);    Needs mask prompt support
+            return inpaintingPayload(prompt, options);
         case NovaImageGenerationTaskType.OUTPAINTING:
-        //   return outpaintingPayload(prompt, options);
+            return outpaintingPayload(prompt, options);
         case NovaImageGenerationTaskType.BACKGROUND_REMOVAL:
             return backgroundRemovalPayload(prompt, options);
         default:
