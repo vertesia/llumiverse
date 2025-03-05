@@ -28,6 +28,5 @@
         "@llumiverse/core": "workspace:*",
         "@llumiverse/drivers": "workspace:*",
         "dotenv": "^16.4.5"
-    },
-    "packageManager": "pnpm@9.7.1"
+    }
 }
