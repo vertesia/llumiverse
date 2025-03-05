@@ -2,6 +2,7 @@ import { ModelOptions, ModelOptionsInfo, OptionType, SharedOptions } from "./typ
 import { getBedrockOptions } from "./options/bedrock.js";
 import { getVertexAiOptions } from "./options/vertexai.js";
 import { getOpenAiOptions } from "./options/openai.js";
+import { getGroqOptions } from "./options/groq.js";
 
 export interface TextFallbackOptions {
     _option_id: "text-fallback";    //For specific models should be format as "provider-model"
@@ -53,6 +54,8 @@ export function getOptions(provider?: string, model?: string, options?: ModelOpt
             return getVertexAiOptions(model ?? "", options);
         case "openai":
             return getOpenAiOptions(model ?? "", options);
+        case "groq":
+            return getGroqOptions(model ?? "", options);
         default:
             return textOptionsFallback;
     }
