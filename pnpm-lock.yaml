@@ -99,8 +99,8 @@ importers:
         specifier: ^1.7.0
         version: 1.9.3
       '@huggingface/inference':
-        specifier: 2.6.7
-        version: 2.6.7
+        specifier: 3.5.1
+        version: 3.5.1
       '@llumiverse/core':
         specifier: workspace:*
         version: link:../core
@@ -574,9 +574,12 @@ packages:
     engines: {node: '>=6'}
     hasBin: true
 
-  '@huggingface/inference@2.6.7':
-    resolution: {integrity: sha512-vFBqvtU3LhxjufTs0jcRrDSc0nK+lah10bOgvlIn80lAH4JwMzHHPBQ4g4ECEdRD0PIt6EpTiidEZQq2sArb5Q==}
+  '@huggingface/inference@3.5.1':
+    resolution: {integrity: sha512-NwTj5MS1eb4HfSp/O1/PyH1bEhTXl/iFh/K+8yYkUTHtK4AHXi/NDsV2LblhACaTEIhpOpYswL9cZx7z3y1tlg==}
     engines: {node: '>=18'}
+
+  '@huggingface/tasks@0.17.1':
+    resolution: {integrity: sha512-kN5F/pzwxtmdZ0jORumNyegNKOX/ciU5G/DMZcqK3SJShod4C6yfvBRCMn5sEDzanxtU8VjX+7TaInQFmmU8Nw==}
 
   '@isaacs/cliui@8.0.2':
     resolution: {integrity: sha512-O8jcjabXaleOG9DQ0+ARXWZBTfnP4WNAqzuiJK7ll44AmxGKv/J2M4TPjxjY3znBCfvBXFzucm1twdyFybFqEA==}
@@ -2744,7 +2747,11 @@ snapshots:
       protobufjs: 7.4.0
       yargs: 17.7.2
 
-  '@huggingface/inference@2.6.7': {}
+  '@huggingface/inference@3.5.1':
+    dependencies:
+      '@huggingface/tasks': 0.17.1
+
+  '@huggingface/tasks@0.17.1': {}
 
   '@isaacs/cliui@8.0.2':
     dependencies:
