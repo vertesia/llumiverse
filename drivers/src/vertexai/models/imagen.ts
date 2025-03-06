@@ -28,8 +28,10 @@ export enum ImagenTaskType {
     EDIT_MODE_INPAINT_INSERTION = "EDIT_MODE_INPAINT_INSERTION",
     EDIT_MODE_BGSWAP = "EDIT_MODE_BGSWAP",
     EDIT_MODE_OUTPAINT = "EDIT_MODE_OUTPAINT",
-    CUSTOMIZATION_GENERATE = "CUSTOMIZATION_GENERATE",
-    CUSTOMIZATION_EDIT = "CUSTOMIZATION_EDIT",
+    CUSTOMIZATION_SUBJECT = "CUSTOMIZATION_SUBJECT",
+    CUSTOMIZATION_STYLE = "CUSTOMIZATION_STYLE",
+    CUSTOMIZATION_CONTROLLED = "CUSTOMIZATION_CONTROLLED",
+    CUSTOMIZATION_INSTRUCT = "CUSTOMIZATION_INSTRUCT",
 }
 
 export enum ImagenMaskMode {
@@ -95,8 +97,6 @@ const clientOptions = {
 // Instantiates a client
 const predictionServiceClient = new PredictionServiceClient(clientOptions);
 
-
-
 function getImagenParameters(taskType: string, options: ImagenOptions) {
     const commonParameters = {
         sampleCount: options?.number_of_images,
@@ -113,18 +113,25 @@ function getImagenParameters(taskType: string, options: ImagenOptions) {
             return {
                 ...commonParameters,
                 editMode: "EDIT_MODE_INPAINT_REMOVAL",
-                editSteps: options?.edit_steps,
+                editConfig: {
+                    baseSteps: options?.edit_steps,
+                },
             }
         case ImagenTaskType.EDIT_MODE_INPAINT_INSERTION:
             return {
                 ...commonParameters,
                 editMode: "EDIT_MODE_INPAINT_INSERTION",
-                editSteps: options?.edit_steps,
+                editConfig: {
+                    baseSteps: options?.edit_steps,
+                },
             }
         case ImagenTaskType.EDIT_MODE_BGSWAP:
             return {
                 ...commonParameters,
                 editMode: "EDIT_MODE_BGSWAP",
+                editConfig: {
+                    baseSteps: options?.edit_steps,
+                },
             }
         case ImagenTaskType.EDIT_MODE_OUTPAINT:
             return {
@@ -142,11 +149,10 @@ function getImagenParameters(taskType: string, options: ImagenOptions) {
                 aspectRatio: options?.aspect_ratio,
                 enhancePrompt: options?.enhance_prompt,
             };
-        case ImagenTaskType.CUSTOMIZATION_GENERATE:
-            return {
-                ...commonParameters,
-            }
-        case ImagenTaskType.CUSTOMIZATION_EDIT:
+        case ImagenTaskType.CUSTOMIZATION_SUBJECT:
+        case ImagenTaskType.CUSTOMIZATION_CONTROLLED:
+        case ImagenTaskType.CUSTOMIZATION_INSTRUCT:
+        case ImagenTaskType.CUSTOMIZATION_STYLE:
             return {
                 ...commonParameters,
             }
@@ -213,7 +219,7 @@ export class ImagenModelDefinition {
                     if (img.mime_type?.includes("image")) {
                         if (msg.role !== PromptRole.mask) {
                             //Editing based mode requires a reference image
-                            if (imagenOptions?.edit_mode !== "CUSTOMIZATION_GENERATE") {
+                            if (imagenOptions?.edit_mode?.includes("EDIT_MODE")) {
                                 prompt.referenceImages.push({
                                     referenceType: "REFERENCE_TYPE_RAW",
                                     referenceId: refId,
@@ -222,7 +228,7 @@ export class ImagenModelDefinition {
                                     }
                                 });
                                 //If mask is auto-generated, add a mask reference
-                                if (mask_mode !== "MASK_MODE_USER_PROVIDED") {
+                                if (mask_mode !== ImagenMaskMode.MASK_MODE_USER_PROVIDED) {
                                     prompt.referenceImages.push({
                                         referenceType: "REFERENCE_TYPE_MASK",
                                         referenceId: refId,
@@ -233,10 +239,10 @@ export class ImagenModelDefinition {
                                     });
                                 }
                             }
-                            else if ((options.model_options as ImagenOptions)?.edit_mode === "CUSTOMIZATION_GENERATE") {
+                            else if ((options.model_options as ImagenOptions)?.edit_mode === ImagenTaskType.CUSTOMIZATION_SUBJECT) {
                                 //First image is always the control image
                                 if (refId == 1) {
-                                    //Customization generate mode requires a control image
+                                    //Customization subject mode requires a control image
                                     prompt.referenceImages.push({
                                         referenceType: "REFERENCE_TYPE_CONTROL",
                                         referenceId: refId,
@@ -262,10 +268,44 @@ export class ImagenModelDefinition {
                                         }
                                     });
                                 }
+                            } else if ((options.model_options as ImagenOptions)?.edit_mode === ImagenTaskType.CUSTOMIZATION_STYLE) {
+                                // Style images
+                                prompt.referenceImages.push({
+                                    referenceType: "REFERENCE_TYPE_STYLE",
+                                    referenceId: refId,
+                                    referenceImage: {
+                                        bytesBase64Encoded: await readStreamAsBase64(await img.getStream()),
+                                    },
+                                    styleImageConfig: {
+                                        styleDescription: prompt.subjectDescription ?? msg.content,
+                                    }
+                                });
+                            } else if ((options.model_options as ImagenOptions)?.edit_mode === ImagenTaskType.CUSTOMIZATION_CONTROLLED) {
+                                // Control images
+                                prompt.referenceImages.push({
+                                    referenceType: "REFERENCE_TYPE_CONTROL",
+                                    referenceId: refId,
+                                    referenceImage: {
+                                        bytesBase64Encoded: await readStreamAsBase64(await img.getStream()),
+                                    },
+                                    controlImageConfig: {
+                                        controlType: imagenOptions?.controlType === "CONTROL_TYPE_FACE_MESH" ? "CONTROL_TYPE_FACE_MESH" : "CONTROL_TYPE_CANNY",
+                                        enableControlImageComputation: imagenOptions?.controlImageComputation,
+                                    }
+                                });
+                            } else if ((options.model_options as ImagenOptions)?.edit_mode === ImagenTaskType.CUSTOMIZATION_INSTRUCT) {
+                                // Control images
+                                prompt.referenceImages.push({
+                                    referenceType: "REFERENCE_TYPE_RAW",
+                                    referenceId: refId,
+                                    referenceImage: {
+                                        bytesBase64Encoded: await readStreamAsBase64(await img.getStream()),
+                                    },
+                                });
                             }
                         }
                         //If mask is user-provided, add a mask reference
-                        if (msg.role === PromptRole.mask && mask_mode === "MASK_MODE_USER_PROVIDED") {
+                        if (msg.role === PromptRole.mask && mask_mode === ImagenMaskMode.MASK_MODE_USER_PROVIDED) {
                             prompt.referenceImages.push({
                                 referenceType: "REFERENCE_TYPE_MASK",
                                 referenceId: refId,
