@@ -10,8 +10,10 @@ export enum ImagenTaskType {
     EDIT_MODE_INPAINT_INSERTION = "EDIT_MODE_INPAINT_INSERTION",
     EDIT_MODE_BGSWAP = "EDIT_MODE_BGSWAP",
     EDIT_MODE_OUTPAINT = "EDIT_MODE_OUTPAINT",
-    CUSTOMIZATION_GENERATE = "CUSTOMIZATION_GENERATE",
-    CUSTOMIZATION_EDIT = "CUSTOMIZATION_EDIT",
+    CUSTOMIZATION_SUBJECT = "CUSTOMIZATION_SUBJECT",
+    CUSTOMIZATION_STYLE = "CUSTOMIZATION_STYLE",
+    CUSTOMIZATION_CONTROLLED = "CUSTOMIZATION_CONTROLLED",
+    CUSTOMIZATION_INSTRUCT = "CUSTOMIZATION_INSTRUCT",
 }
 
 export enum ImagenMaskMode {
@@ -31,18 +33,18 @@ export interface ImagenOptions {
     safety_setting?: "block_none" | "block_only_high" | "block_medium_and_above" | "block_low_and_above"; //The "off" option does not seem to work for Imagen 3, might be only for text models
     image_file_type?: "image/jpeg" | "image/png";
     jpeg_compression_quality?: number;
-    aspect_ratio?: "1:1" | "4:3" | "3:4" | "16:9" | "9:16" ;
+    aspect_ratio?: "1:1" | "4:3" | "3:4" | "16:9" | "9:16";
     add_watermark?: boolean;
     enhance_prompt?: boolean;
 
     //Capability options
     edit_mode?: ImagenTaskType
     guidance_scale?: number;
-    base_steps?: number;
+    edit_steps?: number;
     mask_mode?: ImagenMaskMode;
     mask_dilation?: number;
     mask_class?: number[];
-    
+
     //Customization options
     controlType: "CONTROL_TYPE_FACE_MESH" | "CONTROL_TYPE_CANNY" | "CONTROL_TYPE_SCRIBBLE";
     controlImageComputation?: boolean;
@@ -102,15 +104,15 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
             //Generate models
             const modeOptions: ModelOptionInfoItem[]
                 = [
-                {
-                    name: "aspect_ratio", type: OptionType.enum, enum: { "1:1": "1:1", "4:3": "4:3", "3:4": "3:4", "16:9": "16:9" ,"9:16": "9:16" },
-                    default: "1:1", description: "The aspect ratio of the generated image"
-                },
-                {
-                    name: "add_watermark", type: OptionType.boolean, default: false, description: "Add an invisible watermark to the generated image, useful for detection of AI images"
-                },
-                
-            ];
+                    {
+                        name: "aspect_ratio", type: OptionType.enum, enum: { "1:1": "1:1", "4:3": "4:3", "3:4": "3:4", "16:9": "16:9", "9:16": "9:16" },
+                        default: "1:1", description: "The aspect ratio of the generated image"
+                    },
+                    {
+                        name: "add_watermark", type: OptionType.boolean, default: false, description: "Add an invisible watermark to the generated image, useful for detection of AI images"
+                    },
+
+                ];
 
             const enhanceOptions: ModelOptionInfoItem[] = !model.includes("generate-001") ? [
                 {
@@ -131,10 +133,10 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
         if (model.includes("capability")) {
             //Edit models
             let guidanceScaleDefault = 75;
-            if ((option as ImagenOptions)?.edit_mode === "EDIT_MODE_INPAINT_INSERTION") {
+            if ((option as ImagenOptions)?.edit_mode === ImagenTaskType.EDIT_MODE_INPAINT_INSERTION) {
                 guidanceScaleDefault = 60;
             }
-        
+
             const modeOptions: ModelOptionInfoItem[] = [
                 {
                     name: "edit_mode", type: OptionType.enum,
@@ -143,12 +145,21 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
                         "EDIT_MODE_INPAINT_INSERTION": "EDIT_MODE_INPAINT_INSERTION",
                         "EDIT_MODE_BGSWAP": "EDIT_MODE_BGSWAP",
                         "EDIT_MODE_OUTPAINT": "EDIT_MODE_OUTPAINT",
-                        "CUSTOMIZATION_GENERATE": "CUSTOMIZATION_GENERATE",
-                        "CUSTOMIZATION_EDIT": "CUSTOMIZATION_EDIT",
+                        "CUSTOMIZATION_SUBJECT": "CUSTOMIZATION_SUBJECT",
+                        "CUSTOMIZATION_STYLE": "CUSTOMIZATION_STYLE",
+                        "CUSTOMIZATION_CONTROLLED": "CUSTOMIZATION_CONTROLLED",
+                        "CUSTOMIZATION_INSTRUCT": "CUSTOMIZATION_INSTRUCT",
                     },
-                    default: "EDIT_MODE_INPAINT_REMOVAL",
                     description: "The editing mode. CUSTOMIZATION options use few-shot learning to generate images based on a few examples."
                 },
+                
+                {
+                    name: "guidance_scale", type: OptionType.numeric, min: 0, max: 500, default: guidanceScaleDefault,
+                    integer: true, description: "How closely the generation follows the prompt"
+                }
+            ];
+
+            const maskOptions: ModelOptionInfoItem[] = ((option as ImagenOptions)?.edit_mode?.includes("EDIT")) ? [
                 {
                     name: "mask_mode", type: OptionType.enum,
                     enum: {
@@ -161,23 +172,27 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
                     description: "How should the mask for the generation be provided"
                 },
                 {
-                    name: "mask_dilation", type: OptionType.numeric, min: 0, max: 1, default: 0.01,
+                    name: "mask_dilation", type: OptionType.numeric, min: 0, max: 1,
                     integer: true, description: "The mask dilation, grows the mask by a percetage of image width to compensate for imprecise masks."
                 },
-                {
-                    name: "guidance_scale", type: OptionType.numeric, min: 0, max: 500, default: guidanceScaleDefault,
-                    integer: true, description: "The scale of the guidance image"
-                }
-            ];
+            ] : [];
 
-            const maskClassOptions: ModelOptionInfoItem[] = ((option as ImagenOptions)?.mask_mode === "MASK_MODE_SEMANTIC") ? [
+            const maskClassOptions: ModelOptionInfoItem[] = ((option as ImagenOptions)?.mask_mode === ImagenMaskMode.MASK_MODE_SEMANTIC) ? [
                 {
                     name: "mask_class", type: OptionType.string_list, default: [],
                     description: "Input Class IDs. Create a mask based on image class, based on https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/imagen-api-customization#segment-ids"
                 }
             ] : [];
 
-            const customizationOptions: ModelOptionInfoItem[] = (option as ImagenOptions)?.edit_mode === "CUSTOMIZATION_GENERATE" ? [
+            const editOptions: ModelOptionInfoItem[] = (option as ImagenOptions)?.edit_mode?.includes("EDIT") ? [
+                {
+                    name: "edit_steps", type: OptionType.numeric, default: 75,
+                    integer: true, description: "The number of steps for the base image generation, more steps means more time and better quality"
+                },
+            ] : [];
+
+            const customizationOptions: ModelOptionInfoItem[] = (option as ImagenOptions)?.edit_mode === ImagenTaskType.CUSTOMIZATION_CONTROLLED
+            || (option as ImagenOptions)?.edit_mode === ImagenTaskType.CUSTOMIZATION_SUBJECT ? [
                 {
                     name: "controlType", type: OptionType.enum, enum: { "Face Mesh": "CONTROL_TYPE_FACE_MESH", "Canny": "CONTROL_TYPE_CANNY", "Scribble": "CONTROL_TYPE_SCRIBBLE" },
                     default: "CONTROL_TYPE_CANNY", description: "Method used to generate the control image"
@@ -192,9 +207,11 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
                 options: [
                     ...modeOptions,
                     ...commonOptions,
-                    ...outputOptions,
+                    ...maskOptions,
                     ...maskClassOptions,
+                    ...editOptions,
                     ...customizationOptions,
+                    ...outputOptions,
                 ]
             };
         }
