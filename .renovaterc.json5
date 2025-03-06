@@ -1,13 +1,30 @@
 {
-  $schema: "https://docs.renovatebot.com/renovate-schema.json",
-  packageRules: [
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "packageRules": [
     {
-      groupName: "gh-actions deps",
-      matchManagers: ["github-actions"],
+      "groupName": "gh-actions deps",
+      "matchManagers": ["github-actions"]
     },
     {
-      groupName: "node deps",
-      matchManagers: ["npm", "nvm", "nodenv"],
+      "groupName": "node deps",
+      "matchManagers": ["npm", "nvm", "nodenv"]
+    },
+    {
+      "groupName": "Model Provider Client libraries",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchPackageNames": [
+        "@azure/openai",
+        "@google-cloud/**",
+        "@huggingface/inference",
+        "@replicate",
+        "@openai",
+        "@groq-sdk",
+        "@aws-sdk/**",
+        "@anthropic-ai/**"
+      ],
+      "rangeStrategy": "bump"
     },
   ],
 }
