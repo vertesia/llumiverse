@@ -15,7 +15,7 @@ import { ImagenOptions } from "../../../../core/src/options/vertexai.js";
 
 interface ImagenBaseReference {
     referenceType: "REFERENCE_TYPE_RAW" | "REFERENCE_TYPE_MASK" | "REFERENCE_TYPE_SUBJECT" |
-        "REFERENCE_TYPE_CONTROL" | "REFERENCE_TYPE_STYLE";
+    "REFERENCE_TYPE_CONTROL" | "REFERENCE_TYPE_STYLE";
     referenceId: number;
     referenceImage: {
         bytesBase64Encoded: string; //10MB max
@@ -49,7 +49,7 @@ interface ImagenReferenceMask extends Omit<ImagenBaseReference, "referenceImage"
         maskMode?: ImagenMaskMode;
         maskClasses?: number[]; //Used for MASK_MODE_SEMANTIC, based on https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/imagen-api-customization#segment-ids
         dilation?: number; //Recommendation depends on mode: Inpaint: 0.01, BGSwap: 0.0, Outpaint: 0.01-0.03
-    }   
+    }
     referenceImage?: {  //Only used for MASK_MODE_USER_PROVIDED
         bytesBase64Encoded: string; //10MB max
     }
@@ -89,7 +89,7 @@ export interface ImagenPrompt {
 
 // Specifies the location of the api endpoint
 const clientOptions = {
-  apiEndpoint: `${location}-aiplatform.googleapis.com`,
+    apiEndpoint: `${location}-aiplatform.googleapis.com`,
 };
 
 // Instantiates a client
@@ -113,11 +113,13 @@ function getImagenParameters(taskType: string, options: ImagenOptions) {
             return {
                 ...commonParameters,
                 editMode: "EDIT_MODE_INPAINT_REMOVAL",
+                editSteps: options?.edit_steps,
             }
         case ImagenTaskType.EDIT_MODE_INPAINT_INSERTION:
             return {
                 ...commonParameters,
                 editMode: "EDIT_MODE_INPAINT_INSERTION",
+                editSteps: options?.edit_steps,
             }
         case ImagenTaskType.EDIT_MODE_BGSWAP:
             return {
@@ -129,14 +131,14 @@ function getImagenParameters(taskType: string, options: ImagenOptions) {
                 ...commonParameters,
                 editMode: "EDIT_MODE_OUTPAINT",
                 editConfig: {
-                    baseSteps: options?.base_steps,
+                    baseSteps: options?.edit_steps,
                 },
             }
         case ImagenTaskType.TEXT_IMAGE:
             return {
                 ...commonParameters,
                 // You can't use a seed value and watermark at the same time.
-                addWatermark: options?.add_watermark, 
+                addWatermark: options?.add_watermark,
                 aspectRatio: options?.aspect_ratio,
                 enhancePrompt: options?.enhance_prompt,
             };
@@ -153,7 +155,7 @@ function getImagenParameters(taskType: string, options: ImagenOptions) {
     }
 }
 
-export class ImagenModelDefinition  {
+export class ImagenModelDefinition {
 
     model: AIModel
 
@@ -199,7 +201,7 @@ export class ImagenModelDefinition  {
             }
             if (msg.files) {
                 //Get images from messages
-                if (!prompt.referenceImages) { 
+                if (!prompt.referenceImages) {
                     prompt.referenceImages = [];
                 }
 
@@ -243,7 +245,7 @@ export class ImagenModelDefinition  {
                                         },
                                         controlImageConfig: {
                                             controlType: imagenOptions?.controlType === "CONTROL_TYPE_FACE_MESH" ? "CONTROL_TYPE_FACE_MESH" : "CONTROL_TYPE_CANNY",
-                                            enableControlImageComputation : imagenOptions?.controlImageComputation,
+                                            enableControlImageComputation: imagenOptions?.controlImageComputation,
                                         }
                                     });
                                 } else {
@@ -290,22 +292,22 @@ export class ImagenModelDefinition  {
         }
 
         console.log(prompt);
-            
+
         return prompt
     }
-    
+
     async requestImageGeneration(driver: VertexAIDriver, prompt: ImagenPrompt, options: ExecutionOptions): Promise<Completion<ImageGeneration>> {
         if (options.model_options?._option_id !== "vertexai-imagen") {
             driver.logger.warn("Invalid model options", options.model_options);
         }
         options.model_options = options.model_options as ImagenOptions;
-        
+
         if (options.output_modality !== Modalities.image) {
             throw new Error(`Image generation requires image output_modality`);
         }
 
-        const taskType : string = options.model_options.edit_mode ?? ImagenTaskType.TEXT_IMAGE;
-        
+        const taskType: string = options.model_options.edit_mode ?? ImagenTaskType.TEXT_IMAGE;
+
         driver.logger.info("Task type: " + taskType);
 
         const modelName = options.model.split("/").pop() ?? '';
@@ -338,7 +340,7 @@ export class ImagenModelDefinition  {
         };
 
         // Predict request
-        const [response] = await predictionServiceClient.predict(request, {timeout: 120000 * numberOfImages}); //Extended timeout for image generation
+        const [response] = await predictionServiceClient.predict(request, { timeout: 120000 * numberOfImages }); //Extended timeout for image generation
         const predictions = response.predictions;
 
         if (!predictions) {
@@ -346,7 +348,7 @@ export class ImagenModelDefinition  {
         }
 
         // Extract base64 encoded images from predictions
-        const images : string[] = predictions.map(prediction =>
+        const images: string[] = predictions.map(prediction =>
             prediction.structValue?.fields?.bytesBase64Encoded?.stringValue ?? ''
         );
 

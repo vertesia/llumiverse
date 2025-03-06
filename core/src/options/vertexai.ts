@@ -31,18 +31,18 @@ export interface ImagenOptions {
     safety_setting?: "block_none" | "block_only_high" | "block_medium_and_above" | "block_low_and_above"; //The "off" option does not seem to work for Imagen 3, might be only for text models
     image_file_type?: "image/jpeg" | "image/png";
     jpeg_compression_quality?: number;
-    aspect_ratio?: "1:1" | "4:3" | "3:4" | "16:9" | "9:16" ;
+    aspect_ratio?: "1:1" | "4:3" | "3:4" | "16:9" | "9:16";
     add_watermark?: boolean;
     enhance_prompt?: boolean;
 
     //Capability options
     edit_mode?: ImagenTaskType
     guidance_scale?: number;
-    base_steps?: number;
+    edit_steps?: number;
     mask_mode?: ImagenMaskMode;
     mask_dilation?: number;
     mask_class?: number[];
-    
+
     //Customization options
     controlType: "CONTROL_TYPE_FACE_MESH" | "CONTROL_TYPE_CANNY" | "CONTROL_TYPE_SCRIBBLE";
     controlImageComputation?: boolean;
@@ -102,15 +102,15 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
             //Generate models
             const modeOptions: ModelOptionInfoItem[]
                 = [
-                {
-                    name: "aspect_ratio", type: OptionType.enum, enum: { "1:1": "1:1", "4:3": "4:3", "3:4": "3:4", "16:9": "16:9" ,"9:16": "9:16" },
-                    default: "1:1", description: "The aspect ratio of the generated image"
-                },
-                {
-                    name: "add_watermark", type: OptionType.boolean, default: false, description: "Add an invisible watermark to the generated image, useful for detection of AI images"
-                },
-                
-            ];
+                    {
+                        name: "aspect_ratio", type: OptionType.enum, enum: { "1:1": "1:1", "4:3": "4:3", "3:4": "3:4", "16:9": "16:9", "9:16": "9:16" },
+                        default: "1:1", description: "The aspect ratio of the generated image"
+                    },
+                    {
+                        name: "add_watermark", type: OptionType.boolean, default: false, description: "Add an invisible watermark to the generated image, useful for detection of AI images"
+                    },
+
+                ];
 
             const enhanceOptions: ModelOptionInfoItem[] = !model.includes("generate-001") ? [
                 {
@@ -134,7 +134,7 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
             if ((option as ImagenOptions)?.edit_mode === "EDIT_MODE_INPAINT_INSERTION") {
                 guidanceScaleDefault = 60;
             }
-        
+
             const modeOptions: ModelOptionInfoItem[] = [
                 {
                     name: "edit_mode", type: OptionType.enum,
@@ -170,6 +170,13 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
                 }
             ];
 
+            const editOptions: ModelOptionInfoItem[] = (option as ImagenOptions)?.edit_mode?.includes("edit") ? [
+                {
+                    name: "edit_steps", type: OptionType.numeric, min: 1, max: 500, default: 35,
+                    integer: true, description: "The number of steps for the base image generation, more steps means more time and better quality"
+                },
+            ] : [];
+
             const maskClassOptions: ModelOptionInfoItem[] = ((option as ImagenOptions)?.mask_mode === "MASK_MODE_SEMANTIC") ? [
                 {
                     name: "mask_class", type: OptionType.string_list, default: [],
@@ -192,6 +199,7 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
                 options: [
                     ...modeOptions,
                     ...commonOptions,
+                    ...editOptions,
                     ...outputOptions,
                     ...maskClassOptions,
                     ...customizationOptions,
