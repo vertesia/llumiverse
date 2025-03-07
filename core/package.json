@@ -68,13 +68,13 @@
         "url": "git+ssh://git@github.com/vertesia/llumiverse.git"
     },
     "devDependencies": {
-        "@types/eventsource": "^1.1.15",
+        "@types/eventsource": "^3.0.0",
         "@types/json-schema": "^7.0.15",
         "api-fetch-client": "^0.13.0",
         "rimraf": "^6.0.0",
         "ts-dual-module": "^0.6.3",
         "typescript": "^5.4.2",
-        "vitest": "^2.1.9"
+        "vitest": "^3.0.0"
     },
     "dependencies": {
         "@types/node": "^22.5.0",
