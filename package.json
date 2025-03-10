@@ -13,7 +13,7 @@
         "npm-ws-tools": "^0.3.0",
         "rollup": "^4.27.4",
         "typescript": "^5.6.2",
-        "vitest": "^2.1.9"
+        "vitest": "^3.0.8"
     },
     "packageManager": "pnpm@9.15.2",
     "pnpm": {
