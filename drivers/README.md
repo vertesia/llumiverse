@@ -14,7 +14,7 @@ The following LLM platforms are supported in the current version:
 | --- | :-: | :-: | :-: | :-: | :-: |
 | AWS Bedrock | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Azure OpenAI | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Google Vertex AI | ✅ | ✅ | N/A | ✅ | By Request |
+| Google Vertex AI | ✅ | ✅ | ✅ | ✅ | By Request |
 | Groq | ✅ | ✅ | ✅ | N/A | N/A |
 | HuggingFace Inference Endpoints | ✅ | ✅ | N/A | N/A | N/A |
 | IBM WatsonX | ✅ | ✅ | ✅ | N/A | By Request |

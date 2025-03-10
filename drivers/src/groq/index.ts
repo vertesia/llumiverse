@@ -67,7 +67,7 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, OpenAITextMess
         const res = await this.client.chat.completions.create({
             model: options.model,
             messages: messages,
-            max_tokens: options.model_options?.max_tokens,
+            max_completion_tokens: options.model_options?.max_tokens,
             temperature: options.model_options?.temperature,
             top_p: options.model_options?.top_p,
             //top_logprobs: options.top_logprobs,       //Logprobs output currently not supported
@@ -102,7 +102,7 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, OpenAITextMess
         const res = await this.client.chat.completions.create({
             model: options.model,
             messages: messages,
-            max_tokens: options.model_options?.max_tokens,
+            max_completion_tokens: options.model_options?.max_tokens,
             temperature: options.model_options?.temperature,
             top_p: options.model_options?.top_p,
             //top_logprobs: options.top_logprobs,       //Logprobs output currently not supported
