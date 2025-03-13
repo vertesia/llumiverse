@@ -123,8 +123,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 parent: `publishers/${publisher}`,
                 orderBy: 'name',
                 //filter: `name eq name`,
-                //list_all_versions: 'true',     
-                //As of 27/12/24 list_all_versions is not supported yet, see if https://github.com/googleapis/google-cloud-node/pull/5836 is merged
+                listAllVersions: true,
             });
 
             models = models.concat(response.map(model => ({
