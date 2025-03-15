@@ -72,35 +72,35 @@ importers:
         specifier: ^0.7.0
         version: 0.7.0
       '@aws-sdk/client-bedrock':
-        specifier: ^3.709.0
-        version: 3.758.0
+        specifier: ^3.763.0
+        version: 3.763.0
       '@aws-sdk/client-bedrock-runtime':
-        specifier: ^3.709.0
+        specifier: ^3.758.0
         version: 3.758.0
       '@aws-sdk/client-s3':
-        specifier: ^3.709.0
+        specifier: ^3.758.0
         version: 3.758.0
       '@aws-sdk/credential-providers':
-        specifier: ^3.709.0
-        version: 3.758.0
+        specifier: ^3.768.0
+        version: 3.768.0
       '@aws-sdk/lib-storage':
-        specifier: ^3.709.0
+        specifier: ^3.758.0
         version: 3.758.0(@aws-sdk/client-s3@3.758.0)
       '@azure/identity':
         specifier: ^4.4.1
         version: 4.7.0
       '@azure/openai':
-        specifier: 2.0.0-beta.2
-        version: 2.0.0-beta.2
+        specifier: 2.0.0
+        version: 2.0.0
       '@google-cloud/aiplatform':
         specifier: ^3.35.0
         version: 3.35.0
       '@google-cloud/vertexai':
-        specifier: ^1.7.0
+        specifier: ^1.9.3
         version: 1.9.3
       '@huggingface/inference':
-        specifier: 2.6.7
-        version: 2.6.7
+        specifier: 2.8.1
+        version: 2.8.1
       '@llumiverse/core':
         specifier: workspace:*
         version: link:../core
@@ -217,12 +217,12 @@ packages:
     resolution: {integrity: sha512-T7s+fULUxN3AcJP+lgoUKLawzVEtyCTi+5Ga+wrHnqEPwAsM/wg7VctsZfow1fCgARLT/lzmP2LTCi8ycRnQWg==}
     engines: {node: '>=18.0.0'}
 
-  '@aws-sdk/client-bedrock@3.758.0':
-    resolution: {integrity: sha512-aduuo/xGT3dA65un4Rv6XB+YG0P4FloL6hM4DHjlq3bXKiKJmXiXe/j87VMmzZtdaoZcPRhxyWKXJl6BGKX2xA==}
+  '@aws-sdk/client-bedrock@3.763.0':
+    resolution: {integrity: sha512-o02L7Mf9vnvuQDERGNmRLoVARAJYhFM5LPmFJWlO/OcBOSlT+9sJOsVabAzA10OezAdO/6H8JbklGBpSk+s1hQ==}
     engines: {node: '>=18.0.0'}
 
-  '@aws-sdk/client-cognito-identity@3.758.0':
-    resolution: {integrity: sha512-8bOXVYtf/0OUN0jXTIHLv3V0TAS6kvvCRAy7nmiL/fDde0O+ChW1WZU7CVPAOtFEpFCdKskDcxFspM7m1k6qyg==}
+  '@aws-sdk/client-cognito-identity@3.768.0':
+    resolution: {integrity: sha512-h/WOvKhuXVIhNKjDcsF6oY2oJuBusspnmEaX20h+GUzIrNMlf6qkJrWziT58KzzESyzeYZcGNWjcOfbVRpH6NA==}
     engines: {node: '>=18.0.0'}
 
   '@aws-sdk/client-s3@3.758.0':
@@ -237,8 +237,8 @@ packages:
     resolution: {integrity: sha512-0RswbdR9jt/XKemaLNuxi2gGr4xGlHyGxkTdhSQzCyUe9A9OPCoLl3rIESRguQEech+oJnbHk/wuiwHqTuP9sg==}
     engines: {node: '>=18.0.0'}
 
-  '@aws-sdk/credential-provider-cognito-identity@3.758.0':
-    resolution: {integrity: sha512-y/rHZqyChlEkNRr59gn4hv0gjhJwGmdCdW0JI1K9p3P9p7EurWGjr2M6+goTn3ilOlcAwrl5oFKR5jLt27TkOA==}
+  '@aws-sdk/credential-provider-cognito-identity@3.768.0':
+    resolution: {integrity: sha512-nNBN+lb2N8Odi0abHln60HqA4z0+UsBw8j7XU+ElEi5E2qOBCJSkLIFDIcYfn+j88FP2oLiQlOPe7H8pav5ayQ==}
     engines: {node: '>=18.0.0'}
 
   '@aws-sdk/credential-provider-env@3.758.0':
@@ -269,8 +269,8 @@ packages:
     resolution: {integrity: sha512-XGguXhBqiCXMXRxcfCAVPlMbm3VyJTou79r/3mxWddHWF0XbhaQiBIbUz6vobVTD25YQRbWSmSch7VA8kI5Lrw==}
     engines: {node: '>=18.0.0'}
 
-  '@aws-sdk/credential-providers@3.758.0':
-    resolution: {integrity: sha512-BaGVBdm9ynsErIc/mLuUwJ1OQcL/pkhCuAm24jpsif3evZ5wgyZnEAZB2yRin+mQnQaQT3L+KvTbdKGfjL8+fQ==}
+  '@aws-sdk/credential-providers@3.768.0':
+    resolution: {integrity: sha512-uEAtcdHArZxq7dbpgI4ofDclefNYnYWrT9bJn2Q6rf7VlQnoD37ptzVLQBLomXnRaBiQB/sRV2MJaugFqwOEQA==}
     engines: {node: '>=18.0.0'}
 
   '@aws-sdk/lib-storage@3.758.0':
@@ -415,8 +415,8 @@ packages:
     resolution: {integrity: sha512-0eaPqBIWEAizeYiXdeHb09Iq0tvHJ17ztvNEaLdr/KcJJhJxbpkkEQf09DB+vKlFE0tzYi7j4rYLTXtES/InEQ==}
     engines: {node: '>=16'}
 
-  '@azure/openai@2.0.0-beta.2':
-    resolution: {integrity: sha512-cElfZcBno4h3OWxZPvqqqtDUQ7jcGANlzF1oC9bigRiKe/0bAfBmOSYqPyb6Gaf+ngBVo9IWJs/5ZWNAVSvkqQ==}
+  '@azure/openai@2.0.0':
+    resolution: {integrity: sha512-zSNhwarYbqg3P048uKMjEjbge41OnAgmiiE1elCHVsuCCXRyz2BXnHMJkW6WR6ZKQy5NHswJNUNSWsuqancqFA==}
     engines: {node: '>=18.0.0'}
 
   '@esbuild/aix-ppc64@0.21.5':
@@ -574,9 +574,12 @@ packages:
     engines: {node: '>=6'}
     hasBin: true
 
-  '@huggingface/inference@2.6.7':
-    resolution: {integrity: sha512-vFBqvtU3LhxjufTs0jcRrDSc0nK+lah10bOgvlIn80lAH4JwMzHHPBQ4g4ECEdRD0PIt6EpTiidEZQq2sArb5Q==}
+  '@huggingface/inference@2.8.1':
+    resolution: {integrity: sha512-EfsNtY9OR6JCNaUa5bZu2mrs48iqeTz0Gutwf+fU0Kypx33xFQB4DKMhp8u4Ee6qVbLbNWvTHuWwlppLQl4p4Q==}
     engines: {node: '>=18'}
+
+  '@huggingface/tasks@0.12.30':
+    resolution: {integrity: sha512-A1ITdxbEzx9L8wKR8pF7swyrTLxWNDFIGDLUWInxvks2ruQ8PLRBZe8r0EcjC3CDdtlj9jV1V4cgV35K/iy3GQ==}
 
   '@isaacs/cliui@8.0.2':
     resolution: {integrity: sha512-O8jcjabXaleOG9DQ0+ARXWZBTfnP4WNAqzuiJK7ll44AmxGKv/J2M4TPjxjY3znBCfvBXFzucm1twdyFybFqEA==}
@@ -1984,7 +1987,7 @@ snapshots:
     transitivePeerDependencies:
       - aws-crt
 
-  '@aws-sdk/client-bedrock@3.758.0':
+  '@aws-sdk/client-bedrock@3.763.0':
     dependencies:
       '@aws-crypto/sha256-browser': 5.2.0
       '@aws-crypto/sha256-js': 5.2.0
@@ -2030,7 +2033,7 @@ snapshots:
     transitivePeerDependencies:
       - aws-crt
 
-  '@aws-sdk/client-cognito-identity@3.758.0':
+  '@aws-sdk/client-cognito-identity@3.768.0':
     dependencies:
       '@aws-crypto/sha256-browser': 5.2.0
       '@aws-crypto/sha256-js': 5.2.0
@@ -2192,9 +2195,9 @@ snapshots:
       fast-xml-parser: 4.4.1
       tslib: 2.8.1
 
-  '@aws-sdk/credential-provider-cognito-identity@3.758.0':
+  '@aws-sdk/credential-provider-cognito-identity@3.768.0':
     dependencies:
-      '@aws-sdk/client-cognito-identity': 3.758.0
+      '@aws-sdk/client-cognito-identity': 3.768.0
       '@aws-sdk/types': 3.734.0
       '@smithy/property-provider': 4.0.1
       '@smithy/types': 4.1.0
@@ -2291,11 +2294,11 @@ snapshots:
     transitivePeerDependencies:
       - aws-crt
 
-  '@aws-sdk/credential-providers@3.758.0':
+  '@aws-sdk/credential-providers@3.768.0':
     dependencies:
-      '@aws-sdk/client-cognito-identity': 3.758.0
+      '@aws-sdk/client-cognito-identity': 3.768.0
       '@aws-sdk/core': 3.758.0
-      '@aws-sdk/credential-provider-cognito-identity': 3.758.0
+      '@aws-sdk/credential-provider-cognito-identity': 3.768.0
       '@aws-sdk/credential-provider-env': 3.758.0
       '@aws-sdk/credential-provider-http': 3.758.0
       '@aws-sdk/credential-provider-ini': 3.758.0
@@ -2618,7 +2621,7 @@ snapshots:
       jsonwebtoken: 9.0.2
       uuid: 8.3.2
 
-  '@azure/openai@2.0.0-beta.2':
+  '@azure/openai@2.0.0':
     dependencies:
       '@azure-rest/core-client': 2.3.1
       tslib: 2.8.1
@@ -2721,7 +2724,11 @@ snapshots:
       protobufjs: 7.4.0
       yargs: 17.7.2
 
-  '@huggingface/inference@2.6.7': {}
+  '@huggingface/inference@2.8.1':
+    dependencies:
+      '@huggingface/tasks': 0.12.30
+
+  '@huggingface/tasks@0.12.30': {}
 
   '@isaacs/cliui@8.0.2':
     dependencies:
