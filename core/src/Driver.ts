@@ -8,6 +8,8 @@ import { DefaultCompletionStream, FallbackCompletionStream } from "./CompletionS
 import { formatTextPrompt } from "./formatters/index.js";
 import {
     AIModel,
+    BatchInferenceJob,
+    BatchInferenceResult,
     Completion,
     CompletionChunk,
     CompletionStream,
@@ -90,6 +92,35 @@ export interface Driver<PromptT = unknown> {
     //generate embeddings for a given text or image
     generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult>;
 
+    /**
+     * Start a batch inference job with multiple prompts
+     * @param batchInputs Array of prompt segments to process as a batch
+     * @param options Execution options for the batch job
+     * @returns Promise with the batch job information
+     */
+    startBatchInference?(batchInputs: {segments: PromptSegment[], options: ExecutionOptions}[], batchOptions?: any): Promise<BatchInferenceJob>;
+
+    /**
+     * Get the status of a batch inference job
+     * @param jobId The ID of the batch job to retrieve
+     * @returns Promise with the batch job information
+     */
+    getBatchInferenceJob?(jobId: string): Promise<BatchInferenceJob>;
+
+    /**
+     * Cancel a running batch inference job
+     * @param jobId The ID of the batch job to cancel
+     * @returns Promise with the updated batch job information
+     */
+    cancelBatchInferenceJob?(jobId: string): Promise<BatchInferenceJob>;
+
+    /**
+     * Get the results of a completed batch inference job
+     * @param jobId The ID of the batch job to retrieve results for
+     * @param options Optional parameters for retrieving results
+     * @returns Promise with the batch results
+     */
+    getBatchInferenceResults?(jobId: string, options?: {maxResults?: number, nextToken?: string}): Promise<BatchInferenceResult>;
 }
 
 /**

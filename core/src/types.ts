@@ -136,6 +136,12 @@ export interface ExecutionOptions extends PromptOptions {
     include_original_response?: boolean;
     model_options?: ModelOptions;
     output_modality: Modalities;
+    /**
+     * Used in batch inference to specify a unique identifier for the input
+     * in a batch operation. This is used to correlate inputs with outputs when
+     * retrieving batch results.
+     */
+    batch_id?: string;
 }
 
 //Common names to share between different models
@@ -332,9 +338,44 @@ export enum TrainingJobStatus {
     cancelled = "cancelled",
 }
 
+export enum BatchInferenceJobStatus {
+    created = "created",
+    running = "running",
+    succeeded = "succeeded",
+    failed = "failed",
+    cancelled = "cancelled",
+    partial = "partial", // Some results are available but some failed
+}
+
 export interface TrainingJob {
     id: string; // id of the training job
     status: TrainingJobStatus; // status of the training job - depends on the implementation
     details?: string;
     model?: string; // the name of the fine tuned model which is created
+}
+
+export interface BatchInferenceJob {
+    id: string; // id of the batch inference job
+    status: BatchInferenceJobStatus; // status of the batch inference job
+    details?: string;
+    model: string; // the model used for inference
+    input_count?: number; // total number of inputs in the batch
+    completed_count?: number; // number of completed inferences
+    error_count?: number; // number of failed inferences
+    start_time?: Date; // when the job was started
+    end_time?: Date; // when the job was completed or failed
+}
+
+export interface BatchInferenceResult<ResultT = any> {
+    batch_id: string; // id of the batch inference job
+    results: BatchItemResult<ResultT>[]; // individual results
+    completed: boolean; // whether the batch job has completed
+    error?: string; // error message if the job failed
+}
+
+export interface BatchItemResult<ResultT = any> {
+    item_id: string; // identifier for this specific item within the batch
+    result?: ResultT; // the result if successful
+    error?: string; // error message if this specific item failed
+    token_usage?: ExecutionTokenUsage; // token usage for this item
 }

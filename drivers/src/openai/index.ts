@@ -1,6 +1,8 @@
 import {
     AIModel,
     AbstractDriver,
+    BatchInferenceJob,
+    BatchInferenceResult,
     Completion,
     CompletionChunkObject,
     DataSource,
@@ -10,6 +12,7 @@ import {
     ExecutionOptions,
     ExecutionTokenUsage,
     ModelType,
+    PromptSegment,
     TrainingJob,
     TrainingJobStatus,
     TrainingOptions,
@@ -19,6 +22,7 @@ import { asyncMap } from "@llumiverse/core/async";
 import { formatOpenAILikeMultimodalPrompt } from "@llumiverse/core/formatters";
 import OpenAI, { AzureOpenAI } from "openai";
 import { Stream } from "openai/streaming";
+import { OpenAIBatchOptions, startBatchInference, getBatchInferenceJob, cancelBatchInferenceJob, getBatchInferenceResults } from "./batch/batch-inference.js";
 
 //TODO: Do we need a list?, replace with if statements and modernise?
 const supportFineTunning = new Set([
@@ -312,6 +316,39 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         return { values: embeddings, model } as EmbeddingsResult;
     }
 
+    /**
+     * Start a batch inference job with multiple prompts
+     */
+    async startBatchInference(
+        batchInputs: { segments: PromptSegment[], options: ExecutionOptions }[],
+        batchOptions?: OpenAIBatchOptions
+    ): Promise<BatchInferenceJob> {
+        return startBatchInference(this, batchInputs, batchOptions);
+    }
+
+    /**
+     * Get the status of a batch inference job
+     */
+    async getBatchInferenceJob(jobId: string): Promise<BatchInferenceJob> {
+        return getBatchInferenceJob(this, jobId);
+    }
+
+    /**
+     * Cancel a running batch inference job
+     */
+    async cancelBatchInferenceJob(jobId: string): Promise<BatchInferenceJob> {
+        return cancelBatchInferenceJob(this, jobId);
+    }
+
+    /**
+     * Get the results of a completed batch inference job
+     */
+    async getBatchInferenceResults(
+        jobId: string,
+        options?: { maxResults?: number }
+    ): Promise<BatchInferenceResult> {
+        return getBatchInferenceResults(this, jobId, options);
+    }
 }
 
 
@@ -339,7 +376,7 @@ function jobInfo(job: OpenAI.FineTuning.Jobs.FineTuningJob): TrainingJob {
     }
 }
 
-function insert_image_detail(messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[], detail_level: string): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
+export function insert_image_detail(messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[], detail_level: string): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
     if (detail_level == "auto" || detail_level == "low" || detail_level == "high") {
         for (const message of messages) {
             if (message.role !== 'assistant' && message.content) {
@@ -357,7 +394,7 @@ function insert_image_detail(messages: OpenAI.Chat.Completions.ChatCompletionMes
     return messages;
 }
 
-function convertRoles(messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[], model: string): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
+export function convertRoles(messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[], model: string): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
     //New openai models use developer role instead of system
     if (model.includes("o1") || model.includes("o3")) {
         if (model.includes("o1-mini") || model.includes("o1-preview")) {
@@ -379,7 +416,7 @@ function convertRoles(messages: OpenAI.Chat.Completions.ChatCompletionMessagePar
     return messages
 }
 
-function isNonStructureSupporting(model: string): boolean {
+export function isNonStructureSupporting(model: string): boolean {
     return model.includes("o1-mini") || model.includes("o1-preview")
         || model.includes("chatgpt-4o");
 }

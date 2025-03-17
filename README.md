@@ -10,18 +10,18 @@ It solely focuses on abstracting LLMs and their execution platforms, and does no
 
 The following LLM platforms are supported in the current version:
 
-| Provider | Completion | Chat | Model Listing | Multimodal | Fine-Tuning |
-| --- | :-: | :-: | :-: | :-: | :-: |
-| AWS Bedrock | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Azure OpenAI | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Google Vertex AI | ✅ | ✅ | ✅ | ✅ | By Request |
-| Groq | ✅ | ✅ | ✅ | N/A | N/A |
-| HuggingFace Inference Endpoints | ✅ | ✅ | N/A | N/A | N/A |
-| IBM WatsonX | ✅ | ✅ | ✅ | N/A | By Request |
-| Mistral AI | ✅ | ✅ | ✅ | N/A | By Request |
-| OpenAI | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Replicate | ✅ | ✅ | ✅ | N/A | ✅ |
-| Together AI| ✅ | ✅ | ✅ | N/A | By Request |
+| Provider | Completion | Chat | Model Listing | Multimodal | Fine-Tuning | Batch Inference |
+| --- | :-: | :-: | :-: | :-: | :-: | :-: |
+| AWS Bedrock | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Azure OpenAI | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Google Vertex AI | ✅ | ✅ | ✅ | ✅ | By Request | ✅ |
+| Groq | ✅ | ✅ | ✅ | N/A | N/A | N/A |
+| HuggingFace Inference Endpoints | ✅ | ✅ | N/A | N/A | N/A | N/A |
+| IBM WatsonX | ✅ | ✅ | ✅ | N/A | By Request | N/A |
+| Mistral AI | ✅ | ✅ | ✅ | N/A | By Request | N/A |
+| OpenAI | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Replicate | ✅ | ✅ | ✅ | N/A | ✅ | N/A |
+| Together AI| ✅ | ✅ | ✅ | N/A | By Request | N/A |
 
 New capabilities and platform can easily be added by creating a new driver for the platform.
 
@@ -255,10 +255,10 @@ const driver = new VertexAIDriver({
     region: 'us-central1' // your zone
 });
 
-const r = await vertex.generateEmbeddings({ content: "Hello world!" });
+const r = await driver.generateEmbeddings({ content: "Hello world!" });
 
 // print the vector
-console.log('Embeddings: ', v.values);
+console.log('Embeddings: ', r.values);
 ```
 
 The result object contains the vector as the `values` property, the `model` used to generate the embeddings and an optional `token_count` which if defined is the token count of the input text. 
@@ -276,17 +276,90 @@ const driver = new VertexAIDriver({
     region: 'us-central1' // your zone
 });
 
-const r = await vertex.generateEmbeddings({ 
+const r = await driver.generateEmbeddings({ 
     content: "Hello world!", 
     model: "textembedding-gecko@002",  
     task_type: "SEMANTIC_SIMILARITY"
 });
 
 // print the vector
-console.log('Embeddings: ', v.values);
+console.log('Embeddings: ', r.values);
 ```
 
 The `task_type` parameter is specific to the [textembedding-gecko model](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/text-embeddings). 
+
+### Batch Inference
+
+LLumiverse supports batch inference for OpenAI, Vertex AI and AWS Bedrock. Batch inference allows you to process multiple prompts asynchronously in a single operation, which is more efficient for large-scale inference tasks.
+
+Each provider implements batch inference differently:
+- **OpenAI**: Processes batches locally with concurrent API requests
+- **Vertex AI**: Uses Google's managed batch processing service
+- **AWS Bedrock**: Uses Amazon's batch inference capabilities
+
+Here's an example of how to use batch inference with Vertex AI:
+
+```javascript
+import { Modalities, PromptRole } from '@llumiverse/core';
+import { VertexAIDriver } from '@llumiverse/drivers/vertexai';
+
+// Create a Vertex AI driver
+const driver = new VertexAIDriver({
+  project: 'your-gcp-project-id',
+  region: 'us-central1'
+});
+
+// Prepare multiple prompts for batch processing
+const batchInputs = [];
+
+// Add several sample prompts
+for (let i = 0; i < 5; i++) {
+  batchInputs.push({
+    segments: [
+      {
+        role: PromptRole.user,
+        content: `Tell me an interesting fact about topic ${i+1}.`
+      }
+    ],
+    options: {
+      model: 'gemini-1.0-pro',
+      output_modality: Modalities.text,
+      batch_id: `item-${i}`  // Assign a unique ID to each item
+    }
+  });
+}
+
+// Start the batch inference job
+const batchJob = await driver.startBatchInference(batchInputs, {
+  // Optional batch options
+  maxWorkerCount: 2,
+  machineType: 'e2-standard-4'
+});
+
+console.log(`Batch job created with ID: ${batchJob.id}`);
+
+// Poll for job status
+let complete = false;
+while (!complete) {
+  await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
+  
+  const jobStatus = await driver.getBatchInferenceJob(batchJob.id);
+  console.log(`Job status: ${jobStatus.status}`);
+  
+  if (jobStatus.status === 'succeeded' || 
+      jobStatus.status === 'failed' || 
+      jobStatus.status === 'cancelled' ||
+      jobStatus.status === 'partial') {
+    complete = true;
+  }
+}
+
+// Get results if job completed successfully
+const results = await driver.getBatchInferenceResults(batchJob.id);
+console.log('Batch Results:', results.results);
+```
+
+Similar functionality is available for AWS Bedrock with the `BedrockDriver`.
 
 
 ## Contributing
@@ -297,4 +370,4 @@ Please see [CONTRIBUTING.md](https://github.com/vertesia/llumiverse/blob/main/CO
 
 ## License
 
-Llumivers is licensed under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). Feel free to use it accordingly.
+Llumiverse is licensed under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). Feel free to use it accordingly.

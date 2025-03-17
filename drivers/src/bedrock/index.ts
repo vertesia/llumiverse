@@ -1,7 +1,7 @@
 import { Bedrock, CreateModelCustomizationJobCommand, FoundationModelSummary, GetModelCustomizationJobCommand, GetModelCustomizationJobCommandOutput, ModelCustomizationJobStatus, StopModelCustomizationJobCommand } from "@aws-sdk/client-bedrock";
 import { BedrockRuntime, ConverseRequest, ConverseResponse, ConverseStreamOutput, InferenceConfiguration } from "@aws-sdk/client-bedrock-runtime";
 import { S3Client } from "@aws-sdk/client-s3";
-import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, ExecutionTokenUsage, ImageGeneration, Modalities, PromptOptions, PromptSegment, TextFallbackOptions, TrainingJob, TrainingJobStatus, TrainingOptions } from "@llumiverse/core";
+import { AbstractDriver, AIModel, BatchInferenceJob, BatchInferenceResult, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, ExecutionTokenUsage, ImageGeneration, Modalities, PromptOptions, PromptSegment, TextFallbackOptions, TrainingJob, TrainingJobStatus, TrainingOptions } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
 import { AwsCredentialIdentity, Provider } from "@smithy/types";
@@ -9,6 +9,7 @@ import mnemonist from "mnemonist";
 import { BedrockClaudeOptions, NovaCanvasOptions } from "../../../core/src/options/bedrock.js";
 import { converseConcatMessages, converseRemoveJSONprefill, converseSystemToMessages, fortmatConversePrompt } from "./converse.js";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
+import { BedrockBatchOptions, cancelBatchInferenceJob, getBatchInferenceJob, getBatchInferenceResults, startBatchInference } from "./batch/batch-inference.js";
 import { forceUploadFile } from "./s3.js";
 
 const { LRUCache } = mnemonist;
@@ -641,6 +642,40 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             model: modelID,
             token_count: result.inputTextTokenCount
         };
+    }
+
+    /**
+     * Start a batch inference job with multiple prompts
+     */
+    async startBatchInference(
+        batchInputs: { segments: PromptSegment[], options: ExecutionOptions }[],
+        batchOptions?: BedrockBatchOptions
+    ): Promise<BatchInferenceJob> {
+        return startBatchInference(this, batchInputs, batchOptions);
+    }
+
+    /**
+     * Get the status of a batch inference job
+     */
+    async getBatchInferenceJob(jobId: string): Promise<BatchInferenceJob> {
+        return getBatchInferenceJob(this, jobId);
+    }
+
+    /**
+     * Cancel a running batch inference job
+     */
+    async cancelBatchInferenceJob(jobId: string): Promise<BatchInferenceJob> {
+        return cancelBatchInferenceJob(this, jobId);
+    }
+
+    /**
+     * Get the results of a completed batch inference job
+     */
+    async getBatchInferenceResults(
+        jobId: string,
+        options?: { maxResults?: number, nextToken?: string }
+    ): Promise<BatchInferenceResult> {
+        return getBatchInferenceResults(this, jobId, options);
     }
 }
 

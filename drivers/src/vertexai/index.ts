@@ -1,15 +1,15 @@
 import { GenerateContentRequest, VertexAI } from "@google-cloud/vertexai";
-import { AIModel, AbstractDriver, Completion, CompletionChunkObject, DriverOptions, EmbeddingsResult, ExecutionOptions, ImageGeneration, Modalities, ModelSearchPayload, PromptSegment } from "@llumiverse/core";
+import { AIModel, AbstractDriver, BatchInferenceJob, BatchInferenceResult, Completion, CompletionChunkObject, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, ImageGeneration, Modalities, ModelSearchPayload, PromptSegment } from "@llumiverse/core";
 import { FetchClient } from "api-fetch-client";
 import { GoogleAuth, GoogleAuthOptions } from "google-auth-library";
 import { JSONClient } from "google-auth-library/build/src/auth/googleauth.js";
 import { TextEmbeddingsOptions, getEmbeddingsForText } from "./embeddings/embeddings-text.js";
 import { getModelDefinition } from "./models.js";
-import { EmbeddingsOptions } from "@llumiverse/core";
 import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
 import { v1beta1 } from '@google-cloud/aiplatform';
 import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
 import { ImagenModelDefinition, ImagenPrompt } from "./models/imagen.js";
+import { VertexAIBatchOptions, startBatchInference, getBatchInferenceJob, cancelBatchInferenceJob, getBatchInferenceResults } from "./batch/batch-inference.js";
 
 
 export interface VertexAIDriverOptions extends DriverOptions {
@@ -160,6 +160,40 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             model: options.model,
         }
         return getEmbeddingsForText(this, text_options);
+    }
+
+    /**
+     * Start a batch inference job with multiple prompts
+     */
+    async startBatchInference(
+        batchInputs: { segments: PromptSegment[], options: ExecutionOptions }[],
+        batchOptions?: VertexAIBatchOptions
+    ): Promise<BatchInferenceJob> {
+        return startBatchInference(this, batchInputs, batchOptions);
+    }
+
+    /**
+     * Get the status of a batch inference job
+     */
+    async getBatchInferenceJob(jobId: string): Promise<BatchInferenceJob> {
+        return getBatchInferenceJob(this, jobId);
+    }
+
+    /**
+     * Cancel a running batch inference job
+     */
+    async cancelBatchInferenceJob(jobId: string): Promise<BatchInferenceJob> {
+        return cancelBatchInferenceJob(this, jobId);
+    }
+
+    /**
+     * Get the results of a completed batch inference job
+     */
+    async getBatchInferenceResults(
+        jobId: string,
+        options?: { maxResults?: number, nextToken?: string }
+    ): Promise<BatchInferenceResult> {
+        return getBatchInferenceResults(this, jobId, options);
     }
 
 }
