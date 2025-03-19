@@ -1,4 +1,4 @@
-import { AIModel, AbstractDriver, Completion, DriverOptions, EmbeddingsOptions, EmbeddingsResult, CompletionChunk, ExecutionOptions, TextFallbackOptions } from "@llumiverse/core";
+import { AIModel, AbstractDriver, Completion, CompletionChunk, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, TextFallbackOptions } from "@llumiverse/core";
 import { transformSSEStream } from "@llumiverse/core/async";
 import { FetchClient } from "api-fetch-client";
 import { GenerateEmbeddingPayload, GenerateEmbeddingResponse, WatsonAuthToken, WatsonxListModelResponse, WatsonxModelSpec, WatsonxTextGenerationPayload, WatsonxTextGenerationResponse } from "./interfaces.js";
@@ -31,7 +31,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
 
     async requestTextCompletion(prompt: string, options: ExecutionOptions): Promise<Completion<any>> {
         if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", options.model_options);
+            this.logger.warn("Invalid model options", {options: options.model_options });
         }
         options.model_options = options.model_options as TextFallbackOptions;
         
@@ -63,7 +63,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
 
     async requestTextCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
         if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", options.model_options);
+            this.logger.warn("Invalid model options", {options: options.model_options });
         }
         options.model_options = options.model_options as TextFallbackOptions;
         const payload: WatsonxTextGenerationPayload = {
@@ -146,7 +146,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
         return this.listModels()
             .then(() => true)
             .catch((err) => {
-                this.logger.warn("Failed to connect to WatsonX", err);
+                this.logger.warn("Failed to connect to WatsonX", { error: err });
                 return false
             });
     }

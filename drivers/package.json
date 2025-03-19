@@ -52,7 +52,7 @@
     "rimraf": "^6.0.0",
     "ts-dual-module": "^0.6.3",
     "typescript": "^5.6.2",
-    "vitest": "^2.1.9"
+    "vitest": "^3.0.8"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
@@ -64,7 +64,7 @@
     "@aws-sdk/lib-storage": "^3.709.0",
     "@azure/identity": "^4.4.1",
     "@azure/openai": "2.0.0-beta.2",
-    "@google-cloud/aiplatform": "^3.34.0",
+    "@google-cloud/aiplatform": "^3.35.0",
     "@google-cloud/vertexai": "^1.7.0",
     "@huggingface/inference": "2.6.7",
     "@llumiverse/core": "workspace:*",
@@ -72,7 +72,7 @@
     "api-fetch-client": "^0.13.0",
     "eventsource": "^2.0.2",
     "google-auth-library": "^9.14.0",
-    "groq-sdk": "^0.3.3",
+    "groq-sdk": "^0.15.0",
     "json-schema": "^0.4.0",
     "mnemonist": "^0.39.8",
     "node-web-stream-adapters": "^0.1.0",
