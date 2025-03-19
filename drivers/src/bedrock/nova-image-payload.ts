@@ -144,9 +144,7 @@ async function backgroundRemovalPayload(prompt: NovaMessagesPrompt): Promise<Nov
 }
 
 async function inpaintingPayload(prompt: NovaMessagesPrompt, options: ExecutionOptions): Promise<NovaInpaintingPayload> {
-    if (options.model_options?._option_id !== "bedrock-nova-canvas") {
-        throw new Error("Invalid model options");
-    }
+    const modelOptions = options.model_options as NovaCanvasOptions;
 
     const images = getAllImagesFromPrompt(prompt.messages);
     if (!images?.length || images.length < 2) {
@@ -158,12 +156,12 @@ async function inpaintingPayload(prompt: NovaMessagesPrompt, options: ExecutionO
     const payload: NovaInpaintingPayload = {
         taskType: NovaImageGenerationTaskType.INPAINTING,
         imageGenerationConfig: {
-            quality: options.model_options?.quality,
-            width: options.model_options?.width,
-            height: options.model_options?.height,
-            numberOfImages: options.model_options?.numberOfImages,
-            seed: options.model_options?.seed,
-            cfgScale: options.model_options?.cfgScale,
+            quality: modelOptions?.quality,
+            width: modelOptions?.width,
+            height: modelOptions?.height,
+            numberOfImages: modelOptions?.numberOfImages,
+            seed: modelOptions?.seed,
+            cfgScale: modelOptions?.cfgScale,
         },
         inPaintingParams: {
             image: sourceImage,
@@ -177,9 +175,7 @@ async function inpaintingPayload(prompt: NovaMessagesPrompt, options: ExecutionO
 }
 
 async function outpaintingPayload(prompt: NovaMessagesPrompt, options: ExecutionOptions): Promise<NovaOutpaintingPayload> {
-    if (options.model_options?._option_id !== "bedrock-nova-canvas") {
-        throw new Error("Invalid model options");
-    }
+    const modelOptions = options.model_options as NovaCanvasOptions;
 
     const images = getAllImagesFromPrompt(prompt.messages);
     if (!images?.length || images.length < 2) {
@@ -191,19 +187,19 @@ async function outpaintingPayload(prompt: NovaMessagesPrompt, options: Execution
     const payload: NovaOutpaintingPayload = {
         taskType: NovaImageGenerationTaskType.OUTPAINTING,
         imageGenerationConfig: {
-            quality: options.model_options?.quality,
-            width: options.model_options?.width,
-            height: options.model_options?.height,
-            numberOfImages: options.model_options?.numberOfImages,
-            seed: options.model_options?.seed,
-            cfgScale: options.model_options?.cfgScale,
+            quality: modelOptions?.quality,
+            width: modelOptions?.width,
+            height: modelOptions?.height,
+            numberOfImages: modelOptions?.numberOfImages,
+            seed: modelOptions?.seed,
+            cfgScale: modelOptions?.cfgScale,
         },
         outPaintingParams: {
             image: sourceImage,
             maskImage: maskImage,
             text: prompt.messages.map(m => m.content.map(c => c.text)).flat().join("\n\n"),
             negativeText: prompt.negative,
-            outPaintingMode: options.model_options?.outPaintingMode ?? "DEFAULT"
+            outPaintingMode: modelOptions?.outPaintingMode ?? "DEFAULT"
         }
     }
 
