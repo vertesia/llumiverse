@@ -1,5 +1,6 @@
 import { ExecutionOptions } from "@llumiverse/core";
 import { NovaMessage, NovaMessagesPrompt } from "@llumiverse/core/formatters";
+import { NovaCanvasOptions } from "../../../core/src/options/bedrock";
 
 function getFirstImageFromPrompt(prompt: NovaMessage[]) {
 
@@ -25,9 +26,7 @@ function getAllImagesFromPrompt(prompt: NovaMessage[]) {
 }
 
 async function textToImagePayload(prompt: NovaMessagesPrompt, options: ExecutionOptions): Promise<NovaTextToImagePayload> {
-    if (options.model_options?._option_id !== "bedrock-nova-canvas") {
-        throw new Error("Invalid model options");
-    }
+    const modelOptions = options.model_options as NovaCanvasOptions;
 
     const textMessages = prompt.messages.map(m => m.content.map(c => c.text)).flat();
     let text = textMessages.join("\n\n");
@@ -44,18 +43,18 @@ async function textToImagePayload(prompt: NovaMessagesPrompt, options: Execution
     const payload: NovaTextToImagePayload = {
         taskType: NovaImageGenerationTaskType.TEXT_IMAGE,   // Always TEXT_IMAGE, as TEXT_IMAGE_WITH_IMAGE_CONDITIONING is only an internal marker.
         imageGenerationConfig: {
-            quality: options.model_options?.quality,
-            width: options.model_options?.width,
-            height: options.model_options?.height,
-            numberOfImages: options.model_options?.numberOfImages,
-            seed: options.model_options?.seed,
-            cfgScale: options.model_options?.cfgScale,
+            quality: modelOptions?.quality,
+            width: modelOptions.width,
+            height: modelOptions.height,
+            numberOfImages: modelOptions.numberOfImages,
+            seed: modelOptions.seed,
+            cfgScale: modelOptions.cfgScale,
         },
         textToImageParams: {
             text: text,
-            conditionImage: conditionImage(options.model_options.controlMode ? true : false)?.source.bytes,
-            controlMode: options.model_options.controlMode,
-            controlStrength: options.model_options.controlStrength,
+            conditionImage: conditionImage(modelOptions?.controlMode ? true : false)?.source.bytes,
+            controlMode: modelOptions?.controlMode,
+            controlStrength: modelOptions?.controlStrength,
         }
     }
 
@@ -63,9 +62,7 @@ async function textToImagePayload(prompt: NovaMessagesPrompt, options: Execution
 }
 
 async function imageVariationPayload(prompt: NovaMessagesPrompt, options: ExecutionOptions): Promise<NovaImageVariationPayload> {
-    if (options.model_options?._option_id !== "bedrock-nova-canvas") {
-        throw new Error("Invalid model options");
-    }
+    const modelOptions = options.model_options as NovaCanvasOptions;
 
     const text = prompt.messages.map(m => m.content).join("\n\n");
     const images = getAllImagesFromPrompt(prompt.messages);
@@ -73,29 +70,26 @@ async function imageVariationPayload(prompt: NovaMessagesPrompt, options: Execut
     const payload: NovaImageVariationPayload = {
         taskType: NovaImageGenerationTaskType.IMAGE_VARIATION,
         imageGenerationConfig: {
-            quality: options.model_options?.quality,
-            width: options.model_options?.width,
-            height: options.model_options?.height,
-            numberOfImages: options.model_options?.numberOfImages,
-            seed: options.model_options?.seed,
-            cfgScale: options.model_options?.cfgScale,
+            quality: modelOptions?.quality,
+            width: modelOptions.width,
+            height: modelOptions.height,
+            numberOfImages: modelOptions.numberOfImages,
+            seed: modelOptions.seed,
+            cfgScale: modelOptions.cfgScale,
         },
         imageVariationParams: {
             images: images ?? [],
             text: text,
             negativeText: prompt.negative,
-            similarityStrength: options.model_options?.similarityStrength,
+            similarityStrength: modelOptions?.similarityStrength,
         }
     }
 
     return payload;
-
 }
 
 async function colorGuidedGenerationPayload(prompt: NovaMessagesPrompt, options: ExecutionOptions): Promise<NovaColorGuidedGenerationPayload> {
-    if (options.model_options?._option_id !== "bedrock-nova-canvas") {
-        throw new Error("Invalid model options");
-    }
+    const modelOptions = options.model_options as NovaCanvasOptions;
 
     const textMessages = prompt.messages.map(m => m.content.map(c => c.text)).flat();
     let text = textMessages.join("\n\n");
@@ -112,27 +106,24 @@ async function colorGuidedGenerationPayload(prompt: NovaMessagesPrompt, options:
     const payload: NovaColorGuidedGenerationPayload = {
         taskType: NovaImageGenerationTaskType.COLOR_GUIDED_GENERATION,
         imageGenerationConfig: {
-            quality: options.model_options?.quality,
-            width: options.model_options?.width,
-            height: options.model_options?.height,
-            numberOfImages: options.model_options?.numberOfImages,
-            seed: options.model_options?.seed,
-            cfgScale: options.model_options?.cfgScale,
+            quality: modelOptions?.quality,
+            width: modelOptions.width,
+            height: modelOptions.height,
+            numberOfImages: modelOptions.numberOfImages,
+            seed: modelOptions.seed,
+            cfgScale: modelOptions.cfgScale,
         },
         colorGuidedGenerationParams: {
-            colors: options.model_options.colors ?? [],
+            colors: modelOptions.colors ?? [],
             text: text,
-            referenceImage: conditionImage(options.model_options.controlMode ? true : false)?.source.bytes,
+            referenceImage: conditionImage(modelOptions.controlMode ? true : false)?.source.bytes,
         }
     }
 
     return payload;
 }
 
-async function backgroundRemovalPayload(prompt: NovaMessagesPrompt, options: ExecutionOptions): Promise<NovaBackgroundRemovalPayload> {
-    if (options.model_options?._option_id !== "bedrock-nova-canvas") {
-        throw new Error("Invalid model options");
-    }
+async function backgroundRemovalPayload(prompt: NovaMessagesPrompt): Promise<NovaBackgroundRemovalPayload> {
 
     const image = getFirstImageFromPrompt(prompt.messages);
     if (!image?.source.bytes) {
@@ -166,7 +157,7 @@ export function formatNovaImageGenerationPayload(taskType: string, prompt: NovaM
         case NovaImageGenerationTaskType.OUTPAINTING:
         //   return outpaintingPayload(prompt, options);
         case NovaImageGenerationTaskType.BACKGROUND_REMOVAL:
-            return backgroundRemovalPayload(prompt, options);
+            return backgroundRemovalPayload(prompt);
         default:
             throw new Error("Task type not supported");
     }
