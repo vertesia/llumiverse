@@ -59,7 +59,7 @@ let r = await driver.execute(myFirstPrompt, {
     tools: [
         {
             name: "myTool",
-            descripton: "bla"
+            descripton: "describe what the tool is usefull for",
             input_schema: {
                 type: "object", properties: {}
             }
