@@ -148,12 +148,12 @@ async function inpaintingPayload(prompt: NovaMessagesPrompt, options: ExecutionO
         throw new Error("Invalid model options");
     }
 
-    const image = getFirstImageFromPrompt(prompt.messages);
-    const maskImage = getFirstImageFromPrompt(prompt.messages);
-
-    if (!image?.source.bytes) {
-        throw new Error("No image found in prompt");
+    const images = getAllImagesFromPrompt(prompt.messages);
+    if (!images?.length || images.length < 2) {
+        throw new Error("2 images are required for inpainting");
     }
+    const sourceImage = images[0];
+    const maskImage = images[1];
 
     const payload: NovaInpaintingPayload = {
         taskType: NovaImageGenerationTaskType.INPAINTING,
@@ -166,8 +166,8 @@ async function inpaintingPayload(prompt: NovaMessagesPrompt, options: ExecutionO
             cfgScale: options.model_options?.cfgScale,
         },
         inPaintingParams: {
-            image: image.source.bytes,
-            maskImage: maskImage?.source.bytes,
+            image: sourceImage,
+            maskImage: maskImage,
             text: prompt.messages.map(m => m.content.map(c => c.text)).flat().join("\n\n"),
             negativeText: prompt.negative
         }
@@ -181,12 +181,12 @@ async function outpaintingPayload(prompt: NovaMessagesPrompt, options: Execution
         throw new Error("Invalid model options");
     }
 
-    const image = getFirstImageFromPrompt(prompt.messages);
-    const maskImage = getFirstImageFromPrompt(prompt.messages);
-
-    if (!image?.source.bytes) {
-        throw new Error("No image found in prompt");
+    const images = getAllImagesFromPrompt(prompt.messages);
+    if (!images?.length || images.length < 2) {
+        throw new Error("2 images are required for outpainting");
     }
+    const sourceImage = images[0];
+    const maskImage = images[1];
 
     const payload: NovaOutpaintingPayload = {
         taskType: NovaImageGenerationTaskType.OUTPAINTING,
@@ -199,8 +199,8 @@ async function outpaintingPayload(prompt: NovaMessagesPrompt, options: Execution
             cfgScale: options.model_options?.cfgScale,
         },
         outPaintingParams: {
-            image: image.source.bytes,
-            maskImage: maskImage?.source.bytes,
+            image: sourceImage,
+            maskImage: maskImage,
             text: prompt.messages.map(m => m.content.map(c => c.text)).flat().join("\n\n"),
             negativeText: prompt.negative,
             outPaintingMode: options.model_options?.outPaintingMode ?? "DEFAULT"
