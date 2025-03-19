@@ -233,21 +233,19 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
     test(`${name}: run tool`, { timeout: TIMEOUT, retry: 0 }, async () => {
         const options = getTestOptions(models[0]);
         let r = await driver.execute(PROMPT_WITH_GET_NAME_TOOL, options);
-        console.log('Step 1.', r);
         expect(r.tool_use).toBeDefined();
         expect(r.tool_use?.length).toBe(1);
         expect(r.tool_use?.[0].id).toBeDefined();
         expect(r.tool_use?.[0].input).toBeDefined();
         expect(r.tool_use?.[0].name).toBe("get_weather");
-        console.log('Step 2.', r);
         const tool_use = r.tool_use!;
         r = await driver.execute([{
             "role": PromptRole.tool,
             "tool_use_id": tool_use[0].id,
             "content": "15 degrees"
         }], { ...options, conversation: r.conversation });
-        console.log("Step 3. ", r.conversation);
-        console.log("#######Result IS", r.result);
+        expect(r.result.includes("15 degrees")).toBeTruthy();
+        //console.log("#######Result:", r.result);
     });
 
 });

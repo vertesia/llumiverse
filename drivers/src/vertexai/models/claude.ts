@@ -5,7 +5,6 @@ import { asyncMap } from "@llumiverse/core/async";
 import { VertexAIClaudeOptions } from "../../../../core/src/options/vertexai.js";
 import { VertexAIDriver } from "../index.js";
 import { ModelDefinition } from "../models.js";
-import util from "node:util";
 
 type MessageParam = AnthropicAPI.Anthropic.MessageParam;
 
@@ -148,9 +147,6 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
 
         let conversation = updateConversation(options.conversation as ClaudePrompt, prompt);
 
-
-        console.log("@@@@@@@@@@@tools>>", util.inspect(options.tools, { depth: 5 }));
-        console.log("@@@@@@@@@@@CONVERSATION>>", util.inspect(options.conversation, { depth: 5 }));
         const result = await client.messages.create({
             ...conversation, // messages, system,
             tools: options.tools, // we are using the same shape as claude for tools
@@ -170,21 +166,21 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         }) as Message;
 
         const text = collectTextParts(result.content);
-        const tools_use = collectTools(result.content);
+        const tool_use = collectTools(result.content);
 
         conversation = updateConversation(options.conversation as ClaudePrompt, createPromptFromResponse(result));
 
         return {
             chat: [prompt, { role: result.role, content: result.content }],
             result: text ?? '',
-            tools_use,
+            tool_use,
             token_usage: {
                 prompt: result?.usage.input_tokens,
                 result: result?.usage.output_tokens,
                 total: result?.usage.input_tokens + result?.usage.output_tokens
             },
             // make sure we set finish_reason to the correct value (claude is normally setting this by itself)
-            finish_reason: tools_use ? "tool_use" : claudeFinishReason(result?.stop_reason ?? ''),
+            finish_reason: tool_use ? "tool_use" : claudeFinishReason(result?.stop_reason ?? ''),
             conversation
         } as Completion;
     }
