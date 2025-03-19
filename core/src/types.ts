@@ -56,16 +56,35 @@ export interface CompletionChunkObject<ResultT = any> {
 //Internal structure used in driver implementation.
 export type CompletionChunk = CompletionChunkObject | string;
 
+export interface ToolDefinition {
+    name: string,
+    description?: string,
+    input_schema: {
+        type: 'object';
+        properties?: unknown | null | undefined;
+        [k: string]: unknown;
+    },
+}
+
+export interface ToolUse {
+    id: string,
+    name: string,
+    input: JSONObject | null
+}
+
 //ResultT should be either JSONObject or string
 export interface Completion<ResultT = any> {
     // the driver impl must return the result and optionally the token_usage. the execution time is computed by the extended abstract driver
     result: ResultT;
     token_usage?: ExecutionTokenUsage;
-
+    /**
+     * Contains the tools from which the model awaits information.
+     */
+    tool_use?: ToolUse[];
     /**
      * The finish reason as reported by the model: stop | length or other model specific values
      */
-    finish_reason?: "stop" | "length" | string;
+    finish_reason?: "stop" | "length" | "tool_use" | string;
 
     /**
      * Set only if a result validation error occured, otherwise if the result is valid the error field is undefined
@@ -78,6 +97,10 @@ export interface Completion<ResultT = any> {
      */
     original_response?: Record<string, any>;
 
+    /**
+     * The conversation context. This is an opaque structure that can be passed to the next request to restore the context.
+     */
+    conversation?: unknown;
 }
 
 export interface ImageGeneration {
@@ -136,6 +159,16 @@ export interface ExecutionOptions extends PromptOptions {
     include_original_response?: boolean;
     model_options?: ModelOptions;
     output_modality: Modalities;
+    /**
+     * Available tools for the request
+     */
+    tools?: ToolDefinition[];
+    /**
+     * This is an opaque structure that provides a conversation context
+     * Each driver implementation will return a conversation property in the execution response
+     * that can be passed here to restore the context when a new prompt is sent to the model.
+     */
+    conversation?: unknown | null;
 }
 
 //Common names to share between different models
@@ -220,11 +253,19 @@ export enum PromptRole {
     assistant = "assistant",
     negative = "negative",
     mask = "mask",
+    /**
+     * Used to send the response of a tool
+     */
+    tool = "tool"
 }
 
 export interface PromptSegment {
     role: PromptRole;
     content: string;
+    /**
+     * The tool use id if the segment is a tool response
+     */
+    tool_use_id?: string;
     files?: DataSource[]
 }
 

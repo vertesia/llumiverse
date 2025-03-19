@@ -8,7 +8,7 @@ export interface NovaMessage {
     content: NovaMessagePart[]
 }
 
-export interface NovaSystemMessage{
+export interface NovaSystemMessage {
     text: string
 }
 
@@ -64,7 +64,7 @@ export async function formatNovaPrompt(segments: PromptSegment[], schema?: JSONS
             const source = await f.getStream();
             const data = await readStreamAsBase64(source);
             const format = f.mime_type?.split('/')[1] || 'png';
-            
+
             parts.push({
                 image: {
                     format: format as "jpeg" | "png" | "gif" | "webp",
@@ -93,7 +93,7 @@ export async function formatNovaPrompt(segments: PromptSegment[], schema?: JSONS
             negative = negative.concat(segment.content, ', ');
         } else if (segment.role === PromptRole.mask) {
             mask = mask.concat(segment.content, ' ');
-        } else {
+        } else if (segment.role !== PromptRole.tool) {
             messages.push({
                 role: segment.role,
                 content: parts
@@ -121,7 +121,7 @@ export async function formatNovaPrompt(segments: PromptSegment[], schema?: JSONS
 
     /*start Nova's message to amke sure it answers properly in JSON
    if enabled, this requires to add the { to Nova's response*/
-    
+
     if (schema) {
         messages.push({
             role: "assistant",
@@ -130,7 +130,7 @@ export async function formatNovaPrompt(segments: PromptSegment[], schema?: JSONS
             }]
         });
     }
-        
+
     // put system mesages first and safety last
     return {
         system: systemMessage ? [{ text: systemMessage }] : [{ text: "" }],

@@ -42,7 +42,7 @@ export function formatOpenAILikeTextPrompt(segments: PromptSegment[]): OpenAITex
             system.push({ content: msg.content, role: "system" });
         } else if (msg.role === PromptRole.safety) {
             safety.push({ content: "IMPORTANT: " + msg.content, role: "system" });
-        } else if (msg.role !== PromptRole.negative && msg.role !== PromptRole.mask) {
+        } else if (msg.role !== PromptRole.negative && msg.role !== PromptRole.mask && msg.role !== PromptRole.tool) {
             user.push({
                 content: msg.content,
                 role: msg.role || 'user',
@@ -114,7 +114,7 @@ export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[]
 
             system.push(safetyMsg)
 
-        } else if (msg.role !== PromptRole.negative && msg.role !== PromptRole.mask) {
+        } else if (msg.role !== PromptRole.negative && msg.role !== PromptRole.mask && msg.role !== PromptRole.tool) {
             others.push({
                 role: msg.role ?? 'user',
                 content: parts

@@ -1,10 +1,12 @@
 import * as AnthropicAPI from '@anthropic-ai/sdk';
-import { TextBlockParam } from "@anthropic-ai/sdk/resources/index.js";
-import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, ModelType, PromptOptions, PromptRole, PromptSegment } from "@llumiverse/core";
+import { ContentBlock, Message, TextBlockParam } from "@anthropic-ai/sdk/resources/index.js";
+import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, JSONObject, ModelType, PromptOptions, PromptRole, PromptSegment, ToolUse } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { VertexAIClaudeOptions } from "../../../../core/src/options/vertexai.js";
 import { VertexAIDriver } from "../index.js";
 import { ModelDefinition } from "../models.js";
+import util from "node:util";
+
 type MessageParam = AnthropicAPI.Anthropic.MessageParam;
 
 interface ClaudePrompt {
@@ -98,18 +100,38 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
             safetySegments.push(schemaSegments);
         }
 
-        const messages: MessageParam[] = segments
-            .filter(segment => segment.role == PromptRole.user || segment.role == PromptRole.assistant)
-            .map(segment => ({
-                role: segment.role !== PromptRole.user ? 'assistant' : 'user',
-                content: segment.content
-            }));
+        const messages: MessageParam[] = segments.filter(segment =>
+            segment.role == PromptRole.user
+            || segment.role == PromptRole.assistant
+            || segment.role === PromptRole.tool)
+            .map(segment => {
+                if (segment.role === PromptRole.tool) {
+                    if (!segment.tool_use_id) {
+                        throw new Error("Tool prompt segment must have a tool_use_id");
+                    }
+                    return {
+                        role: 'user',
+                        content: [
+                            {
+                                type: 'tool_result',
+                                tool_use_id: segment.tool_use_id,
+                                content: segment.content || undefined
+                            }
+                        ]
+                    }
+                } else {
+                    return {
+                        role: segment.role !== PromptRole.user ? 'assistant' : 'user',
+                        content: segment.content
+                    }
+                }
+            });
 
         const system = systemSegments.concat(safetySegments);
 
         return {
             messages: messages,
-            system: system,
+            system: system
         }
     }
 
@@ -124,9 +146,14 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
             driver.logger.warn("Invalid model options", { options: options.model_options });
         }
 
+        let conversation = updateConversation(options.conversation as ClaudePrompt, prompt);
+
+
+        console.log("@@@@@@@@@@@tools>>", util.inspect(options.tools, { depth: 5 }));
+        console.log("@@@@@@@@@@@CONVERSATION>>", util.inspect(options.conversation, { depth: 5 }));
         const result = await client.messages.create({
-            messages: prompt.messages,
-            system: prompt.system,
+            ...conversation, // messages, system,
+            tools: options.tools, // we are using the same shape as claude for tools
             temperature: options.model_options?.temperature,
             model: modelName,
             max_tokens: maxToken(options.model_options?.max_tokens, modelName),
@@ -140,18 +167,25 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                 } : {
                     type: "disabled"
                 }
-        });
+        }) as Message;
 
         const text = collectTextParts(result.content);
+        const tools_use = collectTools(result.content);
+
+        conversation = updateConversation(options.conversation as ClaudePrompt, createPromptFromResponse(result));
 
         return {
+            chat: [prompt, { role: result.role, content: result.content }],
             result: text ?? '',
+            tools_use,
             token_usage: {
                 prompt: result?.usage.input_tokens,
                 result: result?.usage.output_tokens,
                 total: result?.usage.input_tokens + result?.usage.output_tokens
             },
-            finish_reason: claudeFinishReason(result?.stop_reason ?? ''),
+            // make sure we set finish_reason to the correct value (claude is normally setting this by itself)
+            finish_reason: tools_use ? "tool_use" : claudeFinishReason(result?.stop_reason ?? ''),
+            conversation
         } as Completion;
     }
 
@@ -167,7 +201,8 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         }
 
         const response_stream = await client.messages.stream({
-            ...prompt,  // messages, system
+            ...prompt, // messages, system,
+            tools: options.tools, // we are using the same shape as claude for tools
             temperature: options.model_options?.temperature,
             model: modelName,
             max_tokens: maxToken(options.model_options?.max_tokens, modelName),
@@ -206,4 +241,45 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
 
         return stream;
     }
+}
+
+export function collectTools(content: ContentBlock[]): ToolUse[] | undefined {
+    const out: ToolUse[] = [];
+
+    for (const block of content) {
+        if (block?.type === "tool_use") {
+            out.push({
+                id: block.id,
+                name: block.name,
+                input: block.input as JSONObject,
+            });
+        }
+    }
+
+    return out.length > 0 ? out : undefined;
+}
+
+function createPromptFromResponse(response: Message): ClaudePrompt {
+    return {
+        messages: [{
+            role: PromptRole.assistant,
+            content: response.content,
+        }],
+        system: []
+    }
+}
+
+/**
+ * Update the converatation messages
+ * @param prompt
+ * @param response
+ * @returns
+ */
+function updateConversation(conversation: ClaudePrompt | undefined | null, prompt: ClaudePrompt): ClaudePrompt {
+    const baseSystemMessages = conversation ? conversation.system : [];
+    const baseMessages = conversation ? conversation.messages : []
+    return {
+        messages: baseMessages.concat(prompt.messages || []),
+        system: baseSystemMessages.concat(prompt.system || [])
+    };
 }
