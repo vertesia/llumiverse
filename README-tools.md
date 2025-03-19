@@ -54,7 +54,18 @@ When you execute the first prompt you don't need to pass any conversation.
 **Example:**
 
 ```js
-let r = await driver.execute(myFirstPrompt);
+let r = await driver.execute(myFirstPrompt, {
+    // define the available tools
+    tools: [
+        {
+            name: "myTool",
+            descripton: "bla"
+            input_schema: {
+                type: "object", properties: {}
+            }
+        }
+    ]
+});
 if (r.tool_use) {
     const toolMessages = r.tool_use.map((toolUse) => {
         const result = executeTool(toolUse)
