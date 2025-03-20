@@ -135,7 +135,7 @@ export async function formatNovaPrompt(segments: PromptSegment[], schema?: JSONS
     return {
         system: systemMessage ? [{ text: systemMessage }] : [{ text: "" }],
         messages: messages,
-        negative: negative,
-        mask: mask,
+        negative: negative || undefined,
+        mask: mask || undefined,
     }
 }
