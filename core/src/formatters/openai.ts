@@ -13,6 +13,12 @@ export interface OpenAIMessage {
     role: "system" | "user" | "assistant";
     name?: string;
 }
+export interface OpenAIToolMessage {
+    role: "tool";
+    tool_call_id: string;
+    content: string;
+}
+export type OpenAIInputMessage = OpenAIMessage | OpenAIToolMessage;
 
 export interface OpenAIContentPartText {
     type: "text";
@@ -55,10 +61,10 @@ export function formatOpenAILikeTextPrompt(segments: PromptSegment[]): OpenAITex
 }
 
 
-export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[], opts: PromptOptions & OpenAIPromptFormatterOptions): Promise<OpenAIMessage[]> {
+export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[], opts: PromptOptions & OpenAIPromptFormatterOptions): Promise<OpenAIInputMessage[]> {
     const system: OpenAIMessage[] = [];
     const safety: OpenAIMessage[] = [];
-    const others: OpenAIMessage[] = [];
+    const others: OpenAIInputMessage[] = [];
 
     for (const msg of segments) {
 
@@ -113,8 +119,16 @@ export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[]
             })
 
             system.push(safetyMsg)
-
-        } else if (msg.role !== PromptRole.negative && msg.role !== PromptRole.mask && msg.role !== PromptRole.tool) {
+        } else if (msg.role === PromptRole.tool) {
+            if (!msg.tool_use_id) {
+                throw new Error("Tool use id is required for tool messages")
+            }
+            others.push({
+                role: "tool",
+                tool_call_id: msg.tool_use_id,
+                content: msg.content
+            })
+        } else if (msg.role !== PromptRole.negative && msg.role !== PromptRole.mask) {
             others.push({
                 role: msg.role ?? 'user',
                 content: parts
@@ -134,7 +148,7 @@ export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[]
     }
 
     // put system mesages first and safety last
-    return system.concat(others).concat(safety);
+    return ([] as OpenAIInputMessage[]).concat(system).concat(others).concat(safety);
 
 }
 
