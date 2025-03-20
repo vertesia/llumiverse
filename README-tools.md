@@ -1,5 +1,7 @@
 # Using model tools with llumiverse
 
+Only gemini and claude on vertexai are supporting tools for now.
+
 ## Introduction
 
 To declare the existing tools you can use the `tools` property on the `ExecutionOptions` to pass the tools definitions. The `tools` property ios an array of `ToolDefinition` objects.
