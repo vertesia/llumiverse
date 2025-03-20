@@ -33,6 +33,8 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
             "publishers/anthropic/models/claude-3-5-sonnet-v2",
         ]
     })
+} else {
+    console.warn("Google Vertex tests are skipped: GOOGLE_PROJECT_ID environment variable is not set");
 }
 
 
@@ -164,7 +166,6 @@ if (process.env.WATSONX_API_KEY) {
 }
 
 if (process.env.XAI_API_KEY) {
-
     drivers.push({
         name: "xai",
         driver: new xAIDriver({
@@ -175,6 +176,8 @@ if (process.env.XAI_API_KEY) {
             "grok-vision-beta"
         ]
     })
+} else {
+    console.warn("xAI tests are skipped: XAI_API_KEY environment variable is not set");
 }
 
 function getTestOptions(model: string): ExecutionOptions {
