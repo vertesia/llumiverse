@@ -1,5 +1,5 @@
-import { Content, FinishReason, GenerateContentRequest, HarmBlockThreshold, HarmCategory, InlineDataPart, ModelParams, TextPart } from "@google-cloud/vertexai";
-import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, ExecutionTokenUsage, ModelType, PromptOptions, PromptRole, PromptSegment, readStreamAsBase64, TextFallbackOptions } from "@llumiverse/core";
+import { Content, FinishReason, FunctionDeclarationSchema, FunctionDeclarationsTool, GenerateContentRequest, HarmBlockThreshold, HarmCategory, InlineDataPart, ModelParams, TextPart, Tool } from "@google-cloud/vertexai";
+import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, ExecutionTokenUsage, JSONObject, ModelType, PromptOptions, PromptRole, PromptSegment, readStreamAsBase64, TextFallbackOptions, ToolDefinition, ToolUse } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { VertexAIDriver } from "../index.js";
 import { ModelDefinition } from "../models.js";
@@ -10,7 +10,7 @@ function getGenerativeModel(driver: VertexAIDriver, options: ExecutionOptions, m
     const jsonMode = options.result_schema && !(options.model.includes("ultra"));
 
     if (options.model_options?._option_id !== "text-fallback") {
-        driver.logger.warn("Invalid model options", {options: options.model_options });
+        driver.logger.warn("Invalid model options", { options: options.model_options });
     }
     options.model_options = options.model_options as TextFallbackOptions;
 
@@ -38,7 +38,7 @@ function getGenerativeModel(driver: VertexAIDriver, options: ExecutionOptions, m
             category: HarmCategory.HARM_CATEGORY_UNSPECIFIED,
             threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH
         }
-    ], 
+        ],
         generationConfig: {
             responseMimeType: jsonMode ? "application/json" : "text/plain",
             candidateCount: modelParams?.generationConfig?.candidateCount ?? 1,
@@ -68,6 +68,21 @@ function collectTextParts(content: Content) {
     return out.join('\n');
 }
 
+function collectToolUseParts(content: Content): ToolUse[] | undefined {
+    const out: ToolUse[] = [];
+    const parts = content.parts;
+    for (const part of parts) {
+        if (part.functionCall) {
+            out.push({
+                id: part.functionCall.name,
+                name: part.functionCall.name,
+                input: part.functionCall.args as JSONObject,
+            });
+        }
+    }
+    return out.length > 0 ? out : undefined;
+}
+
 export class GeminiModelDefinition implements ModelDefinition<GenerateContentRequest> {
 
     model: AIModel
@@ -86,7 +101,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
         const splits = options.model.split("/");
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
-        
+
         const schema = options.result_schema;
         const contents: Content[] = [];
         const safety: string[] = [];
@@ -111,6 +126,20 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
                             }
                         });
                     }
+                }
+
+                if (msg.role === PromptRole.tool) {
+                    const content: Content = {
+                        role: 'user',
+                        parts: [{
+                            functionResponse: {
+                                name: msg.tool_use_id!,
+                                response: formatFunctionResponse(msg.content || ''),
+                            }
+                        }]
+                    }
+                    contents.push(content);
+                    continue;
                 }
 
                 const role = msg.role === PromptRole.assistant ? "model" : "user";
@@ -157,8 +186,13 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
     async requestTextCompletion(driver: VertexAIDriver, prompt: GenerateContentRequest, options: ExecutionOptions): Promise<Completion> {
         const splits = options.model.split("/");
         const modelName = splits[splits.length - 1];
-        options = { ...options, model: modelName};
-        
+        options = { ...options, model: modelName };
+
+        let conversation = updateConversation(options.conversation as Content[], prompt.contents);
+
+        prompt.contents = conversation;
+        prompt.tools = getToolDefinitions(options.tools);
+
         const model = getGenerativeModel(driver, options);
         const r = await model.generateContent(prompt);
         const response = await r.response;
@@ -169,6 +203,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
             total: usage?.totalTokenCount,
         }
 
+        let tool_use: ToolUse[] | undefined;
         let finish_reason: string | undefined, result: any;
         const candidate = response.candidates && response.candidates[0];
         if (candidate) {
@@ -179,7 +214,9 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
             }
             const content = candidate.content;
             if (content) {
+                tool_use = collectToolUseParts(content);
                 result = collectTextParts(content);
+                conversation = updateConversation(conversation, [content]);
                 // if (options.result_schema) {
                 //     result = candidate.;
                 // } else {
@@ -187,11 +224,17 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
             }
         }
 
+        if (tool_use) {
+            finish_reason = "tool_use";
+        }
+
         return {
             result: result ?? '',
             token_usage: token_usage,
             finish_reason: finish_reason,
             original_response: options.include_original_response ? response : undefined,
+            conversation,
+            tool_use
         } as Completion;
     }
 
@@ -199,7 +242,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
         const splits = options.model.split("/");
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
-        
+
         const model = getGenerativeModel(driver, options);
         const streamingResp = await model.generateContentStream(prompt);
 
@@ -221,7 +264,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
                     if (candidate.content?.role === 'model') {
                         const text = collectTextParts(candidate.content);
                         return {
-                            result:text,
+                            result: text,
                             token_usage: token_usage,
                             finish_reason: finish_reason,
                         };
@@ -238,4 +281,54 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
         return stream;
     }
 
+}
+
+
+function getToolDefinitions(tools: ToolDefinition[] | undefined | null) {
+    return tools ? tools.map(getToolDefinition) : undefined;
+}
+function getToolDefinition(tool: ToolDefinition): Tool {
+    return {
+        functionDeclarations: [
+            {
+                name: tool.name,
+                description: tool.description,
+                parameters: { ...tool.input_schema, type: "OBJECT" } as FunctionDeclarationSchema,
+            }
+        ]
+    } satisfies FunctionDeclarationsTool;
+}
+
+
+/**
+ * Update the converatation messages
+ * @param prompt
+ * @param response
+ * @returns
+ */
+function updateConversation(conversation: Content[], prompt: Content[]): Content[] {
+    return (conversation || [] as Content[]).concat(prompt);
+}
+/**
+ *
+ * Gemini supports JSON output in the response. so we test if the response is a valid JSON object. otherwise we treat the response as a string.
+ *
+ * This is an excerpt from googleapis.github.io/python-genai:
+ *
+ * The function response in JSON object format.
+ * Use “output” key to specify function output and “error” key to specify error details (if any).
+ * If “output” and “error” keys are not specified, then whole “response” is treated as function output.
+ * @see https://googleapis.github.io/python-genai/genai.html#genai.types.FunctionResponse
+ */
+function formatFunctionResponse(response: string): JSONObject {
+    response = response.trim();
+    if (response.startsWith("{") && response.endsWith("}")) {
+        try {
+            return JSON.parse(response);
+        } catch (e) {
+            return { output: response };
+        }
+    } else {
+        return { output: response };
+    }
 }

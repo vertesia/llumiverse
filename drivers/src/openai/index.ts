@@ -10,6 +10,7 @@ import {
     ExecutionOptions,
     ExecutionTokenUsage,
     ModelType,
+    ToolDefinition,
     TrainingJob,
     TrainingJobStatus,
     TrainingOptions,
@@ -89,7 +90,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
     async requestTextCompletionStream(prompt: OpenAI.Chat.Completions.ChatCompletionMessageParam[], options: ExecutionOptions): Promise<any> {
         if (options.model_options?._option_id !== "openai-text" && options.model_options?._option_id !== "openai-thinking") {
-            this.logger.warn("Invalid model options", {options: options.model_options });
+            this.logger.warn("Invalid model options", { options: options.model_options });
         }
 
         const useTools: boolean = !isNonStructureSupporting(options.model);
@@ -112,9 +113,9 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                 }
             } as CompletionChunkObject;
         };
-        
+
         convertRoles(prompt, options.model);
-    
+
         const model_options = options.model_options as any;
         insert_image_detail(prompt, model_options?.image_detail ?? "auto");
 
@@ -132,6 +133,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             frequency_penalty: model_options?.frequency_penalty,
             n: 1,
             max_completion_tokens: model_options?.max_tokens, //TODO: use max_tokens for older models, currently relying on OpenAI to handle it
+            //tools: getToolDefinitions(options.tools),
             tools: useTools ? options.result_schema && this.provider.includes("openai")
                 ? [
                     {
@@ -156,7 +158,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
     async requestTextCompletion(prompt: OpenAI.Chat.Completions.ChatCompletionMessageParam[], options: ExecutionOptions): Promise<any> {
         if (options.model_options?._option_id !== "openai-text" && options.model_options?._option_id !== "openai-thinking") {
-            this.logger.warn("Invalid model options", {options: options.model_options });
+            this.logger.warn("Invalid model options", { options: options.model_options });
         }
 
         const functions = options.result_schema && this.provider.includes("openai")
@@ -170,7 +172,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                 } as OpenAI.Chat.ChatCompletionTool,
             ]
             : undefined;
-        
+
         convertRoles(prompt, options.model);
         const useTools: boolean = !isNonStructureSupporting(options.model);
         const model_options = options.model_options as any;
@@ -189,6 +191,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             frequency_penalty: model_options?.frequency_penalty,
             n: 1,
             max_completion_tokens: model_options?.max_tokens, //TODO: use max_tokens for older models, currently relying on OpenAI to handle it
+            //tools: getToolDefinitions(options.tools),
             tools: useTools ? functions : undefined,
             tool_choice: useTools ? options.result_schema && this.provider.includes("openai")
                 ? {
@@ -382,4 +385,19 @@ function convertRoles(messages: OpenAI.Chat.Completions.ChatCompletionMessagePar
 function isNonStructureSupporting(model: string): boolean {
     return model.includes("o1-mini") || model.includes("o1-preview")
         || model.includes("chatgpt-4o");
+}
+//@ts-ignore
+function getToolDefinitions(tools: ToolDefinition[] | undefined | null): OpenAI.ChatCompletionTool[] | undefined {
+    return tools ? tools.map(getToolDefinition) : undefined;
+}
+function getToolDefinition(toolDef: ToolDefinition): OpenAI.ChatCompletionTool {
+    return {
+        type: "function",
+        function: {
+            name: toolDef.name,
+            description: toolDef.description,
+            parameters: toolDef.input_schema,
+            strict: true
+        },
+    } satisfies OpenAI.ChatCompletionTool;
 }

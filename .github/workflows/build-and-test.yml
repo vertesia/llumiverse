@@ -16,51 +16,51 @@ jobs:
       matrix:
         node-version: [18.x, 20.x, 22.x]
     steps:
-    - uses: actions/checkout@main
-    - uses: pnpm/action-setup@v4
-      with:
-        run_install: false
-    - uses: actions/setup-node@main
-      with:
-        node-version: ${{ matrix.node-version }}
-        cache: 'pnpm'
-    - run: pnpm install
-    - run: pnpm build
-    
+      - uses: actions/checkout@main
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+      - uses: actions/setup-node@main
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "pnpm"
+      - run: pnpm install
+      - run: pnpm build
+
   test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@main
-    - uses: pnpm/action-setup@v4
-      with:
-        run_install: false
-    - uses: actions/setup-node@main
-      with:
-        node-version: 22.x
-        cache: 'pnpm'
-    - run: pnpm install
-    - run: pnpm build
+      - uses: actions/checkout@main
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+      - uses: actions/setup-node@main
+        with:
+          node-version: 22.x
+          cache: "pnpm"
+      - run: pnpm install
+      - run: pnpm build
 
-    - name: Authenticate with Google Cloud
-      uses: "google-github-actions/auth@v2"
-      id: gauth
-      with:
-        project_id: "dengenlabs"
-        workload_identity_provider: "projects/265888598630/locations/global/workloadIdentityPools/composable-cloud/providers/github"
+      - name: Authenticate with Google Cloud
+        uses: "google-github-actions/auth@v2"
+        id: gauth
+        with:
+          project_id: "dengenlabs"
+          workload_identity_provider: "projects/265888598630/locations/global/workloadIdentityPools/composable-cloud/providers/github"
 
-    - uses: 'aws-actions/configure-aws-credentials@v4.1.0'
-      with:
-        audience: sts.amazonaws.com
-        role-to-assume: arn:aws:iam::716085231028:role/ComposablePromptExecutor
-        role-session-name: github-actions
-        aws-region: us-east-1
+      - uses: "aws-actions/configure-aws-credentials@v4.1.0"
+        with:
+          audience: sts.amazonaws.com
+          role-to-assume: arn:aws:iam::716085231028:role/ComposablePromptExecutor
+          role-session-name: github-actions
+          aws-region: us-east-1
 
-    - run: npx vitest
-      env:
-        TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
-        MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
-        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-        BEDROCK_REGION: us-east-1
-
-
+      - run: npx vitest
+        env:
+          TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          BEDROCK_REGION: us-east-1
+          GOOGLE_PROJECT_ID: dengenlabs
+          GOOGLE_REGION: us-central1
