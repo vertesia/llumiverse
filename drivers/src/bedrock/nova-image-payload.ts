@@ -55,6 +55,7 @@ async function textToImagePayload(prompt: NovaMessagesPrompt, options: Execution
             conditionImage: conditionImage(modelOptions?.controlMode ? true : false)?.source.bytes,
             controlMode: modelOptions?.controlMode,
             controlStrength: modelOptions?.controlStrength,
+            negativeText: prompt.negative
         }
     }
 
@@ -116,7 +117,8 @@ async function colorGuidedGenerationPayload(prompt: NovaMessagesPrompt, options:
         colorGuidedGenerationParams: {
             colors: modelOptions.colors ?? [],
             text: text,
-            referenceImage: conditionImage(modelOptions.controlMode ? true : false)?.source.bytes,
+            referenceImage: conditionImage(modelOptions?.controlMode ? true : false)?.source.bytes,
+            negativeText: prompt.negative
         }
     }
 
@@ -141,6 +143,69 @@ async function backgroundRemovalPayload(prompt: NovaMessagesPrompt): Promise<Nov
     return payload;
 }
 
+async function inpaintingPayload(prompt: NovaMessagesPrompt, options: ExecutionOptions): Promise<NovaInpaintingPayload> {
+    const modelOptions = options.model_options as NovaCanvasOptions;
+
+    const images = getAllImagesFromPrompt(prompt.messages);
+    if (!images?.length || images.length < 2) {
+        throw new Error("2 images are required for inpainting");
+    }
+    const sourceImage = images[0];
+    const maskImage = images[1];
+
+    const payload: NovaInpaintingPayload = {
+        taskType: NovaImageGenerationTaskType.INPAINTING,
+        imageGenerationConfig: {
+            quality: modelOptions?.quality,
+            width: modelOptions?.width,
+            height: modelOptions?.height,
+            numberOfImages: modelOptions?.numberOfImages,
+            seed: modelOptions?.seed,
+            cfgScale: modelOptions?.cfgScale,
+        },
+        inPaintingParams: {
+            image: sourceImage,
+            maskImage: maskImage,
+            text: prompt.messages.map(m => m.content.map(c => c.text)).flat().join("\n\n"),
+            negativeText: prompt.negative
+        }
+    }
+
+    return payload;
+}
+
+async function outpaintingPayload(prompt: NovaMessagesPrompt, options: ExecutionOptions): Promise<NovaOutpaintingPayload> {
+    const modelOptions = options.model_options as NovaCanvasOptions;
+
+    const images = getAllImagesFromPrompt(prompt.messages);
+    if (!images?.length || images.length < 2) {
+        throw new Error("2 images are required for outpainting");
+    }
+    const sourceImage = images[0];
+    const maskImage = images[1];
+
+    const payload: NovaOutpaintingPayload = {
+        taskType: NovaImageGenerationTaskType.OUTPAINTING,
+        imageGenerationConfig: {
+            quality: modelOptions?.quality,
+            width: modelOptions?.width,
+            height: modelOptions?.height,
+            numberOfImages: modelOptions?.numberOfImages,
+            seed: modelOptions?.seed,
+            cfgScale: modelOptions?.cfgScale,
+        },
+        outPaintingParams: {
+            image: sourceImage,
+            maskImage: maskImage,
+            text: prompt.messages.map(m => m.content.map(c => c.text)).flat().join("\n\n"),
+            negativeText: prompt.negative,
+            outPaintingMode: modelOptions?.outPaintingMode ?? "DEFAULT"
+        }
+    }
+
+    return payload;
+}
+
 export function formatNovaImageGenerationPayload(taskType: string, prompt: NovaMessagesPrompt, options: ExecutionOptions) {
 
     switch (taskType) {
@@ -153,9 +218,9 @@ export function formatNovaImageGenerationPayload(taskType: string, prompt: NovaM
         case NovaImageGenerationTaskType.IMAGE_VARIATION:
             return imageVariationPayload(prompt, options);
         case NovaImageGenerationTaskType.INPAINTING:
-        //   return inpaintingPayload(prompt, options);    Needs mask prompt support
+            return inpaintingPayload(prompt, options);
         case NovaImageGenerationTaskType.OUTPAINTING:
-        //   return outpaintingPayload(prompt, options);
+            return outpaintingPayload(prompt, options);
         case NovaImageGenerationTaskType.BACKGROUND_REMOVAL:
             return backgroundRemovalPayload(prompt);
         default:
