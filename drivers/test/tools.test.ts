@@ -27,6 +27,7 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
             region: process.env.GOOGLE_REGION as string,
         }),
         models: [
+            "gemini-1.5-pro",
             "publishers/anthropic/models/claude-3-7-sonnet",
         ]
     })
@@ -229,9 +230,8 @@ function getTestOptions(model: string): ExecutionOptions {
 }
 
 describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => {
-
-    test(`${name}: run tool`, { timeout: TIMEOUT, retry: 0 }, async () => {
-        const options = getTestOptions(models[0]);
+    test.each(models)(`${name}: generation with tools for %s`, { timeout: TIMEOUT, retry: 1 }, async (model) => {
+        const options = getTestOptions(model);
         let r = await driver.execute(PROMPT_WITH_GET_NAME_TOOL, options);
         expect(r.tool_use).toBeDefined();
         expect(r.tool_use?.length).toBe(1);
@@ -245,7 +245,7 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
             "content": "15 degrees"
         }], { ...options, conversation: r.conversation });
         expect(r.result.includes("15 degrees")).toBeTruthy();
-        //console.log("#######Result:", r.result);
+        //console.log("#######Result:", r.result, model);
     });
 
 });

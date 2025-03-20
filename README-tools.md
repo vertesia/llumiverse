@@ -80,3 +80,17 @@ if (r.tool_use) {
     console.log("Response: ", r.result)
 }
 ```
+
+## Tool Function result
+
+The result of a tool fucntion is passed through a PromptSegment as follows:
+
+```js
+{
+    role: "tool",
+    content: "the result is passed here"
+}
+```
+
+This means the target model will receive a string.
+The `gemini-pro` model accepts a JSON object as the fucntion result. To be able to pass an object in the case of gemini-pro you need to stringify the JSON object and pass it as a string. The gemini-pro driver will parse the JSON string if a valid JSON is found and will send the object as the result to the model. If no valid JSON is found it will send the string as the result.
