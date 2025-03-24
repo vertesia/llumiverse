@@ -127,7 +127,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     }
 
     validateResult(result: Completion, options: ExecutionOptions) {
-        if (!result.error && options.result_schema) {
+        if (!result.tool_use && !result.error && options.result_schema) {
             try {
                 result.result = validateResult(result.result, options.result_schema);
             } catch (error: any) {

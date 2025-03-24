@@ -1,5 +1,3 @@
-import { JSONSchema4 } from 'json-schema';
-
 import { PromptFormatter } from './formatters/index.js';
 import { JSONObject } from './json.js';
 import { TextFallbackOptions } from './options.js';
@@ -137,6 +135,22 @@ export interface DriverOptions {
     logger?: Logger | "console";
 }
 
+export type JSONSchema4TypeName =
+    | "string" //
+    | "number"
+    | "integer"
+    | "boolean"
+    | "object"
+    | "array"
+    | "null"
+    | "any";
+
+export interface JSONSchema {
+    type?: JSONSchema4TypeName | JSONSchema4TypeName[] | undefined;
+    properties?: Record<string, JSONSchema>;
+    [k: string]: any;
+}
+
 //Options are split into PromptOptions, ModelOptions and ExecutionOptions.
 //ExecutionOptions are most often used within llumiverse as they are the most complete.
 //The base types are useful for external code that needs to interact with llumiverse.
@@ -147,7 +161,7 @@ export interface PromptOptions {
      * If no one is specified the driver will choose a formatter compatible with the target model
      */
     format?: PromptFormatter;
-    result_schema?: JSONSchema4;
+    result_schema?: JSONSchema;
 }
 
 export interface ExecutionOptions extends PromptOptions {
@@ -363,7 +377,7 @@ export interface TrainingPromptOptions {
     segments: PromptSegment[];
     completion: string | JSONObject;
     model: string; // the model to train
-    schema?: JSONSchema4; // the resuilt schema f any
+    schema?: JSONSchema; // the resuilt schema f any
 }
 
 export enum TrainingJobStatus {

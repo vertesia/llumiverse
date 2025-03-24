@@ -1,4 +1,4 @@
-import { JSONSchema4 } from "json-schema";
+import { JSONSchema } from "@llumiverse/core";
 import { PromptSegment, PromptRole } from "@llumiverse/core";
 import {
     ConversationRole,
@@ -8,7 +8,7 @@ import {
     ContentBlock,
 } from "@aws-sdk/client-bedrock-runtime";
 
-function getJSONSafetyNotice(schema: JSONSchema4) {
+function getJSONSafetyNotice(schema: JSONSchema) {
     return "The answer must be a JSON object using the following JSON Schema:\n" + JSON.stringify(schema, undefined, 2);
 }
 
@@ -67,9 +67,9 @@ export function converseConcatMessages(messages: Message[] | undefined): Message
 
 export function converseSystemToMessages(system: SystemContentBlock[]): Message {
     return {
-        content: [{text: system.map(system => system.text).join('\n').trim()}],
+        content: [{ text: system.map(system => system.text).join('\n').trim() }],
         role: ConversationRole.USER
-    }; 
+    };
 }
 
 export function converseRemoveJSONprefill(messages: Message[] | undefined): Message[] {
@@ -82,7 +82,7 @@ export function converseRemoveJSONprefill(messages: Message[] | undefined): Mess
     return messages ?? [];
 }
 
-export async function fortmatConversePrompt(segments: PromptSegment[], schema?: JSONSchema4): Promise<ConverseRequest> {
+export async function fortmatConversePrompt(segments: PromptSegment[], schema?: JSONSchema): Promise<ConverseRequest> {
     //Non-const for concat
     let system: SystemContentBlock[] = [];
     const safety: SystemContentBlock[] = [];
