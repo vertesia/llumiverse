@@ -75,8 +75,8 @@ function collectToolUseParts(content: Content): ToolUse[] | undefined {
         if (part.functionCall) {
             out.push({
                 id: part.functionCall.name,
-                name: part.functionCall.name,
-                input: part.functionCall.args as JSONObject,
+                tool_name: part.functionCall.name,
+                tool_input: part.functionCall.args as JSONObject,
             });
         }
     }

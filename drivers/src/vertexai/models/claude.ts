@@ -246,8 +246,8 @@ export function collectTools(content: ContentBlock[]): ToolUse[] | undefined {
         if (block?.type === "tool_use") {
             out.push({
                 id: block.id,
-                name: block.name,
-                input: block.input as JSONObject,
+                tool_name: block.name,
+                tool_input: block.input as JSONObject,
             });
         }
     }

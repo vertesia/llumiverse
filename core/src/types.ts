@@ -63,11 +63,14 @@ export interface ToolDefinition {
         [k: string]: unknown;
     },
 }
-
+/**
+ * A tool use instance represents a call to a tool.
+ * The id property is used to identify the tool call.
+ */
 export interface ToolUse {
     id: string,
-    name: string,
-    input: JSONObject | null
+    tool_name: string,
+    tool_input: JSONObject | null
 }
 
 //ResultT should be either JSONObject or string
@@ -148,6 +151,7 @@ export type JSONSchema4TypeName =
 export interface JSONSchema {
     type?: JSONSchema4TypeName | JSONSchema4TypeName[] | undefined;
     properties?: Record<string, JSONSchema>;
+    required?: string[];
     [k: string]: any;
 }
 
@@ -164,7 +168,7 @@ export interface PromptOptions {
     result_schema?: JSONSchema;
 }
 
-export interface ExecutionOptions extends PromptOptions {
+export interface StatelessExecutionOptions extends PromptOptions {
     /**
      * If set to true the original response from the target LLM will be included in the response under the original_response field.
      * This is useful for debugging and for some advanced use cases.
@@ -173,6 +177,9 @@ export interface ExecutionOptions extends PromptOptions {
     include_original_response?: boolean;
     model_options?: ModelOptions;
     output_modality: Modalities;
+}
+
+export interface ExecutionOptions extends StatelessExecutionOptions {
     /**
      * Available tools for the request
      */
