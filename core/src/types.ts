@@ -149,7 +149,7 @@ export type JSONSchema4TypeName =
     | "any";
 
 export interface JSONSchema {
-    type?: JSONSchema4TypeName | JSONSchema4TypeName[] | undefined;
+    type?: JSONSchema4TypeName | JSONSchema4TypeName[];
     properties?: Record<string, JSONSchema>;
     required?: string[];
     [k: string]: any;
