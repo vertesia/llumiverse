@@ -150,6 +150,7 @@ export type JSONSchema4TypeName =
 
 export interface JSONSchema {
     type?: JSONSchema4TypeName | JSONSchema4TypeName[];
+    description?: string;
     properties?: Record<string, JSONSchema>;
     required?: string[];
     [k: string]: any;
