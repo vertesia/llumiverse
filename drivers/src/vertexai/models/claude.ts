@@ -168,7 +168,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         const text = collectTextParts(result.content);
         const tool_use = collectTools(result.content);
 
-        conversation = updateConversation(options.conversation as ClaudePrompt, createPromptFromResponse(result));
+        conversation = updateConversation(conversation, createPromptFromResponse(result));
 
         return {
             chat: [prompt, { role: result.role, content: result.content }],
