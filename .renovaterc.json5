@@ -26,5 +26,16 @@
       ],
       "rangeStrategy": "bump"
     },
+    {
+      "groupName": "package manager dependencies",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchPackageNames": [
+        "npm",
+        "pnpm"
+      ],
+      "rangeStrategy": "bump"
+    }
   ],
 }
