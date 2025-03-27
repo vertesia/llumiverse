@@ -1,5 +1,3 @@
-import { JSONSchema4 } from 'json-schema';
-
 import { PromptFormatter } from './formatters/index.js';
 import { JSONObject } from './json.js';
 import { TextFallbackOptions } from './options.js';
@@ -65,11 +63,14 @@ export interface ToolDefinition {
         [k: string]: unknown;
     },
 }
-
+/**
+ * A tool use instance represents a call to a tool.
+ * The id property is used to identify the tool call.
+ */
 export interface ToolUse {
     id: string,
-    name: string,
-    input: JSONObject | null
+    tool_name: string,
+    tool_input: JSONObject | null
 }
 
 //ResultT should be either JSONObject or string
@@ -137,6 +138,24 @@ export interface DriverOptions {
     logger?: Logger | "console";
 }
 
+export type JSONSchema4TypeName =
+    | "string" //
+    | "number"
+    | "integer"
+    | "boolean"
+    | "object"
+    | "array"
+    | "null"
+    | "any";
+
+export interface JSONSchema {
+    type?: JSONSchema4TypeName | JSONSchema4TypeName[];
+    description?: string;
+    properties?: Record<string, JSONSchema>;
+    required?: string[];
+    [k: string]: any;
+}
+
 //Options are split into PromptOptions, ModelOptions and ExecutionOptions.
 //ExecutionOptions are most often used within llumiverse as they are the most complete.
 //The base types are useful for external code that needs to interact with llumiverse.
@@ -147,10 +166,10 @@ export interface PromptOptions {
      * If no one is specified the driver will choose a formatter compatible with the target model
      */
     format?: PromptFormatter;
-    result_schema?: JSONSchema4;
+    result_schema?: JSONSchema;
 }
 
-export interface ExecutionOptions extends PromptOptions {
+export interface StatelessExecutionOptions extends PromptOptions {
     /**
      * If set to true the original response from the target LLM will be included in the response under the original_response field.
      * This is useful for debugging and for some advanced use cases.
@@ -159,6 +178,9 @@ export interface ExecutionOptions extends PromptOptions {
     include_original_response?: boolean;
     model_options?: ModelOptions;
     output_modality: Modalities;
+}
+
+export interface ExecutionOptions extends StatelessExecutionOptions {
     /**
      * Available tools for the request
      */
@@ -363,7 +385,7 @@ export interface TrainingPromptOptions {
     segments: PromptSegment[];
     completion: string | JSONObject;
     model: string; // the model to train
-    schema?: JSONSchema4; // the resuilt schema f any
+    schema?: JSONSchema; // the resuilt schema f any
 }
 
 export enum TrainingJobStatus {

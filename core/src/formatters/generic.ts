@@ -1,4 +1,4 @@
-import { JSONSchema4 } from "json-schema";
+import { JSONSchema } from "../types.js";
 import { PromptRole, PromptSegment } from "../types.js";
 import { getJSONSafetyNotice } from "./commons.js";
 
@@ -17,7 +17,7 @@ export function createTextPromptFormatter(labels: Labels = {
     safety: "IMPORTANT",
     instruction: "INSTRUCTION"
 }) {
-    return function genericTextPrompt(segments: PromptSegment[], schema?: JSONSchema4): string {
+    return function genericTextPrompt(segments: PromptSegment[], schema?: JSONSchema): string {
         const isChat = segments.find(m => m.role === PromptRole.assistant);
         const context: string[] = [];
         const content: string[] = [];

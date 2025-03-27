@@ -236,8 +236,8 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
         expect(r.tool_use).toBeDefined();
         expect(r.tool_use?.length).toBe(1);
         expect(r.tool_use?.[0].id).toBeDefined();
-        expect(r.tool_use?.[0].input).toBeDefined();
-        expect(r.tool_use?.[0].name).toBe("get_weather");
+        expect(r.tool_use?.[0].tool_input).toBeDefined();
+        expect(r.tool_use?.[0].tool_name).toBe("get_weather");
         const tool_use = r.tool_use!;
         r = await driver.execute([{
             "role": PromptRole.tool,

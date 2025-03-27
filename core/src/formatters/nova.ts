@@ -1,4 +1,4 @@
-import { JSONSchema4 } from "json-schema";
+import { JSONSchema } from "../types.js";
 import { PromptRole, PromptSegment, readStreamAsBase64 } from "../index.js";
 //import { readStreamAsBase64 } from "../stream.js";
 import { getJSONSafetyNotice } from "./commons.js";
@@ -45,7 +45,7 @@ export interface NovaMessagesPrompt {
  * A formatter used by Bedrock to format prompts for nova related models
  */
 
-export async function formatNovaPrompt(segments: PromptSegment[], schema?: JSONSchema4): Promise<NovaMessagesPrompt> {
+export async function formatNovaPrompt(segments: PromptSegment[], schema?: JSONSchema): Promise<NovaMessagesPrompt> {
     const system: string[] = [];
     const safety: string[] = [];
     const messages: NovaMessage[] = [];

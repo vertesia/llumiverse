@@ -1,7 +1,7 @@
 import { DataSource, PromptRole, PromptSegment, readStreamAsBase64 } from "@llumiverse/core";
 import { NovaMessagesPrompt } from "@llumiverse/core/formatters";
 import { createReadStream } from "fs";
-import { JSONSchema4 } from "json-schema";
+import { JSONSchema } from "@llumiverse/core";
 import { createReadableStreamFromReadable } from "node-web-stream-adapters";
 import { basename, resolve } from "path";
 
@@ -13,7 +13,7 @@ export const testPrompt_color: PromptSegment[] = [
 ]
 
 //json schema with 2 properties object and color
-export const testSchema_color: JSONSchema4 = {
+export const testSchema_color: JSONSchema = {
     type: "object",
     properties: {
         color: {
@@ -72,7 +72,7 @@ export const testPrompt_describeImage: PromptSegment[] = [
     }
 ]
 
-export const testSchema_animalDescription: JSONSchema4 =
+export const testSchema_animalDescription: JSONSchema =
 {
     type: "object",
     properties: {
