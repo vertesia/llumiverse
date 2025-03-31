@@ -126,12 +126,32 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 listAllVersions: true,
             });
 
-            models = models.concat(response.map(model => ({
-                id: model.name ?? '',
-                name: model.name?.split('/').pop() ?? '',
-                provider: 'vertexai',
-                owner: publisher,
-            })).filter(model => {
+            models = models.concat(response.map(model => {
+                let fullID = '';
+                let nameWithVer = '';
+                if (publisher === 'anthropic') {
+                    const version = model.versionId;
+                    //Turn version 2023-10-01 into 20231001
+                    const versionNum = version?.replace(/-/g, '');
+                    fullID = model?.name ?? '';
+                    nameWithVer = model.name?.split('/').pop() ?? '';
+                    if (version) {
+                        fullID = `${fullID}@${versionNum}`;
+                        nameWithVer = `${nameWithVer}@${versionNum}`;
+                    }
+                } else if (publisher === 'google') {
+                    fullID = model?.name ?? '';
+                    nameWithVer = model.name?.split('/').pop() ?? '';
+                    console.log("Google Model", model);
+                    console.log(fullID, nameWithVer);
+                }
+                return {
+                    id: fullID,
+                    name: nameWithVer,
+                    provider: 'vertexai',
+                    owner: publisher,
+                } satisfies AIModel
+            }).filter(model => {
                 const modelFamily = supportedModels[publisher as keyof typeof supportedModels];
                 for (const family of modelFamily) {
                     if (model.name.includes(family)) {
@@ -141,7 +161,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             }));
         }
 
-        return models;
+        //Remove duplicates
+        const uniqueModels = Array.from(new Set(models.map(a => a.id)))
+            .map(id => {
+                return models.find(a => a.id === id) ?? {} as AIModel<string>;
+            })
+
+        return uniqueModels;
     }
 
     validateConnection(): Promise<boolean> {
