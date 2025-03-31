@@ -20,7 +20,8 @@
         "overrides": {
             "rollup": "$rollup",
             "cross-spawn": "$cross-spawn",
-            "vite@>=5.0.0 <=5.4.11": "^5.4.12"
+            "vite@>=5.0.0 <=5.4.14": "^5.4.15",
+            "esbuild@<=0.24.2": "^0.25.0"
         }
     }
 }
