@@ -144,7 +144,7 @@ export class GeminiModelDefinition implements ModelDefinition<ContentListUnion> 
         }
         const model_options = options.model_options as VertexAIGeminiOptions;
 
-        const conversation = updateConversation(options.conversation as Content[], prompt as Content[]);
+        let conversation = updateConversation(options.conversation as Content[], prompt as Content[]);
 
         prompt = conversation;
         const tools = getToolDefinitions(options.tools);
