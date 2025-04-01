@@ -1,13 +1,7 @@
 import { AIModel, Completion, ExecutionOptions, ImageGeneration, Modalities, ModelType, PromptRole, PromptSegment, readStreamAsBase64 } from "@llumiverse/core";
 import { VertexAIDriver } from "../index.js";
 
-const projectId = process.env.GOOGLE_PROJECT_ID;
-const location = 'us-central1';
-
-import aiplatform, { protos } from '@google-cloud/aiplatform';
-
-// Imports the Google Cloud Prediction Service Client library
-const { PredictionServiceClient } = aiplatform.v1;
+import { protos } from '@google-cloud/aiplatform';
 
 // Import the helper module for converting arbitrary protobuf.Value objects
 import { helpers } from '@google-cloud/aiplatform';
@@ -88,14 +82,6 @@ export interface ImagenPrompt {
     subjectDescription?: string; //Used for image customization to describe in the reference image
     negativePrompt?: string; //Used for negative prompts
 }
-
-// Specifies the location of the api endpoint
-const clientOptions = {
-    apiEndpoint: `${location}-aiplatform.googleapis.com`,
-};
-
-// Instantiates a client
-const predictionServiceClient = new PredictionServiceClient(clientOptions);
 
 function getImagenParameters(taskType: string, options: ImagenOptions) {
     const commonParameters = {
@@ -353,7 +339,7 @@ export class ImagenModelDefinition {
         const modelName = options.model.split("/").pop() ?? '';
 
         // Configure the parent resource
-        const endpoint = `projects/${projectId}/locations/${location}/publishers/google/models/${modelName}`;
+        const endpoint = `projects/${driver.options.project}/locations/${driver.options.region}/publishers/google/models/${modelName}`;
 
         const instanceValue = helpers.toValue(prompt);
         if (!instanceValue) {
@@ -380,7 +366,8 @@ export class ImagenModelDefinition {
         };
 
         // Predict request
-        const [response] = await predictionServiceClient.predict(request, { timeout: 120000 * numberOfImages }); //Extended timeout for image generation
+        const client = driver.getImagenClient();
+        const [response] = await client.predict(request, { timeout: 120000 * numberOfImages }); //Extended timeout for image generation
         const predictions = response.predictions;
 
         if (!predictions) {
