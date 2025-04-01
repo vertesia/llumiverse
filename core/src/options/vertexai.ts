@@ -2,7 +2,7 @@ import { ModelOptionsInfo, ModelOptionInfoItem, OptionType, SharedOptions, Model
 import { textOptionsFallback } from "../options.js";
 
 // Union type of all Bedrock options
-export type VertexAIOptions = ImagenOptions | VertexAIClaudeOptions;
+export type VertexAIOptions = ImagenOptions | VertexAIClaudeOptions | VertexAIGeminiOptions;
 
 export enum ImagenTaskType {
     TEXT_IMAGE = "TEXT_IMAGE",
@@ -60,6 +60,17 @@ export interface VertexAIClaudeOptions {
     stop_sequence?: string[];
     thinking_mode?: boolean;
     thinking_budget_tokens?: number;
+}
+
+export interface VertexAIGeminiOptions {
+    _option_id: "vertexai-gemini"
+    max_tokens?: number;
+    temperature?: number;
+    top_p?: number;
+    top_k?: number;
+    stop_sequence?: string[];
+    presence_penalty?: number;
+    frequency_penalty?: number;
 }
 
 export function getVertexAiOptions(model: string, option?: ModelOptions): ModelOptionsInfo {

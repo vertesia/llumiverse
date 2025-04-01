@@ -1,8 +1,9 @@
-import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, ExecutionTokenUsage, ModelType, PromptOptions, PromptRole, PromptSegment, readStreamAsBase64, ToolUse } from "@llumiverse/core";
+import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, ExecutionTokenUsage, JSONObject, ModelType, PromptOptions, PromptRole, PromptSegment, readStreamAsBase64, ToolDefinition, ToolUse } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { VertexAIDriver } from "../index.js";
 import { ModelDefinition } from "../models.js";
-import { Content, ContentListUnion, ContentUnion, FinishReason, GenerateContentConfig, Part } from "@google/genai";
+import { Content, ContentListUnion, ContentUnion, FinishReason, FunctionDeclaration, GenerateContentConfig, Part, Tool } from "@google/genai";
+import { VertexAIGeminiOptions } from "../../../../core/src/options/vertexai.js";
 
 function collectTextParts(content: Content) {
     const out = [];
@@ -17,21 +18,23 @@ function collectTextParts(content: Content) {
     return out.join('\n');
 }
 
-// function collectToolUseParts(content: Content): ToolUse[] | undefined {
-//     return undefined;
-//     // const out: ToolUse[] = [];
-//     // const parts = content.parts;
-//     // for (const part of parts) {
-//     //     if (part.functionCall) {
-//     //         out.push({
-//     //             id: part.functionCall.name,
-//     //             tool_name: part.functionCall.name,
-//     //             tool_input: part.functionCall.args as JSONObject,
-//     //         });
-//     //     }
-//     // }
-//     // return out.length > 0 ? out : undefined;
-// }
+function collectToolUseParts(content: Content): ToolUse[] | undefined {
+    const out: ToolUse[] = [];
+    const parts = content.parts;
+    if (!parts) {
+        return undefined;
+    }
+    for (const part of parts) {
+        if (part.functionCall) {
+            out.push({
+                id: part.functionCall.name ?? "",
+                tool_name: part.functionCall.name ?? "",
+                tool_input: part.functionCall.args as JSONObject,
+            });
+        }
+    }
+    return out.length > 0 ? out : undefined;
+}
 
 export class GeminiModelDefinition implements ModelDefinition<ContentListUnion> {
 
@@ -78,6 +81,20 @@ export class GeminiModelDefinition implements ModelDefinition<ContentListUnion> 
                     }
                 }
 
+                if (msg.role === PromptRole.tool) {
+                    const content: Content = {
+                        role: 'user',
+                        parts: [{
+                            functionResponse: {
+                                name: msg.tool_use_id!,
+                                response: formatFunctionResponse(msg.content || ''),
+                            }
+                        }]
+                    }
+                    contents.push(content);
+                    continue;
+                }
+
                 const role = msg.role === PromptRole.assistant ? "model" : "user";
 
                 if (lastUserContent && lastUserContent.role === role) {
@@ -122,21 +139,31 @@ export class GeminiModelDefinition implements ModelDefinition<ContentListUnion> 
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
 
-        //let conversation = updateConversation(options.conversation as Content[], prompt.contents);
+        if (options.model_options?._option_id !== "vertexai-gemini") {
+            driver.logger.warn("Invalid model options", { options: options.model_options });
+        }
+        const model_options = options.model_options as VertexAIGeminiOptions;
 
-        //prompt.contents = conversation;
-        //prompt.tools = getToolDefinitions(options.tools);
+        const conversation = updateConversation(options.conversation as Content[], prompt as Content[]);
 
-        console.log(prompt);
+        prompt = conversation;
+        const tools = getToolDefinitions(options.tools);
+
         const client = driver.getGenAIClient();
         const response = await client.models.generateContent({
             model: options.model,
-            //contents: 'Why is the sky blue?',
             contents: prompt satisfies ContentListUnion,
-            config: {} satisfies GenerateContentConfig,
+            config: {
+                temperature: model_options.temperature,
+                maxOutputTokens: model_options.max_tokens,
+                topK: model_options.top_k,
+                topP: model_options.top_p,
+                stopSequences: model_options.stop_sequence,
+                presencePenalty: model_options.presence_penalty,
+                frequencyPenalty: model_options.frequency_penalty,
+                tools: tools,
+            } satisfies GenerateContentConfig,
         })
-
-        console.log(response);
 
         const usage = response?.usageMetadata;
         const token_usage: ExecutionTokenUsage = {
@@ -156,9 +183,9 @@ export class GeminiModelDefinition implements ModelDefinition<ContentListUnion> 
             }
             const content = candidate.content;
             if (content) {
-                //tool_use = collectToolUseParts(content);
+                tool_use = collectToolUseParts(content);
                 result = collectTextParts(content);
-                //conversation = updateConversation(conversation, [content]);
+                conversation = updateConversation(conversation, [content]);
                 // if (options.result_schema) {
                 //     result = candidate.;
                 // } else {
@@ -175,7 +202,7 @@ export class GeminiModelDefinition implements ModelDefinition<ContentListUnion> 
             token_usage: token_usage,
             finish_reason: finish_reason,
             original_response: options.include_original_response ? response : undefined,
-            //conversation,
+            conversation,
             tool_use
         } as Completion;
     }
@@ -185,11 +212,30 @@ export class GeminiModelDefinition implements ModelDefinition<ContentListUnion> 
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
 
+        if (options.model_options?._option_id !== "vertexai-gemini") {
+            driver.logger.warn("Invalid model options", { options: options.model_options });
+        }
+        const model_options = options.model_options as VertexAIGeminiOptions;
+
+        const conversation = updateConversation(options.conversation as Content[], prompt as Content[]);
+
+        prompt = conversation;
+        const tools = getToolDefinitions(options.tools);
+
         const client = driver.getGenAIClient();
         const streamingResp = await client.models.generateContentStream({
             model: options.model,
             contents: prompt satisfies ContentListUnion,
-            config: {} satisfies GenerateContentConfig,
+            config: {
+                temperature: model_options.temperature,
+                maxOutputTokens: model_options.max_tokens,
+                topK: model_options.top_k,
+                topP: model_options.top_p,
+                stopSequences: model_options.stop_sequence,
+                presencePenalty: model_options.presence_penalty,
+                frequencyPenalty: model_options.frequency_penalty,
+                tools: tools,
+            } satisfies GenerateContentConfig
         })
 
         const stream = asyncMap(streamingResp, async (item) => {
@@ -230,20 +276,20 @@ export class GeminiModelDefinition implements ModelDefinition<ContentListUnion> 
 }
 
 
-// function getToolDefinitions(tools: ToolDefinition[] | undefined | null) {
-//     return tools ? tools.map(getToolDefinition) : undefined;
-// }
-// function getToolDefinition(tool: ToolDefinition): Tool {
-//     return {
-//         functionDeclarations: [
-//             {
-//                 name: tool.name,
-//                 description: tool.description,
-//                 parameters: { ...tool.input_schema, type: "OBJECT" } as FunctionDeclaration,
-//             }
-//         ]
-//     };
-// }
+function getToolDefinitions(tools: ToolDefinition[] | undefined | null) {
+    return tools ? tools.map(getToolDefinition) : undefined;
+}
+function getToolDefinition(tool: ToolDefinition): Tool {
+    return {
+        functionDeclarations: [
+            {
+                name: tool.name,
+                description: tool.description,
+                parameters: { ...tool.input_schema, type: "OBJECT" } as FunctionDeclaration,
+            }
+        ]
+    };
+}
 
 
 /**
@@ -252,9 +298,9 @@ export class GeminiModelDefinition implements ModelDefinition<ContentListUnion> 
  * @param response
  * @returns
  */
-// function updateConversation(conversation: Content[], prompt: Content[]): Content[] {
-//     return (conversation || [] as Content[]).concat(prompt);
-// }
+function updateConversation(conversation: Content[], prompt: Content[]): Content[] {
+    return (conversation || [] as Content[]).concat(prompt);
+}
 /**
  *
  * Gemini supports JSON output in the response. so we test if the response is a valid JSON object. otherwise we treat the response as a string.
@@ -266,15 +312,15 @@ export class GeminiModelDefinition implements ModelDefinition<ContentListUnion> 
  * If “output” and “error” keys are not specified, then whole “response” is treated as function output.
  * @see https://googleapis.github.io/python-genai/genai.html#genai.types.FunctionResponse
  */
-// function formatFunctionResponse(response: string): JSONObject {
-//     response = response.trim();
-//     if (response.startsWith("{") && response.endsWith("}")) {
-//         try {
-//             return JSON.parse(response);
-//         } catch (e) {
-//             return { output: response };
-//         }
-//     } else {
-//         return { output: response };
-//     }
-// }
+function formatFunctionResponse(response: string): JSONObject {
+    response = response.trim();
+    if (response.startsWith("{") && response.endsWith("}")) {
+        try {
+            return JSON.parse(response);
+        } catch (e) {
+            return { output: response };
+        }
+    } else {
+        return { output: response };
+    }
+}
