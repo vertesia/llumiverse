@@ -191,7 +191,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
         let conversation = updateConversation(options.conversation as Content[], prompt.contents);
 
         prompt.contents = conversation;
-        prompt.tools = getToolDefinitions(options.tools);
+        const tools = getToolDefinitions(options.tools);
+        prompt.tools = tools ? [tools] : undefined;
 
         const model = getGenerativeModel(driver, options);
         const r = await model.generateContent(prompt);
@@ -243,6 +244,9 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
 
+        const tools = getToolDefinitions(options.tools);
+        prompt.tools = tools ? [tools] : undefined;
+
         const model = getGenerativeModel(driver, options);
         const streamingResp = await model.generateContentStream(prompt);
 
@@ -255,6 +259,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
             }
             if (item.candidates && item.candidates.length > 0) {
                 for (const candidate of item.candidates) {
+                    let tool_use: ToolUse[] | undefined;
                     let finish_reason: string | undefined;
                     switch (candidate.finishReason) {
                         case FinishReason.MAX_TOKENS: finish_reason = "length"; break;
@@ -263,10 +268,15 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
                     }
                     if (candidate.content?.role === 'model') {
                         const text = collectTextParts(candidate.content);
+                        tool_use = collectToolUseParts(candidate.content);
+                        if (tool_use) {
+                            finish_reason = "tool_use";
+                        }
                         return {
                             result: text,
                             token_usage: token_usage,
                             finish_reason: finish_reason,
+                            tool_use,
                         };
                     }
                 }
@@ -284,10 +294,20 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
 }
 
 
-function getToolDefinitions(tools: ToolDefinition[] | undefined | null) {
-    return tools ? tools.map(getToolDefinition) : undefined;
+function getToolDefinitions(tools: ToolDefinition[] | undefined | null): Tool | undefined {
+    if (!tools || tools.length === 0) {
+        return undefined;
+    }
+    // VertexAI Gemini only supports one tool at a time.
+    // For multiple tools, we have multiple functions in one tool.
+    const tool_array = tools.map(getToolDefinition);
+    let mergedTool: FunctionDeclarationsTool = tool_array[0];
+    for (let i = 1; i < tool_array.length; i++) {
+        mergedTool.functionDeclarations = mergedTool.functionDeclarations?.concat(tool_array[i].functionDeclarations ?? []);
+    }
+    return mergedTool;
 }
-function getToolDefinition(tool: ToolDefinition): Tool {
+function getToolDefinition(tool: ToolDefinition): FunctionDeclarationsTool {
     return {
         functionDeclarations: [
             {
