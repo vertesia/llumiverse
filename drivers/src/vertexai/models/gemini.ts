@@ -161,7 +161,7 @@ export class GeminiModelDefinition implements ModelDefinition<ContentListUnion> 
                 stopSequences: model_options.stop_sequence,
                 presencePenalty: model_options.presence_penalty,
                 frequencyPenalty: model_options.frequency_penalty,
-                tools: tools,
+                tools: tools ? [tools] : undefined,
             } satisfies GenerateContentConfig,
         })
 
@@ -234,7 +234,7 @@ export class GeminiModelDefinition implements ModelDefinition<ContentListUnion> 
                 stopSequences: model_options.stop_sequence,
                 presencePenalty: model_options.presence_penalty,
                 frequencyPenalty: model_options.frequency_penalty,
-                tools: tools,
+                tools: tools ? [tools] : undefined,
             } satisfies GenerateContentConfig
         })
 
@@ -275,9 +275,18 @@ export class GeminiModelDefinition implements ModelDefinition<ContentListUnion> 
 
 }
 
-
-function getToolDefinitions(tools: ToolDefinition[] | undefined | null) {
-    return tools ? tools.map(getToolDefinition) : undefined;
+function getToolDefinitions(tools: ToolDefinition[] | undefined | null): Tool | undefined {
+    if (!tools || tools.length === 0) {
+        return undefined;
+    }
+    // VertexAI Gemini only supports one tool at a time.
+    // For multiple tools, we have multiple functions in one tool.
+    const tool_array = tools.map(getToolDefinition);
+    let mergedTool: Tool = tool_array[0];
+    for (let i = 1; i < tool_array.length; i++) {
+        mergedTool.functionDeclarations = mergedTool.functionDeclarations?.concat(tool_array[i].functionDeclarations ?? []);
+    }
+    return mergedTool;
 }
 function getToolDefinition(tool: ToolDefinition): Tool {
     return {
