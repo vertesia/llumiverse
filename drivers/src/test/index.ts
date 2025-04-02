@@ -81,6 +81,11 @@ export class TestDriver implements Driver<PromptSegment[]> {
             },
         ]
     }
+
+    async listEmbeddingModels(): Promise<AIModel[]> {
+        return [];
+    }
+    
     validateConnection(): Promise<boolean> {
         throw new Error("Method not implemented.");
     }

@@ -98,25 +98,31 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     async listModels(_params?: ModelSearchPayload): Promise<AIModel<string>[]> {
+        //Model Garden Publisher models - Pretrained models
+        const publishers = ['google', 'anthropic']
+        const supportedModels = { google: ['gemini', 'imagen'], anthropic: ['claude'] }
+
+        return await this._listModels(publishers, supportedModels, true);
+    }
+
+    async _listModels(publishers: string[], supportedModels: any, includeCustom: boolean = false): Promise<AIModel<string>[]> {
         let models: AIModel<string>[] = [];
         const modelGarden = new v1beta1.ModelGardenServiceClient({
             projectId: this.options.project,
             apiEndpoint: `${this.options.region}-${API_BASE_PATH}`,
         });
 
-        //Project specific deployed models
-        const [response] = await this.aiplatform.listModels({
-            parent: `projects/${this.options.project}/locations/${this.options.region}`,
-        });
-        models = models.concat(response.map(model => ({
-            id: model.name?.split('/').pop() ?? '',
-            name: model.displayName ?? '',
-            provider: 'vertexai',
-        })));
-
-        //Model Garden Publisher models - Pretrained models
-        const publishers = ['google', 'anthropic']
-        const supportedModels = {google: ['gemini','imagen'], anthropic: ['claude']}
+        if (includeCustom) {
+            //Project specific deployed models
+            const [response] = await this.aiplatform.listModels({
+                parent: `projects/${this.options.project}/locations/${this.options.region}`,
+            });
+            models = models.concat(response.map(model => ({
+                id: model.name?.split('/').pop() ?? '',
+                name: model.displayName ?? '',
+                provider: 'vertexai',
+            })));
+        }
 
         for (const publisher of publishers) {
             const [response] = await modelGarden.listPublisherModels({
@@ -142,6 +148,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         }
 
         return models;
+    }
+
+    async listEmbeddingModels(): Promise<AIModel[]> {
+        const publishers = ['google']
+        const supportedModels = { google: ['embedding'] }
+
+        return await this._listModels(publishers, supportedModels, false);
     }
 
     validateConnection(): Promise<boolean> {

@@ -607,6 +607,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return aimodels;
     }
 
+    async listEmbeddingModels(): Promise<AIModel[]> {
+        this.logger.debug("[Bedrock] listing embedding models");
+        // Look for embedding models
+        const filter = (m: FoundationModelSummary) => (m.inferenceTypesSupported?.includes("ON_DEMAND") && m.outputModalities?.includes("EMBEDDING")) ?? false;
+        return this._listModels(filter);
+    }
+
     async generateEmbeddings({ text, image, model }: EmbeddingsOptions): Promise<EmbeddingsResult> {
 
         this.logger.info("[Bedrock] Generating embeddings with model " + model);

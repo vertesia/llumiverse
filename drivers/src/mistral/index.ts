@@ -1,4 +1,4 @@
-import { AIModel, AbstractDriver, Completion, CompletionChunk, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, PromptSegment, TextFallbackOptions } from "@llumiverse/core";
+import { AIModel, AbstractDriver, Completion, CompletionChunk, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, ModelType, PromptSegment, TextFallbackOptions } from "@llumiverse/core";
 import { transformSSEStream } from "@llumiverse/core/async";
 import { OpenAITextMessage, formatOpenAILikeTextPrompt, getJSONSafetyNotice } from "@llumiverse/core/formatters";
 import { FetchClient } from "api-fetch-client";
@@ -140,7 +140,23 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
             }
         });
 
-        return aimodels;
+        return aimodels.filter(m => !m.id.includes("embed"));
+    }
+
+    async listEmbeddingModels(): Promise<AIModel<string>[]> {
+        const models: ListModelsResponse = await this.client.get('v1/models');
+        const aimodels = models.data.map(m => {
+            return {
+                id: m.id,
+                name: m.id,
+                description: undefined,
+                provider: this.provider,
+                owner: m.owned_by,
+                type: ModelType.Embedding,
+            }
+        });
+
+        return aimodels.filter(m => m.id.includes("embed"));
     }
 
     validateConnection(): Promise<boolean> {
