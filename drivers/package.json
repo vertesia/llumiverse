@@ -63,7 +63,7 @@
     "@aws-sdk/lib-storage": "^3.709.0",
     "@azure/identity": "^4.4.1",
     "@azure/openai": "2.0.0-beta.2",
-    "@google-cloud/aiplatform": "^3.35.0",
+    "@google-cloud/aiplatform": "^4.1.0",
     "@google-cloud/vertexai": "^1.7.0",
     "@huggingface/inference": "2.6.7",
     "@llumiverse/core": "workspace:*",
