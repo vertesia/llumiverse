@@ -10,7 +10,9 @@ import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
 import { v1beta1 } from '@google-cloud/aiplatform';
 import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
 import { ImagenModelDefinition, ImagenPrompt } from "./models/imagen.js";
-
+import { GoogleGenAI } from "@google/genai";
+import * as aiplatform from '@google-cloud/aiplatform';
+const { PredictionServiceClient } = aiplatform.v1;
 
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
@@ -30,8 +32,11 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     static PROVIDER = "vertexai";
     provider = VertexAIDriver.PROVIDER;
 
-    aiplatform: v1beta1.ModelServiceClient;
-    vertexai: VertexAI;
+    genai: GoogleGenAI | undefined;
+    aiplatform: v1beta1.ModelServiceClient | undefined;
+    modelgarden: v1beta1.ModelGardenServiceClient | undefined;
+    vertexai: VertexAI | undefined;
+    imagenprediction: aiplatform.v1.PredictionServiceClient | undefined;
     fetchClient: FetchClient;
     authClient: JSONClient | GoogleAuth<JSONClient>;
     anthropicClient: AnthropicVertex | undefined;
@@ -39,15 +44,16 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     constructor( options: VertexAIDriverOptions) {
         super(options);
 
+        //Lazy initialised
         this.anthropicClient = undefined;
+        this.vertexai = undefined;
+        this.aiplatform = undefined;
+        this.modelgarden = undefined;
+        this.genai = undefined;
+        this.imagenprediction = undefined;
 
         this.authClient = options.googleAuthOptions?.authClient ?? new GoogleAuth(options.googleAuthOptions);
 
-        this.vertexai = new VertexAI({
-            project: this.options.project,
-            location: this.options.region,
-            googleAuthOptions: this.options.googleAuthOptions,
-        });
         this.fetchClient = createFetchClient({
             region: this.options.region,
             project: this.options.project,
@@ -56,10 +62,53 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             const token = await this.authClient.getAccessToken();
             return `Bearer ${token}`;
         });
-        this.aiplatform = new v1beta1.ModelServiceClient({
-            projectId: this.options.project,
-            apiEndpoint: `${this.options.region}-${API_BASE_PATH}`,
-        });
+    }
+
+    public getAIPlatformClient() : v1beta1.ModelServiceClient {
+        //Lazy initialisation
+        if (!this.aiplatform) {
+            this.aiplatform = new v1beta1.ModelServiceClient({
+                projectId: this.options.project,
+                apiEndpoint: `${this.options.region}-${API_BASE_PATH}`,
+            });
+        }
+        return this.aiplatform;
+    }
+
+    public getModelGardenClient() : v1beta1.ModelGardenServiceClient {
+        //Lazy initialisation
+        if (!this.modelgarden) {
+            this.modelgarden = new v1beta1.ModelGardenServiceClient({
+                projectId: this.options.project,
+                apiEndpoint: `${this.options.region}-${API_BASE_PATH}`,
+            });
+        }
+        return this.modelgarden;
+    }
+
+    public getVertexAIClient() : VertexAI {
+        //Lazy initialisation
+        if (!this.vertexai) {
+            this.vertexai = new VertexAI({
+                project: this.options.project,
+                location: this.options.region,
+                googleAuthOptions: this.options.googleAuthOptions,
+            });
+        }
+        return this.vertexai;
+    }
+
+    public getGenAIClient() : GoogleGenAI {
+        //Lazy initialisation
+        if (!this.genai) {
+            this.genai = new GoogleGenAI({
+                vertexai: true,
+                project: this.options.project,
+                location: this.options.region,
+                googleAuthOptions: this.options.googleAuthOptions,
+            });
+        }
+        return this.genai;
     }
 
     public getAnthropicClient() : AnthropicVertex {
@@ -68,6 +117,20 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             this.anthropicClient = new AnthropicVertex({region: "us-east5", projectId: process.env.GOOGLE_PROJECT_ID});
         }
         return this.anthropicClient;
+    }
+
+    public getImagenClient(): aiplatform.v1.PredictionServiceClient {
+        //Lazy initialisation
+        if (!this.imagenprediction) {
+            const location = 'us-central1';
+            const clientOptions = {
+                apiEndpoint: `${location}-aiplatform.googleapis.com`,
+            };
+
+            // Instantiates a client
+            this.imagenprediction = new PredictionServiceClient(clientOptions);
+        }
+        return this.imagenprediction;
     }
 
     protected canStream(options: ExecutionOptions): Promise<boolean> {
@@ -98,16 +161,15 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     async listModels(_params?: ModelSearchPayload): Promise<AIModel<string>[]> {
+        this.getAIPlatformClient();
+        this.getModelGardenClient();
         let models: AIModel<string>[] = [];
-        const modelGarden = new v1beta1.ModelGardenServiceClient({
-            projectId: this.options.project,
-            apiEndpoint: `${this.options.region}-${API_BASE_PATH}`,
-        });
-
+    
         //Project specific deployed models
-        const [response] = await this.aiplatform.listModels({
+        const [response] = await this.aiplatform!.listModels({
             parent: `projects/${this.options.project}/locations/${this.options.region}`,
         });
+
         models = models.concat(response.map(model => ({
             id: model.name?.split('/').pop() ?? '',
             name: model.displayName ?? '',
@@ -119,7 +181,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         const supportedModels = {google: ['gemini','imagen'], anthropic: ['claude']}
 
         for (const publisher of publishers) {
-            const [response] = await modelGarden.listPublisherModels({
+            const [response] = await this.modelgarden!.listPublisherModels({
                 parent: `publishers/${publisher}`,
                 orderBy: 'name',
                 //filter: `name eq name`,
