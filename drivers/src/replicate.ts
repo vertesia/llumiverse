@@ -14,7 +14,7 @@ import {
     TrainingOptions,
 } from "@llumiverse/core";
 import { EventStream } from "@llumiverse/core/async";
-import EventSource from "eventsource";
+import { EventSource } from "eventsource";
 import Replicate, { Prediction } from "replicate";
 
 let cachedTrainableModels: AIModel[] | undefined;
