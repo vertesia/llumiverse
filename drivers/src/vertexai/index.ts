@@ -127,27 +127,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             });
 
             models = models.concat(response.map(model => {
-                let fullID = '';
-                let nameWithVer = '';
-                if (publisher === 'anthropic') {
-                    const version = model.versionId;
-                    //Turn version 2023-10-01 into 20231001
-                    const versionNum = version?.replace(/-/g, '');
-                    fullID = model?.name ?? '';
-                    nameWithVer = model.name?.split('/').pop() ?? '';
-                    if (version) {
-                        fullID = `${fullID}@${versionNum}`;
-                        nameWithVer = `${nameWithVer}@${versionNum}`;
-                    }
-                } else if (publisher === 'google') {
-                    fullID = model?.name ?? '';
-                    nameWithVer = model.name?.split('/').pop() ?? '';
-                    console.log("Google Model", model);
-                    console.log(fullID, nameWithVer);
-                }
                 return {
-                    id: fullID,
-                    name: nameWithVer,
+                    id: model?.name ?? '',
+                    name: model.name?.split('/').pop() ?? '',
                     provider: 'vertexai',
                     owner: publisher,
                 } satisfies AIModel
