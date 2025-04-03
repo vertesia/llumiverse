@@ -97,8 +97,8 @@ importers:
         specifier: ^1.7.0
         version: 1.9.3
       '@huggingface/inference':
-        specifier: 2.6.7
-        version: 2.6.7
+        specifier: 3.6.2
+        version: 3.6.2
       '@llumiverse/core':
         specifier: workspace:*
         version: link:../core
@@ -573,9 +573,16 @@ packages:
     engines: {node: '>=6'}
     hasBin: true
 
-  '@huggingface/inference@2.6.7':
-    resolution: {integrity: sha512-vFBqvtU3LhxjufTs0jcRrDSc0nK+lah10bOgvlIn80lAH4JwMzHHPBQ4g4ECEdRD0PIt6EpTiidEZQq2sArb5Q==}
+  '@huggingface/inference@3.6.2':
+    resolution: {integrity: sha512-FkJr8dOP8yFTxGFi+X/ylwG3qoCq/s8WI2A4Jg13RBX3voJWrzadpHLD/99EKZU7r35X4Mm6tKUev7dR2B/cTg==}
     engines: {node: '>=18'}
+
+  '@huggingface/jinja@0.3.3':
+    resolution: {integrity: sha512-vQQr2JyWvVFba3Lj9es4q9vCl1sAc74fdgnEMoX8qHrXtswap9ge9uO3ONDzQB0cQ0PUyaKY2N6HaVbTBvSXvw==}
+    engines: {node: '>=18'}
+
+  '@huggingface/tasks@0.18.6':
+    resolution: {integrity: sha512-ZxE+KS7po5thl2IJcq9H+teSfkdAaLkO5VhbgBqpVpDVkun+Kmmhkp18/ho4D8gAUVKiNdK5vSS7ZqeD/9b8Sw==}
 
   '@isaacs/cliui@8.0.2':
     resolution: {integrity: sha512-O8jcjabXaleOG9DQ0+ARXWZBTfnP4WNAqzuiJK7ll44AmxGKv/J2M4TPjxjY3znBCfvBXFzucm1twdyFybFqEA==}
@@ -2734,7 +2741,14 @@ snapshots:
       protobufjs: 7.4.0
       yargs: 17.7.2
 
-  '@huggingface/inference@2.6.7': {}
+  '@huggingface/inference@3.6.2':
+    dependencies:
+      '@huggingface/jinja': 0.3.3
+      '@huggingface/tasks': 0.18.6
+
+  '@huggingface/jinja@0.3.3': {}
+
+  '@huggingface/tasks@0.18.6': {}
 
   '@isaacs/cliui@8.0.2':
     dependencies:
