@@ -158,7 +158,7 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
         return {
             values: r.data[0].embedding,
             model,
-            token_count: r.usage.total_tokens
+            token_count: r.usage.total_tokens || r.usage.prompt_tokens + r.usage.completion_tokens,
         }
     }
 
