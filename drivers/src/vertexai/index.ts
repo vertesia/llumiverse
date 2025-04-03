@@ -126,14 +126,12 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 listAllVersions: true,
             });
 
-            models = models.concat(response.map(model => {
-                return {
-                    id: model?.name ?? '',
-                    name: model.name?.split('/').pop() ?? '',
-                    provider: 'vertexai',
-                    owner: publisher,
-                } satisfies AIModel
-            }).filter(model => {
+            models = models.concat(response.map(model => ({
+                id: model.name ?? '',
+                name: model.name?.split('/').pop() ?? '',
+                provider: 'vertexai',
+                owner: publisher,
+            } satisfies AIModel<string>)).filter(model => {
                 const modelFamily = supportedModels[publisher as keyof typeof supportedModels];
                 for (const family of modelFamily) {
                     if (model.name.includes(family)) {
