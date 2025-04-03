@@ -35,8 +35,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     fetchClient: FetchClient;
     authClient: JSONClient | GoogleAuth<JSONClient>;
     anthropicClient: AnthropicVertex | undefined;
-    
-    constructor( options: VertexAIDriverOptions) {
+
+    constructor(options: VertexAIDriverOptions) {
         super(options);
 
         this.anthropicClient = undefined;
@@ -59,13 +59,14 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         this.aiplatform = new v1beta1.ModelServiceClient({
             projectId: this.options.project,
             apiEndpoint: `${this.options.region}-${API_BASE_PATH}`,
+            authClient: this.authClient as JSONClient,
         });
     }
 
-    public getAnthropicClient() : AnthropicVertex {
+    public getAnthropicClient(): AnthropicVertex {
         //Lazy initialisation
         if (!this.anthropicClient) {
-            this.anthropicClient = new AnthropicVertex({region: "us-east5", projectId: process.env.GOOGLE_PROJECT_ID});
+            this.anthropicClient = new AnthropicVertex({ region: "us-east5", projectId: process.env.GOOGLE_PROJECT_ID });
         }
         return this.anthropicClient;
     }
@@ -91,7 +92,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return getModelDefinition(options.model).requestTextCompletionStream(this, prompt, options);
     }
 
-    async requestImageGeneration(_prompt: ImagenPrompt, _options: ExecutionOptions): Promise <Completion<ImageGeneration>> {
+    async requestImageGeneration(_prompt: ImagenPrompt, _options: ExecutionOptions): Promise<Completion<ImageGeneration>> {
         const splits = _options.model.split("/");
         const modelName = trimModelName(splits[splits.length - 1]);
         return new ImagenModelDefinition(modelName).requestImageGeneration(this, _prompt, _options);
@@ -116,7 +117,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
         //Model Garden Publisher models - Pretrained models
         const publishers = ['google', 'anthropic']
-        const supportedModels = {google: ['gemini','imagen'], anthropic: ['claude']}
+        const supportedModels = { google: ['gemini', 'imagen'], anthropic: ['claude'] }
 
         for (const publisher of publishers) {
             const [response] = await modelGarden.listPublisherModels({
