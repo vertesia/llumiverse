@@ -302,21 +302,8 @@ function jobInfo(job: Prediction, modelName?: string): TrainingJob {
         if (typeof error === 'string') {
             details = error;
         } else {
-            const parts = [];
-            if (error.code) {
-                parts.push(error.code + ' - ');
-            }
-            if (error.message) {
-                parts.push(error.message);
-            }
-            if (parts.length) {
-                details = parts.join(' ');
-            } else {
-                details = JSON.stringify(error);
-            }
+            details = JSON.stringify(error);
         }
-        //TODO: What is the point of the above if statement, if we overwrite details below?
-        details = job.error ? `${error.code} - ${error.message} ${error.param ? " [" + error.param + "]" : ""}` : "error";
     } else if (jobStatus === 'canceled') {
         status = TrainingJobStatus.cancelled;
     } else {
