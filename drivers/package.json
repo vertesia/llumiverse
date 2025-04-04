@@ -74,7 +74,7 @@
     "mnemonist": "^0.39.8",
     "node-web-stream-adapters": "^0.1.0",
     "openai": "^4.85.1",
-    "replicate": "^0.33.0"
+    "replicate": "^1.0.1"
   },
   "ts_dual_module": {
     "outDir": "lib"
