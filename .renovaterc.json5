@@ -16,11 +16,12 @@
       ],
       "matchPackageNames": [
         "@azure/openai",
+        "@azure/identity",
         "@google-cloud/**",
         "@huggingface/inference",
-        "@replicate",
-        "@openai",
-        "@groq-sdk",
+        "replicate",
+        "openai",
+        "groq-sdk",
         "@aws-sdk/**",
         "@anthropic-ai/**"
       ],
