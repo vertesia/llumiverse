@@ -146,6 +146,11 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, OpenAITextMess
         return aimodels;
     }
 
+    async listEmbeddingModels(): Promise<AIModel[]> {
+        //Groq does not support embedding models
+        return [];
+    }
+
     validateConnection(): Promise<boolean> {
         throw new Error("Method not implemented.");
     }

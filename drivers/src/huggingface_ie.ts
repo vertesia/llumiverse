@@ -148,6 +148,12 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
         return models;
     }
 
+    async listEmbeddingModels(): Promise<AIModel[]> {
+        //TODO: implement
+        //Currently we do not support huggingface embedding models
+        return [];
+    }
+
     async validateConnection(): Promise<boolean> {
         try {
             await this.service.get("/models");

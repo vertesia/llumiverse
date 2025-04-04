@@ -130,6 +130,14 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     async listModels(_params?: ModelSearchPayload): Promise<AIModel<string>[]> {
+        //Model Garden Publisher models - Pretrained models
+        const publishers = ['google', 'anthropic']
+        const supportedModels = { google: ['gemini', 'imagen'], anthropic: ['claude'] }
+
+        return await this._listModels(publishers, supportedModels, true);
+    }
+
+    async _listModels(publishers: string[], supportedModels: any, includeCustom: boolean = false): Promise<AIModel<string>[]> {
         // Get clients
         const modelGarden = this.getModelGardenClient();
         const aiplatform = this.getAIPlatformClient();
@@ -146,9 +154,17 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             provider: 'vertexai',
         })));
 
-        //Model Garden Publisher models - Pretrained models
-        const publishers = ['google', 'anthropic']
-        const supportedModels = { google: ['gemini', 'imagen'], anthropic: ['claude'] }
+        if (includeCustom) {
+            //Project specific deployed models
+            const [response] = await aiplatform.listModels({
+                parent: `projects/${this.options.project}/locations/${this.options.region}`,
+            });
+            models = models.concat(response.map(model => ({
+                id: model.name?.split('/').pop() ?? '',
+                name: model.displayName ?? '',
+                provider: 'vertexai',
+            })));
+        }
 
         for (const publisher of publishers) {
             const [response] = await modelGarden.listPublisherModels({
@@ -180,6 +196,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             })
 
         return uniqueModels;
+    }
+
+    async listEmbeddingModels(): Promise<AIModel[]> {
+        const publishers = ['google']
+        const supportedModels = { google: ['embedding'] }
+
+        return await this._listModels(publishers, supportedModels, false);
     }
 
     validateConnection(): Promise<boolean> {

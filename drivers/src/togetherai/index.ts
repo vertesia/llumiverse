@@ -132,6 +132,11 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
 
     }
 
+    async listEmbeddingModels(): Promise<AIModel[]> {
+        //TODO: Implement, we do not currently support togetherai embedding models
+        return [];
+    }
+
     validateConnection(): Promise<boolean> {
         throw new Error("Method not implemented.");
     }

@@ -282,6 +282,11 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
 
         return models;
     }
+    
+    async listEmbeddingModels(): Promise<AIModel[]> {
+        //TODO: Implement, we do not currently support replicate embedding models
+        return [];
+    }
 
     async generateEmbeddings(): Promise<EmbeddingsResult> {
         throw new Error("Method not implemented.");
