@@ -298,24 +298,12 @@ function jobInfo(job: Prediction, modelName?: string): TrainingJob {
         status = TrainingJobStatus.succeeded;
     } else if (jobStatus === 'failed') {
         status = TrainingJobStatus.failed;
-        const error = job.error;
+        const error = job.error as any; 
         if (typeof error === 'string') {
             details = error;
         } else {
-            const parts = [];
-            if (error.code) {
-                parts.push(error.code + ' - ');
-            }
-            if (error.message) {
-                parts.push(error.message);
-            }
-            if (parts.length) {
-                details = parts.join(' ');
-            } else {
-                details = JSON.stringify(error);
-            }
+            details = JSON.stringify(error);
         }
-        details = job.error ? `${job.error.code} - ${job.error.message} ${job.error.param ? " [" + job.error.param + "]" : ""}` : "error";
     } else if (jobStatus === 'canceled') {
         status = TrainingJobStatus.cancelled;
     } else {
