@@ -163,7 +163,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 name: model.name?.split('/').pop() ?? '',
                 provider: 'vertexai',
                 owner: publisher,
-            })).filter(model => {
+            } satisfies AIModel<string>)).filter(model => {
                 const modelFamily = supportedModels[publisher as keyof typeof supportedModels];
                 for (const family of modelFamily) {
                     if (model.name.includes(family)) {
@@ -173,7 +173,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             }));
         }
 
-        return models;
+        //Remove duplicates
+        const uniqueModels = Array.from(new Set(models.map(a => a.id)))
+            .map(id => {
+                return models.find(a => a.id === id) ?? {} as AIModel<string>;
+            })
+
+        return uniqueModels;
     }
 
     validateConnection(): Promise<boolean> {
