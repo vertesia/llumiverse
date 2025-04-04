@@ -16,7 +16,8 @@ function getGenerativeModel(driver: VertexAIDriver, options: ExecutionOptions, m
 
     const model_options = options.model_options;
 
-    const model = driver.vertexai.getGenerativeModel({
+    const client = driver.getVertexAIClient();
+    const model = client.getGenerativeModel({
         model: options.model,
         safetySettings: modelParams?.safetySettings ?? [{
             category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
