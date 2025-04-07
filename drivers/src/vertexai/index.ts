@@ -41,24 +41,24 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     static PROVIDER = "vertexai";
     provider = VertexAIDriver.PROVIDER;
 
-    aiplatform: v1beta1.ModelServiceClient;
-    vertexai: VertexAI;
     fetchClient: FetchClient;
     authClient: JSONClient | GoogleAuth<JSONClient>;
+
     anthropicClient: AnthropicVertex | undefined;
+    aiplatform: v1beta1.ModelServiceClient | undefined;
+    modelGarden: v1beta1.ModelGardenServiceClient | undefined;
+    vertexai: VertexAI | undefined;
 
     constructor(options: VertexAIDriverOptions) {
         super(options);
 
         this.anthropicClient = undefined;
+        this.vertexai = undefined;
+        this.aiplatform = undefined;
+        this.modelGarden = undefined;
 
         this.authClient = options.googleAuthOptions?.authClient ?? new GoogleAuth(options.googleAuthOptions);
 
-        this.vertexai = new VertexAI({
-            project: this.options.project,
-            location: this.options.region,
-            googleAuthOptions: this.options.googleAuthOptions,
-        });
         this.fetchClient = createFetchClient({
             region: this.options.region,
             project: this.options.project,
@@ -66,12 +66,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             //@ts-ignore
             const token = await this.authClient.getAccessToken();
             return `Bearer ${token}`;
-        });
-        this.aiplatform = new v1beta1.ModelServiceClient({
-            projectId: this.options.project,
-            apiEndpoint: `${this.options.region}-${API_BASE_PATH}`,
-            //@ts-ignore
-            authClient: this.authClient as JSONClient,
         });
     }
 
@@ -84,6 +78,42 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             });
         }
         return this.anthropicClient;
+    }
+
+    public getVertexAIClient(): VertexAI {
+        //Lazy initialisation
+        if (!this.vertexai) {
+            this.vertexai = new VertexAI({
+                project: this.options.project,
+                location: this.options.region,
+                googleAuthOptions: this.options.googleAuthOptions,
+            });
+        }
+        return this.vertexai;
+    }
+
+    public getAIPlatformClient(): v1beta1.ModelServiceClient {
+        //Lazy initialisation
+        if (!this.aiplatform) {
+            this.aiplatform = new v1beta1.ModelServiceClient({
+                projectId: this.options.project,
+                apiEndpoint: `${this.options.region}-${API_BASE_PATH}`,
+                authClient: this.authClient as JSONClient,
+            });
+        }
+        return this.aiplatform;
+    }
+
+    public getModelGardenClient(): v1beta1.ModelGardenServiceClient {
+        //Lazy initialisation
+        if (!this.modelGarden) {
+            this.modelGarden = new v1beta1.ModelGardenServiceClient({
+                projectId: this.options.project,
+                apiEndpoint: `${this.options.region}-${API_BASE_PATH}`,
+                authClient: this.authClient as JSONClient,
+            });
+        }
+        return this.modelGarden;
     }
 
     protected canStream(options: ExecutionOptions): Promise<boolean> {
@@ -120,14 +150,14 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     async listModels(_params?: ModelSearchPayload): Promise<AIModel<string>[]> {
+        // Get clients
+        const modelGarden = this.getModelGardenClient();
+        const aiplatform = this.getAIPlatformClient();
+
         let models: AIModel<string>[] = [];
-        const modelGarden = new v1beta1.ModelGardenServiceClient({
-            projectId: this.options.project,
-            apiEndpoint: `${this.options.region}-${API_BASE_PATH}`,
-        });
 
         //Project specific deployed models
-        const [response] = await this.aiplatform.listModels({
+        const [response] = await aiplatform.listModels({
             parent: `projects/${this.options.project}/locations/${this.options.region}`,
         });
         models = models.concat(
@@ -150,26 +180,28 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 listAllVersions: true,
             });
 
-            models = models.concat(
-                response
-                    .map((model) => ({
-                        id: model.name ?? "",
-                        name: model.name?.split("/").pop() ?? "",
-                        provider: "vertexai",
-                        owner: publisher,
-                    }))
-                    .filter((model) => {
-                        const modelFamily = supportedModels[publisher as keyof typeof supportedModels];
-                        for (const family of modelFamily) {
-                            if (model.name.includes(family)) {
-                                return true;
-                            }
-                        }
-                    }),
-            );
+            models = models.concat(response.map(model => ({
+                id: model.name ?? '',
+                name: model.name?.split('/').pop() ?? '',
+                provider: 'vertexai',
+                owner: publisher,
+            } satisfies AIModel<string>)).filter(model => {
+                const modelFamily = supportedModels[publisher as keyof typeof supportedModels];
+                for (const family of modelFamily) {
+                    if (model.name.includes(family)) {
+                        return true;
+                    }
+                }
+            }));
         }
 
-        return models;
+        //Remove duplicates
+        const uniqueModels = Array.from(new Set(models.map(a => a.id)))
+            .map(id => {
+                return models.find(a => a.id === id) ?? {} as AIModel<string>;
+            })
+
+        return uniqueModels;
     }
 
     validateConnection(): Promise<boolean> {
