@@ -1,4 +1,4 @@
-import { Content, FinishReason, FunctionDeclarationSchema, FunctionDeclarationsTool, GenerateContentRequest, HarmBlockThreshold, HarmCategory, InlineDataPart, ModelParams, TextPart, Tool } from "@google-cloud/vertexai";
+import { Content, FinishReason, FunctionDeclarationSchema, FunctionDeclarationsTool, FunctionResponsePart, GenerateContentRequest, HarmBlockThreshold, HarmCategory, InlineDataPart, ModelParams, TextPart, Tool } from "@google-cloud/vertexai";
 import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, ExecutionTokenUsage, JSONObject, ModelType, PromptOptions, PromptRole, PromptSegment, readStreamAsBase64, TextFallbackOptions, ToolDefinition, ToolUse } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { VertexAIDriver } from "../index.js";
@@ -108,15 +108,15 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
         const safety: string[] = [];
 
         let lastUserContent: Content | undefined = undefined;
+        const toolParts: FunctionResponsePart[] = [];
 
         for (const msg of segments) {
 
             if (msg.role === PromptRole.safety) {
                 safety.push(msg.content);
             } else {
-                let fileParts: InlineDataPart[] | undefined;
+                const fileParts: InlineDataPart[] = [];
                 if (msg.files) {
-                    fileParts = [];
                     for (const f of msg.files) {
                         const stream = await f.getStream();
                         const data = await readStreamAsBase64(stream);
@@ -130,16 +130,12 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
                 }
 
                 if (msg.role === PromptRole.tool) {
-                    const content: Content = {
-                        role: 'user',
-                        parts: [{
-                            functionResponse: {
-                                name: msg.tool_use_id!,
-                                response: formatFunctionResponse(msg.content || ''),
-                            }
-                        }]
-                    }
-                    contents.push(content);
+                    toolParts.push({
+                        functionResponse: {
+                            name: msg.tool_use_id!,
+                            response: formatFunctionResponse(msg.content || ''),
+                        }
+                    });
                     continue;
                 }
 
@@ -178,6 +174,13 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
                     parts: [{ text: content } as TextPart],
                 })
             }
+        }
+
+        if (toolParts.length > 0) {
+            contents.push({
+                role: 'user',
+                parts: toolParts,
+            });
         }
 
         // put system mesages first and safety last
