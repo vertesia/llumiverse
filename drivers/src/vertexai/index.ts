@@ -52,8 +52,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             region: this.options.region,
             project: this.options.project,
         }).withAuthCallback(async () => {
-            //@ts-ignore
-            const token = await this.authClient.getAccessToken();
+            const accessTokenResponse = await this.authClient.getAccessToken();
+            const token = typeof accessTokenResponse === 'string' ? accessTokenResponse : accessTokenResponse?.token;
             return `Bearer ${token}`;
         });
     }
