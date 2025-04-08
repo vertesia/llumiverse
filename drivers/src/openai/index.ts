@@ -278,7 +278,9 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
     async _listModels(filter?: (m: OpenAI.Models.Model) => boolean): Promise<AIModel[]> {
         let result = await this.service.models.list();
-        const models = filter ? result.data.filter(filter) : result.data;
+        let models = filter ? result.data.filter(filter) : result.data;
+        //Remove embedding models
+        models.filter((m) => !m.id.includes("embed"));
         return models.map((m) => ({
             id: m.id,
             name: m.id,
@@ -290,6 +292,18 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         }));
     }
 
+    async listEmbeddingModels(): Promise<AIModel[]> {
+        let result = await this.service.models.list();
+        const filter = (m: OpenAI.Models.Model) => m.id.includes("embed");
+        const models = result.data.filter(filter);
+        return models.map((m) => ({
+            id: m.id,
+            name: m.id,
+            provider: this.provider,
+            owner: m.owned_by,
+            type: ModelType.Embedding
+        }));
+    }
 
     async generateEmbeddings({ text, image, model = "text-embedding-3-small" }: EmbeddingsOptions): Promise<EmbeddingsResult> {
 

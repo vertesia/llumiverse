@@ -187,6 +187,11 @@ export class FireflyDriver extends AbstractDriver<FireflyDriverOptions> {
         ];
     }
 
+    async listEmbeddingModels(): Promise<AIModel[]> {
+        //Not supported
+        return [];
+    }
+
     async validateConnection(): Promise<boolean> {
         try {
             const response = await fetch(`${this.endpoint}/auth/validate`, {
