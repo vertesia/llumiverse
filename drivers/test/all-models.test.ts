@@ -155,7 +155,8 @@ if (process.env.WATSONX_API_KEY) {
         }),
         models: [
             "ibm/granite-3-2-8b-instruct",
-            "ibm/granite-13b-instruct",
+            "ibm/granite-3-2b-instruct",
+            //"ibm/granite-13b-instruct-v2" Does not work with schemas
             //Non-ibm models don't work, may be account related
             //"meta/llama-3-3-70b-instruct",
             //"mistralai/pixtral-12b",
