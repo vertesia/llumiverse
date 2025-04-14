@@ -39,8 +39,11 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
             model_id: options.model,
             input: prompt + "\n",
             parameters: {
-                max_new_tokens: options.model_options.max_tokens
-                //time_limit: options.time_limit,
+                max_new_tokens: options.model_options.max_tokens,
+                temperature: options.model_options.temperature,
+                top_k: options.model_options.top_k,
+                top_p: options.model_options.top_p,
+                stop_sequences: options.model_options.stop_sequence,
             },
             project_id: this.projectId,
         }
@@ -70,8 +73,11 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
             model_id: options.model,
             input: prompt + "\n",
             parameters: {
-                max_new_tokens: options.model_options.temperature,
-                //time_limit: options.time_limit,
+                max_new_tokens: options.model_options.max_tokens,
+                temperature: options.model_options.temperature,
+                top_k: options.model_options.top_k,
+                top_p: options.model_options.top_p,
+                stop_sequences: options.model_options.stop_sequence,
             },
             project_id: this.projectId,
         }
