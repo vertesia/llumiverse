@@ -27,10 +27,9 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
             region: process.env.GOOGLE_REGION as string,
         }),
         models: [
-            "publishers/google/models/gemini-1.5-pro-002",
+            "publishers/google/models/gemini-2.0-flash-lite-001",
             "gemini-1.5-flash", //legacy id format
-            //"gemini-1.5-pro",
-            "publishers/anthropic/models/claude-3-5-sonnet-v2",
+            "publishers/anthropic/models/claude-3-7-sonnet",
         ]
     })
 } else {
@@ -46,8 +45,8 @@ if (process.env.MISTRAL_API_KEY) {
             endpoint_url: process.env.MISTRAL_ENDPOINT_URL as string ?? undefined
         }),
         models: [
-            "open-mixtral-8x7b",
-            "mistral-medium-latest",
+            "pixtral-large-latest",
+            "mistral-small-latest",
             "mistral-large-latest"
         ]
     }
@@ -79,8 +78,8 @@ if (process.env.OPENAI_API_KEY) {
             apiKey: process.env.OPENAI_API_KEY as string
         }),
         models: [
-            "gpt-4o",
-            "gpt-3.5-turbo",
+            "o3-mini",
+            "gpt-4o-mini",
             "o1-mini",
         ]
     }
@@ -90,8 +89,8 @@ if (process.env.OPENAI_API_KEY) {
 }
 
 const AZURE_OPENAI_MODELS = [
-    "gpt-4o",
-    "gpt-3.5-turbo"
+    "gpt-4o-mini",
+    "o3-mini"
 ]
 
 
@@ -118,7 +117,7 @@ if (process.env.BEDROCK_REGION) {
         }),
         //Use foundation models and inference profiles to test the driver
         models: [
-            "anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "anthropic.claude-3-7-sonnet-20250219-v1:0",
             "us.meta.llama3-3-70b-instruct-v1:0",
             "us.amazon.nova-micro-v1:0",
             "ai21.jamba-1-5-mini-v1:0",
@@ -136,7 +135,7 @@ if (process.env.GROQ_API_KEY) {
             apiKey: process.env.GROQ_API_KEY as string
         }),
         models: [
-            "llama3-70b-8192",
+            "gemma2-9b-it",
             "llama-3.3-70b-versatile"
         ]
     })
@@ -155,9 +154,9 @@ if (process.env.WATSONX_API_KEY) {
             endpointUrl: process.env.WATSONX_ENDPOINT_URL as string
         }),
         models: [
-            "ibm/granite-20b-multilingual",
-            "ibm/granite-34b-code-instruct",
-            "mistralai/mixtral-8x7b-instruct-v01"
+            "ibm/granite-3-2-8b-instruct",
+            "meta/llama-3-3-70b-instruct",
+            "mistralai/pixtral-12b",
         ]
     })
 } else {
@@ -171,8 +170,8 @@ if (process.env.XAI_API_KEY) {
             apiKey: process.env.XAI_API_KEY as string,
         }),
         models: [
-            "grok-beta",
-            "grok-vision-beta"
+            "grok-3-beta",
+            "grok-2-vision-1212",
         ]
     })
 } else {
