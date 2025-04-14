@@ -284,6 +284,11 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             return (m as any)?.capabilities?.chat_completion ?? false
         });
 
+        //OpenAI has very little information, filtering based on name.
+        result = result.filter((m) => {
+            return !m.id.includes("embed") && !m.id.includes("dall-e") && !m.id.includes("whisper");
+        });
+
         const models = filter ? result.filter(filter) : result;
         return models.map((m) => ({
             id: m.id,
