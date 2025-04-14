@@ -84,6 +84,9 @@ export interface Driver<PromptT = unknown> {
     //list models that can be trained
     listTrainableModels(): Promise<AIModel[]>;
 
+    //list embedding models
+    listEmbeddingModels(): Promise<AIModel[]>;
+
     //check that it is possible to connect to the environment
     validateConnection(): Promise<boolean>;
 
@@ -231,6 +234,9 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     //list models available for this environement
     abstract listModels(params?: ModelSearchPayload): Promise<AIModel[]>;
+
+    //list embedding models
+    abstract listEmbeddingModels(): Promise<AIModel[]>;
 
     //check that it is possible to connect to the environment
     abstract validateConnection(): Promise<boolean>;

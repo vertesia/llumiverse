@@ -105,11 +105,8 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
 
 
     async listModels(): Promise<AIModel<string>[]> {
-
-
-
-        const res = await this.fetchClient.get(`/ml/v1/foundation_model_specs?version=${API_VERSION}`)
-            .catch(err => this.logger.warn("Can't list models on Watsonx: " + err)) as WatsonxListModelResponse;
+        const res = await this.fetchClient.get(`/ml/v1/foundation_model_specs?version=${API_VERSION}&!filters=function_embedding`)
+            .catch(err => this.logger.warn("Can't list models on Watsonx: " + err)) satisfies WatsonxListModelResponse;
 
         const aimodels = res.resources.map((m: WatsonxModelSpec) => {
             return {
@@ -122,6 +119,22 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
 
         return aimodels;
 
+    }
+
+    async listEmbeddingModels(): Promise<AIModel[]> {
+        const res = await this.fetchClient.get(`/ml/v1/foundation_model_specs?version=${API_VERSION}&filters=function_embedding`)
+            .catch(err => this.logger.warn("Can't list models on Watsonx: " + err)) satisfies WatsonxListModelResponse;
+
+        const aimodels = res.resources.map((m: WatsonxModelSpec) => {
+            return {
+                id: m.model_id,
+                name: m.label,
+                description: m.short_description,
+                provider: this.provider,
+            }
+        });
+
+        return aimodels;
     }
 
     async getAuthToken(): Promise<string> {
