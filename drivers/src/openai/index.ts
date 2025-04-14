@@ -277,8 +277,14 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     }
 
     async _listModels(filter?: (m: OpenAI.Models.Model) => boolean): Promise<AIModel[]> {
-        let result = await this.service.models.list();
-        const models = filter ? result.data.filter(filter) : result.data;
+        let result = (await this.service.models.list()).data;
+        
+        //Azure OpenAI has additional information about the models
+        result = result.filter((m) => {
+            return (m as any)?.capabilities?.chat_completion ?? false
+        });
+
+        const models = filter ? result.filter(filter) : result;
         return models.map((m) => ({
             id: m.id,
             name: m.id,
