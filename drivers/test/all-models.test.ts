@@ -155,8 +155,10 @@ if (process.env.WATSONX_API_KEY) {
         }),
         models: [
             "ibm/granite-3-2-8b-instruct",
-            "meta/llama-3-3-70b-instruct",
-            "mistralai/pixtral-12b",
+            "ibm/granite-13b-instruct",
+            //Non-ibm models don't work, may be account related
+            //"meta/llama-3-3-70b-instruct",
+            //"mistralai/pixtral-12b",
         ]
     })
 } else {
