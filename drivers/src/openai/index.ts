@@ -280,9 +280,11 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         let result = (await this.service.models.list()).data;
         
         //Azure OpenAI has additional information about the models
-        result = result.filter((m) => {
-            return (m as any)?.capabilities?.chat_completion ?? true;
-        });
+        if (this.provider === "azure_openai") {
+            result = result.filter((m) => {
+                return !(m as any)?.capabilities?.embeddings;
+            });
+        }
 
         //Some of these use the completions API instead of the chat completions API
         //Others are for non-text input modalities. Update as required.
