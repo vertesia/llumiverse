@@ -117,7 +117,7 @@ if (process.env.BEDROCK_REGION) {
         }),
         //Use foundation models and inference profiles to test the driver
         models: [
-            "anthropic.claude-3-7-sonnet-20250219-v1:0",
+            "anthropic.claude-3-5-sonnet-20240620-v1:0",
             "us.meta.llama3-3-70b-instruct-v1:0",
             "us.amazon.nova-micro-v1:0",
             "ai21.jamba-1-5-mini-v1:0",
