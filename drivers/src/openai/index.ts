@@ -281,7 +281,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         
         //Azure OpenAI has additional information about the models
         result = result.filter((m) => {
-            return (m as any)?.capabilities?.chat_completion ?? false
+            return (m as any)?.capabilities?.chat_completion ?? true;
         });
 
         //Some of these use the completions API instead of the chat completions API
