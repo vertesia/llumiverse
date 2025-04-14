@@ -89,8 +89,7 @@ if (process.env.OPENAI_API_KEY) {
 }
 
 const AZURE_OPENAI_MODELS = [
-    "gpt-4o-mini",
-    "o3-mini"
+    "gpt-4",
 ]
 
 

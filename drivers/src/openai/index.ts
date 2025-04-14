@@ -277,8 +277,25 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     }
 
     async _listModels(filter?: (m: OpenAI.Models.Model) => boolean): Promise<AIModel[]> {
-        let result = await this.service.models.list();
-        const models = filter ? result.data.filter(filter) : result.data;
+        let result = (await this.service.models.list()).data;
+
+        //Some of these use the completions API instead of the chat completions API.
+        //Others are for non-text input modalities. Therefore common to both.
+        const wordBlacklist = ["embed", "whisper", "transcribe", "audio", "moderation", "tts", "realtime", "dall-e", "babbage", "davinci"];
+        
+        if (this.provider === "azure_openai") {
+            //Azure OpenAI has additional information about the models
+            result = result.filter((m) => {
+                return !(m as any)?.capabilities?.embeddings;
+            });
+        }
+
+        //OpenAI has very little information, filtering based on name.
+        result = result.filter((m) => {
+            return !wordBlacklist.some((word) => m.id.includes(word));
+        });
+
+        const models = filter ? result.filter(filter) : result;
         return models.map((m) => ({
             id: m.id,
             name: m.id,
