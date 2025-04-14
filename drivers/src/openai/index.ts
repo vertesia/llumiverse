@@ -284,8 +284,8 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         //Others are for non-text input modalities. Therefore common to both.
         const commonWordBlacklist = ["embed", "whisper", "transcribe", "audio", "moderation", "tts", "realtime"];
         
-        //Azure OpenAI has additional information about the models
         if (this.provider === "azure_openai") {
+            //Azure OpenAI has additional information about the models
             result = result.filter((m) => {
                 return !(m as any)?.capabilities?.embeddings;
             });
