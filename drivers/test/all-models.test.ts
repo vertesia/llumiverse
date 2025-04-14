@@ -179,13 +179,13 @@ if (process.env.XAI_API_KEY) {
 }
 
 function getTestOptions(model: string): ExecutionOptions {
-    if (model == "o1-mini") {
+    if (model == "o1-mini" || model == "o3-mini") {
         return {
             model: model,
             model_options: {
                 _option_id: "openai-thinking",
-                max_tokens: 2048,
-                stop_sequence: ["adsoiuygsa"],
+                max_tokens: 3000,
+                stop_sequence: model == "o3-mini" ? ["adsoiuygsa"] : undefined,
             },
             output_modality: Modalities.text,
         };
