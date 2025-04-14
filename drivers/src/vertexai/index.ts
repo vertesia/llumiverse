@@ -144,7 +144,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             id: model.name?.split('/').pop() ?? '',
             name: model.displayName ?? '',
             provider: 'vertexai',
-            modalities: model.supportedInputStorageFormats ?? []
+            input_modalities: model.supportedInputStorageFormats ?? []
         })));
 
         //Model Garden Publisher models - Pretrained models
@@ -164,7 +164,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 name: model.name?.split('/').pop() ?? '',
                 provider: 'vertexai',
                 owner: publisher,
-                modalities: [],
+                input_modalities: [],
             } satisfies AIModel<string>)).filter(model => {
                 const modelFamily = supportedModels[publisher as keyof typeof supportedModels];
                 for (const family of modelFamily) {

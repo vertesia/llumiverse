@@ -318,7 +318,7 @@ export interface AIModel<ProviderKeys = string> {
     can_stream?: boolean; //if the model's reponse can be streamed
     is_custom?: boolean; //if the model is a custom model (a trained model)
     is_multimodal?: boolean //if the model support files and images
-    modalities?: string[]; //if the model support files and images
+    input_modalities?: string[]; //if the model support files and images
     environment?: string; //the environment name
 }
 
