@@ -288,7 +288,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
         //Some of these use the completions API instead of the chat completions API
         //Others are for non-text input modalities. Update as required.
-        const wordBlacklist = ["embed", "whisper", "dall-e", "babbage", "davinci", "transcribe", "audio", "moderation", "tts"];
+        const wordBlacklist = ["embed", "whisper", "dall-e", "babbage", "davinci", "transcribe", "audio", "moderation", "tts", "realtime"];
         //OpenAI has very little information, filtering based on name.
         result = result.filter((m) => {
             return !wordBlacklist.some((word) => m.id.includes(word));
