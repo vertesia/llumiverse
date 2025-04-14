@@ -6,6 +6,10 @@ export interface WatsonxTextGenerationPayload {
     parameters: {
         max_new_tokens?: number;
         time_limit?: number;
+        stop_sequences?: string[];
+        temperature?: number;
+        top_k?: number;
+        top_p?: number;
     },
     project_id: string;
 }
