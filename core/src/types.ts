@@ -1,9 +1,9 @@
 import { PromptFormatter } from './formatters/index.js';
 import { JSONObject } from './json.js';
 import { TextFallbackOptions } from './options.js';
-import { VertexAIOptions } from './options/vertexai.js';
 import { BedrockOptions } from './options/bedrock.js';
 import { OpenAiOptions } from './options/openai.js';
+import { VertexAIOptions } from './options/vertexai.js';
 
 export interface EmbeddingsOptions {
     /**
@@ -67,10 +67,10 @@ export interface ToolDefinition {
  * A tool use instance represents a call to a tool.
  * The id property is used to identify the tool call.
  */
-export interface ToolUse {
+export interface ToolUse<ParamsT = JSONObject> {
     id: string,
     tool_name: string,
-    tool_input: JSONObject | null
+    tool_input: ParamsT | null
 }
 
 //ResultT should be either JSONObject or string
