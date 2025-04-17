@@ -78,7 +78,7 @@ export function parseS3UrlToUri(s3Url: URL) {
         if (hostname.includes('.s3.')) {
             // Format: bucket-name.s3.region.amazonaws.com
             bucketName = hostname.split('.s3.')[0];
-        } else if (hostname.startsWith('s3.') && hostname.includes('.amazonaws.com')) {
+        } else if (hostname.startsWith('s3.') && hostname.endsWith('.amazonaws.com')) {
             // Format: s3.region.amazonaws.com/bucket-name
             // In this case, the bucket is actually in the first segment of the pathname
             bucketName = url.pathname.split('/')[1];
