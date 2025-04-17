@@ -7,6 +7,7 @@ import {
     SystemContentBlock,
     ContentBlock,
 } from "@aws-sdk/client-bedrock-runtime";
+import { parseS3UrlToUri } from "./s3.js";
 
 function getJSONSafetyNotice(schema: JSONSchema) {
     return "The answer must be a JSON object using the following JSON Schema:\n" + JSON.stringify(schema, undefined, 2);
@@ -123,15 +124,40 @@ export async function fortmatConversePrompt(segments: PromptSegment[], schema?: 
 
                     //Video file - "mov | mkv | mp4 | webm | flv | mpeg | mpg | wmv | three_gp"
                 } else if (f.mime_type && f.mime_type.startsWith("video")) {
-                    content = [
-                        {
-                            video: {
-                                format: mimeToVideoType(f.mime_type),
-                                source: { bytes: await readStreamAsUint8Array(source) },
+                    let url_string = (await f.getURL()).toLowerCase();
+                    let url_format = new URL(url_string);
+                    if (url_format.hostname.endsWith("amazonaws.com") &&
+                        (url_format.hostname.startsWith("s3.") || url_format.hostname.includes(".s3."))) {
+                        //Convert to s3:// format
+                        const parsedUrl = parseS3UrlToUri(new URL(url_string));
+                        url_string = parsedUrl;
+                        url_format = new URL(parsedUrl);
+                    }
+                    if (url_format.protocol === "s3:") {
+                        //Use S3 bucket if available
+                        content = [
+                            {
+                                video: {
+                                    format: mimeToVideoType(f.mime_type),
+                                    source: {
+                                        s3Location: {
+                                            uri: url_string, //S3 URL
+                                            //bucketOwner:  We don't have this additional information.
+                                        }
+                                    },
+                                },
                             },
-                        },
-                    ];
-
+                        ];
+                    } else {
+                        content = [
+                            {
+                                video: {
+                                    format: mimeToVideoType(f.mime_type),
+                                    source: { bytes: await readStreamAsUint8Array(source) },
+                                },
+                            },
+                        ];
+                    }
                     //Fallback, send string
                 } else {
                     content = [{ text: await readStreamAsString(source) }];
