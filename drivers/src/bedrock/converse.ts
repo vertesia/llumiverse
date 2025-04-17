@@ -142,7 +142,7 @@ export async function fortmatConversePrompt(segments: PromptSegment[], schema?: 
                                     source: {
                                         s3Location: {
                                             uri: url_string, //S3 URL
-                                            //bucketOwnerId:  //We don't have this additional information.
+                                            //bucketOwner:  We don't have this additional information.
                                         }
                                      },
                                 },
