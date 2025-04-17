@@ -126,14 +126,13 @@ export async function fortmatConversePrompt(segments: PromptSegment[], schema?: 
                 } else if (f.mime_type && f.mime_type.startsWith("video")) {
                     let url_string = (await f.getURL()).toLowerCase();
                     let url_format = new URL(url_string);
-                    console.log("Video URL", url_format.hostname);
-                    if (url_format.hostname.includes("s3") && url_format.hostname.includes("amazonaws.com")) {
+                    if (url_format.hostname.endsWith("amazonaws.com") &&
+                        (url_format.hostname.startsWith("s3.") || url_format.hostname.includes(".s3."))) {
                         //Convert to s3:// format
                         const parsedUrl = parseS3UrlToUri(new URL(url_string));
                         url_string = parsedUrl;
                         url_format = new URL(parsedUrl);
                     }
-                    console.log("Video URL protocol", url_format.protocol);
                     if (url_format.protocol === "s3:") {
                         //Use S3 bucket if available
                         content = [

@@ -75,16 +75,20 @@ export function parseS3UrlToUri(s3Url: URL) {
 
         // Parse the hostname to extract the bucket name
         let bucketName;
-        if (hostname.includes('.s3.')) {
-            // Format: bucket-name.s3.region.amazonaws.com
-            bucketName = hostname.split('.s3.')[0];
-        } else if (hostname.startsWith('s3.') && hostname.endsWith('.amazonaws.com')) {
-            // Format: s3.region.amazonaws.com/bucket-name
-            // In this case, the bucket is actually in the first segment of the pathname
-            bucketName = url.pathname.split('/')[1];
-            // Adjust the pathname to remove the bucket name
-            const pathParts = url.pathname.split('/').slice(2);
-            url.pathname = '/' + pathParts.join('/');
+        if (hostname.endsWith('.amazonaws.com')) {
+            if (hostname.includes('.s3.')) {
+                // Format: bucket-name.s3.region.amazonaws.com
+                bucketName = hostname.split('.s3.')[0];
+            } else if (hostname.startsWith('s3.')) {
+                // Format: s3.region.amazonaws.com/bucket-name
+                // In this case, the bucket is actually in the first segment of the pathname
+                bucketName = url.pathname.split('/')[1];
+                // Adjust the pathname to remove the bucket name
+                const pathParts = url.pathname.split('/').slice(2);
+                url.pathname = '/' + pathParts.join('/');
+            } else {
+                throw new Error('Unable to determine bucket name from URL');
+            }
         } else {
             throw new Error('Unable to determine bucket name from URL');
         }
