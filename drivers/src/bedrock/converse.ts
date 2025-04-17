@@ -125,16 +125,17 @@ export async function fortmatConversePrompt(segments: PromptSegment[], schema?: 
                     //Video file - "mov | mkv | mp4 | webm | flv | mpeg | mpg | wmv | three_gp"
                 } else if (f.mime_type && f.mime_type.startsWith("video")) {
                     let url_string = (await f.getURL()).toLowerCase();
-                    if (url_string.includes("amazonaws.com")) {
-                        try {
-                            //Convert to s3:// format
-                            const parsedUrl = parseS3UrlToUri(new URL(url_string));
-                            url_string = parsedUrl;
-                        } catch (e) {
-                        }
+                    let url_format = new URL(url_string);
+                    console.log("Video URL", url_format.hostname);
+                    if (url_format.hostname.includes("s3") && url_format.hostname.includes("amazonaws.com")) {
+                        //Convert to s3:// format
+                        const parsedUrl = parseS3UrlToUri(new URL(url_string));
+                        url_string = parsedUrl;
+                        url_format = new URL(parsedUrl);
                     }
-                    //Use S3 bucket if available
-                    if (url_string.startsWith("s3://")) {
+                    console.log("Video URL protocol", url_format.protocol);
+                    if (url_format.protocol === "s3:") {
+                        //Use S3 bucket if available
                         content = [
                             {
                                 video: {
@@ -144,7 +145,7 @@ export async function fortmatConversePrompt(segments: PromptSegment[], schema?: 
                                             uri: url_string, //S3 URL
                                             //bucketOwner:  We don't have this additional information.
                                         }
-                                     },
+                                    },
                                 },
                             },
                         ];
