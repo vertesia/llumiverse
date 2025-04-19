@@ -67,8 +67,8 @@ importers:
         specifier: ^0.7.0
         version: 0.7.0
       '@aws-sdk/client-bedrock':
-        specifier: ^3.787.0
-        version: 3.787.0
+        specifier: ^3.791.0
+        version: 3.791.0
       '@aws-sdk/client-bedrock-runtime':
         specifier: ^3.787.0
         version: 3.787.0
@@ -85,8 +85,8 @@ importers:
         specifier: ^3.775.0
         version: 3.775.0
       '@azure/identity':
-        specifier: ^4.8.0
-        version: 4.8.0
+        specifier: ^4.9.0
+        version: 4.9.0
       '@azure/openai':
         specifier: 2.0.0
         version: 2.0.0
@@ -97,8 +97,8 @@ importers:
         specifier: ^1.9.3
         version: 1.9.3
       '@huggingface/inference':
-        specifier: 2.6.7
-        version: 2.6.7
+        specifier: 2.8.1
+        version: 2.8.1
       '@llumiverse/core':
         specifier: workspace:*
         version: link:../core
@@ -121,8 +121,8 @@ importers:
         specifier: ^0.2.0
         version: 0.2.1
       openai:
-        specifier: ^4.93.0
-        version: 4.93.0
+        specifier: ^4.95.1
+        version: 4.95.1
       replicate:
         specifier: ^1.0.1
         version: 1.0.1
@@ -200,8 +200,8 @@ packages:
     resolution: {integrity: sha512-aGxGNsv366rewmz0w10C6Epo9iClxdL9kY+uOEo4OO7gRchRwSHOj1AYK7Tqa0zB5vGLYa1KGCrvzvthCWt4AQ==}
     engines: {node: '>=18.0.0'}
 
-  '@aws-sdk/client-bedrock@3.787.0':
-    resolution: {integrity: sha512-qk6pwmvlUVaQNAWKp4Zmq7k71mYMi1BT6b152vwwnOOuhK3cEvQKynXkG7+eOF8COt28uDfaPsQWtofofD8fQg==}
+  '@aws-sdk/client-bedrock@3.791.0':
+    resolution: {integrity: sha512-xM5fg+I6+U1lIKXsTtkQsN9FzMwIjhv/WKvzRwdRWz1Eiriq9TNmXDiNWhCjyk108Ktjv/IcrmslsZxzbH4y1g==}
     engines: {node: '>=18.0.0'}
 
   '@aws-sdk/client-cognito-identity@3.787.0':
@@ -386,8 +386,8 @@ packages:
     resolution: {integrity: sha512-DxOSLua+NdpWoSqULhjDyAZTXFdP/LKkqtYuxxz1SCN289zk3OG8UOpnCQAz/tygyACBtWp/BoO72ptK7msY8g==}
     engines: {node: '>=18.0.0'}
 
-  '@azure/identity@4.8.0':
-    resolution: {integrity: sha512-l9ALUGHtFB/JfsqmA+9iYAp2a+cCwdNO/cyIr2y7nJLJsz1aae6qVP8XxT7Kbudg0IQRSIMXj0+iivFdbD1xPA==}
+  '@azure/identity@4.9.0':
+    resolution: {integrity: sha512-dz2ZvKxDFoTUmJgmkCBVcyuKckgqE1qVxrRPzUhyKN7FyvUbtNPUrGzqSllOAf1OL9TMGgYqZWbIyD0b/AE15g==}
     engines: {node: '>=18.0.0'}
 
   '@azure/logger@1.1.4':
@@ -402,12 +402,12 @@ packages:
     resolution: {integrity: sha512-lh+eZfibGwtQxFnx+mj6cYWn0pwA8tDnn8CBs9P21nC7Uw5YWRwfXaXdVQSMENZ5ojRqR+NzRaucEo4qUvs3pA==}
     engines: {node: '>=0.8.0'}
 
-  '@azure/msal-common@15.4.0':
-    resolution: {integrity: sha512-reeIUDXt6Xc+FpCBDEbUFQWvJ6SjE0JwsGYIfa3ZCR6Tpzjc9J1v+/InQgfCeJzfTRd7PDJVxI6TSzOmOd7+Ag==}
+  '@azure/msal-common@15.5.1':
+    resolution: {integrity: sha512-oxK0khbc4Bg1bKQnqDr7ikULhVL2OHgSrIq0Vlh4b6+hm4r0lr6zPMQE8ZvmacJuh+ZZGKBM5iIObhF1q1QimQ==}
     engines: {node: '>=0.8.0'}
 
-  '@azure/msal-node@3.4.1':
-    resolution: {integrity: sha512-VlW6ygnKBIqUKIHnA/ubQ+F3rZ8aW3K6VA1bpZ90Ln0vlE4XaA6yGB/FibPJxet7gWinAG1oSpQqPN/PL9AqIw==}
+  '@azure/msal-node@3.5.1':
+    resolution: {integrity: sha512-dkgMYM5B6tI88r/oqf5bYd93WkenQpaWwiszJDk7avVjso8cmuKRTW97dA1RMi6RhihZFLtY1VtWxU9+sW2T5g==}
     engines: {node: '>=16'}
 
   '@azure/openai@2.0.0':
@@ -581,9 +581,12 @@ packages:
     engines: {node: '>=6'}
     hasBin: true
 
-  '@huggingface/inference@2.6.7':
-    resolution: {integrity: sha512-vFBqvtU3LhxjufTs0jcRrDSc0nK+lah10bOgvlIn80lAH4JwMzHHPBQ4g4ECEdRD0PIt6EpTiidEZQq2sArb5Q==}
+  '@huggingface/inference@2.8.1':
+    resolution: {integrity: sha512-EfsNtY9OR6JCNaUa5bZu2mrs48iqeTz0Gutwf+fU0Kypx33xFQB4DKMhp8u4Ee6qVbLbNWvTHuWwlppLQl4p4Q==}
     engines: {node: '>=18'}
+
+  '@huggingface/tasks@0.12.30':
+    resolution: {integrity: sha512-A1ITdxbEzx9L8wKR8pF7swyrTLxWNDFIGDLUWInxvks2ruQ8PLRBZe8r0EcjC3CDdtlj9jV1V4cgV35K/iy3GQ==}
 
   '@isaacs/cliui@8.0.2':
     resolution: {integrity: sha512-O8jcjabXaleOG9DQ0+ARXWZBTfnP4WNAqzuiJK7ll44AmxGKv/J2M4TPjxjY3znBCfvBXFzucm1twdyFybFqEA==}
@@ -1072,6 +1075,7 @@ packages:
 
   bignumber.js@9.2.0:
     resolution: {integrity: sha512-JocpCSOixzy5XFJi2ub6IMmV/G9i8Lrm2lZvwBv9xPdglmZM0ufDVBbjbrfU/zuLvBfD7Bv2eYxz9i+OHTgkew==}
+    deprecated: pkg version number incorrect
 
   bowser@2.11.0:
     resolution: {integrity: sha512-AlcaJBi/pqqJBIQ8U9Mcpc9i8Aqxn88Skv5d+xBX006BY5u8N3mGLHa5Lgppa7L/HfwgwLgZ6NYs+Ag6uUmJRA==}
@@ -1553,8 +1557,8 @@ packages:
     resolution: {integrity: sha512-mnkeQ1qP5Ue2wd+aivTD3NHd/lZ96Lu0jgf0pwktLPtx6cTZiH7tyeGRRHs0zX0rbrahXPnXlUnbeXyaBBuIaw==}
     engines: {node: '>=18'}
 
-  openai@4.93.0:
-    resolution: {integrity: sha512-2kONcISbThKLfm7T9paVzg+QCE1FOZtNMMUfXyXckUAoXRRS/mTP89JSDHPMp8uM5s0bz28RISbvQjArD6mgUQ==}
+  openai@4.95.1:
+    resolution: {integrity: sha512-IqJy+ymeW+k/Wq+2YVN3693OQMMcODRtHEYOlz263MdUwnN/Dwdl9c2EXSxLLtGEHkSHAfvzpDMHI5MaWJKXjQ==}
     hasBin: true
     peerDependencies:
       ws: ^8.18.0
@@ -1683,10 +1687,6 @@ packages:
 
   std-env@3.9.0:
     resolution: {integrity: sha512-UGvjygr6F6tpH7o2qyqR6QYpwraIjKSdtzyBdyytFOHmPZY917kwdwLG0RbOjWOnKmnm3PeHjaoLLMie7kPLQw==}
-
-  stoppable@1.1.0:
-    resolution: {integrity: sha512-KXDYZ9dszj6bzvnEMRYvxgeTHU74QBFL54XKtP3nyMuJ81CFYtABZ3bAzL2EdFUaEwJOBOgENyFj3R7oTzDyyw==}
-    engines: {node: '>=4', npm: '>=6'}
 
   stream-browserify@3.0.0:
     resolution: {integrity: sha512-H73RAHsVBapbim0tU2JwwOiXUj+fikfiaoYAKHF3VJfA0pe2BCzkhAHBlLG6REzE+2WNZcxOXjK7lkso+9euLA==}
@@ -2017,7 +2017,7 @@ snapshots:
     transitivePeerDependencies:
       - aws-crt
 
-  '@aws-sdk/client-bedrock@3.787.0':
+  '@aws-sdk/client-bedrock@3.791.0':
     dependencies:
       '@aws-crypto/sha256-browser': 5.2.0
       '@aws-crypto/sha256-js': 5.2.0
@@ -2632,7 +2632,7 @@ snapshots:
       '@azure/abort-controller': 2.1.2
       tslib: 2.8.1
 
-  '@azure/identity@4.8.0':
+  '@azure/identity@4.9.0':
     dependencies:
       '@azure/abort-controller': 2.1.2
       '@azure/core-auth': 1.9.0
@@ -2642,11 +2642,8 @@ snapshots:
       '@azure/core-util': 1.11.0
       '@azure/logger': 1.1.4
       '@azure/msal-browser': 4.8.0
-      '@azure/msal-node': 3.4.1
-      events: 3.3.0
-      jws: 4.0.0
+      '@azure/msal-node': 3.5.1
       open: 10.1.0
-      stoppable: 1.1.0
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
@@ -2661,11 +2658,11 @@ snapshots:
 
   '@azure/msal-common@15.3.0': {}
 
-  '@azure/msal-common@15.4.0': {}
+  '@azure/msal-common@15.5.1': {}
 
-  '@azure/msal-node@3.4.1':
+  '@azure/msal-node@3.5.1':
     dependencies:
-      '@azure/msal-common': 15.4.0
+      '@azure/msal-common': 15.5.1
       jsonwebtoken: 9.0.2
       uuid: 8.3.2
 
@@ -2778,7 +2775,11 @@ snapshots:
       protobufjs: 7.4.0
       yargs: 17.7.2
 
-  '@huggingface/inference@2.6.7': {}
+  '@huggingface/inference@2.8.1':
+    dependencies:
+      '@huggingface/tasks': 0.12.30
+
+  '@huggingface/tasks@0.12.30': {}
 
   '@isaacs/cliui@8.0.2':
     dependencies:
@@ -3880,7 +3881,7 @@ snapshots:
       is-inside-container: 1.0.0
       is-wsl: 3.1.0
 
-  openai@4.93.0:
+  openai@4.95.1:
     dependencies:
       '@types/node': 18.19.86
       '@types/node-fetch': 2.6.12
@@ -4030,8 +4031,6 @@ snapshots:
   stackback@0.0.2: {}
 
   std-env@3.9.0: {}
-
-  stoppable@1.1.0: {}
 
   stream-browserify@3.0.0:
     dependencies:
