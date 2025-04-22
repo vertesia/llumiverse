@@ -1,6 +1,6 @@
 import * as AnthropicAPI from '@anthropic-ai/sdk';
-import { ContentBlock, Message, TextBlockParam } from "@anthropic-ai/sdk/resources/index.js";
-import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, JSONObject, ModelType, PromptOptions, PromptRole, PromptSegment, ToolUse } from "@llumiverse/core";
+import { ContentBlock, ContentBlockParam, Message, TextBlockParam } from "@anthropic-ai/sdk/resources/index.js";
+import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, JSONObject, ModelType, PromptOptions, PromptRole, PromptSegment, readStreamAsBase64, ToolUse } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { VertexAIClaudeOptions } from "../../../../core/src/options/vertexai.js";
 import { VertexAIDriver } from "../index.js";
@@ -99,33 +99,70 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
             safetySegments.push(schemaSegments);
         }
 
-        const messages: MessageParam[] = segments.filter(segment =>
-            segment.role == PromptRole.user
-            || segment.role == PromptRole.assistant
-            || segment.role === PromptRole.tool)
-            .map(segment => {
-                if (segment.role === PromptRole.tool) {
-                    if (!segment.tool_use_id) {
-                        throw new Error("Tool prompt segment must have a tool_use_id");
-                    }
-                    return {
-                        role: 'user',
-                        content: [
-                            {
-                                type: 'tool_result',
-                                tool_use_id: segment.tool_use_id,
-                                content: segment.content || undefined
+        const messages: MessageParam[] = [];
+        for (const segment of segments) {
+            if (segment.role === PromptRole.system || segment.role === PromptRole.safety) {
+                continue;
+            }
+
+            if (segment.role === PromptRole.tool) {
+                if (!segment.tool_use_id) {
+                    throw new Error("Tool prompt segment must have a tool_use_id");
+                }
+                messages.push({
+                    role: 'user',
+                    content: [
+                        {
+                            type: 'tool_result',
+                            tool_use_id: segment.tool_use_id,
+                            content: segment.content || undefined
+                        }
+                    ]
+                });
+            } else {
+                const contentBlocks: ContentBlockParam[] = [];
+                for (const file of segment.files || []) {
+                    if (file.mime_type?.startsWith("image/")) {
+                        const allowedTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+                        if (!allowedTypes.includes(file.mime_type)) {
+                            throw new Error(`Unsupported image type: ${file.mime_type}`);
+                        }
+
+                        contentBlocks.push({
+                            type: 'image',
+                            source: {
+                                type: 'base64',
+                                data: await readStreamAsBase64(await file.getStream()),
+                                media_type: file.mime_type as any
                             }
-                        ]
-                    }
-                } else {
-                    return {
-                        role: segment.role !== PromptRole.user ? 'assistant' : 'user',
-                        content: segment.content
+                        });
+                    } else if (file.mime_type?.startsWith("text/")) {
+                        contentBlocks.push({
+                            source: {
+                                type: 'text',
+                                data: await readStreamAsBase64(await file.getStream()),
+                                media_type: 'text/plain'
+                            },
+                            type : 'document'
+                        });
                     }
                 }
-            });
 
+                if (segment.content) {
+                    contentBlocks.push({
+                        type: 'text',
+                        text: segment.content
+                    });
+                }
+
+
+                messages.push({
+                    role: segment.role === PromptRole.assistant ? 'assistant' : 'user',
+                    content: contentBlocks
+                });
+            }
+        }
+        
         const system = systemSegments.concat(safetySegments);
 
         return {
