@@ -105,13 +105,13 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
             return {
                 result: result,
-                finish_reason: chunk.choices[0]?.finish_reason,         //Uses expected "stop" , "length" format
+                finish_reason: chunk.choices[0]?.finish_reason ?? undefined,         //Uses expected "stop" , "length" format
                 token_usage: {
                     prompt: chunk.usage?.prompt_tokens,
                     result: chunk.usage?.completion_tokens,
                     total: (chunk.usage?.prompt_tokens ?? 0) + (chunk.usage?.completion_tokens ?? 0),
                 }
-            } as CompletionChunkObject;
+            } satisfies CompletionChunkObject;
         };
 
         convertRoles(prompt, options.model);
@@ -134,6 +134,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             n: 1,
             max_completion_tokens: model_options?.max_tokens, //TODO: use max_tokens for older models, currently relying on OpenAI to handle it
             //tools: getToolDefinitions(options.tools),
+            /*
             tools: useTools ? options.result_schema && this.provider.includes("openai")
                 ? [
                     {
@@ -150,8 +151,16 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                     type: 'function',
                     function: { name: "format_output" }
                 } : undefined : undefined,
+                */
             stop: model_options?.stop_sequence,
-        })) as Stream<OpenAI.Chat.Completions.ChatCompletionChunk>;
+            response_format: options.result_schema ? {
+                type: "json_schema",
+                json_schema: {
+                    name: "format_output",
+                    schema: options.result_schema,
+                }
+            } : undefined,
+        })) satisfies Stream<OpenAI.Chat.Completions.ChatCompletionChunk>;
 
         return asyncMap(stream, mapFn);
     }
@@ -161,6 +170,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             this.logger.warn("Invalid model options", { options: options.model_options });
         }
 
+        /*
         const functions = options.result_schema && this.provider.includes("openai")
             ? [
                 {
@@ -169,12 +179,12 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                         parameters: options.result_schema as any,
                     },
                     type: 'function'
-                } as OpenAI.Chat.ChatCompletionTool,
+                } satisfies OpenAI.Chat.ChatCompletionTool,
             ]
             : undefined;
-
+        */
         convertRoles(prompt, options.model);
-        const useTools: boolean = !isNonStructureSupporting(options.model);
+        //const useTools: boolean = !isNonStructureSupporting(options.model);
         const model_options = options.model_options as any;
         insert_image_detail(prompt, model_options?.image_detail ?? "auto");
 
@@ -192,13 +202,20 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             n: 1,
             max_completion_tokens: model_options?.max_tokens, //TODO: use max_tokens for older models, currently relying on OpenAI to handle it
             //tools: getToolDefinitions(options.tools),
-            tools: useTools ? functions : undefined,
-            tool_choice: useTools ? options.result_schema && this.provider.includes("openai")
-                ? {
-                    type: 'function',
-                    function: { name: "format_output" }
-                } : undefined : undefined,
+            //tools: useTools ? functions : undefined,
+            //tool_choice: useTools ? options.result_schema && this.provider.includes("openai")
+            //    ? {
+            //        type: 'function',
+            //        function: { name: "format_output" }
+            //    } : undefined : undefined,
             stop: model_options?.stop_sequence,
+            response_format: options.result_schema ? {
+                type: "json_schema",
+                json_schema: {
+                    name: "format_output",
+                    schema: options.result_schema,
+                }
+            } : undefined,
             // functions: functions,
             // function_call: options.result_schema
             //     ? { name: "format_output" }
@@ -329,7 +346,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             throw new Error("No embedding found");
         }
 
-        return { values: embeddings, model } as EmbeddingsResult;
+        return { values: embeddings, model } satisfies EmbeddingsResult;
     }
 
 }
