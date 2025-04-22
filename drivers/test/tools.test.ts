@@ -68,22 +68,20 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
 //     console.warn("TogetherAI tests are skipped: TOGETHER_API_KEY environment variable is not set");
 // }
 
-// if (process.env.OPENAI_API_KEY) {
-//     drivers.push({
-//         name: "openai",
-//         driver: new OpenAIDriver({
-//             apiKey: process.env.OPENAI_API_KEY as string
-//         }),
-//         models: [
-//             "gpt-4o",
-//             "gpt-3.5-turbo",
-//             "o1-mini",
-//         ]
-//     }
-//     )
-// } else {
-//     console.warn("OpenAI tests are skipped: OPENAI_API_KEY environment variable is not set");
-// }
+if (process.env.OPENAI_API_KEY) {
+    drivers.push({
+        name: "openai",
+        driver: new OpenAIDriver({
+            apiKey: process.env.OPENAI_API_KEY as string
+        }),
+        models: [
+            "gpt-4o",
+        ]
+    }
+    )
+} else {
+    console.warn("OpenAI tests are skipped: OPENAI_API_KEY environment variable is not set");
+}
 
 // const AZURE_OPENAI_MODELS = [
 //     "gpt-4o",
