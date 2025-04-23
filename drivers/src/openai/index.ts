@@ -9,6 +9,7 @@ import {
     EmbeddingsResult,
     ExecutionOptions,
     ExecutionTokenUsage,
+    JSONSchema,
     ModelType,
     ToolDefinition,
     ToolUse,
@@ -130,11 +131,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                 type: "json_schema",
                 json_schema: {
                     name: "format_output",
-                    schema: {
-                        ...options.result_schema,
-                        additionalProperties: false,
-                        required: Object.keys(options.result_schema.properties ?? {})
-                    },
+                    schema: openAISchemaFormat(options.result_schema),
                 }
             } : undefined,
         })) satisfies Stream<OpenAI.Chat.Completions.ChatCompletionChunk>;
@@ -176,11 +173,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                 type: "json_schema",
                 json_schema: {
                     name: "format_output",
-                    schema: {
-                        ...options.result_schema,
-                        additionalProperties: false,
-                        required: Object.keys(options.result_schema.properties ?? {})
-                    },
+                    schema: openAISchemaFormat(options.result_schema)
                 }
             } : undefined,
         });
@@ -403,11 +396,7 @@ function getToolDefinition(toolDef: ToolDefinition): OpenAI.ChatCompletionTool {
             name: toolDef.name,
             description: toolDef.description,
             parameters: toolDef.input_schema ?
-                {
-                    ...toolDef.input_schema,
-                    additionalProperties: false,
-                    required: Object.keys(toolDef.input_schema.properties ?? {})
-                } : undefined,
+                openAISchemaFormat(toolDef.input_schema as JSONSchema) : undefined,
             strict: toolDef.input_schema ? true : false,
         },
     } satisfies OpenAI.ChatCompletionTool;
@@ -457,4 +446,36 @@ function createPromptFromResponse(response: OpenAI.Chat.Completions.ChatCompleti
         });
     }
     return messages;
+}
+
+function openAISchemaFormat(schema: JSONSchema): JSONSchema {
+    // Base case: if no schema or no properties, return the schema as is
+    if (!schema || typeof schema !== 'object') {
+        return schema;
+    }
+    const formattedSchema = { ...schema };
+    formattedSchema.additionalProperties = false;
+    
+    if (formattedSchema.properties) {
+        formattedSchema.required = Object.keys(formattedSchema.properties);
+        
+        // Process each property recursively
+        for (const propName of Object.keys(formattedSchema.properties)) {
+            const property = formattedSchema.properties[propName];
+            
+            // Recursively process object properties
+            if (property.type === 'object') {
+                formattedSchema.properties[propName] = openAISchemaFormat(property);
+            } 
+            // Process arrays with items of type object
+            else if (property.type === 'array' && property.items && property.items.type === 'object') {
+                formattedSchema.properties[propName] = {
+                    ...property,
+                    items: openAISchemaFormat(property.items)
+                };
+            }
+        }
+    }
+    
+    return formattedSchema;
 }
