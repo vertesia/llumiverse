@@ -119,7 +119,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                 strictMode = true;
             }
             catch (e) {
-                options.result_schema = parsedSchema;
+                parsedSchema = limitedSchemaFormat(options.result_schema);
                 strictMode = false;
             }
         }
@@ -176,7 +176,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                 strictMode = true;
             }
             catch (e) {
-                parsedSchema = options.result_schema;
+                parsedSchema = limitedSchemaFormat(options.result_schema);
                 strictMode = false;
             }
         }
@@ -426,7 +426,7 @@ function getToolDefinition(toolDef: ToolDefinition): OpenAI.ChatCompletionTool {
             strictMode = true;
         }
         catch (e) {
-            parsedSchema = toolDef.input_schema as JSONSchema;
+            parsedSchema = limitedSchemaFormat(toolDef.input_schema as JSONSchema);
             strictMode = false;
         }
     }
@@ -488,6 +488,35 @@ function createPromptFromResponse(response: OpenAI.Chat.Completions.ChatCompleti
     return messages;
 }
 
+//For strict mode false
+function limitedSchemaFormat(schema: JSONSchema): JSONSchema {
+    const formattedSchema = { ...schema };
+
+    // Defaults not supported
+    delete formattedSchema.default;
+
+    if (formattedSchema?.properties) {
+        // Process each property recursively
+        for (const propName of Object.keys(formattedSchema.properties)) {
+            const property = formattedSchema.properties[propName];
+
+            // Recursively process properties
+            formattedSchema.properties[propName] = limitedSchemaFormat(property);
+
+            // Process arrays with items of type object
+            if (property?.type === 'array' && property.items && property.items?.type === 'object') {
+                formattedSchema.properties[propName] = {
+                    ...property,
+                    items: limitedSchemaFormat(property.items),
+                };
+            }
+        }
+    }
+
+    return formattedSchema;
+}
+
+//For strict mode true
 function openAISchemaFormat(schema: JSONSchema): JSONSchema {
     const formattedSchema = { ...schema };
 
