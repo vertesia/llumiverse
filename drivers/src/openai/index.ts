@@ -111,6 +111,19 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         const model_options = options.model_options as any;
         insert_image_detail(prompt, model_options?.image_detail ?? "auto");
 
+        let parsedSchema: JSONSchema | undefined = undefined;
+        let strictMode = false;
+        if (options.result_schema && supportsSchema(options.model)) {
+            try {
+                parsedSchema = openAISchemaFormat(options.result_schema);
+                strictMode = true;
+            }
+            catch (e) {
+                options.result_schema = parsedSchema;
+                strictMode = false;
+            }
+        }
+
         const stream = (await this.service.chat.completions.create({
             stream: true,
             stream_options: { include_usage: true },
@@ -127,11 +140,12 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             max_completion_tokens: model_options?.max_tokens, //TODO: use max_tokens for older models, currently relying on OpenAI to handle it
             tools: useTools ? toolDefs : undefined,
             stop: model_options?.stop_sequence,
-            response_format: options.result_schema && supportsSchema(options.model) ? {
+            response_format: parsedSchema ? {
                 type: "json_schema",
                 json_schema: {
                     name: "format_output",
-                    schema: openAISchemaFormat(options.result_schema),
+                    schema: parsedSchema,
+                    strict: strictMode,
                 }
             } : undefined,
         })) satisfies Stream<OpenAI.Chat.Completions.ChatCompletionChunk>;
@@ -154,6 +168,19 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
         let conversation = updateConversation(options.conversation as OpenAIMessageBlock[], prompt);
 
+        let parsedSchema: JSONSchema | undefined = undefined;
+        let strictMode = false;
+        if (options.result_schema && supportsSchema(options.model)) {
+            try {
+                parsedSchema = openAISchemaFormat(options.result_schema);
+                strictMode = true;
+            }
+            catch (e) {
+                parsedSchema = options.result_schema;
+                strictMode = false;
+            }
+        }
+
         const res = await this.service.chat.completions.create({
             stream: false,
             model: options.model,
@@ -169,11 +196,12 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             max_completion_tokens: model_options?.max_tokens, //TODO: use max_tokens for older models, currently relying on OpenAI to handle it
             tools: useTools ? toolDefs : undefined,
             stop: model_options?.stop_sequence,
-            response_format: options.result_schema && supportsSchema(options.model) ? {
+            response_format: parsedSchema ? {
                 type: "json_schema",
                 json_schema: {
                     name: "format_output",
-                    schema: openAISchemaFormat(options.result_schema)
+                    schema: parsedSchema,
+                    strict: strictMode,
                 }
             } : undefined,
         });
@@ -390,14 +418,26 @@ function getToolDefinitions(tools: ToolDefinition[] | undefined | null): OpenAI.
     return tools ? tools.map(getToolDefinition) : undefined;
 }
 function getToolDefinition(toolDef: ToolDefinition): OpenAI.ChatCompletionTool {
+    let parsedSchema: JSONSchema | undefined = undefined;
+    let strictMode = false;
+    if (toolDef.input_schema) {
+        try {
+            parsedSchema = openAISchemaFormat(toolDef.input_schema as JSONSchema);
+            strictMode = true;
+        }
+        catch (e) {
+            parsedSchema = toolDef.input_schema as JSONSchema;
+            strictMode = false;
+        }
+    }
+
     return {
         type: "function",
         function: {
             name: toolDef.name,
             description: toolDef.description,
-            parameters: toolDef.input_schema ?
-                openAISchemaFormat(toolDef.input_schema as JSONSchema) : undefined,
-            strict: toolDef.input_schema ? true : false,
+            parameters: parsedSchema,
+            strict: strictMode,
         },
     } satisfies OpenAI.ChatCompletionTool;
 }
@@ -449,33 +489,49 @@ function createPromptFromResponse(response: OpenAI.Chat.Completions.ChatCompleti
 }
 
 function openAISchemaFormat(schema: JSONSchema): JSONSchema {
-    // Base case: if no schema or no properties, return the schema as is
-    if (!schema || typeof schema !== 'object') {
-        return schema;
-    }
     const formattedSchema = { ...schema };
-    formattedSchema.additionalProperties = false;
-    
-    if (formattedSchema.properties) {
+
+    // Defaults not supported
+    delete formattedSchema.default 
+
+    // Additional properties not supported, required to be set.
+    if (formattedSchema?.type === "object") {
+        formattedSchema.additionalProperties = false;
+    }
+
+    //Optionality set by type, everything is set to required so remove any nullable.
+    if (formattedSchema?.nullable && formattedSchema?.type) {
+        formattedSchema.type = Array.isArray(formattedSchema.type)
+            ? [...formattedSchema.type, "null"]
+            : [formattedSchema.type, "null"];
+    }
+    delete formattedSchema.nullable; 
+
+    if (formattedSchema?.properties) {
+        // Set all properties as required
         formattedSchema.required = Object.keys(formattedSchema.properties);
         
         // Process each property recursively
         for (const propName of Object.keys(formattedSchema.properties)) {
             const property = formattedSchema.properties[propName];
             
-            // Recursively process object properties
-            if (property.type === 'object') {
-                formattedSchema.properties[propName] = openAISchemaFormat(property);
-            } 
+            // Recursively process properties
+            formattedSchema.properties[propName] = openAISchemaFormat(property);
+            
             // Process arrays with items of type object
-            else if (property.type === 'array' && property.items && property.items.type === 'object') {
+            if (property?.type === 'array' && property.items && property.items?.type === 'object') {
                 formattedSchema.properties[propName] = {
                     ...property,
-                    items: openAISchemaFormat(property.items)
+                    items: openAISchemaFormat(property.items),
                 };
             }
         }
     }
+    if (formattedSchema?.type === 'object' && (!formattedSchema?.properties || Object.keys(formattedSchema?.properties ?? {}).length == 0)) {
+        //If no properties are defined, then additionalProperties: true was set or the object would be empty.
+        //OpenAI does not support this on structured output/ strict mode.
+        throw new Error("OpenAI does not support empty objects or objects with additionalProperties set to true");
+    }
     
-    return formattedSchema;
+    return formattedSchema
 }
