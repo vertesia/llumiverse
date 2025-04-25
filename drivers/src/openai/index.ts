@@ -9,8 +9,10 @@ import {
     EmbeddingsResult,
     ExecutionOptions,
     ExecutionTokenUsage,
+    JSONSchema,
     ModelType,
     ToolDefinition,
+    ToolUse,
     TrainingJob,
     TrainingJobStatus,
     TrainingOptions,
@@ -20,6 +22,9 @@ import { asyncMap } from "@llumiverse/core/async";
 import { formatOpenAILikeMultimodalPrompt } from "@llumiverse/core/formatters";
 import OpenAI, { AzureOpenAI } from "openai";
 import { Stream } from "openai/streaming";
+
+//For code readability
+type OpenAIMessageBlock = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
 //TODO: Do we need a list?, replace with if statements and modernise?
 const supportFineTunning = new Set([
@@ -35,7 +40,7 @@ export interface BaseOpenAIDriverOptions extends DriverOptions {
 
 export abstract class BaseOpenAIDriver extends AbstractDriver<
     BaseOpenAIDriverOptions,
-    OpenAI.Chat.Completions.ChatCompletionMessageParam[]
+    OpenAIMessageBlock[]
 > {
     abstract provider: "azure_openai" | "openai" | "xai";
     abstract service: OpenAI | AzureOpenAI;
@@ -47,7 +52,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     }
 
     extractDataFromResponse(
-        options: ExecutionOptions,
+        _options: ExecutionOptions,
         result: OpenAI.Chat.Completions.ChatCompletion
     ): Completion {
         const tokenInfo: ExecutionTokenUsage = {
@@ -58,25 +63,10 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
         const choice = result.choices[0];
 
-        //if no schema, return content
-        if (!options.result_schema) {
-            return {
-                result: choice.message.content ?? undefined,
-                token_usage: tokenInfo,
-                finish_reason: choice.finish_reason, //Uses expected "stop" , "length" format
-            }
-        }
+        const tools = collectTools(choice.message.tool_calls);
+        const data = choice.message.content ?? undefined;
 
-        const useTools: boolean = !isNonStructureSupporting(options.model);
-        let data = undefined;
-        if (useTools) {
-            //we have a schema: get the content and return after validation
-            data = choice?.message.tool_calls?.[0].function.arguments ?? choice.message.content ?? undefined;
-        } else {
-            data = choice.message.content ?? undefined;
-        }
-
-        if (!data) {
+        if (!data && !tools) {
             this.logger?.error("[OpenAI] Response is not valid", result);
             throw new Error("Response is not valid: no data");
         }
@@ -84,16 +74,18 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         return {
             result: data,
             token_usage: tokenInfo,
-            finish_reason: choice.finish_reason,
+            finish_reason: openAiFinishReason(choice.finish_reason),
+            tool_use: tools,
         };
     }
 
-    async requestTextCompletionStream(prompt: OpenAI.Chat.Completions.ChatCompletionMessageParam[], options: ExecutionOptions): Promise<any> {
+    async requestTextCompletionStream(prompt: OpenAIMessageBlock[], options: ExecutionOptions): Promise<any> {
         if (options.model_options?._option_id !== "openai-text" && options.model_options?._option_id !== "openai-thinking") {
             this.logger.warn("Invalid model options", { options: options.model_options });
         }
-
-        const useTools: boolean = !isNonStructureSupporting(options.model);
+        
+        const toolDefs = getToolDefinitions(options.tools);
+        const useTools: boolean = toolDefs ? supportsTools(options.model) : false;
 
         const mapFn = (chunk: OpenAI.Chat.Completions.ChatCompletionChunk) => {
             let result = undefined
@@ -105,19 +97,32 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
             return {
                 result: result,
-                finish_reason: chunk.choices[0]?.finish_reason,         //Uses expected "stop" , "length" format
+                finish_reason: openAiFinishReason(chunk.choices[0]?.finish_reason ?? undefined),         //Uses expected "stop" , "length" format
                 token_usage: {
                     prompt: chunk.usage?.prompt_tokens,
                     result: chunk.usage?.completion_tokens,
                     total: (chunk.usage?.prompt_tokens ?? 0) + (chunk.usage?.completion_tokens ?? 0),
                 }
-            } as CompletionChunkObject;
+            } satisfies CompletionChunkObject;
         };
 
         convertRoles(prompt, options.model);
 
         const model_options = options.model_options as any;
         insert_image_detail(prompt, model_options?.image_detail ?? "auto");
+
+        let parsedSchema: JSONSchema | undefined = undefined;
+        let strictMode = false;
+        if (options.result_schema && supportsSchema(options.model)) {
+            try {
+                parsedSchema = openAISchemaFormat(options.result_schema);
+                strictMode = true;
+            }
+            catch (e) {
+                parsedSchema = limitedSchemaFormat(options.result_schema);
+                strictMode = false;
+            }
+        }
 
         const stream = (await this.service.chat.completions.create({
             stream: true,
@@ -133,55 +138,53 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             frequency_penalty: model_options?.frequency_penalty,
             n: 1,
             max_completion_tokens: model_options?.max_tokens, //TODO: use max_tokens for older models, currently relying on OpenAI to handle it
-            //tools: getToolDefinitions(options.tools),
-            tools: useTools ? options.result_schema && this.provider.includes("openai")
-                ? [
-                    {
-                        function: {
-                            name: "format_output",
-                            parameters: options.result_schema as any,
-                        },
-                        type: "function"
-                    } as OpenAI.Chat.ChatCompletionTool,
-                ]
-                : undefined : undefined,
-            tool_choice: useTools ? options.result_schema
-                ? {
-                    type: 'function',
-                    function: { name: "format_output" }
-                } : undefined : undefined,
+            tools: useTools ? toolDefs : undefined,
             stop: model_options?.stop_sequence,
-        })) as Stream<OpenAI.Chat.Completions.ChatCompletionChunk>;
+            response_format: parsedSchema ? {
+                type: "json_schema",
+                json_schema: {
+                    name: "format_output",
+                    schema: parsedSchema,
+                    strict: strictMode,
+                }
+            } : undefined,
+        })) satisfies Stream<OpenAI.Chat.Completions.ChatCompletionChunk>;
 
         return asyncMap(stream, mapFn);
     }
 
-    async requestTextCompletion(prompt: OpenAI.Chat.Completions.ChatCompletionMessageParam[], options: ExecutionOptions): Promise<any> {
+    async requestTextCompletion(prompt: OpenAIMessageBlock[], options: ExecutionOptions): Promise<any> {
         if (options.model_options?._option_id !== "openai-text" && options.model_options?._option_id !== "openai-thinking") {
             this.logger.warn("Invalid model options", { options: options.model_options });
         }
 
-        const functions = options.result_schema && this.provider.includes("openai")
-            ? [
-                {
-                    function: {
-                        name: "format_output",
-                        parameters: options.result_schema as any,
-                    },
-                    type: 'function'
-                } as OpenAI.Chat.ChatCompletionTool,
-            ]
-            : undefined;
-
         convertRoles(prompt, options.model);
-        const useTools: boolean = !isNonStructureSupporting(options.model);
+
         const model_options = options.model_options as any;
         insert_image_detail(prompt, model_options?.image_detail ?? "auto");
+
+        const toolDefs = getToolDefinitions(options.tools);
+        const useTools: boolean = toolDefs ? supportsTools(options.model) : false;
+
+        let conversation = updateConversation(options.conversation as OpenAIMessageBlock[], prompt);
+
+        let parsedSchema: JSONSchema | undefined = undefined;
+        let strictMode = false;
+        if (options.result_schema && supportsSchema(options.model)) {
+            try {
+                parsedSchema = openAISchemaFormat(options.result_schema);
+                strictMode = true;
+            }
+            catch (e) {
+                parsedSchema = limitedSchemaFormat(options.result_schema);
+                strictMode = false;
+            }
+        }
 
         const res = await this.service.chat.completions.create({
             stream: false,
             model: options.model,
-            messages: prompt,
+            messages: conversation,
             reasoning_effort: model_options?.reasoning_effort,
             temperature: model_options?.temperature,
             top_p: model_options?.top_p,
@@ -191,24 +194,26 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             frequency_penalty: model_options?.frequency_penalty,
             n: 1,
             max_completion_tokens: model_options?.max_tokens, //TODO: use max_tokens for older models, currently relying on OpenAI to handle it
-            //tools: getToolDefinitions(options.tools),
-            tools: useTools ? functions : undefined,
-            tool_choice: useTools ? options.result_schema && this.provider.includes("openai")
-                ? {
-                    type: 'function',
-                    function: { name: "format_output" }
-                } : undefined : undefined,
+            tools: useTools ? toolDefs : undefined,
             stop: model_options?.stop_sequence,
-            // functions: functions,
-            // function_call: options.result_schema
-            //     ? { name: "format_output" }
-            //     : undefined,
+            response_format: parsedSchema ? {
+                type: "json_schema",
+                json_schema: {
+                    name: "format_output",
+                    schema: parsedSchema,
+                    strict: strictMode,
+                }
+            } : undefined,
         });
 
         const completion = this.extractDataFromResponse(options, res);
         if (options.include_original_response) {
             completion.original_response = res;
         }
+
+        conversation = updateConversation(conversation, createPromptFromResponse(res.choices[0].message));
+        completion.conversation = conversation;
+
         return completion;
     }
 
@@ -329,7 +334,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             throw new Error("No embedding found");
         }
 
-        return { values: embeddings, model } as EmbeddingsResult;
+        return { values: embeddings, model } satisfies EmbeddingsResult;
     }
 
 }
@@ -359,7 +364,7 @@ function jobInfo(job: OpenAI.FineTuning.Jobs.FineTuningJob): TrainingJob {
     }
 }
 
-function insert_image_detail(messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[], detail_level: string): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
+function insert_image_detail(messages: OpenAIMessageBlock[], detail_level: string): OpenAIMessageBlock[] {
     if (detail_level == "auto" || detail_level == "low" || detail_level == "high") {
         for (const message of messages) {
             if (message.role !== 'assistant' && message.content) {
@@ -377,7 +382,7 @@ function insert_image_detail(messages: OpenAI.Chat.Completions.ChatCompletionMes
     return messages;
 }
 
-function convertRoles(messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[], model: string): OpenAI.Chat.Completions.ChatCompletionMessageParam[] {
+function convertRoles(messages: OpenAIMessageBlock[], model: string): OpenAIMessageBlock[] {
     //New openai models use developer role instead of system
     if (model.includes("o1") || model.includes("o3")) {
         if (model.includes("o1-mini") || model.includes("o1-preview")) {
@@ -399,22 +404,163 @@ function convertRoles(messages: OpenAI.Chat.Completions.ChatCompletionMessagePar
     return messages
 }
 
-function isNonStructureSupporting(model: string): boolean {
-    return model.includes("o1-mini") || model.includes("o1-preview")
-        || model.includes("chatgpt-4o");
+function supportsTools(model: string): boolean {
+    return !(model.includes("o1-mini") || model.includes("o1-preview")
+        || model.includes("chatgpt-4o"));
 }
-//@ts-ignore
+
+function supportsSchema(model: string): boolean {
+    return !(model.includes("o1-mini") || model.includes("o1-preview")
+        || model.includes("chatgpt-4o"));
+}
+
 function getToolDefinitions(tools: ToolDefinition[] | undefined | null): OpenAI.ChatCompletionTool[] | undefined {
     return tools ? tools.map(getToolDefinition) : undefined;
 }
 function getToolDefinition(toolDef: ToolDefinition): OpenAI.ChatCompletionTool {
+    let parsedSchema: JSONSchema | undefined = undefined;
+    let strictMode = false;
+    if (toolDef.input_schema) {
+        try {
+            parsedSchema = openAISchemaFormat(toolDef.input_schema as JSONSchema);
+            strictMode = true;
+        }
+        catch (e) {
+            parsedSchema = limitedSchemaFormat(toolDef.input_schema as JSONSchema);
+            strictMode = false;
+        }
+    }
+
     return {
         type: "function",
         function: {
             name: toolDef.name,
             description: toolDef.description,
-            parameters: toolDef.input_schema,
-            strict: true
+            parameters: parsedSchema,
+            strict: strictMode,
         },
     } satisfies OpenAI.ChatCompletionTool;
+}
+
+function openAiFinishReason(finish_reason?: string): string | undefined {
+    if (finish_reason === "tool_calls") {
+        return "tool_use";
+    }
+    return finish_reason;
+}
+
+function updateConversation(conversation: OpenAIMessageBlock[], message: OpenAIMessageBlock[]): OpenAIMessageBlock[] {
+    if (!message) {
+        return conversation;
+    }
+    if (!conversation) {
+        return message;
+    }
+    return [...conversation, ...message];
+}
+
+export function collectTools(toolCalls?: OpenAI.Chat.Completions.ChatCompletionMessageToolCall[]): ToolUse[] | undefined {
+    if (!toolCalls) {
+        return undefined;
+    }
+
+    const tools: ToolUse[] = [];
+    for (const call of toolCalls) {
+        tools.push({
+            id: call.id,
+            tool_name: call.function.name,
+            tool_input: JSON.parse(call.function.arguments),
+        });
+
+    }
+    return tools.length > 0 ? tools : undefined;
+}
+
+function createPromptFromResponse(response: OpenAI.Chat.Completions.ChatCompletionMessage) : OpenAIMessageBlock[] {
+    const messages: OpenAIMessageBlock[] = [];
+    if (response) {
+        messages.push({
+            role: response.role,
+            content: response.content,
+            tool_calls: response.tool_calls,
+        });
+    }
+    return messages;
+}
+
+//For strict mode false
+function limitedSchemaFormat(schema: JSONSchema): JSONSchema {
+    const formattedSchema = { ...schema };
+
+    // Defaults not supported
+    delete formattedSchema.default;
+
+    if (formattedSchema?.properties) {
+        // Process each property recursively
+        for (const propName of Object.keys(formattedSchema.properties)) {
+            const property = formattedSchema.properties[propName];
+
+            // Recursively process properties
+            formattedSchema.properties[propName] = limitedSchemaFormat(property);
+
+            // Process arrays with items of type object
+            if (property?.type === 'array' && property.items && property.items?.type === 'object') {
+                formattedSchema.properties[propName] = {
+                    ...property,
+                    items: limitedSchemaFormat(property.items),
+                };
+            }
+        }
+    }
+
+    return formattedSchema;
+}
+
+//For strict mode true
+function openAISchemaFormat(schema: JSONSchema): JSONSchema {
+    const formattedSchema = { ...schema };
+
+    // Defaults not supported
+    delete formattedSchema.default 
+
+    // Additional properties not supported, required to be set.
+    if (formattedSchema?.type === "object") {
+        formattedSchema.additionalProperties = false;
+    }
+
+    //Optionality set by type, everything is set to required so remove any nullable.
+    if (formattedSchema?.nullable && formattedSchema?.type) {
+        formattedSchema.type = Array.isArray(formattedSchema.type)
+            ? [...formattedSchema.type, "null"]
+            : [formattedSchema.type, "null"];
+    }
+    delete formattedSchema.nullable; 
+
+    if (formattedSchema?.properties) {
+        // Set all properties as required
+        formattedSchema.required = Object.keys(formattedSchema.properties);
+        
+        // Process each property recursively
+        for (const propName of Object.keys(formattedSchema.properties)) {
+            const property = formattedSchema.properties[propName];
+            
+            // Recursively process properties
+            formattedSchema.properties[propName] = openAISchemaFormat(property);
+            
+            // Process arrays with items of type object
+            if (property?.type === 'array' && property.items && property.items?.type === 'object') {
+                formattedSchema.properties[propName] = {
+                    ...property,
+                    items: openAISchemaFormat(property.items),
+                };
+            }
+        }
+    }
+    if (formattedSchema?.type === 'object' && (!formattedSchema?.properties || Object.keys(formattedSchema?.properties ?? {}).length == 0)) {
+        //If no properties are defined, then additionalProperties: true was set or the object would be empty.
+        //OpenAI does not support this on structured output/ strict mode.
+        throw new Error("OpenAI does not support empty objects or objects with additionalProperties set to true");
+    }
+    
+    return formattedSchema
 }
