@@ -1,8 +1,8 @@
 import { Bedrock, CreateModelCustomizationJobCommand, FoundationModelSummary, GetModelCustomizationJobCommand, GetModelCustomizationJobCommandOutput, ModelCustomizationJobStatus, StopModelCustomizationJobCommand } from "@aws-sdk/client-bedrock";
-import { BedrockRuntime, ConverseRequest, ConverseResponse, ConverseStreamOutput, InferenceConfiguration } from "@aws-sdk/client-bedrock-runtime";
+import { BedrockRuntime, ConverseRequest, ConverseResponse, ConverseStreamOutput, InferenceConfiguration, Tool } from "@aws-sdk/client-bedrock-runtime";
 import { S3Client } from "@aws-sdk/client-s3";
 import { AwsCredentialIdentity, Provider } from "@aws-sdk/types";
-import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, ExecutionTokenUsage, ImageGeneration, Modalities, PromptOptions, PromptSegment, TextFallbackOptions, TrainingJob, TrainingJobStatus, TrainingOptions } from "@llumiverse/core";
+import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, ExecutionTokenUsage, ImageGeneration, Modalities, PromptOptions, PromptSegment, TextFallbackOptions, ToolDefinition, TrainingJob, TrainingJobStatus, TrainingOptions } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
 import { LRUCache } from "mnemonist";
@@ -10,7 +10,6 @@ import { BedrockClaudeOptions, NovaCanvasOptions } from "../../../core/src/optio
 import { converseConcatMessages, converseRemoveJSONprefill, converseSystemToMessages, fortmatConversePrompt } from "./converse.js";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
 import { forceUploadFile } from "./s3.js";
-
 
 const supportStreamingCache = new LRUCache<string, boolean>(4096);
 
@@ -145,16 +144,25 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
     async requestTextCompletion(prompt: ConverseRequest, options: ExecutionOptions): Promise<Completion> {
 
+        //let conversation = updateConversation(options.conversation as ConverseRequest, prompt);
+
         const payload = this.preparePayload(prompt, options);
         const executor = this.getExecutor();
 
         const res = await executor.converse({
             ...payload,
         });
+        /*
+        conversation = updateConversation(conversation, {
+            messages: [res.output?.message ?? { content: [{ text: "" }], role: "assistant" }],
+            modelId: prompt.modelId,
+        });
+        */
 
         const completion = {
             ...BedrockDriver.getExtractedExecuton(res, prompt),
             original_response: options.include_original_response ? res : undefined,
+            //conversation: conversation,
         } satisfies Completion;
 
         return completion;
@@ -390,6 +398,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             additionalModelRequestFields: {
                 ...additionalField,
             },
+            toolConfig: {
+                tools: getToolDefinitions(options.tools),
+            }
         } satisfies ConverseRequest;
     }
 
@@ -674,3 +685,36 @@ function jobInfo(job: GetModelCustomizationJobCommandOutput, jobId: string): Tra
         details
     }
 }
+
+function getToolDefinitions(tools?: ToolDefinition[]): Tool[] | undefined {
+    return tools ? tools.map(getToolDefinition) : undefined;
+}
+
+function getToolDefinition(tool: ToolDefinition): Tool.ToolSpecMember {
+    return {
+        toolSpec: {
+            name: tool.name,
+            description: tool.description,
+            inputSchema: {
+                json: tool.input_schema as any,
+            }
+        }
+    }
+}
+
+/**
+ * Update the converatation messages
+ * @param prompt
+ * @param response
+ * @returns
+ */
+/*
+function updateConversation(conversation: ConverseRequest, prompt: ConverseRequest): ConverseRequest {
+    return {
+        ...conversation,
+        ...prompt,
+        messages: [...(conversation.messages || []), ...(prompt.messages || [])],
+        system: prompt.system || conversation.system,
+    };
+}
+*/
