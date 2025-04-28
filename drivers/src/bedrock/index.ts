@@ -546,11 +546,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
 
         const supportedProviders = ["amazon", "anthropic", "cohere", "ai21", "mistral", "meta", "deepseek"];
-        fmodels = fmodels.filter((m) => {
-            supportedProviders.some((provider) => {
-                m.providerName?.includes(provider) ?? false;
-            });
-        });
+        fmodels = fmodels.filter((m) =>
+            supportedProviders.some((provider) =>
+                m.providerName?.toLowerCase().includes(provider) ?? false
+            )
+        );
 
         const aimodels: AIModel[] = fmodels.map((m) => {
 
