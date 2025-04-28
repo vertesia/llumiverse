@@ -146,7 +146,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         let conversation = updateConversation(options.conversation as ConverseRequest, prompt);
 
-        const payload = this.preparePayload(prompt, options);
+        const payload = this.preparePayload(conversation, options);
         const executor = this.getExecutor();
 
         const res = await executor.converse({
@@ -163,7 +163,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const completion: Completion = {
             ...BedrockDriver.getExtractedExecuton(res, prompt),
             original_response: options.include_original_response ? res : undefined,
-            //conversation: conversation,
+            conversation: conversation,
         };
 
         //Get tool requests
