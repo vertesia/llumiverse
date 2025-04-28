@@ -517,7 +517,11 @@ function limitedSchemaFormat(schema: JSONSchema): JSONSchema {
 }
 
 //For strict mode true
-function openAISchemaFormat(schema: JSONSchema): JSONSchema {
+function openAISchemaFormat(schema: JSONSchema, nesting: number = 0): JSONSchema {
+    if (nesting > 5) {
+        throw new Error("OpenAI schema nesting too deep");
+    }
+
     const formattedSchema = { ...schema };
 
     // Defaults not supported
@@ -528,14 +532,6 @@ function openAISchemaFormat(schema: JSONSchema): JSONSchema {
         formattedSchema.additionalProperties = false;
     }
 
-    //Optionality set by type, everything is set to required so remove any nullable.
-    if (formattedSchema?.nullable && formattedSchema?.type) {
-        formattedSchema.type = Array.isArray(formattedSchema.type)
-            ? [...formattedSchema.type, "null"]
-            : [formattedSchema.type, "null"];
-    }
-    delete formattedSchema.nullable; 
-
     if (formattedSchema?.properties) {
         // Set all properties as required
         formattedSchema.required = Object.keys(formattedSchema.properties);
@@ -545,13 +541,13 @@ function openAISchemaFormat(schema: JSONSchema): JSONSchema {
             const property = formattedSchema.properties[propName];
             
             // Recursively process properties
-            formattedSchema.properties[propName] = openAISchemaFormat(property);
+            formattedSchema.properties[propName] = openAISchemaFormat(property, nesting + 1);
             
             // Process arrays with items of type object
             if (property?.type === 'array' && property.items && property.items?.type === 'object') {
                 formattedSchema.properties[propName] = {
                     ...property,
-                    items: openAISchemaFormat(property.items),
+                    items: openAISchemaFormat(property.items, nesting + 1),
                 };
             }
         }
