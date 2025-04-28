@@ -92,8 +92,23 @@ export async function fortmatConversePrompt(segments: PromptSegment[], schema?: 
     for (const segment of segments) {
         const parts: Message[] = [];
 
+        //Tool response
+        if (segment.role === PromptRole.tool) {
+            parts.push({
+                content: [{
+                    toolResult: {
+                        toolUseId: segment.tool_use_id,
+                        content: [{ text: segment.content }],
+                    }
+                }],
+                role: ConversationRole.USER,
+            });
+            messages = messages.concat(parts);
+            continue;
+        }
+
         //File segments
-        if (segment.files)
+        if (segment.files) {
             for (const f of segment.files) {
                 const source = await f.getStream();
                 let content: ContentBlock[];
@@ -168,6 +183,7 @@ export async function fortmatConversePrompt(segments: PromptSegment[], schema?: 
                     role: roleConversion(segment.role),
                 });
             }
+        }
 
         //Text segments
         if (segment.content) {
