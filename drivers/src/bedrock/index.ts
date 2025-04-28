@@ -2,7 +2,7 @@ import { Bedrock, CreateModelCustomizationJobCommand, FoundationModelSummary, Ge
 import { BedrockRuntime, ConverseRequest, ConverseResponse, ConverseStreamOutput, InferenceConfiguration, Tool } from "@aws-sdk/client-bedrock-runtime";
 import { S3Client } from "@aws-sdk/client-s3";
 import { AwsCredentialIdentity, Provider } from "@aws-sdk/types";
-import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, ExecutionTokenUsage, ImageGeneration, Modalities, PromptOptions, PromptSegment, TextFallbackOptions, ToolDefinition, TrainingJob, TrainingJobStatus, TrainingOptions } from "@llumiverse/core";
+import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, ExecutionTokenUsage, ImageGeneration, Modalities, PromptOptions, PromptSegment, TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
 import { LRUCache } from "mnemonist";
@@ -144,7 +144,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
     async requestTextCompletion(prompt: ConverseRequest, options: ExecutionOptions): Promise<Completion> {
 
-        //let conversation = updateConversation(options.conversation as ConverseRequest, prompt);
+        let conversation = updateConversation(options.conversation as ConverseRequest, prompt);
 
         const payload = this.preparePayload(prompt, options);
         const executor = this.getExecutor();
@@ -152,18 +152,30 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const res = await executor.converse({
             ...payload,
         });
-        /*
+        
         conversation = updateConversation(conversation, {
             messages: [res.output?.message ?? { content: [{ text: "" }], role: "assistant" }],
             modelId: prompt.modelId,
         });
-        */
 
-        const completion = {
+        let tool_use: ToolUse[] | undefined = undefined;
+        
+        const completion: Completion = {
             ...BedrockDriver.getExtractedExecuton(res, prompt),
             original_response: options.include_original_response ? res : undefined,
             //conversation: conversation,
-        } satisfies Completion;
+        };
+
+        if (res.stopReason === "tool_use") {
+            tool_use = res.output?.message?.content?.map(c => {
+                return {
+                    tool_name: c.toolUse?.name ?? "",
+                    tool_input: c.toolUse?.input as any,
+                    id: c.toolUse?.toolUseId ?? "",
+                } satisfies ToolUse;
+            });
+            completion.tool_use = tool_use;
+        }
 
         return completion;
     }
@@ -708,13 +720,11 @@ function getToolDefinition(tool: ToolDefinition): Tool.ToolSpecMember {
  * @param response
  * @returns
  */
-/*
 function updateConversation(conversation: ConverseRequest, prompt: ConverseRequest): ConverseRequest {
     return {
         ...conversation,
         ...prompt,
-        messages: [...(conversation.messages || []), ...(prompt.messages || [])],
-        system: prompt.system || conversation.system,
+        messages: [...(conversation?.messages || []), ...(prompt.messages || [])],
+        system: prompt.system || conversation?.system,
     };
 }
-*/
