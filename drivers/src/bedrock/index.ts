@@ -166,14 +166,18 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             //conversation: conversation,
         };
 
+        //Get tool requests
         if (res.stopReason === "tool_use") {
-            tool_use = res.output?.message?.content?.map(c => {
-                return {
-                    tool_name: c.toolUse?.name ?? "",
-                    tool_input: c.toolUse?.input as any,
-                    id: c.toolUse?.toolUseId ?? "",
-                } satisfies ToolUse;
-            });
+            tool_use = res.output?.message?.content?.reduce((tools: ToolUse[], c) => {
+                if (c.toolUse) {
+                    tools.push({
+                        tool_name: c.toolUse.name ?? "",
+                        tool_input: c.toolUse.input as any,
+                        id: c.toolUse.toolUseId ?? "",
+                    } satisfies ToolUse);
+                }
+                return tools;
+            }, []);
             completion.tool_use = tool_use;
         }
 
