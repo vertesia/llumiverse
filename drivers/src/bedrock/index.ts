@@ -1,8 +1,15 @@
-import { Bedrock, CreateModelCustomizationJobCommand, FoundationModelSummary, GetModelCustomizationJobCommand, GetModelCustomizationJobCommandOutput, ModelCustomizationJobStatus, StopModelCustomizationJobCommand } from "@aws-sdk/client-bedrock";
+import {
+    Bedrock, CreateModelCustomizationJobCommand, FoundationModelSummary, GetModelCustomizationJobCommand,
+    GetModelCustomizationJobCommandOutput, ModelCustomizationJobStatus, StopModelCustomizationJobCommand
+} from "@aws-sdk/client-bedrock";
 import { BedrockRuntime, ConverseRequest, ConverseResponse, ConverseStreamOutput, InferenceConfiguration, Tool } from "@aws-sdk/client-bedrock-runtime";
 import { S3Client } from "@aws-sdk/client-s3";
 import { AwsCredentialIdentity, Provider } from "@aws-sdk/types";
-import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, ExecutionTokenUsage, ImageGeneration, Modalities, PromptOptions, PromptSegment, TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions } from "@llumiverse/core";
+import {
+    AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult,
+    ExecutionOptions, ExecutionTokenUsage, ImageGeneration, Modalities, PromptOptions, PromptSegment, supportsToolUse,
+    TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions
+} from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
 import { LRUCache } from "mnemonist";
@@ -10,7 +17,6 @@ import { BedrockClaudeOptions, BedrockPalmyraOptions, NovaCanvasOptions } from "
 import { converseConcatMessages, converseRemoveJSONprefill, converseSystemToMessages, fortmatConversePrompt } from "./converse.js";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
 import { forceUploadFile } from "./s3.js";
-import { supportsToolUseBedrock } from "../../../core/src/tools/bedrock.js";
 
 const supportStreamingCache = new LRUCache<string, boolean>(4096);
 
@@ -144,7 +150,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     };
 
     async requestTextCompletion(prompt: ConverseRequest, options: ExecutionOptions): Promise<Completion> {
-        if (options.tools && options.tools.length > 0 && !supportsToolUseBedrock(options.model, false) === false) {
+        if (options.tools && options.tools.length > 0 && supportsToolUse("bedrock", options.model, false) === false) {
             throw new Error(`Tool use is not supported for this model: ${options.model}`);
         }
 
@@ -265,7 +271,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     async requestTextCompletionStream(prompt: ConverseRequest, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
-        if (options.tools && options.tools.length > 0 && supportsToolUseBedrock(options.model, true) === false) {
+        if (options.tools && options.tools.length > 0 && supportsToolUse("bedrock", options.model, true) === false) {
             throw new Error(`Tool use with streaming is not supported for this model: ${options.model}`);
         }
 

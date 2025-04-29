@@ -56,7 +56,8 @@ const MODELS_WITH_TOOL_USE = [
     // Amazon Nova models
     "nova",
     // Anthropic Claude 3 models
-    "claude-3",
+    "claude-3-5",
+    "claude-3-7",
     // Cohere Command R models
     "command-r",
     // Meta Llama 3.1 and some 3.2 variants
@@ -81,7 +82,8 @@ const MODELS_WITH_STREAMING_TOOL_USE = [
     // Amazon Nova models
     "nova",
     // Anthropic Claude 3 models
-    "claude-3",
+    "claude-3-5",
+    "claude-3-7",
     // Cohere Command R models
     "command-r"
 ];
@@ -94,6 +96,7 @@ const MODELS_WITH_STREAMING_TOOL_USE = [
  * @returns true if the model supports tool use, false if it doesn't, undefined if unknown
  */
 export function supportsToolUseBedrock(model: string, streaming: boolean = false): boolean | undefined {
+    return undefined;
     // Normalize the model string for easier matching
     const modelLower = model.toLowerCase();
 
