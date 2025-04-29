@@ -6,7 +6,7 @@ import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource,
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
 import { LRUCache } from "mnemonist";
-import { BedrockClaudeOptions, NovaCanvasOptions } from "../../../core/src/options/bedrock.js";
+import { BedrockClaudeOptions, BedrockPalmyraOptions, NovaCanvasOptions } from "../../../core/src/options/bedrock.js";
 import { converseConcatMessages, converseRemoveJSONprefill, converseSystemToMessages, fortmatConversePrompt } from "./converse.js";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
 import { forceUploadFile } from "./s3.js";
@@ -362,6 +362,16 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     prompt.messages = converseConcatMessages(prompt.messages);
                 }
             }
+        } else if (options.model.includes("palmyra")) {
+            const palmyraOptions = options.model_options as BedrockPalmyraOptions;
+            //If last message is "```json", remove it. Model requires the final message to be a user message
+            prompt.messages = converseRemoveJSONprefill(prompt.messages);
+            additionalField = {
+                seed: palmyraOptions?.seed,
+                presence_penalty: palmyraOptions?.presence_penalty,
+                frequency_penalty: palmyraOptions?.frequency_penalty,
+                min_tokens: palmyraOptions?.min_tokens,
+            }
         }
 
         //If last message is "```json", add corresponding ``` as a stop sequence.
@@ -545,7 +555,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             fmodels = fmodels.filter(foundationFilter);
         }
 
-        const supportedProviders = ["amazon", "anthropic", "cohere", "ai21", "mistral", "meta", "deepseek"];
+        const supportedProviders = ["amazon", "anthropic", "cohere", "ai21", "mistral", "meta", "deepseek", "writer"];
         fmodels = fmodels.filter((m) =>
             supportedProviders.some((provider) =>
                 m.providerName?.toLowerCase().includes(provider) ?? false
