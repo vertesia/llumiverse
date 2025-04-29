@@ -545,7 +545,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             fmodels = fmodels.filter(foundationFilter);
         }
 
-        const supportedProviders = ["amazon", "anthropic", "cohere", "ai21", "mistral", "meta", "deepseek"];
+        const supportedProviders = ["amazon", "anthropic", "cohere", "ai21", "mistral", "meta", "deepseek", "writer"];
         fmodels = fmodels.filter((m) =>
             supportedProviders.some((provider) =>
                 m.providerName?.toLowerCase().includes(provider) ?? false
