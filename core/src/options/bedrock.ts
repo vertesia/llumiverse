@@ -1,6 +1,5 @@
 import { ModelOptionsInfo, ModelOptions, OptionType, ModelOptionInfoItem } from "../types.js";
 import { textOptionsFallback } from "../options.js";
-import { get } from "http";
 
 // Union type of all Bedrock options
 export type BedrockOptions = NovaCanvasOptions | BaseConverseOptions | BedrockClaudeOptions;
