@@ -2,7 +2,7 @@ import { ModelOptionsInfo, ModelOptions, OptionType, ModelOptionInfoItem } from 
 import { textOptionsFallback } from "../options.js";
 
 // Union type of all Bedrock options
-export type BedrockOptions = NovaCanvasOptions | BaseConverseOptions | BedrockClaudeOptions;
+export type BedrockOptions = NovaCanvasOptions | BaseConverseOptions | BedrockClaudeOptions | BedrockPalmyraOptions;
 
 export interface NovaCanvasOptions {
     _option_id: "bedrock-nova-canvas"
@@ -404,6 +404,12 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                     step: 100,
                 },
                 {
+                    name: "seed",
+                    type: OptionType.numeric,
+                    integer: true,
+                    description: "Random seed for generation"
+                },
+                {
                     name: "frequency_penalty",
                     type: OptionType.numeric,
                     min: -2,
@@ -421,12 +427,6 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                     step: 0.1,
                     description: "A higher presence penalty encourages the model to talk about new topics"
                 },
-                {
-                    name: "seed",
-                    type: OptionType.numeric,
-                    integer: true,
-                    description: "Random seed for generation"
-                }
             ]
             return {
                 _option_id: "bedrock-palmyra",
