@@ -10,6 +10,7 @@ import { BedrockClaudeOptions, BedrockPalmyraOptions, NovaCanvasOptions } from "
 import { converseConcatMessages, converseRemoveJSONprefill, converseSystemToMessages, fortmatConversePrompt } from "./converse.js";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
 import { forceUploadFile } from "./s3.js";
+import { supportsToolUseBedrock } from "../../../core/src/tools/bedrock.js";
 
 const supportStreamingCache = new LRUCache<string, boolean>(4096);
 
@@ -143,6 +144,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     };
 
     async requestTextCompletion(prompt: ConverseRequest, options: ExecutionOptions): Promise<Completion> {
+        if (options.tools && options.tools.length > 0 && !supportsToolUseBedrock(options.model, false) === false) {
+            throw new Error(`Tool use is not supported for this model: ${options.model}`);
+        }
 
         let conversation = updateConversation(options.conversation as ConverseRequest, prompt);
 
@@ -261,6 +265,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     async requestTextCompletionStream(prompt: ConverseRequest, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+        if (options.tools && options.tools.length > 0 && supportsToolUseBedrock(options.model, true) === false) {
+            throw new Error(`Tool use with streaming is not supported for this model: ${options.model}`);
+        }
+
         const payload = this.preparePayload(prompt, options);
         const executor = this.getExecutor();
         return executor.converseStream({
