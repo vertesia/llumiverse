@@ -2,7 +2,7 @@ import { ModelOptionsInfo, ModelOptions, OptionType, ModelOptionInfoItem } from 
 import { textOptionsFallback } from "../options.js";
 
 // Union type of all Bedrock options
-export type BedrockOptions = NovaCanvasOptions | BaseConverseOptions | BedrockClaudeOptions;
+export type BedrockOptions = NovaCanvasOptions | BaseConverseOptions | BedrockClaudeOptions | BedrockPalmyraOptions;
 
 export interface NovaCanvasOptions {
     _option_id: "bedrock-nova-canvas"
@@ -21,7 +21,7 @@ export interface NovaCanvasOptions {
 }
 
 export interface BaseConverseOptions {
-    _option_id: "bedrock-converse" | "bedrock-claude" | "bedrock-nova" | "bedrock-mistral" | "bedrock-ai21" | "bedrock-cohere-command";
+    _option_id: "bedrock-converse" | "bedrock-claude" | "bedrock-nova" | "bedrock-mistral" | "bedrock-ai21" | "bedrock-cohere-command" | "bedrock-palmyra";
     max_tokens?: number;
     temperature?: number;
     top_p?: number;
@@ -33,6 +33,14 @@ export interface BedrockClaudeOptions extends BaseConverseOptions {
     top_k?: number;
     thinking_mode?: boolean;
     thinking_budget_tokens?: number;
+}
+
+export interface BedrockPalmyraOptions extends BaseConverseOptions {
+    _option_id: "bedrock-palmyra";
+    min_tokens?: number;
+    seed?: number;
+    frequency_penalty?: number;
+    presence_penalty?: number;
 }
 
 function getMaxTokensLimit(model: string, option?: ModelOptions): number | undefined {
@@ -103,6 +111,15 @@ function getMaxTokensLimit(model: string, option?: ModelOptions): number | undef
             return 2048;
         }
         return 8192;
+    }
+    //Writer models
+    else if (model.includes("writer")) {
+        if (model.includes("palmyra-x5")) {
+            return 8192;
+        }
+        else if (model.includes("palmyra-x4")) {
+            return 8192;
+        }
     }
 
     // Default fallback
@@ -375,6 +392,45 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                     _option_id: "bedrock-cohere-command",
                     options: [...baseConverseOptions, ...cohereCommandOptions, ...cohereCommandROptions]
                 }
+            }
+        } else if (model.includes("writer")) {
+            const palmyraConverseOptions: ModelOptionInfoItem[] = [
+                {
+                    name: "min_tokens",
+                    type: OptionType.numeric,
+                    min: 1,
+                    max: max_tokens_limit,
+                    integer: false,
+                    step: 100,
+                },
+                {
+                    name: "seed",
+                    type: OptionType.numeric,
+                    integer: true,
+                    description: "Random seed for generation"
+                },
+                {
+                    name: "frequency_penalty",
+                    type: OptionType.numeric,
+                    min: -2,
+                    max: 2,
+                    default: 0,
+                    step: 0.1,
+                    description: "A higher frequency penalty encourages the model to use less common words"
+                },
+                {
+                    name: "presence_penalty",
+                    type: OptionType.numeric,
+                    min: -2,
+                    max: 2,
+                    default: 0,
+                    step: 0.1,
+                    description: "A higher presence penalty encourages the model to talk about new topics"
+                },
+            ]
+            return {
+                _option_id: "bedrock-palmyra",
+                options: [...baseConverseOptions, ...palmyraConverseOptions]
             }
         }
 
