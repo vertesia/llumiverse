@@ -6,7 +6,7 @@ import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource,
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
 import { LRUCache } from "mnemonist";
-import { BedrockClaudeOptions, NovaCanvasOptions } from "../../../core/src/options/bedrock.js";
+import { BedrockClaudeOptions, BedrockPalmyraOptions, NovaCanvasOptions } from "../../../core/src/options/bedrock.js";
 import { converseConcatMessages, converseRemoveJSONprefill, converseSystemToMessages, fortmatConversePrompt } from "./converse.js";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
 import { forceUploadFile } from "./s3.js";
@@ -363,13 +363,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 }
             }
         } else if (options.model.includes("palmyra")) {
+            const palmyraOptions = options.model_options as BedrockPalmyraOptions;
             //If last message is "```json", remove it. Model requires the final message to be a user message
             prompt.messages = converseRemoveJSONprefill(prompt.messages);
             additionalField = {
-                //seed: model_options?.seed,
-                presence_penalty: model_options?.presence_penalty,
-                frequency_penalty: model_options?.frequency_penalty,
-                //min_tokens: model_options?.min_tokens,
+                seed: palmyraOptions?.seed,
+                presence_penalty: palmyraOptions?.presence_penalty,
+                frequency_penalty: palmyraOptions?.frequency_penalty,
+                min_tokens: palmyraOptions?.min_tokens,
             }
         }
 
