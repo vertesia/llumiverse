@@ -420,7 +420,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
         }
 
-        return {
+        const tool_defs = getToolDefinitions(options.tools);
+
+        const request: ConverseRequest = {
             messages: prompt.messages,
             system: prompt.system,
             modelId: options.model,
@@ -432,11 +434,17 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             } satisfies InferenceConfiguration,
             additionalModelRequestFields: {
                 ...additionalField,
-            },
-            toolConfig: {
-                tools: getToolDefinitions(options.tools),
             }
-        } satisfies ConverseRequest;
+        };
+
+        //Only add tools if they are defined
+        if (tool_defs) {
+            request.toolConfig = {
+                tools: tool_defs,
+            }
+        }
+
+        return request;
     }
 
 
