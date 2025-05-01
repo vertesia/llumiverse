@@ -7,7 +7,7 @@ import { S3Client } from "@aws-sdk/client-s3";
 import { AwsCredentialIdentity, Provider } from "@aws-sdk/types";
 import {
     AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult,
-    ExecutionOptions, ExecutionTokenUsage, ImageGeneration, Modalities, PromptOptions, PromptSegment, supportsToolUse,
+    ExecutionOptions, ExecutionTokenUsage, ImageGeneration, Modalities, PromptOptions, PromptSegment,
     TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions
 } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
@@ -150,10 +150,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     };
 
     async requestTextCompletion(prompt: ConverseRequest, options: ExecutionOptions): Promise<Completion> {
-        if (options.tools && options.tools.length > 0 && supportsToolUse("bedrock", options.model, false) === false) {
-            throw new Error(`Tool use is not supported for this model: ${options.model}`);
-        }
-
         let conversation = updateConversation(options.conversation as ConverseRequest, prompt);
 
         const payload = this.preparePayload(conversation, options);
@@ -169,15 +165,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         });
 
         let tool_use: ToolUse[] | undefined = undefined;
-        
-        const completion: Completion = {
-            ...BedrockDriver.getExtractedExecuton(res, prompt),
-            original_response: options.include_original_response ? res : undefined,
-            conversation: conversation,
-        };
-
         //Get tool requests
-        if (res.stopReason === "tool_use") {
+        if (res.stopReason == "tool_use") {
             tool_use = res.output?.message?.content?.reduce((tools: ToolUse[], c) => {
                 if (c.toolUse) {
                     tools.push({
@@ -188,8 +177,18 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 }
                 return tools;
             }, []);
-            completion.tool_use = tool_use;
+            //If no tools were used, set to undefined
+            if (tool_use && tool_use.length == 0) {
+                tool_use = undefined;
+            }
         }
+
+        const completion = {
+            ...BedrockDriver.getExtractedExecuton(res, prompt),
+            original_response: options.include_original_response ? res : undefined,
+            conversation: conversation,
+            tool_use: tool_use,
+        };
 
         return completion;
     }
@@ -271,10 +270,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     async requestTextCompletionStream(prompt: ConverseRequest, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
-        if (options.tools && options.tools.length > 0 && supportsToolUse("bedrock", options.model, true) === false) {
-            throw new Error(`Tool use with streaming is not supported for this model: ${options.model}`);
-        }
-
         const payload = this.preparePayload(prompt, options);
         const executor = this.getExecutor();
         return executor.converseStream({
