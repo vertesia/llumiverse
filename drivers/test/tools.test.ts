@@ -104,23 +104,21 @@ if (process.env.OPENAI_API_KEY) {
 // }
 
 
-// if (process.env.BEDROCK_REGION) {
-//     drivers.push({
-//         name: "bedrock",
-//         driver: new BedrockDriver({
-//             region: process.env.BEDROCK_REGION as string,
-//         }),
-//         //Use foundation models and inference profiles to test the driver
-//         models: [
-//             "anthropic.claude-3-5-sonnet-20240620-v1:0",
-//             "us.meta.llama3-3-70b-instruct-v1:0",
-//             "us.amazon.nova-micro-v1:0",
-//             "ai21.jamba-1-5-mini-v1:0",
-//         ],
-//     });
-// } else {
-//     console.warn("Bedrock tests are skipped: BEDROCK_REGION environment variable is not set");
-// }
+if (process.env.BEDROCK_REGION) {
+    drivers.push({
+        name: "bedrock",
+        driver: new BedrockDriver({
+            region: process.env.BEDROCK_REGION as string,
+        }),
+        //Use foundation models and inference profiles to test the driver
+        models: [
+            "anthropic.claude-3-5-sonnet-20240620-v1:0",
+            //"us.writer.palmyra-x5-v1:0" // Only in us-west-2
+        ],
+    });
+} else {
+    console.warn("Bedrock tests are skipped: BEDROCK_REGION environment variable is not set");
+}
 
 // if (process.env.GROQ_API_KEY) {
 

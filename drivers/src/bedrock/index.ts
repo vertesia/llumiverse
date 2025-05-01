@@ -1,8 +1,15 @@
-import { Bedrock, CreateModelCustomizationJobCommand, FoundationModelSummary, GetModelCustomizationJobCommand, GetModelCustomizationJobCommandOutput, ModelCustomizationJobStatus, StopModelCustomizationJobCommand } from "@aws-sdk/client-bedrock";
-import { BedrockRuntime, ConverseRequest, ConverseResponse, ConverseStreamOutput, InferenceConfiguration } from "@aws-sdk/client-bedrock-runtime";
+import {
+    Bedrock, CreateModelCustomizationJobCommand, FoundationModelSummary, GetModelCustomizationJobCommand,
+    GetModelCustomizationJobCommandOutput, ModelCustomizationJobStatus, StopModelCustomizationJobCommand
+} from "@aws-sdk/client-bedrock";
+import { BedrockRuntime, ConverseRequest, ConverseResponse, ConverseStreamOutput, InferenceConfiguration, Tool } from "@aws-sdk/client-bedrock-runtime";
 import { S3Client } from "@aws-sdk/client-s3";
 import { AwsCredentialIdentity, Provider } from "@aws-sdk/types";
-import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, ExecutionTokenUsage, ImageGeneration, Modalities, PromptOptions, PromptSegment, TextFallbackOptions, TrainingJob, TrainingJobStatus, TrainingOptions } from "@llumiverse/core";
+import {
+    AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult,
+    ExecutionOptions, ExecutionTokenUsage, ImageGeneration, Modalities, PromptOptions, PromptSegment,
+    TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions
+} from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
 import { LRUCache } from "mnemonist";
@@ -10,7 +17,6 @@ import { BedrockClaudeOptions, BedrockPalmyraOptions, NovaCanvasOptions } from "
 import { converseConcatMessages, converseRemoveJSONprefill, converseSystemToMessages, fortmatConversePrompt } from "./converse.js";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
 import { forceUploadFile } from "./s3.js";
-
 
 const supportStreamingCache = new LRUCache<string, boolean>(4096);
 
@@ -144,18 +150,45 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     };
 
     async requestTextCompletion(prompt: ConverseRequest, options: ExecutionOptions): Promise<Completion> {
+        let conversation = updateConversation(options.conversation as ConverseRequest, prompt);
 
-        const payload = this.preparePayload(prompt, options);
+        const payload = this.preparePayload(conversation, options);
         const executor = this.getExecutor();
 
         const res = await executor.converse({
             ...payload,
         });
+        
+        conversation = updateConversation(conversation, {
+            messages: [res.output?.message ?? { content: [{ text: "" }], role: "assistant" }],
+            modelId: prompt.modelId,
+        });
+
+        let tool_use: ToolUse[] | undefined = undefined;
+        //Get tool requests
+        if (res.stopReason == "tool_use") {
+            tool_use = res.output?.message?.content?.reduce((tools: ToolUse[], c) => {
+                if (c.toolUse) {
+                    tools.push({
+                        tool_name: c.toolUse.name ?? "",
+                        tool_input: c.toolUse.input as any,
+                        id: c.toolUse.toolUseId ?? "",
+                    } satisfies ToolUse);
+                }
+                return tools;
+            }, []);
+            //If no tools were used, set to undefined
+            if (tool_use && tool_use.length == 0) {
+                tool_use = undefined;
+            }
+        }
 
         const completion = {
             ...BedrockDriver.getExtractedExecuton(res, prompt),
             original_response: options.include_original_response ? res : undefined,
-        } satisfies Completion;
+            conversation: conversation,
+            tool_use: tool_use,
+        };
 
         return completion;
     }
@@ -387,7 +420,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
         }
 
-        return {
+        const tool_defs = getToolDefinitions(options.tools);
+
+        const request: ConverseRequest = {
             messages: prompt.messages,
             system: prompt.system,
             modelId: options.model,
@@ -399,8 +434,17 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             } satisfies InferenceConfiguration,
             additionalModelRequestFields: {
                 ...additionalField,
-            },
-        } satisfies ConverseRequest;
+            }
+        };
+
+        //Only add tools if they are defined
+        if (tool_defs) {
+            request.toolConfig = {
+                tools: tool_defs,
+            }
+        }
+
+        return request;
     }
 
 
@@ -683,4 +727,35 @@ function jobInfo(job: GetModelCustomizationJobCommandOutput, jobId: string): Tra
         status,
         details
     }
+}
+
+function getToolDefinitions(tools?: ToolDefinition[]): Tool[] | undefined {
+    return tools ? tools.map(getToolDefinition) : undefined;
+}
+
+function getToolDefinition(tool: ToolDefinition): Tool.ToolSpecMember {
+    return {
+        toolSpec: {
+            name: tool.name,
+            description: tool.description,
+            inputSchema: {
+                json: tool.input_schema as any,
+            }
+        }
+    }
+}
+
+/**
+ * Update the converatation messages
+ * @param prompt
+ * @param response
+ * @returns
+ */
+function updateConversation(conversation: ConverseRequest, prompt: ConverseRequest): ConverseRequest {
+    return {
+        ...conversation,
+        ...prompt,
+        messages: [...(conversation?.messages || []), ...(prompt.messages || [])],
+        system: prompt.system || conversation?.system,
+    };
 }
