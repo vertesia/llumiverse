@@ -113,7 +113,7 @@ if (process.env.BEDROCK_REGION) {
         //Use foundation models and inference profiles to test the driver
         models: [
             "anthropic.claude-3-5-sonnet-20240620-v1:0",
-            "us.writer.palmyra-x5-v1:0"
+            //"us.writer.palmyra-x5-v1:0" // Only in us-west-2
         ],
     });
 } else {
