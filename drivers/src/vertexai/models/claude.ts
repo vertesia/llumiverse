@@ -24,7 +24,7 @@ function getFullModelName(model: string): string {
         return "claude-3-opus@20240229"
     } else if (model.includes("claude-3-sonnet")) {
         return "claude-3-sonnet@20240229"
-    } else if (model.includes("claude-3-haike")) {
+    } else if (model.includes("claude-3-haiku")) {
         return "claude-3-haiku@20240307"
     }
     return model;
@@ -252,7 +252,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         });
 
         //Streaming does not give information on the input tokens,
-        //So we use a seperate call to get the input tokens.
+        //So we use a separate call to get the input tokens.
         //Non-critical and model name sensitive so we put it in a try catch block
         let count_tokens = { input_tokens: 0 };
         try {
@@ -303,7 +303,7 @@ function createPromptFromResponse(response: Message): ClaudePrompt {
 }
 
 /**
- * Update the converatation messages
+ * Update the conversation messages
  * @param prompt
  * @param response
  * @returns

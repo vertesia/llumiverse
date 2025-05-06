@@ -297,4 +297,4 @@ Please see [CONTRIBUTING.md](https://github.com/vertesia/llumiverse/blob/main/CO
 
 ## License
 
-Llumivers is licensed under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). Feel free to use it accordingly.
+Llumiverse is licensed under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). Feel free to use it accordingly.

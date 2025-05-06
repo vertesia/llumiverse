@@ -10,7 +10,7 @@ export interface GroqDeepseekThinkingOptions {
     temperature?: number,
     top_p?: number,
     stop_sequence?: string[],
-    reasonsing_format: 'parsed' | 'raw' | 'hidden',
+    reasoning_format: 'parsed' | 'raw' | 'hidden',
 }
 
 export function getGroqOptions(model: string, _option?: ModelOptions): ModelOptionsInfo {

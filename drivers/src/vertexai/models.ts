@@ -8,7 +8,7 @@ export interface ModelDefinition<PromptT = any> {
     versions?: string[]; // the versions of the model that are available. ex: ['001', '002']
     createPrompt: (driver: VertexAIDriver, segments: PromptSegment[], options: PromptOptions) => Promise<PromptT>;
     requestTextCompletion: (driver: VertexAIDriver, prompt: PromptT, options: ExecutionOptions) => Promise<Completion>;
-    requestTextCompletionStream: (driver: VertexAIDriver, promp: PromptT, options: ExecutionOptions) => Promise<AsyncIterable<CompletionChunkObject>>;
+    requestTextCompletionStream: (driver: VertexAIDriver, prompt: PromptT, options: ExecutionOptions) => Promise<AsyncIterable<CompletionChunkObject>>;
 }
 
 export function getModelDefinition(model: string): ModelDefinition {

@@ -27,7 +27,7 @@ export interface EmbeddingsResult {
      */
     values: number[];
     /**
-     * The model used to hgenerate the embeddings.
+     * The model used to generate the embeddings.
      */
     model: string;
     /**
@@ -88,8 +88,8 @@ export interface Completion<ResultT = any> {
     finish_reason?: "stop" | "length" | "tool_use" | string;
 
     /**
-     * Set only if a result validation error occured, otherwise if the result is valid the error field is undefined
-     * This can only be set if the result_schema is set and the reuslt could not be parsed as a json or if the result does not match the schema
+     * Set only if a result validation error occurred, otherwise if the result is valid the error field is undefined
+     * This can only be set if the result_schema is set and the result could not be parsed as a json or if the result does not match the schema
      */
     error?: ResultValidationError;
 
@@ -315,7 +315,7 @@ export interface AIModel<ProviderKeys = string> {
     tags?: string[]; //tags for searching
     owner?: string; //owner of the model
     status?: AIModelStatus; //status of the model
-    can_stream?: boolean; //if the model's reponse can be streamed
+    can_stream?: boolean; //if the model's response can be streamed
     is_custom?: boolean; //if the model is a custom model (a trained model)
     is_multimodal?: boolean //if the model support files and images
     input_modalities?: string[]; //if the model support files and images
@@ -331,7 +331,7 @@ export enum AIModelStatus {
 }
 
 /**
- * payload to list available models for an enviroment
+ * payload to list available models for an environment
  * @param environmentId id of the environment
  * @param query text to search for in model name/description
  * @param type type of the model
@@ -387,7 +387,7 @@ export interface TrainingPromptOptions {
     segments: PromptSegment[];
     completion: string | JSONObject;
     model: string; // the model to train
-    schema?: JSONSchema; // the resuilt schema f any
+    schema?: JSONSchema; // the result schema f any
 }
 
 export enum TrainingJobStatus {

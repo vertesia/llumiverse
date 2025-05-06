@@ -179,7 +179,7 @@ const PROMPT_WITH_GET_NAME_TOOL = [
     },
 ] satisfies PromptSegment[];
 
-function addToolRsponse(prompt: PromptSegment[], tool_use_id: string, response: string): PromptSegment[] {
+function addToolResponse(prompt: PromptSegment[], tool_use_id: string, response: string): PromptSegment[] {
     return [
         ...prompt,
         {
@@ -203,7 +203,7 @@ function getTestOptions(model: string): ExecutionOptions {
             //   top_logprobs: 5,        //Currently not supported, option will be ignored
             presence_penalty: 0.1,      //Cohere Command R does not support using presence & frequency penalty at the same time
             frequency_penalty: -0.1,
-            stop_sequence: ["adsoiuygsa"],
+            stop_sequence: ["Haemoglobin"],
         },
         output_modality: Modalities.text,
         tools: [

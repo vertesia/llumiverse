@@ -83,7 +83,7 @@ export function converseRemoveJSONprefill(messages: Message[] | undefined): Mess
     return messages ?? [];
 }
 
-export async function fortmatConversePrompt(segments: PromptSegment[], schema?: JSONSchema): Promise<ConverseRequest> {
+export async function formatConversePrompt(segments: PromptSegment[], schema?: JSONSchema): Promise<ConverseRequest> {
     //Non-const for concat
     let system: SystemContentBlock[] = [];
     const safety: SystemContentBlock[] = [];

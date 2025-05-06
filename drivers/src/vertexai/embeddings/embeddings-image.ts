@@ -8,7 +8,7 @@ export interface ImageEmbeddingsOptions {
     text: string,                           // the text to generate embeddings for
 }
 
-interface EmbedingsForImagePrompt {
+interface EmbeddingsForImagePrompt {
     instances: ImageEmbeddingsOptions[]
 }
 
@@ -35,7 +35,7 @@ export async function getEmbeddingsForImages(driver: VertexAIDriver, options: Em
                 }
                 : undefined,
         }]
-    } as EmbedingsForImagePrompt;
+    } as EmbeddingsForImagePrompt;
 
     const model = options.model || "multimodalembedding@001";
 

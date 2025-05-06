@@ -111,7 +111,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
         const res = await this.fetchClient.get(`/ml/v1/foundation_model_specs?version=${API_VERSION}`)
             .catch(err => this.logger.warn("Can't list models on Watsonx: " + err)) as WatsonxListModelResponse;
 
-        const aimodels = res.resources.map((m: WatsonxModelSpec) => {
+        const aiModels = res.resources.map((m: WatsonxModelSpec) => {
             return {
                 id: m.model_id,
                 name: m.label,
@@ -120,7 +120,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
             }
         });
 
-        return aimodels;
+        return aiModels;
 
     }
 

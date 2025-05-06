@@ -47,8 +47,8 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
     constructor(opts: BaseOpenAIDriverOptions) {
         super(opts);
-        this.formatPrompt = formatOpenAILikeMultimodalPrompt as any //TODO: better type, we send back OpenAI.Chat.Completions.ChatCompletionMessageParam[] but just not compatbile with Function call that we don't use here
-
+        this.formatPrompt = formatOpenAILikeMultimodalPrompt as any
+        //TODO: better type, we send back OpenAI.Chat.Completions.ChatCompletionMessageParam[] but just not compatible with Function call that we don't use here
     }
 
     extractDataFromResponse(
