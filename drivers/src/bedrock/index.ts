@@ -13,7 +13,7 @@ import {
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
 import { LRUCache } from "mnemonist";
-import { BedrockClaudeOptions, BedrockPalmyraOptions, NovaCanvasOptions } from "../../../core/src/options/bedrock.js";
+import { BedrockClaudeOptions, BedrockPalmyraOptions, getMaxTokensLimit, NovaCanvasOptions } from "../../../core/src/options/bedrock.js";
 import { converseConcatMessages, converseJSONprefill, converseSystemToMessages, fortmatConversePrompt } from "./converse.js";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
 import { forceUploadFile } from "./s3.js";
@@ -317,7 +317,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     model_options.max_tokens = thinking ? 128000 : 8192;
                 }
                 additionalField = {
-                    top_k: model_options?.top_k,
+                    ...additionalField,
                     reasoning_config: {
                         type: thinking ? "enabled" : "disabled",
                         budget_tokens: thinking_options?.thinking_budget_tokens,
@@ -332,19 +332,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
             //Needs max_tokens to be set
             if (!model_options?.max_tokens) {
-                if (options.model.includes("claude-3-5")) {
-                    model_options.max_tokens = 8192;
-
-                    //Bug with AWS Converse Sonnet 3.5, does not effect Haiku.
-                    //See https://github.com/boto/boto3/issues/4279
-                    if (options.model.includes("claude-3-5-sonnet")) {
-                        model_options.max_tokens = 4096;
-                    }
-                } else {
-                    model_options.max_tokens = 4096;
-                }
+                model_options.max_tokens = getMaxTokensLimit(options.model, model_options);
             }
-            additionalField = { top_k: model_options?.top_k };
+            additionalField = { ...additionalField, top_k: model_options?.top_k };
         } else if (options.model.includes("meta")) {
             //LLaMA models support no additional options
         } else if (options.model.includes("mistral")) {
