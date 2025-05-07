@@ -28,6 +28,19 @@ The main abstractions are:
 - **Run specific tests**: `cd drivers && pnpm test -- -t "pattern"`
 - **Run linting**: `pnpm eslint`
 
+## Code Style
+
+- TypeScript strict mode with noUnusedLocals/Parameters
+- ESM modules with node-next resolution
+- Use async/await with proper error handling (no floating promises)
+- Objects: use shorthand notation
+- Unused variables prefix: `_` (e.g., `_unused`)
+- Line length: 120 characters, single quotes
+- Component patterns: follow existing naming, directory structure and import patterns
+- Always use proper typing - avoid `any` when possible
+- Error handling: use proper error types and propagation, especially with async code
+- Formatting: follows Prettier configuration
+
 ## Testing
 
 Tests require API keys for the various LLM providers stored as environment variables:
