@@ -11,7 +11,7 @@ const { PredictionServiceClient } = aiplatform.v1;
 
 // Import the helper module for converting arbitrary protobuf.Value objects
 import { helpers } from '@google-cloud/aiplatform';
-import { ImagenOptions } from "@llumiverse/core";
+import { ImagenOptions } from "../../../../core/src/options/vertexai.js";
 
 interface ImagenBaseReference {
     referenceType: "REFERENCE_TYPE_RAW" | "REFERENCE_TYPE_MASK" | "REFERENCE_TYPE_SUBJECT" |
