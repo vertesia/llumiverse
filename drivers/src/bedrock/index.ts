@@ -8,12 +8,12 @@ import { AwsCredentialIdentity, Provider } from "@aws-sdk/types";
 import {
     AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult,
     ExecutionOptions, ExecutionTokenUsage, ImageGeneration, Modalities, PromptOptions, PromptSegment,
-    TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions
+    TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions,
+    BedrockClaudeOptions, BedrockPalmyraOptions, getMaxTokensLimit, NovaCanvasOptions
 } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
 import { LRUCache } from "mnemonist";
-import { BedrockClaudeOptions, BedrockPalmyraOptions, getMaxTokensLimit, NovaCanvasOptions } from "../../../core/src/options/bedrock.js";
 import { converseConcatMessages, converseJSONprefill, converseSystemToMessages, fortmatConversePrompt } from "./converse.js";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
 import { forceUploadFile } from "./s3.js";
