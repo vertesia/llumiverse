@@ -1,8 +1,10 @@
 import * as AnthropicAPI from '@anthropic-ai/sdk';
 import { ContentBlock, ContentBlockParam, Message, TextBlockParam } from "@anthropic-ai/sdk/resources/index.js";
-import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, JSONObject, ModelType, PromptOptions, PromptRole, PromptSegment, readStreamAsBase64, ToolUse } from "@llumiverse/core";
+import {
+    AIModel, Completion, CompletionChunkObject, ExecutionOptions, JSONObject, ModelType,
+    PromptOptions, PromptRole, PromptSegment, readStreamAsBase64, ToolUse, VertexAIClaudeOptions
+} from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
-import { VertexAIClaudeOptions } from "../../../../core/src/options/vertexai.js";
 import { VertexAIDriver } from "../index.js";
 import { ModelDefinition } from "../models.js";
 
