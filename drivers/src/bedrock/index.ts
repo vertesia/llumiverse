@@ -14,7 +14,7 @@ import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
 import { LRUCache } from "mnemonist";
 import { BedrockClaudeOptions, BedrockPalmyraOptions, NovaCanvasOptions } from "../../../core/src/options/bedrock.js";
-import { converseConcatMessages, converseRemoveJSONprefill, converseSystemToMessages, formatConversePrompt as formatConversePrompt } from "./converse.js";
+import { converseConcatMessages, converseRemoveJSONprefill, converseSystemToMessages, formatConversePrompt } from "./converse.js";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
 import { forceUploadFile } from "./s3.js";
 
