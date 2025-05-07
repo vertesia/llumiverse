@@ -60,3 +60,6 @@ export function getOptions(provider?: string, model?: string, options?: ModelOpt
             return textOptionsFallback;
     }
 }
+
+export type * from "./options/bedrock.js";
+export type * from "./options/vertexai.js";
