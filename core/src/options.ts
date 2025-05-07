@@ -4,6 +4,12 @@ import { getVertexAiOptions } from "./options/vertexai.js";
 import { getOpenAiOptions } from "./options/openai.js";
 import { getGroqOptions } from "./options/groq.js";
 
+//Export types from providers
+export * from "./options/bedrock.js";
+export * from "./options/vertexai.js";
+export * from "./options/openai.js";
+export * from "./options/groq.js";
+
 export interface TextFallbackOptions {
     _option_id: "text-fallback";    //For specific models should be format as "provider-model"
     max_tokens?: number;

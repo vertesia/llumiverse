@@ -83,6 +83,19 @@ export function converseRemoveJSONprefill(messages: Message[] | undefined): Mess
     return messages ?? [];
 }
 
+export function converseJSONprefill(messages: Message[] | undefined): Message[] {
+    if (!messages) {
+        messages = [];
+    }
+
+    //prefill the json
+    messages.push({
+        content: [{ text: "```json" }],
+        role: ConversationRole.ASSISTANT,
+    });
+    return messages;
+}
+
 export async function formatConversePrompt(segments: PromptSegment[], schema?: JSONSchema): Promise<ConverseRequest> {
     //Non-const for concat
     let system: SystemContentBlock[] = [];
@@ -218,12 +231,6 @@ export async function formatConversePrompt(segments: PromptSegment[], schema?: J
     if (schema) {
         safety.push({ text: "IMPORTANT: " + getJSONSafetyNotice(schema) });
         system = system.concat(safety);
-
-        //prefill the json
-        messages.push({
-            content: [{ text: "```json" }],
-            role: ConversationRole.ASSISTANT,
-        });
     }
 
     messages = converseConcatMessages(messages);

@@ -8,13 +8,13 @@ import { AwsCredentialIdentity, Provider } from "@aws-sdk/types";
 import {
     AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult,
     ExecutionOptions, ExecutionTokenUsage, ImageGeneration, Modalities, PromptOptions, PromptSegment,
-    TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions
+    TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions,
+    BedrockClaudeOptions, BedrockPalmyraOptions, getMaxTokensLimit, NovaCanvasOptions
 } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
 import { LRUCache } from "mnemonist";
-import { BedrockClaudeOptions, BedrockPalmyraOptions, NovaCanvasOptions } from "../../../core/src/options/bedrock.js";
-import { converseConcatMessages, converseRemoveJSONprefill, converseSystemToMessages, formatConversePrompt } from "./converse.js";
+import { converseConcatMessages, converseJSONprefill, converseSystemToMessages, formatConversePrompt } from "./converse.js";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
 import { forceUploadFile } from "./s3.js";
 
@@ -299,11 +299,17 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         let additionalField = {};
 
         if (options.model.includes("amazon")) {
+            if (options.result_schema) {
+                prompt.messages = converseJSONprefill(prompt.messages);
+            }
             //Titan models also exists but does not support any additional options
             if (options.model.includes("nova")) {
                 additionalField = { inferenceConfig: { topK: model_options?.top_k } };
             }
         } else if (options.model.includes("claude")) {
+            if (options.result_schema) {
+                prompt.messages = converseJSONprefill(prompt.messages);
+            }
             if (options.model.includes("claude-3-7")) {
                 const thinking_options = options.model_options as BedrockClaudeOptions;
                 const thinking = thinking_options?.thinking_mode ?? false;
@@ -311,7 +317,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     model_options.max_tokens = thinking ? 128000 : 8192;
                 }
                 additionalField = {
-                    top_k: model_options?.top_k,
+                    ...additionalField,
                     reasoning_config: {
                         type: thinking ? "enabled" : "disabled",
                         budget_tokens: thinking_options?.thinking_budget_tokens,
@@ -326,22 +332,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
             //Needs max_tokens to be set
             if (!model_options?.max_tokens) {
-                if (options.model.includes("claude-3-5")) {
-                    model_options.max_tokens = 8192;
-
-                    //Bug with AWS Converse Sonnet 3.5, does not effect Haiku.
-                    //See https://github.com/boto/boto3/issues/4279
-                    if (options.model.includes("claude-3-5-sonnet")) {
-                        model_options.max_tokens = 4096;
-                    }
-                } else {
-                    model_options.max_tokens = 4096;
-                }
+                model_options.max_tokens = getMaxTokensLimit(options.model, model_options);
             }
-            additionalField = { top_k: model_options?.top_k };
+            additionalField = { ...additionalField, top_k: model_options?.top_k };
         } else if (options.model.includes("meta")) {
-            //If last message is "```json", remove it. Model requires the final message to be a user message
-            prompt.messages = converseRemoveJSONprefill(prompt.messages);
+            //LLaMA models support no additional options
         } else if (options.model.includes("mistral")) {
             //7B instruct and 8x7B instruct
             if (options.model.includes("7b")) {
@@ -352,14 +347,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     prompt.system = undefined;
                     prompt.messages = converseConcatMessages(prompt.messages);
                 }
+                if (options.result_schema) {
+                    prompt.messages = converseJSONprefill(prompt.messages);
+                }
             } else {
                 //Other models such as Mistral Small,Large and Large 2
                 //Support no additional fields.
-                prompt.messages = converseRemoveJSONprefill(prompt.messages);
             }
         } else if (options.model.includes("ai21")) {
-            //If last message is "```json", remove it. Model requires the final message to be a user message
-            prompt.messages = converseRemoveJSONprefill(prompt.messages);
             //Jamba models support no additional options
             //Jurassic 2 models do.
             if (options.model.includes("j2")) {
@@ -376,8 +371,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
         } else if (options.model.includes("cohere.command")) {
             // If last message is "```json", remove it.
-            // Model requires the final message to be a user message or does not support assistant messages
-            prompt.messages = converseRemoveJSONprefill(prompt.messages);
             //Command R and R plus
             if (options.model.includes("cohere.command-r")) {
                 additionalField = {
@@ -397,14 +390,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
         } else if (options.model.includes("palmyra")) {
             const palmyraOptions = options.model_options as BedrockPalmyraOptions;
-            //If last message is "```json", remove it. Model requires the final message to be a user message
-            prompt.messages = converseRemoveJSONprefill(prompt.messages);
             additionalField = {
                 seed: palmyraOptions?.seed,
                 presence_penalty: palmyraOptions?.presence_penalty,
                 frequency_penalty: palmyraOptions?.frequency_penalty,
                 min_tokens: palmyraOptions?.min_tokens,
             }
+        } else if (options.model.includes("deepseek")) {
+            //DeepSeek models support no additional options
         }
 
         //If last message is "```json", add corresponding ``` as a stop sequence.

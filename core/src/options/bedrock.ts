@@ -43,7 +43,7 @@ export interface BedrockPalmyraOptions extends BaseConverseOptions {
     presence_penalty?: number;
 }
 
-function getMaxTokensLimit(model: string, option?: ModelOptions): number | undefined {
+export function getMaxTokensLimit(model: string, option?: ModelOptions): number | undefined {
     // Claude models
     if (model.includes("claude")) {
         if (model.includes("3-7")) {
@@ -54,6 +54,8 @@ function getMaxTokensLimit(model: string, option?: ModelOptions): number | undef
             }
         }
         else if (model.includes("3-5")) {
+            //Bug with AWS Converse Sonnet 3.5, does not effect Haiku.
+            //See https://github.com/boto/boto3/issues/4279
             if (model.includes("claude-3-5-sonnet")) {
                 return 4096;
             }

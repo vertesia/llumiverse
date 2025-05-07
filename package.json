@@ -4,15 +4,18 @@
     "private": true,
     "scripts": {
         "bump": "pnpm exec wst bump minor",
+        "eslint": "eslint '**/src/**/*.ts'",
         "release": "pnpm -r publish --access public",
         "prepare": "cp ./README.md ./core/ && cp ./README.md ./drivers/",
         "build": "pnpm -r build"
     },
     "devDependencies": {
         "cross-spawn": "^7.0.5",
+        "eslint": "^9.26.0",
         "npm-ws-tools": "^0.3.0",
         "rollup": "^4.27.4",
         "typescript": "^5.6.2",
+        "typescript-eslint": "^8.32.0",
         "vitest": "^3.0.9"
     },
     "packageManager": "pnpm@10.8.1",

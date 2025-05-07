@@ -1,4 +1,7 @@
-import { AIModel, Completion, ExecutionOptions, ImageGeneration, Modalities, ModelType, PromptRole, PromptSegment, readStreamAsBase64 } from "@llumiverse/core";
+import {
+    AIModel, Completion, ExecutionOptions, ImageGeneration, Modalities,
+    ModelType, PromptRole, PromptSegment, readStreamAsBase64, ImagenOptions
+} from "@llumiverse/core";
 import { VertexAIDriver } from "../index.js";
 
 const projectId = process.env.GOOGLE_PROJECT_ID;
@@ -11,8 +14,6 @@ const { PredictionServiceClient } = aiplatform.v1;
 
 // Import the helper module for converting arbitrary protobuf.Value objects
 import { helpers } from '@google-cloud/aiplatform';
-import { ImagenOptions } from "../../../../core/src/options/vertexai.js";
-
 interface ImagenBaseReference {
     referenceType: "REFERENCE_TYPE_RAW" | "REFERENCE_TYPE_MASK" | "REFERENCE_TYPE_SUBJECT" |
     "REFERENCE_TYPE_CONTROL" | "REFERENCE_TYPE_STYLE";

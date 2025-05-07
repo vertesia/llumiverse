@@ -1,6 +1,5 @@
-import { ExecutionOptions } from "@llumiverse/core";
+import { ExecutionOptions, NovaCanvasOptions } from "@llumiverse/core";
 import { NovaMessage, NovaMessagesPrompt } from "@llumiverse/core/formatters";
-import { NovaCanvasOptions } from "../../../core/src/options/bedrock.js";
 
 function getFirstImageFromPrompt(prompt: NovaMessage[]) {
 
