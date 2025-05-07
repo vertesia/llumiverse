@@ -5,7 +5,7 @@
 - Dev mode: `pnpm dev` (watches for changes)
 - Run tests: `pnpm test` (all tests)
 - Run single test: `cd packages/<package> && pnpm test -- -t "<test name>"`
-- Lint: `pnpm eslint './src/**/*.{jsx,js,tsx,ts}'`
+- Lint: `pnpm eslint`
 
 # Code Style
 
