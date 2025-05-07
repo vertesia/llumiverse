@@ -12,6 +12,22 @@ export default defineConfig([
       '@typescript-eslint/no-unused-expressions': 'warn',
       '@typescript-eslint/no-unused-vars': 'warn',
       '@typescript-eslint/no-wrapper-object-types': 'warn',
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: [
+                '../core/**',
+                '../../core/**',
+                '../../../core/**',
+                '../../../../core/**',
+              ],
+              message: 'Please use "@llumiverse/core" instead of relative paths.',
+            }
+          ]
+        }
+      ],
       'prefer-const': 'warn',
     },
   },
