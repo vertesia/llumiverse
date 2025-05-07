@@ -14,7 +14,7 @@ import {
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
 import { LRUCache } from "mnemonist";
-import { converseConcatMessages, converseJSONprefill, converseSystemToMessages, fortmatConversePrompt } from "./converse.js";
+import { converseConcatMessages, converseJSONprefill, converseSystemToMessages, formatConversePrompt } from "./converse.js";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
 import { forceUploadFile } from "./s3.js";
 
@@ -49,8 +49,8 @@ export interface BedrockDriverOptions extends DriverOptions {
      */
     region: string;
     /**
-     * Tthe bucket name to be used for training.
-     * It will be created oif nto already exixts
+     * The bucket name to be used for training.
+     * It will be created if does not already exist.
      */
     training_bucket?: string;
 
@@ -110,10 +110,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if (opts.model.includes("canvas")) {
             return await formatNovaPrompt(segments, opts.result_schema);
         }
-        return await fortmatConversePrompt(segments, opts.result_schema);
+        return await formatConversePrompt(segments, opts.result_schema);
     }
 
-    static getExtractedExecuton(result: ConverseResponse, _prompt?: BedrockPrompt): CompletionChunkObject {
+    static getExtractedExecution(result: ConverseResponse, _prompt?: BedrockPrompt): CompletionChunkObject {
         return {
             result: result.output?.message?.content?.map(c => c.text).join("\n") ?? "",
             token_usage: {
@@ -158,7 +158,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const res = await executor.converse({
             ...payload,
         });
-        
+
         conversation = updateConversation(conversation, {
             messages: [res.output?.message ?? { content: [{ text: "" }], role: "assistant" }],
             modelId: prompt.modelId,
@@ -184,7 +184,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
 
         const completion = {
-            ...BedrockDriver.getExtractedExecuton(res, prompt),
+            ...BedrockDriver.getExtractedExecution(res, prompt),
             original_response: options.include_original_response ? res : undefined,
             conversation: conversation,
             tool_use: tool_use,
@@ -199,13 +199,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if (arnMatch) {
             return arnMatch[1];
         }
-        
+
         // Match common AWS regions directly in string
         const regionMatch = modelString.match(/(?:us|eu|ap|sa|ca|me|af)[-](east|west|central|south|north|southeast|southwest|northeast|northwest)[-][1-9]/);
         if (regionMatch) {
             return regionMatch[0];
         }
-    
+
         return defaultRegion;
     }
 
@@ -446,7 +446,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             throw new Error(`Image generation requires image output_modality`);
         }
         if (options.model_options?._option_id !== "bedrock-nova-canvas") {
-            this.logger.warn("Invalid model options", {options: options.model_options });
+            this.logger.warn("Invalid model options", { options: options.model_options });
         }
         const model_options = options.model_options as NovaCanvasOptions;
 
@@ -568,7 +568,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
     async _listModels(foundationFilter?: (m: FoundationModelSummary) => boolean): Promise<AIModel[]> {
         const service = this.getService();
-        const [foundationals, customs, inferenceProfiles] = await Promise.all([
+        const [foundationModelsList, customModelsList, inferenceProfilesList] = await Promise.all([
             service.listFoundationModels({}).catch(() => {
                 this.logger.warn("[Bedrock] Can't list foundation models. Check if the user has the right permissions.");
                 return undefined
@@ -583,23 +583,23 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }),
         ]);
 
-        if (!foundationals?.modelSummaries) {
+        if (!foundationModelsList?.modelSummaries) {
             throw new Error("Foundation models not found");
         }
 
-        let fmodels = foundationals.modelSummaries || [];
+        let foundationModels = foundationModelsList.modelSummaries || [];
         if (foundationFilter) {
-            fmodels = fmodels.filter(foundationFilter);
+            foundationModels = foundationModels.filter(foundationFilter);
         }
 
         const supportedProviders = ["amazon", "anthropic", "cohere", "ai21", "mistral", "meta", "deepseek", "writer"];
-        fmodels = fmodels.filter((m) =>
+        foundationModels = foundationModels.filter((m) =>
             supportedProviders.some((provider) =>
                 m.providerName?.toLowerCase().includes(provider) ?? false
             )
         );
 
-        const aimodels: AIModel[] = fmodels.map((m) => {
+        const aiModels: AIModel[] = foundationModels.map((m) => {
 
             if (!m.modelId) {
                 throw new Error("modelId not found");
@@ -621,8 +621,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         });
 
         //add custom models
-        if (customs?.modelSummaries) {
-            customs.modelSummaries.forEach((m) => {
+        if (customModelsList?.modelSummaries) {
+            customModelsList.modelSummaries.forEach((m) => {
 
                 if (!m.modelArn) {
                     throw new Error("Model ID not found");
@@ -636,14 +636,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     is_custom: true,
                 };
 
-                aimodels.push(model);
+                aiModels.push(model);
                 this.validateConnection;
             });
         }
 
         //add inference profiles
-        if (inferenceProfiles?.inferenceProfileSummaries) {
-            inferenceProfiles.inferenceProfileSummaries.forEach((p) => {
+        if (inferenceProfilesList?.inferenceProfileSummaries) {
+            inferenceProfilesList.inferenceProfileSummaries.forEach((p) => {
                 if (!p.inferenceProfileArn) {
                     throw new Error("Profile ARN not found");
                 }
@@ -654,11 +654,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     provider: this.provider,
                 };
 
-                aimodels.push(model);
+                aiModels.push(model);
             });
         }
 
-        return aimodels;
+        return aiModels;
     }
 
     async generateEmbeddings({ text, image, model }: EmbeddingsOptions): Promise<EmbeddingsResult> {
@@ -739,7 +739,7 @@ function getToolDefinition(tool: ToolDefinition): Tool.ToolSpecMember {
 }
 
 /**
- * Update the converatation messages
+ * Update the conversation messages
  * @param prompt
  * @param response
  * @returns

@@ -56,7 +56,7 @@ export function formatOpenAILikeTextPrompt(segments: PromptSegment[]): OpenAITex
         }
     }
 
-    // put system mesages first and safety last
+    // put system messages first and safety last
     return system.concat(user).concat(safety);
 }
 
@@ -70,7 +70,7 @@ export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[]
 
         const parts: (OpenAIContentPartImage | OpenAIContentPartText)[] = [];
 
-        //generate the parts based on promptsegment
+        //generate the parts based on PromptSegment
         if (msg.files) {
             for (const file of msg.files) {
                 const stream = await file.getStream();
@@ -147,7 +147,7 @@ export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[]
         })
     }
 
-    // put system mesages first and safety last
+    // put system messages first and safety last
     return ([] as OpenAIInputMessage[]).concat(system).concat(others).concat(safety);
 
 }

@@ -119,7 +119,7 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
         const models: TogetherModelInfo[] = await this.fetchClient.get("/models/info");
         //        logObject('#### LIST MODELS RESULT IS', models[0]);
 
-        const aimodels = models.map(m => {
+        const aiModels = models.map(m => {
             return {
                 id: m.name,
                 name: m.display_name,
@@ -128,7 +128,7 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
             }
         });
 
-        return aimodels;
+        return aiModels;
 
     }
 

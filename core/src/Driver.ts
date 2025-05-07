@@ -78,7 +78,7 @@ export interface Driver<PromptT = unknown> {
 
     getTrainingJob(jobId: string): Promise<TrainingJob>;
 
-    //list models available for this environement
+    //list models available for this environment
     listModels(params?: ModelSearchPayload): Promise<AIModel[]>;
 
     //list models that can be trained
@@ -199,13 +199,13 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     }
 
     /**
-     * Must be overrided if the implementation cannot stream.
+     * Must be overridden if the implementation cannot stream.
      * Some implementation may be able to stream for certain models but not for others.
      * You must overwrite and return false if the current model doesn't support streaming.
      * The default implementation returns true, so it is assumed that the streaming can be done.
      * If this method returns false then the streaming execution will fallback on a blocking execution streaming the entire response as a single event.
      * @param options the execution options containing the target model name.
-     * @returns true if the exeuction can be streamed false otherwise.
+     * @returns true if the execution can be streamed false otherwise.
      */
     protected canStream(_options: ExecutionOptions) {
         return Promise.resolve(true);
@@ -229,7 +229,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         //Cannot be made abstract, as abstract methods are required in the derived class
     }
 
-    //list models available for this environement
+    //list models available for this environment
     abstract listModels(params?: ModelSearchPayload): Promise<AIModel[]>;
 
     //check that it is possible to connect to the environment

@@ -105,7 +105,7 @@ export async function formatNovaPrompt(segments: PromptSegment[], schema?: JSONS
         safety.push("IMPORTANT: " + getJSONSafetyNotice(schema));
     }
 
-    // messages must contains at least 1 item. If the prompt doesn;t contains a user message (but only system messages)
+    // messages must contains at least 1 item. If the prompt does not contains a user message (but only system messages)
     // we need to put the system messages in the messages array
 
     let systemMessage = system.join('\n').trim();
@@ -119,7 +119,7 @@ export async function formatNovaPrompt(segments: PromptSegment[], schema?: JSONS
         systemMessage = systemMessage + '\n\nIMPORTANT: ' + safety.join('\n');
     }
 
-    /*start Nova's message to amke sure it answers properly in JSON
+    /*start Nova's message to make sure it answers properly in JSON
    if enabled, this requires to add the { to Nova's response*/
 
     if (schema) {
@@ -131,7 +131,7 @@ export async function formatNovaPrompt(segments: PromptSegment[], schema?: JSONS
         });
     }
 
-    // put system mesages first and safety last
+    // put system messages first and safety last
     return {
         system: systemMessage ? [{ text: systemMessage }] : [{ text: "" }],
         messages: messages,

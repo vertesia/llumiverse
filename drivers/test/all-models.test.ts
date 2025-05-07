@@ -187,7 +187,7 @@ function getTestOptions(model: string): ExecutionOptions {
             model_options: {
                 _option_id: "openai-thinking",
                 max_tokens: 3000,
-                stop_sequence: model == "o3-mini" ? ["adsoiuygsa"] : undefined,
+                stop_sequence: model == "o3-mini" ? ["haemoglobin"] : undefined,
             },
             output_modality: Modalities.text,
         };
@@ -204,7 +204,7 @@ function getTestOptions(model: string): ExecutionOptions {
             //   top_logprobs: 5,        //Currently not supported, option will be ignored
             presence_penalty: 0.1,      //Cohere Command R does not support using presence & frequency penalty at the same time
             frequency_penalty: -0.1,
-            stop_sequence: ["adsoiuygsa"],
+            stop_sequence: ["haemoglobin"],
         },
         output_modality: Modalities.text,
     };

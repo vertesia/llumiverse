@@ -173,7 +173,7 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
                 },
                 {
                     name: "mask_dilation", type: OptionType.numeric, min: 0, max: 1,
-                    integer: true, description: "The mask dilation, grows the mask by a percetage of image width to compensate for imprecise masks."
+                    integer: true, description: "The mask dilation, grows the mask by a percentage of image width to compensate for imprecise masks."
                 },
             ] : [];
 

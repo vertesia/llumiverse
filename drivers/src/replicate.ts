@@ -237,7 +237,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
         ]);
 
         if (!rModel || !versions || versions.length === 0) {
-            throw new Error("Model not found or no versions avaialble");
+            throw new Error("Model not found or no versions available");
         }
 
         const models: AIModel[] = (versions as any).results.map((v: any) => {

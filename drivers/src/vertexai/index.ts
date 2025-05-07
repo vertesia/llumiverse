@@ -211,7 +211,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
         if (options.image || options.model?.includes("multimodal")) {
             if (options.text && options.image) {
-                throw new Error("Text and Image simultaneous embedding not implemented. Submit seperately");
+                throw new Error("Text and Image simultaneous embedding not implemented. Submit separately");
             }
             return getEmbeddingsForImages(this, options);
         }

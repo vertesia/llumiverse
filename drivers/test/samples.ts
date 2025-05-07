@@ -82,7 +82,7 @@ export const testSchema_animalDescription: JSONSchema =
         type: {
             type: "string"
         },
-        specy: {
+        species: {
             type: "string"
         },
         characteristics: {

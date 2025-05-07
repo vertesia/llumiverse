@@ -9,7 +9,7 @@ export interface OpenAIDriverOptions extends DriverOptions {
     /**
      * The OpenAI api key
      */
-    apiKey?: string; //type with azure credntials
+    apiKey?: string; //type with azure credentials
     
 }
 

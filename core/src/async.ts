@@ -19,7 +19,7 @@ export function oneAsyncIterator<T>(value: T): AsyncIterable<T> {
  * Given a ReadableStream of server sent events, tran
  */
 export function transformSSEStream(stream: ReadableStream<ServerSentEvent>, transform: (data: string) => CompletionChunk): ReadableStream<CompletionChunk> & AsyncIterable<CompletionChunk> {
-    // on node and bun the readablestream is an async iterable
+    // on node and bun the ReadableStream is an async iterable
     return stream.pipeThrough(new TransformStream<ServerSentEvent, CompletionChunk>({
         transform(event: ServerSentEvent, controller) {
             if (event.type === 'event' && event.data && event.data !== '[DONE]') {
@@ -27,7 +27,7 @@ export function transformSSEStream(stream: ReadableStream<ServerSentEvent>, tran
                     const result = transform(event.data) ?? ''
                     controller.enqueue(result);
                 } catch (err) {
-                    // double check for the last event whicb is not a JSON - at this time togetherai and mistralai returrns the string [DONE]
+                    // double check for the last event which is not a JSON - at this time togetherai and mistralai returns the string [DONE]
                     // do nothing - happens if data is not a JSON - the last event data is the [DONE] string
                 }
             }
@@ -58,7 +58,7 @@ export class EventStream<T, ReturnT = any> implements AsyncIterable<T>{
     }
 
     /**
-     * Close the stream. This means the stream cannot be feeded anymore.
+     * Close the stream. This means the stream cannot be fed anymore.
      * But the consumer can still consume the remaining events.
      */
     close(value?: ReturnT) {

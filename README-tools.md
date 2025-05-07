@@ -19,7 +19,7 @@ export interface ToolDefinition {
 ```
 
 When the target model will need a tool output it will respond using a `finish_reason` with the value of `tool_use`.
-Additionally, a `tool_use` property will be available on the execution result object. The proprty is an array of tool use definitions:
+Additionally, a `tool_use` property will be available on the execution result object. The property is an array of tool use definitions:
 
 ```ts
 export interface ToolUse {
@@ -46,7 +46,7 @@ const r = await driver.execute([
 
 At each execution you need to restore the conversation context since the model need to continue generating the previous response which was postponed while awaiting for the tool output.
 
-In order to restore the comnversation you need to recover the current state of the conversation from the last execution result and pass it on the new execution.
+In order to restore the conversation you need to recover the current state of the conversation from the last execution result and pass it on the new execution.
 
 You can get the current state of a conversation after an execution from the `conversation` property of the `ExecutionResponse` object.
 Then you need to pass this object to the next execution through the `conversation` field of the `ExecutionOptions` object.
@@ -61,7 +61,7 @@ let r = await driver.execute(myFirstPrompt, {
     tools: [
         {
             name: "myTool",
-            descripton: "describe what the tool is usefull for",
+            description: "describe what the tool is useful for",
             input_schema: {
                 type: "object", properties: {}
             }
@@ -85,7 +85,7 @@ if (r.tool_use) {
 
 ## Tool Function result
 
-The result of a tool fucntion is passed through a PromptSegment as follows:
+The result of a tool function is passed through a PromptSegment as follows:
 
 ```js
 {
@@ -95,4 +95,4 @@ The result of a tool fucntion is passed through a PromptSegment as follows:
 ```
 
 This means the target model will receive a string.
-The `gemini-pro` model accepts a JSON object as the fucntion result. To be able to pass an object in the case of gemini-pro you need to stringify the JSON object and pass it as a string. The gemini-pro driver will parse the JSON string if a valid JSON is found and will send the object as the result to the model. If no valid JSON is found it will send the string as the result.
+The `gemini-pro` model accepts a JSON object as the function result. To be able to pass an object in the case of gemini-pro you need to stringify the JSON object and pass it as a string. The gemini-pro driver will parse the JSON string if a valid JSON is found and will send the object as the result to the model. If no valid JSON is found it will send the string as the result.

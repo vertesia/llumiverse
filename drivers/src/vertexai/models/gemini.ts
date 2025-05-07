@@ -183,7 +183,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
             });
         }
 
-        // put system mesages first and safety last
+        // put system messages first and safety last
         return { contents, tools } as GenerateContentRequest;
     }
 
@@ -325,7 +325,7 @@ function getToolDefinition(tool: ToolDefinition): FunctionDeclarationsTool {
 
 
 /**
- * Update the converatation messages
+ * Update the conversation messages
  * @param prompt
  * @param response
  * @returns

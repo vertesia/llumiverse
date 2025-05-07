@@ -28,7 +28,7 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, OpenAITextMess
 
     // protected canStream(options: ExecutionOptions): Promise<boolean> {
     //     if (options.result_schema) {
-    //         // not yet streamign json responses
+    //         // not yet streaming json responses
     //         return Promise.resolve(false);
     //     } else {
     //         return Promise.resolve(true);
@@ -130,7 +130,7 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, OpenAITextMess
             throw new Error("No models found");
         }
 
-        const aimodels = models.data?.map(m => {
+        const aiModels = models.data?.map(m => {
             if (!m.id) {
                 throw new Error("Model id is missing");
             }
@@ -143,7 +143,7 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, OpenAITextMess
             }
         });
 
-        return aimodels;
+        return aiModels;
     }
 
     validateConnection(): Promise<boolean> {

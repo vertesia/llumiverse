@@ -45,7 +45,7 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
         // return _options.result_schema ? responseFormatJson : responseFormatText;
 
         //TODO remove this when Mistral properly supports the parameters - it makes an error for now
-        // some models like mixtral mistrall tiny or medium are throwing an error when using the response_format parameter
+        // some models like mixtral mistral tiny or medium are throwing an error when using the response_format parameter
         return undefined
     }
 
@@ -130,7 +130,7 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
     async listModels(): Promise<AIModel<string>[]> {
         const models: ListModelsResponse = await this.client.get('v1/models');
 
-        const aimodels = models.data.map(m => {
+        const aiModels = models.data.map(m => {
             return {
                 id: m.id,
                 name: m.id,
@@ -140,7 +140,7 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
             }
         });
 
-        return aimodels;
+        return aiModels;
     }
 
     validateConnection(): Promise<boolean> {

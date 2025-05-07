@@ -130,7 +130,7 @@ export function getMaxTokensLimit(model: string, option?: ModelOptions): number 
 
 export function getBedrockOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
     if (model.includes("canvas")) {
-        const tasktypeList: ModelOptionInfoItem = {
+        const taskTypeList: ModelOptionInfoItem = {
             name: "taskType",
             type: OptionType.enum,
             enum: {
@@ -204,7 +204,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
         return {
             _option_id: "bedrock-nova-canvas",
             options: [
-                tasktypeList,
+                taskTypeList,
                 ...otherOptions,
                 ...dependentOptions,
             ]

@@ -9,7 +9,7 @@ export interface TextEmbeddingsOptions {
     content: string // the text to generate embeddings for
 }
 
-interface EmbedingsForTextPrompt {
+interface EmbeddingsForTextPrompt {
     instances: TextEmbeddingsOptions[]
 }
 
@@ -36,7 +36,7 @@ export async function getEmbeddingsForText(driver: VertexAIDriver, options: Text
             title: options.title,
             content: options.content
         }]
-    } as EmbedingsForTextPrompt;
+    } as EmbeddingsForTextPrompt;
 
     const model = options.model || "text-embedding-004";
 
