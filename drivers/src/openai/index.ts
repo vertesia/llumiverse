@@ -123,7 +123,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                 strictMode = false;
             }
         }
-        
+
         const stream = await this.service.chat.completions.create({
             stream: true,
             stream_options: { include_usage: true },
@@ -407,7 +407,7 @@ function convertRoles(messages: OpenAIMessageBlock[], model: string): OpenAIMess
 
 function supportsTools(model: string): boolean {
     const list_check = !noStructuredOutputModels.some((m) => model.includes(m));
-    if (list_check && model.includes("gpt-4o") && !model.includes("gpt-4o-2024-05-13")) {
+    if (!list_check && model.includes("gpt-4o") && !model.includes("gpt-4o-2024-05-13")) {
         return true;
     }
     return list_check
@@ -415,7 +415,7 @@ function supportsTools(model: string): boolean {
 
 function supportsSchema(model: string): boolean {
     const list_check = !noStructuredOutputModels.some((m) => model.includes(m));
-    if (list_check && model.includes("gpt-4o") && !model.includes("gpt-4o-2024-05-13")) {
+    if (!list_check && model.includes("gpt-4o") && !model.includes("gpt-4o-2024-05-13")) {
         return true; 
     }
     return list_check
