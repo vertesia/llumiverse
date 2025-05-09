@@ -96,7 +96,6 @@ const MODELS_WITH_STREAMING_TOOL_USE = [
  * @returns true if the model supports tool use, false if it doesn't, undefined if unknown
  */
 export function supportsToolUseBedrock(model: string, streaming: boolean = false): boolean | undefined {
-    return undefined;
     // Normalize the model string for easier matching
     const modelLower = model.toLowerCase();
 
