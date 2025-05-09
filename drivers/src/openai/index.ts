@@ -123,9 +123,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                 strictMode = false;
             }
         }
-
-        console.log(parsedSchema, options.result_schema, strictMode);
-
+        
         const stream = await this.service.chat.completions.create({
             stream: true,
             stream_options: { include_usage: true },

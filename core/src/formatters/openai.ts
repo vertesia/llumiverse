@@ -82,8 +82,6 @@ export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[]
 
     for (const msg of segments) {
 
-        console.log(JSON.stringify(msg, null, 2));
-
         const parts: (OpenAIContentPartImage | OpenAIContentPartText)[] = [];
 
         //generate the parts based on PromptSegment
