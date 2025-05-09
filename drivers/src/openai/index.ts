@@ -406,7 +406,7 @@ function convertRoles(messages: OpenAIMessageBlock[], model: string): OpenAIMess
 }
 
 function supportsTools(model: string): boolean {
-    const list_check = noStructuredOutputModels.some((m) => model.includes(m));
+    const list_check = !noStructuredOutputModels.some((m) => model.includes(m));
     if (list_check && model.includes("gpt-4o") && !model.includes("gpt-4o-2024-05-13")) {
         return true;
     }
@@ -414,7 +414,7 @@ function supportsTools(model: string): boolean {
 }
 
 function supportsSchema(model: string): boolean {
-    const list_check = noStructuredOutputModels.some((m) => model.includes(m));
+    const list_check = !noStructuredOutputModels.some((m) => model.includes(m));
     if (list_check && model.includes("gpt-4o") && !model.includes("gpt-4o-2024-05-13")) {
         return true; 
     }
