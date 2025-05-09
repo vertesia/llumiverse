@@ -309,7 +309,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             type: m.object === "model" ? ModelType.Text : ModelType.Unknown,
             can_stream: true,
             is_multimodal: m.id.includes("gpt-4")
-        }));
+        })).sort((a, b) => a.id.localeCompare(b.id));
     }
 
 
