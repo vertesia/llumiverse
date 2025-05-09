@@ -19,7 +19,7 @@ import {
     TrainingPromptOptions,
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
-import { formatOpenAILikeMultimodalPrompt } from "@llumiverse/core/formatters";
+import { formatOpenAILikeMultimodalPrompt, noStructuredOutputModels } from "@llumiverse/core/formatters";
 import OpenAI, { AzureOpenAI } from "openai";
 import { Stream } from "openai/streaming";
 
@@ -124,7 +124,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             }
         }
 
-        const stream = (await this.service.chat.completions.create({
+        const stream = await this.service.chat.completions.create({
             stream: true,
             stream_options: { include_usage: true },
             model: options.model,
@@ -148,7 +148,8 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                     strict: strictMode,
                 }
             } : undefined,
-        })) satisfies Stream<OpenAI.Chat.Completions.ChatCompletionChunk>;
+        } satisfies OpenAI.Chat.ChatCompletionCreateParamsStreaming
+        ) satisfies Stream<OpenAI.Chat.Completions.ChatCompletionChunk>;
 
         return asyncMap(stream, mapFn);
     }
@@ -405,13 +406,19 @@ function convertRoles(messages: OpenAIMessageBlock[], model: string): OpenAIMess
 }
 
 function supportsTools(model: string): boolean {
-    return !(model.includes("o1-mini") || model.includes("o1-preview")
-        || model.includes("chatgpt-4o"));
+    const list_check = !noStructuredOutputModels.some((m) => model.includes(m));
+    if (!list_check && model.includes("gpt-4o") && !model.includes("gpt-4o-2024-05-13")) {
+        return true;
+    }
+    return list_check
 }
 
 function supportsSchema(model: string): boolean {
-    return !(model.includes("o1-mini") || model.includes("o1-preview")
-        || model.includes("chatgpt-4o"));
+    const list_check = !noStructuredOutputModels.some((m) => model.includes(m));
+    if (!list_check && model.includes("gpt-4o") && !model.includes("gpt-4o-2024-05-13")) {
+        return true; 
+    }
+    return list_check
 }
 
 function getToolDefinitions(tools: ToolDefinition[] | undefined | null): OpenAI.ChatCompletionTool[] | undefined {
