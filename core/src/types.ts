@@ -302,6 +302,16 @@ export enum Modalities {
     image = "image",
 }
 
+/**
+ * Represents the output and input modalities a model can support
+ */
+export interface ModelModalities {
+    text?: boolean;
+    image?: boolean;
+    video?: boolean;
+    audio?: boolean;
+    embedding?: boolean; //Only for output
+}
 
 // ============== AI MODEL ==============
 

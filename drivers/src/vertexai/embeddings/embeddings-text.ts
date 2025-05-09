@@ -40,7 +40,9 @@ export async function getEmbeddingsForText(driver: VertexAIDriver, options: Text
 
     const model = options.model || "text-embedding-004";
 
-    const result = await driver.fetchClient.post(`/publishers/google/models/${model}:predict`, {
+    const client = driver.getFetchClient();
+
+    const result = await client.post(`/publishers/google/models/${model}:predict`, {
         payload: prompt
     }) as TextEmbeddingsResult;
 

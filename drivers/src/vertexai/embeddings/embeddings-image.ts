@@ -39,7 +39,9 @@ export async function getEmbeddingsForImages(driver: VertexAIDriver, options: Em
 
     const model = options.model || "multimodalembedding@001";
 
-    const result = await driver.fetchClient.post(`/publishers/google/models/${model}:predict`, {
+    const client = driver.getFetchClient();
+
+    const result = await client.post(`/publishers/google/models/${model}:predict`, {
         payload: prompt
     }) as ImageEmbeddingsResult;
 
