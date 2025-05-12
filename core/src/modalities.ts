@@ -21,11 +21,11 @@ import {
 /**
  * Get the input modalities supported by a model across providers
  * 
- * @param provider The LLM provider (e.g., "bedrock", "vertexai", "openai")
  * @param model Model identifier
+ * @param provider The LLM provider (e.g., "bedrock", "vertexai", "openai")
  * @returns Object containing the supported input modalities
  */
-export function getInputModality(provider: string, model: string): ModelModalities {
+export function getInputModality(model: string, provider: string): ModelModalities {
     const providerLower = provider.toLowerCase();
 
     switch (providerLower) {
@@ -52,11 +52,11 @@ export function getInputModality(provider: string, model: string): ModelModaliti
 /**
  * Get the output modalities supported by a model across providers
  * 
- * @param provider The LLM provider (e.g., "bedrock", "vertexai", "openai") 
  * @param model Model identifier
+ * @param provider The LLM provider (e.g., "bedrock", "vertexai", "openai") 
  * @returns Object containing the supported output modalities
  */
-export function getOutputModality(provider: string, model: string): ModelModalities {
+export function getOutputModality(model: string, provider: string): ModelModalities {
     const providerLower = provider.toLowerCase();
 
     switch (providerLower) {
@@ -83,14 +83,14 @@ export function getOutputModality(provider: string, model: string): ModelModalit
 /**
  * Check if a model supports a specific input modality across providers
  * 
- * @param provider The LLM provider (e.g., "bedrock", "vertexai", "openai")
  * @param model Model identifier
+ * @param provider The LLM provider (e.g., "bedrock", "vertexai", "openai")
  * @param modality The modality to check for
  * @returns Boolean indicating if the model supports the specified input modality
  */
 export function supportsInputModality(
-    provider: string,
     model: string,
+    provider: string,
     modality: keyof ModelModalities
 ): boolean {
     const providerLower = provider.toLowerCase();
@@ -119,14 +119,14 @@ export function supportsInputModality(
 /**
  * Check if a model supports a specific output modality across providers
  * 
- * @param provider The LLM provider (e.g., "bedrock", "vertexai", "openai")
  * @param model Model identifier
+ * @param provider The LLM provider (e.g., "bedrock", "vertexai", "openai")
  * @param modality The modality to check for
  * @returns Boolean indicating if the model supports the specified output modality
  */
 export function supportsOutputModality(
-    provider: string,
     model: string,
+    provider: string,
     modality: keyof ModelModalities
 ): boolean {
     const providerLower = provider.toLowerCase();
