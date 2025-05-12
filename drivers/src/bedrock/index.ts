@@ -1,6 +1,6 @@
 import {
     Bedrock, CreateModelCustomizationJobCommand, FoundationModelSummary, GetModelCustomizationJobCommand,
-    GetModelCustomizationJobCommandOutput, ModelCustomizationJobStatus, StopModelCustomizationJobCommand
+    GetModelCustomizationJobCommandOutput, ModelCustomizationJobStatus, ModelModality, StopModelCustomizationJobCommand
 } from "@aws-sdk/client-bedrock";
 import { BedrockRuntime, ConverseRequest, ConverseResponse, ConverseStreamOutput, InferenceConfiguration, Tool } from "@aws-sdk/client-bedrock-runtime";
 import { S3Client } from "@aws-sdk/client-s3";
@@ -612,12 +612,12 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 id: m.modelArn ?? m.modelId,
                 name: `${m.providerName} ${m.modelName}`,
                 provider: this.provider,
-                input_modalities: m.inputModalities ?? modelModalitiesToArray(getInputModality(m.modelArn ?? m.modelId, "bedrock")),
+                input_modalities: m.inputModalities ? formatAmazonModalities(m.inputModalities) : modelModalitiesToArray(getInputModality(m.modelArn ?? m.modelId, "bedrock")),
                 //description: ``,
                 owner: m.providerName,
                 can_stream: m.responseStreamingSupported ?? false,
                 is_multimodal: m.inputModalities?.includes("IMAGE") ?? false,
-                tags: m.outputModalities ?? modelModalitiesToArray(getOutputModality(m.modelArn ?? m.modelId, "bedrock")),
+                tags: m.outputModalities ? formatAmazonModalities(m.outputModalities) : modelModalitiesToArray(getOutputModality(m.modelArn ?? m.modelId, "bedrock")),
             };
 
             return model;
@@ -758,4 +758,25 @@ function updateConversation(conversation: ConverseRequest, prompt: ConverseReque
         messages: [...(conversation?.messages || []), ...(prompt.messages || [])],
         system: prompt.system || conversation?.system,
     };
+}
+
+function formatAmazonModalities(modalities: ModelModality[]) : string[] {
+    const standardizedModalities: string[] = [];
+    for (const modality of modalities) {
+        if (modality === ModelModality.TEXT) {
+            standardizedModalities.push("text");
+        } else if (modality === ModelModality.IMAGE) {
+            standardizedModalities.push("image");
+        } else if (modality === ModelModality.EMBEDDING) {
+            standardizedModalities.push("embedding");
+        } else if (modality == "SPEECH") {
+            standardizedModalities.push("audio");
+        } else if (modality == "VIDEO") {
+            standardizedModalities.push("video");
+        } else {
+            // Handle other modalities as needed
+            standardizedModalities.push((modality as string).toString().toLowerCase());
+        }
+    }
+    return standardizedModalities;
 }
