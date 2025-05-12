@@ -11,6 +11,9 @@ import {
     Modalities,
     ModelSearchPayload,
     PromptSegment,
+    getInputModality,
+    getOutputModality,
+    modelModalitiesToArray,
 } from "@llumiverse/core";
 import { FetchClient } from "api-fetch-client";
 import { GoogleAuth, GoogleAuthOptions } from "google-auth-library";
@@ -218,6 +221,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 name: model.name?.split('/').pop() ?? '',
                 provider: 'vertexai',
                 owner: publisher,
+                input_modalities: modelModalitiesToArray(getInputModality(model.name ?? '', "vertexai")),
+                tags: modelModalitiesToArray(getOutputModality(model.name ?? '', "vertexai"))
             } satisfies AIModel<string>)));
         }
 
