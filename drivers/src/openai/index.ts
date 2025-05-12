@@ -17,6 +17,9 @@ import {
     TrainingJobStatus,
     TrainingOptions,
     TrainingPromptOptions,
+    getInputModality,
+    getOutputModality,
+    modelModalitiesToArray,
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { formatOpenAILikeMultimodalPrompt, noStructuredOutputModels } from "@llumiverse/core/formatters";
@@ -309,7 +312,9 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             owner: m.owned_by,
             type: m.object === "model" ? ModelType.Text : ModelType.Unknown,
             can_stream: true,
-            is_multimodal: m.id.includes("gpt-4")
+            is_multimodal: m.id.includes("gpt-4"),
+            input_modalities: modelModalitiesToArray(getInputModality(m.id, "openai")),
+            tags: modelModalitiesToArray(getOutputModality(m.id, "openai")),
         })).sort((a, b) => a.id.localeCompare(b.id));
     }
 
