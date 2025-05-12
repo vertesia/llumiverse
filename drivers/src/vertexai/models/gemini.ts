@@ -71,7 +71,7 @@ function collectTextParts(content: Content) {
 
 function collectToolUseParts(content: Content): ToolUse[] | undefined {
     const out: ToolUse[] = [];
-    const parts = content.parts;
+    const parts = content.parts ?? [];
     for (const part of parts) {
         if (part.functionCall) {
             out.push({
