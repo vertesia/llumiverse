@@ -20,6 +20,7 @@ import {
     getInputModality,
     getOutputModality,
     modelModalitiesToArray,
+    supportsToolUse,
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { formatOpenAILikeMultimodalPrompt, noStructuredOutputModels } from "@llumiverse/core/formatters";
@@ -314,7 +315,8 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             can_stream: true,
             is_multimodal: m.id.includes("gpt-4"),
             input_modalities: modelModalitiesToArray(getInputModality(m.id, "openai")),
-            tags: modelModalitiesToArray(getOutputModality(m.id, "openai")),
+            output_modalities: modelModalitiesToArray(getOutputModality(m.id, "openai")),
+            tool_use: supportsToolUse(m.id, "openai", false),
         })).sort((a, b) => a.id.localeCompare(b.id));
     }
 

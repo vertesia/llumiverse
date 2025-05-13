@@ -14,6 +14,7 @@ import {
     getInputModality,
     getOutputModality,
     modelModalitiesToArray,
+    supportsToolUse,
 } from "@llumiverse/core";
 import { FetchClient } from "api-fetch-client";
 import { GoogleAuth, GoogleAuthOptions } from "google-auth-library";
@@ -222,7 +223,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 provider: 'vertexai',
                 owner: publisher,
                 input_modalities: modelModalitiesToArray(getInputModality(model.name ?? '', "vertexai")),
-                tags: modelModalitiesToArray(getOutputModality(model.name ?? '', "vertexai"))
+                output_modalities: modelModalitiesToArray(getOutputModality(model.name ?? '', "vertexai")),
+                tool_support: supportsToolUse(model.name ?? '', "vertexai", false),
             } satisfies AIModel<string>)));
         }
 

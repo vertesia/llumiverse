@@ -12,7 +12,8 @@ import {
     BedrockClaudeOptions, BedrockPalmyraOptions, getMaxTokensLimit, NovaCanvasOptions,
     getOutputModality,
     modelModalitiesToArray,
-    getInputModality
+    getInputModality,
+    supportsToolUse
 } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
@@ -612,12 +613,12 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 id: m.modelArn ?? m.modelId,
                 name: `${m.providerName} ${m.modelName}`,
                 provider: this.provider,
-                input_modalities: m.inputModalities ? formatAmazonModalities(m.inputModalities) : modelModalitiesToArray(getInputModality(m.modelArn ?? m.modelId, "bedrock")),
                 //description: ``,
                 owner: m.providerName,
                 can_stream: m.responseStreamingSupported ?? false,
-                is_multimodal: m.inputModalities?.includes("IMAGE") ?? false,
-                tags: m.outputModalities ? formatAmazonModalities(m.outputModalities) : modelModalitiesToArray(getOutputModality(m.modelArn ?? m.modelId, "bedrock")),
+                input_modalities: m.inputModalities ? formatAmazonModalities(m.inputModalities) : modelModalitiesToArray(getInputModality(m.modelArn ?? m.modelId, "bedrock")),
+                output_modalities: m.outputModalities ? formatAmazonModalities(m.outputModalities) : modelModalitiesToArray(getOutputModality(m.modelArn ?? m.modelId, "bedrock")),
+                tool_support: supportsToolUse(m.modelArn ?? m.modelId, "bedrock", false),
             };
 
             return model;
@@ -638,7 +639,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     description: `Custom model from ${m.baseModelName}`,
                     is_custom: true,
                     input_modalities: modelModalitiesToArray(getInputModality(m.modelArn, "bedrock")),
-                    tags: modelModalitiesToArray(getOutputModality(m.modelArn, "bedrock")),
+                    output_modalities: modelModalitiesToArray(getOutputModality(m.modelArn, "bedrock")),
+                    tool_support: supportsToolUse(m.modelArn, "bedrock", false),
                 };
 
                 aiModels.push(model);
@@ -658,7 +660,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     name: p.inferenceProfileName ?? p.inferenceProfileArn,
                     provider: this.provider,
                     input_modalities: modelModalitiesToArray(getInputModality(p.inferenceProfileArn ?? p.inferenceProfileId, "bedrock")),
-                    tags: modelModalitiesToArray(getOutputModality(p.inferenceProfileArn ?? p.inferenceProfileId, "bedrock")),
+                    output_modalities: modelModalitiesToArray(getOutputModality(p.inferenceProfileArn ?? p.inferenceProfileId, "bedrock")),
+                    tool_support: supportsToolUse(p.inferenceProfileArn ?? p.inferenceProfileId, "bedrock", false),
                 };
 
                 aiModels.push(model);
