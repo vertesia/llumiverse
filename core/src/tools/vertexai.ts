@@ -57,21 +57,44 @@ const MODELS_WITH_STREAMING_TOOL_USE = [
 ];
 
 /**
- * Checks if a model name matches a base model exactly or with a feature suffix or a version suffix
+ * Checks if a model name matches a base model exactly or with a feature suffix or a version suffix,
+ * accounting for path prefixes like "publishers/anthropic/models/" and similar
  * 
  * @param modelName The model name to check
  * @param baseModel The base model name
  * @returns Whether the model matches the base model
  */
 function modelMatches(modelName: string, baseModel: string): boolean {
-    // Exact match
-    if (modelName === baseModel) {
+    // Extract just the model part from paths like "publishers/anthropic/models/claude-3-5-sonnet-v2"
+    const getModelPart = (name: string): string => {
+        const segments = name.split('/');
+        return segments[segments.length - 1]; // Get last segment
+    };
+
+    // Get the model part without path prefixes
+    const modelPart = getModelPart(modelName);
+
+    // Exact match with either full name or extracted model part
+    if (modelName === baseModel || modelPart === baseModel) {
         return true;
     }
 
-    // Check if it's a variant (e.g., "gemini-1.5-flash-002", "gemini-2.5-preview-04-17")
-    if (modelName.startsWith(baseModel + '-')) {
+    // Check if it's a variant (e.g., "claude-3-5-sonnet-v2" matches "claude-3-5")
+    if (modelPart.startsWith(baseModel + '-') || modelName.startsWith(baseModel + '-')) {
         return true;
+    }
+
+    // Check if the model part contains the base model as a substring
+    // This handles cases like "claude-3-5-sonnet-v2" matching "claude-3-5"
+    if (modelPart.includes(baseModel)) {
+        // Make sure it's not a partial match (e.g. "claude-3" shouldn't match "claude-3-5")
+        // Check if the character after the baseModel is either end of string, dash or other delimiter
+        const baseModelEndIndex = modelPart.indexOf(baseModel) + baseModel.length;
+        if (baseModelEndIndex === modelPart.length ||
+            modelPart[baseModelEndIndex] === '-' ||
+            modelPart[baseModelEndIndex] === '_') {
+            return true;
+        }
     }
 
     return false;
