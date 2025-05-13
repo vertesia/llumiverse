@@ -228,7 +228,7 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
             integer: true, step: 200, description: "The maximum number of tokens to generate"
         }];
         return {
-            _option_id: "vertexai-gemini",
+            _option_id: "text-fallback",
             options: [
                 ...max_tokens,
                 ...commonOptions,
