@@ -59,7 +59,7 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, OpenAITextMess
     }
 
     async requestTextCompletion(messages: OpenAITextMessage[], options: ExecutionOptions): Promise<Completion<any>> {
-        if (options.model_options?._option_id !== "text-fallback") {
+        if (options.model_options?._option_id !== "text-fallback" && options.model_options?._option_id !== "groq-deepseek-thinking") {
             this.logger.warn("Invalid model options", {options: options.model_options });
         }
         options.model_options = options.model_options as TextFallbackOptions;

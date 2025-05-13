@@ -1,6 +1,6 @@
 import { PromptFormatter } from './formatters/index.js';
 import { JSONObject } from './json.js';
-import { TextFallbackOptions } from './options.js';
+import { GroqOptions, TextFallbackOptions } from './options.js';
 import { BedrockOptions } from './options/bedrock.js';
 import { OpenAiOptions } from './options/openai.js';
 import { VertexAIOptions } from './options/vertexai.js';
@@ -218,7 +218,7 @@ export enum OptionType {
 
 // ============== Model Options ===============
 
-export type ModelOptions = TextFallbackOptions | VertexAIOptions | BedrockOptions | OpenAiOptions;
+export type ModelOptions = TextFallbackOptions | VertexAIOptions | BedrockOptions | OpenAiOptions | GroqOptions;
 
 // ============== Option Info ===============
 
