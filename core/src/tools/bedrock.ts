@@ -10,6 +10,10 @@ const MODELS_WITHOUT_TOOL_USE = [
     "titan-text-express",
     "titan-text-lite",
     "titan-text-premier",
+    // Amazon Nova variants without tool use
+    "nova-canvas",
+    "nova-reel",
+    "nova-sonic",
     // Anthropic Claude 2.x and earlier
     "claude-2",
     "claude-instant",
@@ -54,7 +58,10 @@ const MODELS_WITH_TOOL_USE = [
     // AI21 Jamba models
     "jamba-1.5",
     // Amazon Nova models
-    "nova",
+    "nova-premier",
+    "nova-pro",
+    "nova-lite",
+    "nova-micro",
     // Anthropic Claude 3 models
     "claude-3-5",
     "claude-3-7",
@@ -80,7 +87,10 @@ const MODELS_WITH_STREAMING_TOOL_USE = [
     // AI21 Jamba models
     "jamba-1.5",
     // Amazon Nova models
-    "nova",
+    "nova-premier",
+    "nova-pro",
+    "nova-lite",
+    "nova-micro",
     // Anthropic Claude 3 models
     "claude-3-5",
     "claude-3-7",
