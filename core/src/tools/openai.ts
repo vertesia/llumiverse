@@ -87,16 +87,22 @@ function modelMatches(modelName: string, baseModel: string): boolean {
     if (modelName === baseModel) {
         return true;
     }
-    
-    // Check if it's a versioned variant (e.g., "gpt-3.5-turbo-1106")
+
+    // Check if it's a variant with any suffix (e.g., "gpt-4o-mini-search-preview-2025-03-11")
     if (modelName.startsWith(baseModel + '-')) {
-        // Extract the suffix after the base model name and hyphen
-        const suffix = modelName.substring(baseModel.length + 1);
-        
-        // A version suffix typically starts with a digit or contains a date format
-        return /^\d/.test(suffix);
+        return true;
     }
-    
+
+    // Handle date-suffixed models without hyphens (e.g., "o1-2024-12-17")
+    if (baseModel === modelName.split('-')[0]) {
+        const parts = modelName.split('-');
+        // Check if remaining parts form a date (e.g., 2024-12-17) or version
+        if (parts.length >= 2) {
+            // Match date patterns or version numbers
+            return /^\d/.test(parts[1]);
+        }
+    }
+
     return false;
 }
 
