@@ -21,7 +21,9 @@ const IMAGE_INPUT_MODELS = [
     "gemini-2.5-flash-preview",
     "gemini-2.5-pro-preview",
     // Veo model
-    "veo-2.0-generate"
+    "veo-2.0-generate",
+    // Imagen editing models
+    "imagen-3.0-capability"
 ];
 
 const VIDEO_INPUT_MODELS = [
@@ -72,8 +74,10 @@ const TEXT_OUTPUT_MODELS = [
 ];
 
 const IMAGE_OUTPUT_MODELS = [
-    // Imagen models
+    // Imagen generation models
     "imagen-3.0-generate",
+    // Imagen editing models
+    "imagen-3.0-capability",
     // Gemini image generation model
     "gemini-2.0-flash-preview-image-generation"
 ];
