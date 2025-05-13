@@ -339,7 +339,8 @@ export enum AIModelStatus {
     Pending = "pending",
     Stopped = "stopped",
     Unavailable = "unavailable",
-    Unknown = "unknown"
+    Unknown = "unknown",
+    Legacy = "legacy",
 }
 
 /**
