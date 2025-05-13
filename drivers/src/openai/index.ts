@@ -316,8 +316,8 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             is_multimodal: m.id.includes("gpt-4"),
             input_modalities: modelModalitiesToArray(getInputModality(m.id, "openai")),
             output_modalities: modelModalitiesToArray(getOutputModality(m.id, "openai")),
-            tool_use: supportsToolUse(m.id, "openai", false),
-        })).sort((a, b) => a.id.localeCompare(b.id));
+            tool_support: supportsToolUse(m.id, "openai", false),
+        } satisfies AIModel<string>)).sort((a, b) => a.id.localeCompare(b.id));
     }
 
 
