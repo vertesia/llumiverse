@@ -11,10 +11,8 @@ import {
     Modalities,
     ModelSearchPayload,
     PromptSegment,
-    getInputModality,
-    getOutputModality,
+    getModelCapabilities,
     modelModalitiesToArray,
-    supportsToolUse,
 } from "@llumiverse/core";
 import { FetchClient } from "api-fetch-client";
 import { GoogleAuth, GoogleAuthOptions } from "google-auth-library";
@@ -184,7 +182,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         const supportedModels = { google: ["gemini", "imagen"], anthropic: ["claude"] };
 
         //Used to exclude retired models that are still in the listing API but not available for use.
-        const retiredModelsByPublisher = {
+        //Or models we do not support yet
+        const unsupportedModelsByPublisher = {
             google: ["gemini-pro", "gemini-ultra"],
             anthropic: [],
         };
@@ -193,7 +192,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             let [response] = await modelGarden.listPublisherModels({
                 parent: `publishers/${publisher}`,
                 orderBy: "name",
-                listAllVersions: true, 
+                listAllVersions: true,
             });
 
             // Filter out the 100+ long list coming from Google models
@@ -204,7 +203,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             }
 
             const modelFamily = supportedModels[publisher as keyof typeof supportedModels];
-            const retiredModels = retiredModelsByPublisher[publisher as keyof typeof retiredModelsByPublisher];
+            const retiredModels = unsupportedModelsByPublisher[publisher as keyof typeof unsupportedModelsByPublisher];
 
             models = models.concat(response.filter((model) => {
                 const modelName = model.name ?? "";
@@ -217,22 +216,25 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                     return true;
                 }
                 return false;
-            }).map(model => ({
-                id: model.name ?? '',
-                name: model.name?.split('/').pop() ?? '',
-                provider: 'vertexai',
-                owner: publisher,
-                input_modalities: modelModalitiesToArray(getInputModality(model.name ?? '', "vertexai")),
-                output_modalities: modelModalitiesToArray(getOutputModality(model.name ?? '', "vertexai")),
-                tool_support: supportsToolUse(model.name ?? '', "vertexai", false),
-            } satisfies AIModel<string>)));
+            }).map(model => {
+                const modelCapability = getModelCapabilities(model.name ?? '', "vertexai");
+                return {
+                    id: model.name ?? '',
+                    name: model.name?.split('/').pop() ?? '',
+                    provider: 'vertexai',
+                    owner: publisher,
+                    input_modalities: modelModalitiesToArray(modelCapability.input),
+                    output_modalities: modelModalitiesToArray(modelCapability.output),
+                    tool_support: modelCapability.tool_support,
+                } satisfies AIModel<string>;
+            }));
         }
 
         //Remove duplicates
         const uniqueModels = Array.from(new Set(models.map(a => a.id)))
             .map(id => {
                 return models.find(a => a.id === id) ?? {} as AIModel<string>;
-            })
+            });
 
         return uniqueModels;
     }

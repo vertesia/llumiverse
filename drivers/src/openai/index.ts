@@ -17,10 +17,8 @@ import {
     TrainingJobStatus,
     TrainingOptions,
     TrainingPromptOptions,
-    getInputModality,
-    getOutputModality,
+    getModelCapabilities,
     modelModalitiesToArray,
-    supportsToolUse,
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { formatOpenAILikeMultimodalPrompt, noStructuredOutputModels } from "@llumiverse/core/formatters";
@@ -87,7 +85,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         if (options.model_options?._option_id !== "openai-text" && options.model_options?._option_id !== "openai-thinking") {
             this.logger.warn("Invalid model options", { options: options.model_options });
         }
-        
+
         const toolDefs = getToolDefinitions(options.tools);
         const useTools: boolean = toolDefs ? supportsTools(options.model) : false;
 
@@ -292,7 +290,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         //Some of these use the completions API instead of the chat completions API.
         //Others are for non-text input modalities. Therefore common to both.
         const wordBlacklist = ["embed", "whisper", "transcribe", "audio", "moderation", "tts", "realtime", "dall-e", "babbage", "davinci"];
-        
+
         if (this.provider === "azure_openai") {
             //Azure OpenAI has additional information about the models
             result = result.filter((m) => {
@@ -306,18 +304,23 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         });
 
         const models = filter ? result.filter(filter) : result;
-        return models.map((m) => ({
-            id: m.id,
-            name: m.id,
-            provider: this.provider,
-            owner: m.owned_by,
-            type: m.object === "model" ? ModelType.Text : ModelType.Unknown,
-            can_stream: true,
-            is_multimodal: m.id.includes("gpt-4"),
-            input_modalities: modelModalitiesToArray(getInputModality(m.id, "openai")),
-            output_modalities: modelModalitiesToArray(getOutputModality(m.id, "openai")),
-            tool_support: supportsToolUse(m.id, "openai", false),
-        } satisfies AIModel<string>)).sort((a, b) => a.id.localeCompare(b.id));
+        const aiModels = models.map((m) => {
+            const modelCapability = getModelCapabilities(m.id, "openai");
+            return {
+                id: m.id,
+                name: m.id,
+                provider: this.provider,
+                owner: m.owned_by,
+                type: m.object === "model" ? ModelType.Text : ModelType.Unknown,
+                can_stream: true,
+                is_multimodal: m.id.includes("gpt-4"),
+                input_modalities: modelModalitiesToArray(modelCapability.input),
+                output_modalities: modelModalitiesToArray(modelCapability.output),
+                tool_support: modelCapability.tool_support,
+            } satisfies AIModel<string>;
+        }).sort((a, b) => a.id.localeCompare(b.id));
+
+        return aiModels;
     }
 
 
@@ -423,7 +426,7 @@ function supportsTools(model: string): boolean {
 function supportsSchema(model: string): boolean {
     const list_check = !noStructuredOutputModels.some((m) => model.includes(m));
     if (!list_check && model.includes("gpt-4o") && !model.includes("gpt-4o-2024-05-13")) {
-        return true; 
+        return true;
     }
     return list_check
 }
@@ -539,7 +542,7 @@ function openAISchemaFormat(schema: JSONSchema, nesting: number = 0): JSONSchema
     const formattedSchema = { ...schema };
 
     // Defaults not supported
-    delete formattedSchema.default 
+    delete formattedSchema.default;
 
     // Additional properties not supported, required to be set.
     if (formattedSchema?.type === "object") {
@@ -549,14 +552,14 @@ function openAISchemaFormat(schema: JSONSchema, nesting: number = 0): JSONSchema
     if (formattedSchema?.properties) {
         // Set all properties as required
         formattedSchema.required = Object.keys(formattedSchema.properties);
-        
+
         // Process each property recursively
         for (const propName of Object.keys(formattedSchema.properties)) {
             const property = formattedSchema.properties[propName];
-            
+
             // Recursively process properties
             formattedSchema.properties[propName] = openAISchemaFormat(property, nesting + 1);
-            
+
             // Process arrays with items of type object
             if (property?.type === 'array' && property.items && property.items?.type === 'object') {
                 formattedSchema.properties[propName] = {
@@ -571,6 +574,6 @@ function openAISchemaFormat(schema: JSONSchema, nesting: number = 0): JSONSchema
         //OpenAI does not support this on structured output/ strict mode.
         throw new Error("OpenAI does not support empty objects or objects with additionalProperties set to true");
     }
-    
+
     return formattedSchema
 }

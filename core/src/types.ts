@@ -310,7 +310,14 @@ export interface ModelModalities {
     image?: boolean;
     video?: boolean;
     audio?: boolean;
-    embedding?: boolean; //Only for output
+    embed?: boolean; //Only for output
+}
+
+export interface ModelCapabilities {
+    input: ModelModalities;
+    output: ModelModalities;
+    tool_support?: boolean; //if the model supports tool use
+    tool_support_streaming?: boolean; //if the model supports tool use with streaming
 }
 
 // ============== AI MODEL ==============
