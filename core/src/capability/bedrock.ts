@@ -134,10 +134,13 @@ export function getModelCapabilitiesBedrock(model: string): ModelCapabilities {
     let normalized = model;
     const arnPattern = /^arn:aws:bedrock:[^:]+:[^:]*:(inference-profile|foundation-model)\/.+/i;
     if (arnPattern.test(model)) {
-        // Extract the model ID after the last colon
-        const lastColon = model.lastIndexOf(":");
-        if (lastColon !== -1 && lastColon < model.length - 1) {
-            normalized = model.substring(lastColon + 1);
+        // Extract after last occurrence of 'foundation-model/' or 'inference-profile/'
+        const foundationIdx = model.lastIndexOf('foundation-model/');
+        const inferenceIdx = model.lastIndexOf('inference-profile/');
+        if (foundationIdx !== -1) {
+            normalized = model.substring(foundationIdx);
+        } else if (inferenceIdx !== -1) {
+            normalized = model.substring(inferenceIdx);
         }
     }
     // Standardize region for inference-profile to 'us' for record lookup
@@ -145,6 +148,7 @@ export function getModelCapabilitiesBedrock(model: string): ModelCapabilities {
     if (normalized.startsWith("inference-profile/")) {
         normalized = normalized.replace(/^inference-profile\/[^.]+\./, "inference-profile/us.");
     }
+    
     // 1. Exact match in record
     const record = RECORD_MODEL_CAPABILITIES[normalized];
     if (record) return record;
