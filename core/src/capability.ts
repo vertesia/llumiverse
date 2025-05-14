@@ -4,6 +4,16 @@ import { getModelCapabilitiesVertexAI } from "./capability/vertexai.js";
 import { ModelCapabilities, ModelModalities } from "./types.js";
 
 export function getModelCapabilities(model: string, provider?: string): ModelCapabilities {
+    const capabilities = _getModelCapabilities(model, provider);
+    // Globally disable audio and video for all models, as we don't support them yet
+    // TODO: Remove this when we support audio and video
+    capabilities.input.audio = false;
+    capabilities.output.audio = false;
+    capabilities.output.video = false;
+    return capabilities;
+}
+
+function _getModelCapabilities(model: string, provider?: string): ModelCapabilities {
     switch (provider?.toLowerCase()) {
         case "vertexai":
             return getModelCapabilitiesVertexAI(model);
@@ -12,7 +22,16 @@ export function getModelCapabilities(model: string, provider?: string): ModelCap
         case "bedrock":
             return getModelCapabilitiesBedrock(model);
         default:
-            throw new Error(`Unsupported provider: ${provider}`);
+            // Guess the provider based on the model name
+            if (model.startsWith("gpt")) {
+                return getModelCapabilitiesOpenAI(model);
+            } else if (model.startsWith("publishers/")) {
+                return getModelCapabilitiesVertexAI(model);
+            } else if (model.startsWith("arn:aws")) {
+                return getModelCapabilitiesBedrock(model);
+            }
+            // Fallback to a generic model with no capabilities
+            return { input: {}, output: {} } satisfies ModelCapabilities;
     }
 }
 
