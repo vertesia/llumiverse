@@ -35,9 +35,9 @@ function _getModelCapabilities(model: string, provider?: string): ModelCapabilit
     }
 }
 
-export function supportsToolUse(model: string, provider?: string, streaming?: boolean): boolean {
+export function supportsToolUse(model: string, provider?: string, streaming: boolean = false): boolean {
     const capabilities = getModelCapabilities(model, provider);
-    return streaming ? !!capabilities.tool_support : !!capabilities.tool_support_streaming;
+    return streaming ? !!capabilities.tool_support_streaming : !!capabilities.tool_support;
 }
 
 export function modelModalitiesToArray(modalities: ModelModalities): string[] {
