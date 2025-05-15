@@ -6,10 +6,12 @@ import { ModelCapabilities, ModelModalities } from "./types.js";
 export function getModelCapabilities(model: string, provider?: string): ModelCapabilities {
     const capabilities = _getModelCapabilities(model, provider);
     // Globally disable audio and video for all models, as we don't support them yet
-    // TODO: Remove this when we support audio and video
+    // We also do not support tool use while streaming
+    // TODO: Remove this when we add support.
     capabilities.input.audio = false;
     capabilities.output.audio = false;
     capabilities.output.video = false;
+    capabilities.tool_support_streaming = false;
     return capabilities;
 }
 
