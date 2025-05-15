@@ -52,8 +52,8 @@ export const textOptionsFallback: ModelOptionsInfo = {
     ]
 };
 
-export function getOptions(provider?: string, model?: string, options?: ModelOptions): ModelOptionsInfo {
-    switch (provider) {
+export function getOptions(model: string, provider?: string, options?: ModelOptions): ModelOptionsInfo {
+    switch (provider?.toLowerCase()) {
         case "bedrock":
             return getBedrockOptions(model ?? "", options);
         case "vertexai":

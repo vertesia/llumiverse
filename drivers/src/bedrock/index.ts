@@ -1,6 +1,6 @@
 import {
     Bedrock, CreateModelCustomizationJobCommand, FoundationModelSummary, GetModelCustomizationJobCommand,
-    GetModelCustomizationJobCommandOutput, ModelCustomizationJobStatus, StopModelCustomizationJobCommand
+    GetModelCustomizationJobCommandOutput, ModelCustomizationJobStatus, ModelModality, StopModelCustomizationJobCommand
 } from "@aws-sdk/client-bedrock";
 import { BedrockRuntime, ConverseRequest, ConverseResponse, ConverseStreamOutput, InferenceConfiguration, Tool } from "@aws-sdk/client-bedrock-runtime";
 import { S3Client } from "@aws-sdk/client-s3";
@@ -9,7 +9,8 @@ import {
     AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult,
     ExecutionOptions, ExecutionTokenUsage, ImageGeneration, Modalities, PromptOptions, PromptSegment,
     TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions,
-    BedrockClaudeOptions, BedrockPalmyraOptions, getMaxTokensLimit, NovaCanvasOptions
+    BedrockClaudeOptions, BedrockPalmyraOptions, getMaxTokensLimit, NovaCanvasOptions,
+    modelModalitiesToArray, getModelCapabilities
 } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
@@ -592,11 +593,46 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             foundationModels = foundationModels.filter(foundationFilter);
         }
 
-        const supportedProviders = ["amazon", "anthropic", "cohere", "ai21", "mistral", "meta", "deepseek", "writer"];
-        foundationModels = foundationModels.filter((m) =>
-            supportedProviders.some((provider) =>
-                m.providerName?.toLowerCase().includes(provider) ?? false
-            )
+        const supportedPublishers = ["amazon", "anthropic", "cohere", "ai21", "mistral", "meta", "deepseek", "writer"];
+        const unsupportedModelsByPublisher = {
+            amazon: ["titan-image-generator", "nova-reel", "nova-sonic", "rerank"],
+            anthropic: [],
+            cohere: ["rerank"],
+            ai21: [],
+            mistral: [],
+            meta: [],
+            deepseek: [],
+            writer: [],
+        };
+
+        // Helper function to check if model should be filtered out
+        const shouldIncludeModel = (modelId?: string, providerName?: string): boolean => {
+            if (!modelId || !providerName) return false;
+
+            const normalizedProvider = providerName.toLowerCase();
+
+            // Check if provider is supported
+            const isProviderSupported = supportedPublishers.some(provider =>
+                normalizedProvider.includes(provider)
+            );
+
+            if (!isProviderSupported) return false;
+
+            // Check if model is in the unsupported list for its provider
+            for (const provider of supportedPublishers) {
+                if (normalizedProvider.includes(provider)) {
+                    const unsupportedModels = unsupportedModelsByPublisher[provider as keyof typeof unsupportedModelsByPublisher] || [];
+                    return !unsupportedModels.some(unsupported =>
+                        modelId.toLowerCase().includes(unsupported)
+                    );
+                }
+            }
+
+            return true;
+        };
+
+        foundationModels = foundationModels.filter(m =>
+            shouldIncludeModel(m.modelId, m.providerName)
         );
 
         const aiModels: AIModel[] = foundationModels.map((m) => {
@@ -605,16 +641,18 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 throw new Error("modelId not found");
             }
 
+            const modelCapability = getModelCapabilities(m.modelArn ?? m.modelId, this.provider);
+
             const model: AIModel = {
                 id: m.modelArn ?? m.modelId,
                 name: `${m.providerName} ${m.modelName}`,
                 provider: this.provider,
-                input_modalities: m.inputModalities ?? [],
                 //description: ``,
                 owner: m.providerName,
                 can_stream: m.responseStreamingSupported ?? false,
-                is_multimodal: m.inputModalities?.includes("IMAGE") ?? false,
-                tags: m.outputModalities ?? [],
+                input_modalities: m.inputModalities ? formatAmazonModalities(m.inputModalities) : modelModalitiesToArray(modelCapability.input),
+                output_modalities: m.outputModalities ? formatAmazonModalities(m.outputModalities) : modelModalitiesToArray(modelCapability.input),
+                tool_support: modelCapability.tool_support,
             };
 
             return model;
@@ -628,12 +666,17 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     throw new Error("Model ID not found");
                 }
 
+                const modelCapability = getModelCapabilities(m.modelArn, this.provider);
+
                 const model: AIModel = {
                     id: m.modelArn,
                     name: m.modelName ?? m.modelArn,
                     provider: this.provider,
                     description: `Custom model from ${m.baseModelName}`,
                     is_custom: true,
+                    input_modalities: modelModalitiesToArray(modelCapability.input),
+                    output_modalities: modelModalitiesToArray(modelCapability.output),
+                    tool_support: modelCapability.tool_support,
                 };
 
                 aiModels.push(model);
@@ -648,13 +691,33 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     throw new Error("Profile ARN not found");
                 }
 
-                const model: AIModel = {
-                    id: p.inferenceProfileArn ?? p.inferenceProfileId,
-                    name: p.inferenceProfileName ?? p.inferenceProfileArn,
-                    provider: this.provider,
-                };
+                // Apply the same filtering logic to inference profiles based on their name
+                const profileId = p.inferenceProfileId || "";
+                const profileName = p.inferenceProfileName || "";
 
-                aiModels.push(model);
+                // Extract provider name from profile name or ID
+                let providerName = "";
+                for (const provider of supportedPublishers) {
+                    if (profileName.toLowerCase().includes(provider) || profileId.toLowerCase().includes(provider)) {
+                        providerName = provider;
+                        break;
+                    }
+                }
+
+                const modelCapability = getModelCapabilities(p.inferenceProfileArn ?? p.inferenceProfileId, this.provider);
+
+                if (providerName && shouldIncludeModel(profileId, providerName)) {
+                    const model: AIModel = {
+                        id: p.inferenceProfileArn ?? p.inferenceProfileId,
+                        name: p.inferenceProfileName ?? p.inferenceProfileArn,
+                        provider: this.provider,
+                        input_modalities: modelModalitiesToArray(modelCapability.input),
+                        output_modalities: modelModalitiesToArray(modelCapability.output),
+                        tool_support: modelCapability.tool_support,
+                    };
+
+                    aiModels.push(model);
+                }
             });
         }
 
@@ -751,4 +814,25 @@ function updateConversation(conversation: ConverseRequest, prompt: ConverseReque
         messages: [...(conversation?.messages || []), ...(prompt.messages || [])],
         system: prompt.system || conversation?.system,
     };
+}
+
+function formatAmazonModalities(modalities: ModelModality[]): string[] {
+    const standardizedModalities: string[] = [];
+    for (const modality of modalities) {
+        if (modality === ModelModality.TEXT) {
+            standardizedModalities.push("text");
+        } else if (modality === ModelModality.IMAGE) {
+            standardizedModalities.push("image");
+        } else if (modality === ModelModality.EMBEDDING) {
+            standardizedModalities.push("embedding");
+        } else if (modality == "SPEECH") {
+            standardizedModalities.push("audio");
+        } else if (modality == "VIDEO") {
+            standardizedModalities.push("video");
+        } else {
+            // Handle other modalities as needed
+            standardizedModalities.push((modality as string).toString().toLowerCase());
+        }
+    }
+    return standardizedModalities;
 }

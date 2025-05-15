@@ -1,6 +1,6 @@
 import { PromptFormatter } from './formatters/index.js';
 import { JSONObject } from './json.js';
-import { TextFallbackOptions } from './options.js';
+import { GroqOptions, TextFallbackOptions } from './options.js';
 import { BedrockOptions } from './options/bedrock.js';
 import { OpenAiOptions } from './options/openai.js';
 import { VertexAIOptions } from './options/vertexai.js';
@@ -218,7 +218,7 @@ export enum OptionType {
 
 // ============== Model Options ===============
 
-export type ModelOptions = TextFallbackOptions | VertexAIOptions | BedrockOptions | OpenAiOptions;
+export type ModelOptions = TextFallbackOptions | VertexAIOptions | BedrockOptions | OpenAiOptions | GroqOptions;
 
 // ============== Option Info ===============
 
@@ -302,6 +302,23 @@ export enum Modalities {
     image = "image",
 }
 
+/**
+ * Represents the output and input modalities a model can support
+ */
+export interface ModelModalities {
+    text?: boolean;
+    image?: boolean;
+    video?: boolean;
+    audio?: boolean;
+    embed?: boolean; //Only for output
+}
+
+export interface ModelCapabilities {
+    input: ModelModalities;
+    output: ModelModalities;
+    tool_support?: boolean; //if the model supports tool use
+    tool_support_streaming?: boolean; //if the model supports tool use with streaming
+}
 
 // ============== AI MODEL ==============
 
@@ -318,7 +335,9 @@ export interface AIModel<ProviderKeys = string> {
     can_stream?: boolean; //if the model's response can be streamed
     is_custom?: boolean; //if the model is a custom model (a trained model)
     is_multimodal?: boolean //if the model support files and images
-    input_modalities?: string[]; //if the model support files and images
+    input_modalities?: string[]; //Input modalities supported by the model (e.g. text, image, video, audio)
+    output_modalities?: string[]; //Output modalities supported by the model (e.g. text, image, video, audio)
+    tool_support?: boolean; //if the model supports tool use
     environment?: string; //the environment name
 }
 
@@ -327,7 +346,8 @@ export enum AIModelStatus {
     Pending = "pending",
     Stopped = "stopped",
     Unavailable = "unavailable",
-    Unknown = "unknown"
+    Unknown = "unknown",
+    Legacy = "legacy",
 }
 
 /**

@@ -11,6 +11,8 @@ import {
     Modalities,
     ModelSearchPayload,
     PromptSegment,
+    getModelCapabilities,
+    modelModalitiesToArray,
 } from "@llumiverse/core";
 import { FetchClient } from "api-fetch-client";
 import { GoogleAuth, GoogleAuthOptions } from "google-auth-library";
@@ -41,32 +43,39 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     static PROVIDER = "vertexai";
     provider = VertexAIDriver.PROVIDER;
 
-    fetchClient: FetchClient;
-    authClient: JSONClient | GoogleAuth<JSONClient>;
-
-    anthropicClient: AnthropicVertex | undefined;
     aiplatform: v1beta1.ModelServiceClient | undefined;
+    anthropicClient: AnthropicVertex | undefined;
+    fetchClient: FetchClient | undefined;
     modelGarden: v1beta1.ModelGardenServiceClient | undefined;
     vertexai: VertexAI | undefined;
+
+    authClient: JSONClient | GoogleAuth<JSONClient>;
 
     constructor(options: VertexAIDriverOptions) {
         super(options);
 
-        this.anthropicClient = undefined;
-        this.vertexai = undefined;
         this.aiplatform = undefined;
+        this.anthropicClient = undefined;
+        this.fetchClient = undefined
         this.modelGarden = undefined;
+        this.vertexai = undefined;
 
         this.authClient = options.googleAuthOptions?.authClient ?? new GoogleAuth(options.googleAuthOptions);
+    }
 
-        this.fetchClient = createFetchClient({
-            region: this.options.region,
-            project: this.options.project,
-        }).withAuthCallback(async () => {
-            const accessTokenResponse = await this.authClient.getAccessToken();
-            const token = typeof accessTokenResponse === 'string' ? accessTokenResponse : accessTokenResponse?.token;
-            return `Bearer ${token}`;
-        });
+    public getFetchClient(): FetchClient {
+        //Lazy initialisation
+        if (!this.fetchClient) {
+            this.fetchClient = createFetchClient({
+                region: this.options.region,
+                project: this.options.project,
+            }).withAuthCallback(async () => {
+                const accessTokenResponse = await this.authClient.getAccessToken();
+                const token = typeof accessTokenResponse === 'string' ? accessTokenResponse : accessTokenResponse?.token;
+                return `Bearer ${token}`;
+            });
+        }
+        return this.fetchClient;
     }
 
     public getAnthropicClient(): AnthropicVertex {
@@ -164,7 +173,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             response.map((model) => ({
                 id: model.name?.split("/").pop() ?? "",
                 name: model.displayName ?? "",
-                provider: "vertexai",
+                provider: "vertexai"
             })),
         );
 
@@ -172,26 +181,52 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         const publishers = ["google", "anthropic"];
         const supportedModels = { google: ["gemini", "imagen"], anthropic: ["claude"] };
 
+        //Used to exclude retired models that are still in the listing API but not available for use.
+        //Or models we do not support yet
+        const unsupportedModelsByPublisher = {
+            google: ["gemini-pro", "gemini-ultra"],
+            anthropic: [],
+        };
+
         for (const publisher of publishers) {
-            const [response] = await modelGarden.listPublisherModels({
+            let [response] = await modelGarden.listPublisherModels({
                 parent: `publishers/${publisher}`,
                 orderBy: "name",
-                //filter: `name eq name`,
                 listAllVersions: true,
             });
 
-            models = models.concat(response.map(model => ({
-                id: model.name ?? '',
-                name: model.name?.split('/').pop() ?? '',
-                provider: 'vertexai',
-                owner: publisher,
-            } satisfies AIModel<string>)).filter(model => {
-                const modelFamily = supportedModels[publisher as keyof typeof supportedModels];
-                for (const family of modelFamily) {
-                    if (model.name.includes(family)) {
-                        return true;
-                    }
+            // Filter out the 100+ long list coming from Google models
+            if (publisher === "google") {
+                response = response.filter((model) => {
+                    return (model.supportedActions?.openGenerationAiStudio || undefined) !== undefined;
+                });
+            }
+
+            const modelFamily = supportedModels[publisher as keyof typeof supportedModels];
+            const retiredModels = unsupportedModelsByPublisher[publisher as keyof typeof unsupportedModelsByPublisher];
+
+            models = models.concat(response.filter((model) => {
+                const modelName = model.name ?? "";
+                // Exclude retired models
+                if (retiredModels.some(retiredModel => modelName.includes(retiredModel))) {
+                    return false;
                 }
+                // Check if the model belongs to the supported model families
+                if (modelFamily.some(family => modelName.includes(family))) {
+                    return true;
+                }
+                return false;
+            }).map(model => {
+                const modelCapability = getModelCapabilities(model.name ?? '', "vertexai");
+                return {
+                    id: model.name ?? '',
+                    name: model.name?.split('/').pop() ?? '',
+                    provider: 'vertexai',
+                    owner: publisher,
+                    input_modalities: modelModalitiesToArray(modelCapability.input),
+                    output_modalities: modelModalitiesToArray(modelCapability.output),
+                    tool_support: modelCapability.tool_support,
+                } satisfies AIModel<string>;
             }));
         }
 
@@ -199,7 +234,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         const uniqueModels = Array.from(new Set(models.map(a => a.id)))
             .map(id => {
                 return models.find(a => a.id === id) ?? {} as AIModel<string>;
-            })
+            });
 
         return uniqueModels;
     }
