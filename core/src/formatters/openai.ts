@@ -1,4 +1,4 @@
-import { PromptRole, PromptOptions } from "../index.js";
+import { PromptRole, PromptOptions } from "../types.js";
 import { readStreamAsBase64 } from "../stream.js";
 import { PromptSegment } from "../types.js";
 

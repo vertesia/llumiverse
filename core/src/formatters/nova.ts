@@ -1,6 +1,6 @@
 import { JSONSchema } from "../types.js";
-import { PromptRole, PromptSegment, readStreamAsBase64 } from "../index.js";
-//import { readStreamAsBase64 } from "../stream.js";
+import { PromptRole, PromptSegment } from "../types.js";
+import { readStreamAsBase64 } from "../stream.js";
 import { getJSONSafetyNotice } from "./commons.js";
 
 export interface NovaMessage {
