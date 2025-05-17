@@ -66,6 +66,7 @@
     "@google-cloud/aiplatform": "^3.35.0",
     "@google-cloud/vertexai": "^1.10.0",
     "@huggingface/inference": "2.6.7",
+    "@llumiverse/common": "workspace:*",
     "@llumiverse/core": "workspace:*",
     "api-fetch-client": "^0.13.0",
     "eventsource": "^4.0.0",

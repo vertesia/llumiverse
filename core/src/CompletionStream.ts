@@ -1,5 +1,5 @@
 import { AbstractDriver } from "./Driver.js";
-import { CompletionStream, DriverOptions, ExecutionOptions, ExecutionResponse, ExecutionTokenUsage } from "./types.js";
+import { CompletionStream, DriverOptions, ExecutionOptions, ExecutionResponse, ExecutionTokenUsage } from "@llumiverse/common";
 
 export class DefaultCompletionStream<PromptT = any> implements CompletionStream<PromptT> {
 
@@ -35,7 +35,7 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
                 if (typeof chunk === 'string') {
                     chunks.push(chunk);
                     yield chunk;
-                }else{
+                } else {
                     if (chunk.finish_reason) {                           //Do not replace non-null values with null values
                         finish_reason = chunk.finish_reason;             //Used to skip empty finish_reason chunks coming after "stop" or "length"
                     }
@@ -43,14 +43,14 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
                         //Tokens returned include prior parts of stream,
                         //so overwrite rather than accumulate
                         //Math.max used as some models report final token count at beginning of stream
-                        promptTokens = Math.max(promptTokens,chunk.token_usage.prompt ?? 0);       
-                        resultTokens = Math.max(resultTokens ?? 0,chunk.token_usage.result ?? 0);      
+                        promptTokens = Math.max(promptTokens, chunk.token_usage.prompt ?? 0);
+                        resultTokens = Math.max(resultTokens ?? 0, chunk.token_usage.result ?? 0);
                     }
                     if (chunk.result) {
                         chunks.push(chunk.result);
                         yield chunk.result;
                     }
-                }                
+                }
             }
         }
 

@@ -1,4 +1,5 @@
-packages: 
+packages:
+  - ./common
   - ./core
   - ./drivers
   - ./examples

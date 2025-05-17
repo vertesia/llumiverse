@@ -2,7 +2,7 @@ import { Ajv } from 'ajv';
 import addFormats from 'ajv-formats';
 import { extractAndParseJSON } from "./json.js";
 import { resolveField } from './resolver.js';
-import { ResultValidationError } from "./types.js";
+import { ResultValidationError } from "@llumiverse/common";
 
 
 const ajv = new Ajv({
@@ -45,7 +45,7 @@ export function validateResult(data: any, schema: Object) {
     const valid = validate(json);
 
     if (!valid && validate.errors) {
-        let errors = [];    
+        let errors = [];
 
         for (const e of validate.errors) {
             const path = e.instancePath.split("/").slice(1);
@@ -55,7 +55,7 @@ export function validateResult(data: any, schema: Object) {
             const schemaField = resolveField(schema, schemaPath.slice(0, -3));
 
             //ignore date if empty or null
-            if (!value 
+            if (!value
                 && ["date", "date-time"].includes(schemaFieldFormat)
                 && !schemaField?.required?.includes(path[path.length - 1])) {
                 continue;

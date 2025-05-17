@@ -26,7 +26,7 @@ import {
     TrainingJob,
     TrainingOptions,
     TrainingPromptOptions
-} from "./types.js";
+} from "@llumiverse/common";
 import { validateResult } from "./validation.js";
 
 const ConsoleLogger: Logger = {

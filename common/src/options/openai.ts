@@ -1,5 +1,5 @@
 import { ModelOptionsInfo, ModelOptionInfoItem, ModelOptions, OptionType, SharedOptions } from "../types.js";
-import { textOptionsFallback } from "../options.js";
+import { textOptionsFallback } from "./fallback.js";
 
 // Union type of all Bedrock options
 export type OpenAiOptions = OpenAiThinkingOptions | OpenAiTextOptions;
@@ -25,12 +25,12 @@ export interface OpenAiTextOptions {
 
 export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOptionsInfo {
     const visionOptions: ModelOptionInfoItem[] = isVisionModel(model) ? [
-            {
-                name: "image_detail", type: OptionType.enum, enum: { "Low": "low", "High": "high", "Auto": "auto" },
-                default: "auto", description: "Controls how the model processes an input image."
-            },
+        {
+            name: "image_detail", type: OptionType.enum, enum: { "Low": "low", "High": "high", "Auto": "auto" },
+            default: "auto", description: "Controls how the model processes an input image."
+        },
     ] : [];
-    
+
     if (model.includes("o1") || model.includes("o3")) {
         //Is thinking text model
         let max_tokens_limit = 4096;

@@ -1,8 +1,8 @@
 {
-    "name": "@llumiverse/core",
+    "name": "@llumiverse/common",
     "version": "0.17.0",
     "type": "module",
-    "description": "Provide an universal API to LLMs. Support for existing LLMs can be added by writing a driver.",
+    "description": "Public types, enums and options used by Llumiverse API.",
     "files": [
         "lib",
         "src"
@@ -68,23 +68,14 @@
         "url": "git+ssh://git@github.com/vertesia/llumiverse.git"
     },
     "devDependencies": {
-        "api-fetch-client": "^0.13.0",
         "rimraf": "^6.0.0",
         "ts-dual-module": "^0.6.3",
         "typescript": "^5.4.2",
-        "vitest": "^3.0.9"
+        "vitest": "^3.0.9",
+        "@types/node": "^22.5.0"
     },
-    "dependencies": {
-        "@llumiverse/common": "workspace:*",
-        "@types/node": "^22.5.0",
-        "ajv": "^8.16.0",
-        "ajv-formats": "^3.0.1"
-    },
+    "dependencies": {},
     "ts_dual_module": {
-        "outDir": "lib",
-        "exports": {
-            "async": "async.js",
-            "formatters": "formatters/index.js"
-        }
+        "outDir": "lib"
     }
 }

@@ -1,0 +1,45 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
+    "rootDir": "./src",
+    "declarationDir": "./lib/types", // must be specified otherwise vscode generate files in src
+    "outDir": "./lib/esm",
+    "sourceMap": true,
+    "forceConsistentCasingInFileNames": true,
+    "experimentalDecorators": true, /* Enable experimental support for TC39 stage 2 draft decorators. */
+    "allowSyntheticDefaultImports": true, /* Allow 'import x from y' when a module doesn't have a default export. */
+    "esModuleInterop": true, /* Emit additional JavaScript to ease support for importing CommonJS modules. This enables `allowSyntheticDefaultImports` for type compatibility. */
+    //"moduleDetection": "force",
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    /* Bundler mode */
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    //"allowImportingTsExtensions": true,
+    //"verbatimModuleSyntax": true,
+    //"noEmit": false,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "useUnknownInCatchVariables": true,
+    "noPropertyAccessFromIndexSignature": false,
+  },
+  "include": [
+    "src"
+  ],
+  "exclude": [
+    "node_modules",
+    "**/*.test.ts",
+    "lib",
+    "test"
+  ]
+}

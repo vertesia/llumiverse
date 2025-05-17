@@ -1,5 +1,5 @@
 import { ModelOptionsInfo, ModelOptionInfoItem, OptionType, SharedOptions, ModelOptions } from "../types.js";
-import { textOptionsFallback } from "../options.js";
+import { textOptionsFallback } from "./fallback.js";
 
 // Union type of all Bedrock options
 export type VertexAIOptions = ImagenOptions | VertexAIClaudeOptions;
@@ -152,7 +152,7 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
                     },
                     description: "The editing mode. CUSTOMIZATION options use few-shot learning to generate images based on a few examples."
                 },
-                
+
                 {
                     name: "guidance_scale", type: OptionType.numeric, min: 0, max: 500, default: guidanceScaleDefault,
                     integer: true, description: "How closely the generation follows the prompt"
@@ -192,7 +192,7 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
             ] : [];
 
             const customizationOptions: ModelOptionInfoItem[] = (option as ImagenOptions)?.edit_mode === ImagenTaskType.CUSTOMIZATION_CONTROLLED
-            || (option as ImagenOptions)?.edit_mode === ImagenTaskType.CUSTOMIZATION_SUBJECT ? [
+                || (option as ImagenOptions)?.edit_mode === ImagenTaskType.CUSTOMIZATION_SUBJECT ? [
                 {
                     name: "controlType", type: OptionType.enum, enum: { "Face Mesh": "CONTROL_TYPE_FACE_MESH", "Canny": "CONTROL_TYPE_CANNY", "Scribble": "CONTROL_TYPE_SCRIBBLE" },
                     default: "CONTROL_TYPE_CANNY", description: "Method used to generate the control image"
@@ -309,4 +309,3 @@ function getClaudeMaxTokensLimit(model: string, option?: VertexAIClaudeOptions):
         return 4096;
     }
 }
-

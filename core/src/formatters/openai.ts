@@ -1,6 +1,6 @@
-import { PromptRole, PromptOptions } from "../index.js";
+import { PromptRole, PromptOptions } from "@llumiverse/common";
 import { readStreamAsBase64 } from "../stream.js";
-import { PromptSegment } from "../types.js";
+import { PromptSegment } from "@llumiverse/common";
 
 
 export interface OpenAITextMessage {
