@@ -1,4 +1,4 @@
-import { ModelModalities } from "../types.js";
+import { ModelModalities } from "@llumiverse/common";
 
 // Record of OpenAI model capabilities keyed by model ID (lowercased)
 const RECORD_MODEL_CAPABILITIES: Record<string, { input: ModelModalities; output: ModelModalities; tool_support?: boolean }> = {

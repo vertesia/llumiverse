@@ -1,10 +1,10 @@
-import { ModelModalities } from "../types.js";
+import { ModelModalities } from "@llumiverse/common";
 
 // Record of Vertex AI model capabilities keyed by model ID (last path segment, lowercased)
 const RECORD_MODEL_CAPABILITIES: Record<string, { input: ModelModalities; output: ModelModalities; tool_support?: boolean }> = {
-    "imagen-3.0-generate-002":	{ input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
-    "imagen-3.0-capability-001":	{ input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
-    "gemini-1.5-flash-002":	{ input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
+    "imagen-3.0-generate-002": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
+    "imagen-3.0-capability-001": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
+    "gemini-1.5-flash-002": { input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
     "gemini-1.5-pro-002": { input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
     "gemini-2.0-flash-001": { input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
     "gemini-2.0-flash-lite-001": { input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: false },

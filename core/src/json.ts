@@ -1,3 +1,4 @@
+import { JSONValue } from "@llumiverse/common";
 
 function extractJsonFromText(text: string): string {
     const start = text.indexOf("{");
@@ -9,15 +10,6 @@ function extractJsonFromText(text: string): string {
 export function extractAndParseJSON(text: string): JSONValue {
     return parseJSON(extractJsonFromText(text));
 }
-
-export type JSONPrimitive = string | number | boolean | null;
-export type JSONArray = JSONValue[];
-export type JSONObject = { [key: string]: JSONValue };
-export type JSONComposite = JSONArray | JSONObject;
-export type JSONValue = JSONPrimitive | JSONComposite;
-
-
-
 
 const RX_DQUOTE = /^"([^"\\]|\\.)*"/us;
 const RX_SQUOTE = /^'([^'\\]|\\.)*'/us;
@@ -192,7 +184,7 @@ export function parseJSON(text: string): JSONValue {
         // use a relaxed parser
         try {
             return JsonParser.parse(text);
-        } catch (err2: any) { // throw the original error            
+        } catch (err2: any) { // throw the original error
             throw err;
         }
     }

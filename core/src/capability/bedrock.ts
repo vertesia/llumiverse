@@ -1,4 +1,4 @@
-import { ModelModalities, ModelCapabilities } from "../types.js";
+import { ModelModalities, ModelCapabilities } from "@llumiverse/common";
 
 // Record of Bedrock model capabilities keyed by model ID.
 const RECORD_MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
@@ -148,7 +148,7 @@ export function getModelCapabilitiesBedrock(model: string): ModelCapabilities {
     if (normalized.startsWith("inference-profile/")) {
         normalized = normalized.replace(/^inference-profile\/[^.]+\./, "inference-profile/us.");
     }
-    
+
     // 1. Exact match in record
     const record = RECORD_MODEL_CAPABILITIES[normalized];
     if (record) return record;

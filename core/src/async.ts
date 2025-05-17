@@ -1,5 +1,5 @@
 import type { ServerSentEvent } from "api-fetch-client";
-import { CompletionChunk } from "./types.js";
+import { CompletionChunk } from "@llumiverse/common";
 
 export async function* asyncMap<T, R>(asyncIterable: AsyncIterable<T>, callback: (value: T, index: number) => R) {
     let i = 0;
@@ -35,7 +35,7 @@ export function transformSSEStream(stream: ReadableStream<ServerSentEvent>, tran
     })) as ReadableStream<CompletionChunk> & AsyncIterable<CompletionChunk>;
 }
 
-export class EventStream<T, ReturnT = any> implements AsyncIterable<T>{
+export class EventStream<T, ReturnT = any> implements AsyncIterable<T> {
 
     private queue: T[] = [];
     private pending?: {
@@ -140,6 +140,3 @@ export async function* transformAsyncIterator<T, V>(
 // for await (const chunk of stream) {
 //     console.log('++++chunk:', chunk);
 // }
-
-
-

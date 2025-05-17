@@ -1,6 +1,5 @@
-import { PromptFormatter } from './formatters/index.js';
-import { JSONObject } from './json.js';
-import { GroqOptions, TextFallbackOptions } from './options.js';
+import { GroqOptions } from './options/groq.js';
+import { TextFallbackOptions } from './options/fallback.js';
 import { BedrockOptions } from './options/bedrock.js';
 import { OpenAiOptions } from './options/openai.js';
 import { VertexAIOptions } from './options/vertexai.js';
@@ -155,6 +154,8 @@ export interface JSONSchema {
     required?: string[];
     [k: string]: any;
 }
+
+export type PromptFormatter<T = any> = (messages: PromptSegment[], schema?: JSONSchema) => T;
 
 //Options are split into PromptOptions, ModelOptions and ExecutionOptions.
 //ExecutionOptions are most often used within llumiverse as they are the most complete.
@@ -423,3 +424,9 @@ export interface TrainingJob {
     details?: string;
     model?: string; // the name of the fine tuned model which is created
 }
+
+export type JSONPrimitive = string | number | boolean | null;
+export type JSONArray = JSONValue[];
+export type JSONObject = { [key: string]: JSONValue };
+export type JSONComposite = JSONArray | JSONObject;
+export type JSONValue = JSONPrimitive | JSONComposite;

@@ -1,5 +1,5 @@
-import { JSONSchema } from "../types.js";
-import { PromptRole, PromptSegment } from "../types.js";
+import { JSONSchema } from "@llumiverse/common";
+import { PromptRole, PromptSegment } from "@llumiverse/common";
 import { getJSONSafetyNotice } from "./commons.js";
 
 interface Labels {
