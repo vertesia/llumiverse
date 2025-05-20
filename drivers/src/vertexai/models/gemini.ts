@@ -70,10 +70,11 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
             presencePenalty: model_options?.presence_penalty,
             frequencyPenalty: model_options?.frequency_penalty,
             seed: model_options?.seed,
-            thinkingConfig: {
-                includeThoughts: model_options?.include_thoughts,
-                thinkingBudget: model_options?.thinking_budget,
-            },
+            thinkingConfig: model_options?.include_thoughts || model_options?.thinking_budget ?
+                {
+                    includeThoughts: model_options?.include_thoughts,
+                    thinkingBudget: model_options?.thinking_budget,
+                } : undefined,
         }
     };
 }
