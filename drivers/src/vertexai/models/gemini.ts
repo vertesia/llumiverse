@@ -1,60 +1,82 @@
-import { Content, FinishReason, FunctionDeclarationSchema, FunctionDeclarationsTool, FunctionResponsePart, GenerateContentRequest, HarmBlockThreshold, HarmCategory, InlineDataPart, ModelParams, TextPart, Tool } from "@google-cloud/vertexai";
-import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, ExecutionTokenUsage, JSONObject, ModelType, PromptOptions, PromptRole, PromptSegment, readStreamAsBase64, TextFallbackOptions, ToolDefinition, ToolUse } from "@llumiverse/core";
+import {
+    Content, FinishReason, FunctionDeclaration, GenerateContentParameters,
+    HarmBlockThreshold, HarmCategory, Part, SafetySetting, Tool, Type
+} from "@google/genai";
+import {
+    AIModel, Completion, CompletionChunkObject, ExecutionOptions,
+    ExecutionTokenUsage, JSONObject, ModelType, PromptOptions, PromptRole,
+    PromptSegment, readStreamAsBase64, ToolDefinition, ToolUse
+} from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
-import { VertexAIDriver } from "../index.js";
+import { VertexAIDriver, GenerateContentPrompt } from "../index.js";
 import { ModelDefinition } from "../models.js";
 
-function getGenerativeModel(driver: VertexAIDriver, options: ExecutionOptions, modelParams?: ModelParams) {
-
-    //1.0 Ultra does not support JSON output, 1.0 Pro does.
-    const jsonMode = options.result_schema && !(options.model.includes("ultra"));
-
-    if (options.model_options?._option_id !== "text-fallback") {
-        driver.logger.warn("Invalid model options", { options: options.model_options });
-    }
-    options.model_options = options.model_options as TextFallbackOptions;
-
-    const model_options = options.model_options;
-
-    const client = driver.getVertexAIClient();
-    const model = client.getGenerativeModel({
-        model: options.model,
-        safetySettings: modelParams?.safetySettings ?? [{
-            category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-            threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH
-        },
-        {
-            category: HarmCategory.HARM_CATEGORY_HARASSMENT,
-            threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH
-        },
-        {
-            category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-            threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH
-        },
-        {
-            category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-            threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH
-        },
-        {
-            category: HarmCategory.HARM_CATEGORY_UNSPECIFIED,
-            threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH
-        }
-        ],
-        generationConfig: {
-            responseMimeType: jsonMode ? "application/json" : "text/plain",
-            candidateCount: modelParams?.generationConfig?.candidateCount ?? 1,
-            temperature: model_options?.temperature,
-            maxOutputTokens: model_options?.max_tokens,
-            topP: model_options?.top_p,
-            topK: model_options?.top_k,
-            frequencyPenalty: model_options?.frequency_penalty,
-            stopSequences: model_options?.stop_sequence,
-        },
-    });
-
-    return model;
+function supportsStructuredOutput(options: PromptOptions): boolean {
+    // Gemini 1.0 Ultra does not support JSON output, 1.0 Pro does.
+    return !!options.result_schema && !options.model.includes("ultra");
 }
 
+const geminiSafetySettings: SafetySetting[] = [
+    {
+        category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH
+    },
+    {
+        category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH
+    },
+    {
+        category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH
+    },
+    {
+        category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH
+    },
+    {
+        category: HarmCategory.HARM_CATEGORY_UNSPECIFIED,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH
+    },
+    {
+        category: HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY,
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH
+    }
+];
+
+function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentPrompt): GenerateContentParameters {
+    //1.0 Ultra does not support JSON output, 1.0 Pro does.
+    const useStructuredOutput = supportsStructuredOutput(options);
+
+    const model_options = options.model_options as any;
+    const tools = getToolDefinitions(options.tools);
+    prompt.tools = tools ? [tools] : undefined;
+    return {
+        model: options.model,
+        contents: prompt.contents,
+        config: {
+            systemInstruction: prompt.system,
+            safetySettings: geminiSafetySettings,
+            tools: tools ? [tools] : undefined,
+            candidateCount: 1,
+            //JSON/Structured output
+            responseMimeType: useStructuredOutput ? "application/json" : "text/plain",
+            responseSchema: useStructuredOutput ? options.result_schema : undefined,
+            //Model options
+            temperature: model_options?.temperature,
+            topP: model_options?.top_p,
+            topK: model_options?.top_k,
+            maxOutputTokens: model_options?.max_tokens,
+            stopSequences: model_options?.stop_sequence,
+            presencePenalty: model_options?.presence_penalty,
+            frequencyPenalty: model_options?.frequency_penalty,
+            seed: model_options?.seed,
+            thinkingConfig: {
+                includeThoughts: model_options?.include_thoughts,
+                thinkingBudget: model_options?.thinking_budget,
+            },
+        }
+    };
+}
 
 function collectTextParts(content: Content) {
     const out = [];
@@ -75,8 +97,8 @@ function collectToolUseParts(content: Content): ToolUse[] | undefined {
     for (const part of parts) {
         if (part.functionCall) {
             out.push({
-                id: part.functionCall.name,
-                tool_name: part.functionCall.name,
+                id: part.functionCall.name ?? '',
+                tool_name: part.functionCall.name ?? '',
                 tool_input: part.functionCall.args as JSONObject,
             });
         }
@@ -84,7 +106,7 @@ function collectToolUseParts(content: Content): ToolUse[] | undefined {
     return out.length > 0 ? out : undefined;
 }
 
-export class GeminiModelDefinition implements ModelDefinition<GenerateContentRequest> {
+export class GeminiModelDefinition implements ModelDefinition<GenerateContentPrompt> {
 
     model: AIModel
 
@@ -95,10 +117,10 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
             provider: 'vertexai',
             type: ModelType.Text,
             can_stream: true,
-        } as AIModel;
+        } satisfies AIModel;
     }
 
-    async createPrompt(_driver: VertexAIDriver, segments: PromptSegment[], options: PromptOptions): Promise<GenerateContentRequest> {
+    async createPrompt(_driver: VertexAIDriver, segments: PromptSegment[], options: PromptOptions): Promise<GenerateContentPrompt> {
         const splits = options.model.split("/");
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
@@ -106,16 +128,19 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
         const schema = options.result_schema;
         const contents: Content[] = [];
         const safety: string[] = [];
+        const system: string[] = [];
 
         let lastUserContent: Content | undefined = undefined;
-        const toolParts: FunctionResponsePart[] = [];
+        const toolParts = [];
 
         for (const msg of segments) {
 
             if (msg.role === PromptRole.safety) {
                 safety.push(msg.content);
+            } else if (msg.role === PromptRole.system) {
+                system.push(msg.content);
             } else {
-                const fileParts: InlineDataPart[] = [];
+                const fileParts: Part[] = [];
                 if (msg.files) {
                     for (const f of msg.files) {
                         const stream = await f.getStream();
@@ -142,14 +167,14 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
                 const role = msg.role === PromptRole.assistant ? "model" : "user";
 
                 if (lastUserContent && lastUserContent.role === role) {
-                    lastUserContent.parts.push({ text: msg.content } as TextPart);
-                    fileParts?.forEach(p => lastUserContent?.parts.push(p));
+                    lastUserContent?.parts?.push({ text: msg.content });
+                    fileParts?.forEach(p => lastUserContent?.parts?.push(p));
                 } else {
                     const content: Content = {
                         role,
-                        parts: [{ text: msg.content } as TextPart],
+                        parts: [{ text: msg.content }],
                     }
-                    fileParts?.forEach(p => content.parts.push(p));
+                    fileParts?.forEach(p => content?.parts?.push(p));
 
                     if (role === 'user') {
                         lastUserContent = content;
@@ -158,22 +183,21 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
                 }
             }
         }
-
-        let tools: any = undefined;
-        if (schema) {
+        // Fallback to putting the schema in the prompt, if not using structured output.
+        if (schema && !supportsStructuredOutput(options)) {
             safety.push("The answer must be a JSON object using the following JSON Schema:\n" + JSON.stringify(schema));
         }
 
         if (safety.length > 0) {
             const content = safety.join('\n');
             if (lastUserContent) {
-                lastUserContent.parts.push({ text: content } as TextPart);
+               lastUserContent?.parts?.push({ text: content });
             } else {
-                contents.push({
-                    role: 'user',
-                    parts: [{ text: content } as TextPart],
-                })
-            }
+               contents.push({
+                   role: 'user',
+                   parts: [{ text: content }],
+               })
+           }
         }
 
         if (toolParts.length > 0) {
@@ -184,23 +208,22 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
         }
 
         // put system messages first and safety last
-        return { contents, tools } as GenerateContentRequest;
+        return { contents, system: system.join('\n'), tools: undefined };
     }
 
-    async requestTextCompletion(driver: VertexAIDriver, prompt: GenerateContentRequest, options: ExecutionOptions): Promise<Completion> {
+    async requestTextCompletion(driver: VertexAIDriver, prompt: GenerateContentPrompt, options: ExecutionOptions): Promise<Completion> {
         const splits = options.model.split("/");
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
 
         let conversation = updateConversation(options.conversation as Content[], prompt.contents);
-
         prompt.contents = conversation;
-        const tools = getToolDefinitions(options.tools);
-        prompt.tools = tools ? [tools] : undefined;
 
-        const model = getGenerativeModel(driver, options);
-        const r = await model.generateContent(prompt);
-        const response = await r.response;
+        const client = driver.getGoogleGenAIClient();
+
+        const payload = getGeminiPayload(options, prompt);
+        const response = await client.models.generateContent(payload);
+
         const usage = response.usageMetadata;
         const token_usage: ExecutionTokenUsage = {
             prompt: usage?.promptTokenCount,
@@ -240,21 +263,20 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentReq
             original_response: options.include_original_response ? response : undefined,
             conversation,
             tool_use
-        } as Completion;
+        } satisfies Completion;
     }
 
-    async requestTextCompletionStream(driver: VertexAIDriver, prompt: GenerateContentRequest, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+    async requestTextCompletionStream(driver: VertexAIDriver, prompt: GenerateContentPrompt, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         const splits = options.model.split("/");
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
 
-        const tools = getToolDefinitions(options.tools);
-        prompt.tools = tools ? [tools] : undefined;
+        const client = driver.getGoogleGenAIClient();
 
-        const model = getGenerativeModel(driver, options);
-        const streamingResp = await model.generateContentStream(prompt);
+        const payload = getGeminiPayload(options, prompt);
+        const response = await client.models.generateContentStream(payload);
 
-        const stream = asyncMap(streamingResp.stream, async (item) => {
+        const stream = asyncMap(response, async (item) => {
             const usage = item.usageMetadata;
             const token_usage: ExecutionTokenUsage = {
                 prompt: usage?.promptTokenCount,
@@ -305,22 +327,29 @@ function getToolDefinitions(tools: ToolDefinition[] | undefined | null): Tool | 
     // VertexAI Gemini only supports one tool at a time.
     // For multiple tools, we have multiple functions in one tool.
     const tool_array = tools.map(getToolDefinition);
-    let mergedTool: FunctionDeclarationsTool = tool_array[0];
+    let mergedTool = tool_array[0];
     for (let i = 1; i < tool_array.length; i++) {
         mergedTool.functionDeclarations = mergedTool.functionDeclarations?.concat(tool_array[i].functionDeclarations ?? []);
     }
     return mergedTool;
 }
-function getToolDefinition(tool: ToolDefinition): FunctionDeclarationsTool {
+
+function getToolDefinition(tool: ToolDefinition) {
     return {
         functionDeclarations: [
             {
                 name: tool.name,
                 description: tool.description,
-                parameters: { ...tool.input_schema, type: "OBJECT" } as FunctionDeclarationSchema,
-            }
+                parameters: {
+                    ...tool.input_schema,
+                    type: Type.OBJECT,
+                    properties: (tool.input_schema && typeof tool.input_schema.properties === 'object'
+                        ? tool.input_schema.properties
+                        : undefined) as Record<string, any> | undefined,
+                },
+            } satisfies FunctionDeclaration
         ]
-    } satisfies FunctionDeclarationsTool;
+    };
 }
 
 
@@ -331,7 +360,7 @@ function getToolDefinition(tool: ToolDefinition): FunctionDeclarationsTool {
  * @returns
  */
 function updateConversation(conversation: Content[], prompt: Content[]): Content[] {
-    return (conversation || [] as Content[]).concat(prompt);
+    return (conversation || [] satisfies Content[]).concat(prompt);
 }
 /**
  *

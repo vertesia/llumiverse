@@ -120,9 +120,9 @@ importers:
       '@google-cloud/aiplatform':
         specifier: ^3.35.0
         version: 3.35.0
-      '@google-cloud/vertexai':
-        specifier: ^1.10.0
-        version: 1.10.0
+      '@google/genai':
+        specifier: ^0.15.0
+        version: 0.15.0(@modelcontextprotocol/sdk@1.11.0)
       '@huggingface/inference':
         specifier: 2.6.7
         version: 2.6.7
@@ -786,9 +786,11 @@ packages:
     resolution: {integrity: sha512-Eo+ckr1KbTxAOew9P+MeeR0aQXeW5PeOzrSM1JyGny/SGKejwX/RcGWSFpeapnlegTfI9N9xJeUeo3M+XBOeFg==}
     engines: {node: '>=14.0.0'}
 
-  '@google-cloud/vertexai@1.10.0':
-    resolution: {integrity: sha512-HqYqoivNtkq59po8m7KI0n+lWKdz4kabENncYQXZCX/hBWJfXtKAfR/2nUQsP+TwSfHKoA7zDL2RrJYIv/j3VQ==}
+  '@google/genai@0.15.0':
+    resolution: {integrity: sha512-G1yvDDkQ0XtUPe2B58bk2d7/YyWEv4+CJVfSDmqhvcQdxOKhsKhlIR+0+fqKAs1fTXeNRG5nivZOpt9iQoZzIw==}
     engines: {node: '>=18.0.0'}
+    peerDependencies:
+      '@modelcontextprotocol/sdk': ^1.11.0
 
   '@grpc/grpc-js@1.13.2':
     resolution: {integrity: sha512-nnR5nmL6lxF8YBqb6gWvEgLdLh/Fn+kvAdX5hUOnt48sNSb0riz/93ASd2E5gvanPA41X6Yp25bIfGRp1SMb2g==}
@@ -2772,6 +2774,18 @@ packages:
   wrappy@1.0.2:
     resolution: {integrity: sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==}
 
+  ws@8.18.2:
+    resolution: {integrity: sha512-DMricUmwGZUVr++AEAe2uiVM7UoO9MAVZMDu05UQOaUII0lp+zOzLLU4Xqh/JvTqklB1T4uELaaPBKyjE1r4fQ==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
   y18n@5.0.8:
     resolution: {integrity: sha512-0pfFzegeDWJHJIAmTLRP2DwHjdF5s7jo9tuztdQxAhINCdvS+3nGINqPd00AphqJR/0LhANUS6/+7SCb98YOfA==}
     engines: {node: '>=10'}
@@ -3775,12 +3789,18 @@ snapshots:
       - encoding
       - supports-color
 
-  '@google-cloud/vertexai@1.10.0':
+  '@google/genai@0.15.0(@modelcontextprotocol/sdk@1.11.0)':
     dependencies:
+      '@modelcontextprotocol/sdk': 1.11.0
       google-auth-library: 9.15.1
+      ws: 8.18.2
+      zod: 3.24.4
+      zod-to-json-schema: 3.24.5(zod@3.24.4)
     transitivePeerDependencies:
+      - bufferutil
       - encoding
       - supports-color
+      - utf-8-validate
 
   '@grpc/grpc-js@1.13.2':
     dependencies:
@@ -6019,6 +6039,8 @@ snapshots:
       strip-ansi: 7.1.0
 
   wrappy@1.0.2: {}
+
+  ws@8.18.2: {}
 
   y18n@5.0.8: {}
 
