@@ -47,10 +47,10 @@ function parseJSONtoSchema(schema?: JSONSchema): Schema {
     if (!schema) {
         return {};
     }
-    
+
     const convertType = (type?: string | string[]): Type | undefined => {
         if (!type) return undefined;
-        
+
         // Handle single type
         if (typeof type === 'string') {
             switch (type) {
@@ -63,23 +63,23 @@ function parseJSONtoSchema(schema?: JSONSchema): Schema {
                 default: return undefined;
             }
         }
-        
+
         // For array of types, we'll take the first valid one as the primary type
         // The full set of types will be handled with anyOf
         for (const t of type) {
             const converted = convertType(t);
             if (converted) return converted;
         }
-        
+
         return undefined;
     };
-    
+
     // Deep clone and convert the schema
     const convertSchema = (jsSchema?: JSONSchema): Schema => {
         if (!jsSchema) return {};
-        
+
         const result: Schema = {};
-        
+
         // Handle multiple types using anyOf
         if (jsSchema.type && Array.isArray(jsSchema.type) && jsSchema.type.length > 1) {
             // Create a schema for each type in the array
@@ -87,56 +87,57 @@ function parseJSONtoSchema(schema?: JSONSchema): Schema {
                 const singleTypeSchema: JSONSchema = { ...jsSchema, type: t };
                 return convertSchema(singleTypeSchema);
             });
-            
-            // Still set the primary type for better compatibility
-            result.type = convertType(jsSchema.type);
-        } 
+        }
         // Handle single type
         else if (jsSchema.type) {
             result.type = convertType(jsSchema.type);
         }
-        
+
         // Handle description
         if (jsSchema.description) {
             result.description = jsSchema.description;
         }
-        
-        // Handle required properties
-        if (jsSchema.required) {
-            result.required = jsSchema.required;
-        }
-        
+
         // Handle nested properties
         if (jsSchema.properties) {
             result.properties = {};
             // Extract property ordering from the object keys
             const propertyNames = Object.keys(jsSchema.properties);
-            
+
             // Set property ordering based on the existing order in the schema
             if (propertyNames.length > 0) {
                 result.propertyOrdering = propertyNames;
+
+                // Mark all properties as required by default
+                // This ensures the model fills all fields
+                result.required = propertyNames;
             }
-            
+
             for (const [key, value] of Object.entries(jsSchema.properties)) {
                 result.properties[key] = convertSchema(value);
             }
         }
-        
+
+        // Override with explicit required properties if specified in the original schema
+        if (jsSchema.required) {
+            result.required = jsSchema.required;
+        }
+
         // Handle items for arrays
         if (jsSchema.items) {
             result.items = convertSchema(jsSchema.items);
         }
-        
+
         // Handle enum values
         if (jsSchema.enum) {
             result.enum = jsSchema.enum;
         }
-        
+
         // Override with explicit propertyOrdering if present
         if (jsSchema.propertyOrdering) {
             result.propertyOrdering = jsSchema.propertyOrdering;
         }
-        
+
         // Handle min/max constraints
         if (jsSchema.minimum !== undefined) result.minimum = jsSchema.minimum;
         if (jsSchema.maximum !== undefined) result.maximum = jsSchema.maximum;
@@ -149,10 +150,10 @@ function parseJSONtoSchema(schema?: JSONSchema): Schema {
         if (jsSchema.format) result.format = jsSchema.format;
         if (jsSchema.default !== undefined) result.default = jsSchema.default;
         if (jsSchema.example !== undefined) result.example = jsSchema.example;
-        
+
         return result;
     };
-    
+
     return convertSchema(schema);
 }
 
@@ -234,6 +235,10 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         } satisfies AIModel;
     }
 
+    preValidationProcessing(result: Completion, options: ExecutionOptions): {result: Completion, options: ExecutionOptions} {
+        return { result, options };
+    }
+
     async createPrompt(_driver: VertexAIDriver, segments: PromptSegment[], options: PromptOptions): Promise<GenerateContentPrompt> {
         const splits = options.model.split("/");
         const modelName = splits[splits.length - 1];
@@ -297,7 +302,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 }
             }
         }
-        
+
         if (schema && !supportsStructuredOutput(options)) {
             // Fallback to putting the schema in the prompt, if not using structured output.
             safety.push("The answer must be a JSON object using the following JSON Schema:\n" + JSON.stringify(schema));
@@ -309,13 +314,13 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         if (safety.length > 0) {
             const content = safety.join('\n');
             if (lastUserContent) {
-               lastUserContent?.parts?.push({ text: content });
+                lastUserContent?.parts?.push({ text: content });
             } else {
-               contents.push({
-                   role: 'user',
-                   parts: [{ text: content }],
-               })
-           }
+                contents.push({
+                    role: 'user',
+                    parts: [{ text: content }],
+                })
+            }
         }
 
         if (toolParts.length > 0) {

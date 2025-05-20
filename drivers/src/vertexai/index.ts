@@ -134,6 +134,18 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return this.modelGarden;
     }
 
+    validateResult(result: Completion, options: ExecutionOptions) {
+        // Optionally preprocess the result before validation
+        const modelDef = getModelDefinition(options.model);
+        if (typeof modelDef.preValidationProcessing === "function") {
+            const processed = modelDef.preValidationProcessing(result, options);
+            result = processed.result;
+            options = processed.options;
+        }
+
+        super.validateResult(result, options);
+    }
+
     protected canStream(options: ExecutionOptions): Promise<boolean> {
         if (options.output_modality == Modalities.image) {
             return Promise.resolve(false);
