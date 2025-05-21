@@ -121,8 +121,8 @@ importers:
         specifier: ^3.35.0
         version: 3.35.0
       '@google/genai':
-        specifier: ^0.15.0
-        version: 0.15.0(@modelcontextprotocol/sdk@1.11.0)
+        specifier: ^1.0.0
+        version: 1.0.0(@modelcontextprotocol/sdk@1.11.0)
       '@huggingface/inference':
         specifier: 2.6.7
         version: 2.6.7
@@ -786,8 +786,8 @@ packages:
     resolution: {integrity: sha512-Eo+ckr1KbTxAOew9P+MeeR0aQXeW5PeOzrSM1JyGny/SGKejwX/RcGWSFpeapnlegTfI9N9xJeUeo3M+XBOeFg==}
     engines: {node: '>=14.0.0'}
 
-  '@google/genai@0.15.0':
-    resolution: {integrity: sha512-G1yvDDkQ0XtUPe2B58bk2d7/YyWEv4+CJVfSDmqhvcQdxOKhsKhlIR+0+fqKAs1fTXeNRG5nivZOpt9iQoZzIw==}
+  '@google/genai@1.0.0':
+    resolution: {integrity: sha512-IQiL8UlPblGDrMhTuiHZbfMDVx0KY3eYkmB5Ro9wwyXovYCFIhL5ZC7LP42FjFUj0eWUa4Auo8Ixqf2dqx9JjA==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
       '@modelcontextprotocol/sdk': ^1.11.0
@@ -1532,6 +1532,15 @@ packages:
 
   debug@4.4.0:
     resolution: {integrity: sha512-6WTZ/IxCY/T6BALoZHaE4ctp9xm+Z5kY/pzYaCHRFeyVhojxlrm+46y68HA6hr0TcwEssoxNiDEUJQjfPZ/RYA==}
+    engines: {node: '>=6.0'}
+    peerDependencies:
+      supports-color: '*'
+    peerDependenciesMeta:
+      supports-color:
+        optional: true
+
+  debug@4.4.1:
+    resolution: {integrity: sha512-KcKCqiftBJcZr++7ykoDIEwSa3XWowTfNPo92BYxjXiyYEVrUQh2aLyhxBCwww+heortUFxEJYcRzosstTEBYQ==}
     engines: {node: '>=6.0'}
     peerDependencies:
       supports-color: '*'
@@ -2810,6 +2819,9 @@ packages:
   zod@3.24.4:
     resolution: {integrity: sha512-OdqJE9UDRPwWsrHjLN2F8bPxvwJBK22EHLWtanu0LSYr5YqzsaaW3RMgmjwr8Rypg5k+meEJdSPXJZXE/yqOMg==}
 
+  zod@3.25.17:
+    resolution: {integrity: sha512-8hQzQ/kMOIFbwOgPrm9Sf9rtFHpFUMy4HvN0yEB0spw14aYi0uT5xG5CE2DB9cd51GWNsz+DNO7se1kztHMKnw==}
+
 snapshots:
 
   '@anthropic-ai/sdk@0.39.0':
@@ -3789,13 +3801,13 @@ snapshots:
       - encoding
       - supports-color
 
-  '@google/genai@0.15.0(@modelcontextprotocol/sdk@1.11.0)':
+  '@google/genai@1.0.0(@modelcontextprotocol/sdk@1.11.0)':
     dependencies:
       '@modelcontextprotocol/sdk': 1.11.0
       google-auth-library: 9.15.1
       ws: 8.18.2
-      zod: 3.24.4
-      zod-to-json-schema: 3.24.5(zod@3.24.4)
+      zod: 3.25.17
+      zod-to-json-schema: 3.24.5(zod@3.25.17)
     transitivePeerDependencies:
       - bufferutil
       - encoding
@@ -4672,6 +4684,10 @@ snapshots:
     dependencies:
       ms: 2.1.3
 
+  debug@4.4.1:
+    dependencies:
+      ms: 2.1.3
+
   deep-eql@5.0.2: {}
 
   deep-is@0.1.4: {}
@@ -5201,7 +5217,7 @@ snapshots:
   https-proxy-agent@7.0.6:
     dependencies:
       agent-base: 7.1.3
-      debug: 4.4.0
+      debug: 4.4.1
     transitivePeerDependencies:
       - supports-color
 
@@ -6062,4 +6078,10 @@ snapshots:
     dependencies:
       zod: 3.24.4
 
+  zod-to-json-schema@3.24.5(zod@3.25.17):
+    dependencies:
+      zod: 3.25.17
+
   zod@3.24.4: {}
+
+  zod@3.25.17: {}
