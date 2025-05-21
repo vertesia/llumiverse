@@ -33,20 +33,6 @@ export interface OpenAIContentPartImage {
     }
 }
 
-//Anything before gpt-4o-mini, gpt-4o-mini-2024-07-18, and gpt-4o-2024-08-06 model snapshots.
-//https://platform.openai.com/docs/guides/structured-outputs?api-mode=chat
-export const noStructuredOutputModels: string[] = [
-    "turbo",
-    "davinci",
-    "babbage",
-    "curie",
-    "chatgpt-4o",
-    "gpt-4",
-    "gpt-4o-2024-05-13", //later gpt-4o does support structured output
-    "o1-preview",
-    "o1-mini",
-]
-
 /**
  * OpenAI text only prompts
  * @param segments
