@@ -19,9 +19,10 @@ import {
     TrainingPromptOptions,
     getModelCapabilities,
     modelModalitiesToArray,
+    supportsToolUse,
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
-import { formatOpenAILikeMultimodalPrompt, noStructuredOutputModels } from "@llumiverse/core/formatters";
+import { formatOpenAILikeMultimodalPrompt } from "@llumiverse/core/formatters";
 import OpenAI, { AzureOpenAI } from "openai";
 import { Stream } from "openai/streaming";
 
@@ -87,7 +88,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         }
 
         const toolDefs = getToolDefinitions(options.tools);
-        const useTools: boolean = toolDefs ? supportsTools(options.model) : false;
+        const useTools: boolean = toolDefs ? supportsToolUse(options.model, "openai", true) : false;
 
         const mapFn = (chunk: OpenAI.Chat.Completions.ChatCompletionChunk) => {
             let result = undefined
@@ -167,7 +168,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         insert_image_detail(prompt, model_options?.image_detail ?? "auto");
 
         const toolDefs = getToolDefinitions(options.tools);
-        const useTools: boolean = toolDefs ? supportsTools(options.model) : false;
+        const useTools: boolean = toolDefs ? supportsToolUse(options.model, "openai") : false;
 
         let conversation = updateConversation(options.conversation as OpenAIMessageBlock[], prompt);
 
@@ -415,20 +416,14 @@ function convertRoles(messages: OpenAIMessageBlock[], model: string): OpenAIMess
     return messages
 }
 
-function supportsTools(model: string): boolean {
-    const list_check = !noStructuredOutputModels.some((m) => model.includes(m));
-    if (!list_check && model.includes("gpt-4o") && !model.includes("gpt-4o-2024-05-13")) {
-        return true;
-    }
-    return list_check
-}
-
+//Structured output support is typically aligned with tool use support
+//Not true for realtime models, which do not support structured output, but do support tool use.
 function supportsSchema(model: string): boolean {
-    const list_check = !noStructuredOutputModels.some((m) => model.includes(m));
-    if (!list_check && model.includes("gpt-4o") && !model.includes("gpt-4o-2024-05-13")) {
-        return true;
+    const realtimeModel = model.includes("realtime");
+    if (realtimeModel) {
+        return false;
     }
-    return list_check
+    return supportsToolUse(model, "openai");
 }
 
 function getToolDefinitions(tools: ToolDefinition[] | undefined | null): OpenAI.ChatCompletionTool[] | undefined {
