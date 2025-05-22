@@ -137,7 +137,7 @@ export interface DriverOptions {
     logger?: Logger | "console";
 }
 
-export type JSONSchema4TypeName =
+export type JSONSchemaTypeName =
     | "string" //
     | "number"
     | "integer"
@@ -147,8 +147,22 @@ export type JSONSchema4TypeName =
     | "null"
     | "any";
 
+export type JSONSchemaType =
+    | string //
+    | number
+    | boolean
+    | JSONSchemaObject
+    | JSONSchemaArray
+    | null;
+
+export interface JSONSchemaObject {
+    [key: string]: JSONSchemaType;
+}
+
+export interface JSONSchemaArray extends Array<JSONSchemaType> { }
+
 export interface JSONSchema {
-    type?: JSONSchema4TypeName | JSONSchema4TypeName[];
+    type?: JSONSchemaTypeName | JSONSchemaTypeName[];
     description?: string;
     properties?: Record<string, JSONSchema>;
     required?: string[];
