@@ -51,8 +51,6 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
     const tools = getToolDefinitions(options.tools);
     prompt.tools = tools ? [tools] : undefined;
 
-    const parsedSchema = parseJSONtoSchema(options.result_schema);
-    console.log("Parsed Schema", JSON.stringify(parsedSchema, null, 2));
     return {
         model: options.model,
         contents: prompt.contents,
@@ -268,6 +266,39 @@ function extractConstraints(jsSchema: JSONSchema): Partial<Schema> {
 }
 
 /**
+ * Check if a value is empty (null, undefined, empty string, empty array, empty object)
+ * @param value The value to check
+ * @returns True if the value is considered empty
+ */
+function isEmpty(value: any): boolean {
+    if (value === null || value === undefined) {
+        return true;
+    }
+
+    if (typeof value === 'string' && value.trim() === '') {
+        return true;
+    }
+
+    if (Array.isArray(value) && value.length === 0) {
+        return true;
+    }
+
+    // Check for empty object (no own enumerable properties)
+    if (typeof value === 'object' && Object.keys(value).length === 0) {
+        return true;
+    }
+
+    // Check for array of empty objects
+    if (Array.isArray(value) && value.every(item => isEmpty(item))) {
+        return true;
+    }
+
+    return false;
+}
+
+// No array cleaning function needed as we're only working with JSONObjects
+
+/**
  * Clean up the JSON result by removing empty values for optional fields
  * Uses immutable patterns to create a new Content object rather than modifying the original
  * @param content The original content from Gemini
@@ -297,10 +328,17 @@ function cleanEmptyFieldsContent(content: Content, result_schema?: JSONSchema): 
             try {
                 // Parse JSON, clean it based on schema, then stringify
                 const jsonText = JSON.parse(part.text);
-                const cleanedJson = cleanResultBasedOnSchema(jsonText, result_schema);
-                newPart.text = JSON.stringify(cleanedJson);
+                // Skip cleaning if not an object
+                if (typeof jsonText === 'object' && jsonText !== null && !Array.isArray(jsonText)) {
+                    const cleanedJson = removeEmptyFields(jsonText, result_schema);       
+                    newPart.text = JSON.stringify(cleanedJson);
+                } else {
+                    // Keep original if not an object (string, number, array, etc.)
+                    newPart.text = part.text;
+                }
             } catch (e) {
                 // On error, keep the original text
+                console.warn("Error parsing Gemini output to JSON in part:", e);
             }
 
             return newPart;
@@ -311,124 +349,58 @@ function cleanEmptyFieldsContent(content: Content, result_schema?: JSONSchema): 
 }
 
 /**
- * Cleans the result based on the original schema to respect optionality
- * Removes empty values from fields that weren't explicitly required in the original schema
- * @param obj The object to clean
+ * Removes empty optional fields from the JSON result based on the provided schema
+ * @param object The object to clean
  * @param schema The JSON schema to use for cleaning
  * @returns A new object with empty optional fields removed
  */
-function cleanResultBasedOnSchema(obj: unknown, schema: JSONSchema): unknown {
-    // Handle non-object results
-    if (obj === null || obj === undefined || typeof obj !== 'object') {
-        return obj;
+function removeEmptyFields(object: JSONObject | any[], schema: JSONSchema): JSONObject | any[] {
+    if (!object) {
+        return object
     }
 
-    // Handle arrays
-    if (Array.isArray(obj)) {
-        return cleanArrayResult(obj, schema);
+    if (Array.isArray(object)) {
+        return removeEmptyJSONArray(object, schema);
     }
-
-    // For objects, check each property against the schema
-    if (schema.properties && typeof obj === 'object' && !Array.isArray(obj)) {
-        return cleanObjectResult(obj as Record<string, unknown>, schema);
+    if (typeof object == 'object' || object === null) {
+        return removeEmptyJSONObject(object, schema);
     }
-
-    return obj;
+    
+    return object;
 }
 
-/**
- * Clean an array result based on schema
- */
-function cleanArrayResult(array: unknown[], schema: JSONSchema): unknown[] {
-    // If array is empty and field is optional, it should be removed entirely by parent
-    if (array.length === 0) {
-        return array;
-    }
-
-    // Process each item in the array with its item schema
-    const processedItems = array
-        .map(item => {
-            if (schema.items) {
-                return cleanResultBasedOnSchema(item, schema.items);
-            }
-            return item;
-        })
-        .filter(item => item !== null && item !== undefined);
-
-    // Return the processed array
-    return processedItems;
-}
-
-/**
- * Clean an object result based on schema
- */
-function cleanObjectResult(obj: Record<string, unknown>, schema: JSONSchema): Record<string, unknown> {
-    const result: Record<string, unknown> = {};
+function removeEmptyJSONObject(object: JSONObject, schema: JSONSchema): JSONObject {
+    // Get the original required properties from schema
     const requiredProps = schema.required || [];
-    const schemaProperties = schema.properties || {};
+    const cleanedResult: JSONObject = {...object};
 
-    for (const [key, value] of Object.entries(obj)) {
-        const propSchema = schemaProperties[key];
+    // Process each property
+    for (const [key, value] of Object.entries(object)) {
+        const isRequired = requiredProps.includes(key);
+        const propSchema = schema.properties?.[key];
 
-        // If the field has a schema definition
-        if (propSchema) {
-            // First recursively clean the nested value
-            const cleanedValue = cleanResultBasedOnSchema(value, propSchema);
+        // Recursively clean nested objects based on their schema
+        cleanedResult[key] = removeEmptyFields(value as JSONObject, propSchema ?? {});
 
-            // For required fields, always keep the value
-            if (requiredProps.includes(key)) {
-                result[key] = cleanedValue;
+        if (isEmpty(value)) {
+            if (isRequired) {
+                continue; // Keep required fields even if empty
+            } else {
+                delete cleanedResult[key]; // Remove empty optional fields
             }
-            // For optional fields, only keep non-empty values
-            else if (!isEffectivelyEmpty(cleanedValue, propSchema)) {
-                result[key] = cleanedValue;
-            }
-        }
-        // No schema for this property, keep it if non-empty
-        else if (!isEffectivelyEmpty(value, null)) {
-            result[key] = value;
         }
     }
 
-    return result;
+    return cleanedResult;
 }
 
-/**
- * Checks if a value should be considered effectively empty
- * Takes into account the expected schema type to make better decisions
- */
-function isEffectivelyEmpty(value: any, schema: JSONSchema | null): boolean {
-    // Basic empty values
-    if (value === null || value === undefined) {
-        return true;
-    }
+function removeEmptyJSONArray(array: any[], schema: JSONSchema): any[] {
+    const cleanedArray = array.map(item => {
+        return removeEmptyFields(item, schema); 
+    });
 
-    // Empty strings
-    if (typeof value === 'string' && value.trim() === '') {
-        return true;
-    }
-
-    // Empty arrays - consider empty arrays as effectively empty
-    if (Array.isArray(value) && value.length === 0) {
-        return true;
-    }
-
-    // Empty objects
-    if (typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) {
-        return true;
-    }
-
-    // Check for objects with only empty values
-    if (schema && schema.type === 'object' && typeof value === 'object' && !Array.isArray(value)) {
-        // If every property is effectively empty, consider the whole object empty
-        const hasNonEmptyProperty = Object.entries(value).some(([key, propValue]) => {
-            const propSchema = schema.properties?.[key];
-            return !isEffectivelyEmpty(propValue, propSchema || null);
-        });
-        return !hasNonEmptyProperty;
-    }
-
-    return false;
+    // Filter out empty objects from the array
+    return cleanedArray.filter(item => !isEmpty(item));
 }
 
 function collectTextParts(content: Content) {
@@ -474,24 +446,17 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
     }
 
     preValidationProcessing(result: Completion, options: ExecutionOptions): { result: Completion, options: ExecutionOptions } {
+        // If there's no schema or result, no processing needed
+        if (!options.result_schema || !result.result) {
+            return { result, options };
+        }
         try {
-            // If there's no schema or result is not an object, no processing needed
-            if (!options.result_schema || !result.result || typeof result.result !== 'object') {
-                return { result, options };
-            }
-
-            // Create a new result object with a cleaned result property (immutable pattern)
-            const newResult: Completion = {
-                ...result,
-                result: cleanResultBasedOnSchema(result.result, options.result_schema)
-            };
-
-            return { result: newResult, options };
+            const jsonResult = JSON.parse(result.result);
+            result.result = JSON.stringify(removeEmptyFields(jsonResult, options.result_schema));
+            return { result, options };
         } catch (error) {
             // Log error during processing but don't fail the completion
-            if (process.env.NODE_ENV === 'development') {
-                console.warn('Error during preValidationProcessing:', error instanceof Error ? error.message : error);
-            }
+            console.warn('Error during Gemini JSON pre-validation', error);
             // Return original result if cleanup fails
             return { result, options };
         }
@@ -565,8 +530,9 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             // Fallback to putting the schema in the prompt, if not using structured output.
             safety.push("The answer must be a JSON object using the following JSON Schema:\n" + JSON.stringify(schema));
         } else if (schema) {
-            // Gemini structured output is unnecessarily sparse.
-            safety.push("The answer must be a JSON, fill fields using relevant data.");
+            // Gemini structured output is unnecessarily sparse. Adding encouragement to fill the fields.
+            // Putting JSON in prompt is not recommended by Google, when using structured output.
+            safety.push("Fill all appropriate fields in the JSON output.");
         }
 
         if (safety.length > 0) {
