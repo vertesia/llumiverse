@@ -244,7 +244,7 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
             integer: true, step: 200, description: "The maximum number of tokens to generate"
         }];
 
-        if (model.includes("3-7")) {
+        if (model.includes("-3-7") || model.includes("-4")) {
             const claudeModeOptions: ModelOptionInfoItem[] = [
                 {
                     name: "thinking_mode",
@@ -286,7 +286,7 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
     return textOptionsFallback;
 }
 function getGeminiMaxTokensLimit(model: string): number {
-    if (model.includes("thinking")) {
+    if (model.includes("thinking") || model.includes("-2.5-")) {
         return 65536;
     }
     if (model.includes("ultra") || model.includes("vision")) {
@@ -295,14 +295,20 @@ function getGeminiMaxTokensLimit(model: string): number {
     return 8192;
 }
 function getClaudeMaxTokensLimit(model: string, option?: VertexAIClaudeOptions): number {
-    if (model.includes("3-7")) {
+    if (model.includes("-4-")) {
+        if(model.includes("opus-")) {
+            return 32768;
+        }
+        return 65536;
+    }
+    else if (model.includes("-3-7-")) {
         if (option && option?.thinking_mode) {
-            return 128000;
+            return 131072;
         } else {
             return 8192;
         }
     }
-    else if (model.includes("3-5")) {
+    else if (model.includes("-3-5-")) {
         return 8192;
     }
     else {
