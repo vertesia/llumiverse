@@ -10,12 +10,14 @@ const RECORD_MODEL_CAPABILITIES: Record<string, { input: ModelModalities; output
     "gemini-2.0-flash-lite-001": { input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: false },
     "gemini-2.5-flash-preview-04-17": { input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
     "gemini-2.5-pro-preview-05-06": { input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "claude-3-opus": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "claude-3-haiku": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "claude-3-5-sonnet": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "claude-3-5-haiku": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "claude-3-5-sonnet-v2": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "claude-3-7-sonnet": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true }
+    "claude-3-opus": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
+    "claude-3-haiku": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
+    "claude-3-5-sonnet": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
+    "claude-3-5-haiku": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
+    "claude-3-5-sonnet-v2": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
+    "claude-3-7-sonnet": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
+    "claude-opus-4": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
+    "claude-sonnet-4": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
 };
 
 // Populate RECORD_FAMILY_CAPABILITIES as a const record (lowest common denominator for each family)
@@ -24,9 +26,10 @@ const RECORD_FAMILY_CAPABILITIES: Record<string, { input: ModelModalities; outpu
     "gemini-2.0": { input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
     "gemini-2.5": { input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
     "imagen-3.0": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
-    "claude-3-5": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "claude-3-7": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "claude-3": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true }
+    "claude-3-5": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
+    "claude-3-7": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
+    "claude-3": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
+    "claude": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
 };
 
 // Fallback pattern lists for inferring modalities and tool support
