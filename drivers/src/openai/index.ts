@@ -290,7 +290,8 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
         //Some of these use the completions API instead of the chat completions API.
         //Others are for non-text input modalities. Therefore common to both.
-        const wordBlacklist = ["embed", "whisper", "transcribe", "audio", "moderation", "tts", "realtime", "dall-e", "babbage", "davinci"];
+        const wordBlacklist = ["embed", "whisper", "transcribe", "audio", "moderation", "tts",
+            "realtime", "dall-e", "babbage", "davinci", "codex", "o1-pro"];
 
         if (this.provider === "azure_openai") {
             //Azure OpenAI has additional information about the models

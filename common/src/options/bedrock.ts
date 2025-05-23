@@ -46,19 +46,20 @@ export interface BedrockPalmyraOptions extends BaseConverseOptions {
 export function getMaxTokensLimit(model: string, option?: ModelOptions): number | undefined {
     // Claude models
     if (model.includes("claude")) {
-        if (model.includes("3-7")) {
+        if (model.includes("-4-")) {
+            if(model.includes("opus-")) {
+                return 32768;
+            }
+            return 65536;
+        }
+        else if (model.includes("-3-7-")) {
             if (option && (option as BedrockClaudeOptions)?.thinking_mode) {
-                return 128000;
+                return 131072;
             } else {
                 return 8192;
             }
         }
-        else if (model.includes("3-5")) {
-            //Bug with AWS Converse Sonnet 3.5, does not effect Haiku.
-            //See https://github.com/boto/boto3/issues/4279
-            if (model.includes("claude-3-5-sonnet")) {
-                return 4096;
-            }
+        else if (model.includes("-3-5-")) {
             return 8192;
         }
         else {
@@ -78,13 +79,16 @@ export function getMaxTokensLimit(model: string, option?: ModelOptions): number 
 
         }
         else if (model.includes("nova")) {
-            return 5000;
+            return 10000;
         }
     }
     // Mistral models
     else if (model.includes("mistral")) {
         if (model.includes("8x7b")) {
             return 4096;
+        }
+        if (model.includes("pixtral-large")) {
+            return 131072;
         }
         return 8192;
     }
@@ -102,10 +106,10 @@ export function getMaxTokensLimit(model: string, option?: ModelOptions): number 
     }
     // Cohere models
     else if (model.includes("cohere.command")) {
-        if (model.includes("command-r")) {
-            return 128000;
+        if (model.includes("command-a")) {
+            return 8192;
         }
-        return 4096;
+        return 4096;   
     }
     // Meta models
     else if (model.includes("llama")) {
@@ -256,7 +260,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                     description: "Limits token sampling to the top k tokens"
                 },
             ];
-            if (model.includes("3-7")) {
+            if (model.includes("-3-7-") || model.includes("-4-")) {
                 const claudeModeOptions: ModelOptionInfoItem[] = [
                     {
                         name: "thinking_mode",
