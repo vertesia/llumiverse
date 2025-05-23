@@ -1,4 +1,3 @@
-import { GenerateContentRequest, VertexAI } from "@google-cloud/vertexai";
 import {
     AIModel,
     AbstractDriver,
@@ -24,6 +23,7 @@ import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
 import { v1beta1 } from "@google-cloud/aiplatform";
 import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { ImagenModelDefinition, ImagenPrompt } from "./models/imagen.js";
+import { GoogleGenAI, Content, Tool } from "@google/genai";
 
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
@@ -31,8 +31,14 @@ export interface VertexAIDriverOptions extends DriverOptions {
     googleAuthOptions?: GoogleAuthOptions;
 }
 
+export interface GenerateContentPrompt {
+    contents: Content[];
+    system?: string;
+    tools?: Tool[];
+}
+
 //General Prompt type for VertexAI
-export type VertexAIPrompt = GenerateContentRequest | ImagenPrompt;
+export type VertexAIPrompt = ImagenPrompt | GenerateContentPrompt;
 
 export function trimModelName(model: string) {
     const i = model.lastIndexOf("@");
@@ -47,7 +53,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     anthropicClient: AnthropicVertex | undefined;
     fetchClient: FetchClient | undefined;
     modelGarden: v1beta1.ModelGardenServiceClient | undefined;
-    vertexai: VertexAI | undefined;
+    googleGenAI: GoogleGenAI | undefined;
 
     authClient: JSONClient | GoogleAuth<JSONClient>;
 
@@ -58,9 +64,24 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         this.anthropicClient = undefined;
         this.fetchClient = undefined
         this.modelGarden = undefined;
-        this.vertexai = undefined;
+        this.googleGenAI = undefined;
 
         this.authClient = options.googleAuthOptions?.authClient ?? new GoogleAuth(options.googleAuthOptions);
+    }
+
+    public getGoogleGenAIClient(): GoogleGenAI {
+        //Lazy initialisation
+        if (!this.googleGenAI) {
+            this.googleGenAI = new GoogleGenAI({
+                project: this.options.project,
+                location: this.options.region,
+                vertexai: true,
+                googleAuthOptions: {
+                    authClient: this.authClient as JSONClient,
+                }
+            });
+        }
+        return this.googleGenAI;
     }
 
     public getFetchClient(): FetchClient {
@@ -89,18 +110,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return this.anthropicClient;
     }
 
-    public getVertexAIClient(): VertexAI {
-        //Lazy initialisation
-        if (!this.vertexai) {
-            this.vertexai = new VertexAI({
-                project: this.options.project,
-                location: this.options.region,
-                googleAuthOptions: this.options.googleAuthOptions,
-            });
-        }
-        return this.vertexai;
-    }
-
     public getAIPlatformClient(): v1beta1.ModelServiceClient {
         //Lazy initialisation
         if (!this.aiplatform) {
@@ -123,6 +132,18 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             });
         }
         return this.modelGarden;
+    }
+
+    validateResult(result: Completion, options: ExecutionOptions) {
+        // Optionally preprocess the result before validation
+        const modelDef = getModelDefinition(options.model);
+        if (typeof modelDef.preValidationProcessing === "function") {
+            const processed = modelDef.preValidationProcessing(result, options);
+            result = processed.result;
+            options = processed.options;
+        }
+
+        super.validateResult(result, options);
     }
 
     protected canStream(options: ExecutionOptions): Promise<boolean> {
