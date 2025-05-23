@@ -35,7 +35,7 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, OpenAITextMess
     //     }
     // }
 
-    getResponseFormat(_options: ExecutionOptions): Groq.Chat.Completions.CompletionCreateParams.ResponseFormat | undefined {
+    getResponseFormat(_options: ExecutionOptions): undefined {
         //TODO: when forcing json_object type the streaming is not supported.
         // either implement canStream as above or comment the code below:
         // const responseFormatJson: Groq.Chat.Completions.CompletionCreateParams.ResponseFormat = {
