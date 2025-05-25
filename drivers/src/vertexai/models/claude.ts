@@ -63,6 +63,35 @@ function maxToken(max_tokens: number | undefined, model: string): number {
     }
 }
 
+async function collectImageBlocks(segment: PromptSegment, contentBlocks: ContentBlockParam[]) {
+    for (const file of segment.files || []) {
+        if (file.mime_type?.startsWith("image/")) {
+            const allowedTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+            if (!allowedTypes.includes(file.mime_type)) {
+                throw new Error(`Unsupported image type: ${file.mime_type}`);
+            }
+
+            contentBlocks.push({
+                type: 'image',
+                source: {
+                    type: 'base64',
+                    data: await readStreamAsBase64(await file.getStream()),
+                    media_type: file.mime_type as any
+                }
+            });
+        } else if (file.mime_type?.startsWith("text/")) {
+            contentBlocks.push({
+                source: {
+                    type: 'text',
+                    data: await readStreamAsBase64(await file.getStream()),
+                    media_type: 'text/plain'
+                },
+                type: 'document'
+            });
+        }
+    }
+}
+
 export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
 
     model: AIModel
@@ -111,45 +140,21 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                 if (!segment.tool_use_id) {
                     throw new Error("Tool prompt segment must have a tool_use_id");
                 }
+                const contentBlocks: ContentBlockParam[] = [];
+                collectImageBlocks(segment, contentBlocks);
+                contentBlocks.push({
+                    type: 'tool_result',
+                    tool_use_id: segment.tool_use_id,
+                    content: segment.content || undefined
+                })
+
                 messages.push({
                     role: 'user',
-                    content: [
-                        {
-                            type: 'tool_result',
-                            tool_use_id: segment.tool_use_id,
-                            content: segment.content || undefined
-                        }
-                    ]
+                    content: contentBlocks
                 });
             } else {
                 const contentBlocks: ContentBlockParam[] = [];
-                for (const file of segment.files || []) {
-                    if (file.mime_type?.startsWith("image/")) {
-                        const allowedTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"];
-                        if (!allowedTypes.includes(file.mime_type)) {
-                            throw new Error(`Unsupported image type: ${file.mime_type}`);
-                        }
-
-                        contentBlocks.push({
-                            type: 'image',
-                            source: {
-                                type: 'base64',
-                                data: await readStreamAsBase64(await file.getStream()),
-                                media_type: file.mime_type as any
-                            }
-                        });
-                    } else if (file.mime_type?.startsWith("text/")) {
-                        contentBlocks.push({
-                            source: {
-                                type: 'text',
-                                data: await readStreamAsBase64(await file.getStream()),
-                                media_type: 'text/plain'
-                            },
-                            type : 'document'
-                        });
-                    }
-                }
-
+                collectImageBlocks(segment, contentBlocks);
                 if (segment.content) {
                     contentBlocks.push({
                         type: 'text',
@@ -164,7 +169,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                 });
             }
         }
-        
+
         const system = systemSegments.concat(safetySegments);
 
         return {
