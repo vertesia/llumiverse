@@ -1,5 +1,5 @@
 import {
-    Content, FinishReason, FunctionDeclaration, GenerateContentParameters,
+    Content, FinishReason, FunctionCallingConfigMode, FunctionDeclaration, GenerateContentParameters,
     HarmBlockThreshold, HarmCategory, Part, SafetySetting, Schema, Tool, Type
 } from "@google/genai";
 import {
@@ -58,10 +58,15 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
             systemInstruction: prompt.system,
             safetySettings: geminiSafetySettings,
             tools: tools ? [tools] : undefined,
+            toolConfig: tools ? {
+                functionCallingConfig: {
+                    mode: FunctionCallingConfigMode.AUTO,
+                }
+            } : undefined,
             candidateCount: 1,
             //JSON/Structured output
             responseMimeType: useStructuredOutput ? "application/json" : "text/plain",
-            responseSchema: useStructuredOutput ? parseJSONtoSchema(options.result_schema) : undefined,
+            responseSchema: useStructuredOutput ? parseJSONtoSchema(options.result_schema, true) : undefined,
             //Model options
             temperature: model_options?.temperature,
             topP: model_options?.top_p,
@@ -85,12 +90,12 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
  * Make all properties required by default
  * Properties previously marked as optional will be marked as nullable.
  */
-function parseJSONtoSchema(schema?: JSONSchema): Schema {
+function parseJSONtoSchema(schema?: JSONSchema, requiredAll = false): Schema {
     if (!schema) {
         return {};
     }
 
-    return convertSchema(schema);
+    return convertSchema(schema, 0, requiredAll);
 }
 
 /**
@@ -108,7 +113,7 @@ function convertType(type?: string | string[]): Type | undefined {
             case 'boolean': return Type.BOOLEAN;
             case 'object': return Type.OBJECT;
             case 'array': return Type.ARRAY;
-            default: return undefined;
+            default: return type as Type; // For unsupported types, return as is
         }
     }
 
@@ -126,7 +131,7 @@ function convertType(type?: string | string[]): Type | undefined {
  * Deep clone and convert the schema from JSONSchema to Gemini Schema
  * @throws {Error} If circular references are detected (max depth exceeded)
  */
-function convertSchema(jsSchema?: JSONSchema, depth: number = 0): Schema {
+function convertSchema(jsSchema?: JSONSchema, depth: number = 0, requiredAll = false): Schema {
     // Prevent circular references
     if (depth > 50) {
         throw new Error("Maximum schema depth exceeded. Possible circular reference detected.");
@@ -147,7 +152,7 @@ function convertSchema(jsSchema?: JSONSchema, depth: number = 0): Schema {
 
     // Handle properties and required fields
     if (jsSchema.properties) {
-        const propertyResult = convertSchemaProperties(jsSchema, depth + 1);
+        const propertyResult = convertSchemaProperties(jsSchema, depth + 1, requiredAll);
         Object.assign(result, propertyResult);
     }
 
@@ -188,7 +193,7 @@ function convertSchemaType(jsSchema: JSONSchema): Type | undefined {
 /**
  * Handle properties conversion and required fields 
  */
-function convertSchemaProperties(jsSchema: JSONSchema, depth: number): Partial<Schema> {
+function convertSchemaProperties(jsSchema: JSONSchema, depth: number, requiredAll: boolean): Partial<Schema> {
     const result: Partial<Schema> = { properties: {} };
     if (jsSchema.required) {
         result.required = [...jsSchema.required]; // Create a copy
@@ -201,24 +206,26 @@ function convertSchemaProperties(jsSchema: JSONSchema, depth: number): Partial<S
     if (propertyNames.length > 0) {
         result.propertyOrdering = propertyNames;
 
-        // Mark all properties as required by default
-        // This ensures the model fills all fields
-        result.required = propertyNames;
+        if (requiredAll) {
+            // Mark all properties as required by default
+            // This ensures the model fills all fields
+            result.required = propertyNames;
 
-        // Get the original required properties
-        const originalRequired = jsSchema.required || [];
+            // Get the original required properties
+            const originalRequired = jsSchema.required || [];
 
-        // Make previously optional properties nullable since we're marking them as required
-        for (const key of propertyNames) {
-            const propSchema = jsSchema.properties?.[key];
-            if (propSchema && !originalRequired.includes(key)) {
-                // Initialize the property if needed
-                if (!result.properties![key]) {
-                    result.properties![key] = {};
+            // Make previously optional properties nullable since we're marking them as required
+            for (const key of propertyNames) {
+                const propSchema = jsSchema.properties?.[key];
+                if (propSchema && !originalRequired.includes(key)) {
+                    // Initialize the property if needed
+                    if (!result.properties![key]) {
+                        result.properties![key] = {};
+                    }
+
+                    // Mark as nullable
+                    result.properties![key].nullable = true;
                 }
-
-                // Mark as nullable
-                result.properties![key].nullable = true;
             }
         }
     }
@@ -672,29 +679,27 @@ function getToolDefinitions(tools: ToolDefinition[] | undefined | null): Tool | 
     }
     // VertexAI Gemini only supports one tool at a time.
     // For multiple tools, we have multiple functions in one tool.
-    const tool_array = tools.map(getToolDefinition);
-    let mergedTool = tool_array[0];
-    for (let i = 1; i < tool_array.length; i++) {
-        mergedTool.functionDeclarations = mergedTool.functionDeclarations?.concat(tool_array[i].functionDeclarations ?? []);
+    return {
+        functionDeclarations: tools.map(getToolFunction),
     }
-    return mergedTool;
 }
 
-function getToolDefinition(tool: ToolDefinition) {
+function getToolFunction(tool: ToolDefinition): FunctionDeclaration {
+    // If input_schema is a string, parse it; if it's already an object, use it directly
+    let toolSchema: Schema | undefined;
+
+    // Using a try-catch for safety, as the input_schema might not be a valid JSONSchema
+    try {
+        toolSchema = parseJSONtoSchema(tool.input_schema as JSONSchema, false);
+    }
+    catch (e) {
+        toolSchema = { ...tool.input_schema, type: Type.OBJECT } as unknown as Schema;
+    }
+
     return {
-        functionDeclarations: [
-            {
-                name: tool.name,
-                description: tool.description,
-                parameters: {
-                    ...tool.input_schema,
-                    type: Type.OBJECT,
-                    properties: (tool.input_schema && typeof tool.input_schema.properties === 'object'
-                        ? tool.input_schema.properties
-                        : undefined) as Record<string, any> | undefined,
-                },
-            } satisfies FunctionDeclaration
-        ]
+        name: tool.name,
+        description: tool.description,
+        parameters: toolSchema,
     };
 }
 
