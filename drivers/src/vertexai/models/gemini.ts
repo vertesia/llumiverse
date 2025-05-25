@@ -693,7 +693,6 @@ function getToolFunction(tool: ToolDefinition): FunctionDeclaration {
         toolSchema = parseJSONtoSchema(tool.input_schema as JSONSchema, false);
     }
     catch (e) {
-        console.warn("Error parsing tool input schema for tool", tool.name, ":", e);
         toolSchema = { ...tool.input_schema, type: Type.OBJECT } as unknown as Schema;
     }
 
