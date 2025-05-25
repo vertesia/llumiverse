@@ -1,5 +1,5 @@
 import * as AnthropicAPI from '@anthropic-ai/sdk';
-import { ContentBlock, ContentBlockParam, Message, TextBlockParam } from "@anthropic-ai/sdk/resources/index.js";
+import { ContentBlock, ContentBlockParam, ImageBlockParam, Message, TextBlockParam } from "@anthropic-ai/sdk/resources/index.js";
 import {
     AIModel, Completion, CompletionChunkObject, ExecutionOptions, JSONObject, ModelType,
     PromptOptions, PromptRole, PromptSegment, readStreamAsBase64, ToolUse, VertexAIClaudeOptions
@@ -70,13 +70,14 @@ async function collectImageBlocks(segment: PromptSegment, contentBlocks: Content
             if (!allowedTypes.includes(file.mime_type)) {
                 throw new Error(`Unsupported image type: ${file.mime_type}`);
             }
+            const mimeType = String(file.mime_type) as "image/png" | "image/jpeg" | "image/gif" | "image/webp";
 
             contentBlocks.push({
                 type: 'image',
                 source: {
                     type: 'base64',
                     data: await readStreamAsBase64(await file.getStream()),
-                    media_type: file.mime_type as any
+                    media_type: mimeType
                 }
             });
         } else if (file.mime_type?.startsWith("text/")) {
@@ -140,18 +141,22 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                 if (!segment.tool_use_id) {
                     throw new Error("Tool prompt segment must have a tool_use_id");
                 }
-                const contentBlocks: ContentBlockParam[] = [];
-                collectImageBlocks(segment, contentBlocks);
-                contentBlocks.push({
-                    type: 'tool_result',
-                    tool_use_id: segment.tool_use_id,
-                    content: segment.content || undefined
-                })
+
+                const imageBlocks: ImageBlockParam[] = [];
+                await collectImageBlocks(segment, imageBlocks);
 
                 messages.push({
                     role: 'user',
-                    content: contentBlocks
+                    content: [{
+                        type: 'tool_result',
+                        tool_use_id: segment.tool_use_id,
+                        content: [{
+                            type: 'text',
+                            text: segment.content || ''
+                        }, ...imageBlocks]
+                    }]
                 });
+
             } else {
                 const contentBlocks: ContentBlockParam[] = [];
                 collectImageBlocks(segment, contentBlocks);
@@ -161,8 +166,6 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                         text: segment.content
                     });
                 }
-
-
                 messages.push({
                     role: segment.role === PromptRole.assistant ? 'assistant' : 'user',
                     content: contentBlocks

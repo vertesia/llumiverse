@@ -1,6 +1,6 @@
-import { GroqOptions } from './options/groq.js';
-import { TextFallbackOptions } from './options/fallback.js';
 import { BedrockOptions } from './options/bedrock.js';
+import { TextFallbackOptions } from './options/fallback.js';
+import { GroqOptions } from './options/groq.js';
 import { OpenAiOptions } from './options/openai.js';
 import { VertexAIOptions } from './options/vertexai.js';
 
@@ -410,6 +410,7 @@ export interface DataSource {
     mime_type?: string;
     getStream(): Promise<ReadableStream<Uint8Array | string>>;
     getURL(): Promise<string>;
+    getMimeType(): Promise<string | undefined>;
 }
 
 export interface TrainingOptions {
