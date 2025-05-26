@@ -407,10 +407,9 @@ export enum ModelType {
 
 export interface DataSource {
     name: string;
-    mime_type?: string;
+    mime_type: string;
     getStream(): Promise<ReadableStream<Uint8Array | string>>;
     getURL(): Promise<string>;
-    getMimeType(): Promise<string | undefined>;
 }
 
 export interface TrainingOptions {
