@@ -1,6 +1,6 @@
-import { GroqOptions } from './options/groq.js';
-import { TextFallbackOptions } from './options/fallback.js';
 import { BedrockOptions } from './options/bedrock.js';
+import { TextFallbackOptions } from './options/fallback.js';
+import { GroqOptions } from './options/groq.js';
 import { OpenAiOptions } from './options/openai.js';
 import { VertexAIOptions } from './options/vertexai.js';
 
@@ -407,7 +407,7 @@ export enum ModelType {
 
 export interface DataSource {
     name: string;
-    mime_type?: string;
+    mime_type: string;
     getStream(): Promise<ReadableStream<Uint8Array | string>>;
     getURL(): Promise<string>;
 }
