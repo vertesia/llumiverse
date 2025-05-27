@@ -2,7 +2,7 @@ import {
     AIModel,
     AbstractDriver,
     Completion,
-    CompletionChunkObject,
+    CompletionChunk,
     DriverOptions,
     EmbeddingsResult,
     ExecutionOptions,
@@ -186,7 +186,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     async requestTextCompletionStream(
         prompt: VertexAIPrompt,
         options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>> {
+    ): Promise<AsyncIterable<CompletionChunk>> {
         return getModelDefinition(options.model).requestTextCompletionStream(this, prompt, options);
     }
 
