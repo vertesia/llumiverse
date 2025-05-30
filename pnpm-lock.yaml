@@ -2572,8 +2572,8 @@ packages:
   zod@3.25.17:
     resolution: {integrity: sha512-8hQzQ/kMOIFbwOgPrm9Sf9rtFHpFUMy4HvN0yEB0spw14aYi0uT5xG5CE2DB9cd51GWNsz+DNO7se1kztHMKnw==}
 
-  zod@3.25.39:
-    resolution: {integrity: sha512-yrva2T2x4R+FMFTPBVD/YPS7ct8njqjnV93zNx/MlwqLAxcnxwRGbXWyWF63/nErl3rdRd8KARObon7BiWzabQ==}
+  zod@3.25.42:
+    resolution: {integrity: sha512-PcALTLskaucbeHc41tU/xfjfhcz8z0GdhhDcSgrCTmSazUuqnYqiXO63M0QUBVwpBlsLsNVn5qHSC5Dw3KZvaQ==}
 
 snapshots:
 
@@ -3534,8 +3534,8 @@ snapshots:
       express-rate-limit: 7.5.0(express@5.1.0)
       pkce-challenge: 5.0.0
       raw-body: 3.0.0
-      zod: 3.25.39
-      zod-to-json-schema: 3.24.5(zod@3.25.39)
+      zod: 3.25.42
+      zod-to-json-schema: 3.24.5(zod@3.25.42)
     transitivePeerDependencies:
       - supports-color
 
@@ -5623,10 +5623,10 @@ snapshots:
     dependencies:
       zod: 3.25.17
 
-  zod-to-json-schema@3.24.5(zod@3.25.39):
+  zod-to-json-schema@3.24.5(zod@3.25.42):
     dependencies:
-      zod: 3.25.39
+      zod: 3.25.42
 
   zod@3.25.17: {}
 
-  zod@3.25.39: {}
+  zod@3.25.42: {}
