@@ -18,6 +18,7 @@
         "@azure/openai",
         "@azure/identity",
         "@google-cloud/**",
+        "@google/**",
         "@huggingface/inference",
         "replicate",
         "openai",

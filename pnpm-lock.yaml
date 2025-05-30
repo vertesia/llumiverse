@@ -152,7 +152,7 @@ importers:
         version: 0.2.1
       openai:
         specifier: ^4.103.0
-        version: 4.103.0(ws@8.18.2)(zod@3.25.17)
+        version: 4.103.0(ws@8.18.2)(zod@3.25.42)
       replicate:
         specifier: ^1.0.1
         version: 1.0.1
@@ -1531,10 +1531,6 @@ packages:
     resolution: {integrity: sha512-v0eOBUbiaFojBu2s2NPBfYUoRR9GjcDNvCXVaqEf5vVfpIAh9f8RCo4vXTP8c63QRKCFwoLpMpTdPwwhEKVgzA==}
     engines: {node: '>=14.18'}
 
-  eventsource-parser@3.0.1:
-    resolution: {integrity: sha512-VARTJ9CYeuQYb0pZEPbzi740OWFgpHe7AYJ2WFZVnUDUQp5Dk2yJUgF36YsZ81cOyxT0QxmXD2EQpapAouzWVA==}
-    engines: {node: '>=18.0.0'}
-
   eventsource-parser@3.0.2:
     resolution: {integrity: sha512-6RxOBZ/cYgd8usLwsEl+EC09Au/9BcmCKYF2/xbml6DNczf7nv0MQb+7BA2F+li6//I+28VNlQR37XfQtcAJuA==}
     engines: {node: '>=18.0.0'}
@@ -2569,11 +2565,8 @@ packages:
     peerDependencies:
       zod: ^3.24.1
 
-  zod@3.25.17:
-    resolution: {integrity: sha512-8hQzQ/kMOIFbwOgPrm9Sf9rtFHpFUMy4HvN0yEB0spw14aYi0uT5xG5CE2DB9cd51GWNsz+DNO7se1kztHMKnw==}
-
-  zod@3.25.39:
-    resolution: {integrity: sha512-yrva2T2x4R+FMFTPBVD/YPS7ct8njqjnV93zNx/MlwqLAxcnxwRGbXWyWF63/nErl3rdRd8KARObon7BiWzabQ==}
+  zod@3.25.42:
+    resolution: {integrity: sha512-PcALTLskaucbeHc41tU/xfjfhcz8z0GdhhDcSgrCTmSazUuqnYqiXO63M0QUBVwpBlsLsNVn5qHSC5Dw3KZvaQ==}
 
 snapshots:
 
@@ -3475,8 +3468,8 @@ snapshots:
       '@modelcontextprotocol/sdk': 1.12.0
       google-auth-library: 9.15.1
       ws: 8.18.2
-      zod: 3.25.17
-      zod-to-json-schema: 3.24.5(zod@3.25.17)
+      zod: 3.25.42
+      zod-to-json-schema: 3.24.5(zod@3.25.42)
     transitivePeerDependencies:
       - bufferutil
       - encoding
@@ -3534,8 +3527,8 @@ snapshots:
       express-rate-limit: 7.5.0(express@5.1.0)
       pkce-challenge: 5.0.0
       raw-body: 3.0.0
-      zod: 3.25.39
-      zod-to-json-schema: 3.24.5(zod@3.25.39)
+      zod: 3.25.42
+      zod-to-json-schema: 3.24.5(zod@3.25.42)
     transitivePeerDependencies:
       - supports-color
 
@@ -4515,8 +4508,6 @@ snapshots:
 
   eventsource-parser@1.1.2: {}
 
-  eventsource-parser@3.0.1: {}
-
   eventsource-parser@3.0.2: {}
 
   eventsource@3.0.7:
@@ -4525,7 +4516,7 @@ snapshots:
 
   eventsource@4.0.0:
     dependencies:
-      eventsource-parser: 3.0.1
+      eventsource-parser: 3.0.2
 
   expect-type@1.2.1: {}
 
@@ -5080,7 +5071,7 @@ snapshots:
       is-inside-container: 1.0.0
       is-wsl: 3.1.0
 
-  openai@4.103.0(ws@8.18.2)(zod@3.25.17):
+  openai@4.103.0(ws@8.18.2)(zod@3.25.42):
     dependencies:
       '@types/node': 18.19.86
       '@types/node-fetch': 2.6.12
@@ -5091,7 +5082,7 @@ snapshots:
       node-fetch: 2.7.0
     optionalDependencies:
       ws: 8.18.2
-      zod: 3.25.17
+      zod: 3.25.42
     transitivePeerDependencies:
       - encoding
 
@@ -5619,14 +5610,8 @@ snapshots:
 
   yocto-queue@0.1.0: {}
 
-  zod-to-json-schema@3.24.5(zod@3.25.17):
+  zod-to-json-schema@3.24.5(zod@3.25.42):
     dependencies:
-      zod: 3.25.17
+      zod: 3.25.42
 
-  zod-to-json-schema@3.24.5(zod@3.25.39):
-    dependencies:
-      zod: 3.25.39
-
-  zod@3.25.17: {}
-
-  zod@3.25.39: {}
+  zod@3.25.42: {}
