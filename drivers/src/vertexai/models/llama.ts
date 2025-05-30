@@ -234,6 +234,8 @@ export class LLamaModelDefinition implements ModelDefinition<LLamaPrompt> {
         };
 
         // Make POST request to the Llama MaaS API
+        //TODO: Fix error handling with the fetch client, errors will return a empty response
+        //But not throw any error
         const region = this.getLlamaModelRegion(modelName);
         const client = driver.getLLamaClient(region);
         const openaiEndpoint = `endpoints/openapi/chat/completions`;
