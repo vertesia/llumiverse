@@ -1,14 +1,15 @@
-import { AIModel, Completion, CompletionChunkObject, PromptOptions, PromptSegment, ExecutionOptions } from "@llumiverse/core";
+import { AIModel, Completion, PromptOptions, PromptSegment, ExecutionOptions, CompletionChunk } from "@llumiverse/core";
 import { VertexAIDriver , trimModelName} from "./index.js";
 import { GeminiModelDefinition } from "./models/gemini.js";
 import { ClaudeModelDefinition } from "./models/claude.js";
+import { LLamaModelDefinition } from "./models/llama.js";
 
 export interface ModelDefinition<PromptT = any> {
     model: AIModel;
     versions?: string[]; // the versions of the model that are available. ex: ['001', '002']
     createPrompt: (driver: VertexAIDriver, segments: PromptSegment[], options: PromptOptions) => Promise<PromptT>;
     requestTextCompletion: (driver: VertexAIDriver, prompt: PromptT, options: ExecutionOptions) => Promise<Completion>;
-    requestTextCompletionStream: (driver: VertexAIDriver, prompt: PromptT, options: ExecutionOptions) => Promise<AsyncIterable<CompletionChunkObject>>;
+    requestTextCompletionStream: (driver: VertexAIDriver, prompt: PromptT, options: ExecutionOptions) => Promise<AsyncIterable<CompletionChunk>>;
     preValidationProcessing?(result: Completion, options: ExecutionOptions): { result: Completion, options: ExecutionOptions };
 }
 
@@ -21,6 +22,8 @@ export function getModelDefinition(model: string): ModelDefinition {
         return new ClaudeModelDefinition(modelName);
     } else if (publisher?.includes("google")) {
         return new GeminiModelDefinition(modelName);
+    } else if (publisher?.includes("meta")) {
+        return new LLamaModelDefinition(modelName);
     }
 
     //Fallback, assume it is Gemini.

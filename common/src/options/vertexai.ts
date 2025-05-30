@@ -282,6 +282,36 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
                 ...commonOptions,
             ]
         };
+    } else if (model.includes("llama")) {
+        const max_tokens_limit = getLlamaMaxTokensLimit(model);
+        const excludeOptions = ["max_tokens", "presence_penalty", "frequency_penalty", "stop_sequence"];
+        let commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
+        const max_tokens: ModelOptionInfoItem[] = [{
+            name: SharedOptions.max_tokens, type: OptionType.numeric, min: 1, max: max_tokens_limit,
+            integer: true, step: 200, description: "The maximum number of tokens to generate"
+        }];
+        
+        //Set max temperature to 1.0 for Llama models
+        commonOptions = commonOptions.map((option) => {
+            if (
+                option.name === SharedOptions.temperature &&
+                option.type === OptionType.numeric
+            ) {
+                return {
+                    ...option,
+                    max: 1.0,
+                };
+            }
+            return option;
+        });
+
+        return {
+            _option_id: "text-fallback",
+            options: [
+                ...max_tokens,
+                ...commonOptions,
+            ]
+        };
     }
     return textOptionsFallback;
 }
@@ -314,4 +344,8 @@ function getClaudeMaxTokensLimit(model: string, option?: VertexAIClaudeOptions):
     else {
         return 4096;
     }
+}
+
+function getLlamaMaxTokensLimit(_model: string): number {
+    return 8192;
 }
