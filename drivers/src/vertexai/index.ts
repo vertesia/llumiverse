@@ -2,7 +2,7 @@ import {
     AIModel,
     AbstractDriver,
     Completion,
-    CompletionChunkObject,
+    CompletionChunk,
     DriverOptions,
     EmbeddingsResult,
     ExecutionOptions,
@@ -52,8 +52,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     aiplatform: v1beta1.ModelServiceClient | undefined;
     anthropicClient: AnthropicVertex | undefined;
     fetchClient: FetchClient | undefined;
-    modelGarden: v1beta1.ModelGardenServiceClient | undefined;
     googleGenAI: GoogleGenAI | undefined;
+    llamaClient: FetchClient & { region?: string } | undefined;
+    modelGarden: v1beta1.ModelGardenServiceClient | undefined;
 
     authClient: JSONClient | GoogleAuth<JSONClient>;
 
@@ -63,8 +64,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         this.aiplatform = undefined;
         this.anthropicClient = undefined;
         this.fetchClient = undefined
-        this.modelGarden = undefined;
         this.googleGenAI = undefined;
+        this.modelGarden = undefined;
+        this.llamaClient = undefined;
 
         this.authClient = options.googleAuthOptions?.authClient ?? new GoogleAuth(options.googleAuthOptions);
     }
@@ -97,6 +99,24 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             });
         }
         return this.fetchClient;
+    }
+
+    public getLLamaClient(region: string = "us-central1"): FetchClient {
+        //Lazy initialisation
+        if (!this.llamaClient || this.llamaClient["region"] !== region) {
+            this.llamaClient = createFetchClient({
+                region: region,
+                project: this.options.project,
+                apiVersion: "v1beta1",
+            }).withAuthCallback(async () => {
+                const accessTokenResponse = await this.authClient.getAccessToken();
+                const token = typeof accessTokenResponse === 'string' ? accessTokenResponse : accessTokenResponse?.token;
+                return `Bearer ${token}`;
+            });
+            // Store the region for potential client reuse
+            this.llamaClient["region"] = region;
+        }
+        return this.llamaClient;
     }
 
     public getAnthropicClient(): AnthropicVertex {
@@ -166,7 +186,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     async requestTextCompletionStream(
         prompt: VertexAIPrompt,
         options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>> {
+    ): Promise<AsyncIterable<CompletionChunk>> {
         return getModelDefinition(options.model).requestTextCompletionStream(this, prompt, options);
     }
 
@@ -199,14 +219,31 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         );
 
         //Model Garden Publisher models - Pretrained models
-        const publishers = ["google", "anthropic"];
-        const supportedModels = { google: ["gemini", "imagen"], anthropic: ["claude"] };
+        const publishers = ["google", "anthropic", "meta"];
+        // Meta "maas" models are LLama Models-As-A-Service. Non-maas models are not pre-deployed.
+        const supportedModels = { google: ["gemini", "imagen"], anthropic: ["claude"], meta: ["maas"] };
+        // Additional models not in the listings, but we want to include
+        // TODO: Remove once the models are available in the listing API, or no longer needed
+        const additionalModels = {
+            google: [],
+            anthropic: [],
+            meta: [
+                "llama-4-maverick-17b-128e-instruct-maas",
+                "llama-4-scout-17b-16e-instruct-maas",
+                "llama-3.3-70b-instruct-maas",
+                "llama-3.2-90b-vision-instruct-maas",
+                "llama-3.1-405b-instruct-maas",
+                "llama-3.1-70b-instruct-maas",
+                "llama-3.1-8b-instruct-maas",
+            ],
+        }
 
         //Used to exclude retired models that are still in the listing API but not available for use.
         //Or models we do not support yet
         const unsupportedModelsByPublisher = {
             google: ["gemini-pro", "gemini-ultra"],
             anthropic: [],
+            meta: [],
         };
 
         for (const publisher of publishers) {
@@ -249,6 +286,21 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                     tool_support: modelCapability.tool_support,
                 } satisfies AIModel<string>;
             }));
+
+            // Add additional models that are not in the listing
+            for (const additionalModel of additionalModels[publisher as keyof typeof additionalModels]) {
+                const publisherModelName = `publishers/${publisher}/models/${additionalModel}`;
+                const modelCapability = getModelCapabilities(additionalModel, "vertexai");
+                models.push({
+                    id: publisherModelName,
+                    name: additionalModel,
+                    provider: 'vertexai',
+                    owner: publisher,
+                    input_modalities: modelModalitiesToArray(modelCapability.input),
+                    output_modalities: modelModalitiesToArray(modelCapability.output),
+                    tool_support: modelCapability.tool_support,
+                } satisfies AIModel<string>);
+            }
         }
 
         //Remove duplicates

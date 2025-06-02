@@ -28,8 +28,9 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
         }),
         models: [
             "publishers/google/models/gemini-2.0-flash-lite-001",
-            "gemini-1.5-flash", //legacy id format
+           // "gemini-1.5-flash", //legacy id format
             "publishers/anthropic/models/claude-3-7-sonnet",
+            "publishers/meta/models/llama-4-scout-17b-16e-instruct-maas"
         ]
     })
 } else {
