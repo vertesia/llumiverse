@@ -1,6 +1,6 @@
 import { AIModel, Completion, DriverOptions, ExecutionOptions, PromptOptions, PromptSegment } from "@llumiverse/core";
 import { formatOpenAILikeMultimodalPrompt, OpenAIPromptFormatterOptions } from "@llumiverse/core/formatters";
-import { FetchClient } from "api-fetch-client";
+import { FetchClient } from "@vertesia/api-fetch-client";
 import OpenAI from "openai";
 import { BaseOpenAIDriver } from "../openai/index.js";
 

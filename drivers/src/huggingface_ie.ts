@@ -14,7 +14,7 @@ import {
     TextFallbackOptions,
 } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
-import { FetchClient } from "api-fetch-client";
+import { FetchClient } from "@vertesia/api-fetch-client";
 
 export interface HuggingFaceIEDriverOptions extends DriverOptions {
     apiKey: string;
