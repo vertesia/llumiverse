@@ -68,7 +68,7 @@
     "@huggingface/inference": "2.6.7",
     "@llumiverse/common": "workspace:*",
     "@llumiverse/core": "workspace:*",
-    "api-fetch-client": "^0.13.0",
+    "@vertesia/api-fetch-client": "^0.60.0",
     "eventsource": "^4.0.0",
     "google-auth-library": "^9.14.0",
     "groq-sdk": "^0.22.0",
