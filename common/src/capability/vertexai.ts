@@ -1,4 +1,4 @@
-import { ModelModalities } from "@llumiverse/common";
+import { ModelModalities } from "../types.js";
 
 // Record of Vertex AI model capabilities keyed by model ID (last path segment, lowercased)
 const RECORD_MODEL_CAPABILITIES: Record<string, { input: ModelModalities; output: ModelModalities; tool_support?: boolean }> = {

@@ -1,4 +1,6 @@
 export * from "./types.js";
+export * from "./capability.js";
+export * from "./options.js";
 
 export * from "./options/bedrock.js";
 export * from "./options/fallback.js";
