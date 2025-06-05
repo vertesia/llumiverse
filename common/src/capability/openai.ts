@@ -1,4 +1,4 @@
-import { ModelModalities } from "@llumiverse/common";
+import { ModelModalities } from "../types.js"; 
 
 // Record of OpenAI model capabilities keyed by model ID (lowercased)
 const RECORD_MODEL_CAPABILITIES: Record<string, { input: ModelModalities; output: ModelModalities; tool_support?: boolean }> = {
@@ -91,7 +91,7 @@ function normalizeOpenAIModelName(modelName: string): string {
  * Checks RECORD_MODEL_CAPABILITIES first, then falls back to pattern-based inference.
  */
 export function getModelCapabilitiesOpenAI(model: string): { input: ModelModalities; output: ModelModalities; tool_support?: boolean } {
-    let normalized = normalizeOpenAIModelName(model);
+    const normalized = normalizeOpenAIModelName(model);
     const record = RECORD_MODEL_CAPABILITIES[normalized];
     if (record) return record;
     let bestFamilyKey = undefined;

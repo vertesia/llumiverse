@@ -1,4 +1,4 @@
-import { ModelModalities, ModelCapabilities } from "@llumiverse/common";
+import { ModelModalities, ModelCapabilities } from "../types.js";
 
 // Record of Bedrock model capabilities keyed by model ID.
 const RECORD_MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {

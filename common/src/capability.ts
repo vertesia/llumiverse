@@ -1,7 +1,7 @@
 import { getModelCapabilitiesBedrock } from "./capability/bedrock.js";
 import { getModelCapabilitiesOpenAI } from "./capability/openai.js";
 import { getModelCapabilitiesVertexAI } from "./capability/vertexai.js";
-import { ModelCapabilities, ModelModalities } from "@llumiverse/common";
+import { ModelCapabilities, ModelModalities } from "./types.js";
 
 export function getModelCapabilities(model: string, provider?: string): ModelCapabilities {
     const capabilities = _getModelCapabilities(model, provider);

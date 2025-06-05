@@ -1,4 +1,4 @@
-import { ModelModalities } from "@llumiverse/common";
+import { ModelModalities } from "../types.js";
 
 // Record of Vertex AI model capabilities keyed by model ID (last path segment, lowercased)
 const RECORD_MODEL_CAPABILITIES: Record<string, { input: ModelModalities; output: ModelModalities; tool_support?: boolean }> = {
@@ -59,7 +59,7 @@ function normalizeVertexAIModelName(modelName: string): string {
  * Checks RECORD_MODEL_CAPABILITIES first, then falls back to pattern-based inference.
  */
 export function getModelCapabilitiesVertexAI(model: string): { input: ModelModalities; output: ModelModalities; tool_support?: boolean } {
-    let normalized = normalizeVertexAIModelName(model);
+    const normalized = normalizeVertexAIModelName(model);
     const record = RECORD_MODEL_CAPABILITIES[normalized];
     if (record) return record;
     let bestFamilyKey = undefined;
