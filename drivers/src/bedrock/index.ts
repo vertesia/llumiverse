@@ -295,7 +295,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     preparePayload(prompt: ConverseRequest, options: ExecutionOptions) {
-        const model_options = options.model_options as TextFallbackOptions;
+        const model_options: TextFallbackOptions = options.model_options as TextFallbackOptions ?? { _option_id: "text-fallback" };
 
         let additionalField = {};
 
@@ -305,7 +305,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
             //Titan models also exists but does not support any additional options
             if (options.model.includes("nova")) {
-                additionalField = { inferenceConfig: { topK: model_options?.top_k } };
+                additionalField = { inferenceConfig: { topK: model_options.top_k } };
             }
         } else if (options.model.includes("claude")) {
             if (options.result_schema) {
@@ -313,18 +313,15 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
             if (options.model.includes("claude-3-7")) {
                 const thinking_options = options.model_options as BedrockClaudeOptions;
-                const thinking = thinking_options?.thinking_mode ?? false;
-                if (!model_options?.max_tokens) {
-                    model_options.max_tokens = thinking ? 128000 : 8192;
-                }
+                const thinking = thinking_options.thinking_mode ?? false;
                 additionalField = {
                     ...additionalField,
                     reasoning_config: {
                         type: thinking ? "enabled" : "disabled",
-                        budget_tokens: thinking_options?.thinking_budget_tokens,
+                        budget_tokens: thinking_options.thinking_budget_tokens,
                     }
                 };
-                if (thinking && (thinking_options?.thinking_budget_tokens ?? 0) > 64000) {
+                if (thinking && (thinking_options.thinking_budget_tokens ?? 0) > 64000) {
                     additionalField = {
                         ...additionalField,
                         anthorpic_beta: ["output-128k-2025-02-19"]
@@ -332,16 +329,16 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 }
             }
             //Needs max_tokens to be set
-            if (!model_options?.max_tokens) {
+            if (!model_options.max_tokens) {
                 model_options.max_tokens = getMaxTokensLimit(options.model, model_options);
             }
-            additionalField = { ...additionalField, top_k: model_options?.top_k };
+            additionalField = { ...additionalField, top_k: model_options.top_k };
         } else if (options.model.includes("meta")) {
             //LLaMA models support no additional options
         } else if (options.model.includes("mistral")) {
             //7B instruct and 8x7B instruct
             if (options.model.includes("7b")) {
-                additionalField = { top_k: model_options?.top_k };
+                additionalField = { top_k: model_options.top_k };
                 //Does not support system messages
                 if (prompt.system && prompt.system?.length != 0) {
                     prompt.messages?.push(converseSystemToMessages(prompt.system));
@@ -360,8 +357,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             //Jurassic 2 models do.
             if (options.model.includes("j2")) {
                 additionalField = {
-                    presencePenalty: { scale: model_options?.presence_penalty },
-                    frequencyPenalty: { scale: model_options?.frequency_penalty },
+                    presencePenalty: { scale: model_options.presence_penalty },
+                    frequencyPenalty: { scale: model_options.frequency_penalty },
                 };
                 //Does not support system messages
                 if (prompt.system && prompt.system?.length != 0) {
@@ -375,13 +372,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             //Command R and R plus
             if (options.model.includes("cohere.command-r")) {
                 additionalField = {
-                    k: model_options?.top_k,
-                    frequency_penalty: model_options?.frequency_penalty,
-                    presence_penalty: model_options?.presence_penalty,
+                    k: model_options.top_k,
+                    frequency_penalty: model_options.frequency_penalty,
+                    presence_penalty: model_options.presence_penalty,
                 };
             } else {
                 // Command non-R
-                additionalField = { k: model_options?.top_k };
+                additionalField = { k: model_options.top_k };
                 //Does not support system messages
                 if (prompt.system && prompt.system?.length != 0) {
                     prompt.messages?.push(converseSystemToMessages(prompt.system));
@@ -404,7 +401,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         //If last message is "```json", add corresponding ``` as a stop sequence.
         if (prompt.messages && prompt.messages.length > 0) {
             if (prompt.messages[prompt.messages.length - 1].content?.[0].text === "```json") {
-                let stopSeq = model_options?.stop_sequence;
+                let stopSeq = model_options.stop_sequence;
                 if (!stopSeq) {
                     model_options.stop_sequence = ["```"];
                 } else if (!stopSeq.includes("```")) {
@@ -421,10 +418,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             system: prompt.system,
             modelId: options.model,
             inferenceConfig: {
-                maxTokens: model_options?.max_tokens,
-                temperature: model_options?.temperature,
-                topP: model_options?.top_p,
-                stopSequences: model_options?.stop_sequence,
+                maxTokens: model_options.max_tokens,
+                temperature: model_options.temperature,
+                topP: model_options.top_p,
+                stopSequences: model_options.stop_sequence,
             } satisfies InferenceConfiguration,
             additionalModelRequestFields: {
                 ...additionalField,
