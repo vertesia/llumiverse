@@ -58,7 +58,7 @@ export interface ToolDefinition {
     description?: string,
     input_schema: {
         type: 'object';
-        properties?: unknown | null | undefined;
+        properties?: JSONSchema | null | undefined;
         [k: string]: unknown;
     },
 }
