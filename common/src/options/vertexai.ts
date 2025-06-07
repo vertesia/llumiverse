@@ -63,7 +63,7 @@ export interface VertexAIClaudeOptions {
 }
 
 export function getVertexAiOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
-    if (model.includes("imagen-3.0")) {
+    if (model.includes("imagen-")) {
         const commonOptions: ModelOptionInfoItem[] = [
             {
                 name: SharedOptions.number_of_images, type: OptionType.numeric, min: 1, max: 4, default: 1,

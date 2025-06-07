@@ -225,7 +225,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         // Additional models not in the listings, but we want to include
         // TODO: Remove once the models are available in the listing API, or no longer needed
         const additionalModels = {
-            google: [],
+            google: ["imagen-3.0-fast-generate-001"],
             anthropic: [],
             meta: [
                 "llama-4-maverick-17b-128e-instruct-maas",
@@ -307,7 +307,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         const uniqueModels = Array.from(new Set(models.map(a => a.id)))
             .map(id => {
                 return models.find(a => a.id === id) ?? {} as AIModel<string>;
-            });
+            }).sort((a, b) => a.id.localeCompare(b.id));
 
         return uniqueModels;
     }
