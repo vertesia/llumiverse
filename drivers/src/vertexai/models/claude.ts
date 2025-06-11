@@ -15,23 +15,6 @@ interface ClaudePrompt {
     system: TextBlockParam[];
 }
 
-function getFullModelName(model: string): string {
-    if (model.includes("claude-3-5-sonnet-v2")) {
-        return "claude-3-5-sonnet-v2@20241022"
-    } else if (model.includes("claude-3-5-sonnet")) {
-        return "claude-3-5-sonnet@20240620"
-    } else if (model.includes("claude-3-5-haiku")) {
-        return "claude-3-5-haiku@20241022"
-    } else if (model.includes("claude-3-opus")) {
-        return "claude-3-opus@20240229"
-    } else if (model.includes("claude-3-sonnet")) {
-        return "claude-3-sonnet@20240229"
-    } else if (model.includes("claude-3-haiku")) {
-        return "claude-3-haiku@20240307"
-    }
-    return model;
-}
-
 function claudeFinishReason(reason: string | undefined) {
     if (!reason) return undefined;
     switch (reason) {
@@ -261,23 +244,17 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                 }
         });
 
-        //Streaming does not give information on the input tokens,
-        //So we use a separate call to get the input tokens.
-        //Non-critical and model name sensitive so we put it in a try catch block
-        let count_tokens = { input_tokens: 0 };
-        try {
-            count_tokens = await client.messages.countTokens({
-                ...prompt,  // messages, system
-                model: getFullModelName(modelName),
-            });
-        } catch (e) {
-            driver.logger.warn("Failed to get token count for model " + modelName);
-        }
-
         const stream = asyncMap(response_stream, async (item: any) => {
+            if (item.type == "message_start") {
+                return {
+                    result: '',
+                    token_usage: { prompt: item?.message?.usage?.input_tokens, result: item?.message?.usage?.output_tokens },
+                    finish_reason: undefined,
+                }
+            }
             return {
                 result: item?.delta?.text ?? '',
-                token_usage: { prompt: count_tokens.input_tokens, result: item?.usage?.output_tokens },
+                token_usage: { result: item?.usage?.output_tokens },
                 finish_reason: claudeFinishReason(item?.delta?.stop_reason ?? ''),
             }
         });
