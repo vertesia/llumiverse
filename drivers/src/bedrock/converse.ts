@@ -1,4 +1,4 @@
-import { JSONSchema } from "@llumiverse/core";
+import { DataSource, JSONSchema } from "@llumiverse/core";
 import { PromptSegment, PromptRole } from "@llumiverse/core";
 import {
     ConversationRole,
@@ -9,7 +9,6 @@ import {
     ToolResultContentBlock,
 } from "@aws-sdk/client-bedrock-runtime";
 import { parseS3UrlToUri } from "./s3.js";
-import { Tool } from "@anthropic-ai/sdk/resources/messages.mjs";
 
 function getJSONSafetyNotice(schema: JSONSchema) {
     return "The answer must be a JSON object using the following JSON Schema:\n" + JSON.stringify(schema, undefined, 2);
@@ -55,27 +54,59 @@ async function readStreamAsUint8Array(stream: ReadableStream): Promise<Uint8Arra
     return Buffer.concat(out);
 }
 
-async function processFileToContentBlock(f: any): Promise<ContentBlock> {
+type FileProcessingMode = 'content' | 'tool';
+
+async function processFile<T extends FileProcessingMode>(
+    f: DataSource,
+    mode: T
+): Promise<T extends 'content' ? ContentBlock : ToolResultContentBlock> {
     const source = await f.getStream();
 
     //Image file - "png" | "jpeg" | "gif" | "webp"
     if (f.mime_type && f.mime_type.startsWith("image")) {
-        return {
+        const imageBlock = {
             image: {
                 format: mimeToImageType(f.mime_type),
                 source: { bytes: await readStreamAsUint8Array(source) },
             }
-        } satisfies ContentBlock.ImageMember;
+        };
+
+        return mode === 'content'
+            ? (imageBlock satisfies ContentBlock.ImageMember)
+            : (imageBlock satisfies ToolResultContentBlock.ImageMember);
     }
     //Document file - "pdf | csv | doc | docx | xls | xlsx | html | txt | md"
     else if (f.mime_type && (f.mime_type.startsWith("text") || f.mime_type?.startsWith("application"))) {
-        return {
-            document: {
-                format: mimeToDocType(f.mime_type),
-                name: f.name,
-                source: { bytes: await readStreamAsUint8Array(source) },
-            },
-        } satisfies ContentBlock.DocumentMember;
+        // Handle JSON files specially
+        if (f.mime_type === "application/json" || (f.name && f.name.endsWith('.json'))) {
+            const jsonContent = await readStreamAsString(source);
+            try {
+                const parsedJson = JSON.parse(jsonContent);
+                if (mode === 'tool') {
+                    return { json: parsedJson } satisfies ToolResultContentBlock.JsonMember as any;
+                } else {
+                    // ContentBlock doesn't support JSON, so treat as text
+                    return { text: jsonContent } satisfies ContentBlock.TextMember;
+                }
+            } catch (error) {
+                const textBlock = { text: jsonContent };
+                return mode === 'content'
+                    ? (textBlock satisfies ContentBlock.TextMember)
+                    : (textBlock satisfies ToolResultContentBlock.TextMember);
+            }
+        } else {
+            const documentBlock = {
+                document: {
+                    format: mimeToDocType(f.mime_type),
+                    name: f.name,
+                    source: { bytes: await readStreamAsUint8Array(source) },
+                },
+            };
+
+            return mode === 'content'
+                ? (documentBlock satisfies ContentBlock.DocumentMember)
+                : (documentBlock satisfies ToolResultContentBlock.DocumentMember);
+        }
     }
     //Video file - "mov | mkv | mp4 | webm | flv | mpeg | mpg | wmv | three_gp"
     else if (f.mime_type && f.mime_type.startsWith("video")) {
@@ -88,115 +119,43 @@ async function processFileToContentBlock(f: any): Promise<ContentBlock> {
             url_string = parsedUrl;
             url_format = new URL(parsedUrl);
         }
-        if (url_format.protocol === "s3:") {
-            //Use S3 bucket if available
-            return {
-                video: {
-                    format: mimeToVideoType(f.mime_type),
-                    source: {
-                        s3Location: {
-                            uri: url_string, //S3 URL
-                            //bucketOwner:  We don't have this additional information.
-                        }
-                    },
+
+        const videoBlock = url_format.protocol === "s3:" ? {
+            video: {
+                format: mimeToVideoType(f.mime_type),
+                source: {
+                    s3Location: {
+                        uri: url_string, //S3 URL
+                        //bucketOwner:  We don't have this additional information.
+                    }
                 },
-            };
-        } else {
-            return {
-                video: {
-                    format: mimeToVideoType(f.mime_type),
-                    source: { bytes: await readStreamAsUint8Array(source) },
-                },
-            } satisfies ContentBlock.VideoMember;
-        }
-    }
-    //JSON file - treat as structured data
-    else if (f.mime_type === "application/json" || (f.name && f.name.endsWith('.json'))) {
-        const jsonContent = await readStreamAsString(source);
-        try {
-            const parsedJson = JSON.parse(jsonContent);
-            return { json: parsedJson };
-        } catch (error) {
-            // If JSON parsing fails, treat as text
-            return { text: jsonContent } satisfies ContentBlock.TextMember;
-        }
+            },
+        } : {
+            video: {
+                format: mimeToVideoType(f.mime_type),
+                source: { bytes: await readStreamAsUint8Array(source) },
+            },
+        };
+
+        return mode === 'content'
+            ? (videoBlock satisfies ContentBlock.VideoMember)
+            : (videoBlock satisfies ToolResultContentBlock.VideoMember);
     }
     //Fallback, send as text
     else {
-        return { text: await readStreamAsString(source) } satisfies ContentBlock.TextMember;
+        const textBlock = { text: await readStreamAsString(source) };
+        return mode === 'content'
+            ? (textBlock satisfies ContentBlock.TextMember)
+            : (textBlock satisfies ToolResultContentBlock.TextMember);
     }
 }
 
-async function processFileToToolContentBlock(f: any): Promise<ToolResultContentBlock> {
-    const source = await f.getStream();
+async function processFileToContentBlock(f: DataSource): Promise<ContentBlock> {
+    return processFile(f, 'content');
+}
 
-    //Image file - "png" | "jpeg" | "gif" | "webp"
-    if (f.mime_type && f.mime_type.startsWith("image")) {
-        return {
-            image: {
-                format: mimeToImageType(f.mime_type),
-                source: { bytes: await readStreamAsUint8Array(source) },
-            }
-        } satisfies ToolResultContentBlock.ImageMember;
-    }
-    //Document file - "pdf | csv | doc | docx | xls | xlsx | html | txt | md"
-    else if (f.mime_type && (f.mime_type.startsWith("text") || f.mime_type?.startsWith("application"))) {
-        return {
-            document: {
-                format: mimeToDocType(f.mime_type),
-                name: f.name,
-                source: { bytes: await readStreamAsUint8Array(source) },
-            },
-        } satisfies ToolResultContentBlock.DocumentMember;
-    }
-    //Video file - "mov | mkv | mp4 | webm | flv | mpeg | mpg | wmv | three_gp"
-    else if (f.mime_type && f.mime_type.startsWith("video")) {
-        let url_string = (await f.getURL()).toLowerCase();
-        let url_format = new URL(url_string);
-        if (url_format.hostname.endsWith("amazonaws.com") &&
-            (url_format.hostname.startsWith("s3.") || url_format.hostname.includes(".s3."))) {
-            //Convert to s3:// format
-            const parsedUrl = parseS3UrlToUri(new URL(url_string));
-            url_string = parsedUrl;
-            url_format = new URL(parsedUrl);
-        }
-        if (url_format.protocol === "s3:") {
-            //Use S3 bucket if available
-            return {
-                video: {
-                    format: mimeToVideoType(f.mime_type),
-                    source: {
-                        s3Location: {
-                            uri: url_string, //S3 URL
-                            //bucketOwner:  We don't have this additional information.
-                        }
-                    },
-                },
-            };
-        } else {
-            return {
-                video: {
-                    format: mimeToVideoType(f.mime_type),
-                    source: { bytes: await readStreamAsUint8Array(source) },
-                },
-            } satisfies ToolResultContentBlock.VideoMember;
-        }
-    }
-    //JSON file - treat as structured data
-    else if (f.mime_type === "application/json" || (f.name && f.name.endsWith('.json'))) {
-        const jsonContent = await readStreamAsString(source);
-        try {
-            const parsedJson = JSON.parse(jsonContent);
-            return { json: parsedJson } satisfies ToolResultContentBlock.JsonMember;
-        } catch (error) {
-            // If JSON parsing fails, treat as text
-            return { text: jsonContent } satisfies ToolResultContentBlock.TextMember;
-        }
-    }
-    //Fallback, send as text
-    else {
-        return { text: await readStreamAsString(source) } satisfies ToolResultContentBlock.TextMember;
-    }
+async function processFileToToolContentBlock(f: DataSource): Promise<ToolResultContentBlock> {
+    return processFile(f, 'tool');
 }
 
 export function converseConcatMessages(messages: Message[] | undefined): Message[] {
@@ -261,17 +220,17 @@ export async function formatConversePrompt(segments: PromptSegment[], schema?: J
         } else if (segment.role === PromptRole.safety) {
             safety.push({ text: segment.content });
         } else if (segment.role === PromptRole.tool) {
+            //Tool use results (i.e. the model has requested a tool and this it the answer to that request)
             const toolContentBlocks: ToolResultContentBlock[] = [];
             //Text segments
             if (segment.content) {
                 toolContentBlocks.push({ text: segment.content });
             }
-            //Handle attached files
+            //Handle attached files concurrently
             if (segment.files) {
-                for (const f of segment.files) {
-                    const contentBlock = await processFileToToolContentBlock(f);
-                    toolContentBlocks.push(contentBlock);
-                }
+                toolContentBlocks.push(
+                    ...await Promise.all(segment.files.map(processFileToToolContentBlock))
+                );
             }
             messages.push({
                 content: [{
@@ -289,12 +248,11 @@ export async function formatConversePrompt(segments: PromptSegment[], schema?: J
             if (segment.content) {
                 contentBlocks.push({ text: segment.content });
             }
-            //Handle attached files
+            //Handle attached files concurrently
             if (segment.files) {
-                for (const f of segment.files) {
-                    const contentBlock = await processFileToContentBlock(f);
-                    contentBlocks.push(contentBlock);
-                }
+                contentBlocks.push(
+                    ...await Promise.all(segment.files.map(processFileToContentBlock))
+                );
             }
             messages.push({
                 content: contentBlocks,
