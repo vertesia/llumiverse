@@ -1,4 +1,4 @@
-import { DataSource, JSONSchema } from "@llumiverse/core";
+import { DataSource, JSONSchema, readStreamAsString, readStreamAsUint8Array } from "@llumiverse/core";
 import { PromptSegment, PromptRole } from "@llumiverse/core";
 import {
     ConversationRole,
@@ -38,22 +38,6 @@ function mimeToVideoType(mime: string): "mov" | "mkv" | "mp4" | "webm" | "flv" |
     return "mp4";
 }
 
-async function readStreamAsString(stream: ReadableStream): Promise<string> {
-    const out: Buffer[] = [];
-    for await (const chunk of stream as any) {
-        out.push(Buffer.from(chunk));
-    }
-    return Buffer.concat(out).toString();
-}
-
-async function readStreamAsUint8Array(stream: ReadableStream): Promise<Uint8Array> {
-    const out: Buffer[] = [];
-    for await (const chunk of stream as any) {
-        out.push(Buffer.from(chunk));
-    }
-    return Buffer.concat(out);
-}
-
 type FileProcessingMode = 'content' | 'tool';
 
 async function processFile<T extends FileProcessingMode>(
@@ -83,7 +67,7 @@ async function processFile<T extends FileProcessingMode>(
             try {
                 const parsedJson = JSON.parse(jsonContent);
                 if (mode === 'tool') {
-                    return { json: parsedJson } satisfies ToolResultContentBlock.JsonMember as any;
+                    return { json: parsedJson } satisfies ToolResultContentBlock.JsonMember as T extends 'content' ? ContentBlock : ToolResultContentBlock;
                 } else {
                     // ContentBlock doesn't support JSON, so treat as text
                     return { text: jsonContent } satisfies ContentBlock.TextMember;
