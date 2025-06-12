@@ -220,6 +220,9 @@ export async function formatConversePrompt(segments: PromptSegment[], schema?: J
         } else if (segment.role === PromptRole.safety) {
             safety.push({ text: segment.content });
         } else if (segment.role === PromptRole.tool) {
+            if (!segment.tool_use_id) {
+                throw new Error("Tool use ID is required for tool segments");
+            }
             //Tool use results (i.e. the model has requested a tool and this it the answer to that request)
             const toolContentBlocks: ToolResultContentBlock[] = [];
             //Text segments
@@ -230,15 +233,19 @@ export async function formatConversePrompt(segments: PromptSegment[], schema?: J
             for (const file of segment.files ?? []) {
                 toolContentBlocks.push(await processFileToToolContentBlock(file));
             }
-            messages.push({
-                content: [{
-                    toolResult: {
-                        toolUseId: segment.tool_use_id,
-                        content: toolContentBlocks,
-                    }
-                }],
-                role: ConversationRole.USER
-            });
+            //If there are no content blocks, skip this tool result
+            //This is to avoid sending empty tool results
+            if (toolContentBlocks.length !== 0) {
+                messages.push({
+                    content: [{
+                        toolResult: {
+                            toolUseId: segment.tool_use_id,
+                            content: toolContentBlocks,
+                        }
+                    }],
+                    role: ConversationRole.USER
+                });
+            }
         } else if (!unsupportedRoles.includes(segment.role)) {
             //User or Assistant
             const contentBlocks: ContentBlock[] = [];
@@ -250,10 +257,13 @@ export async function formatConversePrompt(segments: PromptSegment[], schema?: J
             for (const file of segment.files ?? []) {
                 contentBlocks.push(await processFileToContentBlock(file));
             }
-            messages.push({
-                content: contentBlocks,
-                role: roleConversion(segment.role),
-            });
+            //If there are no content blocks, skip this message
+            if (contentBlocks.length !== 0) {
+                messages.push({
+                    content: contentBlocks,
+                    role: roleConversion(segment.role),
+                });
+            }
         }
     }
 
