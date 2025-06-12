@@ -159,16 +159,35 @@ async function processFileToToolContentBlock(f: DataSource): Promise<ToolResultC
 }
 
 export function converseConcatMessages(messages: Message[] | undefined): Message[] {
-    if (!messages) return [];
-    //Concatenate messages of the same role. Required to have alternative user and assistant roles
+    if (!messages || messages.length === 0) return [];
+
+    let needsMerging = false;
     for (let i = 0; i < messages.length - 1; i++) {
         if (messages[i].role === messages[i + 1].role) {
-            messages[i].content = messages[i].content?.concat(...(messages[i + 1].content || []));
-            messages.splice(i + 1, 1);
-            i--;
+            needsMerging = true;
+            break;
         }
     }
-    return messages;
+    // If no merging needed, return original array
+    if (!needsMerging) {
+        return messages;
+    }
+
+    const result: Message[] = [];
+    let currentMessage = { ...messages[0] };
+    for (let i = 1; i < messages.length; i++) {
+        if (currentMessage.role === messages[i].role) {
+            // Same role - concatenate content
+            currentMessage.content = (currentMessage.content || []).concat(...(messages[i].content || []));
+        } else {
+            // Different role - push current and start new
+            result.push(currentMessage);
+            currentMessage = { ...messages[i] };
+        }
+    }
+
+    result.push(currentMessage);
+    return result;
 }
 
 export function converseSystemToMessages(system: SystemContentBlock[]): Message {
@@ -209,8 +228,8 @@ const unsupportedRoles = [
 
 export async function formatConversePrompt(segments: PromptSegment[], schema?: JSONSchema): Promise<ConverseRequest> {
     //Non-const for concat
-    let system: SystemContentBlock[] = [];
-    const safety: SystemContentBlock[] = [];
+    let system: SystemContentBlock.TextMember[] = [];
+    const safety: SystemContentBlock.TextMember[] = [];
     let messages: Message[] = [];
 
     for (const segment of segments) {
@@ -271,7 +290,7 @@ export async function formatConversePrompt(segments: PromptSegment[], schema?: J
     //Use the system messages if none are provided
     if (messages.length === 0) {
         const systemMessage = converseSystemToMessages(system);
-        if (systemMessage?.content && systemMessage.content[0].text) {
+        if (systemMessage?.content && systemMessage.content?.[0].text) {
             messages.push(systemMessage);
         } else {
             throw new Error("Prompt must contain at least one message");
