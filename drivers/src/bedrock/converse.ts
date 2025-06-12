@@ -151,11 +151,20 @@ async function processFile<T extends FileProcessingMode>(
 }
 
 async function processFileToContentBlock(f: DataSource): Promise<ContentBlock> {
-    return processFile(f, 'content');
+    try {
+        return processFile(f, 'content');
+    } catch (error) {
+        throw new Error(`Failed to process file ${f.name} for prompt: ${error instanceof Error ? error.message : String(error)}`);
+    }
 }
 
 async function processFileToToolContentBlock(f: DataSource): Promise<ToolResultContentBlock> {
-    return processFile(f, 'tool');
+    try {
+        return processFile(f, 'tool');
+    }
+    catch (error) {
+        throw new Error(`Failed to process file ${f.name} for tool response: ${error instanceof Error ? error.message : String(error)}`);
+    }
 }
 
 export function converseConcatMessages(messages: Message[] | undefined): Message[] {
