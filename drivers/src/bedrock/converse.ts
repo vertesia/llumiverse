@@ -226,11 +226,9 @@ export async function formatConversePrompt(segments: PromptSegment[], schema?: J
             if (segment.content) {
                 toolContentBlocks.push({ text: segment.content });
             }
-            //Handle attached files concurrently
-            if (segment.files) {
-                toolContentBlocks.push(
-                    ...await Promise.all(segment.files.map(processFileToToolContentBlock))
-                );
+            //Handle attached files
+            for (const file of segment.files ?? []) {
+                toolContentBlocks.push(await processFileToToolContentBlock(file));
             }
             messages.push({
                 content: [{
@@ -248,11 +246,9 @@ export async function formatConversePrompt(segments: PromptSegment[], schema?: J
             if (segment.content) {
                 contentBlocks.push({ text: segment.content });
             }
-            //Handle attached files concurrently
-            if (segment.files) {
-                contentBlocks.push(
-                    ...await Promise.all(segment.files.map(processFileToContentBlock))
-                );
+            //Handle attached files
+            for (const file of segment.files ?? []) {
+                contentBlocks.push(await processFileToContentBlock(file));
             }
             messages.push({
                 content: contentBlocks,
