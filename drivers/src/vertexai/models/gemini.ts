@@ -16,6 +16,9 @@ function supportsStructuredOutput(options: PromptOptions): boolean {
     return !!options.result_schema && !options.model.includes("ultra");
 }
 
+const schemaPlainPromptMessage = "The output must be a JSON object using the following JSON Schema:\n";
+const schemaStructuredOutputMessage = "Fill all appropriate fields in the JSON output.";
+
 const geminiSafetySettings: SafetySetting[] = [
     {
         category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
@@ -44,12 +47,11 @@ const geminiSafetySettings: SafetySetting[] = [
 ];
 
 function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentPrompt): GenerateContentParameters {
-    //1.0 Ultra does not support JSON output, 1.0 Pro does.
-    const useStructuredOutput = supportsStructuredOutput(options);
-
     const model_options = options.model_options as any;
     const tools = getToolDefinitions(options.tools);
     prompt.tools = tools ? [tools] : undefined;
+
+    const useStructuredOutput = supportsStructuredOutput(options) && !tools;
 
     return {
         model: options.model,
@@ -429,7 +431,7 @@ function collectToolUseParts(content: Content): ToolUse[] | undefined {
     for (const part of parts) {
         if (part.functionCall) {
             out.push({
-                id: part.functionCall.name ?? '',
+                id: part.functionCall.id ?? '',
                 tool_name: part.functionCall.name ?? '',
                 tool_input: part.functionCall.args as JSONObject,
             });
@@ -478,79 +480,72 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const contents: Content[] = [];
         const safety: string[] = [];
         const system: string[] = [];
-
-        let lastUserContent: Content | undefined = undefined;
-        const toolParts = [];
+        const toolParts: Part[] = [];
 
         for (const msg of segments) {
-
+            // Role specific handling
             if (msg.role === PromptRole.safety) {
                 safety.push(msg.content);
             } else if (msg.role === PromptRole.system) {
                 system.push(msg.content);
+            } else if (msg.role === PromptRole.tool) {
+                //console.log("Tool response", JSON.stringify(msg, null, 2));
+                toolParts.push({
+                    functionResponse: {
+                        id: msg.tool_use_id,
+                        name: msg.tool_use_id,
+                        response: formatFunctionResponse(msg.content || ''),
+                    }
+                });
             } else {
-                const fileParts: Part[] = [];
+                const parts: Part[] = [];
+                // Text content handling
+                if (msg.content) {
+                    parts.push({
+                        text: msg.content,
+                    });
+                }
+
+                // File content handling
                 if (msg.files) {
                     for (const f of msg.files) {
                         const stream = await f.getStream();
                         const data = await readStreamAsBase64(stream);
-                        fileParts.push({
+                        parts.push({
                             inlineData: {
                                 data,
-                                mimeType: f.mime_type!
+                                mimeType: f.mime_type
                             }
                         });
                     }
                 }
 
-                if (msg.role === PromptRole.tool) {
-                    toolParts.push({
-                        functionResponse: {
-                            name: msg.tool_use_id!,
-                            response: formatFunctionResponse(msg.content || ''),
-                        }
+                if (parts.length > 0) {
+                    contents.push({
+                        role: msg.role === PromptRole.assistant ? 'model' : 'user',
+                        parts,
                     });
-                    continue;
-                }
-
-                const role = msg.role === PromptRole.assistant ? "model" : "user";
-
-                if (lastUserContent && lastUserContent.role === role) {
-                    lastUserContent?.parts?.push({ text: msg.content });
-                    fileParts?.forEach(p => lastUserContent?.parts?.push(p));
-                } else {
-                    const content: Content = {
-                        role,
-                        parts: [{ text: msg.content }],
-                    }
-                    fileParts?.forEach(p => content?.parts?.push(p));
-
-                    if (role === 'user') {
-                        lastUserContent = content;
-                    }
-                    contents.push(content);
                 }
             }
         }
 
-        if (schema && !supportsStructuredOutput(options)) {
-            // Fallback to putting the schema in the prompt, if not using structured output.
-            safety.push("The answer must be a JSON object using the following JSON Schema:\n" + JSON.stringify(schema));
-        } else if (schema) {
-            // Gemini structured output is unnecessarily sparse. Adding encouragement to fill the fields.
-            // Putting JSON in prompt is not recommended by Google, when using structured output.
-            safety.push("Fill all appropriate fields in the JSON output.");
+        if (schema) {
+            if (supportsStructuredOutput(options)) {
+                // Gemini structured output is unnecessarily sparse. Adding encouragement to fill the fields.
+                // Putting JSON in prompt is not recommended by Google, when using structured output.
+                safety.push(schemaStructuredOutputMessage);
+            } else {
+                // Fallback to putting the schema in the prompt, if not using structured output.
+                safety.push(schemaPlainPromptMessage + JSON.stringify(schema));
+            }
         }
 
         if (safety.length > 0) {
-            const content = safety.join('\n');
-            if (lastUserContent) {
-                lastUserContent?.parts?.push({ text: content });
-            } else {
+            for (let i = 0; i < safety.length; i++) {
                 contents.push({
                     role: 'user',
-                    parts: [{ text: content }],
-                })
+                    parts: [{ text: safety[i] }],
+                });
             }
         }
 
@@ -607,6 +602,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         if (tool_use) {
             finish_reason = "tool_use";
+            //console.log("Tool use detected in Gemini response:", JSON.stringify(tool_use, null, 2));
         }
 
         return {
