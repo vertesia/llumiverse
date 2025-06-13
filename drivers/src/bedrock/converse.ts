@@ -1,4 +1,4 @@
-import { JSONSchema } from "@llumiverse/core";
+import { DataSource, JSONSchema, readStreamAsString, readStreamAsUint8Array } from "@llumiverse/core";
 import { PromptSegment, PromptRole } from "@llumiverse/core";
 import {
     ConversationRole,
@@ -6,6 +6,7 @@ import {
     Message,
     SystemContentBlock,
     ContentBlock,
+    ToolResultContentBlock,
 } from "@aws-sdk/client-bedrock-runtime";
 import { parseS3UrlToUri } from "./s3.js";
 
@@ -37,33 +38,149 @@ function mimeToVideoType(mime: string): "mov" | "mkv" | "mp4" | "webm" | "flv" |
     return "mp4";
 }
 
-async function readStreamAsString(stream: ReadableStream): Promise<string> {
-    const out: Buffer[] = [];
-    for await (const chunk of stream as any) {
-        out.push(Buffer.from(chunk));
+type FileProcessingMode = 'content' | 'tool';
+
+async function processFile<T extends FileProcessingMode>(
+    f: DataSource,
+    mode: T
+): Promise<T extends 'content' ? ContentBlock : ToolResultContentBlock> {
+    const source = await f.getStream();
+
+    //Image file - "png" | "jpeg" | "gif" | "webp"
+    if (f.mime_type && f.mime_type.startsWith("image")) {
+        const imageBlock = {
+            image: {
+                format: mimeToImageType(f.mime_type),
+                source: { bytes: await readStreamAsUint8Array(source) },
+            }
+        };
+
+        return mode === 'content'
+            ? (imageBlock satisfies ContentBlock.ImageMember)
+            : (imageBlock satisfies ToolResultContentBlock.ImageMember);
     }
-    return Buffer.concat(out).toString();
+    //Document file - "pdf | csv | doc | docx | xls | xlsx | html | txt | md"
+    else if (f.mime_type && (f.mime_type.startsWith("text") || f.mime_type?.startsWith("application"))) {
+        // Handle JSON files specially
+        if (f.mime_type === "application/json" || (f.name && f.name.endsWith('.json'))) {
+            const jsonContent = await readStreamAsString(source);
+            try {
+                const parsedJson = JSON.parse(jsonContent);
+                if (mode === 'tool') {
+                    return { json: parsedJson } satisfies ToolResultContentBlock.JsonMember as T extends 'content' ? ContentBlock : ToolResultContentBlock;
+                } else {
+                    // ContentBlock doesn't support JSON, so treat as text
+                    return { text: jsonContent } satisfies ContentBlock.TextMember;
+                }
+            } catch (error) {
+                const textBlock = { text: jsonContent };
+                return mode === 'content'
+                    ? (textBlock satisfies ContentBlock.TextMember)
+                    : (textBlock satisfies ToolResultContentBlock.TextMember);
+            }
+        } else {
+            const documentBlock = {
+                document: {
+                    format: mimeToDocType(f.mime_type),
+                    name: f.name,
+                    source: { bytes: await readStreamAsUint8Array(source) },
+                },
+            };
+
+            return mode === 'content'
+                ? (documentBlock satisfies ContentBlock.DocumentMember)
+                : (documentBlock satisfies ToolResultContentBlock.DocumentMember);
+        }
+    }
+    //Video file - "mov | mkv | mp4 | webm | flv | mpeg | mpg | wmv | three_gp"
+    else if (f.mime_type && f.mime_type.startsWith("video")) {
+        let url_string = (await f.getURL()).toLowerCase();
+        let url_format = new URL(url_string);
+        if (url_format.hostname.endsWith("amazonaws.com") &&
+            (url_format.hostname.startsWith("s3.") || url_format.hostname.includes(".s3."))) {
+            //Convert to s3:// format
+            const parsedUrl = parseS3UrlToUri(new URL(url_string));
+            url_string = parsedUrl;
+            url_format = new URL(parsedUrl);
+        }
+
+        const videoBlock = url_format.protocol === "s3:" ? {
+            video: {
+                format: mimeToVideoType(f.mime_type),
+                source: {
+                    s3Location: {
+                        uri: url_string, //S3 URL
+                        //bucketOwner:  We don't have this additional information.
+                    }
+                },
+            },
+        } : {
+            video: {
+                format: mimeToVideoType(f.mime_type),
+                source: { bytes: await readStreamAsUint8Array(source) },
+            },
+        };
+
+        return mode === 'content'
+            ? (videoBlock satisfies ContentBlock.VideoMember)
+            : (videoBlock satisfies ToolResultContentBlock.VideoMember);
+    }
+    //Fallback, send as text
+    else {
+        const textBlock = { text: await readStreamAsString(source) };
+        return mode === 'content'
+            ? (textBlock satisfies ContentBlock.TextMember)
+            : (textBlock satisfies ToolResultContentBlock.TextMember);
+    }
 }
 
-async function readStreamAsUint8Array(stream: ReadableStream): Promise<Uint8Array> {
-    const out: Buffer[] = [];
-    for await (const chunk of stream as any) {
-        out.push(Buffer.from(chunk));
+async function processFileToContentBlock(f: DataSource): Promise<ContentBlock> {
+    try {
+        return processFile(f, 'content');
+    } catch (error) {
+        throw new Error(`Failed to process file ${f.name} for prompt: ${error instanceof Error ? error.message : String(error)}`);
     }
-    return Buffer.concat(out);
+}
+
+async function processFileToToolContentBlock(f: DataSource): Promise<ToolResultContentBlock> {
+    try {
+        return processFile(f, 'tool');
+    }
+    catch (error) {
+        throw new Error(`Failed to process file ${f.name} for tool response: ${error instanceof Error ? error.message : String(error)}`);
+    }
 }
 
 export function converseConcatMessages(messages: Message[] | undefined): Message[] {
-    if (!messages) return [];
-    //Concatenate messages of the same role. Required to have alternative user and assistant roles
+    if (!messages || messages.length === 0) return [];
+
+    let needsMerging = false;
     for (let i = 0; i < messages.length - 1; i++) {
         if (messages[i].role === messages[i + 1].role) {
-            messages[i].content = messages[i].content?.concat(...(messages[i + 1].content || []));
-            messages.splice(i + 1, 1);
-            i--;
+            needsMerging = true;
+            break;
         }
     }
-    return messages;
+    // If no merging needed, return original array
+    if (!needsMerging) {
+        return messages;
+    }
+
+    const result: Message[] = [];
+    let currentMessage = { ...messages[0] };
+    for (let i = 1; i < messages.length; i++) {
+        if (currentMessage.role === messages[i].role) {
+            // Same role - concatenate content
+            currentMessage.content = (currentMessage.content || []).concat(...(messages[i].content || []));
+        } else {
+            // Different role - push current and start new
+            result.push(currentMessage);
+            currentMessage = { ...messages[i] };
+        }
+    }
+
+    result.push(currentMessage);
+    return result;
 }
 
 export function converseSystemToMessages(system: SystemContentBlock[]): Message {
@@ -96,123 +213,69 @@ export function converseJSONprefill(messages: Message[] | undefined): Message[] 
     return messages;
 }
 
+// Used to ignore unsupported roles. Typically these are things like image specific roles.
+const unsupportedRoles = [
+    PromptRole.negative,
+    PromptRole.mask,
+];
+
 export async function formatConversePrompt(segments: PromptSegment[], schema?: JSONSchema): Promise<ConverseRequest> {
     //Non-const for concat
-    let system: SystemContentBlock[] = [];
-    const safety: SystemContentBlock[] = [];
+    let system: SystemContentBlock.TextMember[] = [];
+    const safety: SystemContentBlock.TextMember[] = [];
     let messages: Message[] = [];
 
     for (const segment of segments) {
-        const parts: Message[] = [];
-
-        //Tool response
-        if (segment.role === PromptRole.tool) {
-            parts.push({
-                content: [{
-                    toolResult: {
-                        toolUseId: segment.tool_use_id,
-                        content: [{ text: segment.content }],
-                    }
-                }],
-                role: ConversationRole.USER,
-            });
-            messages = messages.concat(parts);
-            continue;
-        }
-
-        //File segments
-        if (segment.files) {
-            for (const f of segment.files) {
-                const source = await f.getStream();
-                let content: ContentBlock[];
-
-                //Image file - "png" | "jpeg" | "gif" | "webp"
-                if (f.mime_type && f.mime_type.startsWith("image")) {
-                    content = [
-                        {
-                            image: {
-                                format: mimeToImageType(f.mime_type),
-                                source: { bytes: await readStreamAsUint8Array(source) },
-                            },
-                        },
-                    ];
-
-                    //Document file - "pdf | csv | doc | docx | xls | xlsx | html | txt | md"
-                } else if (f.mime_type && (f.mime_type.startsWith("text") || f.mime_type?.startsWith("application"))) {
-                    content = [
-                        { text: f.name },
-                        {
-                            document: {
-                                format: mimeToDocType(f.mime_type),
-                                name: f.name,
-                                source: { bytes: await readStreamAsUint8Array(source) },
-                            },
-                        },
-                    ];
-
-                    //Video file - "mov | mkv | mp4 | webm | flv | mpeg | mpg | wmv | three_gp"
-                } else if (f.mime_type && f.mime_type.startsWith("video")) {
-                    let url_string = (await f.getURL()).toLowerCase();
-                    let url_format = new URL(url_string);
-                    if (url_format.hostname.endsWith("amazonaws.com") &&
-                        (url_format.hostname.startsWith("s3.") || url_format.hostname.includes(".s3."))) {
-                        //Convert to s3:// format
-                        const parsedUrl = parseS3UrlToUri(new URL(url_string));
-                        url_string = parsedUrl;
-                        url_format = new URL(parsedUrl);
-                    }
-                    if (url_format.protocol === "s3:") {
-                        //Use S3 bucket if available
-                        content = [
-                            {
-                                video: {
-                                    format: mimeToVideoType(f.mime_type),
-                                    source: {
-                                        s3Location: {
-                                            uri: url_string, //S3 URL
-                                            //bucketOwner:  We don't have this additional information.
-                                        }
-                                    },
-                                },
-                            },
-                        ];
-                    } else {
-                        content = [
-                            {
-                                video: {
-                                    format: mimeToVideoType(f.mime_type),
-                                    source: { bytes: await readStreamAsUint8Array(source) },
-                                },
-                            },
-                        ];
-                    }
-                    //Fallback, send string
-                } else {
-                    content = [{ text: await readStreamAsString(source) }];
-                }
-
-                parts.push({
-                    content: content,
-                    role: roleConversion(segment.role),
-                });
-            }
-        }
-
-        //Text segments
-        if (segment.content) {
-            parts.push({
-                content: [{ text: segment.content }],
-                role: roleConversion(segment.role),
-            });
-        }
-
+        // Role dependent processing
         if (segment.role === PromptRole.system) {
             system.push({ text: segment.content });
         } else if (segment.role === PromptRole.safety) {
             safety.push({ text: segment.content });
-        } else if (segment.role !== PromptRole.negative && segment.role !== PromptRole.mask) {
+        } else if (segment.role === PromptRole.tool) {
+            if (!segment.tool_use_id) {
+                throw new Error("Tool use ID is required for tool segments");
+            }
+            //Tool use results (i.e. the model has requested a tool and this it the answer to that request)
+            const toolContentBlocks: ToolResultContentBlock[] = [];
+            //Text segments
+            if (segment.content) {
+                toolContentBlocks.push({ text: segment.content });
+            }
+            //Handle attached files
+            for (const file of segment.files ?? []) {
+                toolContentBlocks.push(await processFileToToolContentBlock(file));
+            }
+            //If there are no content blocks, skip this tool result
+            //This is to avoid sending empty tool results
+            if (toolContentBlocks.length !== 0) {
+                messages.push({
+                    content: [{
+                        toolResult: {
+                            toolUseId: segment.tool_use_id,
+                            content: toolContentBlocks,
+                        }
+                    }],
+                    role: ConversationRole.USER
+                });
+            }
+        } else if (!unsupportedRoles.includes(segment.role)) {
             //User or Assistant
-            messages = messages.concat(parts);
+            const contentBlocks: ContentBlock[] = [];
+            //Text segments
+            if (segment.content) {
+                contentBlocks.push({ text: segment.content });
+            }
+            //Handle attached files
+            for (const file of segment.files ?? []) {
+                contentBlocks.push(await processFileToContentBlock(file));
+            }
+            //If there are no content blocks, skip this message
+            if (contentBlocks.length !== 0) {
+                messages.push({
+                    content: contentBlocks,
+                    role: roleConversion(segment.role),
+                });
+            }
         }
     }
 
@@ -220,7 +283,7 @@ export async function formatConversePrompt(segments: PromptSegment[], schema?: J
     //Use the system messages if none are provided
     if (messages.length === 0) {
         const systemMessage = converseSystemToMessages(system);
-        if (systemMessage?.content && systemMessage.content[0].text) {
+        if (systemMessage?.content && systemMessage.content?.[0].text) {
             messages.push(systemMessage);
         } else {
             throw new Error("Prompt must contain at least one message");
@@ -230,6 +293,9 @@ export async function formatConversePrompt(segments: PromptSegment[], schema?: J
 
     if (schema) {
         safety.push({ text: "IMPORTANT: " + getJSONSafetyNotice(schema) });
+    }
+
+    if (safety.length > 0) {
         system = system.concat(safety);
     }
 

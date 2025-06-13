@@ -3,7 +3,8 @@
     "composite": true,
     "lib": [
       "ES2022",
-      "DOM"
+      "DOM",
+      "DOM.AsyncIterable"
     ],
     "rootDir": "./src",
     "declarationDir": "./lib/types", // must be specified otherwise vscode generate files in src
