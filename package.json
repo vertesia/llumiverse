@@ -23,6 +23,7 @@
         "overrides": {
             "rollup": "$rollup",
             "cross-spawn": "$cross-spawn",
+            "brace-expansion@>=2.0.0 <3.0.0": "^2.0.2",
             "esbuild@<=0.24.2": "^0.25.0",
             "vite@>=6.0.0 <6.2.6": "^6.2.6"
         }
