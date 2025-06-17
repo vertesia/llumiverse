@@ -67,7 +67,7 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
             } : undefined,
             candidateCount: 1,
             //JSON/Structured output
-            responseMimeType: useStructuredOutput ? "application/json" : "text/plain",
+            responseMimeType: useStructuredOutput ? "application/json" : undefined,
             responseSchema: useStructuredOutput ? parseJSONtoSchema(options.result_schema, true) : undefined,
             //Model options
             temperature: model_options?.temperature,
@@ -489,7 +489,6 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             } else if (msg.role === PromptRole.system) {
                 system.push(msg.content);
             } else if (msg.role === PromptRole.tool) {
-                //console.log("Tool response", JSON.stringify(msg, null, 2));
                 toolParts.push({
                     functionResponse: {
                         id: msg.toolInfo?.id,
@@ -602,7 +601,6 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         if (tool_use) {
             finish_reason = "tool_use";
-            //console.log("Tool use detected in Gemini response:", JSON.stringify(tool_use, null, 2));
         }
 
         return {
