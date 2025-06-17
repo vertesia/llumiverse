@@ -232,7 +232,7 @@ export async function formatConversePrompt(segments: PromptSegment[], schema?: J
         } else if (segment.role === PromptRole.safety) {
             safety.push({ text: segment.content });
         } else if (segment.role === PromptRole.tool) {
-            if (!segment.tool_use_id) {
+            if (!segment.toolInfo?.id) {
                 throw new Error("Tool use ID is required for tool segments");
             }
             //Tool use results (i.e. the model has requested a tool and this it the answer to that request)
@@ -251,7 +251,7 @@ export async function formatConversePrompt(segments: PromptSegment[], schema?: J
                 messages.push({
                     content: [{
                         toolResult: {
-                            toolUseId: segment.tool_use_id,
+                            toolUseId: segment.toolInfo.id,
                             content: toolContentBlocks,
                         }
                     }],

@@ -120,12 +120,12 @@ export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[]
 
             system.push(safetyMsg)
         } else if (msg.role === PromptRole.tool) {
-            if (!msg.tool_use_id) {
+            if (!msg.toolInfo?.id) {
                 throw new Error("Tool use id is required for tool messages")
             }
             others.push({
                 role: "tool",
-                tool_call_id: msg.tool_use_id,
+                tool_call_id: msg.toolInfo.id,
                 content: msg.content
             })
         } else if (msg.role !== PromptRole.negative && msg.role !== PromptRole.mask) {

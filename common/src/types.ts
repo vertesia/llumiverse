@@ -296,13 +296,18 @@ export enum PromptRole {
     tool = "tool"
 }
 
+export interface ToolMetadata {
+    name?: string;
+    id?: string;
+}
+
 export interface PromptSegment {
     role: PromptRole;
     content: string;
     /**
      * The tool use id if the segment is a tool response
      */
-    tool_use_id?: string;
+    toolInfo?: ToolMetadata;
     files?: DataSource[]
 }
 

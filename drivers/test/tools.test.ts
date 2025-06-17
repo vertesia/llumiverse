@@ -174,18 +174,18 @@ if (process.env.BEDROCK_REGION) {
 
 const PROMPT_WITH_GET_NAME_TOOL = [
     {
-        "role": PromptRole.user,
-        "content": "What is the weather in Paris?",
+        role: PromptRole.user,
+        content: "What is the weather in Paris?",
     },
 ] satisfies PromptSegment[];
 
-function addToolResponse(prompt: PromptSegment[], tool_use_id: string, response: string): PromptSegment[] {
+function addToolResponse(prompt: PromptSegment[], toolInfo: ToolMetadata, response: string): PromptSegment[] {
     return [
         ...prompt,
         {
-            "role": PromptRole.tool,
-            "tool_use_id": tool_use_id,
-            "content": response
+            role: PromptRole.tool,
+            toolInfo: toolInfo,
+            content: response
         }
     ];
 
@@ -236,10 +236,10 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
         expect(r.tool_use?.[0].tool_name).toBe("get_weather");
         const tool_use = r.tool_use!;
         r = await driver.execute([{
-            "role": PromptRole.tool,
-            "tool_use_id": tool_use[0].id,
-            "content": "15 degrees"
-        }], { ...options, conversation: r.conversation });
+            role: PromptRole.tool,
+            toolInfo: {id: tool_use[0].id, name: tool_use[0].tool_name},
+            content: "15 degrees"
+        } satisfies PromptSegment], { ...options, conversation: r.conversation });
         expect(r.result.includes("15 degrees")).toBeTruthy();
         //console.log("#######Result:", r.result, model);
     });

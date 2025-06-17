@@ -492,8 +492,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 //console.log("Tool response", JSON.stringify(msg, null, 2));
                 toolParts.push({
                     functionResponse: {
-                        id: msg.tool_use_id,
-                        name: msg.tool_use_id,
+                        id: msg.toolInfo?.id,
+                        name: msg.toolInfo?.name,
                         response: formatFunctionResponse(msg.content || ''),
                     }
                 });
