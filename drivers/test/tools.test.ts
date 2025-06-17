@@ -1,4 +1,4 @@
-import { AIModel, AbstractDriver, ExecutionOptions, Modalities, PromptRole, PromptSegment } from '@llumiverse/core';
+import { AIModel, AbstractDriver, ExecutionOptions, Modalities, PromptRole, PromptSegment, ToolMetadata } from '@llumiverse/core';
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from "vitest";
