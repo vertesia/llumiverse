@@ -23,7 +23,7 @@ import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
 import { v1beta1 } from "@google-cloud/aiplatform";
 import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { ImagenModelDefinition, ImagenPrompt } from "./models/imagen.js";
-import { GoogleGenAI, Content, Tool } from "@google/genai";
+import { GoogleGenAI, Content } from "@google/genai";
 
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
@@ -34,7 +34,6 @@ export interface VertexAIDriverOptions extends DriverOptions {
 export interface GenerateContentPrompt {
     contents: Content[];
     system?: Content;
-    tools?: Tool[];
 }
 
 //General Prompt type for VertexAI
