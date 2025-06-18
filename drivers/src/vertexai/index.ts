@@ -33,7 +33,7 @@ export interface VertexAIDriverOptions extends DriverOptions {
 
 export interface GenerateContentPrompt {
     contents: Content[];
-    system?: string;
+    system?: Content;
     tools?: Tool[];
 }
 
