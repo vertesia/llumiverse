@@ -431,7 +431,7 @@ function collectToolUseParts(content: Content): ToolUse[] | undefined {
     for (const part of parts) {
         if (part.functionCall) {
             out.push({
-                id: part.functionCall.id ?? '',
+                id: part.functionCall.name ?? '',
                 tool_name: part.functionCall.name ?? '',
                 tool_input: part.functionCall.args as JSONObject,
             });
