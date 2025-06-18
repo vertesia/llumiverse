@@ -121,7 +121,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
             }
 
             if (segment.role === PromptRole.tool) {
-                if (!segment.toolInfo?.id) {
+                if (!segment.tool_use_id) {
                     throw new Error("Tool prompt segment must have a tool use ID");
                 }
 
@@ -132,7 +132,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                     role: 'user',
                     content: [{
                         type: 'tool_result',
-                        tool_use_id: segment.toolInfo.id,
+                        tool_use_id: segment.tool_use_id,
                         content: [{
                             type: 'text',
                             text: segment.content || ''

@@ -307,7 +307,7 @@ export interface PromptSegment {
     /**
      * The tool use id if the segment is a tool response
      */
-    toolInfo?: ToolMetadata;
+    tool_use_id?: string;
     files?: DataSource[]
 }
 
