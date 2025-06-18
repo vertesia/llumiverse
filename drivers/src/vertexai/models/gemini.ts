@@ -439,13 +439,9 @@ function collectToolUseParts(content: Content): ToolUse[] | undefined {
 export function mergeConsecutiveRole(contents: Content[] | undefined): Content[] {
     if (!contents || contents.length === 0) return [];
 
-    let needsMerging = false;
-    for (let i = 0; i < contents.length - 1; i++) {
-        if (contents[i].role === contents[i + 1].role) {
-            needsMerging = true;
-            break;
-        }
-    }
+    const needsMerging = contents.some((content, i) => 
+        i < contents.length - 1 && content.role === contents[i + 1].role
+    );
     // If no merging needed, return original array
     if (!needsMerging) {
         return contents;
