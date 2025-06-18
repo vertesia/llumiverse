@@ -296,11 +296,6 @@ export enum PromptRole {
     tool = "tool"
 }
 
-export interface ToolMetadata {
-    name?: string;
-    id?: string;
-}
-
 export interface PromptSegment {
     role: PromptRole;
     content: string;

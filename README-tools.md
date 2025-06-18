@@ -35,7 +35,7 @@ To continue you need to execute the tool (or the tools) requested by the model a
 const r = await driver.execute([
     {
         role: PromptRole.tool,
-        toolInfo: "use the corresponding id and name from the ToolUse",
+        tool_use_id: "use the corresponding id from the ToolUse",
         content: "the tool result as a string"
     },
     // my second tool execution result if any
@@ -73,7 +73,7 @@ if (r.tool_use) {
         const result = executeTool(toolUse)
         return {
             role: PromptRole.tool,
-            toolInfo: {id: toolUse.id, name: toolUse.name},
+            tool_use_id: toolUse.id,
             content: result
         }
     })

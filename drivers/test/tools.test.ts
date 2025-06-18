@@ -1,4 +1,4 @@
-import { AIModel, AbstractDriver, ExecutionOptions, Modalities, PromptRole, PromptSegment, ToolMetadata } from '@llumiverse/core';
+import { AIModel, AbstractDriver, ExecutionOptions, Modalities, PromptRole, PromptSegment } from '@llumiverse/core';
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from "vitest";
@@ -179,12 +179,12 @@ const PROMPT_WITH_GET_NAME_TOOL = [
     },
 ] satisfies PromptSegment[];
 
-function addToolResponse(prompt: PromptSegment[], toolInfo: ToolMetadata, response: string): PromptSegment[] {
+function addToolResponse(prompt: PromptSegment[], tool_use_id: string, response: string): PromptSegment[] {
     return [
         ...prompt,
         {
             role: PromptRole.tool,
-            toolInfo: toolInfo,
+            tool_use_id: tool_use_id,
             content: response
         }
     ];
@@ -237,7 +237,7 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
         const tool_use = r.tool_use!;
         r = await driver.execute([{
             role: PromptRole.tool,
-            toolInfo: {id: tool_use[0].id, name: tool_use[0].tool_name},
+            tool_use_id: tool_use[0].id,
             content: "15 degrees"
         } satisfies PromptSegment], { ...options, conversation: r.conversation });
         expect(r.result.includes("15 degrees")).toBeTruthy();
