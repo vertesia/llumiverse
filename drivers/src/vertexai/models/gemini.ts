@@ -44,12 +44,10 @@ const geminiSafetySettings: SafetySetting[] = [
 ];
 
 function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentPrompt): GenerateContentParameters {
-    //1.0 Ultra does not support JSON output, 1.0 Pro does.
-    const useStructuredOutput = supportsStructuredOutput(options);
-
     const model_options = options.model_options as any;
     const tools = getToolDefinitions(options.tools);
-    prompt.tools = tools ? [tools] : undefined;
+
+    const useStructuredOutput = supportsStructuredOutput(options) && !tools;
 
     return {
         model: options.model,
@@ -65,7 +63,7 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
             } : undefined,
             candidateCount: 1,
             //JSON/Structured output
-            responseMimeType: useStructuredOutput ? "application/json" : "text/plain",
+            responseMimeType: useStructuredOutput ? "application/json" : undefined,
             responseSchema: useStructuredOutput ? parseJSONtoSchema(options.result_schema, true) : undefined,
             //Model options
             temperature: model_options?.temperature,
@@ -76,10 +74,10 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
             presencePenalty: model_options?.presence_penalty,
             frequencyPenalty: model_options?.frequency_penalty,
             seed: model_options?.seed,
-            thinkingConfig: model_options?.include_thoughts || model_options?.thinking_budget ?
+            thinkingConfig: model_options?.include_thoughts || model_options?.thinking_budget_tokens ?
                 {
                     includeThoughts: model_options?.include_thoughts,
-                    thinkingBudget: model_options?.thinking_budget,
+                    thinkingBudget: model_options?.thinking_budget_tokens,
                 } : undefined,
         }
     };
@@ -133,8 +131,8 @@ function convertType(type?: string | string[]): Type | undefined {
  */
 function convertSchema(jsSchema?: JSONSchema, depth: number = 0, requiredAll = false): Schema {
     // Prevent circular references
-    if (depth > 50) {
-        throw new Error("Maximum schema depth exceeded. Possible circular reference detected.");
+    if (depth > 20) {
+        throw new Error("Maximum schema depth (20) exceeded. Possible circular reference detected.");
     }
 
     if (!jsSchema) return {};
@@ -438,6 +436,35 @@ function collectToolUseParts(content: Content): ToolUse[] | undefined {
     return out.length > 0 ? out : undefined;
 }
 
+export function mergeConsecutiveRole(contents: Content[] | undefined): Content[] {
+    if (!contents || contents.length === 0) return [];
+
+    const needsMerging = contents.some((content, i) => 
+        i < contents.length - 1 && content.role === contents[i + 1].role
+    );
+    // If no merging needed, return original array
+    if (!needsMerging) {
+        return contents;
+    }
+
+    const result: Content[] = [];
+    let currentContent = { ...contents[0], parts: [...(contents[0].parts || [])] };
+
+    for (let i = 1; i < contents.length; i++) {
+        if (currentContent.role === contents[i].role) {
+            // Same role - concatenate parts (without merging individual parts)
+            currentContent.parts = (currentContent.parts || []).concat(...(contents[i].parts || []));
+        } else {
+            // Different role - push current and start new
+            result.push(currentContent);
+            currentContent = { ...contents[i], parts: [...(contents[i].parts || [])] };
+        }
+    }
+
+    result.push(currentContent);
+    return result;
+}
+
 export class GeminiModelDefinition implements ModelDefinition<GenerateContentPrompt> {
 
     model: AIModel
@@ -448,13 +475,13 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             name: modelId,
             provider: 'vertexai',
             type: ModelType.Text,
-            can_stream: true,
+            can_stream: true
         } satisfies AIModel;
     }
 
     preValidationProcessing(result: Completion, options: ExecutionOptions): { result: Completion, options: ExecutionOptions } {
-        // If there's no schema or result, no processing needed
-        if (!options.result_schema || !result.result) {
+        // Guard clause, if no result_schema, error, or tool use, skip processing
+        if (!options.result_schema || !result.result || result.tool_use || result.error) {
             return { result, options };
         }
         try {
@@ -463,106 +490,122 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             return { result, options };
         } catch (error) {
             // Log error during processing but don't fail the completion
-            console.warn('Error during Gemini JSON pre-validation', error);
+            console.warn('Error during Gemini JSON pre-validation: ', error);
             // Return original result if cleanup fails
             return { result, options };
         }
     }
 
-    async createPrompt(_driver: VertexAIDriver, segments: PromptSegment[], options: PromptOptions): Promise<GenerateContentPrompt> {
+    async createPrompt(_driver: VertexAIDriver, segments: PromptSegment[], options: ExecutionOptions): Promise<GenerateContentPrompt> {
         const splits = options.model.split("/");
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
 
         const schema = options.result_schema;
-        const contents: Content[] = [];
-        const safety: string[] = [];
-        const system: string[] = [];
-
-        let lastUserContent: Content | undefined = undefined;
-        const toolParts = [];
+        let contents: Content[] = [];
+        let system: Content | undefined = { role: "user", parts: [] }; // Single content block for system messages
+        
+        const safety: Content[] = [];
 
         for (const msg of segments) {
+            // Role specific handling
+            if (msg.role === PromptRole.system) {
+                // Text only for system messages
+                if (msg.files && msg.files.length > 0) {
+                    throw new Error("Gemini does not support files/images etc. in system messages. Only text content is allowed.");
+                }
 
-            if (msg.role === PromptRole.safety) {
-                safety.push(msg.content);
-            } else if (msg.role === PromptRole.system) {
-                system.push(msg.content);
-            } else {
-                const fileParts: Part[] = [];
+                if (msg.content) {
+                    system.parts?.push({
+                      text: msg.content
+                    });
+                }
+            } else if (msg.role === PromptRole.tool) {
+                if (!msg.tool_use_id) {
+                    throw new Error("Tool response missing tool_use_id");
+                }
+                contents.push({
+                    role: 'user',
+                    parts: [
+                        {
+                            functionResponse: {
+                                name: msg.tool_use_id,
+                                response: formatFunctionResponse(msg.content || ''),
+                            }
+                        }
+                    ]
+                });
+            } else {    // PromptRole.user, PromptRole.assistant, PromptRole.safety
+                const parts: Part[] = [];
+                // Text content handling
+                if (msg.content) {
+                    parts.push({
+                        text: msg.content,
+                    });
+                }
+
+                // File content handling
                 if (msg.files) {
                     for (const f of msg.files) {
                         const stream = await f.getStream();
                         const data = await readStreamAsBase64(stream);
-                        fileParts.push({
+                        parts.push({
                             inlineData: {
                                 data,
-                                mimeType: f.mime_type!
+                                mimeType: f.mime_type
                             }
                         });
                     }
                 }
 
-                if (msg.role === PromptRole.tool) {
-                    toolParts.push({
-                        functionResponse: {
-                            name: msg.tool_use_id!,
-                            response: formatFunctionResponse(msg.content || ''),
-                        }
-                    });
-                    continue;
-                }
-
-                const role = msg.role === PromptRole.assistant ? "model" : "user";
-
-                if (lastUserContent && lastUserContent.role === role) {
-                    lastUserContent?.parts?.push({ text: msg.content });
-                    fileParts?.forEach(p => lastUserContent?.parts?.push(p));
-                } else {
-                    const content: Content = {
-                        role,
-                        parts: [{ text: msg.content }],
+                if (parts.length > 0) {
+                    if (msg.role === PromptRole.safety) {
+                        safety.push({
+                            role: 'user',
+                            parts,
+                        });
+                    } else {
+                        contents.push({
+                            role: msg.role === PromptRole.assistant ? 'model' : 'user',
+                            parts,
+                        });
                     }
-                    fileParts?.forEach(p => content?.parts?.push(p));
-
-                    if (role === 'user') {
-                        lastUserContent = content;
-                    }
-                    contents.push(content);
                 }
             }
         }
 
-        if (schema && !supportsStructuredOutput(options)) {
-            // Fallback to putting the schema in the prompt, if not using structured output.
-            safety.push("The answer must be a JSON object using the following JSON Schema:\n" + JSON.stringify(schema));
-        } else if (schema) {
-            // Gemini structured output is unnecessarily sparse. Adding encouragement to fill the fields.
-            // Putting JSON in prompt is not recommended by Google, when using structured output.
-            safety.push("Fill all appropriate fields in the JSON output.");
-        }
-
-        if (safety.length > 0) {
-            const content = safety.join('\n');
-            if (lastUserContent) {
-                lastUserContent?.parts?.push({ text: content });
+        // Adding JSON Schema to system message
+        if (schema) {
+            if (supportsStructuredOutput(options) && !options.tools) {
+                // Gemini structured output is unnecessarily sparse. Adding encouragement to fill the fields.
+                // Putting JSON in prompt is not recommended by Google, when using structured output.
+                system.parts?.push({ text: "Fill all appropriate fields in the JSON output." });
             } else {
-                contents.push({
-                    role: 'user',
-                    parts: [{ text: content }],
-                })
+                // Fallback to putting the schema in the system instructions, if not using structured output.
+                if (options.tools) {
+                    system.parts?.push({
+                        text: "When not calling tools, the output must be a JSON object using the following JSON Schema:\n" + JSON.stringify(schema)
+                    });
+                } else {
+                    system.parts?.push({ text: "The output must be a JSON object using the following JSON Schema:\n" + JSON.stringify(schema) });
+                }
             }
         }
-
-        if (toolParts.length > 0) {
-            contents.push({
-                role: 'user',
-                parts: toolParts,
-            });
+        
+        // If no system messages, set system to undefined.
+        if (!system.parts || system.parts.length === 0) {
+            system = undefined;
         }
 
-        // put system messages first and safety last
-        return { contents, system: system.join('\n'), tools: undefined };
+        // Add safety messages to the end of contents. They are in effect user messages that come at the end.
+        if (safety.length > 0) {
+            contents = contents.concat(safety);
+        }
+
+        // Merge consecutive messages with the same role. Note: this may not be necessary, works without it, keeping to match previous behavior.
+        contents = mergeConsecutiveRole(contents);
+        
+        return { contents, system };
     }
 
     async requestTextCompletion(driver: VertexAIDriver, prompt: GenerateContentPrompt, options: ExecutionOptions): Promise<Completion> {

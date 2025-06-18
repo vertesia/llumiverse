@@ -122,7 +122,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
 
             if (segment.role === PromptRole.tool) {
                 if (!segment.tool_use_id) {
-                    throw new Error("Tool prompt segment must have a tool_use_id");
+                    throw new Error("Tool prompt segment must have a tool use ID");
                 }
 
                 const imageBlocks: ImageBlockParam[] = [];

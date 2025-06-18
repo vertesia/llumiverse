@@ -154,13 +154,9 @@ async function processFileToToolContentBlock(f: DataSource): Promise<ToolResultC
 export function converseConcatMessages(messages: Message[] | undefined): Message[] {
     if (!messages || messages.length === 0) return [];
 
-    let needsMerging = false;
-    for (let i = 0; i < messages.length - 1; i++) {
-        if (messages[i].role === messages[i + 1].role) {
-            needsMerging = true;
-            break;
-        }
-    }
+    const needsMerging = messages.some((message, i) =>
+        i < messages.length - 1 && message.role === messages[i + 1].role
+    );
     // If no merging needed, return original array
     if (!needsMerging) {
         return messages;
