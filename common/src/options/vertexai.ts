@@ -243,13 +243,11 @@ function getImagenOptions(model: string, option?: ModelOptions): ModelOptionsInf
     return textOptionsFallback;
 }
 
-function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
+function getGeminiOptions(model: string, _option?: ModelOptions): ModelOptionsInfo {
     const max_tokens_limit = getGeminiMaxTokensLimit(model);
-    const excludeOptions = ["max_tokens", "presence_penalty"];
+    const excludeOptions = ["max_tokens"];
     let commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
-    if (model.includes("1.5")) {
-        commonOptions = commonOptions.filter((option) => option.name !== "frequency_penalty");
-    }
+
     const max_tokens: ModelOptionInfoItem[] = [{
         name: SharedOptions.max_tokens, type: OptionType.numeric, min: 1, max: max_tokens_limit,
         integer: true, step: 200, description: "The maximum number of tokens to generate"
@@ -261,20 +259,11 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
 
     if (model.includes("-2.5-")) {
         // Gemini 2.5 thinking models
-        const geminiThinkingOptions: ModelOptionInfoItem[] = [
-            {
-                name: "include_thoughts",
-                type: OptionType.boolean,
-                default: false,
-                description: "Include the model's reasoning process in the response"
-            },
-        ];
         
         // Set budget token ranges based on model variant
         let budgetMin = -1;
         let budgetMax = 24576;
         let budgetDescription = "";
-        
         if (model.includes("flash-lite")) {
             budgetMin = -1;
             budgetMax = 24576;
@@ -298,7 +287,13 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
                 "Cannot disable thinking - minimum 128 tokens. Set to -1 for dynamic thinking.";
         }
         
-        const geminiThinkingBudgetOptions: ModelOptionInfoItem[] = (option as VertexAIGeminiOptions)?.include_thoughts ? [
+        const geminiThinkingOptions: ModelOptionInfoItem[] = [
+            {
+                name: "include_thoughts",
+                type: OptionType.boolean,
+                default: false,
+                description: "Include the model's reasoning process in the response"
+            },
             {
                 name: "thinking_budget_tokens",
                 type: OptionType.numeric,
@@ -308,8 +303,8 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
                 integer: true,
                 step: 100,
                 description: budgetDescription,
-            },
-        ] : [];
+            }
+        ];
 
         return {
             _option_id: "vertexai-gemini",
@@ -318,7 +313,6 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
                 ...commonOptions,
                 seedOption,
                 ...geminiThinkingOptions,
-                ...geminiThinkingBudgetOptions,
             ]
         };
     }
