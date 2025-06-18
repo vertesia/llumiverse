@@ -131,8 +131,8 @@ function convertType(type?: string | string[]): Type | undefined {
  */
 function convertSchema(jsSchema?: JSONSchema, depth: number = 0, requiredAll = false): Schema {
     // Prevent circular references
-    if (depth > 50) {
-        throw new Error("Maximum schema depth exceeded. Possible circular reference detected.");
+    if (depth > 20) {
+        throw new Error("Maximum schema depth (20) exceeded. Possible circular reference detected.");
     }
 
     if (!jsSchema) return {};
