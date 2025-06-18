@@ -273,16 +273,29 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
         // Set budget token ranges based on model variant
         let budgetMin = -1;
         let budgetMax = 24576;
+        let budgetDescription = "";
         
         if (model.includes("flash-lite")) {
             budgetMin = -1;
             budgetMax = 24576;
+            budgetDescription = "The target number of tokens to use for reasoning. " +
+                "Flash Lite default: Model does not think. " +
+                "Range: 512-24576 tokens. " +
+                "Set to 0 to disable thinking, -1 for dynamic thinking.";
         } else if (model.includes("flash")) {
             budgetMin = -1;
             budgetMax = 24576;
+            budgetDescription = "The target number of tokens to use for reasoning. " +
+                "Flash default: Dynamic thinking (model decides when and how much to think). " +
+                "Range: 0-24576 tokens. " +
+                "Set to 0 to disable thinking, -1 for dynamic thinking.";
         } else if (model.includes("pro")) {
             budgetMin = -1;
             budgetMax = 32768;
+            budgetDescription = "The target number of tokens to use for reasoning. " +
+                "Pro default: Dynamic thinking (model decides when and how much to think). " +
+                "Range: 128-32768 tokens. " +
+                "Cannot disable thinking - minimum 128 tokens. Set to -1 for dynamic thinking.";
         }
         
         const geminiThinkingBudgetOptions: ModelOptionInfoItem[] = (option as VertexAIGeminiOptions)?.include_thoughts ? [
@@ -294,7 +307,7 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
                 default: undefined,
                 integer: true,
                 step: 100,
-                description: "The target number of tokens to use for reasoning. Set to -1 for dynamic thinking (model decides when and how much to think). Flash Lite: 512-24576, Flash: 0-24576, Pro: 128-32768."
+                description: budgetDescription,
             },
         ] : [];
 
