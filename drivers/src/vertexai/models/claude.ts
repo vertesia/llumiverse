@@ -11,7 +11,7 @@ import { MessageStreamParams } from "@anthropic-ai/sdk/resources/index.mjs";
 
 interface ClaudePrompt {
     messages: MessageParam[];
-    system: TextBlockParam[];
+    system?: TextBlockParam[];
 }
 
 function claudeFinishReason(reason: string | undefined) {
@@ -136,7 +136,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
 
     async createPrompt(_driver: VertexAIDriver, segments: PromptSegment[], options: ExecutionOptions): Promise<ClaudePrompt> {
         // Convert the prompt to the format expected by the Claude API
-        const system: TextBlockParam[] = segments
+        let system: TextBlockParam[] | undefined = segments
             .filter(segment => segment.role === PromptRole.system)
             .map(segment => ({
                 text: segment.content,
@@ -226,6 +226,10 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         }
 
         messages = messages.concat(safetyMessages);
+
+        if (system && system.length === 0) {
+            system = undefined; // If system is empty, set to undefined
+        }
 
         return {
             messages: messages,
@@ -338,29 +342,13 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
     }
 }
 
-export function collectTools(content: ContentBlock[]): ToolUse[] | undefined {
-    const out: ToolUse[] = [];
-
-    for (const block of content) {
-        if (block?.type === "tool_use") {
-            out.push({
-                id: block.id,
-                tool_name: block.name,
-                tool_input: block.input as JSONObject,
-            });
-        }
-    }
-
-    return out.length > 0 ? out : undefined;
-}
-
 function createPromptFromResponse(response: Message): ClaudePrompt {
     return {
         messages: [{
             role: PromptRole.assistant,
             content: response.content,
         }],
-        system: []
+        system: undefined
     }
 }
 
@@ -371,11 +359,12 @@ function createPromptFromResponse(response: Message): ClaudePrompt {
  * @returns
  */
 function updateConversation(conversation: ClaudePrompt | undefined | null, prompt: ClaudePrompt): ClaudePrompt {
-    const baseSystemMessages = conversation ? conversation.system : [];
-    const baseMessages = conversation ? conversation.messages : []
+    const baseSystemMessages = conversation?.system || [];
+    const baseMessages = conversation?.messages || [];
+    const system = baseSystemMessages.concat(prompt.system || []);
     return {
         messages: baseMessages.concat(prompt.messages || []),
-        system: baseSystemMessages.concat(prompt.system || [])
+        system: system.length > 0 ? system : undefined // If system is empty, set to undefined
     };
 }
 interface RequestOptions {
