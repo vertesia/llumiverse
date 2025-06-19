@@ -9,7 +9,7 @@ import {
     AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult,
     ExecutionOptions, ExecutionTokenUsage, ImageGeneration, Modalities, PromptOptions, PromptSegment,
     TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions,
-    BedrockClaudeOptions, BedrockPalmyraOptions, getMaxTokensLimit, NovaCanvasOptions,
+    BedrockClaudeOptions, BedrockPalmyraOptions, getMaxTokensLimitBedrock, NovaCanvasOptions,
     modelModalitiesToArray, getModelCapabilities
 } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
@@ -318,7 +318,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     ...additionalField,
                     reasoning_config: {
                         type: thinking ? "enabled" : "disabled",
-                        budget_tokens: thinking_options.thinking_budget_tokens,
+                        budget_tokens: thinking_options.thinking_budget_tokens ?? 1024,
                     }
                 };
                 if (thinking && (thinking_options.thinking_budget_tokens ?? 0) > 64000) {
@@ -330,7 +330,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
             //Needs max_tokens to be set
             if (!model_options.max_tokens) {
-                model_options.max_tokens = getMaxTokensLimit(options.model, model_options);
+                model_options.max_tokens = getMaxTokensLimitBedrock(options.model, model_options);
             }
             additionalField = { ...additionalField, top_k: model_options.top_k };
         } else if (options.model.includes("meta")) {

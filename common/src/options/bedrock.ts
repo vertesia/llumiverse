@@ -43,11 +43,11 @@ export interface BedrockPalmyraOptions extends BaseConverseOptions {
     presence_penalty?: number;
 }
 
-export function getMaxTokensLimit(model: string, option?: ModelOptions): number | undefined {
+export function getMaxTokensLimitBedrock(model: string, option?: ModelOptions): number | undefined {
     // Claude models
     if (model.includes("claude")) {
         if (model.includes("-4-")) {
-            if(model.includes("opus-")) {
+            if (model.includes("opus-")) {
                 return 32768;
             }
             return 65536;
@@ -109,7 +109,7 @@ export function getMaxTokensLimit(model: string, option?: ModelOptions): number 
         if (model.includes("command-a")) {
             return 8192;
         }
-        return 4096;   
+        return 4096;
     }
     // Meta models
     else if (model.includes("llama")) {
@@ -214,7 +214,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
             ]
         };
     } else {
-        const max_tokens_limit = getMaxTokensLimit(model, option);
+        const max_tokens_limit = getMaxTokensLimitBedrock(model, option);
         //Not canvas, i.e normal AWS bedrock converse
         const baseConverseOptions: ModelOptionInfoItem[] = [
             {

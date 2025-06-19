@@ -60,6 +60,7 @@ export interface VertexAIClaudeOptions {
     stop_sequence?: string[];
     thinking_mode?: boolean;
     thinking_budget_tokens?: number;
+    include_thoughts?: boolean;
 }
 
 export interface VertexAIGeminiOptions {
@@ -328,7 +329,7 @@ function getGeminiOptions(model: string, _option?: ModelOptions): ModelOptionsIn
 }
 
 function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
-    const max_tokens_limit = getClaudeMaxTokensLimit(model, option as VertexAIClaudeOptions);
+    const max_tokens_limit = getClaudeMaxTokensLimit(model);
     const excludeOptions = ["max_tokens", "presence_penalty", "frequency_penalty"];
     let commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
     const max_tokens: ModelOptionInfoItem[] = [{
@@ -355,6 +356,12 @@ function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInf
                 step: 100,
                 description: "The target number of tokens to use for reasoning, not a hard limit."
             },
+            {
+                name: "include_thoughts",
+                type: OptionType.boolean,
+                default: false,
+                description: "Include the model's reasoning process in the response"
+            }
         ] : [];
 
         return {
@@ -417,7 +424,8 @@ function getGeminiMaxTokensLimit(model: string): number {
     }
     return 8192;
 }
-function getClaudeMaxTokensLimit(model: string, option?: VertexAIClaudeOptions): number {
+
+function getClaudeMaxTokensLimit(model: string): number {
     if (model.includes("-4-")) {
         if(model.includes("opus-")) {
             return 32768;
@@ -425,11 +433,7 @@ function getClaudeMaxTokensLimit(model: string, option?: VertexAIClaudeOptions):
         return 65536;
     }
     else if (model.includes("-3-7-")) {
-        if (option && option?.thinking_mode) {
-            return 131072;
-        } else {
-            return 8192;
-        }
+        return 128000;
     }
     else if (model.includes("-3-5-")) {
         return 8192;
@@ -441,4 +445,17 @@ function getClaudeMaxTokensLimit(model: string, option?: VertexAIClaudeOptions):
 
 function getLlamaMaxTokensLimit(_model: string): number {
     return 8192;
+}
+
+export function getMaxTokensLimitVertexAi(model: string): number {
+    if (model.includes("imagen-")) {
+        return 0; // Imagen models do not have a max tokens limit in the same way as text models
+    } else if (model.includes("claude")) {
+        return getClaudeMaxTokensLimit(model);
+    } else if (model.includes("gemini")) {
+        return getGeminiMaxTokensLimit(model);
+    } else if (model.includes("llama")) {
+        return getLlamaMaxTokensLimit(model);
+    }
+    return 8192; // Default fallback limit
 }
