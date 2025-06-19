@@ -27,7 +27,7 @@ export function collectTools(content: ContentBlock[]): ToolUse[] | undefined {
     const out: ToolUse[] = [];
 
     for (const block of content) {
-        if (block?.type === "tool_use") {
+        if (block.type === "tool_use") {
             out.push({
                 id: block.id,
                 tool_name: block.name,
@@ -40,12 +40,11 @@ export function collectTools(content: ContentBlock[]): ToolUse[] | undefined {
 }
 
 function collectAllTextContent(content: ContentBlock[], includeThoughts: boolean = false) {
-    const textParts = [];
-    
+    const textParts: string[] = [];
+
+    // First pass: collect thinking blocks
     for (const block of content) {
-        if (block.type === 'text' && block.text) {
-            textParts.push(block.text);
-        } else if (includeThoughts) {
+        if (includeThoughts) {
             if (block.type === 'thinking' && block.thinking) {
                 textParts.push(block.thinking);
             } else if (block.type === 'redacted_thinking' && block.data) {
@@ -53,8 +52,18 @@ function collectAllTextContent(content: ContentBlock[], includeThoughts: boolean
             }
         }
     }
-    
-    return textParts.join(includeThoughts ? '\n\n' : '\n');
+    if (textParts.length > 0) {
+        textParts.push(''); // Create a new line after thinking blocks
+    }
+
+    // Second pass: collect text blocks
+    for (const block of content) {
+        if (block.type === 'text' && block.text) {
+            textParts.push(block.text);
+        }
+    }
+
+    return textParts.join('\n');
 }
 
 //Used to get a max_token value when not specified in the model options. Claude requires it to be set.
