@@ -23,15 +23,38 @@ function claudeFinishReason(reason: string | undefined) {
     }
 }
 
-function collectTextParts(content: any) {
-    const out = [];
+export function collectTools(content: ContentBlock[]): ToolUse[] | undefined {
+    const out: ToolUse[] = [];
 
     for (const block of content) {
-        if (block?.text) {
-            out.push(block.text);
+        if (block?.type === "tool_use") {
+            out.push({
+                id: block.id,
+                tool_name: block.name,
+                tool_input: block.input as JSONObject,
+            });
         }
     }
-    return out.join('\n');
+
+    return out.length > 0 ? out : undefined;
+}
+
+function collectAllTextContent(content: ContentBlock[], includeThoughts: boolean = false) {
+    const textParts = [];
+    
+    for (const block of content) {
+        if (block.type === 'text' && block.text) {
+            textParts.push(block.text);
+        } else if (includeThoughts) {
+            if (block.type === 'thinking' && block.thinking) {
+                textParts.push(block.thinking);
+            } else if (block.type === 'redacted_thinking' && block.data) {
+                textParts.push(`[Redacted thinking: ${block.data}]`);
+            }
+        }
+    }
+    
+    return textParts.join(includeThoughts ? '\n\n' : '\n');
 }
 
 function maxToken(option: StatelessExecutionOptions): number {
@@ -226,7 +249,9 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
 
         const result = await client.messages.create(nonStreamingPayload, requestOptions) satisfies Message;
 
-        const text = collectTextParts(result.content);
+        // Use the new function to collect text content, including thinking if enabled
+        const includeThoughts = options.model_options?.include_thoughts ?? false;
+        const text = collectAllTextContent(result.content, includeThoughts);
         const tool_use = collectTools(result.content);
 
         conversation = updateConversation(conversation, createPromptFromResponse(result));
