@@ -1,7 +1,7 @@
 import { ContentBlock, ContentBlockParam, DocumentBlockParam, ImageBlockParam, Message, MessageParam, TextBlockParam, ToolResultBlockParam } from "@anthropic-ai/sdk/resources/index.js";
 import {
     AIModel, Completion, CompletionChunkObject, ExecutionOptions, getMaxTokensLimitVertexAi, JSONObject, ModelType,
-    PromptRole, PromptSegment, readStreamAsBase64, StatelessExecutionOptions, ToolUse, VertexAIClaudeOptions
+    PromptRole, PromptSegment, readStreamAsBase64, readStreamAsString, StatelessExecutionOptions, ToolUse, VertexAIClaudeOptions
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { VertexAIDriver } from "../index.js";
@@ -47,9 +47,11 @@ function maxToken(option: StatelessExecutionOptions): number {
     }
 }
 
-async function collectFileBlocks(segment: PromptSegment, contentBlocks: ContentBlockParam[], restrictedTypes: boolean = false): Promise<void> {
-    // When restrictedTypes is true, we only allow text files and images.
-    // i.e. output is Array<TextBlockParam | ImageBlockParam>
+// Type-safe overloads for collectFileBlocks
+async function collectFileBlocks(segment: PromptSegment, restrictedTypes: true): Promise<Array<TextBlockParam | ImageBlockParam>>;
+async function collectFileBlocks(segment: PromptSegment, restrictedTypes?: false): Promise<ContentBlockParam[]>;
+async function collectFileBlocks(segment: PromptSegment, restrictedTypes: boolean = false): Promise<ContentBlockParam[]> {
+    const contentBlocks: ContentBlockParam[] = [];
     
     for (const file of segment.files || []) {
         if (file.mime_type?.startsWith("image/")) {
@@ -68,18 +70,31 @@ async function collectFileBlocks(segment: PromptSegment, contentBlocks: ContentB
                 }
             } satisfies ImageBlockParam);
         } else if (!restrictedTypes) {
-            if (file.mime_type?.startsWith("text/")) {
+            if (file.mime_type === "application/pdf") {
                 contentBlocks.push({
+                    title: file.name,
+                    type: 'document',
+                    source: {
+                        type: 'base64',
+                        data: await readStreamAsBase64(await file.getStream()),
+                        media_type: 'application/pdf'
+                    }
+                } satisfies DocumentBlockParam);
+            } else if (file.mime_type?.startsWith("text/")) {
+                contentBlocks.push({
+                    title: file.name,
+                    type: 'document',
                     source: {
                         type: 'text',
-                        data: await readStreamAsBase64(await file.getStream()),
+                        data: await readStreamAsString(await file.getStream()),
                         media_type: 'text/plain'
-                    },
-                    type: 'document'
+                    }
                 } satisfies DocumentBlockParam);
             }
         }
     }
+    
+    return contentBlocks;
 }
 
 export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
@@ -132,6 +147,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                     throw new Error("Tool prompt segment must have a tool use ID");
                 }
 
+                // Build content blocks for tool results (restricted types)
                 const contentBlocks: Array<TextBlockParam | ImageBlockParam> = [];
 
                 if (segment.content) {
@@ -141,7 +157,9 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                     } satisfies TextBlockParam);
                 }
                 
-                await collectFileBlocks(segment, contentBlocks, true);
+                // Collect file blocks with type safety
+                const fileBlocks = await collectFileBlocks(segment, true);
+                contentBlocks.push(...fileBlocks);
 
                 messages.push({
                     role: 'user',
@@ -153,6 +171,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                 });
 
             } else {
+                // Build content blocks for regular messages (all types allowed)
                 const contentBlocks: ContentBlockParam[] = [];
                 
                 if (segment.content) {
@@ -162,24 +181,24 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                     } satisfies TextBlockParam);
                 }
 
-                await collectFileBlocks(segment, contentBlocks);
+                // Collect file blocks without restrictions
+                const fileBlocks = await collectFileBlocks(segment, false);
+                contentBlocks.push(...fileBlocks);
 
                 if (contentBlocks.length === 0) {
                     continue; // skip empty segments
                 }
 
+                const messageParam: MessageParam = {
+                    role: segment.role === PromptRole.assistant ? 'assistant' : 'user',
+                    content: contentBlocks
+                };
+
                 if (segment.role === PromptRole.safety) {
-                    safetyMessages.push({
-                        role: 'user',
-                        content: contentBlocks
-                    });
+                    safetyMessages.push(messageParam);
                 } else {
-                    messages.push({
-                        role: segment.role === PromptRole.assistant ? 'assistant' : 'user',
-                        content: contentBlocks
-                    });
+                    messages.push(messageParam);
                 }
-                
             }
         }
 
@@ -240,7 +259,6 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         const response_stream = await client.messages.stream(streamingPayload, requestOptions);
 
         const stream = asyncMap(response_stream, async (streamEvent: RawMessageStreamEvent) => {
-            console.log(JSON.stringify(streamEvent, null, 2));
             switch (streamEvent.type) {
                 case "message_start":
                     return {
