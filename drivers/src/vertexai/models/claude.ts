@@ -346,7 +346,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
 function createPromptFromResponse(response: Message): ClaudePrompt {
     return {
         messages: [{
-            role: PromptRole.assistant,
+            role: response.role,
             content: response.content,
         }],
         system: undefined
