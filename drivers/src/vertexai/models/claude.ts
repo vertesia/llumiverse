@@ -57,6 +57,7 @@ function collectAllTextContent(content: ContentBlock[], includeThoughts: boolean
     return textParts.join(includeThoughts ? '\n\n' : '\n');
 }
 
+//Used to get a max_token value when not specified in the model options. Claude requires it to be set.
 function maxToken(option: StatelessExecutionOptions): number {
     const modelOptions = option.model_options as VertexAIClaudeOptions | undefined;
     if (modelOptions && typeof modelOptions.max_tokens === "number") {
