@@ -241,19 +241,15 @@ export async function formatConversePrompt(segments: PromptSegment[], schema?: J
             for (const file of segment.files ?? []) {
                 toolContentBlocks.push(await processFileToToolContentBlock(file));
             }
-            //If there are no content blocks, skip this tool result
-            //This is to avoid sending empty tool results
-            if (toolContentBlocks.length !== 0) {
-                messages.push({
-                    content: [{
-                        toolResult: {
-                            toolUseId: segment.tool_use_id,
-                            content: toolContentBlocks,
-                        }
-                    }],
-                    role: ConversationRole.USER
-                });
-            }
+            messages.push({
+                content: [{
+                    toolResult: {
+                        toolUseId: segment.tool_use_id,
+                        content: toolContentBlocks,
+                    }
+                }],
+                role: ConversationRole.USER
+            });
         } else if (!unsupportedRoles.includes(segment.role)) {
             //User or Assistant
             const contentBlocks: ContentBlock[] = [];
