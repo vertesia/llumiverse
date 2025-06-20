@@ -43,17 +43,17 @@ function collectAllTextContent(content: ContentBlock[], includeThoughts: boolean
     const textParts: string[] = [];
 
     // First pass: collect thinking blocks
-    for (const block of content) {
-        if (includeThoughts) {
+    if (includeThoughts) {
+        for (const block of content) {
             if (block.type === 'thinking' && block.thinking) {
                 textParts.push(block.thinking);
             } else if (block.type === 'redacted_thinking' && block.data) {
                 textParts.push(`[Redacted thinking: ${block.data}]`);
             }
         }
-    }
-    if (textParts.length > 0) {
-        textParts.push(''); // Create a new line after thinking blocks
+        if (textParts.length > 0) {
+            textParts.push(''); // Create a new line after thinking blocks
+        }
     }
 
     // Second pass: collect text blocks
@@ -274,9 +274,9 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
             result: text ?? '',
             tool_use,
             token_usage: {
-                prompt: result?.usage.input_tokens,
-                result: result?.usage.output_tokens,
-                total: result?.usage.input_tokens + result?.usage.output_tokens
+                prompt: result.usage.input_tokens,
+                result: result.usage.output_tokens,
+                total: result.usage.input_tokens + result.usage.output_tokens
             },
             // make sure we set finish_reason to the correct value (claude is normally setting this by itself)
             finish_reason: tool_use ? "tool_use" : claudeFinishReason(result?.stop_reason ?? ''),
@@ -307,7 +307,22 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                             result: streamEvent.message.usage.output_tokens
                         }
                     } satisfies CompletionChunkObject;
-
+                case "message_delta":
+                    return {
+                        result: '',
+                        token_usage: {
+                            result: streamEvent.usage.output_tokens
+                        },
+                        finish_reason: claudeFinishReason(streamEvent.delta.stop_reason ?? undefined),
+                    } satisfies CompletionChunkObject;
+                case "content_block_start":
+                    // Handle redacted thinking blocks
+                    if (streamEvent.content_block.type === "redacted_thinking" && model_options?.include_thoughts) {
+                        return {
+                            result: `[Redacted thinking: ${streamEvent.content_block.data}]`
+                        } satisfies CompletionChunkObject;
+                    }
+                    break;
                 case "content_block_delta":
                     // Handle different delta types
                     switch (streamEvent.delta.type) {
@@ -332,14 +347,14 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                             break;
                     }
                     break;
-                case "message_delta":
-                    return {
-                        result: '',
-                        token_usage: {
-                            result: streamEvent.usage.output_tokens
-                        },
-                        finish_reason: claudeFinishReason(streamEvent.delta.stop_reason ?? undefined),
-                    } satisfies CompletionChunkObject;
+                case "content_block_stop":
+                    // Handle the end of content blocks, for redacted thinking blocks
+                    if (model_options?.include_thoughts) {
+                        return {
+                            result: '\n\n' // Add double newline for spacing
+                        } satisfies CompletionChunkObject;
+                    }
+                    break;
             }
 
             // Default case for all other event types
