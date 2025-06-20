@@ -33,6 +33,7 @@ export interface BedrockClaudeOptions extends BaseConverseOptions {
     top_k?: number;
     thinking_mode?: boolean;
     thinking_budget_tokens?: number;
+    include_thoughts?: boolean;
 }
 
 export interface BedrockPalmyraOptions extends BaseConverseOptions {
@@ -43,7 +44,7 @@ export interface BedrockPalmyraOptions extends BaseConverseOptions {
     presence_penalty?: number;
 }
 
-export function getMaxTokensLimitBedrock(model: string, option?: ModelOptions): number | undefined {
+export function getMaxTokensLimitBedrock(model: string): number | undefined {
     // Claude models
     if (model.includes("claude")) {
         if (model.includes("-4-")) {
@@ -53,11 +54,7 @@ export function getMaxTokensLimitBedrock(model: string, option?: ModelOptions): 
             return 65536;
         }
         else if (model.includes("-3-7-")) {
-            if (option && (option as BedrockClaudeOptions)?.thinking_mode) {
-                return 131072;
-            } else {
-                return 8192;
-            }
+            return 131072;
         }
         else if (model.includes("-3-5-")) {
             return 8192;
@@ -214,7 +211,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
             ]
         };
     } else {
-        const max_tokens_limit = getMaxTokensLimitBedrock(model, option);
+        const max_tokens_limit = getMaxTokensLimitBedrock(model);
         //Not canvas, i.e normal AWS bedrock converse
         const baseConverseOptions: ModelOptionInfoItem[] = [
             {
@@ -278,6 +275,12 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                         integer: true,
                         step: 100,
                         description: "The target number of tokens to use for reasoning, not a hard limit."
+                    },
+                    {
+                        name: "include_thoughts",
+                        type: OptionType.boolean,
+                        default: false,
+                        description: "If true, include the reasoning in the response"
                     },
                 ] : [];
 
