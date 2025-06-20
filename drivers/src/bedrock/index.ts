@@ -74,7 +74,7 @@ function maxTokenFallbackClaude(option: StatelessExecutionOptions): number {
         return modelOptions.max_tokens;
     } else {
         // Fallback to the default max tokens limit for the model
-        if (option.model.includes('claude-3-7-sonnet')) {
+        if (option.model.includes('claude-3-7-sonnet') && (modelOptions?.thinking_budget_tokens ?? 0) < 64000) {
             return 64000; // Claude 3.7 can go up to 128k with a beta header, but when no max tokens is specified, we default to 64k.
         }
         return getMaxTokensLimitBedrock(option.model) ?? 8192; // Should always return a number for claude, 8192 is to satisfy the TypeScript type checker
