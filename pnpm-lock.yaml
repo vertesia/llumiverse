@@ -89,8 +89,8 @@ importers:
   drivers:
     dependencies:
       '@anthropic-ai/sdk':
-        specifier: ^0.52.0
-        version: 0.52.0
+        specifier: ^0.54.0
+        version: 0.54.0
       '@anthropic-ai/vertex-sdk':
         specifier: ^0.11.4
         version: 0.11.4
@@ -198,8 +198,8 @@ importers:
 
 packages:
 
-  '@anthropic-ai/sdk@0.52.0':
-    resolution: {integrity: sha512-d4c+fg+xy9e46c8+YnrrgIQR45CZlAi7PwdzIfDXDM6ACxEZli1/fxhURsq30ZpMZy6LvSkr41jGq5aF5TD7rQ==}
+  '@anthropic-ai/sdk@0.54.0':
+    resolution: {integrity: sha512-xyoCtHJnt/qg5GG6IgK+UJEndz8h8ljzt/caKXmq3LfBF81nC/BW6E4x2rOWCZcvsLyVW+e8U5mtIr6UCE/kJw==}
     hasBin: true
 
   '@anthropic-ai/vertex-sdk@0.11.4':
@@ -2599,11 +2599,11 @@ packages:
 
 snapshots:
 
-  '@anthropic-ai/sdk@0.52.0': {}
+  '@anthropic-ai/sdk@0.54.0': {}
 
   '@anthropic-ai/vertex-sdk@0.11.4':
     dependencies:
-      '@anthropic-ai/sdk': 0.52.0
+      '@anthropic-ai/sdk': 0.54.0
       google-auth-library: 9.15.1
     transitivePeerDependencies:
       - encoding
