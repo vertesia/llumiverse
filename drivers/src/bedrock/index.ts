@@ -7,7 +7,7 @@ import { S3Client } from "@aws-sdk/client-s3";
 import { AwsCredentialIdentity, Provider } from "@aws-sdk/types";
 import {
     AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult,
-    ExecutionOptions, ExecutionTokenUsage, ImageGeneration, Modalities, PromptOptions, PromptSegment,
+    ExecutionOptions, ExecutionTokenUsage, ImageGeneration, Modalities, PromptSegment,
     TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions,
     BedrockClaudeOptions, BedrockPalmyraOptions, getMaxTokensLimitBedrock, NovaCanvasOptions,
     modelModalitiesToArray, getModelCapabilities,
@@ -122,11 +122,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return this._service;
     }
 
-    protected async formatPrompt(segments: PromptSegment[], opts: PromptOptions): Promise<BedrockPrompt> {
+    protected async formatPrompt(segments: PromptSegment[], opts: ExecutionOptions): Promise<BedrockPrompt> {
         if (opts.model.includes("canvas")) {
             return await formatNovaPrompt(segments, opts.result_schema);
         }
-        return await formatConversePrompt(segments, opts.result_schema);
+        return await formatConversePrompt(segments, opts);
     }
 
     static getExtractedExecution(result: ConverseResponse, _prompt?: BedrockPrompt, options?: ExecutionOptions): CompletionChunkObject {
@@ -398,21 +398,21 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 additionalField = { inferenceConfig: { topK: model_options.top_k } };
             }
         } else if (options.model.includes("claude")) {
-            if (options.result_schema) {
+            const claude_options = options.model_options as BedrockClaudeOptions;
+            const thinking = claude_options.thinking_mode ?? false;
+            if (options.result_schema && !thinking) {
                 prompt.messages = converseJSONprefill(prompt.messages);
             }
             if (options.model.includes("claude-3-7") || options.model.includes("-4-")) {
-                const thinking_options = options.model_options as BedrockClaudeOptions;
-                const thinking = thinking_options.thinking_mode ?? false;
                 additionalField = {
                     ...additionalField,
                     reasoning_config: {
                         type: thinking ? "enabled" : "disabled",
-                        budget_tokens: thinking ? (thinking_options.thinking_budget_tokens ?? 1024) : undefined,
+                        budget_tokens: thinking ? (claude_options.thinking_budget_tokens ?? 1024) : undefined,
                     }
                 };
                 if (thinking && options.model.includes("claude-3-7-sonnet") &&
-                    ((thinking_options.max_tokens ?? 0) > 64000 || (thinking_options.thinking_budget_tokens ?? 0) > 64000)) {
+                    ((claude_options.max_tokens ?? 0) > 64000 || (claude_options.thinking_budget_tokens ?? 0) > 64000)) {
                     additionalField = {
                         ...additionalField,
                         anthropic_beta: ["output-128k-2025-02-19"]
@@ -896,11 +896,14 @@ function getToolDefinition(tool: ToolDefinition): Tool.ToolSpecMember {
  * @returns
  */
 function updateConversation(conversation: ConverseRequest, prompt: ConverseRequest): ConverseRequest {
+    const combinedMessages = [...(conversation?.messages || []), ...(prompt.messages || [])];
+    const combinedSystem = prompt.system || conversation?.system;
+
     return {
         ...conversation,
         ...prompt,
-        messages: [...(conversation?.messages || []), ...(prompt.messages || [])],
-        system: prompt.system || conversation?.system,
+        messages: combinedMessages.length > 0 ? combinedMessages : [],
+        system: combinedSystem && combinedSystem.length > 0 ? combinedSystem : undefined,
     };
 }
 
