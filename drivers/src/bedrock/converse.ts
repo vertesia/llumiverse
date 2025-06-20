@@ -1,4 +1,4 @@
-import { DataSource, JSONSchema, readStreamAsString, readStreamAsUint8Array } from "@llumiverse/core";
+import { DataSource, ExecutionOptions, readStreamAsString, readStreamAsUint8Array } from "@llumiverse/core";
 import { PromptSegment, PromptRole } from "@llumiverse/core";
 import {
     ConversationRole,
@@ -9,10 +9,6 @@ import {
     ToolResultContentBlock,
 } from "@aws-sdk/client-bedrock-runtime";
 import { parseS3UrlToUri } from "./s3.js";
-
-function getJSONSafetyNotice(schema: JSONSchema) {
-    return "The answer must be a JSON object using the following JSON Schema:\n" + JSON.stringify(schema, undefined, 2);
-}
 
 function roleConversion(role: PromptRole): ConversationRole {
     return role === PromptRole.assistant ? ConversationRole.ASSISTANT : ConversationRole.USER;
@@ -215,18 +211,16 @@ const unsupportedRoles = [
     PromptRole.mask,
 ];
 
-export async function formatConversePrompt(segments: PromptSegment[], schema?: JSONSchema): Promise<ConverseRequest> {
+export async function formatConversePrompt(segments: PromptSegment[], options: ExecutionOptions): Promise<ConverseRequest> {
     //Non-const for concat
-    let system: SystemContentBlock.TextMember[] = [];
-    const safety: SystemContentBlock.TextMember[] = [];
+    let system: SystemContentBlock.TextMember[] | undefined = [];
+    const safety: Message[] = [];
     let messages: Message[] = [];
 
     for (const segment of segments) {
         // Role dependent processing
         if (segment.role === PromptRole.system) {
             system.push({ text: segment.content });
-        } else if (segment.role === PromptRole.safety) {
-            safety.push({ text: segment.content });
         } else if (segment.role === PromptRole.tool) {
             if (!segment.tool_use_id) {
                 throw new Error("Tool use ID is required for tool segments");
@@ -251,7 +245,7 @@ export async function formatConversePrompt(segments: PromptSegment[], schema?: J
                 role: ConversationRole.USER
             });
         } else if (!unsupportedRoles.includes(segment.role)) {
-            //User or Assistant
+            //User, Assistant or safety roles
             const contentBlocks: ContentBlock[] = [];
             //Text segments
             if (segment.content) {
@@ -263,32 +257,45 @@ export async function formatConversePrompt(segments: PromptSegment[], schema?: J
             }
             //If there are no content blocks, skip this message
             if (contentBlocks.length !== 0) {
-                messages.push({
-                    content: contentBlocks,
-                    role: roleConversion(segment.role),
-                });
+                const message = { content: contentBlocks, role: roleConversion(segment.role) };
+                if (segment.role === PromptRole.safety) {
+                    safety.push(message)
+                } else {
+                    messages.push(message);
+                }
             }
         }
+    }
+
+    if (options.result_schema) {
+        let schemaText: string;
+        if (options.tools && options.tools.length > 0) {
+            schemaText = "When not calling tools, the answer must be a JSON object using the following JSON Schema:\n" + JSON.stringify(options.result_schema, undefined, 2);
+        } else {
+            schemaText = "The answer must be a JSON object using the following JSON Schema:\n" + JSON.stringify(options.result_schema, undefined, 2);
+        }
+        system.push({ text: "IMPORTANT: " + schemaText });
+    }
+
+    // Safety messages are user messages that should be included at the end.
+    if (safety.length > 0) {
+        messages = messages.concat(safety);
     }
 
     //Conversations must start with a user message
     //Use the system messages if none are provided
     if (messages.length === 0) {
         const systemMessage = converseSystemToMessages(system);
-        if (systemMessage?.content && systemMessage.content?.[0].text) {
+        if (systemMessage?.content?.[0]?.text?.trim()) {
             messages.push(systemMessage);
         } else {
             throw new Error("Prompt must contain at least one message");
         }
-        system = [];
+        system = undefined;
     }
 
-    if (schema) {
-        safety.push({ text: "IMPORTANT: " + getJSONSafetyNotice(schema) });
-    }
-
-    if (safety.length > 0) {
-        system = system.concat(safety);
+    if (system && system.length === 0) {
+        system = undefined; // If no system messages, set to undefined
     }
 
     messages = converseConcatMessages(messages);
