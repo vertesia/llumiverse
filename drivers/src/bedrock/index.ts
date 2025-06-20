@@ -900,8 +900,7 @@ function updateConversation(conversation: ConverseRequest, prompt: ConverseReque
     const combinedSystem = prompt.system || conversation?.system;
 
     return {
-        ...conversation,
-        ...prompt,
+        modelId: prompt?.modelId || conversation?.modelId,
         messages: combinedMessages.length > 0 ? combinedMessages : [],
         system: combinedSystem && combinedSystem.length > 0 ? combinedSystem : undefined,
     };
