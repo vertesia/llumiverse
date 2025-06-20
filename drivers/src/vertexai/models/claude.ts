@@ -73,7 +73,7 @@ function maxToken(option: StatelessExecutionOptions): number {
         return modelOptions.max_tokens;
     } else {
         // Fallback to the default max tokens limit for the model
-        if (option.model.includes('claude-3-7-sonnet')) {
+        if (option.model.includes('claude-3-7-sonnet') && (modelOptions?.thinking_budget_tokens ?? 0) < 64000) {
             return 64000; // Claude 3.7 can go up to 128k with a beta header, but when no max tokens is specified, we default to 64k.
         }
         return getMaxTokensLimitVertexAi(option.model);
@@ -396,14 +396,15 @@ interface RequestOptions {
     headers?: Record<string, string>;
 }
 
-function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { payload: MessageCreateParamsBase, requestOptions: RequestOptions | undefined} {
+function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { payload: MessageCreateParamsBase, requestOptions: RequestOptions | undefined } {
     const splits = options.model.split("/");
     const modelName = splits[splits.length - 1];
     const model_options = options.model_options as VertexAIClaudeOptions;
 
     // Add beta header for Claude 3.7 models to enable 128k output tokens
     let requestOptions: RequestOptions | undefined = undefined;
-    if (modelName.includes('claude-3-7-sonnet') && (model_options?.max_tokens ?? 0) > 64000) {
+    if (modelName.includes('claude-3-7-sonnet') &&
+        ((model_options?.max_tokens ?? 0) > 64000 || (model_options?.thinking_budget_tokens ?? 0) > 64000)) {
         requestOptions = {
             headers: {
                 'anthropic-beta': 'output-128k-2025-02-19'

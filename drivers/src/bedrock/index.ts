@@ -7,10 +7,11 @@ import { S3Client } from "@aws-sdk/client-s3";
 import { AwsCredentialIdentity, Provider } from "@aws-sdk/types";
 import {
     AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult,
-    ExecutionOptions, ExecutionTokenUsage, ImageGeneration, Modalities, PromptOptions, PromptSegment,
+    ExecutionOptions, ExecutionTokenUsage, ImageGeneration, Modalities, PromptSegment,
     TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions,
     BedrockClaudeOptions, BedrockPalmyraOptions, getMaxTokensLimitBedrock, NovaCanvasOptions,
-    modelModalitiesToArray, getModelCapabilities
+    modelModalitiesToArray, getModelCapabilities,
+    StatelessExecutionOptions
 } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
@@ -66,6 +67,20 @@ export interface BedrockDriverOptions extends DriverOptions {
     credentials?: AwsCredentialIdentity | Provider<AwsCredentialIdentity>;
 }
 
+//Used to get a max_token value when not specified in the model options. Claude requires it to be set.
+function maxTokenFallbackClaude(option: StatelessExecutionOptions): number {
+    const modelOptions = option.model_options as BedrockClaudeOptions | undefined;
+    if (modelOptions && typeof modelOptions.max_tokens === "number") {
+        return modelOptions.max_tokens;
+    } else {
+        // Fallback to the default max tokens limit for the model
+        if (option.model.includes('claude-3-7-sonnet') && (modelOptions?.thinking_budget_tokens ?? 0) < 64000) {
+            return 64000; // Claude 3.7 can go up to 128k with a beta header, but when no max tokens is specified, we default to 64k.
+        }
+        return getMaxTokensLimitBedrock(option.model) ?? 8192; // Should always return a number for claude, 8192 is to satisfy the TypeScript type checker
+    }
+}
+
 export type BedrockPrompt = NovaMessagesPrompt | ConverseRequest;
 
 export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockPrompt> {
@@ -107,35 +122,109 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return this._service;
     }
 
-    protected async formatPrompt(segments: PromptSegment[], opts: PromptOptions): Promise<BedrockPrompt> {
+    protected async formatPrompt(segments: PromptSegment[], opts: ExecutionOptions): Promise<BedrockPrompt> {
         if (opts.model.includes("canvas")) {
             return await formatNovaPrompt(segments, opts.result_schema);
         }
-        return await formatConversePrompt(segments, opts.result_schema);
+        return await formatConversePrompt(segments, opts);
     }
 
-    static getExtractedExecution(result: ConverseResponse, _prompt?: BedrockPrompt): CompletionChunkObject {
-        return {
-            result: result.output?.message?.content?.map(c => c.text).join("\n") ?? "",
+    static getExtractedExecution(result: ConverseResponse, _prompt?: BedrockPrompt, options?: ExecutionOptions): CompletionChunkObject {
+        let resultText = "";
+        let reasoning = "";
+
+        if (result.output?.message?.content) {
+            for (const content of result.output.message.content) {
+                // Get text output
+                if (content.text) {
+                    resultText += content.text;
+                }
+                // Get reasoning content only if include_thoughts is true
+                if (content.reasoningContent && options) {
+                    const claudeOptions = options.model_options as BedrockClaudeOptions;
+                    if (claudeOptions?.include_thoughts) {
+                        if (content.reasoningContent.reasoningText) {
+                            reasoning += content.reasoningContent.reasoningText.text;
+                        } else if (content.reasoningContent.redactedContent) {
+                            // Handle redacted thinking content
+                            const redactedData = new TextDecoder().decode(content.reasoningContent.redactedContent);
+                            reasoning += `[Redacted thinking: ${redactedData}]`;
+                        }
+                    }
+                }
+            }
+
+            // Add spacing if we have reasoning content
+            if (reasoning) {
+                reasoning += '\n\n';
+            }
+        }
+
+        const completionResult: CompletionChunkObject = {
+            result: reasoning + resultText,
             token_usage: {
                 prompt: result.usage?.inputTokens,
                 result: result.usage?.outputTokens,
                 total: result.usage?.totalTokens,
             },
             finish_reason: converseFinishReason(result.stopReason),
-        }
+        };
+
+        return completionResult;
     };
 
-    static getExtractedStream(result: ConverseStreamOutput, _prompt?: BedrockPrompt): CompletionChunkObject {
+    static getExtractedStream(result: ConverseStreamOutput, _prompt?: BedrockPrompt, options?: ExecutionOptions): CompletionChunkObject {
         let output: string = "";
+        let reasoning: string = "";
         let stop_reason = "";
         let token_usage: ExecutionTokenUsage | undefined;
-        if (result.contentBlockDelta) {
-            output = result.contentBlockDelta.delta?.text ?? "";
+
+        // Check if we should include thoughts
+        const shouldIncludeThoughts = options && (options.model_options as BedrockClaudeOptions)?.include_thoughts;
+
+        // Handle content block start events (for reasoning blocks)
+        if (result.contentBlockStart) {
+            // Handle redacted content at block start
+            if (result.contentBlockStart.start && 'reasoningContent' in result.contentBlockStart.start && shouldIncludeThoughts) {
+                const reasoningStart = result.contentBlockStart.start as any;
+                if (reasoningStart.reasoningContent?.redactedContent) {
+                    const redactedData = new TextDecoder().decode(reasoningStart.reasoningContent.redactedContent);
+                    reasoning = `[Redacted thinking: ${redactedData}]`;
+                }
+            }
         }
+
+        // Handle content block deltas (text and reasoning)
+        if (result.contentBlockDelta) {
+            const delta = result.contentBlockDelta.delta;
+            if (delta?.text) {
+                output = delta.text;
+            } else if (delta?.reasoningContent && shouldIncludeThoughts) {
+                if (delta.reasoningContent.text) {
+                    reasoning = delta.reasoningContent.text;
+                } else if (delta.reasoningContent.redactedContent) {
+                    const redactedData = new TextDecoder().decode(delta.reasoningContent.redactedContent);
+                    reasoning = `[Redacted thinking: ${redactedData}]`;
+                } else if (delta.reasoningContent.signature) {
+                    // Handle signature updates for reasoning content - end of thinking
+                    reasoning = "\n\n";
+                }
+            }
+        }
+
+        // Handle content block stop events
+        if (result.contentBlockStop) {
+            // Content block ended - could be end of reasoning or text block
+            // Add minimal spacing for reasoning blocks if not already present
+            if (reasoning && !reasoning.endsWith('\n\n') && shouldIncludeThoughts) {
+                reasoning += '\n\n';
+            }
+        }
+
         if (result.messageStop) {
             stop_reason = result.messageStop.stopReason ?? "";
         }
+
         if (result.metadata) {
             token_usage = {
                 prompt: result.metadata.usage?.inputTokens,
@@ -143,56 +232,15 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 total: result.metadata.usage?.totalTokens,
             }
         }
-        return {
-            result: output,
+
+        const completionResult: CompletionChunkObject = {
+            result: reasoning + output,
             token_usage: token_usage,
             finish_reason: converseFinishReason(stop_reason),
-        }
-    };
-
-    async requestTextCompletion(prompt: ConverseRequest, options: ExecutionOptions): Promise<Completion> {
-        let conversation = updateConversation(options.conversation as ConverseRequest, prompt);
-
-        const payload = this.preparePayload(conversation, options);
-        const executor = this.getExecutor();
-
-        const res = await executor.converse({
-            ...payload,
-        });
-
-        conversation = updateConversation(conversation, {
-            messages: [res.output?.message ?? { content: [{ text: "" }], role: "assistant" }],
-            modelId: prompt.modelId,
-        });
-
-        let tool_use: ToolUse[] | undefined = undefined;
-        //Get tool requests
-        if (res.stopReason == "tool_use") {
-            tool_use = res.output?.message?.content?.reduce((tools: ToolUse[], c) => {
-                if (c.toolUse) {
-                    tools.push({
-                        tool_name: c.toolUse.name ?? "",
-                        tool_input: c.toolUse.input as any,
-                        id: c.toolUse.toolUseId ?? "",
-                    } satisfies ToolUse);
-                }
-                return tools;
-            }, []);
-            //If no tools were used, set to undefined
-            if (tool_use && tool_use.length == 0) {
-                tool_use = undefined;
-            }
-        }
-
-        const completion = {
-            ...BedrockDriver.getExtractedExecution(res, prompt),
-            original_response: options.include_original_response ? res : undefined,
-            conversation: conversation,
-            tool_use: tool_use,
         };
 
-        return completion;
-    }
+        return completionResult;
+    };
 
     extractRegion(modelString: string, defaultRegion: string): string {
         // Match region in full ARN pattern
@@ -270,6 +318,50 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return canStream;
     }
 
+    async requestTextCompletion(prompt: ConverseRequest, options: ExecutionOptions): Promise<Completion> {
+        let conversation = updateConversation(options.conversation as ConverseRequest, prompt);
+
+        const payload = this.preparePayload(conversation, options);
+        const executor = this.getExecutor();
+
+        const res = await executor.converse({
+            ...payload,
+        });
+
+        conversation = updateConversation(conversation, {
+            messages: [res.output?.message ?? { content: [{ text: "" }], role: "assistant" }],
+            modelId: prompt.modelId,
+        });
+
+        let tool_use: ToolUse[] | undefined = undefined;
+        //Get tool requests
+        if (res.stopReason == "tool_use") {
+            tool_use = res.output?.message?.content?.reduce((tools: ToolUse[], c) => {
+                if (c.toolUse) {
+                    tools.push({
+                        tool_name: c.toolUse.name ?? "",
+                        tool_input: c.toolUse.input as any,
+                        id: c.toolUse.toolUseId ?? "",
+                    } satisfies ToolUse);
+                }
+                return tools;
+            }, []);
+            //If no tools were used, set to undefined
+            if (tool_use && tool_use.length == 0) {
+                tool_use = undefined;
+            }
+        }
+
+        const completion = {
+            ...BedrockDriver.getExtractedExecution(res, prompt, options),
+            original_response: options.include_original_response ? res : undefined,
+            conversation: conversation,
+            tool_use: tool_use,
+        };
+
+        return completion;
+    }
+
     async requestTextCompletionStream(prompt: ConverseRequest, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         const payload = this.preparePayload(prompt, options);
         const executor = this.getExecutor();
@@ -282,10 +374,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 throw new Error("[Bedrock] Stream not found in response");
             }
 
-            return transformAsyncIterator(stream, (stream: ConverseStreamOutput) => {
-                //const segment = JSON.parse(decoder.decode(stream.chunk?.bytes));
-                //console.log("Debug Segment for model " + options.model, JSON.stringify(segment));
-                return BedrockDriver.getExtractedStream(stream, prompt);
+            return transformAsyncIterator(stream, (streamSegment: ConverseStreamOutput) => {
+                return BedrockDriver.getExtractedStream(streamSegment, prompt, options);
             });
 
         }).catch((err) => {
@@ -308,29 +398,30 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 additionalField = { inferenceConfig: { topK: model_options.top_k } };
             }
         } else if (options.model.includes("claude")) {
-            if (options.result_schema) {
+            const claude_options = options.model_options as BedrockClaudeOptions;
+            const thinking = claude_options.thinking_mode ?? false;
+            if (options.result_schema && !thinking) {
                 prompt.messages = converseJSONprefill(prompt.messages);
             }
-            if (options.model.includes("claude-3-7")) {
-                const thinking_options = options.model_options as BedrockClaudeOptions;
-                const thinking = thinking_options.thinking_mode ?? false;
+            if (options.model.includes("claude-3-7") || options.model.includes("-4-")) {
                 additionalField = {
                     ...additionalField,
                     reasoning_config: {
                         type: thinking ? "enabled" : "disabled",
-                        budget_tokens: thinking_options.thinking_budget_tokens ?? 1024,
+                        budget_tokens: thinking ? (claude_options.thinking_budget_tokens ?? 1024) : undefined,
                     }
                 };
-                if (thinking && (thinking_options.thinking_budget_tokens ?? 0) > 64000) {
+                if (thinking && options.model.includes("claude-3-7-sonnet") &&
+                    ((claude_options.max_tokens ?? 0) > 64000 || (claude_options.thinking_budget_tokens ?? 0) > 64000)) {
                     additionalField = {
                         ...additionalField,
-                        anthorpic_beta: ["output-128k-2025-02-19"]
+                        anthropic_beta: ["output-128k-2025-02-19"]
                     };
                 }
             }
             //Needs max_tokens to be set
             if (!model_options.max_tokens) {
-                model_options.max_tokens = getMaxTokensLimitBedrock(options.model, model_options);
+                model_options.max_tokens = maxTokenFallbackClaude(options);
             }
             additionalField = { ...additionalField, top_k: model_options.top_k };
         } else if (options.model.includes("meta")) {
@@ -805,11 +896,13 @@ function getToolDefinition(tool: ToolDefinition): Tool.ToolSpecMember {
  * @returns
  */
 function updateConversation(conversation: ConverseRequest, prompt: ConverseRequest): ConverseRequest {
+    const combinedMessages = [...(conversation?.messages || []), ...(prompt.messages || [])];
+    const combinedSystem = prompt.system || conversation?.system;
+
     return {
-        ...conversation,
-        ...prompt,
-        messages: [...(conversation?.messages || []), ...(prompt.messages || [])],
-        system: prompt.system || conversation?.system,
+        modelId: prompt?.modelId || conversation?.modelId,
+        messages: combinedMessages.length > 0 ? combinedMessages : [],
+        system: combinedSystem && combinedSystem.length > 0 ? combinedSystem : undefined,
     };
 }
 

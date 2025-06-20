@@ -351,7 +351,7 @@ function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInf
                 name: "thinking_budget_tokens",
                 type: OptionType.numeric,
                 min: 1024,
-                default: 4000,
+                default: 1024,
                 integer: true,
                 step: 100,
                 description: "The target number of tokens to use for reasoning, not a hard limit."
