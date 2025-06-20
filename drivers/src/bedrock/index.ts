@@ -411,7 +411,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                         budget_tokens: thinking ? (thinking_options.thinking_budget_tokens ?? 1024) : undefined,
                     }
                 };
-                if (thinking && (thinking_options.max_tokens ?? 0) > 64000) {
+                if (thinking && options.model.includes("claude-3-7-sonnet") &&
+                    ((thinking_options.max_tokens ?? 0) > 64000 || (thinking_options.thinking_budget_tokens ?? 0) > 64000)) {
                     additionalField = {
                         ...additionalField,
                         anthropic_beta: ["output-128k-2025-02-19"]
