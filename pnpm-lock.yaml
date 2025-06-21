@@ -95,8 +95,8 @@ importers:
         specifier: ^0.11.4
         version: 0.11.4
       '@aws-sdk/client-bedrock':
-        specifier: ^3.831.0
-        version: 3.831.0
+        specifier: ^3.834.0
+        version: 3.834.0
       '@aws-sdk/client-bedrock-runtime':
         specifier: ^3.830.0
         version: 3.830.0
@@ -104,8 +104,8 @@ importers:
         specifier: ^3.832.0
         version: 3.832.0
       '@aws-sdk/credential-providers':
-        specifier: ^3.830.0
-        version: 3.830.0
+        specifier: ^3.834.0
+        version: 3.834.0
       '@aws-sdk/lib-storage':
         specifier: ^3.832.0
         version: 3.832.0(@aws-sdk/client-s3@3.832.0)
@@ -113,8 +113,8 @@ importers:
         specifier: ^3.821.0
         version: 3.821.0
       '@azure/identity':
-        specifier: ^4.10.0
-        version: 4.10.0
+        specifier: ^4.10.1
+        version: 4.10.1
       '@azure/openai':
         specifier: 2.0.0
         version: 2.0.0
@@ -122,11 +122,11 @@ importers:
         specifier: ^3.35.0
         version: 3.35.0
       '@google/genai':
-        specifier: ^1.5.1
-        version: 1.5.1(@modelcontextprotocol/sdk@1.12.0)
+        specifier: ^1.6.0
+        version: 1.6.0(@modelcontextprotocol/sdk@1.12.0)
       '@huggingface/inference':
-        specifier: 2.6.7
-        version: 2.6.7
+        specifier: 2.8.1
+        version: 2.8.1
       '@llumiverse/common':
         specifier: workspace:*
         version: link:../common
@@ -143,8 +143,8 @@ importers:
         specifier: ^9.14.0
         version: 9.15.1
       groq-sdk:
-        specifier: ^0.22.0
-        version: 0.22.0
+        specifier: ^0.25.0
+        version: 0.25.0
       mnemonist:
         specifier: ^0.40.0
         version: 0.40.3
@@ -152,8 +152,8 @@ importers:
         specifier: ^0.2.0
         version: 0.2.1
       openai:
-        specifier: ^4.103.0
-        version: 4.103.0(ws@8.18.2)(zod@3.25.63)
+        specifier: ^4.104.0
+        version: 4.104.0(ws@8.18.2)(zod@3.25.63)
       replicate:
         specifier: ^1.0.1
         version: 1.0.1
@@ -232,8 +232,8 @@ packages:
     resolution: {integrity: sha512-2f6t0K82CwNdoYYmnuYcyApAAh0H3oOhxF0lydRmPbty56owSC9R2MRzuy1lthLeEmVp0MFaCh17SlFfMKUR1Q==}
     engines: {node: '>=18.0.0'}
 
-  '@aws-sdk/client-bedrock@3.831.0':
-    resolution: {integrity: sha512-VloN7JcYoMgDxzM72gs4b/wQGNKuOYEZhOv45fLiieXjSSzSgEfWh4uuko5eQIIozYCP7rCBt2eZooxUi03dZw==}
+  '@aws-sdk/client-bedrock@3.834.0':
+    resolution: {integrity: sha512-YEf37GF6m3YEFMi1tDoBy4BnIMr1X+cnIezoHUuGIoxrYUQCgTciL3Wy2NfdKb8O8ZxqWduEpVp3VYMWTzpnLg==}
     engines: {node: '>=18.0.0'}
 
   '@aws-sdk/client-cognito-identity@3.830.0':
@@ -284,8 +284,8 @@ packages:
     resolution: {integrity: sha512-hPYrKsZeeOdLROJ59T6Y8yZ0iwC/60L3qhZXjapBFjbqBtMaQiMTI645K6xVXBioA6vxXq7B4aLOhYqk6Fy/Ww==}
     engines: {node: '>=18.0.0'}
 
-  '@aws-sdk/credential-providers@3.830.0':
-    resolution: {integrity: sha512-Q16Yf52L9QWsRhaaG/Q6eUkUWGUrbKTM2ba8at8ZZ8tsGaKO5pYgXUTErxB1bin11S6JszinbLqUf9G9oUExxA==}
+  '@aws-sdk/credential-providers@3.834.0':
+    resolution: {integrity: sha512-ORIWCrLuqJnJg0fuI0rPhwaeuzqnIIJsbSkg1WV2XuiOpWXwLC/CfzhAbelQAv07/sRywZMnKqws0OOWg/ieYg==}
     engines: {node: '>=18.0.0'}
 
   '@aws-sdk/eventstream-handler-node@3.821.0':
@@ -418,8 +418,8 @@ packages:
     resolution: {integrity: sha512-DxOSLua+NdpWoSqULhjDyAZTXFdP/LKkqtYuxxz1SCN289zk3OG8UOpnCQAz/tygyACBtWp/BoO72ptK7msY8g==}
     engines: {node: '>=18.0.0'}
 
-  '@azure/identity@4.10.0':
-    resolution: {integrity: sha512-iT53Sre2NJK6wzMWnvpjNiR3md597LZ3uK/5kQD2TkrY9vqhrY5bt2KwELNjkOWQ9n8S/92knj/QEykTtjMNqQ==}
+  '@azure/identity@4.10.1':
+    resolution: {integrity: sha512-YM/z6RxRtFlXUH2egAYF/FDPes+MUE6ZoknjEdaq7ebJMMNUzn9zCJ3bd2ZZZlkP0r1xKa88kolhFH/FGV7JnA==}
     engines: {node: '>=18.0.0'}
 
   '@azure/logger@1.1.4':
@@ -642,8 +642,8 @@ packages:
     resolution: {integrity: sha512-Eo+ckr1KbTxAOew9P+MeeR0aQXeW5PeOzrSM1JyGny/SGKejwX/RcGWSFpeapnlegTfI9N9xJeUeo3M+XBOeFg==}
     engines: {node: '>=14.0.0'}
 
-  '@google/genai@1.5.1':
-    resolution: {integrity: sha512-9SKpNo5iqvB622lN3tSCbeuiLGTcStRd+3muOrI9pZMpzfLDc/xC7dWIJd5kK+4AZuY28nsvQmCZe0fPj3JUew==}
+  '@google/genai@1.6.0':
+    resolution: {integrity: sha512-0vn8wMGesjiEsHeFsl10T8+SFqLj7q+RSE6mml66sE+jwI7U9wW2LQ3qYtwUEaI+P8ZYeEYE5IpYmNLcRQUBPQ==}
     engines: {node: '>=20.0.0'}
     peerDependencies:
       '@modelcontextprotocol/sdk': ^1.11.0
@@ -660,9 +660,12 @@ packages:
     engines: {node: '>=6'}
     hasBin: true
 
-  '@huggingface/inference@2.6.7':
-    resolution: {integrity: sha512-vFBqvtU3LhxjufTs0jcRrDSc0nK+lah10bOgvlIn80lAH4JwMzHHPBQ4g4ECEdRD0PIt6EpTiidEZQq2sArb5Q==}
+  '@huggingface/inference@2.8.1':
+    resolution: {integrity: sha512-EfsNtY9OR6JCNaUa5bZu2mrs48iqeTz0Gutwf+fU0Kypx33xFQB4DKMhp8u4Ee6qVbLbNWvTHuWwlppLQl4p4Q==}
     engines: {node: '>=18'}
+
+  '@huggingface/tasks@0.12.30':
+    resolution: {integrity: sha512-A1ITdxbEzx9L8wKR8pF7swyrTLxWNDFIGDLUWInxvks2ruQ8PLRBZe8r0EcjC3CDdtlj9jV1V4cgV35K/iy3GQ==}
 
   '@humanfs/core@0.19.1':
     resolution: {integrity: sha512-5DyQ4+1JEUzejeK1JGICcideyfUbGixgS9jNgex5nqkW+cY7WZhxBigmieN5Qnw9ZosSNVC9KQKyb+GUaGyKUA==}
@@ -1728,8 +1731,8 @@ packages:
   graphemer@1.4.0:
     resolution: {integrity: sha512-EtKwoO6kxCL9WO5xipiHTZlSzBm7WLT627TqC/uVRd0HKmq8NXyebnNYxDoBi7wt8eTWrUrKXCOVaFq9x1kgag==}
 
-  groq-sdk@0.22.0:
-    resolution: {integrity: sha512-wLkIFlfbi6u9BM8x79wt+yKYqUHoF//od2P5U0MMZRvj/hR+sCZxx1E/ymSGP+M5/fER85MHhPOd/8q3BP4BbQ==}
+  groq-sdk@0.25.0:
+    resolution: {integrity: sha512-IZQb/U0LZQcoF6Amoq8Kh+3seDYdk7278VrAOCz/W4I2nC7PvqEwik3RjRe3bxrOBFvUFHhL/3J+jzVzfjhZUQ==}
 
   gtoken@7.1.0:
     resolution: {integrity: sha512-pCcEwRi+TKpMlxAQObHDQ56KawURgyAf6jtIY046fJ5tIv3zDe/LEIubckAO8fj6JnAxLdmWkUfNyulQ2iKdEw==}
@@ -2063,8 +2066,8 @@ packages:
     resolution: {integrity: sha512-mnkeQ1qP5Ue2wd+aivTD3NHd/lZ96Lu0jgf0pwktLPtx6cTZiH7tyeGRRHs0zX0rbrahXPnXlUnbeXyaBBuIaw==}
     engines: {node: '>=18'}
 
-  openai@4.103.0:
-    resolution: {integrity: sha512-eWcz9kdurkGOFDtd5ySS5y251H2uBgq9+1a2lTBnjMMzlexJ40Am5t6Mu76SSE87VvitPa0dkIAp75F+dZVC0g==}
+  openai@4.104.0:
+    resolution: {integrity: sha512-p99EFNsA/yX6UhVO93f5kJsDRLAg+CTA2RBqdHK4RtK8u5IJw32Hyb2dTGKbnnFmnuoBv5r7Z2CURI9sGZpSuA==}
     hasBin: true
     peerDependencies:
       ws: ^8.18.0
@@ -2708,7 +2711,7 @@ snapshots:
     transitivePeerDependencies:
       - aws-crt
 
-  '@aws-sdk/client-bedrock@3.831.0':
+  '@aws-sdk/client-bedrock@3.834.0':
     dependencies:
       '@aws-crypto/sha256-browser': 5.2.0
       '@aws-crypto/sha256-js': 5.2.0
@@ -3021,7 +3024,7 @@ snapshots:
     transitivePeerDependencies:
       - aws-crt
 
-  '@aws-sdk/credential-providers@3.830.0':
+  '@aws-sdk/credential-providers@3.834.0':
     dependencies:
       '@aws-sdk/client-cognito-identity': 3.830.0
       '@aws-sdk/core': 3.826.0
@@ -3330,7 +3333,7 @@ snapshots:
       '@azure/abort-controller': 2.1.2
       tslib: 2.8.1
 
-  '@azure/identity@4.10.0':
+  '@azure/identity@4.10.1':
     dependencies:
       '@azure/abort-controller': 2.1.2
       '@azure/core-auth': 1.9.0
@@ -3502,7 +3505,7 @@ snapshots:
       - encoding
       - supports-color
 
-  '@google/genai@1.5.1(@modelcontextprotocol/sdk@1.12.0)':
+  '@google/genai@1.6.0(@modelcontextprotocol/sdk@1.12.0)':
     dependencies:
       google-auth-library: 9.15.1
       ws: 8.18.2
@@ -3528,7 +3531,11 @@ snapshots:
       protobufjs: 7.4.0
       yargs: 17.7.2
 
-  '@huggingface/inference@2.6.7': {}
+  '@huggingface/inference@2.8.1':
+    dependencies:
+      '@huggingface/tasks': 0.12.30
+
+  '@huggingface/tasks@0.12.30': {}
 
   '@humanfs/core@0.19.1': {}
 
@@ -4829,7 +4836,7 @@ snapshots:
 
   graphemer@1.4.0: {}
 
-  groq-sdk@0.22.0:
+  groq-sdk@0.25.0:
     dependencies:
       '@types/node': 18.19.86
       '@types/node-fetch': 2.6.12
@@ -5157,7 +5164,7 @@ snapshots:
       is-inside-container: 1.0.0
       is-wsl: 3.1.0
 
-  openai@4.103.0(ws@8.18.2)(zod@3.25.63):
+  openai@4.104.0(ws@8.18.2)(zod@3.25.63):
     dependencies:
       '@types/node': 18.19.86
       '@types/node-fetch': 2.6.12
