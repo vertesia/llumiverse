@@ -341,13 +341,13 @@ export class ImagenModelDefinition {
         if (options.model_options?._option_id !== "vertexai-imagen") {
             driver.logger.warn("Invalid model options", {options: options.model_options });
         }
-        options.model_options = options.model_options as ImagenOptions;
+        options.model_options = options.model_options as ImagenOptions | undefined;
 
         if (options.output_modality !== Modalities.image) {
             throw new Error(`Image generation requires image output_modality`);
         }
 
-        const taskType: string = options.model_options.edit_mode ?? ImagenTaskType.TEXT_IMAGE;
+        const taskType: string = options.model_options?.edit_mode ?? ImagenTaskType.TEXT_IMAGE;
 
         driver.logger.info("Task type: " + taskType);
 
@@ -362,7 +362,7 @@ export class ImagenModelDefinition {
         }
         const instances = [instanceValue];
 
-        let parameter: any = getImagenParameters(taskType, options.model_options);
+        let parameter: any = getImagenParameters(taskType, options.model_options ?? {_option_id: "vertexai-imagen"});
         parameter.negativePrompt = prompt.negativePrompt ?? undefined;
 
         const numberOfImages = options.model_options?.number_of_images ?? 1;
