@@ -11,7 +11,8 @@ import {
     TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions,
     BedrockClaudeOptions, BedrockPalmyraOptions, getMaxTokensLimitBedrock, NovaCanvasOptions,
     modelModalitiesToArray, getModelCapabilities,
-    StatelessExecutionOptions
+    StatelessExecutionOptions,
+    ModelOptions
 } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
@@ -398,7 +399,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 additionalField = { inferenceConfig: { topK: model_options.top_k } };
             }
         } else if (options.model.includes("claude")) {
-            const claude_options = options.model_options as BedrockClaudeOptions;
+            const claude_options = model_options as ModelOptions as BedrockClaudeOptions;
             const thinking = claude_options.thinking_mode ?? false;
             if (options.result_schema && !thinking) {
                 prompt.messages = converseJSONprefill(prompt.messages);
@@ -478,7 +479,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 }
             }
         } else if (options.model.includes("palmyra")) {
-            const palmyraOptions = options.model_options as BedrockPalmyraOptions;
+            const palmyraOptions = model_options as ModelOptions as BedrockPalmyraOptions;
             additionalField = {
                 seed: palmyraOptions?.seed,
                 presence_penalty: palmyraOptions?.presence_penalty,
