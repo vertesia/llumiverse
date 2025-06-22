@@ -388,11 +388,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const model_options: TextFallbackOptions = options.model_options as TextFallbackOptions ?? { _option_id: "text-fallback" };
 
         let additionalField = {};
+        let supportsJSONPrefill = false;
 
         if (options.model.includes("amazon")) {
-            if (options.result_schema) {
-                prompt.messages = converseJSONprefill(prompt.messages);
-            }
+            supportsJSONPrefill = true;
             //Titan models also exists but does not support any additional options
             if (options.model.includes("nova")) {
                 additionalField = { inferenceConfig: { topK: model_options.top_k } };
@@ -400,9 +399,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         } else if (options.model.includes("claude")) {
             const claude_options = options.model_options as BedrockClaudeOptions;
             const thinking = claude_options.thinking_mode ?? false;
-            if (options.result_schema && !thinking) {
-                prompt.messages = converseJSONprefill(prompt.messages);
-            }
+            supportsJSONPrefill = !thinking
+
             if (options.model.includes("claude-3-7") || options.model.includes("-4-")) {
                 additionalField = {
                     ...additionalField,
@@ -429,15 +427,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         } else if (options.model.includes("mistral")) {
             //7B instruct and 8x7B instruct
             if (options.model.includes("7b")) {
+                supportsJSONPrefill = true;
                 additionalField = { top_k: model_options.top_k };
                 //Does not support system messages
                 if (prompt.system && prompt.system?.length != 0) {
                     prompt.messages?.push(converseSystemToMessages(prompt.system));
                     prompt.system = undefined;
                     prompt.messages = converseConcatMessages(prompt.messages);
-                }
-                if (options.result_schema) {
-                    prompt.messages = converseJSONprefill(prompt.messages);
                 }
             } else {
                 //Other models such as Mistral Small,Large and Large 2
@@ -503,6 +499,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
 
         const tool_defs = getToolDefinitions(options.tools);
+
+        // Use prefill when there is a schema and tools are not being used
+        if (supportsJSONPrefill && options.result_schema && !tool_defs) {
+            prompt.messages = converseJSONprefill(prompt.messages);
+        }
 
         const request: ConverseRequest = {
             messages: prompt.messages,
