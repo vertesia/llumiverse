@@ -33,17 +33,17 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
         if (options.model_options?._option_id !== "text-fallback") {
             this.logger.warn("Invalid model options", {options: options.model_options });
         }
-        options.model_options = options.model_options as TextFallbackOptions;
+        options.model_options = options.model_options as TextFallbackOptions | undefined;
         
         const payload: WatsonxTextGenerationPayload = {
             model_id: options.model,
             input: prompt + "\n",
             parameters: {
-                max_new_tokens: options.model_options.max_tokens,
-                temperature: options.model_options.temperature,
-                top_k: options.model_options.top_k,
-                top_p: options.model_options.top_p,
-                stop_sequences: options.model_options.stop_sequence,
+                max_new_tokens: options.model_options?.max_tokens,
+                temperature: options.model_options?.temperature,
+                top_k: options.model_options?.top_k,
+                top_p: options.model_options?.top_p,
+                stop_sequences: options.model_options?.stop_sequence,
             },
             project_id: this.projectId,
         }
@@ -68,16 +68,16 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
         if (options.model_options?._option_id !== "text-fallback") {
             this.logger.warn("Invalid model options", {options: options.model_options });
         }
-        options.model_options = options.model_options as TextFallbackOptions;
+        options.model_options = options.model_options as TextFallbackOptions | undefined;
         const payload: WatsonxTextGenerationPayload = {
             model_id: options.model,
             input: prompt + "\n",
             parameters: {
-                max_new_tokens: options.model_options.max_tokens,
-                temperature: options.model_options.temperature,
-                top_k: options.model_options.top_k,
-                top_p: options.model_options.top_p,
-                stop_sequences: options.model_options.stop_sequence,
+                max_new_tokens: options.model_options?.max_tokens,
+                temperature: options.model_options?.temperature,
+                top_k: options.model_options?.top_k,
+                top_p: options.model_options?.top_p,
+                stop_sequences: options.model_options?.stop_sequence,
             },
             project_id: this.projectId,
         }
