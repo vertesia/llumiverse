@@ -11,6 +11,7 @@ import {
     ExecutionTokenUsage,
     JSONSchema,
     ModelType,
+    Providers,
     ToolDefinition,
     ToolUse,
     TrainingJob,
@@ -45,7 +46,8 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     BaseOpenAIDriverOptions,
     OpenAIMessageBlock[]
 > {
-    abstract provider: "azure_openai" | "openai" | "xai";
+    //abstract provider: "azure_openai" | "openai" | "xai" | "azure_foundry";
+    abstract provider: Providers.openai | Providers.azure_openai | "xai" | Providers.azure_foundry;
     abstract service: OpenAI | AzureOpenAI;
 
     constructor(opts: BaseOpenAIDriverOptions) {
