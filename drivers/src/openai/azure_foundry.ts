@@ -1,5 +1,5 @@
 import { DefaultAzureCredential, getBearerTokenProvider } from "@azure/identity";
-import { AIModel, DriverOptions, ExecutionOptions } from "@llumiverse/core";
+import { AIModel, DriverOptions, ExecutionOptions, Providers } from "@llumiverse/core";
 import OpenAI, { AzureOpenAI } from "openai";
 import { BaseOpenAIDriver } from "./index.js";
 
@@ -23,7 +23,7 @@ export interface AzureFoundryDriverOptions extends DriverOptions {
 export class AzureFoundryDriver extends BaseOpenAIDriver {
 
     service: AzureOpenAI;
-    provider: "azure_foundry";
+    readonly provider = Providers.azure_foundry;
 
     constructor(opts: AzureFoundryDriverOptions) {
         super(opts);
@@ -38,7 +38,6 @@ export class AzureFoundryDriver extends BaseOpenAIDriver {
             endpoint: opts.endpoint,
             apiVersion: opts.apiVersion ?? "2024-10-21",
         });
-        this.provider = "azure_foundry";
     }
 
     /**

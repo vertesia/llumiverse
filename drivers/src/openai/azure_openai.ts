@@ -1,5 +1,5 @@
 import { DefaultAzureCredential, getBearerTokenProvider } from "@azure/identity";
-import { AIModel, DriverOptions, getModelCapabilities, modelModalitiesToArray } from "@llumiverse/core";
+import { AIModel, DriverOptions, getModelCapabilities, modelModalitiesToArray, Providers } from "@llumiverse/core";
 import OpenAI, { AzureOpenAI } from "openai";
 import { BaseOpenAIDriver } from "./index.js";
 
@@ -24,7 +24,7 @@ export class AzureOpenAIDriver extends BaseOpenAIDriver {
 
 
     service: AzureOpenAI;
-    provider: "azure_openai";
+    readonly provider = Providers.azure_openai;
 
     constructor(opts: AzureOpenAIDriverOptions) {
         super(opts);
@@ -40,7 +40,6 @@ export class AzureOpenAIDriver extends BaseOpenAIDriver {
             apiVersion: opts.apiVersion ?? "2024-10-21",
             deployment: opts.deployment
         });
-        this.provider = "azure_openai";
     }
 
     /**
