@@ -56,32 +56,31 @@ export class AzureOpenAIDriver extends BaseOpenAIDriver {
     }
 
     async _listModels(_filter?: (m: OpenAI.Models.Model) => boolean): Promise<AIModel[]> {
-        if (this.service.deploymentName) {
-            //Do a test execution to check if the model works
-            let modelID = this.service.deploymentName;
-            try {
-                const testResponse = await this.service.chat.completions.create({
-                    model: this.service.deploymentName,
-                    messages: [{ role: "user", content: "Hi" }],
-                    max_tokens: 1,
-                });
-                modelID = testResponse.model;
-            } catch (error) {
-                this.logger.error("Failed to test model for listing:", error);
-            }
-            const modelCapability = getModelCapabilities(modelID, "openai");
-            return [{
-                id: modelID,
-                name: this.service.deploymentName,
-                provider: this.provider,
-                owner: "azure_openai", // Azure OpenAI does not expose ownership in the same way
-                can_stream: false, // Streaming is supported, but we don't have a way to check if it works for this model.
-                input_modalities: modelModalitiesToArray(modelCapability.input),
-                output_modalities: modelModalitiesToArray(modelCapability.output),
-                tool_support: modelCapability.tool_support,
-            } satisfies AIModel<string>];
-        } else {
-            return [];
+        if (!this.service.deploymentName) {
+            throw new Error("A specific deployment is not set. Azure OpenAI cannot list deployments. Update your endpoint URL to include the deployment name, e.g., https://your-resource.openai.azure.com/openai/deployments/your-deployment/chat/completions");
         }
+            
+        //Do a test execution to check if the model works and to get the model ID.
+        let modelID = this.service.deploymentName;
+        try {
+            const testResponse = await this.service.chat.completions.create({
+                model: this.service.deploymentName,
+                messages: [{ role: "user", content: "Hi" }],
+                max_tokens: 1,
+            });
+            modelID = testResponse.model;
+        } catch (error) {
+            this.logger.error("Failed to test model for Azure OpenAI listing :", error);
+        }
+        const modelCapability = getModelCapabilities(modelID, "openai");
+        return [{
+            id: modelID,
+            name: this.service.deploymentName,
+            provider: this.provider,
+            owner: "openai",
+            input_modalities: modelModalitiesToArray(modelCapability.input),
+            output_modalities: modelModalitiesToArray(modelCapability.output),
+            tool_support: modelCapability.tool_support,
+        } satisfies AIModel<string>];
     }
 }
