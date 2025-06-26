@@ -1,5 +1,5 @@
 import { DefaultAzureCredential, getBearerTokenProvider } from "@azure/identity";
-import { AbstractDriver, AIModel, Completion, CompletionChunk, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, getModelCapabilities, modelModalitiesToArray, Providers } from "@llumiverse/core";
+import { AbstractDriver, AIModel, Completion, CompletionChunk, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, getModelCapabilities, modelModalitiesToArray, PromptSegment, Providers } from "@llumiverse/core";
 import { AIProjectClient, Deployment, DeploymentUnion, ModelDeployment } from '@azure/ai-projects';
 
 export interface AzureFoundryDriverOptions extends DriverOptions {
@@ -36,17 +36,16 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     generateEmbeddings(_options: EmbeddingsOptions): Promise<EmbeddingsResult> {
         throw new Error("Method not implemented.");
     }
+    protected async formatPrompt(_segments: PromptSegment[], _opts: ExecutionOptions): Promise<AzureFoundryPrompt> {
+        throw new Error("Method not implemented.");
+    }
+    
 
     service: AIProjectClient;
     readonly provider = Providers.azure_foundry;
 
     constructor(opts: AzureFoundryDriverOptions) {
         super(opts);
-
-        if (!opts.azureADTokenProvider && !opts.apiKey) {
-            opts.azureADTokenProvider = this.getDefaultCognitiveServicesAuth();
-        }
-
         this.service = new AIProjectClient(opts.endpoint ?? "", new DefaultAzureCredential());
     }
 
@@ -59,26 +58,8 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         return azureADTokenProvider;
     }
 
-    /**
-     * Get default authentication for Azure Cognitive Services API
-     */
-    getDefaultCognitiveServicesAuth() {
-        const scope = "https://cognitiveservices.azure.com/.default";
-        const azureADTokenProvider = getBearerTokenProvider(new DefaultAzureCredential(), scope);
-        return azureADTokenProvider;
-    }
-
-    /**
-     * Get default authentication for Azure Management API (for ARM operations)
-     */
-    getDefaultManagementAuth() {
-        const scope = "https://management.azure.com/.default";
-        const azureADTokenProvider = getBearerTokenProvider(new DefaultAzureCredential(), scope);
-        return azureADTokenProvider;
-    }
-
     protected canStream(_options: ExecutionOptions): Promise<boolean> {
-        return Promise.resolve(false);
+        return Promise.resolve(true);
     }
 
     async listModels(): Promise<AIModel[]> {
