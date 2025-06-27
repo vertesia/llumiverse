@@ -26,9 +26,15 @@ export class AzureOpenAIDriver extends BaseOpenAIDriver {
     service: AzureOpenAI;
     readonly provider = Providers.azure_openai;
 
-    constructor(opts: AzureOpenAIDriverOptions) {
+    //Overload to allow independent instantiation with AzureOpenAI service
+    constructor(serviceOrOpts: AzureOpenAI | AzureOpenAIDriverOptions) {
+        if (serviceOrOpts instanceof AzureOpenAI) {
+            super({});
+            this.service = serviceOrOpts;
+            return;
+        }
+        const opts = serviceOrOpts ?? {};
         super(opts);
-
         if (!opts.azureADTokenProvider && !opts.apiKey) {
             opts.azureADTokenProvider = this.getDefaultCognitiveServicesAuth();
         }
