@@ -112,9 +112,15 @@ importers:
       '@aws-sdk/types':
         specifier: ^3.821.0
         version: 3.821.0
+      '@azure-rest/ai-inference':
+        specifier: 1.0.0-beta.6
+        version: 1.0.0-beta.6
       '@azure/ai-projects':
         specifier: 1.0.0-beta.8
         version: 1.0.0-beta.8(ws@8.18.2)(zod@3.25.63)
+      '@azure/core-auth':
+        specifier: ^1.9.0
+        version: 1.9.0
       '@azure/identity':
         specifier: ^4.10.0
         version: 4.10.0
@@ -435,10 +441,6 @@ packages:
 
   '@azure/core-paging@1.6.2':
     resolution: {integrity: sha512-YKWi9YuCU04B55h25cnOYZHxXYtEvQEbKST5vqRga7hWY9ydd3FZHdeQF8pyh+acWZvppw13M/LMGx0LABUVMA==}
-    engines: {node: '>=18.0.0'}
-
-  '@azure/core-rest-pipeline@1.19.1':
-    resolution: {integrity: sha512-zHeoI3NCs53lLBbWNzQycjnYKsA1CVKlnzSNuSFcUDwBp8HHVObePxrM7HaX+Ha5Ks639H7chNC9HOaIhNS03w==}
     engines: {node: '>=18.0.0'}
 
   '@azure/core-rest-pipeline@1.21.0':
@@ -3566,7 +3568,7 @@ snapshots:
       '@azure/abort-controller': 2.1.2
       '@azure/core-auth': 1.9.0
       '@azure/core-lro': 2.7.2
-      '@azure/core-rest-pipeline': 1.19.1
+      '@azure/core-rest-pipeline': 1.21.0
       '@azure/core-tracing': 1.2.0
       '@azure/logger': 1.1.4
       tslib: 2.8.1
@@ -3577,7 +3579,7 @@ snapshots:
     dependencies:
       '@azure/abort-controller': 2.1.2
       '@azure/core-auth': 1.9.0
-      '@azure/core-rest-pipeline': 1.19.1
+      '@azure/core-rest-pipeline': 1.21.0
       '@azure/core-tracing': 1.2.0
       '@azure/core-util': 1.11.0
       tslib: 2.8.1
@@ -3595,7 +3597,7 @@ snapshots:
       '@azure/core-auth': 1.9.0
       '@azure/core-lro': 3.2.0
       '@azure/core-paging': 1.6.2
-      '@azure/core-rest-pipeline': 1.19.1
+      '@azure/core-rest-pipeline': 1.21.0
       '@azure/core-sse': 2.2.0
       '@azure/core-tracing': 1.2.0
       '@azure/core-util': 1.11.0
@@ -3613,7 +3615,7 @@ snapshots:
       '@azure/core-auth': 1.9.0
       '@azure/core-lro': 3.2.0
       '@azure/core-paging': 1.6.2
-      '@azure/core-rest-pipeline': 1.19.1
+      '@azure/core-rest-pipeline': 1.21.0
       '@azure/core-sse': 2.2.0
       '@azure/core-tracing': 1.2.0
       '@azure/core-util': 1.11.0
@@ -3647,7 +3649,7 @@ snapshots:
     dependencies:
       '@azure/abort-controller': 2.1.2
       '@azure/core-auth': 1.9.0
-      '@azure/core-rest-pipeline': 1.19.1
+      '@azure/core-rest-pipeline': 1.21.0
       '@azure/core-tracing': 1.2.0
       '@azure/core-util': 1.11.0
       '@azure/logger': 1.1.4
@@ -3680,19 +3682,6 @@ snapshots:
   '@azure/core-paging@1.6.2':
     dependencies:
       tslib: 2.8.1
-
-  '@azure/core-rest-pipeline@1.19.1':
-    dependencies:
-      '@azure/abort-controller': 2.1.2
-      '@azure/core-auth': 1.9.0
-      '@azure/core-tracing': 1.2.0
-      '@azure/core-util': 1.11.0
-      '@azure/logger': 1.1.4
-      http-proxy-agent: 7.0.2
-      https-proxy-agent: 7.0.6
-      tslib: 2.8.1
-    transitivePeerDependencies:
-      - supports-color
 
   '@azure/core-rest-pipeline@1.21.0':
     dependencies:
@@ -3729,7 +3718,7 @@ snapshots:
       '@azure/abort-controller': 2.1.2
       '@azure/core-auth': 1.9.0
       '@azure/core-client': 1.9.3
-      '@azure/core-rest-pipeline': 1.19.1
+      '@azure/core-rest-pipeline': 1.21.0
       '@azure/core-tracing': 1.2.0
       '@azure/core-util': 1.11.0
       '@azure/logger': 1.1.4
@@ -3785,7 +3774,7 @@ snapshots:
       '@azure/core-http-compat': 2.3.0
       '@azure/core-lro': 2.7.2
       '@azure/core-paging': 1.6.2
-      '@azure/core-rest-pipeline': 1.19.1
+      '@azure/core-rest-pipeline': 1.21.0
       '@azure/core-tracing': 1.2.0
       '@azure/core-util': 1.11.0
       '@azure/core-xml': 1.4.5
