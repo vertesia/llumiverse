@@ -84,7 +84,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         };
     }
 
-    async requestTextCompletionStream(prompt: OpenAIMessageBlock[], options: ExecutionOptions): Promise<any> {
+    async requestTextCompletionStream(prompt: OpenAIMessageBlock[], options: ExecutionOptions): Promise<AsyncIterable<Completion>> {
         if (options.model_options?._option_id !== "openai-text" && options.model_options?._option_id !== "openai-thinking") {
             this.logger.warn("Invalid model options", { options: options.model_options });
         }
@@ -159,7 +159,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         return asyncMap(stream, mapFn);
     }
 
-    async requestTextCompletion(prompt: OpenAIMessageBlock[], options: ExecutionOptions): Promise<any> {
+    async requestTextCompletion(prompt: OpenAIMessageBlock[], options: ExecutionOptions): Promise<Completion> {
         if (options.model_options?._option_id !== "openai-text" && options.model_options?._option_id !== "openai-thinking") {
             this.logger.warn("Invalid model options", { options: options.model_options });
         }
