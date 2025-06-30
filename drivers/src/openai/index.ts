@@ -295,12 +295,6 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         const wordBlacklist = ["embed", "whisper", "transcribe", "audio", "moderation", "tts",
             "realtime", "dall-e", "babbage", "davinci", "codex", "o1-pro"];
 
-        if (this.provider === "azure_openai") {
-            //Azure OpenAI has additional information about the models
-            result = result.filter((m) => {
-                return !(m as any)?.capabilities?.embeddings;
-            });
-        }
 
         //OpenAI has very little information, filtering based on name.
         result = result.filter((m) => {
