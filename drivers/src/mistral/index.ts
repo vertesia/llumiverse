@@ -62,7 +62,7 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
         return messages;
     }
 
-    async requestTextCompletion(messages: OpenAITextMessage[], options: ExecutionOptions): Promise<Completion<any>> {
+    async requestTextCompletion(messages: OpenAITextMessage[], options: ExecutionOptions): Promise<Completion> {
         if (options.model_options?._option_id !== "text-fallback") {
             this.logger.warn("Invalid model options", {options: options.model_options });
         }

@@ -42,7 +42,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     constructor(opts: AzureFoundryDriverOptions) {
         super(opts);
 
-        this.formatPrompt = formatOpenAILikeMultimodalPrompt as any
+        this.formatPrompt = formatOpenAILikeMultimodalPrompt;
 
         if (!opts.endpoint) {
             throw new Error("Azure AI Foundry endpoint is required");
@@ -131,7 +131,6 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                 throw new Error(`Chat completion request failed with status ${response.status}: ${response.body}`);
             }
 
-            console.log(`[Azure Foundry] Chat completion response:`, JSON.stringify(response, null, 2));
             return this.extractDataFromResponse(response.body as ChatCompletionsOutput);
         }
     }
