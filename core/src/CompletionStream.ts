@@ -1,5 +1,5 @@
-import { AbstractDriver } from "./Driver.js";
 import { CompletionStream, DriverOptions, ExecutionOptions, ExecutionResponse, ExecutionTokenUsage } from "@llumiverse/common";
+import { AbstractDriver } from "./Driver.js";
 
 export class DefaultCompletionStream<PromptT = any> implements CompletionStream<PromptT> {
 
@@ -21,7 +21,7 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
         const chunks = this.chunks;
 
         this.driver.logger.debug(
-            `[${this.driver.provider}] Streaming Execution of ${this.options.model} with prompt`, this.prompt,
+            `[${this.driver.provider}] Streaming Execution of ${this.options.model} with prompt`,
         );
 
         const start = Date.now();

@@ -380,7 +380,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             });
 
         }).catch((err) => {
-            this.logger.error("[Bedrock] Failed to stream", err);
+            this.logger.error("[Bedrock] Failed to stream", { error: err });
             throw err;
         });
     }
