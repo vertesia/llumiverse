@@ -283,37 +283,86 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     }
 
     async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
-        if (!options.text) {
-            throw new Error("No text provided for embeddings");
+        if (!options.model) {
+            throw new Error("Default model selection not supported for Azure Foundry. Please specify a model.");
         }
 
+        if (options.text) {
+            return this.generateTextEmbeddings(options);
+        } else if (options.image) {
+            return this.generateImageEmbeddings(options);
+        } else {
+            throw new Error("No text or images provided for embeddings");
+        }
+    }
+
+    async generateTextEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
+        if (!options.text) {
+            throw new Error("No text provided for text embeddings");
+        }
+
+        let response;
         try {
             // Use the embeddings client from the inference operations
             const embeddingsClient = this.service.inference.embeddings();
-            const response = await embeddingsClient.post({
+            response = await embeddingsClient.post({
                 body: {
                     input: Array.isArray(options.text) ? options.text : [options.text],
-                    model: options.model || "text-embedding-ada-002"
+                    model: options.model
                 }
             });
-
-            if (isUnexpected(response)) {
-                throw new Error(`Embeddings request failed: ${response.status} ${response.body?.error?.message || 'Unknown error'}`);
-            }
-
-            const embeddings = response.body.data?.[0]?.embedding;
-            if (!embeddings || !Array.isArray(embeddings) || embeddings.length === 0) {
-                throw new Error("No valid embedding array found in response");
-            }
-
-            return {
-                values: embeddings as number[],
-                model: options.model || "text-embedding-ada-002"
-            };
         } catch (error) {
-            this.logger.error("Azure Foundry embeddings error:", error);
+            this.logger.error("Azure Foundry text embeddings error:", error);
             throw error;
         }
+
+        if (isUnexpected(response)) {
+            throw new Error(`Text embeddings request failed: ${response.status} ${response.body?.error?.message || 'Unknown error'}`);
+        }
+
+        const embeddings = response.body.data?.[0]?.embedding;
+        if (!embeddings || !Array.isArray(embeddings) || embeddings.length === 0) {
+            throw new Error("No valid embedding array found in response");
+        }
+
+        return {
+            values: embeddings,
+            model: options.model ?? ""
+        };
+        
+    }
+
+    async generateImageEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
+        if (!options.image) {
+            throw new Error("No images provided for image embeddings");
+        }
+
+        let response;
+        try {
+            // Use the embeddings client from the inference operations
+            const embeddingsClient = this.service.inference.embeddings();
+            response = await embeddingsClient.post({
+                body: {
+                    input: Array.isArray(options.image) ? options.image : [options.image],
+                    model: options.model
+                }
+            });
+        } catch (error) {
+            this.logger.error("Azure Foundry image embeddings error:", error);
+            throw error;
+        }
+        if (isUnexpected(response)) {
+            throw new Error(`Image embeddings request failed: ${response.status} ${response.body?.error?.message || 'Unknown error'}`);
+        }
+        const embeddings = response.body.data?.[0]?.embedding;
+        if (!embeddings || !Array.isArray(embeddings) || embeddings.length === 0) {
+            throw new Error("No valid embedding array found in response");
+        }
+        return {
+            values: embeddings,
+            model: options.model ?? ""
+        };
+        
     }
 
     async listModels(): Promise<AIModel[]> {
