@@ -31,10 +31,10 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
 
     async requestTextCompletion(prompt: string, options: ExecutionOptions): Promise<Completion<any>> {
         if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", {options: options.model_options });
+            this.logger.warn("Invalid model options", { options: options.model_options });
         }
         options.model_options = options.model_options as TextFallbackOptions | undefined;
-        
+
         const payload: WatsonxTextGenerationPayload = {
             model_id: options.model,
             input: prompt + "\n",
@@ -66,7 +66,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
 
     async requestTextCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
         if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", {options: options.model_options });
+            this.logger.warn("Invalid model options", { options: options.model_options });
         }
         options.model_options = options.model_options as TextFallbackOptions | undefined;
         const payload: WatsonxTextGenerationPayload = {
@@ -132,7 +132,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
             if (now < this.authToken.expiration) {
                 return this.authToken.access_token;
             } else {
-                this.logger.debug("Token expired, refetching", this.authToken, now)
+                this.logger.debug("Token expired, refetching")
             }
         }
         const authToken = await fetch('https://iam.cloud.ibm.com/identity/token', {
@@ -163,7 +163,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
         }
 
         if (!options.text) {
-            throw new Error ("No text provided");
+            throw new Error("No text provided");
         }
 
         const payload: GenerateEmbeddingPayload = {
