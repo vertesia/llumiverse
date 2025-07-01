@@ -1,5 +1,5 @@
-import { DefaultAzureCredential, getBearerTokenProvider } from "@azure/identity";
-import { AbstractDriver, AIModel, Completion, CompletionChunk, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, getModelCapabilities, modelModalitiesToArray, PromptSegment, Providers, PromptRole } from "@llumiverse/core";
+import { DefaultAzureCredential, getBearerTokenProvider, TokenCredential } from "@azure/identity";
+import { AbstractDriver, AIModel, Completion, CompletionChunk, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, getModelCapabilities, modelModalitiesToArray, Providers } from "@llumiverse/core";
 import { AIProjectClient, DeploymentUnion, ModelDeployment } from '@azure/ai-projects';
 import { isUnexpected } from "@azure-rest/ai-inference";
 import { ChatCompletionMessageParam } from "openai/resources";
@@ -9,14 +9,13 @@ import type {
     ChatRequestMessage,
 } from "@azure-rest/ai-inference";
 import { AzureOpenAIDriver } from "../openai/azure_openai.js";
-import { createSseStream } from "@azure/core-sse";
+import { createSseStream, NodeJSReadableStream } from "@azure/core-sse";
+import { formatOpenAILikeMultimodalPrompt, OpenAIInputMessage } from "../openai/openai_format.js";
 export interface AzureFoundryDriverOptions extends DriverOptions {
     /**
      * The credentials to use to access Azure AI Foundry
      */
-    azureADTokenProvider?: any;
-
-    apiKey?: string;
+    azureADTokenProvider?: TokenCredential;
 
     endpoint?: string;
 
@@ -33,12 +32,17 @@ export interface AzureFoundryOpenAIPrompt {
 
 export type AzureFoundryPrompt = AzureFoundryInferencePrompt | AzureFoundryOpenAIPrompt
 
-export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions, AzureFoundryPrompt> {
+export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions, OpenAIInputMessage[]> {
     service: AIProjectClient;
     readonly provider = Providers.azure_foundry;
 
+    OPENAI_API_VERSION = "2025-01-01-preview";
+    INFERENCE_API_VERSION = "2024-05-01-preview";
+
     constructor(opts: AzureFoundryDriverOptions) {
         super(opts);
+
+        this.formatPrompt = formatOpenAILikeMultimodalPrompt as any
 
         if (!opts.endpoint) {
             throw new Error("Azure AI Foundry endpoint is required");
@@ -46,14 +50,8 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
         try {
             if (!opts.azureADTokenProvider) {
-                if (opts.apiKey) {
-                    // Using API key for authentication
-                    //opts.azureADTokenProvider = new AzureKeyCredential(opts.apiKey);
-                    opts.azureADTokenProvider = new DefaultAzureCredential();
-                } else {
-                    // Using Microsoft Entra ID (Azure AD) for authentication
-                    opts.azureADTokenProvider = new DefaultAzureCredential();
-                }
+                // Using Microsoft Entra ID (Azure AD) for authentication
+                opts.azureADTokenProvider = new DefaultAzureCredential();
             }
         } catch (error) {
             this.logger.error("Failed to initialize Azure AD token provider:", error);
@@ -65,6 +63,12 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             opts.endpoint,
             opts.azureADTokenProvider
         );
+
+        if (opts.apiVersion) {
+            this.OPENAI_API_VERSION = opts.apiVersion;
+            this.INFERENCE_API_VERSION = opts.apiVersion;
+            this.logger.info(`[Azure Foundry] Overriding default API version, using API version: ${opts.apiVersion}`);
+        }
     }
 
     /**
@@ -90,48 +94,10 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     }
 
     protected canStream(_options: ExecutionOptions): Promise<boolean> {
-        return Promise.resolve(false);
+        return Promise.resolve(true);
     }
 
-    protected async formatPrompt(segments: PromptSegment[], _opts: ExecutionOptions): Promise<AzureFoundryPrompt> {
-        const messages: ChatRequestMessage[] = [];
-
-        for (const segment of segments) {
-            switch (segment.role) {
-                case PromptRole.system:
-                    messages.push({
-                        role: 'system',
-                        content: segment.content
-                    });
-                    break;
-                case PromptRole.user:
-                    // Azure AI Foundry supports multimodal inputs, but we'll handle simple text for now
-                    // In the future, can be extended to handle segment.files for images
-                    messages.push({
-                        role: 'user',
-                        content: segment.content
-                    });
-                    break;
-                case PromptRole.assistant:
-                    messages.push({
-                        role: 'assistant',
-                        content: segment.content
-                    });
-                    break;
-                case PromptRole.tool:
-                    // Azure AI supports tool responses, can be implemented later
-                    messages.push({
-                        role: 'assistant',
-                        content: segment.content
-                    });
-                    break;
-            }
-        }
-
-        return { messages };
-    }
-
-    async requestTextCompletion(prompt: AzureFoundryPrompt, options: ExecutionOptions): Promise<Completion> {
+    async requestTextCompletion(prompt: OpenAIInputMessage[], options: ExecutionOptions): Promise<Completion> {
         const model_options = options.model_options as any;
         const isOpenAI = await this.isOpenAIDeployment(options.model);
 
@@ -139,17 +105,17 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         let response;
         if (isOpenAI) {
             // Use the Azure OpenAI client for OpenAI models
-            const azureOpenAI = await this.service.inference.azureOpenAI({ apiVersion: "preview" });
+            const azureOpenAI = await this.service.inference.azureOpenAI({ apiVersion: this.OPENAI_API_VERSION });
             const subDriver = new AzureOpenAIDriver(azureOpenAI);
-            const response = await subDriver.requestTextCompletion((prompt as AzureFoundryOpenAIPrompt).messages, options);
+            const response = await subDriver.requestTextCompletion(prompt, options);
             return response;
 
         } else {
             // Use the chat completions client from the inference operations
-            const chatClient = this.service.inference.chatCompletions({ apiVersion: "2024-05-01-preview"});
+            const chatClient = this.service.inference.chatCompletions({ apiVersion: this.INFERENCE_API_VERSION});
             response = await chatClient.post({
                 body: {
-                    messages: prompt.messages,
+                    messages: prompt,
                     max_tokens: model_options?.max_tokens,
                     model: options.model,
                     stream: true,
@@ -170,20 +136,20 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         }
     }
 
-    async requestTextCompletionStream(prompt: AzureFoundryPrompt, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
+    async requestTextCompletionStream(prompt: OpenAIInputMessage[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
         const model_options = options.model_options as any;
         const isOpenAI = await this.isOpenAIDeployment(options.model);
 
         if (isOpenAI) {
-            const azureOpenAI = await this.service.inference.azureOpenAI({ apiVersion: "preview" });
+            const azureOpenAI = await this.service.inference.azureOpenAI({ apiVersion: this.OPENAI_API_VERSION });
             const subDriver = new AzureOpenAIDriver(azureOpenAI);
-            const stream = await subDriver.requestTextCompletionStream((prompt as AzureFoundryOpenAIPrompt).messages, options);
+            const stream = await subDriver.requestTextCompletionStream(prompt, options);
             return stream;
         } else {
-            const chatClient = this.service.inference.chatCompletions({ apiVersion: "2024-05-01-preview" });
+            const chatClient = this.service.inference.chatCompletions({ apiVersion: this.INFERENCE_API_VERSION });
             const response = await chatClient.post({
                 body: {
-                    messages: prompt.messages,
+                    messages: prompt,
                     max_tokens: model_options?.max_tokens,
                     model: options.model,
                     stream: true,
@@ -194,16 +160,18 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                     stop: model_options?.stop_sequence,
                 }
             }).asNodeStream();
-
-            if (!response) {
+     
+            // We type assert from NodeJS.ReadableStream to NodeJSReadableStream
+            // The Azure Examples, expect a .destroy() method on the stream
+            const stream = response.body as NodeJSReadableStream;
+            if (!stream) {
                 throw new Error("The response stream is undefined");
             }
 
             if (response.status !== "200") {
+                stream.destroy();
                 throw new Error(`Failed to get chat completions, http operation failed with ${response.status} code`);
             }
-
-            const stream = response.body as NodeJS.ReadableStream;
 
             const sseStream = createSseStream(stream);
 
@@ -225,12 +193,10 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                     if (!choice) {
                         continue;
                     }
-
                     const chunk: CompletionChunk = {
                         result: choice.delta?.content || "",
                         finish_reason: this.convertFinishReason(choice.finish_reason),
                     };
-
 
                     yield chunk;
                 } catch (parseError) {
@@ -289,7 +255,6 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         switch (reason) {
             case 'stop': return 'stop';
             case 'length': return 'length';
-            case 'content_filter': return 'content_filter';
             case 'tool_calls': return 'tool_calls';
             default: return reason;
         }
@@ -353,11 +318,22 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     }
 
     async listModels(): Promise<AIModel[]> {
-        return this._listModels();
+        const filter = (m: ModelDeployment) => {
+            // Only include models that support chat completions
+            return !!m.capabilities.chat_completion;
+        };
+        return this._listModels(filter);
     }
 
     async _listModels(filter?: (m: ModelDeployment) => boolean): Promise<AIModel[]> {
-        const deploymentsIterable = this.service.deployments.list();
+        let deploymentsIterable;
+        try {
+            // List all deployments in the Azure AI Foundry project
+            deploymentsIterable = this.service.deployments.list();
+        } catch (error) {
+            this.logger.error("Failed to list deployments:", error);
+            throw new Error("Failed to list deployments in Azure AI Foundry project");
+        }
         const deployments: DeploymentUnion[] = [];
 
         for await (const page of deploymentsIterable.byPage()) {
@@ -366,19 +342,15 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             }
         }
 
-        const modelDeployments: ModelDeployment[] = deployments.filter((d): d is ModelDeployment => {
+        let modelDeployments: ModelDeployment[] = deployments.filter((d): d is ModelDeployment => {
             return d.type === "ModelDeployment";
         });
 
-        //Azure OpenAI has additional information about the models
-        const filteredModels = modelDeployments.filter((m) => {
-            return !m.capabilities.embeddings;
-        }).filter((m) => {
-            // Apply passed in filter function if provided
-            return filter && filter(m);
-        });
+        if (filter) {
+            modelDeployments = modelDeployments.filter(filter);
+        }
 
-        const aiModels = filteredModels.map((model) => {
+        const aiModels = modelDeployments.map((model) => {
             const capabilitiesProvider = model.modelPublisher === "OpenAI" ? "openai" : "azure_foundry";
             const modelCapability = getModelCapabilities(model.modelName, capabilitiesProvider);
             return {
