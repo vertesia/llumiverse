@@ -1,9 +1,8 @@
 // This file is used by multiple drivers
 // to format prompts in a way that is compatible with OpenAI's API.
 
-import { PromptRole, PromptOptions } from "@llumiverse/common";
-import { readStreamAsBase64 } from "@llumiverse/core/stream";
-import { PromptSegment } from "@llumiverse/common";
+import { PromptRole, PromptOptions, PromptSegment } from "@llumiverse/common";
+import { readStreamAsBase64 } from "@llumiverse/core";
 
 import type {
     ChatCompletionMessageParam,
