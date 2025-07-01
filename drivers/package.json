@@ -65,7 +65,7 @@
     "@azure/openai": "2.0.0",
     "@google-cloud/aiplatform": "^3.35.0",
     "@google/genai": "^1.7.0",
-    "@huggingface/inference": "2.8.1",
+    "@huggingface/inference": "2.6.7",
     "@llumiverse/common": "workspace:*",
     "@llumiverse/core": "workspace:*",
     "@vertesia/api-fetch-client": "^0.65.0",
