@@ -7,13 +7,10 @@ import { PromptSegment } from "@llumiverse/common";
 
 import type {
     ChatCompletionMessageParam,
-    ChatCompletionContentPart,
     ChatCompletionContentPartText,
     ChatCompletionContentPartImage,
-    ChatCompletionContentPartRefusal,
     ChatCompletionUserMessageParam,
     ChatCompletionSystemMessageParam,
-    ChatCompletionDeveloperMessageParam,
     ChatCompletionAssistantMessageParam,
     ChatCompletionToolMessageParam
 } from 'openai/resources/chat/completions';
@@ -21,69 +18,6 @@ import type {
 export interface OpenAITextMessage {
     content: string;
     role: 'system' | 'user' | 'assistant' | 'developer';
-}
-export type OpenAIInputMessage =
-    OpenAIUserMessage |
-    OpenAISystemMessage |
-    OpenAIDeveloperMessage |
-    OpenAIToolMessage |
-    OpenAIAssistantMessage;
-interface OpenAIBaseMessage {
-    content: string | OpenAIContentPart[];
-    role: 'system' | 'user' | 'assistant' | 'developer' | 'tool';
-    name?: string;
-}
-
-export interface OpenAIUserMessage extends OpenAIBaseMessage {
-    role: 'user';
-}
-
-export interface OpenAISystemMessage extends OpenAIBaseMessage {
-    role: 'system';
-    content: string | OpenAIContentPartText[];
-}
-
-export interface OpenAIDeveloperMessage extends OpenAIBaseMessage {
-    role: 'developer';
-    content: string | OpenAIContentPartText[];
-}
-
-export interface OpenAIToolMessage {
-    role: 'tool';
-    tool_call_id: string;
-    content: string | OpenAIContentPartText[];
-}
-
-interface OpenAIRefusal {
-    type: 'refusal';
-    refusal: string;
-}
-
-export interface OpenAIAssistantMessage extends Omit<OpenAIBaseMessage, 'content'> {
-    content: string | (OpenAIContentPart | OpenAIRefusal)[];
-    role: 'assistant';
-    tool_calls?: {
-        id: string;
-        function: {
-            arguments: string;
-            name: string;
-        }
-        type: 'function';
-    }[];
-}
-
-export type OpenAIContentPart = OpenAIContentPartText | OpenAIContentPartImage | { type: string;[key: string]: any };
-export interface OpenAIContentPartText {
-    type: 'text';
-    text: string
-}
-
-export interface OpenAIContentPartImage {
-    type: 'image_url';
-    image_url: {
-        detail?: 'auto' | 'low' | 'high'
-        url: string
-    }
 }
 
 /**
@@ -114,14 +48,14 @@ export function formatOpenAILikeTextPrompt(segments: PromptSegment[]): OpenAITex
 }
 
 
-export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[], opts: PromptOptions & OpenAIPromptFormatterOptions): Promise<OpenAIInputMessage[]> {
-    const system: OpenAIInputMessage[] = [];
-    const safety: OpenAIInputMessage[] = [];
-    const others: OpenAIInputMessage[] = [];
+export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[], opts: PromptOptions & OpenAIPromptFormatterOptions): Promise<ChatCompletionMessageParam[]> {
+    const system: ChatCompletionMessageParam[] = [];
+    const safety: ChatCompletionMessageParam[] = [];
+    const others: ChatCompletionMessageParam[] = [];
 
     for (const msg of segments) {
 
-        const parts: (OpenAIContentPartImage | OpenAIContentPartText)[] = [];
+        const parts: (ChatCompletionContentPartImage | ChatCompletionContentPartText)[] = [];
 
         //generate the parts based on PromptSegment
         if (msg.files) {
@@ -148,18 +82,19 @@ export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[]
 
         if (msg.role === PromptRole.system) {
             // For system messages, filter to only text parts
-            const textParts = parts.filter((part): part is OpenAIContentPartText => part.type === 'text');
-            system.push({
+            const textParts = parts.filter((part): part is ChatCompletionContentPartText => part.type === 'text');
+            const systemMsg: ChatCompletionSystemMessageParam = {
                 role: "system",
                 content: textParts.length === 1 && !msg.files ? textParts[0].text : textParts
-            });
+            };
+            system.push(systemMsg);
 
             if (opts.useToolForFormatting && opts.schema) {
                 system.forEach(s => {
                     if (typeof s.content === 'string') {
                         s.content = "TOOL: " + s.content;
                     } else if (Array.isArray(s.content)) {
-                        s.content.forEach(c => {
+                        s.content.forEach((c: any) => {
                             if (c.type === "text") c.text = "TOOL: " + c.text;
                         });
                     }
@@ -167,14 +102,14 @@ export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[]
             }
 
         } else if (msg.role === PromptRole.safety) {
-            const textParts = parts.filter((part): part is OpenAIContentPartText => part.type === 'text');
-            const safetyMsg: OpenAISystemMessage = {
+            const textParts = parts.filter((part): part is ChatCompletionContentPartText => part.type === 'text');
+            const safetyMsg: ChatCompletionSystemMessageParam = {
                 role: "system",
                 content: textParts
             };
 
             if (Array.isArray(safetyMsg.content)) {
-                safetyMsg.content.forEach(c => {
+                safetyMsg.content.forEach((c: any) => {
                     if (c.type === "text") c.text = "DO NOT IGNORE - IMPORTANT: " + c.text;
                 });
             }
@@ -184,32 +119,43 @@ export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[]
             if (!msg.tool_use_id) {
                 throw new Error("Tool use id is required for tool messages")
             }
-            others.push({
+            const toolMsg: ChatCompletionToolMessageParam = {
                 role: "tool",
                 tool_call_id: msg.tool_use_id,
-                content: msg.content
-            })
+                content: msg.content || ""
+            };
+            others.push(toolMsg);
         } else if (msg.role !== PromptRole.negative && msg.role !== PromptRole.mask) {
-            others.push({
-                role: msg.role ?? 'user',
-                content: parts
-            })
+            if (msg.role === 'assistant') {
+                const assistantMsg: ChatCompletionAssistantMessageParam = {
+                    role: 'assistant',
+                    content: parts as (ChatCompletionContentPartText)[]
+                };
+                others.push(assistantMsg);
+            } else {
+                const userMsg: ChatCompletionUserMessageParam = {
+                    role: 'user',
+                    content: parts
+                };
+                others.push(userMsg);
+            }
         }
 
     }
 
     if (opts.result_schema && !opts.useToolForFormatting) {
-        system.push({
+        const schemaMsg: ChatCompletionSystemMessageParam = {
             role: "system",
             content: [{
                 type: "text",
                 text: "IMPORTANT: only answer using JSON, and respecting the schema included below, between the <response_schema> tags. " + `<response_schema>${JSON.stringify(opts.result_schema)}</response_schema>`
             }]
-        })
+        };
+        system.push(schemaMsg);
     }
 
     // put system messages first and safety last
-    return ([] as OpenAIInputMessage[]).concat(system).concat(others).concat(safety);
+    return ([] as ChatCompletionMessageParam[]).concat(system).concat(others).concat(safety);
 
 }
 

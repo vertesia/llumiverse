@@ -10,7 +10,7 @@ import type {
 } from "@azure-rest/ai-inference";
 import { AzureOpenAIDriver } from "../openai/azure_openai.js";
 import { createSseStream, NodeJSReadableStream } from "@azure/core-sse";
-import { formatOpenAILikeMultimodalPrompt, OpenAIInputMessage } from "../openai/openai_format.js";
+import { formatOpenAILikeMultimodalPrompt } from "../openai/openai_format.js";
 export interface AzureFoundryDriverOptions extends DriverOptions {
     /**
      * The credentials to use to access Azure AI Foundry
@@ -32,7 +32,7 @@ export interface AzureFoundryOpenAIPrompt {
 
 export type AzureFoundryPrompt = AzureFoundryInferencePrompt | AzureFoundryOpenAIPrompt
 
-export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions, OpenAIInputMessage[]> {
+export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions, ChatCompletionMessageParam[]> {
     service: AIProjectClient;
     readonly provider = Providers.azure_foundry;
 
@@ -97,11 +97,11 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         return Promise.resolve(true);
     }
 
-    async requestTextCompletion(prompt: OpenAIInputMessage[], options: ExecutionOptions): Promise<Completion> {
+    async requestTextCompletion(prompt: ChatCompletionMessageParam[], options: ExecutionOptions): Promise<Completion> {
         const model_options = options.model_options as any;
         const isOpenAI = await this.isOpenAIDeployment(options.model);
 
-        
+
         let response;
         if (isOpenAI) {
             // Use the Azure OpenAI client for OpenAI models
@@ -112,7 +112,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
         } else {
             // Use the chat completions client from the inference operations
-            const chatClient = this.service.inference.chatCompletions({ apiVersion: this.INFERENCE_API_VERSION});
+            const chatClient = this.service.inference.chatCompletions({ apiVersion: this.INFERENCE_API_VERSION });
             response = await chatClient.post({
                 body: {
                     messages: prompt,
@@ -136,7 +136,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         }
     }
 
-    async requestTextCompletionStream(prompt: OpenAIInputMessage[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
+    async requestTextCompletionStream(prompt: ChatCompletionMessageParam[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
         const model_options = options.model_options as any;
         const isOpenAI = await this.isOpenAIDeployment(options.model);
 
@@ -160,7 +160,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                     stop: model_options?.stop_sequence,
                 }
             }).asNodeStream();
-     
+
             // We type assert from NodeJS.ReadableStream to NodeJSReadableStream
             // The Azure Examples, expect a .destroy() method on the stream
             const stream = response.body as NodeJSReadableStream;
