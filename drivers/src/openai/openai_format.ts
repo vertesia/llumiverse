@@ -1,32 +1,85 @@
+// This file is used by multiple drivers
+// to format prompts in a way that is compatible with OpenAI's API.
+
 import { PromptRole, PromptOptions } from "@llumiverse/common";
-import { readStreamAsBase64 } from "../stream.js";
+import { readStreamAsBase64 } from "../../../core/src/stream.js";
 import { PromptSegment } from "@llumiverse/common";
 
+import type {
+    ChatCompletionMessageParam,
+    ChatCompletionContentPart,
+    ChatCompletionContentPartText,
+    ChatCompletionContentPartImage,
+    ChatCompletionContentPartRefusal,
+    ChatCompletionUserMessageParam,
+    ChatCompletionSystemMessageParam,
+    ChatCompletionDeveloperMessageParam,
+    ChatCompletionAssistantMessageParam,
+    ChatCompletionToolMessageParam
+} from 'openai/resources/chat/completions';
 
 export interface OpenAITextMessage {
     content: string;
-    role: "system" | "user" | "assistant";
+    role: 'system' | 'user' | 'assistant' | 'developer';
 }
-
-export interface OpenAIMessage {
-    content: (OpenAIContentPartText | OpenAIContentPartImage)[]
-    role: "system" | "user" | "assistant";
+export type OpenAIInputMessage =
+    OpenAIUserMessage |
+    OpenAISystemMessage |
+    OpenAIDeveloperMessage |
+    OpenAIToolMessage |
+    OpenAIAssistantMessage;
+interface OpenAIBaseMessage {
+    content: string | OpenAIContentPart[];
+    role: 'system' | 'user' | 'assistant' | 'developer' | 'tool';
     name?: string;
 }
-export interface OpenAIToolMessage {
-    role: "tool";
-    tool_call_id: string;
-    content: string;
-}
-export type OpenAIInputMessage = OpenAIMessage | OpenAIToolMessage;
 
+export interface OpenAIUserMessage extends OpenAIBaseMessage {
+    role: 'user';
+}
+
+export interface OpenAISystemMessage extends OpenAIBaseMessage {
+    role: 'system';
+    content: string | OpenAIContentPartText[];
+}
+
+export interface OpenAIDeveloperMessage extends OpenAIBaseMessage {
+    role: 'developer';
+    content: string | OpenAIContentPartText[];
+}
+
+export interface OpenAIToolMessage {
+    role: 'tool';
+    tool_call_id: string;
+    content: string | OpenAIContentPartText[];
+}
+
+interface OpenAIRefusal {
+    type: 'refusal';
+    refusal: string;
+}
+
+export interface OpenAIAssistantMessage extends Omit<OpenAIBaseMessage, 'content'> {
+    content: string | (OpenAIContentPart | OpenAIRefusal)[];
+    role: 'assistant';
+    tool_calls?: {
+        id: string;
+        function: {
+            arguments: string;
+            name: string;
+        }
+        type: 'function';
+    }[];
+}
+
+export type OpenAIContentPart = OpenAIContentPartText | OpenAIContentPartImage | { type: string;[key: string]: any };
 export interface OpenAIContentPartText {
-    type: "text";
+    type: 'text';
     text: string
 }
 
 export interface OpenAIContentPartImage {
-    type: "image_url";
+    type: 'image_url';
     image_url: {
         detail?: 'auto' | 'low' | 'high'
         url: string
@@ -62,8 +115,8 @@ export function formatOpenAILikeTextPrompt(segments: PromptSegment[]): OpenAITex
 
 
 export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[], opts: PromptOptions & OpenAIPromptFormatterOptions): Promise<OpenAIInputMessage[]> {
-    const system: OpenAIMessage[] = [];
-    const safety: OpenAIMessage[] = [];
+    const system: OpenAIInputMessage[] = [];
+    const safety: OpenAIInputMessage[] = [];
     const others: OpenAIInputMessage[] = [];
 
     for (const msg of segments) {
@@ -94,31 +147,39 @@ export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[]
 
 
         if (msg.role === PromptRole.system) {
+            // For system messages, filter to only text parts
+            const textParts = parts.filter((part): part is OpenAIContentPartText => part.type === 'text');
             system.push({
                 role: "system",
-                content: parts
-            })
-
+                content: textParts.length === 1 && !msg.files ? textParts[0].text : textParts
+            });
 
             if (opts.useToolForFormatting && opts.schema) {
                 system.forEach(s => {
-                    s.content.forEach(c => {
-                        if (c.type === "text") c.text = "TOOL: " + c.text;
-                    })
-                })
+                    if (typeof s.content === 'string') {
+                        s.content = "TOOL: " + s.content;
+                    } else if (Array.isArray(s.content)) {
+                        s.content.forEach(c => {
+                            if (c.type === "text") c.text = "TOOL: " + c.text;
+                        });
+                    }
+                });
             }
 
         } else if (msg.role === PromptRole.safety) {
-            const safetyMsg: OpenAIMessage = {
+            const textParts = parts.filter((part): part is OpenAIContentPartText => part.type === 'text');
+            const safetyMsg: OpenAISystemMessage = {
                 role: "system",
-                content: parts
+                content: textParts
+            };
+
+            if (Array.isArray(safetyMsg.content)) {
+                safetyMsg.content.forEach(c => {
+                    if (c.type === "text") c.text = "DO NOT IGNORE - IMPORTANT: " + c.text;
+                });
             }
 
-            safetyMsg.content.forEach(c => {
-                if (c.type === "text") c.text = "DO NOT IGNORE - IMPORTANT: " + c.text;
-            })
-
-            system.push(safetyMsg)
+            system.push(safetyMsg);
         } else if (msg.role === PromptRole.tool) {
             if (!msg.tool_use_id) {
                 throw new Error("Tool use id is required for tool messages")

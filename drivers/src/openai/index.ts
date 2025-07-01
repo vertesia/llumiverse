@@ -23,12 +23,9 @@ import {
     supportsToolUse,
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
-import { formatOpenAILikeMultimodalPrompt } from "@llumiverse/core/formatters";
+import { formatOpenAILikeMultimodalPrompt, OpenAIInputMessage } from "./openai_format.js";
 import OpenAI, { AzureOpenAI } from "openai";
 import { Stream } from "openai/streaming";
-
-//For code readability
-type OpenAIMessageBlock = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
 //TODO: Do we need a list?, replace with if statements and modernise?
 const supportFineTunning = new Set([
@@ -44,7 +41,7 @@ export interface BaseOpenAIDriverOptions extends DriverOptions {
 
 export abstract class BaseOpenAIDriver extends AbstractDriver<
     BaseOpenAIDriverOptions,
-    OpenAIMessageBlock[]
+    OpenAIInputMessage[]
 > {
     //abstract provider: "azure_openai" | "openai" | "xai" | "azure_foundry";
     abstract provider: Providers.openai | Providers.azure_openai | "xai" | Providers.azure_foundry;
@@ -52,7 +49,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
     constructor(opts: BaseOpenAIDriverOptions) {
         super(opts);
-        this.formatPrompt = formatOpenAILikeMultimodalPrompt as any
+        this.formatPrompt = formatOpenAILikeMultimodalPrompt
         //TODO: better type, we send back OpenAI.Chat.Completions.ChatCompletionMessageParam[] but just not compatible with Function call that we don't use here
     }
 
@@ -84,7 +81,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         };
     }
 
-    async requestTextCompletionStream(prompt: OpenAIMessageBlock[], options: ExecutionOptions): Promise<AsyncIterable<Completion>> {
+    async requestTextCompletionStream(prompt: OpenAIInputMessage[], options: ExecutionOptions): Promise<AsyncIterable<Completion>> {
         if (options.model_options?._option_id !== "openai-text" && options.model_options?._option_id !== "openai-thinking") {
             this.logger.warn("Invalid model options", { options: options.model_options });
         }
@@ -159,7 +156,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         return asyncMap(stream, mapFn);
     }
 
-    async requestTextCompletion(prompt: OpenAIMessageBlock[], options: ExecutionOptions): Promise<Completion> {
+    async requestTextCompletion(prompt: OpenAIInputMessage[], options: ExecutionOptions): Promise<Completion> {
         if (options.model_options?._option_id !== "openai-text" && options.model_options?._option_id !== "openai-thinking") {
             this.logger.warn("Invalid model options", { options: options.model_options });
         }
@@ -172,7 +169,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         const toolDefs = getToolDefinitions(options.tools);
         const useTools: boolean = toolDefs ? supportsToolUse(options.model, "openai") : false;
 
-        let conversation = updateConversation(options.conversation as OpenAIMessageBlock[], prompt);
+        let conversation = updateConversation(options.conversation as OpenAIInputMessage[], prompt);
 
         let parsedSchema: JSONSchema | undefined = undefined;
         let strictMode = false;
@@ -373,7 +370,7 @@ function jobInfo(job: OpenAI.FineTuning.Jobs.FineTuningJob): TrainingJob {
     }
 }
 
-function insert_image_detail(messages: OpenAIMessageBlock[], detail_level: string): OpenAIMessageBlock[] {
+function insert_image_detail(messages: OpenAIInputMessage[], detail_level: string): OpenAIInputMessage[] {
     if (detail_level == "auto" || detail_level == "low" || detail_level == "high") {
         for (const message of messages) {
             if (message.role !== 'assistant' && message.content) {
@@ -391,7 +388,7 @@ function insert_image_detail(messages: OpenAIMessageBlock[], detail_level: strin
     return messages;
 }
 
-function convertRoles(messages: OpenAIMessageBlock[], model: string): OpenAIMessageBlock[] {
+function convertRoles(messages: OpenAIInputMessage[], model: string): OpenAIInputMessage[] {
     //New openai models use developer role instead of system
     if (model.includes("o1") || model.includes("o3")) {
         if (model.includes("o1-mini") || model.includes("o1-preview")) {
@@ -458,7 +455,7 @@ function openAiFinishReason(finish_reason?: string): string | undefined {
     return finish_reason;
 }
 
-function updateConversation(conversation: OpenAIMessageBlock[], message: OpenAIMessageBlock[]): OpenAIMessageBlock[] {
+function updateConversation(conversation: OpenAIInputMessage[], message: OpenAIInputMessage[]): OpenAIInputMessage[] {
     if (!message) {
         return conversation;
     }
@@ -485,12 +482,15 @@ export function collectTools(toolCalls?: OpenAI.Chat.Completions.ChatCompletionM
     return tools.length > 0 ? tools : undefined;
 }
 
-function createPromptFromResponse(response: OpenAI.Chat.Completions.ChatCompletionMessage) : OpenAIMessageBlock[] {
-    const messages: OpenAIMessageBlock[] = [];
+function createPromptFromResponse(response: OpenAI.Chat.Completions.ChatCompletionMessage): OpenAIInputMessage[] {
+    const messages: OpenAIInputMessage[] = [];
     if (response) {
         messages.push({
             role: response.role,
-            content: response.content,
+            content: [{
+                type: "text",
+                text: response.content ?? ""
+            }],
             tool_calls: response.tool_calls,
         });
     }

@@ -1,14 +1,14 @@
 import { AIModel, AbstractDriver, Completion, CompletionChunkObject, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, PromptSegment, TextFallbackOptions } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
-import { OpenAITextMessage, formatOpenAILikeTextPrompt, getJSONSafetyNotice } from "@llumiverse/core/formatters";
-import Groq from "groq-sdk";
+import { getJSONSafetyNotice } from "@llumiverse/core/formatters";
+import { formatOpenAILikeTextPrompt, OpenAITextMessage } from "../openai/openai_format.js";
 
+import Groq from "groq-sdk";
 
 interface GroqDriverOptions extends DriverOptions {
     apiKey: string;
     endpoint_url?: string;
 }
-
 
 export class GroqDriver extends AbstractDriver<GroqDriverOptions, OpenAITextMessage[]> {
     static PROVIDER = "groq";
