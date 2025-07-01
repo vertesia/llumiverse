@@ -15,6 +15,8 @@ export function getOptions(model: string, provider?: string, options?: ModelOpti
             return getOpenAiOptions(model ?? "", options);
         case "groq":
             return getGroqOptions(model ?? "", options);
+        case "azure_foundry":
+            return getOpenAiOptions(model ?? "", options); // Azure Foundry uses OpenAI options
         default:
             return textOptionsFallback;
     }

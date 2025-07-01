@@ -23,6 +23,9 @@ function _getModelCapabilities(model: string, provider?: string): ModelCapabilit
             return getModelCapabilitiesOpenAI(model);
         case "bedrock":
             return getModelCapabilitiesBedrock(model);
+        case "azure_foundry":
+            // Azure Foundry uses OpenAI capabilities
+            return getModelCapabilitiesOpenAI(model);
         default:
             // Guess the provider based on the model name
             if (model.startsWith("gpt")) {
