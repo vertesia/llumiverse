@@ -254,7 +254,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         switch (reason) {
             case 'stop': return 'stop';
             case 'length': return 'length';
-            case 'tool_calls': return 'tool_calls';
+            case 'tool_calls': return 'tool_use';
             default: return reason;
         }
     }
