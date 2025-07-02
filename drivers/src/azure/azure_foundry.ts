@@ -284,7 +284,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
     async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
         if (!options.model) {
-            throw new Error("Default model selection not supported for Azure Foundry. Please specify a model.");
+            throw new Error("Default embedding model selection not supported for Azure Foundry. Please specify a model.");
         }
 
         if (options.text) {
