@@ -100,7 +100,7 @@ function normalizeAzureFoundryModelName(modelName: string): string {
     // Remove common Azure Foundry prefixes/suffixes
     let normalized = modelLower
         .replace(/^azure-foundry[\/:]?/i, '')
-        .replace(/[\/:].*$/g, '') // Remove version suffixes after : or /
+        .replace(/[\/:].*$/, '') // Remove version suffixes after : or / (non-global for efficiency)
         .replace(/-v\d+(\.\d+)?$/, '') // Remove version numbers
         .replace(/_/g, '-'); // Normalize underscores to dashes
 
