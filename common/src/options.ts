@@ -3,20 +3,24 @@ import { getGroqOptions } from "./options/groq.js";
 import { getOpenAiOptions } from "./options/openai.js";
 import { getVertexAiOptions } from "./options/vertexai.js";
 import { textOptionsFallback } from "./options/fallback.js";
-import { ModelOptionsInfo, ModelOptions } from "./types.js";
+import { ModelOptionsInfo, ModelOptions, Providers } from "./types.js";
+import { getAzureFoundryOptions } from "./options/azure_foundry.js";
 
-export function getOptions(model: string, provider?: string, options?: ModelOptions): ModelOptionsInfo {
-    switch (provider?.toLowerCase()) {
-        case "bedrock":
-            return getBedrockOptions(model ?? "", options);
-        case "vertexai":
-            return getVertexAiOptions(model ?? "", options);
-        case "openai":
-            return getOpenAiOptions(model ?? "", options);
-        case "groq":
-            return getGroqOptions(model ?? "", options);
-        case "azure_foundry":
-            return getOpenAiOptions(model ?? "", options); // Azure Foundry uses OpenAI options
+export function getOptions(model: string, provider?: string | Providers, options?: ModelOptions): ModelOptionsInfo {
+    if(!provider) {
+        return textOptionsFallback;
+    }
+    switch (provider.toLowerCase()) {
+        case Providers.bedrock:
+            return getBedrockOptions(model, options);
+        case Providers.vertexai:
+            return getVertexAiOptions(model, options);
+        case Providers.openai:
+            return getOpenAiOptions(model, options);
+        case Providers.groq:
+            return getGroqOptions(model, options);
+        case Providers.azure_foundry:
+            return getAzureFoundryOptions(model, options);
         default:
             return textOptionsFallback;
     }
