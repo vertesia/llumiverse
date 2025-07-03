@@ -91,26 +91,12 @@ function modelMatches(modelName: string, patterns: string[]): boolean {
     return patterns.some(pattern => modelName.includes(pattern));
 }
 
-function normalizeAzureFoundryModelName(modelName: string): string {
-    // Handle various Azure Foundry model name formats
-    const modelLower = modelName.toLowerCase();
-
-    // Remove common Azure Foundry prefixes/suffixes
-    let normalized = modelLower
-        .replace(/^azure-foundry[\/:]?/i, '')
-        .replace(/[\/:].*$/, '') // Remove version suffixes after : or / (non-global for efficiency)
-        .replace(/-v\d+(\.\d+)?$/, '') // Remove version numbers
-        .replace(/_/g, '-'); // Normalize underscores to dashes
-
-    return normalized;
-}
-
 /**
  * Get the full ModelCapabilities for an Azure Foundry model.
  * Checks RECORD_MODEL_CAPABILITIES first, then falls back to family pattern matching.
  */
 export function getModelCapabilitiesAzureFoundry(model: string): ModelCapabilities {
-    const normalized = normalizeAzureFoundryModelName(model);
+    const normalized = model.toLowerCase();
 
     // 1. Exact match in record
     const record = RECORD_MODEL_CAPABILITIES[normalized];
