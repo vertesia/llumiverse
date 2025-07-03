@@ -1,5 +1,22 @@
 import { ModelOptionsInfo, ModelOptionInfoItem, ModelOptions, OptionType, SharedOptions } from "../types.js";
 
+// Helper function to parse composite model IDs
+function parseAzureFoundryModelId(compositeId: string): { deploymentName: string; baseModel: string } {
+    const parts = compositeId.split('::');
+    if (parts.length === 2) {
+        return {
+            deploymentName: parts[0],
+            baseModel: parts[1]
+        };
+    }
+
+    // Backwards compatibility: if no delimiter found, treat as deployment name
+    return {
+        deploymentName: compositeId,
+        baseModel: compositeId
+    };
+}
+
 // Union type of all Azure Foundry options
 export type AzureFoundryOptions = AzureFoundryOpenAIOptions | AzureFoundryDeepSeekOptions | AzureFoundryThinkingOptions | AzureFoundryTextOptions | AzureFoundryImageOptions;
 
@@ -56,7 +73,9 @@ export interface AzureFoundryImageOptions {
 }
 
 export function getMaxTokensLimitAzureFoundry(model: string): number | undefined {
-    const modelLower = model.toLowerCase();
+    // Extract base model from composite ID (deployment::baseModel)
+    const { baseModel } = parseAzureFoundryModelId(model);
+    const modelLower = baseModel.toLowerCase();
     // GPT models
     if (modelLower.includes("gpt-4o")) {
         if (modelLower.includes("mini")) {
@@ -157,7 +176,9 @@ export function getMaxTokensLimitAzureFoundry(model: string): number | undefined
 }
 
 export function getAzureFoundryOptions(model: string, _option?: ModelOptions): ModelOptionsInfo {
-    const modelLower = model.toLowerCase();
+    // Extract base model from composite ID (deployment::baseModel)
+    const { baseModel } = parseAzureFoundryModelId(model);
+    const modelLower = baseModel.toLowerCase();
     const max_tokens_limit = getMaxTokensLimitAzureFoundry(model);
     // Image generation models
     if (modelLower.includes("dall-e") || modelLower.includes("gpt-image")) {

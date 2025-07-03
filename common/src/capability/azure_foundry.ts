@@ -96,7 +96,9 @@ function modelMatches(modelName: string, patterns: string[]): boolean {
  * Checks RECORD_MODEL_CAPABILITIES first, then falls back to family pattern matching.
  */
 export function getModelCapabilitiesAzureFoundry(model: string): ModelCapabilities {
-    const normalized = model.toLowerCase();
+    // Extract base model from composite ID (deployment::baseModel)
+    const { baseModel } = parseAzureFoundryModelId(model);
+    const normalized = baseModel.toLowerCase();
 
     // 1. Exact match in record
     const record = RECORD_MODEL_CAPABILITIES[normalized];
@@ -157,4 +159,21 @@ function applyGlobalToolSupportDisable(capabilities: ModelCapabilities, modelNam
     }
 
     return capabilities;
+}
+
+// Helper function to parse composite model IDs
+function parseAzureFoundryModelId(compositeId: string): { deploymentName: string; baseModel: string } {
+    const parts = compositeId.split('::');
+    if (parts.length === 2) {
+        return {
+            deploymentName: parts[0],
+            baseModel: parts[1]
+        };
+    }
+
+    // Backwards compatibility: if no delimiter found, treat as deployment name
+    return {
+        deploymentName: compositeId,
+        baseModel: compositeId
+    };
 }

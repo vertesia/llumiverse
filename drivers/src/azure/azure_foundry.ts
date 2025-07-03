@@ -81,13 +81,15 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     }
 
     async isOpenAIDeployment(model: string): Promise<boolean> {
+        const { deploymentName } = parseAzureFoundryModelId(model);
+
         let deployment = undefined;
         // First, verify the deployment exists
         try {
-            deployment = await this.service.deployments.get(model);
-            this.logger.debug(`[Azure Foundry] Deployment ${model} found`);
+            deployment = await this.service.deployments.get(deploymentName);
+            this.logger.debug(`[Azure Foundry] Deployment ${deploymentName} found`);
         } catch (deploymentError) {
-            this.logger.error(`[Azure Foundry] Deployment ${model} not found:`, deploymentError);
+            this.logger.error(`[Azure Foundry] Deployment ${deploymentName} not found:`, deploymentError);
         }
 
         return (deployment as ModelDeployment).modelPublisher == "OpenAI";
@@ -98,16 +100,18 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     }
 
     async requestTextCompletion(prompt: ChatCompletionMessageParam[], options: ExecutionOptions): Promise<Completion> {
+        const { deploymentName } = parseAzureFoundryModelId(options.model);
         const model_options = options.model_options as any;
         const isOpenAI = await this.isOpenAIDeployment(options.model);
-
 
         let response;
         if (isOpenAI) {
             // Use the Azure OpenAI client for OpenAI models
             const azureOpenAI = await this.service.inference.azureOpenAI({ apiVersion: this.OPENAI_API_VERSION });
             const subDriver = new AzureOpenAIDriver(azureOpenAI);
-            const response = await subDriver.requestTextCompletion(prompt, options);
+            // Use deployment name for API calls
+            const modifiedOptions = { ...options, model: deploymentName };
+            const response = await subDriver.requestTextCompletion(prompt, modifiedOptions);
             return response;
 
         } else {
@@ -117,7 +121,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                 body: {
                     messages: prompt,
                     max_tokens: model_options?.max_tokens,
-                    model: options.model,
+                    model: deploymentName,
                     stream: true,
                     temperature: model_options?.temperature,
                     top_p: model_options?.top_p,
@@ -136,13 +140,15 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     }
 
     async requestTextCompletionStream(prompt: ChatCompletionMessageParam[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
+        const { deploymentName } = parseAzureFoundryModelId(options.model);
         const model_options = options.model_options as any;
         const isOpenAI = await this.isOpenAIDeployment(options.model);
 
         if (isOpenAI) {
             const azureOpenAI = await this.service.inference.azureOpenAI({ apiVersion: this.OPENAI_API_VERSION });
             const subDriver = new AzureOpenAIDriver(azureOpenAI);
-            const stream = await subDriver.requestTextCompletionStream(prompt, options);
+            const modifiedOptions = { ...options, model: deploymentName };
+            const stream = await subDriver.requestTextCompletionStream(prompt, modifiedOptions);
             return stream;
         } else {
             const chatClient = this.service.inference.chatCompletions({ apiVersion: this.INFERENCE_API_VERSION });
@@ -150,7 +156,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                 body: {
                     messages: prompt,
                     max_tokens: model_options?.max_tokens,
-                    model: options.model,
+                    model: deploymentName,
                     stream: true,
                     temperature: model_options?.temperature,
                     top_p: model_options?.top_p,
@@ -301,6 +307,8 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             throw new Error("No text provided for text embeddings");
         }
 
+        const { deploymentName } = parseAzureFoundryModelId(options.model || "");
+
         let response;
         try {
             // Use the embeddings client from the inference operations
@@ -308,7 +316,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             response = await embeddingsClient.post({
                 body: {
                     input: Array.isArray(options.text) ? options.text : [options.text],
-                    model: options.model
+                    model: deploymentName
                 }
             });
         } catch (error) {
@@ -329,13 +337,14 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             values: embeddings,
             model: options.model ?? ""
         };
-        
     }
 
     async generateImageEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
         if (!options.image) {
             throw new Error("No images provided for image embeddings");
         }
+
+        const { deploymentName } = parseAzureFoundryModelId(options.model || "");
 
         let response;
         try {
@@ -344,7 +353,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             response = await embeddingsClient.post({
                 body: {
                     input: Array.isArray(options.image) ? options.image : [options.image],
-                    model: options.model
+                    model: deploymentName
                 }
             });
         } catch (error) {
@@ -362,7 +371,6 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             values: embeddings,
             model: options.model ?? ""
         };
-        
     }
 
     async listModels(): Promise<AIModel[]> {
@@ -399,9 +407,12 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         }
 
         const aiModels = modelDeployments.map((model) => {
+            // Create composite ID: deployment_name::base_model
+            const compositeId = `${model.name}::${model.modelName}`;
+
             const modelCapability = getModelCapabilities(model.modelName, Providers.azure_foundry);
             return {
-                id: model.name,
+                id: compositeId,
                 name: model.name,
                 description: `${model.modelName} - ${model.modelVersion}`,
                 version: model.modelVersion,
@@ -415,4 +426,25 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
         return aiModels;
     }
+}
+
+// Helper functions to parse the composite ID
+export function parseAzureFoundryModelId(compositeId: string): { deploymentName: string; baseModel: string } {
+    const parts = compositeId.split('::');
+    if (parts.length === 2) {
+        return {
+            deploymentName: parts[0],
+            baseModel: parts[1]
+        };
+    }
+
+    // Backwards compatibility: if no delimiter found, treat as deployment name
+    return {
+        deploymentName: compositeId,
+        baseModel: compositeId
+    };
+}
+
+export function isCompositeModelId(modelId: string): boolean {
+    return modelId.includes('::');
 }
