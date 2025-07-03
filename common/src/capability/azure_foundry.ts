@@ -1,11 +1,14 @@
 import { ModelModalities, ModelCapabilities } from "../types.js";
 
+// Global feature flags - temporarily disable tool support for non-OpenAI models
+const ENABLE_TOOL_SUPPORT_NON_OPENAI = false;
+
 // Record of Azure Foundry model capabilities keyed by model ID (lowercased) 
 // Only include models with specific exceptions that differ from their family patterns
 const RECORD_MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
-    // O-series exceptions - o1-mini doesn't have tool support like other o1 models
+    // OpenAI O-series exceptions - o1-mini doesn't have tool support like other o1 models
     "o1-mini": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: false, tool_support_streaming: false },
-    // o3 is text-only unlike other o-series models
+    // OpenAI o3 is text-only unlike other o-series models
     "o3": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true, tool_support_streaming: false },
 
     // Models with special properties not covered by family patterns
@@ -27,18 +30,13 @@ const RECORD_FAMILY_CAPABILITIES: Record<string, ModelCapabilities> = {
     "gpt-4.5": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true, tool_support_streaming: true },
     "gpt-4o": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true, tool_support_streaming: true },
 
-    // O-series families
+    // OpenAI O-series families
     "o1": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true, tool_support_streaming: false },
     "o1-preview": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true, tool_support_streaming: false },
     "o1-pro": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true, tool_support_streaming: false },
     "o3-mini": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true, tool_support_streaming: false },
     "o4-mini": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true, tool_support_streaming: false },
     "o4": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true, tool_support_streaming: false },
-
-    // Claude families
-    "claude-3": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true, tool_support_streaming: true },
-    "claude-3-5": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true, tool_support_streaming: true },
-    "claude": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true, tool_support_streaming: true },
 
     // Llama families
     "llama-3.1": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true, tool_support_streaming: false },
@@ -87,7 +85,7 @@ const VIDEO_OUTPUT_MODELS = ["video"];
 const AUDIO_OUTPUT_MODELS = ["audio"];
 const TEXT_OUTPUT_MODELS = ["text"];
 const EMBEDDING_OUTPUT_MODELS = ["embed"];
-const TOOL_SUPPORT_MODELS = ["tool", "gpt-4", "gpt-4o", "o1", "o3", "o4", "claude", "sonnet", "opus", "llama-3", "mistral-large", "mistral-small", "jamba", "cohere", "command", "grok"];
+const TOOL_SUPPORT_MODELS = ["tool", "gpt-4", "gpt-4o", "o1", "o3", "o4", "llama-3", "mistral-large", "mistral-small", "jamba", "cohere", "command", "grok"];
 
 function modelMatches(modelName: string, patterns: string[]): boolean {
     return patterns.some(pattern => modelName.includes(pattern));
@@ -116,7 +114,9 @@ export function getModelCapabilitiesAzureFoundry(model: string): ModelCapabiliti
 
     // 1. Exact match in record
     const record = RECORD_MODEL_CAPABILITIES[normalized];
-    if (record) return record;
+    if (record) {
+        return applyGlobalToolSupportDisable(record, normalized);
+    }
 
     // 2. Fallback: find the longest matching family prefix in RECORD_FAMILY_CAPABILITIES
     let bestFamilyKey = undefined;
@@ -128,7 +128,7 @@ export function getModelCapabilitiesAzureFoundry(model: string): ModelCapabiliti
         }
     }
     if (bestFamilyKey) {
-        return RECORD_FAMILY_CAPABILITIES[bestFamilyKey];
+        return applyGlobalToolSupportDisable(RECORD_FAMILY_CAPABILITIES[bestFamilyKey], normalized);
     }
 
     // 3. Fallback: infer from normalized name using patterns
@@ -149,5 +149,26 @@ export function getModelCapabilitiesAzureFoundry(model: string): ModelCapabiliti
     const tool_support = modelMatches(normalized, TOOL_SUPPORT_MODELS) || undefined;
     const tool_support_streaming = tool_support || undefined;
 
-    return { input, output, tool_support, tool_support_streaming };
+    const inferredCapabilities = { input, output, tool_support, tool_support_streaming };
+    return applyGlobalToolSupportDisable(inferredCapabilities, normalized);
+}
+
+/**
+ * Apply global tool support disable for non-OpenAI models.
+ * Preserves model-specific information for future use while temporarily disabling tool support.
+ */
+function applyGlobalToolSupportDisable(capabilities: ModelCapabilities, modelName: string): ModelCapabilities {
+    // Check if this is an OpenAI model
+    const isOpenAIModel = modelName.startsWith('gpt-') || modelName.startsWith('o1') || modelName.startsWith('o3') || modelName.startsWith('o4');
+
+    if (!ENABLE_TOOL_SUPPORT_NON_OPENAI && !isOpenAIModel) {
+        // Disable tool support for non-OpenAI models while preserving other capabilities
+        return {
+            ...capabilities,
+            tool_support: false,
+            tool_support_streaming: false
+        };
+    }
+
+    return capabilities;
 }
