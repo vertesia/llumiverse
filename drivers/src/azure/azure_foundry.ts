@@ -399,8 +399,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         }
 
         const aiModels = modelDeployments.map((model) => {
-            const capabilitiesProvider = model.modelPublisher === "OpenAI" ? "openai" : "azure_foundry";
-            const modelCapability = getModelCapabilities(model.modelName, capabilitiesProvider);
+            const modelCapability = getModelCapabilities(model.modelName, Providers.azure_foundry);
             return {
                 id: model.name,
                 name: model.name,
