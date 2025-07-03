@@ -312,7 +312,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         let response;
         try {
             // Use the embeddings client from the inference operations
-            const embeddingsClient = this.service.inference.embeddings();
+            const embeddingsClient = this.service.inference.embeddings({ apiVersion: this.INFERENCE_API_VERSION });
             response = await embeddingsClient.post({
                 body: {
                     input: Array.isArray(options.text) ? options.text : [options.text],
@@ -349,7 +349,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         let response;
         try {
             // Use the embeddings client from the inference operations
-            const embeddingsClient = this.service.inference.embeddings();
+            const embeddingsClient = this.service.inference.embeddings({ apiVersion: this.INFERENCE_API_VERSION });
             response = await embeddingsClient.post({
                 body: {
                     input: Array.isArray(options.image) ? options.image : [options.image],
