@@ -57,7 +57,6 @@ export interface AzureFoundryImageOptions {
 
 export function getMaxTokensLimitAzureFoundry(model: string): number | undefined {
     const modelLower = model.toLowerCase();
-    
     // GPT models
     if (modelLower.includes("gpt-4o")) {
         if (modelLower.includes("mini")) {
@@ -77,7 +76,6 @@ export function getMaxTokensLimitAzureFoundry(model: string): number | undefined
     if (modelLower.includes("gpt-35") || modelLower.includes("gpt-3.5")) {
         return 4096;
     }
-    
     // O-series models
     if (modelLower.includes("o1")) {
         if (modelLower.includes("preview")) {
@@ -97,7 +95,6 @@ export function getMaxTokensLimitAzureFoundry(model: string): number | undefined
     if (modelLower.includes("o4")) {
         return 100000;
     }
-    
     // DeepSeek models
     if (modelLower.includes("deepseek")) {
         if (modelLower.includes("r1")) {
@@ -107,7 +104,6 @@ export function getMaxTokensLimitAzureFoundry(model: string): number | undefined
             return 131072;
         }
     }
-    
     // Claude models
     if (modelLower.includes("claude")) {
         if (modelLower.includes("3-5") || modelLower.includes("3-7")) {
@@ -118,7 +114,6 @@ export function getMaxTokensLimitAzureFoundry(model: string): number | undefined
         }
         return 4096;
     }
-    
     // Llama models
     if (modelLower.includes("llama")) {
         if (modelLower.includes("3.1") || modelLower.includes("3.3")) {
@@ -129,7 +124,6 @@ export function getMaxTokensLimitAzureFoundry(model: string): number | undefined
         }
         return 8192;
     }
-    
     // Mistral models
     if (modelLower.includes("mistral")) {
         if (modelLower.includes("large")) {
@@ -140,17 +134,14 @@ export function getMaxTokensLimitAzureFoundry(model: string): number | undefined
         }
         return 4096;
     }
-    
     // Phi models
     if (modelLower.includes("phi")) {
         return 4096;
     }
-    
     // AI21 Jamba models
     if (modelLower.includes("jamba")) {
         return 4096;
     }
-    
     // Cohere models
     if (modelLower.includes("cohere")) {
         if (modelLower.includes("command-a")) {
@@ -158,19 +149,16 @@ export function getMaxTokensLimitAzureFoundry(model: string): number | undefined
         }
         return 4096;
     }
-    
     // Grok models
     if (modelLower.includes("grok")) {
         return 131072;
     }
-    
     return undefined;
 }
 
 export function getAzureFoundryOptions(model: string, _option?: ModelOptions): ModelOptionsInfo {
     const modelLower = model.toLowerCase();
     const max_tokens_limit = getMaxTokensLimitAzureFoundry(model);
-    
     // Image generation models
     if (modelLower.includes("dall-e") || modelLower.includes("gpt-image")) {
         return {
@@ -181,7 +169,7 @@ export function getAzureFoundryOptions(model: string, _option?: ModelOptions): M
                     type: OptionType.enum,
                     enum: {
                         "256x256": "256x256",
-                        "512x512": "512x512", 
+                        "512x512": "512x512",
                         "1024x1024": "1024x1024",
                         "1792x1024": "1792x1024",
                         "1024x1792": "1024x1792"
@@ -213,7 +201,6 @@ export function getAzureFoundryOptions(model: string, _option?: ModelOptions): M
             ]
         };
     }
-    
     // Vision model options
     const visionOptions: ModelOptionInfoItem[] = isVisionModel(modelLower) ? [
         {
@@ -224,7 +211,6 @@ export function getAzureFoundryOptions(model: string, _option?: ModelOptions): M
             description: "Controls how the model processes input images"
         }
     ] : [];
-    
     // O-series and thinking models
     if (modelLower.includes("o1") || modelLower.includes("o3") || modelLower.includes("o4")) {
         const reasoningOptions: ModelOptionInfoItem[] = (modelLower.includes("o3") || isO1Full(modelLower)) ? [
@@ -236,7 +222,6 @@ export function getAzureFoundryOptions(model: string, _option?: ModelOptions): M
                 description: "How much effort the model should put into reasoning"
             }
         ] : [];
-        
         return {
             _option_id: "azure-foundry-thinking",
             options: [
@@ -276,7 +261,6 @@ export function getAzureFoundryOptions(model: string, _option?: ModelOptions): M
             ]
         };
     }
-    
     // DeepSeek R1 models
     if (modelLower.includes("deepseek") && modelLower.includes("r1")) {
         return {
@@ -316,7 +300,6 @@ export function getAzureFoundryOptions(model: string, _option?: ModelOptions): M
             ]
         };
     }
-    
     // OpenAI models (GPT-4, GPT-4o, GPT-3.5)
     if (modelLower.includes("gpt-")) {
         return {
@@ -374,7 +357,6 @@ export function getAzureFoundryOptions(model: string, _option?: ModelOptions): M
             ]
         };
     }
-    
     // General text models (Claude, Llama, Mistral, Phi, etc.)
     const baseOptions: ModelOptionInfoItem[] = [
         {
@@ -410,10 +392,8 @@ export function getAzureFoundryOptions(model: string, _option?: ModelOptions): M
             description: "Sequences where the model will stop generating"
         }
     ];
-    
     // Add model-specific options
     const additionalOptions: ModelOptionInfoItem[] = [];
-    
     // Add top_k for certain models
     if (modelLower.includes("claude") || modelLower.includes("mistral") || modelLower.includes("phi")) {
         additionalOptions.push({
@@ -425,7 +405,7 @@ export function getAzureFoundryOptions(model: string, _option?: ModelOptions): M
             description: "Limits token sampling to the top k tokens"
         });
     }
-    
+
     // Add penalty options for certain models
     if (modelLower.includes("claude") || modelLower.includes("jamba") || modelLower.includes("cohere")) {
         additionalOptions.push(
@@ -447,7 +427,6 @@ export function getAzureFoundryOptions(model: string, _option?: ModelOptions): M
             }
         );
     }
-    
     // Add seed option for certain models
     if (modelLower.includes("mistral") || modelLower.includes("phi") || modelLower.includes("gemini")) {
         additionalOptions.push({
@@ -457,7 +436,6 @@ export function getAzureFoundryOptions(model: string, _option?: ModelOptions): M
             description: "Random seed for reproducible generation"
         });
     }
-    
     return {
         _option_id: "azure-foundry-text",
         options: [
@@ -469,13 +447,13 @@ export function getAzureFoundryOptions(model: string, _option?: ModelOptions): M
 }
 
 function isVisionModel(modelLower: string): boolean {
-    return modelLower.includes("gpt-4o") || 
-           modelLower.includes("gpt-4-turbo") || 
-           modelLower.includes("claude-3") || 
-           modelLower.includes("llama-3.2") ||
-           modelLower.includes("llama-4") ||
-           modelLower.includes("gemini") ||
-           isO1Full(modelLower);
+    return modelLower.includes("gpt-4o") ||
+        modelLower.includes("gpt-4-turbo") ||
+        modelLower.includes("claude-3") ||
+        modelLower.includes("llama-3.2") ||
+        modelLower.includes("llama-4") ||
+        modelLower.includes("gemini") ||
+        isO1Full(modelLower);
 }
 
 function isO1Full(modelLower: string): boolean {
