@@ -1,6 +1,7 @@
 import { AIModel, AbstractDriver, Completion, CompletionChunk, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, PromptSegment, TextFallbackOptions } from "@llumiverse/core";
 import { transformSSEStream } from "@llumiverse/core/async";
-import { OpenAITextMessage, formatOpenAILikeTextPrompt, getJSONSafetyNotice } from "@llumiverse/core/formatters";
+import { getJSONSafetyNotice } from "@llumiverse/core/formatters";
+import { formatOpenAILikeTextPrompt, OpenAITextMessage } from "../openai/openai_format.js";
 import { FetchClient } from "@vertesia/api-fetch-client";
 import { ChatCompletionResponse, CompletionRequestParams, ListModelsResponse, ResponseFormat } from "./types.js";
 
@@ -61,7 +62,7 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
         return messages;
     }
 
-    async requestTextCompletion(messages: OpenAITextMessage[], options: ExecutionOptions): Promise<Completion<any>> {
+    async requestTextCompletion(messages: OpenAITextMessage[], options: ExecutionOptions): Promise<Completion> {
         if (options.model_options?._option_id !== "text-fallback") {
             this.logger.warn("Invalid model options", {options: options.model_options });
         }

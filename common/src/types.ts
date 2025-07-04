@@ -4,6 +4,119 @@ import { GroqOptions } from './options/groq.js';
 import { OpenAiOptions } from './options/openai.js';
 import { VertexAIOptions } from './options/vertexai.js';
 
+// ============== Provider details ===============
+
+export enum Providers {
+    openai = 'openai',
+    azure_openai = 'azure_openai',
+    azure_foundry = 'azure_foundry',
+    huggingface_ie = 'huggingface_ie',
+    replicate = 'replicate',
+    bedrock = 'bedrock',
+    vertexai = 'vertexai',
+    togetherai = 'togetherai',
+    mistralai = 'mistralai',
+    groq = 'groq',
+    watsonx = 'watsonx'
+}
+
+export interface ProviderParams {
+    id: Providers;
+    name: string;
+    requiresApiKey: boolean;
+    requiresEndpointUrl: boolean;
+    endpointPlaceholder?: string;
+    supportSearch?: boolean;
+}
+
+export const ProviderList: Record<Providers, ProviderParams> = {
+    openai:
+    {
+        id: Providers.openai,
+        name: "OpenAI",
+        requiresApiKey: true,
+        requiresEndpointUrl: false,
+        supportSearch: false,
+    },
+    azure_openai:
+    {
+        id: Providers.azure_openai,
+        name: "Azure OpenAI",
+        requiresApiKey: false,
+        requiresEndpointUrl: true,
+        supportSearch: false,
+    },
+    azure_foundry:
+    {
+        id: Providers.azure_foundry,
+        name: "Azure Foundry",
+        requiresApiKey: true,
+        requiresEndpointUrl: true,
+        supportSearch: false,
+    },
+    huggingface_ie:
+    {
+        id: Providers.huggingface_ie,
+        name: "HuggingFace Inference Endpoint",
+        requiresApiKey: true,
+        requiresEndpointUrl: true,
+    },
+    replicate:
+    {
+        id: Providers.replicate,
+        name: "Repicate",
+        requiresApiKey: true,
+        requiresEndpointUrl: false,
+        supportSearch: true,
+    },
+    bedrock:
+    {
+        id: Providers.bedrock,
+        name: "AWS Bedrock",
+        requiresApiKey: false,
+        requiresEndpointUrl: false,
+        endpointPlaceholder: "region name (eg. us-east-1)",
+        supportSearch: false,
+    },
+    vertexai: {
+        id: Providers.vertexai,
+        name: "Google Vertex AI",
+        requiresApiKey: false,
+        requiresEndpointUrl: false,
+        supportSearch: false,
+    },
+    togetherai: {
+        id: Providers.togetherai,
+        name: "Together AI",
+        requiresApiKey: false,
+        requiresEndpointUrl: false,
+        supportSearch: false,
+    },
+    mistralai: {
+        id: Providers.mistralai,
+        name: "Mistral AI",
+        requiresApiKey: false,
+        requiresEndpointUrl: false,
+        supportSearch: false,
+    },
+    groq: {
+        id: Providers.groq,
+        name: "Groq Cloud",
+        requiresApiKey: false,
+        requiresEndpointUrl: false,
+        supportSearch: false,
+    },
+    watsonx: {
+        id: Providers.watsonx,
+        name: "IBM WatsonX",
+        requiresApiKey: true,
+        requiresEndpointUrl: true,
+        supportSearch: false
+    },
+}
+
+// ============== Embeddings ===============
+
 export interface EmbeddingsOptions {
     /**
      * The text to generate the embeddings for. One of text or image is required.

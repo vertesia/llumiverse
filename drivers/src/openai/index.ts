@@ -11,6 +11,7 @@ import {
     ExecutionTokenUsage,
     JSONSchema,
     ModelType,
+    Providers,
     ToolDefinition,
     ToolUse,
     TrainingJob,
@@ -22,12 +23,10 @@ import {
     supportsToolUse,
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
-import { formatOpenAILikeMultimodalPrompt } from "@llumiverse/core/formatters";
+import { formatOpenAILikeMultimodalPrompt } from "./openai_format.js";
 import OpenAI, { AzureOpenAI } from "openai";
+import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { Stream } from "openai/streaming";
-
-//For code readability
-type OpenAIMessageBlock = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
 //TODO: Do we need a list?, replace with if statements and modernise?
 const supportFineTunning = new Set([
@@ -43,14 +42,15 @@ export interface BaseOpenAIDriverOptions extends DriverOptions {
 
 export abstract class BaseOpenAIDriver extends AbstractDriver<
     BaseOpenAIDriverOptions,
-    OpenAIMessageBlock[]
+    ChatCompletionMessageParam[]
 > {
-    abstract provider: "azure_openai" | "openai" | "xai";
+    //abstract provider: "azure_openai" | "openai" | "xai" | "azure_foundry";
+    abstract provider: Providers.openai | Providers.azure_openai | "xai" | Providers.azure_foundry;
     abstract service: OpenAI | AzureOpenAI;
 
     constructor(opts: BaseOpenAIDriverOptions) {
         super(opts);
-        this.formatPrompt = formatOpenAILikeMultimodalPrompt as any
+        this.formatPrompt = formatOpenAILikeMultimodalPrompt
         //TODO: better type, we send back OpenAI.Chat.Completions.ChatCompletionMessageParam[] but just not compatible with Function call that we don't use here
     }
 
@@ -82,7 +82,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         };
     }
 
-    async requestTextCompletionStream(prompt: OpenAIMessageBlock[], options: ExecutionOptions): Promise<any> {
+    async requestTextCompletionStream(prompt: ChatCompletionMessageParam[], options: ExecutionOptions): Promise<AsyncIterable<Completion>> {
         if (options.model_options?._option_id !== "openai-text" && options.model_options?._option_id !== "openai-thinking") {
             this.logger.warn("Invalid model options", { options: options.model_options });
         }
@@ -157,7 +157,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         return asyncMap(stream, mapFn);
     }
 
-    async requestTextCompletion(prompt: OpenAIMessageBlock[], options: ExecutionOptions): Promise<any> {
+    async requestTextCompletion(prompt: ChatCompletionMessageParam[], options: ExecutionOptions): Promise<Completion> {
         if (options.model_options?._option_id !== "openai-text" && options.model_options?._option_id !== "openai-thinking") {
             this.logger.warn("Invalid model options", { options: options.model_options });
         }
@@ -170,7 +170,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         const toolDefs = getToolDefinitions(options.tools);
         const useTools: boolean = toolDefs ? supportsToolUse(options.model, "openai") : false;
 
-        let conversation = updateConversation(options.conversation as OpenAIMessageBlock[], prompt);
+        let conversation = updateConversation(options.conversation as ChatCompletionMessageParam[], prompt);
 
         let parsedSchema: JSONSchema | undefined = undefined;
         let strictMode = false;
@@ -293,12 +293,6 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         const wordBlacklist = ["embed", "whisper", "transcribe", "audio", "moderation", "tts",
             "realtime", "dall-e", "babbage", "davinci", "codex", "o1-pro"];
 
-        if (this.provider === "azure_openai") {
-            //Azure OpenAI has additional information about the models
-            result = result.filter((m) => {
-                return !(m as any)?.capabilities?.embeddings;
-            });
-        }
 
         //OpenAI has very little information, filtering based on name.
         result = result.filter((m) => {
@@ -377,7 +371,7 @@ function jobInfo(job: OpenAI.FineTuning.Jobs.FineTuningJob): TrainingJob {
     }
 }
 
-function insert_image_detail(messages: OpenAIMessageBlock[], detail_level: string): OpenAIMessageBlock[] {
+function insert_image_detail(messages: ChatCompletionMessageParam[], detail_level: string): ChatCompletionMessageParam[] {
     if (detail_level == "auto" || detail_level == "low" || detail_level == "high") {
         for (const message of messages) {
             if (message.role !== 'assistant' && message.content) {
@@ -395,7 +389,7 @@ function insert_image_detail(messages: OpenAIMessageBlock[], detail_level: strin
     return messages;
 }
 
-function convertRoles(messages: OpenAIMessageBlock[], model: string): OpenAIMessageBlock[] {
+function convertRoles(messages: ChatCompletionMessageParam[], model: string): ChatCompletionMessageParam[] {
     //New openai models use developer role instead of system
     if (model.includes("o1") || model.includes("o3")) {
         if (model.includes("o1-mini") || model.includes("o1-preview")) {
@@ -462,7 +456,7 @@ function openAiFinishReason(finish_reason?: string): string | undefined {
     return finish_reason;
 }
 
-function updateConversation(conversation: OpenAIMessageBlock[], message: OpenAIMessageBlock[]): OpenAIMessageBlock[] {
+function updateConversation(conversation: ChatCompletionMessageParam[], message: ChatCompletionMessageParam[]): ChatCompletionMessageParam[] {
     if (!message) {
         return conversation;
     }
@@ -489,12 +483,15 @@ export function collectTools(toolCalls?: OpenAI.Chat.Completions.ChatCompletionM
     return tools.length > 0 ? tools : undefined;
 }
 
-function createPromptFromResponse(response: OpenAI.Chat.Completions.ChatCompletionMessage) : OpenAIMessageBlock[] {
-    const messages: OpenAIMessageBlock[] = [];
+function createPromptFromResponse(response: OpenAI.Chat.Completions.ChatCompletionMessage): ChatCompletionMessageParam[] {
+    const messages: ChatCompletionMessageParam[] = [];
     if (response) {
         messages.push({
             role: response.role,
-            content: response.content,
+            content: [{
+                type: "text",
+                text: response.content ?? ""
+            }],
             tool_calls: response.tool_calls,
         });
     }

@@ -1,9 +1,10 @@
+import { getModelCapabilitiesAzureFoundry } from "./capability/azure_foundry.js";
 import { getModelCapabilitiesBedrock } from "./capability/bedrock.js";
 import { getModelCapabilitiesOpenAI } from "./capability/openai.js";
 import { getModelCapabilitiesVertexAI } from "./capability/vertexai.js";
-import { ModelCapabilities, ModelModalities } from "./types.js";
+import { ModelCapabilities, ModelModalities, Providers } from "./types.js";
 
-export function getModelCapabilities(model: string, provider?: string): ModelCapabilities {
+export function getModelCapabilities(model: string, provider?: string | Providers): ModelCapabilities {
     const capabilities = _getModelCapabilities(model, provider);
     // Globally disable audio and video for all models, as we don't support them yet
     // We also do not support tool use while streaming
@@ -15,14 +16,17 @@ export function getModelCapabilities(model: string, provider?: string): ModelCap
     return capabilities;
 }
 
-function _getModelCapabilities(model: string, provider?: string): ModelCapabilities {
+function _getModelCapabilities(model: string, provider?: string | Providers): ModelCapabilities {
     switch (provider?.toLowerCase()) {
-        case "vertexai":
+        case Providers.vertexai:
             return getModelCapabilitiesVertexAI(model);
-        case "openai":
+        case Providers.openai:
             return getModelCapabilitiesOpenAI(model);
-        case "bedrock":
+        case Providers.bedrock:
             return getModelCapabilitiesBedrock(model);
+        case Providers.azure_foundry:
+            // Azure Foundry uses OpenAI capabilities
+            return getModelCapabilitiesAzureFoundry(model);
         default:
             // Guess the provider based on the model name
             if (model.startsWith("gpt")) {
@@ -37,7 +41,7 @@ function _getModelCapabilities(model: string, provider?: string): ModelCapabilit
     }
 }
 
-export function supportsToolUse(model: string, provider?: string, streaming: boolean = false): boolean {
+export function supportsToolUse(model: string, provider?: string | Providers, streaming: boolean = false): boolean {
     const capabilities = getModelCapabilities(model, provider);
     return streaming ? !!capabilities.tool_support_streaming : !!capabilities.tool_support;
 }
