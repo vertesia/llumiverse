@@ -72,11 +72,13 @@ function maxToken(option: StatelessExecutionOptions): number {
     if (modelOptions && typeof modelOptions.max_tokens === "number") {
         return modelOptions.max_tokens;
     } else {
+        const thinking_budget = modelOptions?.thinking_budget_tokens ?? 0;
+        let maxSupportedTokens = getMaxTokensLimitVertexAi(option.model);
         // Fallback to the default max tokens limit for the model
-        if (option.model.includes('claude-3-7-sonnet') && (modelOptions?.thinking_budget_tokens ?? 0) < 64000) {
-            return 64000; // Claude 3.7 can go up to 128k with a beta header, but when no max tokens is specified, we default to 64k.
+        if (option.model.includes('claude-3-7-sonnet') && (modelOptions?.thinking_budget_tokens ?? 0) < 48000) {
+            maxSupportedTokens = 64000; // Claude 3.7 can go up to 128k with a beta header, but when no max tokens is specified, we default to 64k.
         }
-        return getMaxTokensLimitVertexAi(option.model);
+        return Math.min(16000 + thinking_budget, maxSupportedTokens); // Cap to 16k, to avoid taking up too much context window and quota.
     }
 }
 
