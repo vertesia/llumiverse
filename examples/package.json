@@ -26,6 +26,6 @@
     "dependencies": {
         "@llumiverse/core": "workspace:*",
         "@llumiverse/drivers": "workspace:*",
-        "dotenv": "^16.4.5"
+        "dotenv": "^17.0.0"
     }
 }
