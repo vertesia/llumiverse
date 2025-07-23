@@ -3,11 +3,13 @@
   "packageRules": [
     {
       "groupName": "gh-actions deps",
-      "matchManagers": ["github-actions"]
+      "matchManagers": ["github-actions"],
+      "rangeStrategy": "bump"
     },
     {
       "groupName": "node deps",
-      "matchManagers": ["npm", "nvm", "nodenv"]
+      "matchManagers": ["npm", "nvm", "nodenv"],
+      "rangeStrategy": "bump"
     },
     {
       "groupName": "Model Provider Client libraries",
