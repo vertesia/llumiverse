@@ -69,15 +69,15 @@
     },
     "devDependencies": {
         "@vertesia/api-fetch-client": "^0.71.0",
-        "rimraf": "^6.0.0",
+        "rimraf": "^6.0.1",
         "ts-dual-module": "^0.6.3",
-        "typescript": "^5.6.2",
-        "vitest": "^3.0.9"
+        "typescript": "^5.8.3",
+        "vitest": "^3.2.4"
     },
     "dependencies": {
         "@llumiverse/common": "workspace:*",
         "@types/node": "^22.16.5",
-        "ajv": "^8.16.0",
+        "ajv": "^8.17.1",
         "ajv-formats": "^3.0.1"
     },
     "ts_dual_module": {
