@@ -337,22 +337,20 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         });
 
         let tool_use: ToolUse[] | undefined = undefined;
-        //Get tool requests
-        if (res.stopReason == "tool_use") {
-            tool_use = res.output?.message?.content?.reduce((tools: ToolUse[], c) => {
-                if (c.toolUse) {
-                    tools.push({
-                        tool_name: c.toolUse.name ?? "",
-                        tool_input: c.toolUse.input as any,
-                        id: c.toolUse.toolUseId ?? "",
-                    } satisfies ToolUse);
-                }
-                return tools;
-            }, []);
-            //If no tools were used, set to undefined
-            if (tool_use && tool_use.length == 0) {
-                tool_use = undefined;
+        //Get tool requests, we check tool use regardless of finish reason, as you can hit length and still get a valid response.
+        tool_use = res.output?.message?.content?.reduce((tools: ToolUse[], c) => {
+            if (c.toolUse) {
+                tools.push({
+                    tool_name: c.toolUse.name ?? "",
+                    tool_input: c.toolUse.input as any,
+                    id: c.toolUse.toolUseId ?? "",
+                } satisfies ToolUse);
             }
+            return tools;
+        }, []);
+        //If no tools were used, set to undefined
+        if (tool_use && tool_use.length == 0) {
+            tool_use = undefined;
         }
 
         const completion = {
