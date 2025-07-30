@@ -206,18 +206,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
         let models: AIModel<string>[] = [];
 
-        //Project specific deployed models
-        const [response] = await aiplatform.listModels({
-            parent: `projects/${this.options.project}/locations/${this.options.region}`,
-        });
-        models = models.concat(
-            response.map((model) => ({
-                id: model.name?.split("/").pop() ?? "",
-                name: model.displayName ?? "",
-                provider: "vertexai"
-            })),
-        );
-
         //Model Garden Publisher models - Pretrained models
         const publishers = ["google", "anthropic", "meta"];
         // Meta "maas" models are LLama Models-As-A-Service. Non-maas models are not pre-deployed.
@@ -225,7 +213,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         // Additional models not in the listings, but we want to include
         // TODO: Remove once the models are available in the listing API, or no longer needed
         const additionalModels = {
-            google: ["imagen-3.0-fast-generate-001"],
+            google: [
+                "imagen-3.0-fast-generate-001",
+            ],
             anthropic: [],
             meta: [
                 "llama-4-maverick-17b-128e-instruct-maas",
@@ -241,25 +231,42 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         //Used to exclude retired models that are still in the listing API but not available for use.
         //Or models we do not support yet
         const unsupportedModelsByPublisher = {
-            google: ["gemini-pro", "gemini-ultra"],
+            google: ["gemini-pro", "gemini-ultra", "imagen-product-recontext-preview", "embedding"],
             anthropic: [],
             meta: [],
         };
 
-        for (const publisher of publishers) {
+        // Start all network requests in parallel
+        const aiplatformPromise = aiplatform.listModels({
+            parent: `projects/${this.options.project}/locations/${this.options.region}`,
+        });
+        const publisherPromises = publishers.map(async (publisher) => {
             let [response] = await modelGarden.listPublisherModels({
                 parent: `publishers/${publisher}`,
                 orderBy: "name",
                 listAllVersions: true,
             });
+            return { publisher, response };
+        });
+        // Await all network requests
+        const [aiplatformResult, ...publisherResults] = await Promise.all([
+            aiplatformPromise,
+            ...publisherPromises,
+        ]);
 
-            // Filter out the 100+ long list coming from Google models
-            if (publisher === "google") {
-                response = response.filter((model) => {
-                    return (model.supportedActions?.openGenerationAiStudio || undefined) !== undefined;
-                });
-            }
+        // Process aiplatform models, project specific models
+        const [response] = aiplatformResult;
+        models = models.concat(
+            response.map((model) => ({
+                id: model.name?.split("/").pop() ?? "",
+                name: model.displayName ?? "",
+                provider: "vertexai"
+            })),
+        );
 
+        // Process publisher models
+        for (const result of publisherResults) {
+            const { publisher, response } = result;
             const modelFamily = supportedModels[publisher as keyof typeof supportedModels];
             const retiredModels = unsupportedModelsByPublisher[publisher as keyof typeof unsupportedModelsByPublisher];
 
