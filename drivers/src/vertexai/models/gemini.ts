@@ -1,5 +1,6 @@
 import {
     Content, FinishReason, FunctionCallingConfigMode, FunctionDeclaration, GenerateContentParameters,
+    GenerateContentResponseUsageMetadata,
     HarmBlockThreshold, HarmCategory, Part, SafetySetting, Schema, Tool, Type
 } from "@google/genai";
 import {
@@ -608,6 +609,32 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         return { contents, system };
     }
 
+    usageMetadataToTokenUsage(usageMetadata: GenerateContentResponseUsageMetadata | undefined): ExecutionTokenUsage {
+        if (!usageMetadata || !usageMetadata.totalTokenCount) {
+            return {};
+        }
+        const tokenUsage: ExecutionTokenUsage = { total: usageMetadata.totalTokenCount, prompt: usageMetadata.promptTokenCount };
+
+        //Output/Response side
+        tokenUsage.result = (usageMetadata.candidatesTokenCount ?? 0)
+            + (usageMetadata.thoughtsTokenCount ?? 0)
+            + (usageMetadata.toolUsePromptTokenCount ?? 0);
+        
+        if ((tokenUsage.total ?? 0) != (tokenUsage.prompt ?? 0) + tokenUsage.result) {
+            console.warn("[VertexAI] Gemini token usage mismatch: total does not equal prompt + result", {
+                total: tokenUsage.total,
+                prompt: tokenUsage.prompt,
+                result: tokenUsage.result
+            });
+        }
+        
+        if (!tokenUsage.result) {
+            tokenUsage.result = undefined; // If no result, mark as undefined
+        }
+
+        return tokenUsage;
+    }
+
     async requestTextCompletion(driver: VertexAIDriver, prompt: GenerateContentPrompt, options: ExecutionOptions): Promise<Completion> {
         const splits = options.model.split("/");
         const modelName = splits[splits.length - 1];
@@ -621,12 +648,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const payload = getGeminiPayload(options, prompt);
         const response = await client.models.generateContent(payload);
 
-        const usage = response.usageMetadata;
-        const token_usage: ExecutionTokenUsage = {
-            prompt: usage?.promptTokenCount,
-            result: usage?.candidatesTokenCount,
-            total: usage?.totalTokenCount,
-        }
+        const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(response.usageMetadata);
 
         let tool_use: ToolUse[] | undefined;
         let finish_reason: string | undefined, result: any;
@@ -673,12 +695,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const response = await client.models.generateContentStream(payload);
 
         const stream = asyncMap(response, async (item) => {
-            const usage = item.usageMetadata;
-            const token_usage: ExecutionTokenUsage = {
-                prompt: usage?.promptTokenCount,
-                result: usage?.candidatesTokenCount,
-                total: usage?.totalTokenCount,
-            }
+            const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(item.usageMetadata);
             if (item.candidates && item.candidates.length > 0) {
                 for (const candidate of item.candidates) {
                     let tool_use: ToolUse[] | undefined;
@@ -707,6 +724,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             return {
                 result: item.promptFeedback?.blockReasonMessage ?? "",
                 finish_reason: item.promptFeedback?.blockReason ?? "",
+                token_usage: token_usage,
             };
         });
 

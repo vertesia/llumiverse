@@ -193,14 +193,22 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
                 try {
                     const data = JSON.parse(event.data);
+                    if (!data) {
+                        this.logger.warn(`[Azure Foundry] Received empty data in streaming response`);
+                        continue;
+                    }
                     const choice = data.choices?.[0];
-
                     if (!choice) {
                         continue;
                     }
                     const chunk: CompletionChunk = {
                         result: choice.delta?.content || "",
                         finish_reason: this.convertFinishReason(choice.finish_reason),
+                        token_usage: {
+                            prompt: data.usage?.prompt_tokens,
+                            result: data.usage?.completion_tokens,
+                            total: data.usage?.total_tokens,
+                        },
                     };
 
                     yield chunk;
