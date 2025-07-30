@@ -183,7 +183,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return completionResult;
     };
 
-    static getExtractedStream(result: ConverseStreamOutput, _prompt?: BedrockPrompt, options?: ExecutionOptions): CompletionChunkObject {
+    getExtractedStream(result: ConverseStreamOutput, _prompt?: BedrockPrompt, options?: ExecutionOptions): CompletionChunkObject {
         let output: string = "";
         let reasoning: string = "";
         let stop_reason = "";
@@ -218,7 +218,15 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 } else if (delta.reasoningContent.signature) {
                     // Handle signature updates for reasoning content - end of thinking
                     reasoning = "\n\n";
+                    // Putting logging here so it only triggers once.
+                    this.logger.info("[Bedrock] Not outputting reasoning content as include_thoughts is false");
                 }
+            } else if (delta) {
+                // Get content block type
+                const type = Object.keys(delta).find(
+                    key => key !== '$unknown' && (delta as any)[key] !== undefined
+                );
+                this.logger.info("[Bedrock] Unsupported content response type:", type);
             }
         }
 
@@ -383,7 +391,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
 
             return transformAsyncIterator(stream, (streamSegment: ConverseStreamOutput) => {
-                return BedrockDriver.getExtractedStream(streamSegment, prompt, options);
+                return this.getExtractedStream(streamSegment, prompt, options);
             });
 
         }).catch((err) => {
