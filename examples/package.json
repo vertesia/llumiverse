@@ -20,12 +20,12 @@
     "license": "MIT",
     "devDependencies": {
         "@types/json-schema": "^7.0.15",
-        "rimraf": "^6.0.0",
-        "typescript": "^5.6.2"
+        "rimraf": "^6.0.1",
+        "typescript": "^5.8.3"
     },
     "dependencies": {
         "@llumiverse/core": "workspace:*",
         "@llumiverse/drivers": "workspace:*",
-        "dotenv": "^16.4.5"
+        "dotenv": "^16.6.1"
     }
 }
