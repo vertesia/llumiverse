@@ -466,6 +466,12 @@ export function mergeConsecutiveRole(contents: Content[] | undefined): Content[]
     return result;
 }
 
+const validFinishReasons: FinishReason[] = [
+    FinishReason.MAX_TOKENS,
+    FinishReason.STOP,
+    FinishReason.FINISH_REASON_UNSPECIFIED
+]
+
 export class GeminiModelDefinition implements ModelDefinition<GenerateContentPrompt> {
 
     model: AIModel
@@ -660,6 +666,13 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 default: finish_reason = candidate.finishReason;
             }
             const content = candidate.content;
+
+            if (candidate.finishReason && !validFinishReasons.includes(candidate.finishReason)) {
+                throw new Error(`Invalid finish reason: ${candidate.finishReason}, `
+                    + `finish message: ${candidate.finishMessage}, `
+                    + `content: ${JSON.stringify(content, null, 2)}, safety: ${JSON.stringify(candidate.safetyRatings, null, 2)}`);
+            }
+
             if (content) {
                 tool_use = collectToolUseParts(content);
 
@@ -669,6 +682,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 conversation = updateConversation(conversation, [cleanedContent]);
             }
         }
+
+        
 
         if (tool_use) {
             finish_reason = "tool_use";
@@ -704,6 +719,11 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                         case FinishReason.MAX_TOKENS: finish_reason = "length"; break;
                         case FinishReason.STOP: finish_reason = "stop"; break;
                         default: finish_reason = candidate.finishReason;
+                    }
+                    if (candidate.finishReason && !validFinishReasons.includes(candidate.finishReason)) {
+                        throw new Error(`Invalid finish reason: ${candidate.finishReason}, `
+                            + `finish message: ${candidate.finishMessage}, `
+                            + `content: ${JSON.stringify(candidate.content, null, 2)}, safety: ${JSON.stringify(candidate.safetyRatings, null, 2)}`);
                     }
                     if (candidate.content?.role === 'model') {
                         const text = collectTextParts(candidate.content);
