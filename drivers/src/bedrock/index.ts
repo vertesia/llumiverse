@@ -132,7 +132,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return await formatConversePrompt(segments, opts);
     }
 
-    static getExtractedExecution(result: ConverseResponse, _prompt?: BedrockPrompt, options?: ExecutionOptions): CompletionChunkObject {
+    getExtractedExecution(result: ConverseResponse, _prompt?: BedrockPrompt, options?: ExecutionOptions): CompletionChunkObject {
         let resultText = "";
         let reasoning = "";
 
@@ -141,10 +141,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 // Get text output
                 if (content.text) {
                     resultText += content.text;
-                }
-                // Get reasoning content only if include_thoughts is true
-                if (content.reasoningContent && options) {
-                    const claudeOptions = options.model_options as BedrockClaudeOptions;
+                } else if (content.reasoningContent) {
+                    // Get reasoning content only if include_thoughts is true
+                    const claudeOptions = options?.model_options as BedrockClaudeOptions;
                     if (claudeOptions?.include_thoughts) {
                         if (content.reasoningContent.reasoningText) {
                             reasoning += content.reasoningContent.reasoningText.text;
@@ -153,7 +152,15 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                             const redactedData = new TextDecoder().decode(content.reasoningContent.redactedContent);
                             reasoning += `[Redacted thinking: ${redactedData}]`;
                         }
+                    } else {
+                        this.logger.info("[Bedrock] Not outputting reasoning content as include_thoughts is false");
                     }
+                } else {
+                    // Get content block type
+                    const type = Object.keys(content).find(
+                        key => key !== '$unknown' && content[key as keyof typeof content] !== undefined
+                    );
+                    this.logger.info("[Bedrock] Unsupported content response type:", type);
                 }
             }
 
@@ -176,7 +183,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return completionResult;
     };
 
-    static getExtractedStream(result: ConverseStreamOutput, _prompt?: BedrockPrompt, options?: ExecutionOptions): CompletionChunkObject {
+    getExtractedStream(result: ConverseStreamOutput, _prompt?: BedrockPrompt, options?: ExecutionOptions): CompletionChunkObject {
         let output: string = "";
         let reasoning: string = "";
         let stop_reason = "";
@@ -211,7 +218,15 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 } else if (delta.reasoningContent.signature) {
                     // Handle signature updates for reasoning content - end of thinking
                     reasoning = "\n\n";
+                    // Putting logging here so it only triggers once.
+                    this.logger.info("[Bedrock] Not outputting reasoning content as include_thoughts is false");
                 }
+            } else if (delta) {
+                // Get content block type
+                const type = Object.keys(delta).find(
+                    key => key !== '$unknown' && (delta as any)[key] !== undefined
+                );
+                this.logger.info("[Bedrock] Unsupported content response type:", type);
             }
         }
 
@@ -337,26 +352,24 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         });
 
         let tool_use: ToolUse[] | undefined = undefined;
-        //Get tool requests
-        if (res.stopReason == "tool_use") {
-            tool_use = res.output?.message?.content?.reduce((tools: ToolUse[], c) => {
-                if (c.toolUse) {
-                    tools.push({
-                        tool_name: c.toolUse.name ?? "",
-                        tool_input: c.toolUse.input as any,
-                        id: c.toolUse.toolUseId ?? "",
-                    } satisfies ToolUse);
-                }
-                return tools;
-            }, []);
-            //If no tools were used, set to undefined
-            if (tool_use && tool_use.length == 0) {
-                tool_use = undefined;
+        //Get tool requests, we check tool use regardless of finish reason, as you can hit length and still get a valid response.
+        tool_use = res.output?.message?.content?.reduce((tools: ToolUse[], c) => {
+            if (c.toolUse) {
+                tools.push({
+                    tool_name: c.toolUse.name ?? "",
+                    tool_input: c.toolUse.input as any,
+                    id: c.toolUse.toolUseId ?? "",
+                } satisfies ToolUse);
             }
+            return tools;
+        }, []);
+        //If no tools were used, set to undefined
+        if (tool_use && tool_use.length == 0) {
+            tool_use = undefined;
         }
 
         const completion = {
-            ...BedrockDriver.getExtractedExecution(res, prompt, options),
+            ...this.getExtractedExecution(res, prompt, options),
             original_response: options.include_original_response ? res : undefined,
             conversation: conversation,
             tool_use: tool_use,
@@ -378,7 +391,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
 
             return transformAsyncIterator(stream, (streamSegment: ConverseStreamOutput) => {
-                return BedrockDriver.getExtractedStream(streamSegment, prompt, options);
+                return this.getExtractedStream(streamSegment, prompt, options);
             });
 
         }).catch((err) => {
