@@ -47,10 +47,10 @@
   ],
   "devDependencies": {
     "dotenv": "^16.6.1",
-    "rimraf": "^6.0.0",
+    "rimraf": "^6.0.1",
     "ts-dual-module": "^0.6.3",
-    "typescript": "^5.6.2",
-    "vitest": "^3.0.9"
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.55.1",
@@ -72,12 +72,12 @@
     "@huggingface/inference": "2.6.7",
     "@llumiverse/common": "workspace:*",
     "@llumiverse/core": "workspace:*",
-    "@vertesia/api-fetch-client": "^0.71.0",
+    "@vertesia/api-fetch-client": "^0.72.0",
     "eventsource": "^4.0.0",
-    "google-auth-library": "^9.14.0",
+    "google-auth-library": "^9.15.1",
     "groq-sdk": "^0.26.0",
-    "mnemonist": "^0.40.0",
-    "node-web-stream-adapters": "^0.2.0",
+    "mnemonist": "^0.40.3",
+    "node-web-stream-adapters": "^0.2.1",
     "openai": "^4.104.0",
     "replicate": "^1.0.1"
   },
