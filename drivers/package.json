@@ -67,9 +67,9 @@
     "@azure/core-sse": "^2.3.0",
     "@azure/identity": "^4.10.1",
     "@azure/openai": "2.0.0",
-    "@google-cloud/aiplatform": "^3.35.0",
+    "@google-cloud/aiplatform": "^5.1.0",
     "@google/genai": "^1.7.0",
-    "@huggingface/inference": "2.6.7",
+    "@huggingface/inference": "4.6.1",
     "@llumiverse/common": "workspace:*",
     "@llumiverse/core": "workspace:*",
     "@vertesia/api-fetch-client": "^0.72.0",
@@ -78,7 +78,7 @@
     "groq-sdk": "^0.26.0",
     "mnemonist": "^0.40.3",
     "node-web-stream-adapters": "^0.2.1",
-    "openai": "^4.104.0",
+    "openai": "^5.11.0",
     "replicate": "^1.0.1"
   },
   "ts_dual_module": {
