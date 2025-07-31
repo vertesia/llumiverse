@@ -466,7 +466,7 @@ export function mergeConsecutiveRole(contents: Content[] | undefined): Content[]
     return result;
 }
 
-const validFinishReasons: FinishReason[] = [
+const supportedFinishReasons: FinishReason[] = [
     FinishReason.MAX_TOKENS,
     FinishReason.STOP,
     FinishReason.FINISH_REASON_UNSPECIFIED
@@ -667,8 +667,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             }
             const content = candidate.content;
 
-            if (candidate.finishReason && !validFinishReasons.includes(candidate.finishReason)) {
-                throw new Error(`Invalid finish reason: ${candidate.finishReason}, `
+            if (candidate.finishReason && !supportedFinishReasons.includes(candidate.finishReason)) {
+                throw new Error(`Unsupported finish reason: ${candidate.finishReason}, `
                     + `finish message: ${candidate.finishMessage}, `
                     + `content: ${JSON.stringify(content, null, 2)}, safety: ${JSON.stringify(candidate.safetyRatings, null, 2)}`);
             }
@@ -720,8 +720,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                         case FinishReason.STOP: finish_reason = "stop"; break;
                         default: finish_reason = candidate.finishReason;
                     }
-                    if (candidate.finishReason && !validFinishReasons.includes(candidate.finishReason)) {
-                        throw new Error(`Invalid finish reason: ${candidate.finishReason}, `
+                    if (candidate.finishReason && !supportedFinishReasons.includes(candidate.finishReason)) {
+                        throw new Error(`Unsupported finish reason: ${candidate.finishReason}, `
                             + `finish message: ${candidate.finishMessage}, `
                             + `content: ${JSON.stringify(candidate.content, null, 2)}, safety: ${JSON.stringify(candidate.safetyRatings, null, 2)}`);
                     }
