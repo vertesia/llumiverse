@@ -14,7 +14,7 @@
         "eslint": "^9.32.0",
         "npm-ws-tools": "^0.3.0",
         "rollup": "^4.46.2",
-        "typescript": "^5.8.3",
+        "typescript": "^5.9.2",
         "typescript-eslint": "^8.38.0",
         "vitest": "^3.2.4"
     },
