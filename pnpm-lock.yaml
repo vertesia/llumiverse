@@ -157,8 +157,8 @@ importers:
         specifier: ^9.15.1
         version: 9.15.1
       groq-sdk:
-        specifier: ^0.26.0
-        version: 0.26.0
+        specifier: ^0.30.0
+        version: 0.30.0
       mnemonist:
         specifier: ^0.40.3
         version: 0.40.3
@@ -1797,8 +1797,8 @@ packages:
   graphemer@1.4.0:
     resolution: {integrity: sha512-EtKwoO6kxCL9WO5xipiHTZlSzBm7WLT627TqC/uVRd0HKmq8NXyebnNYxDoBi7wt8eTWrUrKXCOVaFq9x1kgag==}
 
-  groq-sdk@0.26.0:
-    resolution: {integrity: sha512-2ehKqPYHw4NpikaJQ/z+YYmvMgQj7Hf84YQKgElU3ORobiUYwdPTXZkgnTJ7walxqOjgI5NdpK7iYxBBaZ94Hg==}
+  groq-sdk@0.30.0:
+    resolution: {integrity: sha512-9PowoybiGkq1GpvkC7ikvT+WIFu6zAkeXF8p4eqNEYgGnEcf70fBWuwWqU1KIPQgTMw5sfausvJWzzPbYdHfCQ==}
 
   gtoken@7.1.0:
     resolution: {integrity: sha512-pCcEwRi+TKpMlxAQObHDQ56KawURgyAf6jtIY046fJ5tIv3zDe/LEIubckAO8fj6JnAxLdmWkUfNyulQ2iKdEw==}
@@ -5026,7 +5026,7 @@ snapshots:
 
   graphemer@1.4.0: {}
 
-  groq-sdk@0.26.0:
+  groq-sdk@0.30.0:
     dependencies:
       '@types/node': 18.19.86
       '@types/node-fetch': 2.6.12
