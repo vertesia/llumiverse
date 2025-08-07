@@ -124,7 +124,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             this.anthropicClient = new AnthropicVertex({
                 timeout: 20 * 60 * 10000, // Set to 20 minutes, 10 minute default, setting this disables long request error: https://github.com/anthropics/anthropic-sdk-typescript?#long-requests
                 region: "us-east5",
-                projectId: process.env.GOOGLE_PROJECT_ID,
+                projectId: this.options.project,
             });
         }
         return this.anthropicClient;
