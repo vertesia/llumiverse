@@ -698,7 +698,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             foundationModels = foundationModels.filter(foundationFilter);
         }
 
-        const supportedPublishers = ["amazon", "anthropic", "cohere", "ai21", "mistral", "meta", "deepseek", "writer"];
+        const supportedPublishers = ["amazon", "anthropic", "cohere", "ai21", "mistral", "meta", "deepseek", "writer", "openai"];
         const unsupportedModelsByPublisher = {
             amazon: ["titan-image-generator", "nova-reel", "nova-sonic", "rerank"],
             anthropic: [],
