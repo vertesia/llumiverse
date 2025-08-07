@@ -4,7 +4,6 @@ import {
 } from "@llumiverse/core";
 import { VertexAIDriver } from "../index.js";
 
-const projectId = process.env.GOOGLE_PROJECT_ID;
 const location = 'us-central1';
 
 import aiplatform, { protos } from '@google-cloud/aiplatform';
@@ -354,7 +353,7 @@ export class ImagenModelDefinition {
         const modelName = options.model.split("/").pop() ?? '';
 
         // Configure the parent resource
-        const endpoint = `projects/${projectId}/locations/${location}/publishers/google/models/${modelName}`;
+        const endpoint = `projects/${driver.options.project}/locations/${location}/publishers/google/models/${modelName}`;
 
         const instanceValue = helpers.toValue(prompt);
         if (!instanceValue) {
