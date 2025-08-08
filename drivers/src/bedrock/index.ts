@@ -443,7 +443,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         } else if (options.model.includes("mistral")) {
             //7B instruct and 8x7B instruct
             if (options.model.includes("7b")) {
-                supportsJSONPrefill = true;
                 additionalField = { top_k: model_options.top_k };
                 //Does not support system messages
                 if (prompt.system && prompt.system?.length != 0) {
