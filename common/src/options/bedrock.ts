@@ -124,6 +124,10 @@ export function getMaxTokensLimitBedrock(model: string): number | undefined {
             return 8192;
         }
     }
+    // OpenAI gpt-oss models
+    if (model.includes("gpt-oss")) {
+        return 128000;
+    }
 
     // Default fallback
     return undefined;
@@ -441,6 +445,32 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                 _option_id: "bedrock-palmyra",
                 options: [...baseConverseOptions, ...palmyraConverseOptions]
             }
+        }
+        else if (model.includes("gpt-oss")) {
+            const gptOssOptions: ModelOptionInfoItem[] = [
+                {
+                    name: "temperature",
+                    type: OptionType.numeric,
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.7,
+                    step: 0.1,
+                    description: "Controls randomness in the output."
+                },
+                {
+                    name: "top_p",
+                    type: OptionType.numeric,
+                    min: 0.0,
+                    max: 1.0,
+                    default: 1.0,
+                    step: 0.1,
+                    description: "Limits token sampling to the cumulative probability of top_p tokens."
+                },
+            ];
+            return {
+                _option_id: "bedrock-gpt-oss",
+                options: [...baseConverseOptions, ...gptOssOptions]
+            };
         }
 
         //Fallback to converse standard.

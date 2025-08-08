@@ -708,6 +708,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             meta: [],
             deepseek: [],
             writer: [],
+            openai: [],
         };
 
         // Helper function to check if model should be filtered out
