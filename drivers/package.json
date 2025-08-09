@@ -49,7 +49,7 @@
     "dotenv": "^16.6.1",
     "rimraf": "^6.0.1",
     "ts-dual-module": "^0.6.3",
-    "typescript": "^5.8.3",
+    "typescript": "^5.9.2",
     "vitest": "^3.2.4"
   },
   "dependencies": {
@@ -72,7 +72,7 @@
     "@huggingface/inference": "2.6.7",
     "@llumiverse/common": "workspace:*",
     "@llumiverse/core": "workspace:*",
-    "@vertesia/api-fetch-client": "^0.72.0",
+    "@vertesia/api-fetch-client": "^0.74.0",
     "eventsource": "^4.0.0",
     "google-auth-library": "^9.15.1",
     "groq-sdk": "^0.26.0",
