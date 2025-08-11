@@ -9,7 +9,7 @@ import {
     AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult,
     ExecutionOptions, ExecutionTokenUsage, ImageGeneration, Modalities, PromptSegment,
     TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions,
-    BedrockClaudeOptions, BedrockPalmyraOptions, getMaxTokensLimitBedrock, NovaCanvasOptions,
+    BedrockClaudeOptions, BedrockPalmyraOptions, BedrockGptOssOptions, getMaxTokensLimitBedrock, NovaCanvasOptions,
     modelModalitiesToArray, getModelCapabilities,
     StatelessExecutionOptions,
     ModelOptions
@@ -498,6 +498,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
         } else if (options.model.includes("deepseek")) {
             //DeepSeek models support no additional options
+        } else if (options.model.includes("gpt-oss")) {
+            const gptOssOptions = model_options as ModelOptions as BedrockGptOssOptions;
+            additionalField = {
+                reasoning_effort: gptOssOptions?.reasoning_effort,
+            };
         }
 
         //If last message is "```json", add corresponding ``` as a stop sequence.
