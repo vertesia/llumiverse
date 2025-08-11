@@ -20,7 +20,7 @@ import { TextEmbeddingsOptions, getEmbeddingsForText } from "./embeddings/embedd
 import { getModelDefinition } from "./models.js";
 import { EmbeddingsOptions } from "@llumiverse/core";
 import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
-import { v1beta1 } from "@google-cloud/aiplatform";
+import { PredictionServiceClient, v1beta1 } from "@google-cloud/aiplatform";
 import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { ImagenModelDefinition, ImagenPrompt } from "./models/imagen.js";
 import { GoogleGenAI, Content } from "@google/genai";
@@ -54,6 +54,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     googleGenAI: GoogleGenAI | undefined;
     llamaClient: FetchClient & { region?: string } | undefined;
     modelGarden: v1beta1.ModelGardenServiceClient | undefined;
+    imagenClient: PredictionServiceClient| undefined;
 
     authClient: JSONClient | GoogleAuth<JSONClient>;
 
@@ -66,6 +67,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         this.googleGenAI = undefined;
         this.modelGarden = undefined;
         this.llamaClient = undefined;
+        this.imagenClient = undefined;
 
         this.authClient = options.googleAuthOptions?.authClient ?? new GoogleAuth(options.googleAuthOptions);
     }
@@ -124,7 +126,12 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             this.anthropicClient = new AnthropicVertex({
                 timeout: 20 * 60 * 10000, // Set to 20 minutes, 10 minute default, setting this disables long request error: https://github.com/anthropics/anthropic-sdk-typescript?#long-requests
                 region: "us-east5",
-                projectId: process.env.GOOGLE_PROJECT_ID,
+                projectId: this.options.project,
+                googleAuth: new GoogleAuth({
+                    scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+                    authClient: this.authClient as JSONClient,
+                    projectId: this.options.project,
+                }),
             });
         }
         return this.anthropicClient;
@@ -152,6 +159,19 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             });
         }
         return this.modelGarden;
+    }
+
+    public getImagenClient(): PredictionServiceClient {
+        //Lazy initialisation
+        if (!this.imagenClient) {
+            // TODO: make location configurable, fixed to us-central1 for now
+            this.imagenClient = new PredictionServiceClient({
+                projectId: this.options.project,
+                apiEndpoint: `us-central1-${API_BASE_PATH}`,
+                authClient: this.authClient as JSONClient,
+            });
+        }
+        return this.imagenClient;
     }
 
     validateResult(result: Completion, options: ExecutionOptions) {
