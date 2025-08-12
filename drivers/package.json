@@ -1,87 +1,87 @@
 {
-  "name": "@llumiverse/drivers",
-  "version": "0.22.0",
-  "type": "module",
-  "description": "LLM driver implementations. Currently supported are: openai, huggingface, bedrock, replicate.",
-  "files": [
-    "lib",
-    "src"
-  ],
-  "types": "./lib/types/index.d.ts",
-  "exports": {
+    "name": "@llumiverse/drivers",
+    "version": "0.22.0",
+    "type": "module",
+    "description": "LLM driver implementations. Currently supported are: openai, huggingface, bedrock, replicate.",
+    "files": [
+        "lib",
+        "src"
+    ],
     "types": "./lib/types/index.d.ts",
-    "import": "./lib/esm/index.js",
-    "require": "./lib/cjs/index.js"
-  },
-  "scripts": {
-    "test": "vitest run --retry 3",
-    "build": "pnpm exec tsmod build",
-    "clean": "rimraf ./lib tsconfig.tsbuildinfo"
-  },
-  "author": "Llumiverse",
-  "license": "Apache-2.0",
-  "homepage": "https://github.com/vertesia/llumiverse",
-  "repository": {
-    "type": "git",
-    "url": "git+ssh://git@github.com/vertesia/llumiverse.git"
-  },
-  "keywords": [
-    "llm",
-    "ai",
-    "prompt",
-    "prompt engineering",
-    "ml",
-    "machine learning",
-    "embeddings",
-    "training",
-    "model",
-    "universal",
-    "api",
-    "chatgpt",
-    "openai",
-    "vertexai",
-    "bedrock",
-    "replicate",
-    "huggingface",
-    "togetherai"
-  ],
-  "devDependencies": {
-    "dotenv": "^16.6.1",
-    "rimraf": "^6.0.1",
-    "ts-dual-module": "^0.6.3",
-    "typescript": "^5.9.2",
-    "vitest": "^3.2.4"
-  },
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.59.0",
-    "@anthropic-ai/vertex-sdk": "^0.13.0",
-    "@aws-sdk/client-bedrock": "^3.840.0",
-    "@aws-sdk/client-bedrock-runtime": "^3.840.0",
-    "@aws-sdk/client-s3": "^3.840.0",
-    "@aws-sdk/credential-providers": "^3.840.0",
-    "@aws-sdk/lib-storage": "^3.840.0",
-    "@aws-sdk/types": "^3.840.0",
-    "@azure-rest/ai-inference": "1.0.0-beta.6",
-    "@azure/ai-projects": "1.0.0-beta.10",
-    "@azure/core-auth": "^1.10.0",
-    "@azure/core-sse": "^2.3.0",
-    "@azure/identity": "^4.10.1",
-    "@azure/openai": "2.0.0",
-    "@google-cloud/aiplatform": "^3.35.0",
-    "@google/genai": "^1.7.0",
-    "@huggingface/inference": "2.6.7",
-    "@llumiverse/common": "workspace:*",
-    "@llumiverse/core": "workspace:*",
-    "@vertesia/api-fetch-client": "^0.74.0",
-    "eventsource": "^4.0.0",
-    "google-auth-library": "^9.15.1",
-    "groq-sdk": "^0.26.0",
-    "mnemonist": "^0.40.3",
-    "node-web-stream-adapters": "^0.2.1",
-    "openai": "^4.104.0",
-    "replicate": "^1.0.1"
-  },
-  "ts_dual_module": {
-    "outDir": "lib"
-  }
+    "exports": {
+        "types": "./lib/types/index.d.ts",
+        "import": "./lib/esm/index.js",
+        "require": "./lib/cjs/index.js"
+    },
+    "scripts": {
+        "test": "vitest run --retry 3",
+        "build": "pnpm exec tsmod build",
+        "clean": "rimraf ./lib tsconfig.tsbuildinfo"
+    },
+    "author": "Llumiverse",
+    "license": "Apache-2.0",
+    "homepage": "https://github.com/vertesia/llumiverse",
+    "repository": {
+        "type": "git",
+        "url": "git+ssh://git@github.com/vertesia/llumiverse.git"
+    },
+    "keywords": [
+        "llm",
+        "ai",
+        "prompt",
+        "prompt engineering",
+        "ml",
+        "machine learning",
+        "embeddings",
+        "training",
+        "model",
+        "universal",
+        "api",
+        "chatgpt",
+        "openai",
+        "vertexai",
+        "bedrock",
+        "replicate",
+        "huggingface",
+        "togetherai"
+    ],
+    "devDependencies": {
+        "dotenv": "^16.6.1",
+        "rimraf": "^6.0.1",
+        "ts-dual-module": "^0.6.3",
+        "typescript": "^5.9.2",
+        "vitest": "^3.2.4"
+    },
+    "dependencies": {
+        "@anthropic-ai/sdk": "^0.59.0",
+        "@anthropic-ai/vertex-sdk": "^0.13.0",
+        "@aws-sdk/client-bedrock": "^3.840.0",
+        "@aws-sdk/client-bedrock-runtime": "^3.840.0",
+        "@aws-sdk/client-s3": "^3.840.0",
+        "@aws-sdk/credential-providers": "^3.840.0",
+        "@aws-sdk/lib-storage": "^3.840.0",
+        "@aws-sdk/types": "^3.840.0",
+        "@azure-rest/ai-inference": "1.0.0-beta.6",
+        "@azure/ai-projects": "1.0.0-beta.10",
+        "@azure/core-auth": "^1.10.0",
+        "@azure/core-sse": "^2.3.0",
+        "@azure/identity": "^4.10.1",
+        "@azure/openai": "2.0.0",
+        "@google-cloud/aiplatform": "^3.35.0",
+        "@google/genai": "^1.7.0",
+        "@huggingface/inference": "2.6.7",
+        "@llumiverse/common": "workspace:*",
+        "@llumiverse/core": "workspace:*",
+        "@vertesia/api-fetch-client": "^0.74.0",
+        "eventsource": "^4.0.0",
+        "google-auth-library": "^9.15.1",
+        "groq-sdk": "^0.30.0",
+        "mnemonist": "^0.40.3",
+        "node-web-stream-adapters": "^0.2.1",
+        "openai": "^4.104.0",
+        "replicate": "^1.0.1"
+    },
+    "ts_dual_module": {
+        "outDir": "lib"
+    }
 }
