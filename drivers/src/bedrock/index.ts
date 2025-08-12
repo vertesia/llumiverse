@@ -9,7 +9,7 @@ import {
     AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult,
     ExecutionOptions, ExecutionTokenUsage, ImageGeneration, Modalities, PromptSegment,
     TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions,
-    BedrockClaudeOptions, BedrockPalmyraOptions, getMaxTokensLimitBedrock, NovaCanvasOptions,
+    BedrockClaudeOptions, BedrockPalmyraOptions, BedrockGptOssOptions, getMaxTokensLimitBedrock, NovaCanvasOptions,
     modelModalitiesToArray, getModelCapabilities,
     StatelessExecutionOptions,
     ModelOptions
@@ -443,7 +443,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         } else if (options.model.includes("mistral")) {
             //7B instruct and 8x7B instruct
             if (options.model.includes("7b")) {
-                supportsJSONPrefill = true;
                 additionalField = { top_k: model_options.top_k };
                 //Does not support system messages
                 if (prompt.system && prompt.system?.length != 0) {
@@ -499,6 +498,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
         } else if (options.model.includes("deepseek")) {
             //DeepSeek models support no additional options
+        } else if (options.model.includes("gpt-oss")) {
+            const gptOssOptions = model_options as ModelOptions as BedrockGptOssOptions;
+            additionalField = {
+                reasoning_effort: gptOssOptions?.reasoning_effort,
+            };
         }
 
         //If last message is "```json", add corresponding ``` as a stop sequence.
@@ -698,7 +702,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             foundationModels = foundationModels.filter(foundationFilter);
         }
 
-        const supportedPublishers = ["amazon", "anthropic", "cohere", "ai21", "mistral", "meta", "deepseek", "writer"];
+        const supportedPublishers = ["amazon", "anthropic", "cohere", "ai21", "mistral", "meta", "deepseek", "writer", "openai"];
         const unsupportedModelsByPublisher = {
             amazon: ["titan-image-generator", "nova-reel", "nova-sonic", "rerank"],
             anthropic: [],
@@ -708,6 +712,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             meta: [],
             deepseek: [],
             writer: [],
+            openai: [],
         };
 
         // Helper function to check if model should be filtered out
