@@ -93,6 +93,9 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
         else if (model.includes("gpt-3-5")) {
             max_tokens_limit = 4096;
         }
+        else if (model.includes("gpt-5")) {
+            max_tokens_limit = 128000;
+        }
 
         //Is non-thinking text model
         const commonOptions: ModelOptionInfoItem[] = [
