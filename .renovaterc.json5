@@ -3,11 +3,13 @@
   "packageRules": [
     {
       "groupName": "gh-actions deps",
-      "matchManagers": ["github-actions"]
+      "matchManagers": ["github-actions"],
+      "rangeStrategy": "bump"
     },
     {
       "groupName": "node deps",
-      "matchManagers": ["npm", "nvm", "nodenv"]
+      "matchManagers": ["npm", "nvm", "nodenv"],
+      "rangeStrategy": "bump"
     },
     {
       "groupName": "Model Provider Client libraries",
@@ -15,11 +17,10 @@
         "npm"
       ],
       "matchPackageNames": [
-        "@azure/openai",
-        "@azure/identity",
+        "@azure/**",
         "@google-cloud/**",
         "@google/**",
-        "@huggingface/inference",
+        "@huggingface/**",
         "replicate",
         "openai",
         "groq-sdk",

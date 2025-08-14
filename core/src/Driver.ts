@@ -143,7 +143,10 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     async execute(segments: PromptSegment[], options: ExecutionOptions): Promise<ExecutionResponse<PromptT>> {
         const prompt = await this.createPrompt(segments, options);
-        return this._execute(prompt, options);
+        return this._execute(prompt, options).catch((error: any) => {
+            (error as any).prompt = prompt;
+            throw error;
+        });
     }
 
     async _execute(prompt: PromptT, options: ExecutionOptions): Promise<ExecutionResponse<PromptT>> {

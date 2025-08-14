@@ -25,33 +25,39 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
         );
 
         const start = Date.now();
-        const stream = await this.driver.requestTextCompletionStream(this.prompt, this.options);
-
+        let stream;
         let finish_reason: string | undefined = undefined;
         let promptTokens: number = 0;
         let resultTokens: number | undefined = undefined;
-        for await (const chunk of stream) {
-            if (chunk) {
-                if (typeof chunk === 'string') {
-                    chunks.push(chunk);
-                    yield chunk;
-                } else {
-                    if (chunk.finish_reason) {                           //Do not replace non-null values with null values
-                        finish_reason = chunk.finish_reason;             //Used to skip empty finish_reason chunks coming after "stop" or "length"
-                    }
-                    if (chunk.token_usage) {
-                        //Tokens returned include prior parts of stream,
-                        //so overwrite rather than accumulate
-                        //Math.max used as some models report final token count at beginning of stream
-                        promptTokens = Math.max(promptTokens, chunk.token_usage.prompt ?? 0);
-                        resultTokens = Math.max(resultTokens ?? 0, chunk.token_usage.result ?? 0);
-                    }
-                    if (chunk.result) {
-                        chunks.push(chunk.result);
-                        yield chunk.result;
+
+        try {
+            stream = await this.driver.requestTextCompletionStream(this.prompt, this.options);
+            for await (const chunk of stream) {
+                if (chunk) {
+                    if (typeof chunk === 'string') {
+                        chunks.push(chunk);
+                        yield chunk;
+                    } else {
+                        if (chunk.finish_reason) {                           //Do not replace non-null values with null values
+                            finish_reason = chunk.finish_reason;             //Used to skip empty finish_reason chunks coming after "stop" or "length"
+                        }
+                        if (chunk.token_usage) {
+                            //Tokens returned include prior parts of stream,
+                            //so overwrite rather than accumulate
+                            //Math.max used as some models report final token count at beginning of stream
+                            promptTokens = Math.max(promptTokens, chunk.token_usage.prompt ?? 0);
+                            resultTokens = Math.max(resultTokens ?? 0, chunk.token_usage.result ?? 0);
+                        }
+                        if (chunk.result) {
+                            chunks.push(chunk.result);
+                            yield chunk.result;
+                        }
                     }
                 }
             }
+        } catch (error: any) {
+            error.prompt = this.prompt;
+            throw error;
         }
 
         const content = chunks.join('');
@@ -70,7 +76,12 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
             chunks: chunks.length,
         }
 
-        this.driver.validateResult(this.completion, this.options);
+        try {
+            this.driver.validateResult(this.completion, this.options);
+        } catch (error: any) {
+            error.prompt = this.prompt;
+            throw error;
+        }
     }
 
 }
@@ -90,10 +101,14 @@ export class FallbackCompletionStream<PromptT = any> implements CompletionStream
         this.driver.logger.debug(
             `[${this.driver.provider}] Streaming is not supported, falling back to blocking execution`
         );
-        const completion = await this.driver._execute(this.prompt, this.options);
-        const content = typeof completion.result === 'string' ? completion.result : JSON.stringify(completion.result);
-        yield content;
-
-        this.completion = completion;
+        try {
+            const completion = await this.driver._execute(this.prompt, this.options);
+            const content = typeof completion.result === 'string' ? completion.result : JSON.stringify(completion.result);
+            yield content;
+            this.completion = completion;
+        } catch (error: any) {
+            error.prompt = this.prompt;
+            throw error;
+        }
     }
 }
