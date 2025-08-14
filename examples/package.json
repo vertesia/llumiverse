@@ -1,7 +1,7 @@
 {
     "name": "@llumiverse/examples",
     "private": true,
-    "version": "0.20.0",
+    "version": "0.22.0",
     "type": "module",
     "description": "LLM driver implementations. Currently supported are: openai, huggingface, bedrock, replicate.",
     "main": "./lib/index.js",
@@ -20,12 +20,12 @@
     "license": "MIT",
     "devDependencies": {
         "@types/json-schema": "^7.0.15",
-        "rimraf": "^6.0.0",
-        "typescript": "^5.6.2"
+        "rimraf": "^6.0.1",
+        "typescript": "^5.9.2"
     },
     "dependencies": {
         "@llumiverse/core": "workspace:*",
         "@llumiverse/drivers": "workspace:*",
-        "dotenv": "^16.4.5"
+        "dotenv": "^16.6.1"
     }
 }

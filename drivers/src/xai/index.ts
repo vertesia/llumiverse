@@ -1,5 +1,5 @@
 import { AIModel, Completion, DriverOptions, ExecutionOptions, PromptOptions, PromptSegment } from "@llumiverse/core";
-import { formatOpenAILikeMultimodalPrompt, OpenAIPromptFormatterOptions } from "@llumiverse/core/formatters";
+import { formatOpenAILikeMultimodalPrompt, OpenAIPromptFormatterOptions } from "../openai/openai_format.js";
 import { FetchClient } from "@vertesia/api-fetch-client";
 import OpenAI from "openai";
 import { BaseOpenAIDriver } from "../openai/index.js";
@@ -13,7 +13,6 @@ export interface xAiDriverOptions extends DriverOptions {
 }
 
 export class xAIDriver extends BaseOpenAIDriver {
-
 
     service: OpenAI;
     provider: "xai";
@@ -33,7 +32,7 @@ export class xAIDriver extends BaseOpenAIDriver {
           });
         this.xai_service = new FetchClient(opts.endpoint ?? this.DEFAULT_ENDPOINT ).withAuthCallback(async () => `Bearer ${opts.apiKey}`);
         this.provider = "xai";
-        this.formatPrompt = this._formatPrompt;
+        //this.formatPrompt = this._formatPrompt; //TODO: fix xai prompt formatting
     }
 
     async _formatPrompt(segments: PromptSegment[], opts: PromptOptions): Promise<OpenAI.Chat.Completions.ChatCompletionMessageParam[]> {

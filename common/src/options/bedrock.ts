@@ -2,7 +2,7 @@ import { ModelOptionsInfo, ModelOptions, OptionType, ModelOptionInfoItem } from 
 import { textOptionsFallback } from "./fallback.js";
 
 // Union type of all Bedrock options
-export type BedrockOptions = NovaCanvasOptions | BaseConverseOptions | BedrockClaudeOptions | BedrockPalmyraOptions;
+export type BedrockOptions = NovaCanvasOptions | BaseConverseOptions | BedrockClaudeOptions | BedrockPalmyraOptions | BedrockGptOssOptions;
 
 export interface NovaCanvasOptions {
     _option_id: "bedrock-nova-canvas"
@@ -21,7 +21,7 @@ export interface NovaCanvasOptions {
 }
 
 export interface BaseConverseOptions {
-    _option_id: "bedrock-converse" | "bedrock-claude" | "bedrock-nova" | "bedrock-mistral" | "bedrock-ai21" | "bedrock-cohere-command" | "bedrock-palmyra";
+    _option_id: "bedrock-converse" | "bedrock-claude" | "bedrock-nova" | "bedrock-mistral" | "bedrock-ai21" | "bedrock-cohere-command" | "bedrock-palmyra" | "bedrock-gpt-oss";
     max_tokens?: number;
     temperature?: number;
     top_p?: number;
@@ -40,6 +40,13 @@ export interface BedrockPalmyraOptions extends BaseConverseOptions {
     _option_id: "bedrock-palmyra";
     min_tokens?: number;
     seed?: number;
+    frequency_penalty?: number;
+    presence_penalty?: number;
+}
+
+export interface BedrockGptOssOptions extends BaseConverseOptions {
+    _option_id: "bedrock-gpt-oss";
+    reasoning_effort?: "low" | "medium" | "high";
     frequency_penalty?: number;
     presence_penalty?: number;
 }
@@ -123,6 +130,10 @@ export function getMaxTokensLimitBedrock(model: string): number | undefined {
         else if (model.includes("palmyra-x4")) {
             return 8192;
         }
+    }
+    // OpenAI gpt-oss models
+    if (model.includes("gpt-oss")) {
+        return 128000;
     }
 
     // Default fallback
@@ -441,6 +452,29 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                 _option_id: "bedrock-palmyra",
                 options: [...baseConverseOptions, ...palmyraConverseOptions]
             }
+        }
+        else if (model.includes("gpt-oss")) {
+            const gptOssOptions: ModelOptionInfoItem[] = [
+                {
+                    name: "reasoning_effort",
+                    type: OptionType.enum,
+                    enum: {
+                        "low": "low",
+                        "medium": "medium",
+                        "high": "high"
+                    },
+                    default: "medium",
+                    description: "The reasoning effort of the model, which affects the quality and speed of the response"
+                },
+            ];
+
+            const baseConverseOptionsNoStop: ModelOptionInfoItem[] = [...baseConverseOptions];
+            // Remove stop_sequence for gpt-oss
+            baseConverseOptionsNoStop.splice(baseConverseOptionsNoStop.findIndex(o => o.name === "stop_sequence"), 1);
+            return {
+                _option_id: "bedrock-gpt-oss",
+                options: [...baseConverseOptionsNoStop, ...gptOssOptions]
+            };
         }
 
         //Fallback to converse standard.
