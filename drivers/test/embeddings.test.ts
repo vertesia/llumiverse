@@ -67,7 +67,7 @@ if (vertex) {
         test('embeddings for text', async () => {
             const r = await vertex.generateEmbeddings({ text: TEXT });
             expect(r.values.length).toBeGreaterThan(0);
-            expect(r.model).toBe("text-embedding-004");
+            expect(r.model).toBe("gemini-embedding-001");
             expect(r.token_count).toBe(1);
         }, TIMEOUT);
         test('embeddings for text with multimodal', async () => {
