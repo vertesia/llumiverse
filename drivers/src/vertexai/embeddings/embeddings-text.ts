@@ -36,9 +36,9 @@ export async function getEmbeddingsForText(driver: VertexAIDriver, options: Text
             title: options.title,
             content: options.content
         }]
-    } as EmbeddingsForTextPrompt;
+    } satisfies EmbeddingsForTextPrompt;
 
-    const model = options.model || "text-embedding-004";
+    const model = options.model || "gemini-embedding-001";
 
     const client = driver.getFetchClient();
 

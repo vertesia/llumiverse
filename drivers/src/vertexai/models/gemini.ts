@@ -5,8 +5,9 @@ import {
 } from "@google/genai";
 import {
     AIModel, Completion, CompletionChunkObject, ExecutionOptions,
-    ExecutionTokenUsage, JSONObject, JSONSchema, ModelType, PromptOptions, PromptRole,
-    PromptSegment, readStreamAsBase64, ToolDefinition, ToolUse
+    ExecutionTokenUsage, getMaxTokensLimitVertexAi, JSONObject, JSONSchema, ModelType, PromptOptions, PromptRole,
+    PromptSegment, readStreamAsBase64, StatelessExecutionOptions, ToolDefinition, ToolUse,
+    VertexAIGeminiOptions
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { VertexAIDriver, GenerateContentPrompt } from "../index.js";
@@ -45,10 +46,14 @@ const geminiSafetySettings: SafetySetting[] = [
 ];
 
 function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentPrompt): GenerateContentParameters {
-    const model_options = options.model_options as any;
+    const model_options = options.model_options as VertexAIGeminiOptions | undefined;
     const tools = getToolDefinitions(options.tools);
 
     const useStructuredOutput = supportsStructuredOutput(options) && !tools;
+
+    const thinkingConfigNeeded = model_options?.include_thoughts
+        || model_options?.thinking_budget_tokens
+        || options.model.includes("gemini-2.5");
 
     return {
         model: options.model,
@@ -70,15 +75,15 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
             temperature: model_options?.temperature,
             topP: model_options?.top_p,
             topK: model_options?.top_k,
-            maxOutputTokens: model_options?.max_tokens,
+            maxOutputTokens: geminiMaxTokens(options),
             stopSequences: model_options?.stop_sequence,
             presencePenalty: model_options?.presence_penalty,
             frequencyPenalty: model_options?.frequency_penalty,
             seed: model_options?.seed,
-            thinkingConfig: model_options?.include_thoughts || model_options?.thinking_budget_tokens ?
+            thinkingConfig: thinkingConfigNeeded ?
                 {
-                    includeThoughts: model_options?.include_thoughts,
-                    thinkingBudget: model_options?.thinking_budget_tokens,
+                    includeThoughts: model_options?.include_thoughts ?? false,
+                    thinkingBudget: geminiThinkingBudget(options),
                 } : undefined,
         }
     };
@@ -471,6 +476,35 @@ const supportedFinishReasons: FinishReason[] = [
     FinishReason.STOP,
     FinishReason.FINISH_REASON_UNSPECIFIED
 ]
+
+function geminiMaxTokens(option: StatelessExecutionOptions) {
+    const model_options = option.model_options as VertexAIGeminiOptions | undefined;
+    if (model_options?.max_tokens) {
+        return model_options.max_tokens;
+    }
+    if (option.model.includes("gemini-2.5")) {
+        const maxSupportedTokens = getMaxTokensLimitVertexAi(option.model);
+        const thinkingBudget = geminiThinkingBudget(option) ?? 0;
+        return Math.min(maxSupportedTokens, 16000 + thinkingBudget);
+    }
+    return undefined;
+}
+
+function geminiThinkingBudget(option: StatelessExecutionOptions) {
+    const model_options = option.model_options as VertexAIGeminiOptions | undefined;
+    if (model_options?.thinking_budget_tokens) {
+        return model_options.thinking_budget_tokens;
+    }
+    // Set minimum thinking level by default.
+    // Docs: https://ai.google.dev/gemini-api/docs/thinking#set-budget
+    if (option.model.includes("gemini-2.5")) {
+        if (option.model.includes("pro")) {
+            return 128;
+        }
+        return 0;
+    }
+    return undefined;
+}
 
 export class GeminiModelDefinition implements ModelDefinition<GenerateContentPrompt> {
 
