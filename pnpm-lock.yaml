@@ -118,8 +118,8 @@ importers:
         specifier: 1.0.0-beta.6
         version: 1.0.0-beta.6
       '@azure/ai-projects':
-        specifier: 1.0.0-beta.10
-        version: 1.0.0-beta.10(ws@8.18.2)(zod@3.25.63)
+        specifier: ^1.0.0
+        version: 1.0.0(ws@8.18.2)(zod@3.25.63)
       '@azure/core-auth':
         specifier: ^1.10.0
         version: 1.10.0
@@ -127,10 +127,10 @@ importers:
         specifier: ^2.3.0
         version: 2.3.0
       '@azure/identity':
-        specifier: ^4.10.1
-        version: 4.10.1
+        specifier: ^4.11.1
+        version: 4.11.1
       '@azure/openai':
-        specifier: 2.0.0
+        specifier: ^2.0.0
         version: 2.0.0
       '@google-cloud/aiplatform':
         specifier: ^3.35.0
@@ -157,8 +157,8 @@ importers:
         specifier: ^9.15.1
         version: 9.15.1
       groq-sdk:
-        specifier: ^0.30.0
-        version: 0.30.0
+        specifier: ^0.32.0
+        version: 0.32.0
       mnemonist:
         specifier: ^0.40.3
         version: 0.40.3
@@ -166,8 +166,8 @@ importers:
         specifier: ^0.2.1
         version: 0.2.1
       openai:
-        specifier: ^4.104.0
-        version: 4.104.0(ws@8.18.2)(zod@3.25.63)
+        specifier: ^5.19.1
+        version: 5.19.1(ws@8.18.2)(zod@3.25.63)
       replicate:
         specifier: ^1.0.1
         version: 1.0.1
@@ -416,12 +416,12 @@ packages:
     resolution: {integrity: sha512-nBrLsEWm4J2u5LpAPjxADTlq3trDgVZZXHNKabeXZtpq3d3AbN/KGO82R87rdDz5/lYB024rtEf10/q0urNgsA==}
     engines: {node: '>=18.0.0'}
 
-  '@azure/ai-agents@1.0.0':
-    resolution: {integrity: sha512-8/MZ/Ls7kv2NmwQ0wGzSaFbMST24Apcoorjs9ndGL6uJQ/KGaGCY4haNKzts1wv2oGSI+gBdjbYb0Q+P702pow==}
+  '@azure/ai-agents@1.1.0':
+    resolution: {integrity: sha512-i8HFA7ql18t/otGrRfTWNOE5HgJf/RqedV3VNbFav5z9iTSexf8k4EeWOb/IWWaCsq0z/S7mihdGPAluPs+nXQ==}
     engines: {node: '>=20.0.0'}
 
-  '@azure/ai-projects@1.0.0-beta.10':
-    resolution: {integrity: sha512-y46Ewm7Y0FECWDij05nWmYBtFuX+3+k7A6MEBti7XClX/4KPM2AJMhxWPQAlnrXQMLjKnfPGRymgqTCKMyE3QQ==}
+  '@azure/ai-projects@1.0.0':
+    resolution: {integrity: sha512-VDWbgrppxzEvwpDQwKii1eQBiq6iBpU9+e4jd/7J9RZ36dj2/ALVw34RmYeL2KeBbUr6zJZfDjhH9gAbBkIT4A==}
     engines: {node: '>=20.0.0'}
 
   '@azure/core-auth@1.10.0':
@@ -468,9 +468,9 @@ packages:
     resolution: {integrity: sha512-gT4H8mTaSXRz7eGTuQyq1aIJnJqeXzpOe9Ay7Z3FrCouer14CbV3VzjnJrNrQfbBpGBLO9oy8BmrY75A0p53cA==}
     engines: {node: '>=18.0.0'}
 
-  '@azure/identity@4.10.1':
-    resolution: {integrity: sha512-YM/z6RxRtFlXUH2egAYF/FDPes+MUE6ZoknjEdaq7ebJMMNUzn9zCJ3bd2ZZZlkP0r1xKa88kolhFH/FGV7JnA==}
-    engines: {node: '>=18.0.0'}
+  '@azure/identity@4.11.1':
+    resolution: {integrity: sha512-0ZdsLRaOyLxtCYgyuqyWqGU5XQ9gGnjxgfoNTt1pvELGkkUFrMATABZFIq8gusM7N1qbqpVtwLOhk0d/3kacLg==}
+    engines: {node: '>=20.0.0'}
 
   '@azure/logger@1.1.4':
     resolution: {integrity: sha512-4IXXzcCdLdlXuCG+8UKEwLA1T1NHqUfanhXYHiQTn+6sfWCZXduqbtXDGceg3Ce5QxTGo7EqmbV6Bi+aqKuClQ==}
@@ -1797,8 +1797,8 @@ packages:
   graphemer@1.4.0:
     resolution: {integrity: sha512-EtKwoO6kxCL9WO5xipiHTZlSzBm7WLT627TqC/uVRd0HKmq8NXyebnNYxDoBi7wt8eTWrUrKXCOVaFq9x1kgag==}
 
-  groq-sdk@0.30.0:
-    resolution: {integrity: sha512-9PowoybiGkq1GpvkC7ikvT+WIFu6zAkeXF8p4eqNEYgGnEcf70fBWuwWqU1KIPQgTMw5sfausvJWzzPbYdHfCQ==}
+  groq-sdk@0.32.0:
+    resolution: {integrity: sha512-KQZOzSV8UmeIbv7YEvzpZinSR9CaI/8pIGzLrVBVher6RuamklljBom5HXnNTqpekk3/L/h9Txc3Jq3ti58jug==}
 
   gtoken@7.1.0:
     resolution: {integrity: sha512-pCcEwRi+TKpMlxAQObHDQ56KawURgyAf6jtIY046fJ5tIv3zDe/LEIubckAO8fj6JnAxLdmWkUfNyulQ2iKdEw==}
@@ -2132,8 +2132,8 @@ packages:
     resolution: {integrity: sha512-mnkeQ1qP5Ue2wd+aivTD3NHd/lZ96Lu0jgf0pwktLPtx6cTZiH7tyeGRRHs0zX0rbrahXPnXlUnbeXyaBBuIaw==}
     engines: {node: '>=18'}
 
-  openai@4.104.0:
-    resolution: {integrity: sha512-p99EFNsA/yX6UhVO93f5kJsDRLAg+CTA2RBqdHK4RtK8u5IJw32Hyb2dTGKbnnFmnuoBv5r7Z2CURI9sGZpSuA==}
+  openai@5.19.1:
+    resolution: {integrity: sha512-zSqnUF7oR9ksmpusKkpUgkNrj8Sl57U+OyzO8jzc7LUjTMg4DRfR3uCm+EIMA6iw06sRPNp4t7ojp3sCpEUZRQ==}
     hasBin: true
     peerDependencies:
       ws: ^8.18.0
@@ -3377,7 +3377,7 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@azure/ai-agents@1.0.0':
+  '@azure/ai-agents@1.1.0':
     dependencies:
       '@azure-rest/core-client': 2.3.4
       '@azure/abort-controller': 2.1.2
@@ -3393,12 +3393,11 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@azure/ai-projects@1.0.0-beta.10(ws@8.18.2)(zod@3.25.63)':
+  '@azure/ai-projects@1.0.0(ws@8.18.2)(zod@3.25.63)':
     dependencies:
-      '@azure-rest/ai-inference': 1.0.0-beta.6
       '@azure-rest/core-client': 2.3.4
       '@azure/abort-controller': 2.1.2
-      '@azure/ai-agents': 1.0.0
+      '@azure/ai-agents': 1.1.0
       '@azure/core-auth': 1.10.0
       '@azure/core-lro': 3.2.0
       '@azure/core-paging': 1.6.2
@@ -3408,10 +3407,9 @@ snapshots:
       '@azure/core-util': 1.11.0
       '@azure/logger': 1.1.4
       '@azure/storage-blob': 12.27.0
-      openai: 4.104.0(ws@8.18.2)(zod@3.25.63)
+      openai: 5.19.1(ws@8.18.2)(zod@3.25.63)
       tslib: 2.8.1
     transitivePeerDependencies:
-      - encoding
       - supports-color
       - ws
       - zod
@@ -3490,7 +3488,7 @@ snapshots:
       fast-xml-parser: 5.2.5
       tslib: 2.8.1
 
-  '@azure/identity@4.10.1':
+  '@azure/identity@4.11.1':
     dependencies:
       '@azure/abort-controller': 2.1.2
       '@azure/core-auth': 1.10.0
@@ -5026,7 +5024,7 @@ snapshots:
 
   graphemer@1.4.0: {}
 
-  groq-sdk@0.30.0:
+  groq-sdk@0.32.0:
     dependencies:
       '@types/node': 18.19.86
       '@types/node-fetch': 2.6.12
@@ -5354,20 +5352,10 @@ snapshots:
       is-inside-container: 1.0.0
       is-wsl: 3.1.0
 
-  openai@4.104.0(ws@8.18.2)(zod@3.25.63):
-    dependencies:
-      '@types/node': 18.19.86
-      '@types/node-fetch': 2.6.12
-      abort-controller: 3.0.0
-      agentkeepalive: 4.6.0
-      form-data-encoder: 1.7.2
-      formdata-node: 4.4.1
-      node-fetch: 2.7.0
+  openai@5.19.1(ws@8.18.2)(zod@3.25.63):
     optionalDependencies:
       ws: 8.18.2
       zod: 3.25.63
-    transitivePeerDependencies:
-      - encoding
 
   optionator@0.9.4:
     dependencies:
