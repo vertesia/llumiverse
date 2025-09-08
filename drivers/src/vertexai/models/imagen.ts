@@ -5,7 +5,8 @@ import {
 import { VertexAIDriver } from "../index.js";
 
 // Import the helper module for converting arbitrary protobuf.Value objects
-import { protos, helpers } from '@google-cloud/aiplatform';
+import type { GenerateImagesParameters, EditImageParameters, UpscaleImageParameters, GenerateImagesResponse, EditImageResponse, UpscaleImageResponse } from '@google/genai';
+// helpers/protos removed — PredictionServiceClient fallback removed; using GenAI client only
 
 interface ImagenBaseReference {
     referenceType: "REFERENCE_TYPE_RAW" | "REFERENCE_TYPE_MASK" | "REFERENCE_TYPE_SUBJECT" |
@@ -336,55 +337,122 @@ export class ImagenModelDefinition {
 
         driver.logger.info("Task type: " + taskType);
 
-        const modelName = options.model.split("/").pop() ?? '';
+    const modelName = options.model.split("/").pop() ?? '';
 
-        // Configure the parent resource
-        // TODO: make location configurable, fixed to us-central1 for now
-        const endpoint = `projects/${driver.options.project}/locations/us-central1/publishers/google/models/${modelName}`;
+    // Configure the parent resource (legacy PredictionServiceClient endpoint removed; using GenAI client instead)
 
-        const instanceValue = helpers.toValue(prompt);
-        if (!instanceValue) {
-            throw new Error('No instance value found');
+    // Use the Google GenAI client image APIs.
+    const genai = driver.getGoogleGenAIClient();
+
+    // Map our prompt.referenceImages to genai ReferenceImage types
+    const referenceImages: any[] = (prompt.referenceImages ?? []).map((ref) => {
+                // Common base for image bytes reference
+                if (ref.referenceType === 'REFERENCE_TYPE_RAW') {
+                    return {
+                        referenceId: ref.referenceId,
+                        referenceImage: { imageBytes: (ref as any).referenceImage?.bytesBase64Encoded },
+                        referenceType: 'RAW',
+                    };
+                }
+                if (ref.referenceType === 'REFERENCE_TYPE_MASK') {
+                    const r: any = {
+                        referenceId: ref.referenceId,
+                        referenceType: 'MASK',
+                        maskImageConfig: (ref as any).maskImageConfig ? {
+                            maskMode: (ref as any).maskImageConfig.maskMode,
+                            maskClasses: (ref as any).maskImageConfig.maskClasses,
+                            dilation: (ref as any).maskImageConfig.dilation,
+                        } : undefined,
+                    };
+                    if ((ref as any).referenceImage?.bytesBase64Encoded) {
+                        r.referenceImage = { imageBytes: (ref as any).referenceImage.bytesBase64Encoded };
+                    }
+                    return r;
+                }
+                if (ref.referenceType === 'REFERENCE_TYPE_SUBJECT') {
+                    return {
+                        referenceId: ref.referenceId,
+                        referenceType: 'SUBJECT',
+                        subjectImageConfig: {
+                            subjectDescription: (ref as any).subjectImageConfig?.subjectDescription,
+                            subjectType: (ref as any).subjectImageConfig?.subjectType,
+                        },
+                        referenceImage: { imageBytes: (ref as any).referenceImage?.bytesBase64Encoded },
+                    };
+                }
+                if (ref.referenceType === 'REFERENCE_TYPE_CONTROL') {
+                    return {
+                        referenceId: ref.referenceId,
+                        referenceType: 'CONTROL',
+                        controlImageConfig: {
+                            controlType: (ref as any).controlImageConfig?.controlType,
+                            enableControlImageComputation: (ref as any).controlImageConfig?.enableControlImageComputation,
+                        },
+                        referenceImage: { imageBytes: (ref as any).referenceImage?.bytesBase64Encoded },
+                    };
+                }
+                if (ref.referenceType === 'REFERENCE_TYPE_STYLE') {
+                    return {
+                        referenceId: ref.referenceId,
+                        referenceType: 'STYLE',
+                        styleImageConfig: { styleDescription: (ref as any).styleImageConfig?.styleDescription },
+                        referenceImage: { imageBytes: (ref as any).referenceImage?.bytesBase64Encoded },
+                    };
+                }
+                return ref;
+            });
+
+            // Build config from existing parameter mapping
+            const config: any = getImagenParameters(taskType, options.model_options ?? { _option_id: 'vertexai-imagen' });
+            config.numberOfImages = options.model_options?.number_of_images ?? 1;
+            config.negativePrompt = prompt.negativePrompt ?? undefined;
+
+            // Remove undefined keys
+            Object.keys(config).forEach(k => config[k] === undefined && delete config[k]);
+
+        // Select API method based on task type
+        let response: GenerateImagesResponse | EditImageResponse | UpscaleImageResponse | undefined;
+        if (taskType.startsWith('EDIT_MODE') || (options.model_options as any)?.edit_mode?.startsWith('EDIT_MODE')) {
+            // Use editImage for edit modes
+            const params: EditImageParameters = {
+                model: modelName,
+                prompt: prompt.prompt,
+                referenceImages: referenceImages as any,
+                config: config as any,
+            };
+            response = await genai.models.editImage(params);
+        } else if ((options.model_options as any)?.upscale) {
+            // Upscale expects a single image input; pick first reference image imageBytes
+            const first = referenceImages.find((r: any) => r.referenceImage?.imageBytes);
+            if (!first) {
+                throw new Error('Upscale requires a reference image');
+            }
+            const params: UpscaleImageParameters = {
+                model: modelName,
+                image: first.referenceImage,
+                upscaleFactor: (options.model_options as any).upscaleFactor ?? 'x2',
+                config: config as any,
+            };
+            response = await genai.models.upscaleImage(params);
+        } else {
+            // Default to generateImages
+            const params: GenerateImagesParameters = {
+                model: modelName,
+                prompt: prompt.prompt,
+                config: config as any,
+            };
+            response = await genai.models.generateImages(params);
         }
-        const instances = [instanceValue];
 
-        let parameter: any = getImagenParameters(taskType, options.model_options ?? {_option_id: "vertexai-imagen"});
-        parameter.negativePrompt = prompt.negativePrompt ?? undefined;
+        const generated = (response as any)?.generatedImages ?? (response as any)?.images ?? [];
+        const images: string[] = generated.map((g: any) => g.image?.imageBytes ?? '').filter(Boolean);
 
-        const numberOfImages = options.model_options?.number_of_images ?? 1;
-
-        // Remove all undefined values
-        parameter = Object.fromEntries(
-            Object.entries(parameter).filter(([_, v]) => v !== undefined)
-        ) as any;
-
-        const parameters = helpers.toValue(parameter);
-
-        const request: protos.google.cloud.aiplatform.v1.IPredictRequest = {
-            endpoint,
-            instances,
-            parameters,
-        };
-
-        const client = driver.getImagenClient();
-
-        // Predict request
-        const [response] = await client.predict(request, { timeout: 120000 * numberOfImages }); //Extended timeout for image generation
-        const predictions = response.predictions;
-
-        if (!predictions) {
-            throw new Error('No predictions found');
+        if (images.length === 0) {
+            throw new Error('No images returned from GenAI');
         }
-
-        // Extract base64 encoded images from predictions
-        const images: string[] = predictions.map(prediction =>
-            prediction.structValue?.fields?.bytesBase64Encoded?.stringValue ?? ''
-        );
 
         return {
-            result: {
-                images
-            },
+            result: { images },
         };
     }
 }
