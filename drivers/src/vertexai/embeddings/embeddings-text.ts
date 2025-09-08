@@ -1,54 +1,32 @@
 
+import type { EmbedContentParameters, EmbedContentResponse } from '@google/genai';
 import { EmbeddingsResult } from '@llumiverse/core';
 import { VertexAIDriver } from '../index.js';
 
 export interface TextEmbeddingsOptions {
     model?: string;
-    task_type?: "RETRIEVAL_QUERY" | "RETRIEVAL_DOCUMENT" | "SEMANTIC_SIMILARITY" | "CLASSIFICATION" | "CLUSTERING",
-    title?: string, // the title for the embedding
-    content: string // the text to generate embeddings for
-}
-
-interface EmbeddingsForTextPrompt {
-    instances: TextEmbeddingsOptions[]
-}
-
-interface TextEmbeddingsResult {
-    predictions: [
-        {
-            embeddings: TextEmbeddings
-        }
-    ]
-}
-
-interface TextEmbeddings {
-    statistics: {
-        truncated: boolean,
-        token_count: number
-    },
-    values: [number]
+    title?: string; // the title for the embedding
+    content: string; // the text to generate embeddings for
 }
 
 export async function getEmbeddingsForText(driver: VertexAIDriver, options: TextEmbeddingsOptions): Promise<EmbeddingsResult> {
-    const prompt = {
-        instances: [{
-            task_type: options.task_type,
-            title: options.title,
-            content: options.content
-        }]
-    } satisfies EmbeddingsForTextPrompt;
+    const model = options.model || 'gemini-embedding-001';
 
-    const model = options.model || "gemini-embedding-001";
+    const genai = driver.getGoogleGenAIClient();
+    const params: EmbedContentParameters = {
+        model,
+        contents: [options.content],
+    };
 
-    const client = driver.getFetchClient();
-
-    const result = await client.post(`/publishers/google/models/${model}:predict`, {
-        payload: prompt
-    }) as TextEmbeddingsResult;
+    const resp = await genai.models.embedContent(params) as EmbedContentResponse;
+    const emb = resp?.embeddings?.[0];
+    if (!emb) {
+        throw new Error('Empty embedding response');
+    }
 
     return {
-        ...result.predictions[0].embeddings,
+        values: emb.values ?? [],
         model,
-        token_count: result.predictions[0].embeddings.statistics?.token_count
-    };
+        token_count: (emb.statistics as any)?.tokenCount ?? undefined,
+    } as EmbeddingsResult;
 }
