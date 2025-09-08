@@ -136,8 +136,8 @@ importers:
         specifier: ^3.35.0
         version: 3.35.0
       '@google/genai':
-        specifier: ^1.7.0
-        version: 1.7.0(@modelcontextprotocol/sdk@1.12.0)
+        specifier: ^1.17.0
+        version: 1.17.0(@modelcontextprotocol/sdk@1.12.0)
       '@huggingface/inference':
         specifier: 2.6.7
         version: 2.6.7
@@ -698,11 +698,11 @@ packages:
     resolution: {integrity: sha512-Eo+ckr1KbTxAOew9P+MeeR0aQXeW5PeOzrSM1JyGny/SGKejwX/RcGWSFpeapnlegTfI9N9xJeUeo3M+XBOeFg==}
     engines: {node: '>=14.0.0'}
 
-  '@google/genai@1.7.0':
-    resolution: {integrity: sha512-s/OZLkrIfBwc+SFFaZoKdEogkw4in0YRTGc4Q483jnfchNBWzrNe560eZEfGJHQRPn6YfzJgECCx0sqEOMWvYw==}
+  '@google/genai@1.17.0':
+    resolution: {integrity: sha512-r/OZWN9D8WvYrte3bcKPoLODrZ+2TjfxHm5OOyVHUbdFYIp1C4yJaXX4+sCS8I/+CbN9PxLjU5zm1cgmS7qz+A==}
     engines: {node: '>=20.0.0'}
     peerDependencies:
-      '@modelcontextprotocol/sdk': ^1.11.0
+      '@modelcontextprotocol/sdk': ^1.11.4
     peerDependenciesMeta:
       '@modelcontextprotocol/sdk':
         optional: true
@@ -3679,12 +3679,10 @@ snapshots:
       - encoding
       - supports-color
 
-  '@google/genai@1.7.0(@modelcontextprotocol/sdk@1.12.0)':
+  '@google/genai@1.17.0(@modelcontextprotocol/sdk@1.12.0)':
     dependencies:
       google-auth-library: 9.15.1
       ws: 8.18.2
-      zod: 3.25.63
-      zod-to-json-schema: 3.24.6(zod@3.25.63)
     optionalDependencies:
       '@modelcontextprotocol/sdk': 1.12.0
     transitivePeerDependencies:
@@ -5929,5 +5927,7 @@ snapshots:
   zod-to-json-schema@3.24.6(zod@3.25.63):
     dependencies:
       zod: 3.25.63
+    optional: true
 
-  zod@3.25.63: {}
+  zod@3.25.63:
+    optional: true
