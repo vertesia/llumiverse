@@ -1,5 +1,5 @@
 import {
-    Content, FinishReason, FunctionCallingConfigMode, FunctionDeclaration, GenerateContentParameters,
+    Content, FinishReason, FunctionCallingConfigMode, FunctionDeclaration, GenerateContentConfig, GenerateContentParameters,
     GenerateContentResponseUsageMetadata,
     HarmBlockThreshold, HarmCategory, Part, SafetySetting, Schema, Tool, Type
 } from "@google/genai";
@@ -54,38 +54,44 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
     const thinkingConfigNeeded = model_options?.include_thoughts
         || model_options?.thinking_budget_tokens
         || options.model.includes("gemini-2.5");
+    
+    const configNanoBanana: GenerateContentConfig = {
+        responseModalities: ["TEXT", "IMAGE"]
+    }
+
+    const config: GenerateContentConfig = {
+        systemInstruction: prompt.system,
+        safetySettings: geminiSafetySettings,
+        tools: tools ? [tools] : undefined,
+        toolConfig: tools ? {
+            functionCallingConfig: {
+                mode: FunctionCallingConfigMode.AUTO,
+            }
+        } : undefined,
+        candidateCount: 1,
+        //JSON/Structured output
+        responseMimeType: useStructuredOutput ? "application/json" : undefined,
+        responseSchema: useStructuredOutput ? parseJSONtoSchema(options.result_schema, true) : undefined,
+        //Model options
+        temperature: model_options?.temperature,
+        topP: model_options?.top_p,
+        topK: model_options?.top_k,
+        maxOutputTokens: geminiMaxTokens(options),
+        stopSequences: model_options?.stop_sequence,
+        presencePenalty: model_options?.presence_penalty,
+        frequencyPenalty: model_options?.frequency_penalty,
+        seed: model_options?.seed,
+        thinkingConfig: thinkingConfigNeeded ?
+            {
+                includeThoughts: model_options?.include_thoughts ?? false,
+                thinkingBudget: geminiThinkingBudget(options),
+            } : undefined,
+    }
 
     return {
         model: options.model,
         contents: prompt.contents,
-        config: {
-            systemInstruction: prompt.system,
-            safetySettings: geminiSafetySettings,
-            tools: tools ? [tools] : undefined,
-            toolConfig: tools ? {
-                functionCallingConfig: {
-                    mode: FunctionCallingConfigMode.AUTO,
-                }
-            } : undefined,
-            candidateCount: 1,
-            //JSON/Structured output
-            responseMimeType: useStructuredOutput ? "application/json" : undefined,
-            responseSchema: useStructuredOutput ? parseJSONtoSchema(options.result_schema, true) : undefined,
-            //Model options
-            temperature: model_options?.temperature,
-            topP: model_options?.top_p,
-            topK: model_options?.top_k,
-            maxOutputTokens: geminiMaxTokens(options),
-            stopSequences: model_options?.stop_sequence,
-            presencePenalty: model_options?.presence_penalty,
-            frequencyPenalty: model_options?.frequency_penalty,
-            seed: model_options?.seed,
-            thinkingConfig: thinkingConfigNeeded ?
-                {
-                    includeThoughts: model_options?.include_thoughts ?? false,
-                    thinkingBudget: geminiThinkingBudget(options),
-                } : undefined,
-        }
+        config: options.model.toLowerCase().includes("image") ? configNanoBanana : config,
     };
 }
 
@@ -427,6 +433,22 @@ function collectTextParts(content: Content) {
     return out.join('\n');
 }
 
+function collectInlineDataParts(content: Content) {
+    const out = [];
+    const parts = content.parts;
+    if (parts) {
+        for (const part of parts) {
+            if (part.inlineData) {
+                const base64ImageBytes: string = part.inlineData.data ?? "";
+                const imageUrl = `data:${part.inlineData.mimeType};base64,${base64ImageBytes.slice(0, 100)}`;
+                console.log(imageUrl)
+                out.push(imageUrl);
+            }
+        }
+    }
+    return out.join('\n');
+}
+
 function collectToolUseParts(content: Content): ToolUse[] | undefined {
     const out: ToolUse[] = [];
     const parts = content.parts ?? [];
@@ -690,6 +712,31 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(response.usageMetadata);
 
+        /*
+        example for nano banana - gemini 2.5 flash image preview
+                ### Edit Images
+
+        Editing images is better done using the Gemini native image generation model.
+        Configs are not supported in this model (except modality).
+
+        ```javascript
+        import { GoogleGenAI } from '@google/genai';
+
+        const ai = new GoogleGenAI({});
+
+        const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash-image-preview',
+        contents: [imagePart, 'koala eating a nano banana']
+        });
+        for (const part of response.candidates[0].content.parts) {
+        if (part.inlineData) {
+            const base64ImageBytes: string = part.inlineData.data;
+            const imageUrl = `data:image/png;base64,${base64ImageBytes}`;
+        }
+        }
+        ```
+        */
+
         let tool_use: ToolUse[] | undefined;
         let finish_reason: string | undefined, result: any;
         const candidate = response.candidates && response.candidates[0];
@@ -743,6 +790,31 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const payload = getGeminiPayload(options, prompt);
         const response = await client.models.generateContentStream(payload);
 
+        /*
+        example for nano banana - gemini 2.5 flash image preview
+                ### Edit Images
+
+        Editing images is better done using the Gemini native image generation model.
+        Configs are not supported in this model (except modality).
+
+        ```javascript
+        import { GoogleGenAI } from '@google/genai';
+
+        const ai = new GoogleGenAI({});
+
+        const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash-image-preview',
+        contents: [imagePart, 'koala eating a nano banana']
+        });
+        for (const part of response.candidates[0].content.parts) {
+        if (part.inlineData) {
+            const base64ImageBytes: string = part.inlineData.data;
+            const imageUrl = `data:image/png;base64,${base64ImageBytes}`;
+        }
+        }
+        ```
+        */
+
         const stream = asyncMap(response, async (item) => {
             const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(item.usageMetadata);
             if (item.candidates && item.candidates.length > 0) {
@@ -760,7 +832,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                             + `content: ${JSON.stringify(candidate.content, null, 2)}, safety: ${JSON.stringify(candidate.safetyRatings, null, 2)}`);
                     }
                     if (candidate.content?.role === 'model') {
-                        const text = collectTextParts(candidate.content);
+                        const text = collectTextParts(candidate.content) + collectInlineDataParts(candidate.content);
                         tool_use = collectToolUseParts(candidate.content);
                         if (tool_use) {
                             finish_reason = "tool_use";
