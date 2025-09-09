@@ -77,7 +77,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         if (!this.googleGenAI) {
             this.googleGenAI = new GoogleGenAI({
                 project: this.options.project,
-                location: this.options.region,
+                location: "global",
                 vertexai: true,
                 googleAuthOptions: {
                     authClient: this.authClient as JSONClient,
