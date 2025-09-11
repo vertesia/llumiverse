@@ -1,4 +1,4 @@
-import { AIModel, AbstractDriver, Completion, CompletionChunk, DriverOptions, EmbeddingsResult, ExecutionOptions, TextFallbackOptions } from "@llumiverse/core";
+import { AIModel, AbstractDriver, Completion, CompletionChunkObject, DriverOptions, EmbeddingsResult, ExecutionOptions, TextFallbackOptions } from "@llumiverse/core";
 import { transformSSEStream } from "@llumiverse/core/async";
 import { FetchClient } from "@vertesia/api-fetch-client";
 import { TextCompletion, TogetherModelInfo } from "./interfaces.js";
@@ -29,9 +29,9 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
             } : undefined;
     }
 
-    async requestTextCompletion(prompt: string, options: ExecutionOptions): Promise<Completion<any>> {
+    async requestTextCompletion(prompt: string, options: ExecutionOptions): Promise<Completion> {
         if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", {options: options.model_options });
+            this.logger.warn("Invalid model options", { options: options.model_options });
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
@@ -60,7 +60,7 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
         const text = choice.text ?? '';
         const usage = res.usage || {};
         return {
-            result: text,
+            result: [{ type: "text", value: text }],
             token_usage: {
                 prompt: usage.prompt_tokens,
                 result: usage.completion_tokens,
@@ -71,9 +71,9 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
         }
     }
 
-    async requestTextCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
+    async requestTextCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", {options: options.model_options });
+            this.logger.warn("Invalid model options", { options: options.model_options });
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
