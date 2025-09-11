@@ -9,7 +9,7 @@ import { formatTextPrompt } from "./formatters/index.js";
 import {
     AIModel,
     Completion,
-    CompletionChunk,
+    CompletionChunkObject,
     CompletionStream,
     DataSource,
     DriverOptions,
@@ -17,7 +17,6 @@ import {
     EmbeddingsResult,
     ExecutionOptions,
     ExecutionResponse,
-    ImageGeneration,
     Logger,
     Modalities,
     ModelSearchPayload,
@@ -129,13 +128,20 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     validateResult(result: Completion, options: ExecutionOptions) {
         if (!result.tool_use && !result.error && options.result_schema) {
             try {
-                result.result = validateResult(result.result, options.result_schema);
+                // Validate each result in the array
+                const validatedResults = result.result.map(r => {
+                    if (r.type === 'json') {
+                        return { ...r, value: validateResult(r.value, options.result_schema!) };
+                    }
+                    return r;
+                });
+                result.result = validatedResults;
             } catch (error: any) {
                 this.logger?.error({ err: error, data: result.result }, `[${this.provider}] [${options.model}] ${error.code ? '[' + error.code + '] ' : ''}Result validation error: ${error.message}`);
                 result.error = {
                     code: error.code || error.name,
                     message: error.message,
-                    data: result.result,
+                    data: JSON.stringify(result.result),
                 }
             }
         }
@@ -225,9 +231,9 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     abstract requestTextCompletion(prompt: PromptT, options: ExecutionOptions): Promise<Completion>;
 
-    abstract requestTextCompletionStream(prompt: PromptT, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>>;
+    abstract requestTextCompletionStream(prompt: PromptT, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>>;
 
-    async requestImageGeneration(_prompt: PromptT, _options: ExecutionOptions): Promise<Completion<ImageGeneration>> {
+    async requestImageGeneration(_prompt: PromptT, _options: ExecutionOptions): Promise<Completion> {
         throw new Error("Image generation not implemented.");
         //Cannot be made abstract, as abstract methods are required in the derived class
     }

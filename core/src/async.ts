@@ -1,5 +1,5 @@
 import type { ServerSentEvent } from "@vertesia/api-fetch-client"
-import { CompletionChunk } from "@llumiverse/common";
+import { CompletionChunkObject } from "@llumiverse/common";
 
 export async function* asyncMap<T, R>(asyncIterable: AsyncIterable<T>, callback: (value: T, index: number) => R) {
     let i = 0;
@@ -18,13 +18,13 @@ export function oneAsyncIterator<T>(value: T): AsyncIterable<T> {
 /**
  * Given a ReadableStream of server sent events, tran
  */
-export function transformSSEStream(stream: ReadableStream<ServerSentEvent>, transform: (data: string) => CompletionChunk): ReadableStream<CompletionChunk> & AsyncIterable<CompletionChunk> {
+export function transformSSEStream(stream: ReadableStream<ServerSentEvent>, transform: (data: string) => CompletionChunkObject): ReadableStream<CompletionChunkObject> & AsyncIterable<CompletionChunkObject> {
     // on node and bun the ReadableStream is an async iterable
-    return stream.pipeThrough(new TransformStream<ServerSentEvent, CompletionChunk>({
+    return stream.pipeThrough(new TransformStream<ServerSentEvent, CompletionChunkObject>({
         transform(event: ServerSentEvent, controller) {
             if (event.type === 'event' && event.data && event.data !== '[DONE]') {
                 try {
-                    const result = transform(event.data) ?? ''
+                    const result = transform(event.data) ?? { result: [], finish_reason: undefined }
                     controller.enqueue(result);
                 } catch (err) {
                     // double check for the last event which is not a JSON - at this time togetherai and mistralai returns the string [DONE]
@@ -32,7 +32,7 @@ export function transformSSEStream(stream: ReadableStream<ServerSentEvent>, tran
                 }
             }
         }
-    })) as ReadableStream<CompletionChunk> & AsyncIterable<CompletionChunk>;
+    })) satisfies ReadableStream<CompletionChunkObject> & AsyncIterable<CompletionChunkObject>;
 }
 
 export class EventStream<T, ReturnT = any> implements AsyncIterable<T> {
