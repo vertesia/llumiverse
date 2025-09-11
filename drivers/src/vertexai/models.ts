@@ -1,5 +1,5 @@
-import { AIModel, Completion, PromptSegment, ExecutionOptions, CompletionChunk } from "@llumiverse/core";
-import { VertexAIDriver , trimModelName} from "./index.js";
+import { AIModel, Completion, PromptSegment, ExecutionOptions, CompletionChunkObject } from "@llumiverse/core";
+import { VertexAIDriver, trimModelName } from "./index.js";
 import { GeminiModelDefinition } from "./models/gemini.js";
 import { ClaudeModelDefinition } from "./models/claude.js";
 import { LLamaModelDefinition } from "./models/llama.js";
@@ -9,7 +9,7 @@ export interface ModelDefinition<PromptT = any> {
     versions?: string[]; // the versions of the model that are available. ex: ['001', '002']
     createPrompt: (driver: VertexAIDriver, segments: PromptSegment[], options: ExecutionOptions) => Promise<PromptT>;
     requestTextCompletion: (driver: VertexAIDriver, prompt: PromptT, options: ExecutionOptions) => Promise<Completion>;
-    requestTextCompletionStream: (driver: VertexAIDriver, prompt: PromptT, options: ExecutionOptions) => Promise<AsyncIterable<CompletionChunk>>;
+    requestTextCompletionStream: (driver: VertexAIDriver, prompt: PromptT, options: ExecutionOptions) => Promise<AsyncIterable<CompletionChunkObject>>;
     preValidationProcessing?(result: Completion, options: ExecutionOptions): { result: Completion, options: ExecutionOptions };
 }
 
@@ -17,7 +17,7 @@ export function getModelDefinition(model: string): ModelDefinition {
     const splits = model.split("/");
     const publisher = splits[1];
     const modelName = trimModelName(splits[splits.length - 1]);
-    
+
     if (publisher?.includes("anthropic")) {
         return new ClaudeModelDefinition(modelName);
     } else if (publisher?.includes("google")) {
