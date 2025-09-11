@@ -8,7 +8,7 @@ export function throwError(message: string, prompt: PromptSegment[]): never {
 
 export function createValidationErrorCompletion(segments: PromptSegment[]) {
     return {
-        result: "An invalid result",
+        result: [{ type: "text", value: "An invalid result" }],
         prompt: segments,
         execution_time: 3000,
         error: {
