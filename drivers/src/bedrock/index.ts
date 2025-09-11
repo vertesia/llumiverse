@@ -7,7 +7,7 @@ import { S3Client } from "@aws-sdk/client-s3";
 import { AwsCredentialIdentity, Provider } from "@aws-sdk/types";
 import {
     AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult,
-    ExecutionOptions, ExecutionTokenUsage, ImageGeneration, Modalities, PromptSegment,
+    ExecutionOptions, ExecutionTokenUsage, Modalities, PromptSegment,
     TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions,
     BedrockClaudeOptions, BedrockPalmyraOptions, BedrockGptOssOptions, getMaxTokensLimitBedrock, NovaCanvasOptions,
     modelModalitiesToArray, getModelCapabilities,
@@ -171,7 +171,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
 
         const completionResult: CompletionChunkObject = {
-            result: reasoning + resultText,
+            result: reasoning + resultText ? [{ type: "text", value: reasoning + resultText }] : [],
             token_usage: {
                 prompt: result.usage?.inputTokens,
                 result: result.usage?.outputTokens,
@@ -252,7 +252,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
 
         const completionResult: CompletionChunkObject = {
-            result: reasoning + output,
+            result: reasoning + output ? [{ type: "text", value: reasoning + output }] : [],
             token_usage: token_usage,
             finish_reason: converseFinishReason(stop_reason),
         };
@@ -551,7 +551,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
 
-    async requestImageGeneration(prompt: NovaMessagesPrompt, options: ExecutionOptions): Promise<Completion<ImageGeneration>> {
+    async requestImageGeneration(prompt: NovaMessagesPrompt, options: ExecutionOptions): Promise<Completion> {
         if (options.output_modality !== Modalities.image) {
             throw new Error(`Image generation requires image output_modality`);
         }
@@ -587,9 +587,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         return {
             error: result.error,
-            result: {
-                images: result.images,
-            }
+            result: result.images.map((image: any) => ({
+                type: "image" as const,
+                value: image
+            }))
         }
     }
 
