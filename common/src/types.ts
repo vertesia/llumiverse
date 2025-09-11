@@ -64,7 +64,7 @@ export const ProviderList: Record<Providers, ProviderParams> = {
     replicate:
     {
         id: Providers.replicate,
-        name: "Repicate",
+        name: "Replicate",
         requiresApiKey: true,
         requiresEndpointUrl: false,
         supportSearch: true,
@@ -185,9 +185,6 @@ export interface CompletionChunkObject {
     token_usage?: ExecutionTokenUsage;
     finish_reason?: "stop" | "length" | string;
 }
-
-//Internal structure used in driver implementation.
-export type CompletionChunk = CompletionChunkObject | string;
 
 export interface ToolDefinition {
     name: string,
