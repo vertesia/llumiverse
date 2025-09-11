@@ -155,10 +155,33 @@ export interface ResultValidationError {
     data?: string;
 }
 
-//ResultT should be either JSONObject or string
+// ============== Result Types ===============
+
+export interface BaseResult {
+    type: "text" | "json" | "image";
+    value: any;
+}
+
+export interface TextResult extends BaseResult {
+    type: "text";
+    value: string;
+}
+
+export interface JsonResult extends BaseResult {
+    type: "json";
+    value: JSONValue;
+}
+
+export interface ImageResult extends BaseResult {
+    type: "image";
+    value: string; // base64 data url or real url
+}
+
+export type CompletionResult = TextResult | JsonResult | ImageResult;
+
 //Internal structure used in driver implementation.
-export interface CompletionChunkObject<ResultT = any> {
-    result: ResultT;
+export interface CompletionChunkObject {
+    result: CompletionResult[];
     token_usage?: ExecutionTokenUsage;
     finish_reason?: "stop" | "length" | string;
 }
@@ -185,10 +208,9 @@ export interface ToolUse<ParamsT = JSONObject> {
     tool_input: ParamsT | null
 }
 
-//ResultT should be either JSONObject or string
-export interface Completion<ResultT = any> {
+export interface Completion {
     // the driver impl must return the result and optionally the token_usage. the execution time is computed by the extended abstract driver
-    result: ResultT;
+    result: CompletionResult[];
     token_usage?: ExecutionTokenUsage;
     /**
      * Contains the tools from which the model awaits information.
