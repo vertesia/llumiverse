@@ -1,5 +1,5 @@
 import { DefaultAzureCredential, getBearerTokenProvider, TokenCredential } from "@azure/identity";
-import { AbstractDriver, AIModel, Completion, CompletionChunk, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, getModelCapabilities, modelModalitiesToArray, Providers } from "@llumiverse/core";
+import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, getModelCapabilities, modelModalitiesToArray, Providers } from "@llumiverse/core";
 import { AIProjectClient, DeploymentUnion, ModelDeployment } from '@azure/ai-projects';
 import { isUnexpected } from "@azure-rest/ai-inference";
 import { ChatCompletionMessageParam } from "openai/resources";
@@ -139,7 +139,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         }
     }
 
-    async requestTextCompletionStream(prompt: ChatCompletionMessageParam[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
+    async requestTextCompletionStream(prompt: ChatCompletionMessageParam[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         const { deploymentName } = parseAzureFoundryModelId(options.model);
         const model_options = options.model_options as any;
         const isOpenAI = await this.isOpenAIDeployment(options.model);
@@ -184,7 +184,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         }
     }
 
-    private async *processStreamResponse(sseStream: any): AsyncIterable<CompletionChunk> {
+    private async *processStreamResponse(sseStream: any): AsyncIterable<CompletionChunkObject> {
         try {
             for await (const event of sseStream) {
                 if (event.data === "[DONE]") {
@@ -201,7 +201,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                     if (!choice) {
                         continue;
                     }
-                    const chunk: CompletionChunk = {
+                    const chunk: CompletionChunkObject = {
                         result: choice.delta?.content || "",
                         finish_reason: this.convertFinishReason(choice.finish_reason),
                         token_usage: {
@@ -246,7 +246,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         }
 
         const completion: Completion = {
-            result: data,
+            result: data ? [{ type: "text", value: data }] : [],
             token_usage: tokenInfo,
             finish_reason: this.convertFinishReason(choice.finish_reason),
         };
