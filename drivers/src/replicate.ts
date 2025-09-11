@@ -66,10 +66,10 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
 
     async requestTextCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
         if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", {options: options.model_options });
+            this.logger.warn("Invalid model options", { options: options.model_options });
         }
         options.model_options = options.model_options as TextFallbackOptions;
-        
+
         const model = ReplicateDriver.parseModelId(options.model);
         const predictionData = {
             input: {
@@ -97,7 +97,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
             } catch (error) {
                 error = JSON.stringify(e);
             }
-            this.logger?.error("Error in SSE stream", {e, error});
+            this.logger?.error("Error in SSE stream", { e, error });
         });
         source.addEventListener("done", () => {
             try {
@@ -111,7 +111,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
 
     async requestTextCompletion(prompt: string, options: ExecutionOptions) {
         if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", {options: options.model_options });
+            this.logger.warn("Invalid model options", { options: options.model_options });
         }
         options.model_options = options.model_options as TextFallbackOptions;
         const model = ReplicateDriver.parseModelId(options.model);
@@ -236,7 +236,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
             this.service.models.versions.list(owner, model),
         ]);
 
-        if (!rModel || !versions || versions.length === 0) {
+        if (!rModel || !versions || versions.results.length === 0) {
             throw new Error("Model not found or no versions available");
         }
 
@@ -298,7 +298,7 @@ function jobInfo(job: Prediction, modelName?: string): TrainingJob {
         status = TrainingJobStatus.succeeded;
     } else if (jobStatus === 'failed') {
         status = TrainingJobStatus.failed;
-        const error = job.error as any; 
+        const error = job.error as any;
         if (typeof error === 'string') {
             details = error;
         } else {
