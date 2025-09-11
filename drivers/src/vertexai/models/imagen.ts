@@ -1,5 +1,5 @@
 import {
-    AIModel, Completion, ExecutionOptions, ImageGeneration, Modalities,
+    AIModel, Completion, ExecutionOptions, Modalities,
     ModelType, PromptRole, PromptSegment, readStreamAsBase64, ImagenOptions
 } from "@llumiverse/core";
 import { VertexAIDriver } from "../index.js";
@@ -323,9 +323,9 @@ export class ImagenModelDefinition {
         return prompt
     }
 
-    async requestImageGeneration(driver: VertexAIDriver, prompt: ImagenPrompt, options: ExecutionOptions): Promise<Completion<ImageGeneration>> {
+    async requestImageGeneration(driver: VertexAIDriver, prompt: ImagenPrompt, options: ExecutionOptions): Promise<Completion> {
         if (options.model_options?._option_id !== "vertexai-imagen") {
-            driver.logger.warn("Invalid model options", {options: options.model_options });
+            driver.logger.warn("Invalid model options", { options: options.model_options });
         }
         options.model_options = options.model_options as ImagenOptions | undefined;
 
@@ -337,78 +337,78 @@ export class ImagenModelDefinition {
 
         driver.logger.info("Task type: " + taskType);
 
-    const modelName = options.model.split("/").pop() ?? '';
+        const modelName = options.model.split("/").pop() ?? '';
 
-    // Configure the parent resource (legacy PredictionServiceClient endpoint removed; using GenAI client instead)
+        // Configure the parent resource (legacy PredictionServiceClient endpoint removed; using GenAI client instead)
 
-    // Use the Google GenAI client image APIs.
-    const genai = driver.getGoogleGenAIClient();
+        // Use the Google GenAI client image APIs.
+        const genai = driver.getGoogleGenAIClient();
 
-    // Map our prompt.referenceImages to genai ReferenceImage types
-    const referenceImages: any[] = (prompt.referenceImages ?? []).map((ref) => {
-                // Common base for image bytes reference
-                if (ref.referenceType === 'REFERENCE_TYPE_RAW') {
-                    return {
-                        referenceId: ref.referenceId,
-                        referenceImage: { imageBytes: (ref as any).referenceImage?.bytesBase64Encoded },
-                        referenceType: 'RAW',
-                    };
+        // Map our prompt.referenceImages to genai ReferenceImage types
+        const referenceImages: any[] = (prompt.referenceImages ?? []).map((ref) => {
+            // Common base for image bytes reference
+            if (ref.referenceType === 'REFERENCE_TYPE_RAW') {
+                return {
+                    referenceId: ref.referenceId,
+                    referenceImage: { imageBytes: (ref as any).referenceImage?.bytesBase64Encoded },
+                    referenceType: 'RAW',
+                };
+            }
+            if (ref.referenceType === 'REFERENCE_TYPE_MASK') {
+                const r: any = {
+                    referenceId: ref.referenceId,
+                    referenceType: 'MASK',
+                    maskImageConfig: (ref as any).maskImageConfig ? {
+                        maskMode: (ref as any).maskImageConfig.maskMode,
+                        maskClasses: (ref as any).maskImageConfig.maskClasses,
+                        dilation: (ref as any).maskImageConfig.dilation,
+                    } : undefined,
+                };
+                if ((ref as any).referenceImage?.bytesBase64Encoded) {
+                    r.referenceImage = { imageBytes: (ref as any).referenceImage.bytesBase64Encoded };
                 }
-                if (ref.referenceType === 'REFERENCE_TYPE_MASK') {
-                    const r: any = {
-                        referenceId: ref.referenceId,
-                        referenceType: 'MASK',
-                        maskImageConfig: (ref as any).maskImageConfig ? {
-                            maskMode: (ref as any).maskImageConfig.maskMode,
-                            maskClasses: (ref as any).maskImageConfig.maskClasses,
-                            dilation: (ref as any).maskImageConfig.dilation,
-                        } : undefined,
-                    };
-                    if ((ref as any).referenceImage?.bytesBase64Encoded) {
-                        r.referenceImage = { imageBytes: (ref as any).referenceImage.bytesBase64Encoded };
-                    }
-                    return r;
-                }
-                if (ref.referenceType === 'REFERENCE_TYPE_SUBJECT') {
-                    return {
-                        referenceId: ref.referenceId,
-                        referenceType: 'SUBJECT',
-                        subjectImageConfig: {
-                            subjectDescription: (ref as any).subjectImageConfig?.subjectDescription,
-                            subjectType: (ref as any).subjectImageConfig?.subjectType,
-                        },
-                        referenceImage: { imageBytes: (ref as any).referenceImage?.bytesBase64Encoded },
-                    };
-                }
-                if (ref.referenceType === 'REFERENCE_TYPE_CONTROL') {
-                    return {
-                        referenceId: ref.referenceId,
-                        referenceType: 'CONTROL',
-                        controlImageConfig: {
-                            controlType: (ref as any).controlImageConfig?.controlType,
-                            enableControlImageComputation: (ref as any).controlImageConfig?.enableControlImageComputation,
-                        },
-                        referenceImage: { imageBytes: (ref as any).referenceImage?.bytesBase64Encoded },
-                    };
-                }
-                if (ref.referenceType === 'REFERENCE_TYPE_STYLE') {
-                    return {
-                        referenceId: ref.referenceId,
-                        referenceType: 'STYLE',
-                        styleImageConfig: { styleDescription: (ref as any).styleImageConfig?.styleDescription },
-                        referenceImage: { imageBytes: (ref as any).referenceImage?.bytesBase64Encoded },
-                    };
-                }
-                return ref;
-            });
+                return r;
+            }
+            if (ref.referenceType === 'REFERENCE_TYPE_SUBJECT') {
+                return {
+                    referenceId: ref.referenceId,
+                    referenceType: 'SUBJECT',
+                    subjectImageConfig: {
+                        subjectDescription: (ref as any).subjectImageConfig?.subjectDescription,
+                        subjectType: (ref as any).subjectImageConfig?.subjectType,
+                    },
+                    referenceImage: { imageBytes: (ref as any).referenceImage?.bytesBase64Encoded },
+                };
+            }
+            if (ref.referenceType === 'REFERENCE_TYPE_CONTROL') {
+                return {
+                    referenceId: ref.referenceId,
+                    referenceType: 'CONTROL',
+                    controlImageConfig: {
+                        controlType: (ref as any).controlImageConfig?.controlType,
+                        enableControlImageComputation: (ref as any).controlImageConfig?.enableControlImageComputation,
+                    },
+                    referenceImage: { imageBytes: (ref as any).referenceImage?.bytesBase64Encoded },
+                };
+            }
+            if (ref.referenceType === 'REFERENCE_TYPE_STYLE') {
+                return {
+                    referenceId: ref.referenceId,
+                    referenceType: 'STYLE',
+                    styleImageConfig: { styleDescription: (ref as any).styleImageConfig?.styleDescription },
+                    referenceImage: { imageBytes: (ref as any).referenceImage?.bytesBase64Encoded },
+                };
+            }
+            return ref;
+        });
 
-            // Build config from existing parameter mapping
-            const config: any = getImagenParameters(taskType, options.model_options ?? { _option_id: 'vertexai-imagen' });
-            config.numberOfImages = options.model_options?.number_of_images ?? 1;
-            config.negativePrompt = prompt.negativePrompt ?? undefined;
+        // Build config from existing parameter mapping
+        const config: any = getImagenParameters(taskType, options.model_options ?? { _option_id: 'vertexai-imagen' });
+        config.numberOfImages = options.model_options?.number_of_images ?? 1;
+        config.negativePrompt = prompt.negativePrompt ?? undefined;
 
-            // Remove undefined keys
-            Object.keys(config).forEach(k => config[k] === undefined && delete config[k]);
+        // Remove undefined keys
+        Object.keys(config).forEach(k => config[k] === undefined && delete config[k]);
 
         // Select API method based on task type
         let response: GenerateImagesResponse | EditImageResponse | UpscaleImageResponse | undefined;
@@ -452,7 +452,10 @@ export class ImagenModelDefinition {
         }
 
         return {
-            result: { images },
+            result: images.map(image => ({
+                type: "image" as const,
+                value: image
+            })),
         };
     }
 }

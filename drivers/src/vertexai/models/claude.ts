@@ -87,7 +87,7 @@ async function collectFileBlocks(segment: PromptSegment, restrictedTypes: true):
 async function collectFileBlocks(segment: PromptSegment, restrictedTypes?: false): Promise<ContentBlockParam[]>;
 async function collectFileBlocks(segment: PromptSegment, restrictedTypes: boolean = false): Promise<ContentBlockParam[]> {
     const contentBlocks: ContentBlockParam[] = [];
-    
+
     for (const file of segment.files || []) {
         if (file.mime_type?.startsWith("image/")) {
             const allowedTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"];
@@ -128,7 +128,7 @@ async function collectFileBlocks(segment: PromptSegment, restrictedTypes: boolea
             }
         }
     }
-    
+
     return contentBlocks;
 }
 
@@ -191,7 +191,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                         text: segment.content
                     } satisfies TextBlockParam);
                 }
-                
+
                 // Collect file blocks with type safety
                 const fileBlocks = await collectFileBlocks(segment, true);
                 contentBlocks.push(...fileBlocks);
@@ -208,7 +208,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
             } else {
                 // Build content blocks for regular messages (all types allowed)
                 const contentBlocks: ContentBlockParam[] = [];
-                
+
                 if (segment.content) {
                     contentBlocks.push({
                         type: 'text',
@@ -273,7 +273,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         conversation = updateConversation(conversation, createPromptFromResponse(result));
 
         return {
-            result: text ?? '',
+            result: text ? [{ type: "text", value: text }] : [{ type: "text", value: '' }],
             tool_use,
             token_usage: {
                 prompt: result.usage.input_tokens,
@@ -303,7 +303,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
             switch (streamEvent.type) {
                 case "message_start":
                     return {
-                        result: '',
+                        result: [{ type: "text", value: '' }],
                         token_usage: {
                             prompt: streamEvent.message.usage.input_tokens,
                             result: streamEvent.message.usage.output_tokens
@@ -311,7 +311,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                     } satisfies CompletionChunkObject;
                 case "message_delta":
                     return {
-                        result: '',
+                        result: [{ type: "text", value: '' }],
                         token_usage: {
                             result: streamEvent.usage.output_tokens
                         },
@@ -321,7 +321,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                     // Handle redacted thinking blocks
                     if (streamEvent.content_block.type === "redacted_thinking" && model_options?.include_thoughts) {
                         return {
-                            result: `[Redacted thinking: ${streamEvent.content_block.data}]`
+                            result: [{ type: "text", value: `[Redacted thinking: ${streamEvent.content_block.data}]` }]
                         } satisfies CompletionChunkObject;
                     }
                     break;
@@ -330,12 +330,12 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                     switch (streamEvent.delta.type) {
                         case "text_delta":
                             return {
-                                result: streamEvent.delta.text ?? ''
+                                result: streamEvent.delta.text ? [{ type: "text", value: streamEvent.delta.text }] : []
                             } satisfies CompletionChunkObject;
                         case "thinking_delta":
                             if (model_options?.include_thoughts) {
                                 return {
-                                    result: streamEvent.delta.thinking ?? '',
+                                    result: streamEvent.delta.thinking ? [{ type: "text", value: streamEvent.delta.thinking }] : [],
                                 } satisfies CompletionChunkObject;
                             }
                             break;
@@ -343,7 +343,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                             // Signature deltas, signify the end of the thoughts.
                             if (model_options?.include_thoughts) {
                                 return {
-                                    result: '\n\n', // Double newline for more spacing
+                                    result: [{ type: "text", value: '\n\n' }], // Double newline for more spacing
                                 } satisfies CompletionChunkObject;
                             }
                             break;
@@ -353,7 +353,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                     // Handle the end of content blocks, for redacted thinking blocks
                     if (model_options?.include_thoughts) {
                         return {
-                            result: '\n\n' // Add double newline for spacing
+                            result: [{ type: "text", value: '\n\n' }] // Add double newline for spacing
                         } satisfies CompletionChunkObject;
                     }
                     break;
@@ -361,7 +361,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
 
             // Default case for all other event types
             return {
-                result: ''
+                result: []
             } satisfies CompletionChunkObject;
         });
 
