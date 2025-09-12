@@ -3,7 +3,7 @@ import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatOpenAILikeMultimodalPrompt } from "../openai/openai_format.js";
 
 import Groq from "groq-sdk";
-import type { ChatCompletionMessageParam, ChatCompletionTool } from "groq-sdk/resources/chat/completions";
+import type { ChatCompletionAssistantMessageParam, ChatCompletionMessageParam, ChatCompletionTool, ChatCompletionUserMessageParam } from "groq-sdk/resources/chat/completions";
 
 interface GroqDriverOptions extends DriverOptions {
     apiKey: string;
@@ -97,7 +97,7 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
                     content = supportedParts.length > 0 ? supportedParts : 'Content not supported';
                 }
                 
-                const userMsg: ChatCompletionMessageParam = {
+                const userMsg: ChatCompletionUserMessageParam = {
                     role: 'user',
                     content: content ?? "",
                     // Preserve name if present
@@ -108,13 +108,15 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
             
             // Handle assistant messages - handle content arrays if needed
             if (msg.role === 'assistant') {
-                const assistantMsg: ChatCompletionMessageParam = {
+                const assistantMsg: ChatCompletionAssistantMessageParam = {
                     role: 'assistant',
                     content: Array.isArray(msg.content) 
                         ? msg.content.map(part => 'text' in part ? part.text : '').filter(Boolean).join('\n') || null
                         : msg.content,
-                    // Preserve other assistant message properties
-                    ...(msg.tool_calls && { tool_calls: msg.tool_calls }),
+                    // Only include tool_calls of type 'function'
+                    tool_calls: Array.isArray(msg.tool_calls)
+                        ? msg.tool_calls.filter(tc => tc.type === 'function')
+                        : undefined,
                     ...(msg.name && { name: msg.name })
                 };
                 return assistantMsg;

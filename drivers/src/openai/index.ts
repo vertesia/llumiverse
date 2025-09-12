@@ -471,8 +471,10 @@ export function collectTools(toolCalls?: OpenAI.Chat.Completions.ChatCompletionM
         return undefined;
     }
 
+    const functionToolCalls = toolCalls.filter(tc => tc.type == "function");
+
     const tools: ToolUse[] = [];
-    for (const call of toolCalls) {
+    for (const call of functionToolCalls) {
         tools.push({
             id: call.id,
             tool_name: call.function.name,

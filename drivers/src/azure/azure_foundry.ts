@@ -1,7 +1,7 @@
 import { DefaultAzureCredential, getBearerTokenProvider, TokenCredential } from "@azure/identity";
 import { AbstractDriver, AIModel, Completion, CompletionChunk, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, getModelCapabilities, modelModalitiesToArray, Providers } from "@llumiverse/core";
 import { AIProjectClient, DeploymentUnion, ModelDeployment } from '@azure/ai-projects';
-import { isUnexpected } from "@azure-rest/ai-inference";
+import ModelClient, { isUnexpected } from "@azure-rest/ai-inference";
 import { ChatCompletionMessageParam } from "openai/resources";
 import type {
     ChatCompletionsOutput,
@@ -58,7 +58,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             throw new Error("Failed to initialize Azure AD token provider");
         }
 
-        // Initialize AI Projects client which provides access to inference operations
+        // Initialize AI Projects client which provides access to deployment operations
         this.service = new AIProjectClient(
             opts.endpoint,
             opts.azureADTokenProvider
@@ -107,7 +107,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         let response;
         if (isOpenAI) {
             // Use the Azure OpenAI client for OpenAI models
-            const azureOpenAI = await this.service.inference.azureOpenAI({ apiVersion: this.OPENAI_API_VERSION });
+            const azureOpenAI = await this.service.getAzureOpenAIClient({ apiVersion: this.OPENAI_API_VERSION });
             const subDriver = new AzureOpenAIDriver(azureOpenAI);
             // Use deployment name for API calls
             const modifiedOptions = { ...options, model: deploymentName };
@@ -115,14 +115,13 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             return response;
 
         } else {
-            // Use the chat completions client from the inference operations
-            const chatClient = this.service.inference.chatCompletions({ apiVersion: this.INFERENCE_API_VERSION });
-            response = await chatClient.post({
+            const inferenceClient = ModelClient(this.service.getEndpointUrl(), this.options.azureADTokenProvider!)
+            // Use the inference client directly for non-OpenAI models
+            response = await inferenceClient.path("/chat/completions").post({
                 body: {
                     messages: prompt,
                     max_tokens: model_options?.max_tokens,
                     model: deploymentName,
-                    stream: true,
                     temperature: model_options?.temperature,
                     top_p: model_options?.top_p,
                     frequency_penalty: model_options?.frequency_penalty,
@@ -145,14 +144,14 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         const isOpenAI = await this.isOpenAIDeployment(options.model);
 
         if (isOpenAI) {
-            const azureOpenAI = await this.service.inference.azureOpenAI({ apiVersion: this.OPENAI_API_VERSION });
+            const azureOpenAI = await this.service.getAzureOpenAIClient({ apiVersion: this.OPENAI_API_VERSION });
             const subDriver = new AzureOpenAIDriver(azureOpenAI);
             const modifiedOptions = { ...options, model: deploymentName };
             const stream = await subDriver.requestTextCompletionStream(prompt, modifiedOptions);
             return stream;
         } else {
-            const chatClient = this.service.inference.chatCompletions({ apiVersion: this.INFERENCE_API_VERSION });
-            const response = await chatClient.post({
+            const inferenceClient = ModelClient(this.service.getEndpointUrl(), this.options.azureADTokenProvider!)
+            const response = await inferenceClient.path("/chat/completions").post({
                 body: {
                     messages: prompt,
                     max_tokens: model_options?.max_tokens,
@@ -319,9 +318,10 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
         let response;
         try {
-            // Use the embeddings client from the inference operations
-            const embeddingsClient = this.service.inference.embeddings({ apiVersion: this.INFERENCE_API_VERSION });
-            response = await embeddingsClient.post({
+            // Use the inference client directly for embeddings
+            const inferenceClient = ModelClient(this.service.getEndpointUrl(), this.options.azureADTokenProvider!)
+
+            response = await inferenceClient.path("/embeddings").post({
                 body: {
                     input: Array.isArray(options.text) ? options.text : [options.text],
                     model: deploymentName
@@ -356,9 +356,9 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
         let response;
         try {
-            // Use the embeddings client from the inference operations
-            const embeddingsClient = this.service.inference.embeddings({ apiVersion: this.INFERENCE_API_VERSION });
-            response = await embeddingsClient.post({
+            const inferenceClient = ModelClient(this.service.getEndpointUrl(), this.options.azureADTokenProvider!)
+            // Use the inference client directly for image embeddings
+            response = await inferenceClient.path("/embeddings").post({
                 body: {
                     input: Array.isArray(options.image) ? options.image : [options.image],
                     model: deploymentName
