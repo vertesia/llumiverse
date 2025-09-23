@@ -118,8 +118,8 @@ importers:
         specifier: 1.0.0-beta.6
         version: 1.0.0-beta.6
       '@azure/ai-projects':
-        specifier: 1.0.0
-        version: 1.0.0(ws@8.18.2)(zod@3.25.63)
+        specifier: 1.0.0-beta.10
+        version: 1.0.0-beta.10(ws@8.18.2)(zod@3.25.63)
       '@azure/core-auth':
         specifier: ^1.10.1
         version: 1.10.1
@@ -433,12 +433,12 @@ packages:
     resolution: {integrity: sha512-nBrLsEWm4J2u5LpAPjxADTlq3trDgVZZXHNKabeXZtpq3d3AbN/KGO82R87rdDz5/lYB024rtEf10/q0urNgsA==}
     engines: {node: '>=18.0.0'}
 
-  '@azure/ai-agents@1.1.0':
-    resolution: {integrity: sha512-i8HFA7ql18t/otGrRfTWNOE5HgJf/RqedV3VNbFav5z9iTSexf8k4EeWOb/IWWaCsq0z/S7mihdGPAluPs+nXQ==}
+  '@azure/ai-agents@1.0.0':
+    resolution: {integrity: sha512-8/MZ/Ls7kv2NmwQ0wGzSaFbMST24Apcoorjs9ndGL6uJQ/KGaGCY4haNKzts1wv2oGSI+gBdjbYb0Q+P702pow==}
     engines: {node: '>=20.0.0'}
 
-  '@azure/ai-projects@1.0.0':
-    resolution: {integrity: sha512-VDWbgrppxzEvwpDQwKii1eQBiq6iBpU9+e4jd/7J9RZ36dj2/ALVw34RmYeL2KeBbUr6zJZfDjhH9gAbBkIT4A==}
+  '@azure/ai-projects@1.0.0-beta.10':
+    resolution: {integrity: sha512-y46Ewm7Y0FECWDij05nWmYBtFuX+3+k7A6MEBti7XClX/4KPM2AJMhxWPQAlnrXQMLjKnfPGRymgqTCKMyE3QQ==}
     engines: {node: '>=20.0.0'}
 
   '@azure/core-auth@1.10.1':
@@ -475,10 +475,6 @@ packages:
 
   '@azure/core-tracing@1.2.0':
     resolution: {integrity: sha512-UKTiEJPkWcESPYJz3X5uKRYyOcJD+4nYph+KpfdPRnQJVrZfk0KJgdnaAWKfhsBBtAf/D58Az4AvCJEmWgIBAg==}
-    engines: {node: '>=18.0.0'}
-
-  '@azure/core-util@1.11.0':
-    resolution: {integrity: sha512-DxOSLua+NdpWoSqULhjDyAZTXFdP/LKkqtYuxxz1SCN289zk3OG8UOpnCQAz/tygyACBtWp/BoO72ptK7msY8g==}
     engines: {node: '>=18.0.0'}
 
   '@azure/core-util@1.13.1':
@@ -2189,18 +2185,6 @@ packages:
       zod:
         optional: true
 
-  openai@5.22.1:
-    resolution: {integrity: sha512-nzjcbqcSKxMAkTzNbtqKxrAq1jrG2txRshLZEflL3uZsgzGb22nVjbJscqTOSHGxbUWlYbISKHaUudA5Z1eutg==}
-    hasBin: true
-    peerDependencies:
-      ws: ^8.18.0
-      zod: ^3.23.8
-    peerDependenciesMeta:
-      ws:
-        optional: true
-      zod:
-        optional: true
-
   optionator@0.9.4:
     resolution: {integrity: sha512-6IpQ7mKUxRcZNLIObR0hz7lxsapSSIYNZJwXPGeF0mTVqGKFIXj1DQcMoT22S3ROcLyY/rz0PWaWZ9ayWmad9g==}
     engines: {node: '>= 0.8.0'}
@@ -3455,7 +3439,7 @@ snapshots:
       '@azure/core-auth': 1.10.1
       '@azure/core-rest-pipeline': 1.21.0
       '@azure/core-tracing': 1.2.0
-      '@azure/core-util': 1.11.0
+      '@azure/core-util': 1.13.1
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
@@ -3464,7 +3448,7 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@azure/ai-agents@1.1.0':
+  '@azure/ai-agents@1.0.0':
     dependencies:
       '@azure-rest/core-client': 2.3.4
       '@azure/abort-controller': 2.1.2
@@ -3474,29 +3458,31 @@ snapshots:
       '@azure/core-rest-pipeline': 1.21.0
       '@azure/core-sse': 2.3.0
       '@azure/core-tracing': 1.2.0
-      '@azure/core-util': 1.11.0
+      '@azure/core-util': 1.13.1
       '@azure/logger': 1.1.4
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
 
-  '@azure/ai-projects@1.0.0(ws@8.18.2)(zod@3.25.63)':
+  '@azure/ai-projects@1.0.0-beta.10(ws@8.18.2)(zod@3.25.63)':
     dependencies:
+      '@azure-rest/ai-inference': 1.0.0-beta.6
       '@azure-rest/core-client': 2.3.4
       '@azure/abort-controller': 2.1.2
-      '@azure/ai-agents': 1.1.0
+      '@azure/ai-agents': 1.0.0
       '@azure/core-auth': 1.10.1
       '@azure/core-lro': 3.2.0
       '@azure/core-paging': 1.6.2
       '@azure/core-rest-pipeline': 1.21.0
       '@azure/core-sse': 2.3.0
       '@azure/core-tracing': 1.2.0
-      '@azure/core-util': 1.11.0
+      '@azure/core-util': 1.13.1
       '@azure/logger': 1.1.4
       '@azure/storage-blob': 12.27.0
-      openai: 5.22.1(ws@8.18.2)(zod@3.25.63)
+      openai: 4.104.0(ws@8.18.2)(zod@3.25.63)
       tslib: 2.8.1
     transitivePeerDependencies:
+      - encoding
       - supports-color
       - ws
       - zod
@@ -3515,7 +3501,7 @@ snapshots:
       '@azure/core-auth': 1.10.1
       '@azure/core-rest-pipeline': 1.21.0
       '@azure/core-tracing': 1.2.0
-      '@azure/core-util': 1.11.0
+      '@azure/core-util': 1.13.1
       '@azure/logger': 1.1.4
       tslib: 2.8.1
     transitivePeerDependencies:
@@ -3532,16 +3518,20 @@ snapshots:
   '@azure/core-lro@2.7.2':
     dependencies:
       '@azure/abort-controller': 2.1.2
-      '@azure/core-util': 1.11.0
+      '@azure/core-util': 1.13.1
       '@azure/logger': 1.1.4
       tslib: 2.8.1
+    transitivePeerDependencies:
+      - supports-color
 
   '@azure/core-lro@3.2.0':
     dependencies:
       '@azure/abort-controller': 2.1.2
-      '@azure/core-util': 1.11.0
+      '@azure/core-util': 1.13.1
       '@azure/logger': 1.1.4
       tslib: 2.8.1
+    transitivePeerDependencies:
+      - supports-color
 
   '@azure/core-paging@1.6.2':
     dependencies:
@@ -3552,7 +3542,7 @@ snapshots:
       '@azure/abort-controller': 2.1.2
       '@azure/core-auth': 1.10.1
       '@azure/core-tracing': 1.2.0
-      '@azure/core-util': 1.11.0
+      '@azure/core-util': 1.13.1
       '@azure/logger': 1.1.4
       '@typespec/ts-http-runtime': 0.2.3
       tslib: 2.8.1
@@ -3565,11 +3555,6 @@ snapshots:
 
   '@azure/core-tracing@1.2.0':
     dependencies:
-      tslib: 2.8.1
-
-  '@azure/core-util@1.11.0':
-    dependencies:
-      '@azure/abort-controller': 2.1.2
       tslib: 2.8.1
 
   '@azure/core-util@1.13.1':
@@ -3592,7 +3577,7 @@ snapshots:
       '@azure/core-client': 1.9.3
       '@azure/core-rest-pipeline': 1.21.0
       '@azure/core-tracing': 1.2.0
-      '@azure/core-util': 1.11.0
+      '@azure/core-util': 1.13.1
       '@azure/logger': 1.1.4
       '@azure/msal-browser': 4.8.0
       '@azure/msal-node': 3.5.3
@@ -3636,7 +3621,7 @@ snapshots:
       '@azure/core-paging': 1.6.2
       '@azure/core-rest-pipeline': 1.21.0
       '@azure/core-tracing': 1.2.0
-      '@azure/core-util': 1.11.0
+      '@azure/core-util': 1.13.1
       '@azure/core-xml': 1.4.5
       '@azure/logger': 1.1.4
       events: 3.3.0
@@ -5490,11 +5475,6 @@ snapshots:
       zod: 3.25.63
     transitivePeerDependencies:
       - encoding
-
-  openai@5.22.1(ws@8.18.2)(zod@3.25.63):
-    optionalDependencies:
-      ws: 8.18.2
-      zod: 3.25.63
 
   optionator@0.9.4:
     dependencies:
