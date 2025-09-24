@@ -540,8 +540,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
         };
 
-        //Only add tools if they are defined
-        if (tool_defs) {
+        //Only add tools if they are defined and not empty
+        if (tool_defs?.length) {
             request.toolConfig = {
                 tools: tool_defs,
             }
