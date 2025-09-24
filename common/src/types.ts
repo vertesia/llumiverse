@@ -152,7 +152,7 @@ export interface EmbeddingsResult {
 export interface ResultValidationError {
     code: 'validation_error' | 'json_error' | 'content_policy_violation';
     message: string;
-    data?: string;
+    data?: CompletionResult[];
 }
 
 // ============== Result Types ===============
@@ -178,6 +178,17 @@ export interface ImageResult extends BaseResult {
 }
 
 export type CompletionResult = TextResult | JsonResult | ImageResult;
+
+export function resultAsString(result: CompletionResult): string {
+    switch (result.type) {
+        case "text":
+            return result.value;
+        case "json":
+            return JSON.stringify(result.value, null, 2);
+        case "image":
+            return result.value;
+    }
+}
 
 //Internal structure used in driver implementation.
 export interface CompletionChunkObject {
@@ -233,12 +244,6 @@ export interface Completion {
      * The conversation context. This is an opaque structure that can be passed to the next request to restore the context.
      */
     conversation?: unknown;
-}
-
-export interface ImageGeneration {
-
-    images?: string[];
-
 }
 
 export interface ExecutionResponse<PromptT = any> extends Completion {

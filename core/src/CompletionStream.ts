@@ -23,13 +23,12 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
         );
 
         const start = Date.now();
-        let stream;
         let finish_reason: string | undefined = undefined;
         let promptTokens: number = 0;
         let resultTokens: number | undefined = undefined;
 
         try {
-            stream = await this.driver.requestTextCompletionStream(this.prompt, this.options);
+            const stream = await this.driver.requestTextCompletionStream(this.prompt, this.options);
             for await (const chunk of stream) {
                 if (chunk) {
                     if (typeof chunk === 'string') {
