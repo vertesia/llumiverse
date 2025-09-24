@@ -22,7 +22,7 @@ import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
 import { PredictionServiceClient, v1beta1 } from "@google-cloud/aiplatform";
 import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { ImagenModelDefinition, ImagenPrompt } from "./models/imagen.js";
-import { GoogleGenAI, Content } from "@google/genai";
+import { GoogleGenAI, Content, Model } from "@google/genai";
 
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
@@ -71,12 +71,23 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         this.authClient = options.googleAuthOptions?.authClient ?? new GoogleAuth(options.googleAuthOptions);
     }
 
-    public getGoogleGenAIClient(): GoogleGenAI {
+    public getGoogleGenAIClient(region: string = this.options.region): GoogleGenAI {
         //Lazy initialization
+        if (region !== this.options.region) {
+            //Get one off client for different region
+            return new GoogleGenAI({
+                project: this.options.project,
+                location: region,
+                vertexai: true,
+                googleAuthOptions: {
+                    authClient: this.authClient as JSONClient,
+                }
+            });
+        }
         if (!this.googleGenAI) {
             this.googleGenAI = new GoogleGenAI({
                 project: this.options.project,
-                location: "global",
+                location: region,
                 vertexai: true,
                 googleAuthOptions: {
                     authClient: this.authClient as JSONClient,
@@ -218,10 +229,20 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return new ImagenModelDefinition(modelName).requestImageGeneration(this, _prompt, _options);
     }
 
+    async getGenAIModelsArray(client: GoogleGenAI): Promise<Model[]> {
+        const models: Model[] = [];
+        const pager = await client.models.list();
+        for await (const item of pager) {
+            models.push(item);
+        }
+        return models;
+    }
+
     async listModels(_params?: ModelSearchPayload): Promise<AIModel<string>[]> {
         // Get clients
         const modelGarden = this.getModelGardenClient();
         const aiplatform = this.getAIPlatformClient();
+        const globalGenAiClient = this.getGoogleGenAIClient("global");
 
         let models: AIModel<string>[] = [];
 
@@ -267,9 +288,12 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             });
             return { publisher, response };
         });
+
+        const globalGooglePromise = this.getGenAIModelsArray(globalGenAiClient);
         // Await all network requests
-        const [aiplatformResult, ...publisherResults] = await Promise.all([
+        const [aiplatformResult, globalGoogleResult, ...publisherResults] = await Promise.all([
             aiplatformPromise,
+            globalGooglePromise,
             ...publisherPromises,
         ]);
 
@@ -280,7 +304,23 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 id: model.name?.split("/").pop() ?? "",
                 name: model.displayName ?? "",
                 provider: "vertexai"
-            })),
+            }))
+        );
+
+        // Process global google models from GenAI
+        models = models.concat(
+            globalGoogleResult.map((model) => {
+                const modelCapability = getModelCapabilities(model.name ?? '', "vertexai");
+                return {
+                    id: "locations/global/" + model.name,
+                    name: "Global " + model.name?.split('/').pop(),
+                    provider: "vertexai",
+                    owner: "google",
+                    input_modalities: modelModalitiesToArray(modelCapability.input),
+                    output_modalities: modelModalitiesToArray(modelCapability.output),
+                    tool_support: modelCapability.tool_support,
+                };
+            })
         );
 
         // Process publisher models
