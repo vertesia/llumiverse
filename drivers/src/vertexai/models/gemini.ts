@@ -713,13 +713,17 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
     async requestTextCompletion(driver: VertexAIDriver, prompt: GenerateContentPrompt, options: ExecutionOptions): Promise<Completion> {
         const splits = options.model.split("/");
+        let region: string | undefined = undefined;
+        if (splits[0] !== "locations" && splits.length >= 2) {
+            region = splits[1];
+        } 
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
 
         let conversation = updateConversation(options.conversation as Content[], prompt.contents);
         prompt.contents = conversation;
 
-        const client = driver.getGoogleGenAIClient();
+        const client = driver.getGoogleGenAIClient(region);
 
         const payload = getGeminiPayload(options, prompt);
         const response = await client.models.generateContent(payload);
@@ -773,10 +777,14 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
     async requestTextCompletionStream(driver: VertexAIDriver, prompt: GenerateContentPrompt, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         const splits = options.model.split("/");
+        let region: string | undefined = undefined;
+        if (splits[0] !== "locations" && splits.length >= 2) {
+            region = splits[1];
+        } 
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
 
-        const client = driver.getGoogleGenAIClient();
+        const client = driver.getGoogleGenAIClient(region);
 
         const payload = getGeminiPayload(options, prompt);
         const response = await client.models.generateContentStream(payload);
