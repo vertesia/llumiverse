@@ -169,7 +169,6 @@ export interface TextResult extends BaseResult {
 
 export interface JsonResult extends BaseResult {
     type: "json";
-    value: JSONValue;
 }
 
 export interface ImageResult extends BaseResult {
