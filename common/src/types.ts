@@ -189,6 +189,23 @@ export function resultAsString(result: CompletionResult): string {
     }
 }
 
+export function parseResultAsJson(results: CompletionResult[]): any {
+    const jsonResults = results.filter(r => r.type === "json");
+    if (jsonResults.length == 1) {
+        return jsonResults[0];
+    } else if (jsonResults.length > 1) {
+        return jsonResults;
+    }
+
+    const textResults = results.filter(r => r.type === "text").join();
+    try {
+        return JSON.parse(textResults);
+    }
+    catch {
+        throw new Error("No JSON result found or failed to parse text");
+    }
+}
+
 //Internal structure used in driver implementation.
 export interface CompletionChunkObject {
     result: CompletionResult[];
