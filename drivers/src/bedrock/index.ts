@@ -583,11 +583,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         const decoder = new TextDecoder();
         const body = decoder.decode(res.body);
-        const result = JSON.parse(body);
+        const bedrockResult = JSON.parse(body);
 
         return {
-            error: result.error,
-            result: result.images.map((image: any) => ({
+            error: bedrockResult.error,
+            result: bedrockResult.images.map((image: any) => ({
                 type: "image" as const,
                 value: image
             }))
