@@ -573,7 +573,7 @@ export interface TrainingOptions {
 
 export interface TrainingPromptOptions {
     segments: PromptSegment[];
-    completion: string | JSONObject;
+    completion: CompletionResult[]
     model: string; // the model to train
     schema?: JSONSchema; // the result schema f any
 }
