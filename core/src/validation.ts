@@ -30,16 +30,20 @@ export class ValidationError extends Error implements ResultValidationError {
 
 export function validateResult(data: CompletionResult[], schema: Object) : CompletionResult[] {
     let json;
-    const jsonResults = data.filter(r => r.type === "json");
-    if (jsonResults.length > 0) {
-        json = jsonResults[0].value;
-    } else {
-        const stringResult = data.map(resultAsString).join();
-        try {
-            json = extractAndParseJSON(stringResult);
-        } catch (error: any) {
-            throw new ValidationError("json_error", error.message)
+    if (Array.isArray(data)) {
+        const jsonResults = data.filter(r => r.type === "json");
+        if (jsonResults.length > 0) {
+            json = jsonResults[0].value;
+        } else {
+            const stringResult = data.map(resultAsString).join();
+            try {
+                json = extractAndParseJSON(stringResult);
+            } catch (error: any) {
+                throw new ValidationError("json_error", error.message)
+            }
         }
+    } else {
+        throw new Error("Data to validate must be an array")
     }
 
     const validate = ajv.compile(schema);
