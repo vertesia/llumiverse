@@ -191,10 +191,9 @@ export function resultAsString(result: CompletionResult): string {
 
 export function parseResultAsJson(results: CompletionResult[]): any {
     const jsonResults = results.filter(r => r.type === "json");
-    if (jsonResults.length == 1) {
-        return jsonResults[0];
-    } else if (jsonResults.length > 1) {
-        return jsonResults;
+    if (jsonResults.length >= 1) {
+        return jsonResults[0].value;
+        //TODO: Handle multiple json type results
     }
 
     const textResults = results.filter(r => r.type === "text").join();
