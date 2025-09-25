@@ -508,7 +508,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         //If last message is "```json", add corresponding ``` as a stop sequence.
         if (prompt.messages && prompt.messages.length > 0) {
             if (prompt.messages[prompt.messages.length - 1].content?.[0].text === "```json") {
-                let stopSeq = model_options.stop_sequence;
+                const stopSeq = model_options.stop_sequence;
                 if (!stopSeq) {
                     model_options.stop_sequence = ["```"];
                 } else if (!stopSeq.includes("```")) {

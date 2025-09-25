@@ -115,7 +115,7 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
 
         // Return undefined for the ExecutionTokenUsage object if there is nothing to fill it with.
         // Allows for checking for truthy-ness on token_usage, rather than it's internals. For testing and downstream usage.
-        let tokens: ExecutionTokenUsage | undefined = resultTokens ?
+        const tokens: ExecutionTokenUsage | undefined = resultTokens ?
             { prompt: promptTokens, result: resultTokens, total: resultTokens + promptTokens, } : undefined
 
         this.completion = {

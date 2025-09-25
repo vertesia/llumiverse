@@ -210,7 +210,7 @@ export class LLamaModelDefinition implements ModelDefinition<LLamaPrompt> {
         const splits = options.model.split("/");
         const modelName = splits[splits.length - 1];
 
-        let conversation = updateConversation(options.conversation as LLamaPrompt, prompt);
+        const conversation = updateConversation(options.conversation as LLamaPrompt, prompt);
 
         const modelOptions = options.model_options as TextFallbackOptions;
 

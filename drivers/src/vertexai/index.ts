@@ -281,7 +281,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             parent: `projects/${this.options.project}/locations/${this.options.region}`,
         });
         const publisherPromises = publishers.map(async (publisher) => {
-            let [response] = await modelGarden.listPublisherModels({
+            const [response] = await modelGarden.listPublisherModels({
                 parent: `publishers/${publisher}`,
                 orderBy: "name",
                 listAllVersions: true,
