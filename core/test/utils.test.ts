@@ -2,8 +2,8 @@ import Ajv from 'ajv';
 import fs, { readFileSync } from 'fs';
 import { describe, expect, test } from "vitest";
 import { extractAndParseJSON, parseJSON } from "../src/json";
-import { CompletionResult, JSONArray, JSONObject, JsonResult } from '@llumiverse/common';
-import { validateResult } from '../src/validation';
+import { JSONArray, JSONObject, JsonResult } from '@llumiverse/common';
+import { validateResult, ValidationError } from '../src/validation';
 import { readDataFile } from './utils';
 
 describe('Core Utilities', () => {
@@ -48,7 +48,7 @@ describe('Core Utilities', () => {
     test('Fail at validating JSON against schema', () => {
         const schema = parseJSON(readDataFile('ciia-schema.json')) as any;
         const content: JsonResult[] = [{ type: "json", value: parseJSON(readDataFile('ciia-data-wrong.json')) }];
-        expect(() => validateResult(content, schema)).toThrowError('validation_error');
+        expect(() => validateResult(content, schema)).toThrowError(ValidationError);
     });
 
     test('JSON parser should coerce types', () => {
@@ -75,14 +75,14 @@ describe('Core Utilities', () => {
     test('JSON parser should not validate if date is wrong', () => {
         const schema = parseJSON(readDataFile('ciia-schema.json')) as any;
         const content: JsonResult[] = [{ type: "json", value: parseJSON(readDataFile('ciia-data-date-wrong.json')) }];
-        expect(() => validateResult(content, schema)).toThrowError('validation_error');
+        expect(() => validateResult(content, schema)).toThrowError(ValidationError);
         console.debug(content, schema);
     });
 
     test('JSON parser should not validate if date is required but null', () => {
         const schema = parseJSON(readDataFile('ciia-schema-date-required.json')) as any;
         const content: JsonResult[] = [{ type: "json", value: parseJSON(readDataFile('ciia-data-date-empty.json')) }];
-        expect(() => validateResult(content, schema)).toThrowError('validation_error');
+        expect(() => validateResult(content, schema)).toThrowError(ValidationError);
         console.debug(content, schema);
     });
 
