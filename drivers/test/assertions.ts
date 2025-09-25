@@ -24,11 +24,14 @@ export async function assertStreamingCompletionOk(stream: CompletionStream, json
     const out: string[] = []
     for await (const chunk of stream) {
         out.push(chunk)
+        console.log(chunk)
     }
-
+    console.log(out.join());
     const r = stream.completion as ExecutionResponse;
-    const jsonObject = jsonMode ? extractAndParseJSON(out.join('')) : undefined;
+    const jsonObject = jsonMode ? extractAndParseJSON(out.join()) : undefined;
     const jsonResult = jsonMode ? parseResultAsJson(r.result) : undefined;
+    console.log(jsonObject);
+    console.log(jsonResult);
     if (jsonMode) {
         expect(jsonResult).toStrictEqual(jsonObject);
     }
