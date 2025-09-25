@@ -714,7 +714,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
     async requestTextCompletion(driver: VertexAIDriver, prompt: GenerateContentPrompt, options: ExecutionOptions): Promise<Completion> {
         const splits = options.model.split("/");
         let region: string | undefined = undefined;
-        if (splits[0] !== "locations" && splits.length >= 2) {
+        if (splits[0] === "locations" && splits.length >= 2) {
             region = splits[1];
         } 
         const modelName = splits[splits.length - 1];
@@ -778,7 +778,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
     async requestTextCompletionStream(driver: VertexAIDriver, prompt: GenerateContentPrompt, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         const splits = options.model.split("/");
         let region: string | undefined = undefined;
-        if (splits[0] !== "locations" && splits.length >= 2) {
+        if (splits[0] === "locations" && splits.length >= 2) {
             region = splits[1];
         } 
         const modelName = splits[splits.length - 1];
