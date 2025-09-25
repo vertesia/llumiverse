@@ -115,8 +115,9 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
 
         return transformSSEStream(stream, (data: string) => {
             const json = JSON.parse(data);
+            const content = json.choices[0]?.delta.content;
             return {
-                result: json.choices[0]?.delta.content ?? '',
+                result: content ? [{ type: "text", value: content }] : [],
                 finish_reason: json.choices[0]?.finish_reason,      //Uses expected "stop" , "length" format
                 token_usage: {
                     prompt: json.usage?.prompt_tokens,
