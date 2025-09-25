@@ -236,7 +236,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
             this.service.models.versions.list(owner, model),
         ]);
 
-        if (!rModel || !versions || versions.length === 0) {
+        if (!rModel || !versions || (versions as any).results?.length === 0) {
             throw new Error("Model not found or no versions available");
         }
 
