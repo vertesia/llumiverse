@@ -103,7 +103,7 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
         return transformSSEStream(stream, (data: string) => {
             const json = JSON.parse(data);
             return {
-                result: json.choices[0]?.text ?? '',
+                result: [{ type: "text", value: json.choices[0]?.text ?? '' }],
                 finish_reason: json.choices[0]?.finish_reason,          //Uses expected "stop" , "length" format
                 token_usage: {
                     prompt: json.usage?.prompt_tokens,
