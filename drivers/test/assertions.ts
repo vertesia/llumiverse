@@ -15,7 +15,7 @@ export function assertCompletionOk(r: ExecutionResponse, model?: string, driver?
     }
     expect(r.finish_reason).toBeTruthy();
     //if r.result is string, it should be longer than 2
-    const stringResult = r.result.map(resultAsString).join();
+    const stringResult = r.result.map(resultAsString).join("");
     expect(stringResult.length).toBeGreaterThan(2);
 }
 
@@ -26,9 +26,9 @@ export async function assertStreamingCompletionOk(stream: CompletionStream, json
         out.push(chunk)
         console.log(chunk)
     }
-    console.log(out.join());
+    console.log(out.join(""));
     const r = stream.completion as ExecutionResponse;
-    const jsonObject = jsonMode ? extractAndParseJSON(out.join()) : undefined;
+    const jsonObject = jsonMode ? extractAndParseJSON(out.join("")) : undefined;
     const jsonResult = jsonMode ? parseResultAsJson(r.result) : undefined;
     console.log(jsonObject);
     console.log(jsonResult);
@@ -40,7 +40,7 @@ export async function assertStreamingCompletionOk(stream: CompletionStream, json
     expect(r.prompt).toBeTruthy();
     expect(r.token_usage).toBeTruthy();
     expect(r.finish_reason).toBeTruthy();
-    const stringResult = r.result.map(resultAsString).join();
+    const stringResult = r.result.map(resultAsString).join("");
     expect(stringResult.length).toBeGreaterThan(2);
 
     return out;

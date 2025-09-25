@@ -35,7 +35,7 @@ export function validateResult(data: CompletionResult[], schema: Object) : Compl
         if (jsonResults.length > 0) {
             json = jsonResults[0].value;
         } else {
-            const stringResult = data.map(resultAsString).join();
+            const stringResult = data.map(resultAsString).join("");
             try {
                 json = extractAndParseJSON(stringResult);
             } catch (error: any) {

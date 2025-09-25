@@ -240,7 +240,7 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
             tool_use_id: tool_use[0].id,
             content: "15 degrees"
         } satisfies PromptSegment], { ...options, conversation: r.conversation });
-        const stringResult = r.result.map(resultAsString).join();
+        const stringResult = r.result.map(resultAsString).join("");
         expect(stringResult.includes("15 degrees")).toBeTruthy();
         //console.log("#######Result:", r.result, model);
     });

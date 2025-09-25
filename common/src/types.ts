@@ -196,7 +196,7 @@ export function parseResultAsJson(results: CompletionResult[]): any {
         //TODO: Handle multiple json type results
     }
 
-    const textResults = results.filter(r => r.type === "text").join();
+    const textResults = results.filter(r => r.type === "text").join("");
     try {
         return JSON.parse(textResults);
     }
