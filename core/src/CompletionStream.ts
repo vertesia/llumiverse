@@ -45,7 +45,7 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
                             promptTokens = Math.max(promptTokens, chunk.token_usage.prompt ?? 0);
                             resultTokens = Math.max(resultTokens ?? 0, chunk.token_usage.result ?? 0);
                         }
-                        if (chunk.result) {
+                        if (Array.isArray(chunk.result) && chunk.result.length > 0) {
                             // Process each result in the chunk, combining consecutive text/JSON
                             for (const result of chunk.result) {
                                 // Check if we can combine with the last accumulated result
@@ -85,26 +85,24 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
 
                             // Convert CompletionResult[] to string for streaming
                             // Only yield if we have results to show
-                            if (chunk.result.length > 0) {
-                                const resultText = chunk.result.map(r => {
-                                    switch (r.type) {
-                                        case 'text':
-                                            return r.value;
-                                        case 'json':
-                                            return JSON.stringify(r.value);
-                                        case 'image':
-                                            // Show truncated image placeholder for streaming
-                                            const truncatedValue = typeof r.value === 'string' ? r.value.slice(0, 10) : String(r.value).slice(0, 10);
-                                            return `\n[Image: ${truncatedValue}...]\n`;
-                                        default:
-                                            return String((r as any).value || '');
-                                    }
-                                }).join('');
-
-                                if (resultText) {
-                                    this.chunks++;
-                                    yield resultText;
+                            const resultText = chunk.result.map(r => {
+                                switch (r.type) {
+                                    case 'text':
+                                        return r.value;
+                                    case 'json':
+                                        return JSON.stringify(r.value);
+                                    case 'image':
+                                        // Show truncated image placeholder for streaming
+                                        const truncatedValue = typeof r.value === 'string' ? r.value.slice(0, 10) : String(r.value).slice(0, 10);
+                                        return `\n[Image: ${truncatedValue}...]\n`;
+                                    default:
+                                        return String((r as any).value || '');
                                 }
+                            }).join('');
+
+                            if (resultText) {
+                                this.chunks++;
+                                yield resultText;
                             }
                         }
                     }
