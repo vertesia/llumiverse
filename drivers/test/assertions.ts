@@ -1,6 +1,6 @@
 
 import { Bedrock } from '@aws-sdk/client-bedrock';
-import { AbstractDriver, CompletionStream, ExecutionResponse, extractAndParseJSON, resultAsString } from '@llumiverse/core';
+import { AbstractDriver, CompletionStream, ExecutionResponse, extractAndParseJSON, parseResultAsJson, resultAsString } from '@llumiverse/core';
 import { expect } from "vitest";
 import { BedrockDriver } from '../src';
 
@@ -28,8 +28,10 @@ export async function assertStreamingCompletionOk(stream: CompletionStream, json
 
     const r = stream.completion as ExecutionResponse;
     const jsonObject = jsonMode ? extractAndParseJSON(out.join('')) : undefined;
-
-    if (jsonMode) expect(r.result).toStrictEqual(jsonObject);
+    const jsonResult = jsonMode ? parseResultAsJson(r.result) : undefined;
+    if (jsonMode) {
+        expect(jsonResult).toStrictEqual(jsonObject);
+    }
     
     expect(r.error).toBeFalsy();
     expect(r.prompt).toBeTruthy();
