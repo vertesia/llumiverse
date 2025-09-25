@@ -88,7 +88,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
 
         const source = new EventSource(prediction.urls.stream!);
         source.addEventListener("output", (e: any) => {
-            stream.push(e.data);
+            stream.push({result: [{ type: "text", value: e.data }] });
         });
         source.addEventListener("error", (e: any) => {
             let error: any;
@@ -136,9 +136,9 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
         //not streaming, wait for the result
         const res = await this.service.wait(prediction, {});
 
-        const text = res.output.join("");
+        const text: string = res.output.join("");
         return {
-            result: text,
+            result: [{ type: "text" as const, value: text }],
             original_response: options.include_original_response ? res : undefined,
         };
     }
