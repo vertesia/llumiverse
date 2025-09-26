@@ -1,4 +1,4 @@
-import { AIModel, AbstractDriver, ExecutionOptions, Modalities, PromptRole, PromptSegment } from '@llumiverse/core';
+import { AIModel, AbstractDriver, ExecutionOptions, Modalities, PromptRole, PromptSegment, completionResultToString } from '@llumiverse/core';
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from "vitest";
@@ -27,7 +27,7 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
             region: process.env.GOOGLE_REGION as string,
         }),
         models: [
-            "gemini-1.5-pro",
+            "publishers/google/models/gemini-2.5-flash",
             "publishers/anthropic/models/claude-3-7-sonnet",
         ]
     })
@@ -112,7 +112,7 @@ if (process.env.BEDROCK_REGION) {
         }),
         //Use foundation models and inference profiles to test the driver
         models: [
-            "anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
             //"us.writer.palmyra-x5-v1:0" // Only in us-west-2
         ],
     });
@@ -240,7 +240,8 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
             tool_use_id: tool_use[0].id,
             content: "15 degrees"
         } satisfies PromptSegment], { ...options, conversation: r.conversation });
-        expect(r.result.includes("15 degrees")).toBeTruthy();
+        const stringResult = r.result.map(completionResultToString).join("");
+        expect(stringResult.includes("15 degrees")).toBeTruthy();
         //console.log("#######Result:", r.result, model);
     });
 

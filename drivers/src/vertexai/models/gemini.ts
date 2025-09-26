@@ -1,10 +1,10 @@
 import {
-    Content, FinishReason, FunctionCallingConfigMode, FunctionDeclaration, GenerateContentParameters,
+    Content, FinishReason, FunctionCallingConfigMode, FunctionDeclaration, GenerateContentConfig, GenerateContentParameters,
     GenerateContentResponseUsageMetadata,
     HarmBlockThreshold, HarmCategory, Part, SafetySetting, Schema, Tool, Type
 } from "@google/genai";
 import {
-    AIModel, Completion, CompletionChunkObject, ExecutionOptions,
+    AIModel, Completion, CompletionChunkObject, CompletionResult, ExecutionOptions,
     ExecutionTokenUsage, getMaxTokensLimitVertexAi, JSONObject, JSONSchema, ModelType, PromptOptions, PromptRole,
     PromptSegment, readStreamAsBase64, StatelessExecutionOptions, ToolDefinition, ToolUse,
     VertexAIGeminiOptions
@@ -55,37 +55,43 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
         || model_options?.thinking_budget_tokens
         || options.model.includes("gemini-2.5");
 
+    const configNanoBanana: GenerateContentConfig = {
+        responseModalities: ["TEXT", "IMAGE"]
+    }
+
+    const config: GenerateContentConfig = {
+        systemInstruction: prompt.system,
+        safetySettings: geminiSafetySettings,
+        tools: tools ? [tools] : undefined,
+        toolConfig: tools ? {
+            functionCallingConfig: {
+                mode: FunctionCallingConfigMode.AUTO,
+            }
+        } : undefined,
+        candidateCount: 1,
+        //JSON/Structured output
+        responseMimeType: useStructuredOutput ? "application/json" : undefined,
+        responseSchema: useStructuredOutput ? parseJSONtoSchema(options.result_schema, true) : undefined,
+        //Model options
+        temperature: model_options?.temperature,
+        topP: model_options?.top_p,
+        topK: model_options?.top_k,
+        maxOutputTokens: geminiMaxTokens(options),
+        stopSequences: model_options?.stop_sequence,
+        presencePenalty: model_options?.presence_penalty,
+        frequencyPenalty: model_options?.frequency_penalty,
+        seed: model_options?.seed,
+        thinkingConfig: thinkingConfigNeeded ?
+            {
+                includeThoughts: model_options?.include_thoughts ?? false,
+                thinkingBudget: geminiThinkingBudget(options),
+            } : undefined,
+    }
+
     return {
         model: options.model,
         contents: prompt.contents,
-        config: {
-            systemInstruction: prompt.system,
-            safetySettings: geminiSafetySettings,
-            tools: tools ? [tools] : undefined,
-            toolConfig: tools ? {
-                functionCallingConfig: {
-                    mode: FunctionCallingConfigMode.AUTO,
-                }
-            } : undefined,
-            candidateCount: 1,
-            //JSON/Structured output
-            responseMimeType: useStructuredOutput ? "application/json" : undefined,
-            responseSchema: useStructuredOutput ? parseJSONtoSchema(options.result_schema, true) : undefined,
-            //Model options
-            temperature: model_options?.temperature,
-            topP: model_options?.top_p,
-            topK: model_options?.top_k,
-            maxOutputTokens: geminiMaxTokens(options),
-            stopSequences: model_options?.stop_sequence,
-            presencePenalty: model_options?.presence_penalty,
-            frequencyPenalty: model_options?.frequency_penalty,
-            seed: model_options?.seed,
-            thinkingConfig: thinkingConfigNeeded ?
-                {
-                    includeThoughts: model_options?.include_thoughts ?? false,
-                    thinkingBudget: geminiThinkingBudget(options),
-                } : undefined,
-        }
+        config: options.model.toLowerCase().includes("image") ? configNanoBanana : config,
     };
 }
 
@@ -341,7 +347,7 @@ function cleanEmptyFieldsContent(content: Content, result_schema?: JSONSchema): 
                 const jsonText = JSON.parse(part.text);
                 // Skip cleaning if not an object
                 if (typeof jsonText === 'object' && jsonText !== null && !Array.isArray(jsonText)) {
-                    const cleanedJson = removeEmptyFields(jsonText, result_schema);       
+                    const cleanedJson = removeEmptyFields(jsonText, result_schema);
                     newPart.text = JSON.stringify(cleanedJson);
                 } else {
                     // Keep original if not an object (string, number, array, etc.)
@@ -376,14 +382,14 @@ function removeEmptyFields(object: JSONObject | any[], schema: JSONSchema): JSON
     if (typeof object == 'object' || object === null) {
         return removeEmptyJSONObject(object, schema);
     }
-    
+
     return object;
 }
 
 function removeEmptyJSONObject(object: JSONObject, schema: JSONSchema): JSONObject {
     // Get the original required properties from schema
     const requiredProps = schema.required || [];
-    const cleanedResult: JSONObject = {...object};
+    const cleanedResult: JSONObject = { ...object };
 
     // Process each property
     for (const [key, value] of Object.entries(object)) {
@@ -407,24 +413,46 @@ function removeEmptyJSONObject(object: JSONObject, schema: JSONSchema): JSONObje
 
 function removeEmptyJSONArray(array: any[], schema: JSONSchema): any[] {
     const cleanedArray = array.map(item => {
-        return removeEmptyFields(item, schema); 
+        return removeEmptyFields(item, schema);
     });
 
     // Filter out empty objects from the array
     return cleanedArray.filter(item => !isEmpty(item));
 }
 
-function collectTextParts(content: Content) {
-    const out = [];
+function collectTextParts(content: Content): CompletionResult[] {
+    const results: CompletionResult[] = [];
     const parts = content.parts;
     if (parts) {
         for (const part of parts) {
             if (part.text) {
-                out.push(part.text);
+                results.push({
+                    type: "text",
+                    value: part.text
+                });
             }
         }
     }
-    return out.join('\n');
+    return results;
+}
+
+function collectInlineDataParts(content: Content): CompletionResult[] {
+    const results: CompletionResult[] = [];
+    const parts = content.parts;
+    if (parts) {
+        for (const part of parts) {
+            if (part.inlineData) {
+                const base64ImageBytes: string = part.inlineData.data ?? "";
+                const mimeType = part.inlineData.mimeType ?? "image/png";
+                const imageUrl = `data:${mimeType};base64,${base64ImageBytes}`;
+                results.push({
+                    type: "image",
+                    value: imageUrl
+                });
+            }
+        }
+    }
+    return results;
 }
 
 function collectToolUseParts(content: Content): ToolUse[] | undefined {
@@ -445,7 +473,7 @@ function collectToolUseParts(content: Content): ToolUse[] | undefined {
 export function mergeConsecutiveRole(contents: Content[] | undefined): Content[] {
     if (!contents || contents.length === 0) return [];
 
-    const needsMerging = contents.some((content, i) => 
+    const needsMerging = contents.some((content, i) =>
         i < contents.length - 1 && content.role === contents[i + 1].role
     );
     // If no merging needed, return original array
@@ -526,8 +554,16 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             return { result, options };
         }
         try {
-            const jsonResult = JSON.parse(result.result);
-            result.result = JSON.stringify(removeEmptyFields(jsonResult, options.result_schema));
+            // Extract text content for JSON processing - only process first text result
+            const textResult = result.result.find(r => r.type === 'text')?.value;
+            if (textResult) {
+                const jsonResult = JSON.parse(textResult);
+                const cleanedJson = JSON.stringify(removeEmptyFields(jsonResult, options.result_schema));
+                // Replace the text result with cleaned version
+                result.result = result.result.map(r =>
+                    r.type === 'text' ? { ...r, value: cleanedJson } : r
+                );
+            }
             return { result, options };
         } catch (error) {
             // Log error during processing but don't fail the completion
@@ -545,7 +581,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const schema = options.result_schema;
         let contents: Content[] = [];
         let system: Content | undefined = { role: "user", parts: [] }; // Single content block for system messages
-        
+
         const safety: Content[] = [];
 
         for (const msg of segments) {
@@ -558,7 +594,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
                 if (msg.content) {
                     system.parts?.push({
-                      text: msg.content
+                        text: msg.content
                     });
                 }
             } else if (msg.role === PromptRole.tool) {
@@ -632,7 +668,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 }
             }
         }
-        
+
         // If no system messages, set system to undefined.
         if (!system.parts || system.parts.length === 0) {
             system = undefined;
@@ -645,7 +681,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         // Merge consecutive messages with the same role. Note: this may not be necessary, works without it, keeping to match previous behavior.
         contents = mergeConsecutiveRole(contents);
-        
+
         return { contents, system };
     }
 
@@ -659,7 +695,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         tokenUsage.result = (usageMetadata.candidatesTokenCount ?? 0)
             + (usageMetadata.thoughtsTokenCount ?? 0)
             + (usageMetadata.toolUsePromptTokenCount ?? 0);
-        
+
         if ((tokenUsage.total ?? 0) != (tokenUsage.prompt ?? 0) + tokenUsage.result) {
             console.warn("[VertexAI] Gemini token usage mismatch: total does not equal prompt + result", {
                 total: tokenUsage.total,
@@ -667,7 +703,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 result: tokenUsage.result
             });
         }
-        
+
         if (!tokenUsage.result) {
             tokenUsage.result = undefined; // If no result, mark as undefined
         }
@@ -677,13 +713,21 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
     async requestTextCompletion(driver: VertexAIDriver, prompt: GenerateContentPrompt, options: ExecutionOptions): Promise<Completion> {
         const splits = options.model.split("/");
+        let region: string | undefined = undefined;
+        if (splits[0] === "locations" && splits.length >= 2) {
+            region = splits[1];
+        } 
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
 
         let conversation = updateConversation(options.conversation as Content[], prompt.contents);
         prompt.contents = conversation;
 
-        const client = driver.getGoogleGenAIClient();
+        if (options.model.includes("gemini-2.5-flash-image")) {
+            region = "global"; // Gemini Flash Image only available in global region, this is for nano-banana model
+        }
+
+        const client = driver.getGoogleGenAIClient(region);
 
         const payload = getGeminiPayload(options, prompt);
         const response = await client.models.generateContent(payload);
@@ -712,19 +756,21 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
                 // We clean the content before validation, so we can update the conversation.
                 const cleanedContent = cleanEmptyFieldsContent(content, options.result_schema);
-                result = collectTextParts(cleanedContent);
+                const textResults = collectTextParts(cleanedContent);
+                const imageResults = collectInlineDataParts(cleanedContent);
+                result = [...textResults, ...imageResults];
                 conversation = updateConversation(conversation, [cleanedContent]);
             }
         }
 
-        
+
 
         if (tool_use) {
             finish_reason = "tool_use";
         }
 
         return {
-            result: result ?? '',
+            result: result && result.length > 0 ? result : [{ type: "text" as const, value: '' }],
             token_usage: token_usage,
             finish_reason: finish_reason,
             original_response: options.include_original_response ? response : undefined,
@@ -735,10 +781,18 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
     async requestTextCompletionStream(driver: VertexAIDriver, prompt: GenerateContentPrompt, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         const splits = options.model.split("/");
+        let region: string | undefined = undefined;
+        if (splits[0] === "locations" && splits.length >= 2) {
+            region = splits[1];
+        } 
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
 
-        const client = driver.getGoogleGenAIClient();
+        if (options.model.includes("gemini-2.5-flash-image")) {
+            region = "global"; // Gemini Flash Image only available in global region, this is for nano-banana model
+        }
+
+        const client = driver.getGoogleGenAIClient(region);
 
         const payload = getGeminiPayload(options, prompt);
         const response = await client.models.generateContentStream(payload);
@@ -760,13 +814,15 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                             + `content: ${JSON.stringify(candidate.content, null, 2)}, safety: ${JSON.stringify(candidate.safetyRatings, null, 2)}`);
                     }
                     if (candidate.content?.role === 'model') {
-                        const text = collectTextParts(candidate.content);
+                        const textResults = collectTextParts(candidate.content);
+                        const imageResults = collectInlineDataParts(candidate.content);
+                        const combinedResults = [...textResults, ...imageResults];
                         tool_use = collectToolUseParts(candidate.content);
                         if (tool_use) {
                             finish_reason = "tool_use";
                         }
                         return {
-                            result: text,
+                            result: combinedResults.length > 0 ? combinedResults : [],
                             token_usage: token_usage,
                             finish_reason: finish_reason,
                             tool_use,
@@ -776,7 +832,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             }
             //No normal output, returning block reason if it exists.
             return {
-                result: item.promptFeedback?.blockReasonMessage ?? "",
+                result: item.promptFeedback?.blockReasonMessage ? [{ type: "text" as const, value: item.promptFeedback.blockReasonMessage }] : [],
                 finish_reason: item.promptFeedback?.blockReason ?? "",
                 token_usage: token_usage,
             };

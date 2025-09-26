@@ -3,6 +3,7 @@ import {
     AbstractDriver,
     Completion,
     CompletionChunkObject,
+    CompletionResult,
     DataSource,
     DriverOptions,
     EmbeddingsOptions,
@@ -28,7 +29,12 @@ import OpenAI, { AzureOpenAI } from "openai";
 import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { Stream } from "openai/streaming";
 
-//TODO: Do we need a list?, replace with if statements and modernise?
+// Helper function to convert string to CompletionResult[]
+function textToCompletionResult(text: string): CompletionResult[] {
+    return text ? [{ type: "text", value: text }] : [];
+}
+
+//TODO: Do we need a list?, replace with if statements and modernize?
 const supportFineTunning = new Set([
     "gpt-3.5-turbo-1106",
     "gpt-3.5-turbo-0613",
@@ -75,14 +81,14 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         }
 
         return {
-            result: data,
+            result: textToCompletionResult(data || ''),
             token_usage: tokenInfo,
             finish_reason: openAiFinishReason(choice.finish_reason),
             tool_use: tools,
         };
     }
 
-    async requestTextCompletionStream(prompt: ChatCompletionMessageParam[], options: ExecutionOptions): Promise<AsyncIterable<Completion>> {
+    async requestTextCompletionStream(prompt: ChatCompletionMessageParam[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         if (options.model_options?._option_id !== "openai-text" && options.model_options?._option_id !== "openai-thinking") {
             this.logger.warn("Invalid model options", { options: options.model_options });
         }
@@ -99,7 +105,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             }
 
             return {
-                result: result,
+                result: textToCompletionResult(result),
                 finish_reason: openAiFinishReason(chunk.choices[0]?.finish_reason ?? undefined),         //Uses expected "stop" , "length" format
                 token_usage: {
                     prompt: chunk.usage?.prompt_tokens,
@@ -135,8 +141,6 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             reasoning_effort: model_options?.reasoning_effort,
             temperature: model_options?.temperature,
             top_p: model_options?.top_p,
-            //top_logprobs: options.top_logprobs,       //Logprobs output currently not supported
-            //logprobs: options.top_logprobs ? true : false,
             presence_penalty: model_options?.presence_penalty,
             frequency_penalty: model_options?.frequency_penalty,
             n: 1,
@@ -192,8 +196,6 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             reasoning_effort: model_options?.reasoning_effort,
             temperature: model_options?.temperature,
             top_p: model_options?.top_p,
-            //top_logprobs: options.top_logprobs,       //Logprobs output currently not supported
-            //logprobs: options.top_logprobs ? true : false,
             presence_penalty: model_options?.presence_penalty,
             frequency_penalty: model_options?.frequency_penalty,
             n: 1,

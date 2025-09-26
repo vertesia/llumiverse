@@ -27,8 +27,7 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
             region: process.env.GOOGLE_REGION as string,
         }),
         models: [
-            "publishers/google/models/gemini-2.0-flash-lite-001",
-           // "gemini-1.5-flash", //legacy id format
+            "publishers/google/models/gemini-2.5-flash-lite",
             "publishers/anthropic/models/claude-3-7-sonnet",
             "publishers/meta/models/llama-4-scout-17b-16e-instruct-maas"
         ]
@@ -117,7 +116,7 @@ if (process.env.BEDROCK_REGION) {
         }),
         //Use foundation models and inference profiles to test the driver
         models: [
-            "anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
             "us.meta.llama3-3-70b-instruct-v1:0",
             "us.amazon.nova-micro-v1:0",
             "ai21.jamba-1-5-mini-v1:0",

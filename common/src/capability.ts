@@ -5,6 +5,13 @@ import { getModelCapabilitiesVertexAI } from "./capability/vertexai.js";
 import { ModelCapabilities, ModelModalities, Providers } from "./types.js";
 
 export function getModelCapabilities(model: string, provider?: string | Providers): ModelCapabilities {
+    //Check for locations/<location>/ prefix and remove it
+    if (model.startsWith("locations/")) {
+        const parts = model.split("/");
+        if (parts.length >= 3) {
+            model = parts.slice(2).join("/");
+        }
+    }
     const capabilities = _getModelCapabilities(model, provider);
     // Globally disable audio and video for all models, as we don't support them yet
     // We also do not support tool use while streaming

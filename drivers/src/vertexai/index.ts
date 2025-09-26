@@ -2,11 +2,10 @@ import {
     AIModel,
     AbstractDriver,
     Completion,
-    CompletionChunk,
+    CompletionChunkObject,
     DriverOptions,
     EmbeddingsResult,
     ExecutionOptions,
-    ImageGeneration,
     Modalities,
     ModelSearchPayload,
     PromptSegment,
@@ -23,7 +22,7 @@ import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
 import { PredictionServiceClient, v1beta1 } from "@google-cloud/aiplatform";
 import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { ImagenModelDefinition, ImagenPrompt } from "./models/imagen.js";
-import { GoogleGenAI, Content } from "@google/genai";
+import { GoogleGenAI, Content, Model } from "@google/genai";
 
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
@@ -54,7 +53,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     googleGenAI: GoogleGenAI | undefined;
     llamaClient: FetchClient & { region?: string } | undefined;
     modelGarden: v1beta1.ModelGardenServiceClient | undefined;
-    imagenClient: PredictionServiceClient| undefined;
+    imagenClient: PredictionServiceClient | undefined;
 
     authClient: JSONClient | GoogleAuth<JSONClient>;
 
@@ -72,12 +71,23 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         this.authClient = options.googleAuthOptions?.authClient ?? new GoogleAuth(options.googleAuthOptions);
     }
 
-    public getGoogleGenAIClient(): GoogleGenAI {
-        //Lazy initialisation
+    public getGoogleGenAIClient(region: string = this.options.region): GoogleGenAI {
+        //Lazy initialization
+        if (region !== this.options.region) {
+            //Get one off client for different region
+            return new GoogleGenAI({
+                project: this.options.project,
+                location: region,
+                vertexai: true,
+                googleAuthOptions: {
+                    authClient: this.authClient as JSONClient,
+                }
+            });
+        }
         if (!this.googleGenAI) {
             this.googleGenAI = new GoogleGenAI({
                 project: this.options.project,
-                location: this.options.region,
+                location: region,
                 vertexai: true,
                 googleAuthOptions: {
                     authClient: this.authClient as JSONClient,
@@ -88,7 +98,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     public getFetchClient(): FetchClient {
-        //Lazy initialisation
+        //Lazy initialization
         if (!this.fetchClient) {
             this.fetchClient = createFetchClient({
                 region: this.options.region,
@@ -103,7 +113,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     public getLLamaClient(region: string = "us-central1"): FetchClient {
-        //Lazy initialisation
+        //Lazy initialization
         if (!this.llamaClient || this.llamaClient["region"] !== region) {
             this.llamaClient = createFetchClient({
                 region: region,
@@ -121,7 +131,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     public getAnthropicClient(): AnthropicVertex {
-        //Lazy initialisation
+        //Lazy initialization
         if (!this.anthropicClient) {
             this.anthropicClient = new AnthropicVertex({
                 timeout: 20 * 60 * 10000, // Set to 20 minutes, 10 minute default, setting this disables long request error: https://github.com/anthropics/anthropic-sdk-typescript?#long-requests
@@ -138,7 +148,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     public getAIPlatformClient(): v1beta1.ModelServiceClient {
-        //Lazy initialisation
+        //Lazy initialization
         if (!this.aiplatform) {
             this.aiplatform = new v1beta1.ModelServiceClient({
                 projectId: this.options.project,
@@ -150,7 +160,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     public getModelGardenClient(): v1beta1.ModelGardenServiceClient {
-        //Lazy initialisation
+        //Lazy initialization
         if (!this.modelGarden) {
             this.modelGarden = new v1beta1.ModelGardenServiceClient({
                 projectId: this.options.project,
@@ -162,7 +172,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     public getImagenClient(): PredictionServiceClient {
-        //Lazy initialisation
+        //Lazy initialization
         if (!this.imagenClient) {
             // TODO: make location configurable, fixed to us-central1 for now
             this.imagenClient = new PredictionServiceClient({
@@ -200,29 +210,39 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return getModelDefinition(options.model).createPrompt(this, segments, options);
     }
 
-    async requestTextCompletion(prompt: VertexAIPrompt, options: ExecutionOptions): Promise<Completion<any>> {
+    async requestTextCompletion(prompt: VertexAIPrompt, options: ExecutionOptions): Promise<Completion> {
         return getModelDefinition(options.model).requestTextCompletion(this, prompt, options);
     }
     async requestTextCompletionStream(
         prompt: VertexAIPrompt,
         options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunk>> {
+    ): Promise<AsyncIterable<CompletionChunkObject>> {
         return getModelDefinition(options.model).requestTextCompletionStream(this, prompt, options);
     }
 
     async requestImageGeneration(
         _prompt: ImagenPrompt,
         _options: ExecutionOptions,
-    ): Promise<Completion<ImageGeneration>> {
+    ): Promise<Completion> {
         const splits = _options.model.split("/");
         const modelName = trimModelName(splits[splits.length - 1]);
         return new ImagenModelDefinition(modelName).requestImageGeneration(this, _prompt, _options);
+    }
+
+    async getGenAIModelsArray(client: GoogleGenAI): Promise<Model[]> {
+        const models: Model[] = [];
+        const pager = await client.models.list();
+        for await (const item of pager) {
+            models.push(item);
+        }
+        return models;
     }
 
     async listModels(_params?: ModelSearchPayload): Promise<AIModel<string>[]> {
         // Get clients
         const modelGarden = this.getModelGardenClient();
         const aiplatform = this.getAIPlatformClient();
+        const globalGenAiClient = this.getGoogleGenAIClient("global");
 
         let models: AIModel<string>[] = [];
 
@@ -261,16 +281,19 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             parent: `projects/${this.options.project}/locations/${this.options.region}`,
         });
         const publisherPromises = publishers.map(async (publisher) => {
-            let [response] = await modelGarden.listPublisherModels({
+            const [response] = await modelGarden.listPublisherModels({
                 parent: `publishers/${publisher}`,
                 orderBy: "name",
                 listAllVersions: true,
             });
             return { publisher, response };
         });
+
+        const globalGooglePromise = this.getGenAIModelsArray(globalGenAiClient);
         // Await all network requests
-        const [aiplatformResult, ...publisherResults] = await Promise.all([
+        const [aiplatformResult, globalGoogleResult, ...publisherResults] = await Promise.all([
             aiplatformPromise,
+            globalGooglePromise,
             ...publisherPromises,
         ]);
 
@@ -281,7 +304,23 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 id: model.name?.split("/").pop() ?? "",
                 name: model.displayName ?? "",
                 provider: "vertexai"
-            })),
+            }))
+        );
+
+        // Process global google models from GenAI
+        models = models.concat(
+            globalGoogleResult.map((model) => {
+                const modelCapability = getModelCapabilities(model.name ?? '', "vertexai");
+                return {
+                    id: "locations/global/" + model.name,
+                    name: "Global " + model.name?.split('/').pop(),
+                    provider: "vertexai",
+                    owner: "google",
+                    input_modalities: modelModalitiesToArray(modelCapability.input),
+                    output_modalities: modelModalitiesToArray(modelCapability.output),
+                    tool_support: modelCapability.tool_support,
+                };
+            })
         );
 
         // Process publisher models
