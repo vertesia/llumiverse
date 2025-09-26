@@ -27,7 +27,7 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
             region: process.env.GOOGLE_REGION as string,
         }),
         models: [
-            "gemini-1.5-pro",
+            "publishers/google/models/gemini-2.5-flash",
             "publishers/anthropic/models/claude-3-7-sonnet",
         ]
     })
@@ -112,7 +112,7 @@ if (process.env.BEDROCK_REGION) {
         }),
         //Use foundation models and inference profiles to test the driver
         models: [
-            "anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
             //"us.writer.palmyra-x5-v1:0" // Only in us-west-2
         ],
     });
