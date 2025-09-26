@@ -1,6 +1,6 @@
 
 import { Bedrock } from '@aws-sdk/client-bedrock';
-import { AbstractDriver, CompletionStream, ExecutionResponse, extractAndParseJSON, parseResultAsJson, resultAsString } from '@llumiverse/core';
+import { AbstractDriver, CompletionStream, ExecutionResponse, extractAndParseJSON, parseCompletionResultsToJson, completionResultToString } from '@llumiverse/core';
 import { expect } from "vitest";
 import { BedrockDriver } from '../src';
 
@@ -15,7 +15,7 @@ export function assertCompletionOk(r: ExecutionResponse, model?: string, driver?
     }
     expect(r.finish_reason).toBeTruthy();
     //if r.result is string, it should be longer than 2
-    const stringResult = r.result.map(resultAsString).join("");
+    const stringResult = r.result.map(completionResultToString).join("");
     expect(stringResult.length).toBeGreaterThan(2);
 }
 
@@ -29,7 +29,7 @@ export async function assertStreamingCompletionOk(stream: CompletionStream, json
     console.log(out.join(""));
     const r = stream.completion as ExecutionResponse;
     const jsonObject = jsonMode ? extractAndParseJSON(out.join("")) : undefined;
-    const jsonResult = jsonMode ? parseResultAsJson(r.result) : undefined;
+    const jsonResult = jsonMode ? parseCompletionResultsToJson(r.result) : undefined;
     console.log(jsonObject);
     console.log(jsonResult);
     if (jsonMode) {
@@ -40,7 +40,7 @@ export async function assertStreamingCompletionOk(stream: CompletionStream, json
     expect(r.prompt).toBeTruthy();
     expect(r.token_usage).toBeTruthy();
     expect(r.finish_reason).toBeTruthy();
-    const stringResult = r.result.map(resultAsString).join("");
+    const stringResult = r.result.map(completionResultToString).join("");
     expect(stringResult.length).toBeGreaterThan(2);
 
     return out;
