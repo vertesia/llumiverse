@@ -1,4 +1,4 @@
-import { AIModel, AbstractDriver, ExecutionOptions, Modalities, PromptRole, PromptSegment, resultAsString } from '@llumiverse/core';
+import { AIModel, AbstractDriver, ExecutionOptions, Modalities, PromptRole, PromptSegment, completionResultToString } from '@llumiverse/core';
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from "vitest";
@@ -240,7 +240,7 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
             tool_use_id: tool_use[0].id,
             content: "15 degrees"
         } satisfies PromptSegment], { ...options, conversation: r.conversation });
-        const stringResult = r.result.map(resultAsString).join("");
+        const stringResult = r.result.map(completionResultToString).join("");
         expect(stringResult.includes("15 degrees")).toBeTruthy();
         //console.log("#######Result:", r.result, model);
     });
