@@ -1,4 +1,4 @@
-import { AIModel, AbstractDriver, Completion, CompletionChunk, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, PromptSegment, TextFallbackOptions } from "@llumiverse/core";
+import { AIModel, AbstractDriver, Completion, CompletionChunkObject, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, PromptSegment, TextFallbackOptions } from "@llumiverse/core";
 import { transformSSEStream } from "@llumiverse/core/async";
 import { getJSONSafetyNotice } from "@llumiverse/core/formatters";
 import { formatOpenAILikeTextPrompt, OpenAITextMessage } from "../openai/openai_format.js";
@@ -64,7 +64,7 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
 
     async requestTextCompletion(messages: OpenAITextMessage[], options: ExecutionOptions): Promise<Completion> {
         if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", {options: options.model_options });
+            this.logger.warn("Invalid model options", { options: options.model_options });
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
@@ -82,7 +82,7 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
         const result = choice.message.content;
 
         return {
-            result: result,
+            result: result ? [{ type: "text", value: result }] : [],
             token_usage: {
                 prompt: res.usage.prompt_tokens,
                 result: res.usage.completion_tokens,
@@ -93,9 +93,9 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
         };
     }
 
-    async requestTextCompletionStream(messages: OpenAITextMessage[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
+    async requestTextCompletionStream(messages: OpenAITextMessage[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", {options: options.model_options });
+            this.logger.warn("Invalid model options", { options: options.model_options });
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
@@ -115,8 +115,9 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
 
         return transformSSEStream(stream, (data: string) => {
             const json = JSON.parse(data);
+            const content = json.choices[0]?.delta.content;
             return {
-                result: json.choices[0]?.delta.content ?? '',
+                result: content ? [{ type: "text", value: content }] : [],
                 finish_reason: json.choices[0]?.finish_reason,      //Uses expected "stop" , "length" format
                 token_usage: {
                     prompt: json.usage?.prompt_tokens,
@@ -152,7 +153,7 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
         const r = await this.client.post('/v1/embeddings', {
             payload: {
                 model,
-                input: [ text ],
+                input: [text],
                 encoding_format: "float"
             },
         });

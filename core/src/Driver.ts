@@ -9,7 +9,7 @@ import { formatTextPrompt } from "./formatters/index.js";
 import {
     AIModel,
     Completion,
-    CompletionChunk,
+    CompletionChunkObject,
     CompletionStream,
     DataSource,
     DriverOptions,
@@ -17,7 +17,6 @@ import {
     EmbeddingsResult,
     ExecutionOptions,
     ExecutionResponse,
-    ImageGeneration,
     Logger,
     Modalities,
     ModelSearchPayload,
@@ -225,9 +224,9 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     abstract requestTextCompletion(prompt: PromptT, options: ExecutionOptions): Promise<Completion>;
 
-    abstract requestTextCompletionStream(prompt: PromptT, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>>;
+    abstract requestTextCompletionStream(prompt: PromptT, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>>;
 
-    async requestImageGeneration(_prompt: PromptT, _options: ExecutionOptions): Promise<Completion<ImageGeneration>> {
+    async requestImageGeneration(_prompt: PromptT, _options: ExecutionOptions): Promise<Completion> {
         throw new Error("Image generation not implemented.");
         //Cannot be made abstract, as abstract methods are required in the derived class
     }

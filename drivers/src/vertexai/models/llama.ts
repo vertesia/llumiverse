@@ -1,5 +1,5 @@
 import {
-    AIModel, Completion, CompletionChunk, CompletionChunkObject, ExecutionOptions, ModelType,
+    AIModel, Completion, CompletionChunkObject, ExecutionOptions, ModelType,
     PromptOptions, PromptRole, PromptSegment,
     TextFallbackOptions
 } from "@llumiverse/core";
@@ -195,7 +195,7 @@ export class LLamaModelDefinition implements ModelDefinition<LLamaPrompt> {
         });
 
         return {
-            result: text,
+            result: [{ type: "text", value: text }],
             token_usage: {
                 prompt: result.usage.prompt_tokens,
                 result: result.usage.completion_tokens,
@@ -206,11 +206,11 @@ export class LLamaModelDefinition implements ModelDefinition<LLamaPrompt> {
         };
     }
 
-    async requestTextCompletionStream(driver: VertexAIDriver, prompt: LLamaPrompt, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
+    async requestTextCompletionStream(driver: VertexAIDriver, prompt: LLamaPrompt, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         const splits = options.model.split("/");
         const modelName = splits[splits.length - 1];
 
-        let conversation = updateConversation(options.conversation as LLamaPrompt, prompt);
+        const conversation = updateConversation(options.conversation as LLamaPrompt, prompt);
 
         const modelOptions = options.model_options as TextFallbackOptions;
 
@@ -247,8 +247,9 @@ export class LLamaModelDefinition implements ModelDefinition<LLamaPrompt> {
         return transformSSEStream(stream, (data: string): CompletionChunkObject => {
             const json = JSON.parse(data) as LLamaStreamResponse;
             const choice = json.choices?.[0];
+            const content = choice?.delta?.content ?? '';
             return {
-                result: choice?.delta?.content ?? '',
+                result: content ? [{ type: "text", value: content }] : [],
                 finish_reason: choice?.finish_reason,
                 token_usage: json.usage ? {
                     prompt: json.usage.prompt_tokens,

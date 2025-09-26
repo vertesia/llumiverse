@@ -2,7 +2,7 @@ import { Ajv } from 'ajv';
 import addFormats from 'ajv-formats';
 import { extractAndParseJSON } from "./json.js";
 import { resolveField } from './resolver.js';
-import { ResultValidationError } from "@llumiverse/common";
+import { CompletionResult, completionResultToString, ResultValidationError } from "@llumiverse/common";
 
 
 const ajv = new Ajv({
@@ -28,17 +28,22 @@ export class ValidationError extends Error implements ResultValidationError {
     }
 }
 
-export function validateResult(data: any, schema: Object) {
+export function validateResult(data: CompletionResult[], schema: Object): CompletionResult[] {
     let json;
-
-    if (typeof data === "string") {
-        try {
-            json = extractAndParseJSON(data);
-        } catch (error: any) {
-            throw new ValidationError("json_error", error.message)
+    if (Array.isArray(data)) {
+        const jsonResults = data.filter(r => r.type === "json");
+        if (jsonResults.length > 0) {
+            json = jsonResults[0].value;
+        } else {
+            const stringResult = data.map(completionResultToString).join("");
+            try {
+                json = extractAndParseJSON(stringResult);
+            } catch (error: any) {
+                throw new ValidationError("json_error", error.message)
+            }
         }
     } else {
-        json = data;
+        throw new Error("Data to validate must be an array")
     }
 
     const validate = ajv.compile(schema);
@@ -71,5 +76,5 @@ export function validateResult(data: any, schema: Object) {
         }
     }
 
-    return json;
+    return [{ type: "json", value: json }];
 }
