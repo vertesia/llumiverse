@@ -723,6 +723,10 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         let conversation = updateConversation(options.conversation as Content[], prompt.contents);
         prompt.contents = conversation;
 
+        if (options.model.includes("gemini-2.5-flash-image")) {
+            region = "global"; // Gemini Flash Image only available in global region, this is for nano-banana model
+        }
+
         const client = driver.getGoogleGenAIClient(region);
 
         const payload = getGeminiPayload(options, prompt);
@@ -783,6 +787,10 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         } 
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
+
+        if (options.model.includes("gemini-2.5-flash-image")) {
+            region = "global"; // Gemini Flash Image only available in global region, this is for nano-banana model
+        }
 
         const client = driver.getGoogleGenAIClient(region);
 
