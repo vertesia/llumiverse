@@ -64,7 +64,7 @@ export const ProviderList: Record<Providers, ProviderParams> = {
     replicate:
     {
         id: Providers.replicate,
-        name: "Repicate",
+        name: "Replicate",
         requiresApiKey: true,
         requiresEndpointUrl: false,
         supportSearch: true,
@@ -152,19 +152,89 @@ export interface EmbeddingsResult {
 export interface ResultValidationError {
     code: 'validation_error' | 'json_error' | 'content_policy_violation';
     message: string;
-    data?: string;
+    data?: CompletionResult[];
 }
 
-//ResultT should be either JSONObject or string
+// ============== Result Types ===============
+
+export interface BaseResult {
+    type: "text" | "json" | "image";
+    value: any;
+}
+
+export interface TextResult extends BaseResult {
+    type: "text";
+    value: string;
+}
+
+export interface JsonResult extends BaseResult {
+    type: "json";
+}
+
+export interface ImageResult extends BaseResult {
+    type: "image";
+    value: string; // base64 data url or real url
+}
+
+export type CompletionResult = TextResult | JsonResult | ImageResult;
+
+/**
+ * Output as string
+ */
+export function completionResultToString(result: CompletionResult): string {
+    switch (result.type) {
+        case "text":
+            return result.value;
+        case "json":
+            return JSON.stringify(result.value, null, 2);
+        case "image":
+            return result.value;
+    }
+}
+
+/**
+ * Output as JSON, only handles the first JSON result or tries to parse text as JSON
+ * Expects the text to be pure JSON if no JSON result is found
+ * Throws if no JSON result is found or if parsing fails
+ */
+export function parseCompletionResultsToJson(results: CompletionResult[]): any {
+    const jsonResults = results.filter(r => r.type === "json");
+    if (jsonResults.length >= 1) {
+        return jsonResults[0].value;
+        //TODO: Handle multiple json type results
+    }
+
+    const textResults = results.filter(r => r.type === "text").join();
+    if (textResults.length === 0) {
+        throw new Error("No JSON result found or failed to parse text");
+    }
+    try {
+        return JSON.parse(textResults);
+    }
+    catch {
+        throw new Error("No JSON result found or failed to parse text");
+    }
+}
+
+/**
+ * Output as JSON if possible, otherwise as concatenated text
+ * Joins text results with the specified separator, default is empty string
+ * If multiple JSON results are found only the first one is returned
+ */
+export function parseCompletionResults(result: CompletionResult[], separator: string = ""): any {
+    try {
+        return parseCompletionResultsToJson(result);
+    } catch {
+        return result.map(completionResultToString).join(separator);
+    }
+}
+
 //Internal structure used in driver implementation.
-export interface CompletionChunkObject<ResultT = any> {
-    result: ResultT;
+export interface CompletionChunkObject {
+    result: CompletionResult[];
     token_usage?: ExecutionTokenUsage;
     finish_reason?: "stop" | "length" | string;
 }
-
-//Internal structure used in driver implementation.
-export type CompletionChunk = CompletionChunkObject | string;
 
 export interface ToolDefinition {
     name: string,
@@ -185,10 +255,9 @@ export interface ToolUse<ParamsT = JSONObject> {
     tool_input: ParamsT | null
 }
 
-//ResultT should be either JSONObject or string
-export interface Completion<ResultT = any> {
+export interface Completion {
     // the driver impl must return the result and optionally the token_usage. the execution time is computed by the extended abstract driver
-    result: ResultT;
+    result: CompletionResult[];
     token_usage?: ExecutionTokenUsage;
     /**
      * Contains the tools from which the model awaits information.
@@ -214,12 +283,6 @@ export interface Completion<ResultT = any> {
      * The conversation context. This is an opaque structure that can be passed to the next request to restore the context.
      */
     conversation?: unknown;
-}
-
-export interface ImageGeneration {
-
-    images?: string[];
-
 }
 
 export interface ExecutionResponse<PromptT = any> extends Completion {
@@ -533,7 +596,7 @@ export interface TrainingOptions {
 
 export interface TrainingPromptOptions {
     segments: PromptSegment[];
-    completion: string | JSONObject;
+    completion: CompletionResult[]
     model: string; // the model to train
     schema?: JSONSchema; // the result schema f any
 }

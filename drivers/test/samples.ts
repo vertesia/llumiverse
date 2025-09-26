@@ -24,7 +24,7 @@ export const testSchema_color: JSONSchema = {
 
 class ImageSource implements DataSource {
     file: string;
-    mime_type: "image/jpeg";
+    mime_type: "image/jpeg" = "image/jpeg";
     constructor(file: string) {
         this.file = resolve(file);
     }

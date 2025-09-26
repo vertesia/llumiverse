@@ -245,9 +245,53 @@ function getImagenOptions(model: string, option?: ModelOptions): ModelOptionsInf
 }
 
 function getGeminiOptions(model: string, _option?: ModelOptions): ModelOptionsInfo {
+    // Special handling for gemini-2.5-flash-image
+    if (model.includes("gemini-2.5-flash-image")) {
+        const options: ModelOptionInfoItem[] = [
+            {
+                name: SharedOptions.temperature,
+                type: OptionType.numeric,
+                min: 0.0,
+                max: 2.0,
+                default: 0.7,
+                step: 0.01,
+                description: "Sampling temperature"
+            },
+            {
+                name: SharedOptions.top_p,
+                type: OptionType.numeric,
+                min: 0.0,
+                max: 1.0,
+                step: 0.01,
+                description: "Nucleus sampling probability"
+            },
+            {
+                name: "candidate_count",
+                type: OptionType.numeric,
+                min: 1,
+                max: 8,
+                default: 1,
+                integer: true,
+                description: "Number of candidates to generate"
+            },
+            {
+                name: SharedOptions.max_tokens,
+                type: OptionType.numeric,
+                min: 1,
+                max: 32768,
+                integer: true,
+                step: 200,
+                description: "Maximum output tokens"
+            }
+        ];
+        return {
+            _option_id: "vertexai-gemini",
+            options
+        };
+    }
     const max_tokens_limit = getGeminiMaxTokensLimit(model);
     const excludeOptions = ["max_tokens"];
-    let commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
+    const commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
 
     const max_tokens: ModelOptionInfoItem[] = [{
         name: SharedOptions.max_tokens, type: OptionType.numeric, min: 1, max: max_tokens_limit,
@@ -260,7 +304,7 @@ function getGeminiOptions(model: string, _option?: ModelOptions): ModelOptionsIn
 
     if (model.includes("-2.5-")) {
         // Gemini 2.5 thinking models
-        
+
         // Set budget token ranges based on model variant
         let budgetMin = -1;
         let budgetMax = 24576;
@@ -287,7 +331,7 @@ function getGeminiOptions(model: string, _option?: ModelOptions): ModelOptionsIn
                 "Range: 128-32768 tokens. " +
                 "Cannot disable thinking - minimum 128 tokens. Set to -1 for dynamic thinking.";
         }
-        
+
         const geminiThinkingOptions: ModelOptionInfoItem[] = [
             {
                 name: "include_thoughts",
@@ -331,7 +375,7 @@ function getGeminiOptions(model: string, _option?: ModelOptions): ModelOptionsIn
 function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
     const max_tokens_limit = getClaudeMaxTokensLimit(model);
     const excludeOptions = ["max_tokens", "presence_penalty", "frequency_penalty"];
-    let commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
+    const commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
     const max_tokens: ModelOptionInfoItem[] = [{
         name: SharedOptions.max_tokens, type: OptionType.numeric, min: 1, max: max_tokens_limit,
         integer: true, step: 200, description: "The maximum number of tokens to generate"
@@ -391,7 +435,7 @@ function getLlamaOptions(model: string): ModelOptionsInfo {
         name: SharedOptions.max_tokens, type: OptionType.numeric, min: 1, max: max_tokens_limit,
         integer: true, step: 200, description: "The maximum number of tokens to generate"
     }];
-    
+
     // Set max temperature to 1.0 for Llama models
     commonOptions = commonOptions.map((option) => {
         if (
@@ -416,6 +460,9 @@ function getLlamaOptions(model: string): ModelOptionsInfo {
 }
 
 function getGeminiMaxTokensLimit(model: string): number {
+    if (model.includes("gemini-2.5-flash-image")) {
+        return 32768;
+    }
     if (model.includes("thinking") || model.includes("-2.5-")) {
         return 65536;
     }
@@ -427,7 +474,7 @@ function getGeminiMaxTokensLimit(model: string): number {
 
 function getClaudeMaxTokensLimit(model: string): number {
     if (model.includes("-4-")) {
-        if(model.includes("opus-")) {
+        if (model.includes("opus-")) {
             return 32768;
         }
         return 65536;

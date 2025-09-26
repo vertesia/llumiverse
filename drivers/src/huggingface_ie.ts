@@ -69,7 +69,7 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
 
     async requestTextCompletionStream(prompt: string, options: ExecutionOptions) {
         if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", {options: options.model_options });
+            this.logger.warn("Invalid model options", { options: options.model_options });
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
@@ -81,17 +81,17 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
                 max_new_tokens: options.model_options?.max_tokens,
             },
         });
-        
+
 
         return transformAsyncIterator(req, (val: TextGenerationStreamOutput) => {
             //special like <s> are not part of the result
-            if (val.token.special) return { result: "" };
+            if (val.token.special) return { result: [] };
             let finish_reason = val.details?.finish_reason as string;
             if (finish_reason === "eos_token") {
                 finish_reason = "stop";
             }
             return {
-                result: val.token.text ?? '',
+                result: val.token.text ? [{ type: "text" as const, value: val.token.text }] : [],
                 finish_reason: finish_reason,
                 token_usage: {
                     result: val.details?.generated_tokens ?? 0,
@@ -102,10 +102,10 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
 
     async requestTextCompletion(prompt: string, options: ExecutionOptions) {
         if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", {options: options.model_options });
+            this.logger.warn("Invalid model options", { options: options.model_options });
         }
         options.model_options = options.model_options as TextFallbackOptions;
-    
+
         const executor = await this.getExecutor(options.model);
         const res = await executor.textGeneration({
             inputs: prompt,
@@ -120,7 +120,7 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
             finish_reason = "stop";
         }
         return {
-            result: res.generated_text,
+            result: [{ type: "text" as const, value: res.generated_text }],
             finish_reason: finish_reason,
             token_usage: {
                 result: res.details?.generated_tokens

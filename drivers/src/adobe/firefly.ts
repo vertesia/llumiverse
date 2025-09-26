@@ -1,13 +1,4 @@
-import {
-    AbstractDriver, AIModel,
-    Completion,
-    CompletionChunk, DriverOptions, EmbeddingsOptions,
-    EmbeddingsResult,
-    ExecutionOptions,
-    ImageGeneration,
-    ModelSearchPayload,
-    PromptSegment
-} from "@llumiverse/core";
+import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, ModelSearchPayload, PromptSegment } from "@llumiverse/core";
 
 interface FireflyImageSource {
     url?: string;
@@ -83,7 +74,7 @@ export class FireflyDriver extends AbstractDriver<FireflyDriverOptions> {
 
     constructor(options: FireflyDriverOptions) {
         super(options);
-        
+
         if (!options.apiKey) {
             throw new Error("No API key provided for Firefly driver");
         }
@@ -95,14 +86,14 @@ export class FireflyDriver extends AbstractDriver<FireflyDriverOptions> {
         throw new Error("Text completion not supported by Firefly");
     }
 
-    async requestTextCompletionStream(_prompt: string, _options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
+    async requestTextCompletionStream(_prompt: string, _options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         throw new Error("Text completion streaming not supported by Firefly");
     }
 
-    async requestImageGeneration(segments: PromptSegment[], options: ExecutionOptions): Promise<Completion<ImageGeneration>> {
+    async requestImageGeneration(segments: PromptSegment[], options: ExecutionOptions): Promise<Completion> {
         this.logger.debug(`[${this.provider}] Generating image with model ${options.model}`);
         const prompt = segments.map(s => s.content).join("\n\n");
-    
+
 
         try {
             const payload: FireflyGenerateRequest = {
@@ -127,7 +118,7 @@ export class FireflyDriver extends AbstractDriver<FireflyDriverOptions> {
 
             if (result.promptHasDeniedWords || result.promptHasBlockedArtists) {
                 return {
-                    result: {},
+                    result: [],
                     error: {
                         message: "Prompt contains denied words or blocked artists",
                         code: "content_policy_violation"
@@ -136,15 +127,16 @@ export class FireflyDriver extends AbstractDriver<FireflyDriverOptions> {
             }
 
             return {
-                result: {
-                    images: result.outputs.map(output => output.image.url)
-                }
+                result: result.outputs.map(output => ({
+                    type: "image" as const,
+                    value: output.image.url
+                }))
             };
 
         } catch (error: any) {
             this.logger.error("[Firefly] Image generation failed", { error });
             return {
-                result: {},
+                result: [],
                 error: {
                     message: error.message,
                     code: error.code || 'GENERATION_FAILED'
@@ -171,7 +163,7 @@ export class FireflyDriver extends AbstractDriver<FireflyDriverOptions> {
                 tags: ["image-generation"]
             },
             {
-                id: "firefly-v3-image-to-image", 
+                id: "firefly-v3-image-to-image",
                 name: "Firefly v3 Image to Image",
                 provider: this.provider,
                 description: "Adobe Firefly v3 image to image generation model",

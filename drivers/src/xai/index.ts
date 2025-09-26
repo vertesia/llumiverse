@@ -5,7 +5,7 @@ import OpenAI from "openai";
 import { BaseOpenAIDriver } from "../openai/index.js";
 
 export interface xAiDriverOptions extends DriverOptions {
-    
+
     apiKey: string;
 
     endpoint?: string;
@@ -17,7 +17,7 @@ export class xAIDriver extends BaseOpenAIDriver {
     service: OpenAI;
     provider: "xai";
     xai_service: FetchClient;
-    DEFAULT_ENDPOINT = "https://api.x.ai/v1"; 
+    DEFAULT_ENDPOINT = "https://api.x.ai/v1";
 
     constructor(opts: xAiDriverOptions) {
         super(opts);
@@ -29,8 +29,8 @@ export class xAIDriver extends BaseOpenAIDriver {
         this.service = new OpenAI({
             apiKey: opts.apiKey,
             baseURL: opts.endpoint ?? this.DEFAULT_ENDPOINT,
-          });
-        this.xai_service = new FetchClient(opts.endpoint ?? this.DEFAULT_ENDPOINT ).withAuthCallback(async () => `Bearer ${opts.apiKey}`);
+        });
+        this.xai_service = new FetchClient(opts.endpoint ?? this.DEFAULT_ENDPOINT).withAuthCallback(async () => `Bearer ${opts.apiKey}`);
         this.provider = "xai";
         //this.formatPrompt = this._formatPrompt; //TODO: fix xai prompt formatting
     }
@@ -43,7 +43,7 @@ export class xAIDriver extends BaseOpenAIDriver {
             useToolForFormatting: false,
         }
 
-        const p = await formatOpenAILikeMultimodalPrompt(segments, {...options, ...opts}) as OpenAI.Chat.Completions.ChatCompletionMessageParam[];
+        const p = await formatOpenAILikeMultimodalPrompt(segments, { ...options, ...opts }) as OpenAI.Chat.Completions.ChatCompletionMessageParam[];
 
         return p;
 
@@ -51,7 +51,7 @@ export class xAIDriver extends BaseOpenAIDriver {
 
     extractDataFromResponse(_options: ExecutionOptions, result: OpenAI.Chat.Completions.ChatCompletion): Completion {
         return {
-            result: result.choices[0].message.content,
+            result: result.choices[0].message.content ? [{ type: "text", value: result.choices[0].message.content }] : [],
             finish_reason: result.choices[0].finish_reason,
             token_usage: {
                 prompt: result.usage?.prompt_tokens,
@@ -63,7 +63,7 @@ export class xAIDriver extends BaseOpenAIDriver {
 
     async listModels(): Promise<AIModel[]> {
         const [lm, em] = await Promise.all([
-            this.xai_service.get("/language-models") ,
+            this.xai_service.get("/language-models"),
             this.xai_service.get("/embedding-models")
         ]) as [xAIModelResponse, xAIModelResponse];
 
@@ -93,9 +93,9 @@ export class xAIDriver extends BaseOpenAIDriver {
 
 interface xAIModelResponse {
     models: xAIModel[];
-  }
-  
-  interface xAIModel {
+}
+
+interface xAIModel {
     completion_text_token_price: number;
     created: number;
     id: string;
@@ -105,5 +105,4 @@ interface xAIModelResponse {
     owned_by: string;
     prompt_image_token_price: number;
     prompt_text_token_price: number;
-  }
-  
+}

@@ -1,4 +1,4 @@
-import { AIModel, AbstractDriver, Completion, CompletionChunk, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, TextFallbackOptions } from "@llumiverse/core";
+import { AIModel, AbstractDriver, Completion, CompletionChunkObject, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, TextFallbackOptions } from "@llumiverse/core";
 import { transformSSEStream } from "@llumiverse/core/async";
 import { FetchClient } from "@vertesia/api-fetch-client";
 import { GenerateEmbeddingPayload, GenerateEmbeddingResponse, WatsonAuthToken, WatsonxListModelResponse, WatsonxModelSpec, WatsonxTextGenerationPayload, WatsonxTextGenerationResponse } from "./interfaces.js";
@@ -29,7 +29,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
         this.fetchClient = new FetchClient(this.endpoint_url).withAuthCallback(async () => this.getAuthToken().then(token => `Bearer ${token}`));
     }
 
-    async requestTextCompletion(prompt: string, options: ExecutionOptions): Promise<Completion<any>> {
+    async requestTextCompletion(prompt: string, options: ExecutionOptions): Promise<Completion> {
         if (options.model_options?._option_id !== "text-fallback") {
             this.logger.warn("Invalid model options", { options: options.model_options });
         }
@@ -53,7 +53,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
         const result = res.results[0];
 
         return {
-            result: result.generated_text,
+            result: [{ type: "text", value: result.generated_text }],
             token_usage: {
                 prompt: result.input_token_count,
                 result: result.generated_token_count,
@@ -64,7 +64,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
         }
     }
 
-    async requestTextCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
+    async requestTextCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         if (options.model_options?._option_id !== "text-fallback") {
             this.logger.warn("Invalid model options", { options: options.model_options });
         }
@@ -90,7 +90,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
         return transformSSEStream(stream, (data: string) => {
             const json = JSON.parse(data) as WatsonxTextGenerationResponse;
             return {
-                result: json.results[0]?.generated_text ?? '',
+                result: json.results[0]?.generated_text ? [{ type: "text", value: json.results[0].generated_text }] : [],
                 finish_reason: watsonFinishReason(json.results[0]?.stop_reason),
                 token_usage: {
                     prompt: json.results[0].input_token_count,
