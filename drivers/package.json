@@ -46,7 +46,7 @@
         "togetherai"
     ],
     "devDependencies": {
-        "dotenv": "^16.6.1",
+        "dotenv": "^17.2.2",
         "rimraf": "^6.0.1",
         "ts-dual-module": "^0.6.3",
         "typescript": "^5.9.2",
@@ -74,7 +74,7 @@
         "@llumiverse/core": "workspace:*",
         "@vertesia/api-fetch-client": "^0.78.0",
         "eventsource": "^4.0.0",
-        "google-auth-library": "^9.15.1",
+        "google-auth-library": "^10.3.0",
         "groq-sdk": "^0.32.0",
         "mnemonist": "^0.40.3",
         "node-web-stream-adapters": "^0.2.1",
