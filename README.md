@@ -4,7 +4,7 @@
 [![npm version](https://badge.fury.io/js/%40llumiverse%2Fcore.svg)](https://badge.fury.io/js/%40llumiverse%2Fcore)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
-LLumiverse is a universal interface for interacting with Large Language Models, for the Typescript/Javascript ecosystem. It provides a lightweight modular library for interacting with various LLM models and execution platforms.
+LLumiverse is a universal interface for interacting with Large Language Models, for the TypeScript/JavaScript ecosystem. It provides a lightweight, modular library for interacting with various LLM models and execution platforms.
 
 It solely focuses on abstracting LLMs and their execution platforms, and does not provide prompt templating, or RAG, or chains, letting you pick the best tool for the job.
 
@@ -14,6 +14,7 @@ The following LLM platforms are supported in the current version:
 | --- | :-: | :-: | :-: | :-: | :-: |
 | AWS Bedrock | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Azure OpenAI | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Azure AI Foundry | ✅ | ✅ | ✅ | ✅ | By Model |
 | Google Vertex AI | ✅ | ✅ | ✅ | ✅ | By Request |
 | Groq | ✅ | ✅ | ✅ | N/A | N/A |
 | HuggingFace Inference Endpoints | ✅ | ✅ | N/A | N/A | N/A |
@@ -24,6 +25,40 @@ The following LLM platforms are supported in the current version:
 | Together AI| ✅ | ✅ | ✅ | N/A | By Request |
 
 New capabilities and platform can easily be added by creating a new driver for the platform.
+
+
+## Architecture
+
+Llumiverse is a pnpm monorepo with three main packages:
+- `@llumiverse/common` — shared types, enums, capability detection, and model option metadata
+- `@llumiverse/core` — driver abstraction (`Driver`, `AbstractDriver`), prompt formatting, streaming, and result validation
+- `@llumiverse/drivers` — provider-specific drivers (OpenAI, Bedrock, Vertex AI, Azure AI Foundry, Groq, HuggingFace IE, Mistral, Replicate, Together AI, WatsonX)
+
+Key concepts:
+- Prompts are arrays of `PromptSegment` with roles (`user`, `system`, `assistant`, `safety`, `tool`, etc.). Drivers format these per provider.
+- Streaming uses a unified `CompletionStream` interface; if a provider cannot stream, a fallback streams the full response as one chunk.
+- Structured output is optional: pass a JSON Schema to `result_schema`. Results are validated with Ajv and surfaced in `error` if invalid.
+- Capabilities and model options can be introspected at runtime to build UIs or guard features.
+
+
+## Why Llumiverse
+
+Use Llumiverse when you want a precise, typed, provider‑agnostic LLM connector layer without bringing a full framework. It focuses on:
+
+- Cross‑provider coverage with consistent APIs across OpenAI, Azure (OpenAI + AI Foundry), Vertex AI (Gemini/Claude/Imagen/LLama MaaS), AWS Bedrock, Groq, Mistral, Together, Replicate, HuggingFace IE, WatsonX
+- Clean prompts and multimodal formatting (OpenAI‑like chat, Bedrock Nova, Imagen) plus image generation via Vertex/Bedrock
+- Unified streaming with fallback, normalized finish reasons, and token usage
+- Structured output via JSON Schema (Ajv validation) with provider‑level hints where supported
+- Tool calling across providers with normalized `tool_use` handling and conversation carry‑over
+- Embeddings with a single function for text and image (where supported)
+- Model discovery, capabilities detection, and model‑specific option metadata for building UIs and guardrails
+- Fine‑tuning/training surfaces (currently OpenAI) with a path to extend per provider
+
+When not to use Llumiverse:
+- You want chains, memory, agents, retrieval, or a batteries‑included framework → consider LangChain.
+- You want a lightweight, UI‑first streaming toolkit and typed function calling for mostly OpenAI‑like providers → consider Vercel AI SDK (ai).
+
+Llumiverse complements those tools by being a thin, reliable connector layer you can compose into your own architecture.
 
 
 ## Requirements
@@ -62,6 +97,29 @@ import { OpenAIDriver } from "@llumiverse/drivers";
 // create an instance of the OpenAI driver 
 const driver = new OpenAIDriver({
     apiKey: "YOUR_OPENAI_API_KEY"
+});
+```
+
+### Azure AI Foundry driver
+
+Use this driver when interacting with Azure AI Foundry deployments (including OpenAI-backed and other publishers). Use your project endpoint and pass the composite model id returned by `listModels()` (`deploymentName::baseModel`).
+
+```javascript
+import { AzureFoundryDriver } from "@llumiverse/drivers";
+
+const driver = new AzureFoundryDriver({
+  endpoint: process.env.AZURE_FOUNDRY_ENDPOINT,
+  // Uses DefaultAzureCredential by default; override via azureADTokenProvider if needed
+});
+
+// list available deployments (as models)
+const models = await driver.listModels();
+
+// execute using the composite id returned by listModels()
+const response = await driver.execute(prompt, {
+  model: models[0].id, // e.g. "my-deployment::gpt-4o"
+  temperature: 0.3,
+  max_tokens: 512
 });
 ```
 
@@ -239,13 +297,44 @@ console.log('# Response took', streamingResponse.execution_time, 'ms')
 console.log('# Token usage:', streamingResponse.token_usage);
 ```
 
+### Structured output (JSON Schema)
+
+You can request structured output by providing a JSON Schema via `result_schema`. Llumiverse will validate the final result and populate `error` if parsing/validation fails. When supported by the provider (e.g., OpenAI structured output), the driver also hints the schema to the model.
+
+```javascript
+import { PromptRole } from "@llumiverse/core";
+
+const schema = {
+  type: "object",
+  properties: {
+    title: { type: "string" },
+    tags: { type: "array", items: { type: "string" } }
+  },
+  required: ["title"]
+};
+
+const prompt = [
+  { role: PromptRole.user, content: "Return a blog post title and 3 tags about TypeScript." }
+];
+
+const res = await driver.execute(prompt, {
+  model: "gpt-4o",
+  result_schema: schema,
+  temperature: 0.2,
+});
+
+if (res.error) {
+  console.error("Validation error:", res.error.message);
+} else {
+  console.log("JSON:", res.result);
+}
+```
+
 ### Generate embeddings
 
-LLumiverse drivers expose a method to generate vector embeddings for a given text.
-Drivers supporting embeddings as of v0.10.0 are `bedrock`, `openai`, `vertexai`.
-If embeddings are not yet supported the generateEmbeddings method will throws an error.
+Llumiverse drivers expose `generateEmbeddings()` to generate vector embeddings for text or images (when supported by the provider). Current drivers with embeddings support include `openai`, `vertexai` and `azure_foundry` (text and image via Inference API). Bedrock support varies by model.
 
-Here is an example on using the `vertexai` driver. For the example to work you need to define a `GOOGLE_APPLICATION_CREDENTIALS` env variable to be able to access your gcloud project
+Here is an example using the `vertexai` driver. For the example to work you need to define a `GOOGLE_APPLICATION_CREDENTIALS` env variable to be able to access your GCP project.
 
 ```javascript
 import { VertexAIDriver } from "@llumiverse/drivers";
@@ -287,6 +376,10 @@ console.log('Embeddings: ', v.values);
 ```
 
 The `task_type` parameter is specific to the [textembedding-gecko model](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/text-embeddings). 
+
+### Tool use
+
+Some providers support model tool calling (aka “function calling”). You can pass tool definitions via `ExecutionOptions.tools` and handle tool calls by sending follow-up `PromptSegment` with role `tool`. See the dedicated guide in `README-tools.md` for end-to-end examples and provider notes.
 
 
 ## Contributing

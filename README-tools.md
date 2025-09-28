@@ -1,98 +1,109 @@
-# Using model tools with llumiverse
+# Using model tools with Llumiverse
 
-Only gemini and claude on vertexai are supporting tools for now.
+Tool use (aka function calling) is supported on multiple providers and models. Support and behavior vary by provider/model:
+- OpenAI: supported on modern chat models (including GPT‑4.x/4o families)
+- Google Vertex AI: supported on Gemini and Claude‑on‑Vertex models
+- AWS Bedrock: supported on models that implement tool use via the Converse API (e.g., Claude, Nova where applicable)
+- Azure AI Foundry: supported when the underlying deployment/model exposes tool calls
+
+Notes:
+- Streaming tool use is not universally supported across providers. Prefer non‑streaming when you expect tool calls.
+- Use `getModelCapabilities(model, provider)` if you need to gate tool use dynamically.
 
 ## Introduction
 
-To declare the existing tools you can use the `tools` property on the `ExecutionOptions` to pass the tools definitions. The `tools` property ios an array of `ToolDefinition` objects.
+To declare available tools, pass the `tools` property on `ExecutionOptions`. The `tools` property is an array of `ToolDefinition` objects.
 
 ```ts
 export interface ToolDefinition {
-    name: string,
-    description?: string,
-    input_schema: {
-        type: 'object';
-        properties?: unknown | null | undefined;
-        [k: string]: unknown;
-    },
+  name: string,
+  description?: string,
+  input_schema: {
+    type: 'object';
+    properties?: JSONSchema | null | undefined;
+    [k: string]: unknown;
+  },
 }
 ```
 
-When the target model will need a tool output it will respond using a `finish_reason` with the value of `tool_use`.
-Additionally, a `tool_use` property will be available on the execution result object. The property is an array of tool use definitions:
+When the target model needs a tool output, it will respond with `finish_reason: 'tool_use'` and include a `tool_use` array in the result:
 
 ```ts
-export interface ToolUse {
-    id: string,
-    name: string,
-    input: JSONObject | null
+export interface ToolUse<ParamsT = JSONObject> {
+  id: string,
+  tool_name: string,
+  tool_input: ParamsT | null
 }
 ```
 
-To continue you need to execute the tool (or the tools) requested by the model and then you send the tool results to the model using a `PromptSegment` with a role of `tool`.
+To continue, execute the requested tool(s), then send the tool results back using a `PromptSegment` with role `tool` and the corresponding `tool_use_id`.
 
-```js
+```ts
 const r = await driver.execute([
-    {
-        role: PromptRole.tool,
-        tool_use_id: "use the corresponding id from the ToolUse",
-        content: "the tool result as a string"
-    },
-    // my second tool execution result if any
+  {
+    role: PromptRole.tool,
+    tool_use_id: "<the id from ToolUse>",
+    content: "the tool result as a string"
+  },
+  // my second tool execution result if any
 ], options);
 ```
 
 ## Restoring the conversation context
 
-At each execution you need to restore the conversation context since the model need to continue generating the previous response which was postponed while awaiting for the tool output.
+At each execution, restore the conversation context so the model can continue the previous response that was paused while awaiting tool output.
 
-In order to restore the conversation you need to recover the current state of the conversation from the last execution result and pass it on the new execution.
-
-You can get the current state of a conversation after an execution from the `conversation` property of the `ExecutionResponse` object.
-Then you need to pass this object to the next execution through the `conversation` field of the `ExecutionOptions` object.
-Each time an execution is completed the driver will update the conversation and returns it back through the `ExecutionResponse.conversion` property.
-When you execute the first prompt you don't need to pass any conversation.
+To restore the conversation, pass `ExecutionResponse.conversation` from the last call into `ExecutionOptions.conversation` on the next call.
+Each time an execution completes the driver updates the context and returns it via `ExecutionResponse.conversation`.
 
 **Example:**
 
-```js
+```ts
 let r = await driver.execute(myFirstPrompt, {
-    // define the available tools
-    tools: [
-        {
-            name: "myTool",
-            description: "describe what the tool is useful for",
-            input_schema: {
-                type: "object", properties: {}
-            }
-        }
-    ]
+  // define the available tools
+  tools: [
+    {
+      name: "myTool",
+      description: "describe what the tool is useful for",
+      input_schema: {
+        type: "object", properties: {}
+      }
+    }
+  ]
 });
+
 if (r.tool_use) {
-    const toolMessages = r.tool_use.map((toolUse) => {
-        const result = executeTool(toolUse)
-        return {
-            role: PromptRole.tool,
-            tool_use_id: toolUse.id,
-            content: result
-        }
-    })
-    // send
-    r = await driver.execute(toolMessages, {conversation: r.conversation});
-    console.log("Response: ", r.result)
+  const toolMessages = r.tool_use.map((toolUse) => {
+    const result = executeTool(toolUse); // your function that runs the tool
+    return {
+      role: PromptRole.tool,
+      tool_use_id: toolUse.id,
+      content: result
+    };
+  });
+  // continue the conversation
+  r = await driver.execute(toolMessages, { conversation: r.conversation });
+  console.log("Response:", r.result);
 }
 ```
 
-## Tool Function result
+## Tool function result
 
-The result of a tool function is passed through a PromptSegment as follows:
+Send the tool function result back via a `PromptSegment` as follows:
 
-```js
+```ts
 {
-    role: "tool",
-    content: "the result is passed here"
+  role: "tool",
+  tool_use_id: "<the id>",
+  content: "the result is passed here"
 }
 ```
 
-This means the target model will receive a string.
-The `gemini-pro` model accepts a JSON object as the function result. To be able to pass an object in the case of gemini-pro you need to stringify the JSON object and pass it as a string. The gemini-pro driver will parse the JSON string if a valid JSON is found and will send the object as the result to the model. If no valid JSON is found it will send the string as the result.
+This sends a string to the model. Some providers (e.g., Gemini on Vertex) can accept structured tool results; to keep consistent across providers, stringify your JSON tool outputs. Drivers that support structured tool results will parse when possible; otherwise the model receives the string representation.
+
+### Provider notes
+- OpenAI: tool use + structured output supported on most modern chat models. Streaming tool use is not supported.
+- Vertex AI: Gemini and Claude support tool use; provide JSON tool schemas for best results.
+- Bedrock: tool use supported on models that expose tools in the Converse API (e.g., Claude). Behavior may differ by model family.
+- Azure AI Foundry: support depends on the underlying deployment/model capabilities.
+
