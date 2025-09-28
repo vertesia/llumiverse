@@ -55,8 +55,9 @@ Use Llumiverse when you want a precise, typed, provider‑agnostic LLM connector
 - Fine‑tuning/training surfaces (currently OpenAI) with a path to extend per provider
 
 When not to use Llumiverse:
-- You want chains, memory, agents, retrieval, or a batteries‑included framework → consider LangChain.
-- You want a lightweight, UI‑first streaming toolkit and typed function calling for mostly OpenAI‑like providers → consider Vercel AI SDK (ai).
+- You want a larger platform with orchestration, evaluation, deployment, governance, and UI tooling → consider Vertesia.
+- You need a batteries‑included developer framework for chains, memory, agents, and retrieval → use a chains/agents framework.
+- You need a UI‑first streaming toolkit and typed function calling geared to single‑provider apps → use a lightweight streaming SDK.
 
 Llumiverse complements those tools by being a thin, reliable connector layer you can compose into your own architecture.
 
