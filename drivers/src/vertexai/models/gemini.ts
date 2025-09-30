@@ -426,10 +426,18 @@ function collectTextParts(content: Content): CompletionResult[] {
     if (parts) {
         for (const part of parts) {
             if (part.text) {
-                results.push({
-                    type: "text",
-                    value: part.text
-                });
+                // Check if part.text is actually an object (structured output mode)
+                if (typeof part.text === 'object' && part.text !== null) {
+                    results.push({
+                        type: "json",
+                        value: part.text
+                    });
+                } else {
+                    results.push({
+                        type: "text",
+                        value: part.text
+                    });
+                }
             }
         }
     }

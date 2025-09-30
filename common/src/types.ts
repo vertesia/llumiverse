@@ -204,7 +204,7 @@ export function parseCompletionResultsToJson(results: CompletionResult[]): any {
         //TODO: Handle multiple json type results
     }
 
-    const textResults = results.filter(r => r.type === "text").map(r => r.value).join();
+    const textResults = results.filter(r => r.type === "text").map(r => r.value).join('');
     if (textResults.length === 0) {
         console.error("parseCompletionResultsToJson: No text results found", {
             input: results,
