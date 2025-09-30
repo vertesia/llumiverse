@@ -206,12 +206,21 @@ export function parseCompletionResultsToJson(results: CompletionResult[]): any {
 
     const textResults = results.filter(r => r.type === "text").join();
     if (textResults.length === 0) {
+        console.error("parseCompletionResultsToJson: No text results found", {
+            input: results,
+            resultTypes: results.map(r => r.type)
+        });
         throw new Error("No JSON result found or failed to parse text");
     }
     try {
         return JSON.parse(textResults);
     }
-    catch {
+    catch (error) {
+        console.error("parseCompletionResultsToJson: Failed to parse text as JSON", {
+            input: results,
+            textResults,
+            error: error instanceof Error ? error.message : String(error)
+        });
         throw new Error("No JSON result found or failed to parse text");
     }
 }
