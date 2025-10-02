@@ -193,8 +193,108 @@ export function completionResultToString(result: CompletionResult): string {
 }
 
 /**
+ * Extracts JSON from text that may contain markdown code blocks or surrounding text
+ * Handles:
+ * - Markdown code blocks: ```json {...} ```
+ * - Text with JSON: "Here's the result: {...}"
+ * - Plain JSON: {...}
+ */
+function extractJsonFromText(text: string): string {
+    // First, try to extract from markdown code blocks
+    const codeBlockMatch = text.match(/```(?:json|javascript|typescript)?\s*\n?([\s\S]*?)\n?```/i);
+    if (codeBlockMatch) {
+        return codeBlockMatch[1].trim();
+    }
+
+    // If no code block, try to find JSON object or array
+    // Look for first { or [ and find its matching closing bracket
+    const trimmed = text.trim();
+
+    // Find both object and array start positions
+    const objectStart = trimmed.indexOf('{');
+    const arrayStart = trimmed.indexOf('[');
+
+    // Determine which comes first (or if only one exists)
+    const shouldProcessArray = arrayStart !== -1 && (objectStart === -1 || arrayStart < objectStart);
+
+    if (shouldProcessArray) {
+        // Process JSON array [...]
+        let depth = 0;
+        let inString = false;
+        let escapeNext = false;
+
+        for (let i = arrayStart; i < trimmed.length; i++) {
+            const char = trimmed[i];
+
+            if (escapeNext) {
+                escapeNext = false;
+                continue;
+            }
+
+            if (char === '\\') {
+                escapeNext = true;
+                continue;
+            }
+
+            if (char === '"' && !escapeNext) {
+                inString = !inString;
+                continue;
+            }
+
+            if (inString) continue;
+
+            if (char === '[') depth++;
+            if (char === ']') {
+                depth--;
+                if (depth === 0) {
+                    return trimmed.substring(arrayStart, i + 1);
+                }
+            }
+        }
+    } else if (objectStart !== -1) {
+        // Process JSON object {...}
+        let depth = 0;
+        let inString = false;
+        let escapeNext = false;
+
+        for (let i = objectStart; i < trimmed.length; i++) {
+            const char = trimmed[i];
+
+            if (escapeNext) {
+                escapeNext = false;
+                continue;
+            }
+
+            if (char === '\\') {
+                escapeNext = true;
+                continue;
+            }
+
+            if (char === '"' && !escapeNext) {
+                inString = !inString;
+                continue;
+            }
+
+            if (inString) continue;
+
+            if (char === '{') depth++;
+            if (char === '}') {
+                depth--;
+                if (depth === 0) {
+                    return trimmed.substring(objectStart, i + 1);
+                }
+            }
+        }
+    }
+
+    // If nothing found, return trimmed text as-is
+    return trimmed;
+}
+
+/**
  * Output as JSON, only handles the first JSON result or tries to parse text as JSON
  * Expects the text to be pure JSON if no JSON result is found
+ * Automatically extracts JSON from markdown code blocks or surrounding text
  * Throws if no JSON result is found or if parsing fails
  */
 export function parseCompletionResultsToJson(results: CompletionResult[]): any {
@@ -212,13 +312,18 @@ export function parseCompletionResultsToJson(results: CompletionResult[]): any {
         });
         throw new Error("No JSON result found or failed to parse text");
     }
+
+    // Extract JSON from text (handles markdown code blocks and surrounding text)
+    const cleanedText = extractJsonFromText(textResults);
+
     try {
-        return JSON.parse(textResults);
+        return JSON.parse(cleanedText);
     }
     catch (error) {
         console.error("parseCompletionResultsToJson: Failed to parse text as JSON", {
             input: results,
             textResults,
+            cleanedText,
             error: error instanceof Error ? error.message : String(error)
         });
         throw new Error("No JSON result found or failed to parse text");

@@ -110,6 +110,125 @@ describe('Completion Result Utilities', () => {
             const parsed = parseCompletionResultsToJson(results);
             expect(parsed).toEqual({ key: "value" });
         });
+
+        test('should strip markdown code blocks with json language identifier', () => {
+            const results: CompletionResult[] = [
+                { type: "text", value: '```json\n{"guideline_id": "123", "status": "REUSED_EXISTING"}\n```' }
+            ];
+            const parsed = parseCompletionResultsToJson(results);
+            expect(parsed).toEqual({ guideline_id: "123", status: "REUSED_EXISTING" });
+        });
+
+        test('should strip markdown code blocks without language identifier', () => {
+            const results: CompletionResult[] = [
+                { type: "text", value: '```\n{"key": "value"}\n```' }
+            ];
+            const parsed = parseCompletionResultsToJson(results);
+            expect(parsed).toEqual({ key: "value" });
+        });
+
+        test('should strip markdown code blocks with javascript language identifier', () => {
+            const results: CompletionResult[] = [
+                { type: "text", value: '```javascript\n{"foo": "bar"}\n```' }
+            ];
+            const parsed = parseCompletionResultsToJson(results);
+            expect(parsed).toEqual({ foo: "bar" });
+        });
+
+        test('should strip markdown code blocks with typescript language identifier', () => {
+            const results: CompletionResult[] = [
+                { type: "text", value: '```typescript\n{"foo": "bar"}\n```' }
+            ];
+            const parsed = parseCompletionResultsToJson(results);
+            expect(parsed).toEqual({ foo: "bar" });
+        });
+
+        test('should handle complex JSON wrapped in markdown code blocks', () => {
+            const jsonContent = {
+                guideline_id: "68dd9ef4e52e9b18c9d87b3e",
+                summary: {
+                    status: "REUSED_EXISTING",
+                    title: "HTS Classification Guidelines",
+                    applicable_chapters: ["57", "63", "44"],
+                    coverage: {
+                        products_analyzed: 622,
+                        confidence_level: "MEDIUM"
+                    }
+                }
+            };
+            const results: CompletionResult[] = [
+                { type: "text", value: `\`\`\`json\n${JSON.stringify(jsonContent, null, 2)}\n\`\`\`` }
+            ];
+            const parsed = parseCompletionResultsToJson(results);
+            expect(parsed).toEqual(jsonContent);
+        });
+
+        test('should handle markdown code blocks with extra whitespace', () => {
+            const results: CompletionResult[] = [
+                { type: "text", value: '```json\n\n{"key": "value"}\n\n```' }
+            ];
+            const parsed = parseCompletionResultsToJson(results);
+            expect(parsed).toEqual({ key: "value" });
+        });
+
+        test('should extract JSON from text with preceding chatter', () => {
+            const results: CompletionResult[] = [
+                { type: "text", value: 'Here is the result: {"status": "success", "code": 200}' }
+            ];
+            const parsed = parseCompletionResultsToJson(results);
+            expect(parsed).toEqual({ status: "success", code: 200 });
+        });
+
+        test('should extract JSON from text with markdown code block and chatter', () => {
+            const results: CompletionResult[] = [
+                { type: "text", value: 'Sure, here you go:\n```json\n{"key": "value"}\n```\nHope this helps!' }
+            ];
+            const parsed = parseCompletionResultsToJson(results);
+            expect(parsed).toEqual({ key: "value" });
+        });
+
+        test('should extract JSON array from text with chatter', () => {
+            const results: CompletionResult[] = [
+                { type: "text", value: 'The items are: [{"id": 1}, {"id": 2}]' }
+            ];
+            const parsed = parseCompletionResultsToJson(results);
+            expect(parsed).toEqual([{ id: 1 }, { id: 2 }]);
+        });
+
+        test('should handle nested objects with braces in strings', () => {
+            const results: CompletionResult[] = [
+                { type: "text", value: 'Result: {"message": "Format: {value}", "data": {"nested": true}}' }
+            ];
+            const parsed = parseCompletionResultsToJson(results);
+            expect(parsed).toEqual({ message: "Format: {value}", data: { nested: true } });
+        });
+
+        test('should extract JSON with escaped quotes', () => {
+            const results: CompletionResult[] = [
+                { type: "text", value: 'Output: {"text": "She said \\"hello\\"", "count": 1}' }
+            ];
+            const parsed = parseCompletionResultsToJson(results);
+            expect(parsed).toEqual({ text: 'She said "hello"', count: 1 });
+        });
+
+        test('should prioritize first JSON object when multiple exist', () => {
+            const results: CompletionResult[] = [
+                { type: "text", value: 'First: {"a": 1} and Second: {"b": 2}' }
+            ];
+            const parsed = parseCompletionResultsToJson(results);
+            expect(parsed).toEqual({ a: 1 });
+        });
+
+        test('should handle real-world example from tariff workflow', () => {
+            const realWorldOutput = '```json\n{\n  "guideline_id": "68dd9ef4e52e9b18c9d87b3e",\n  "summary": {\n    "guideline_id": "68dd9ef4e52e9b18c9d87b3e",\n    "status": "REUSED_EXISTING",\n    "title": "HTS Classification Guidelines - Multi-Category Goods from IN"\n  }\n}\n```';
+            const results: CompletionResult[] = [
+                { type: "text", value: realWorldOutput }
+            ];
+            const parsed = parseCompletionResultsToJson(results);
+            expect(parsed).toHaveProperty('guideline_id', '68dd9ef4e52e9b18c9d87b3e');
+            expect(parsed).toHaveProperty('summary');
+            expect(parsed.summary).toHaveProperty('status', 'REUSED_EXISTING');
+        });
     });
 
     describe('parseCompletionResults', () => {
