@@ -13,11 +13,12 @@ export function extractAndParseJSON(text: string): JSONValue {
 
 const RX_DQUOTE = /^"([^"\\]|\\.)*"/us;
 const RX_SQUOTE = /^'([^'\\]|\\.)*'/us;
-const RX_NUMBER = /^-?\d+(\.\d+)?/;
-const RX_BOOLEAN = /^true|false/;
-const RX_NULL = /^null/;
+const RX_NUMBER = /^-?(Infinity|\d+(\.\d+)?([eE][+-]?\d+)?)/;
+const RX_BOOLEAN = /^(true|false|True|False)/i;
+const RX_NULL = /^(null|None|undefined)/i;
 const RX_KEY = /^[$_a-zA-Z][$_a-zA-Z0-9]*/;
 const RX_PUNCTUATION = /^\s*([\[\]{}:,])\s*/;
+const RX_COMMENT = /^(\/\/[^\n]*|\/\*[\s\S]*?\*\/)\s*/;
 
 function fixText(value: string) {
     return value.replaceAll('\n', '\\n').replaceAll('\r', '\\r');
@@ -37,32 +38,49 @@ export class JsonParser {
         this.pos += n;
     }
 
+    skipComments() {
+        while (true) {
+            const m = RX_COMMENT.exec(this.text);
+            if (m) {
+                this.skip(m[0].length);
+            } else {
+                break;
+            }
+        }
+    }
+
     tryReadPunctuation() {
+        this.skipComments();
         const m = RX_PUNCTUATION.exec(this.text);
         if (m) {
             this.skip(m[0].length);
+            this.skipComments();
             return m[1];
         }
     }
 
     readKey() {
+        this.skipComments();
         const first = this.text.charCodeAt(0);
         if (first === 34) { // "
             const m = RX_DQUOTE.exec(this.text);
             if (m) {
                 this.skip(m[0].length);
+                this.skipComments();
                 return JSON.parse(m[0]);
             }
         } else if (first === 39) { // '
             const m = RX_SQUOTE.exec(this.text);
             if (m) {
                 this.skip(m[0].length);
+                this.skipComments();
                 return decodeSingleQuotedString(m[0]);
             }
         } else {
             const m = RX_KEY.exec(this.text);
             if (m) {
                 this.skip(m[0].length);
+                this.skipComments();
                 return m[0];
             }
         }
@@ -70,6 +88,7 @@ export class JsonParser {
     }
 
     readScalar() {
+        this.skipComments();
         const first = this.text.charCodeAt(0);
         if (first === 34) { // "
             const m = RX_DQUOTE.exec(this.text);
@@ -87,16 +106,23 @@ export class JsonParser {
             let m = RX_NUMBER.exec(this.text);
             if (m) {
                 this.skip(m[0].length);
-                return parseFloat(m[0]);
+                const numStr = m[0];
+                if (numStr === 'Infinity' || numStr === '-Infinity') {
+                    return numStr === 'Infinity' ? Infinity : -Infinity;
+                }
+                const num = parseFloat(numStr);
+                return isNaN(num) ? null : num; // Convert NaN to null for JSON compatibility
             }
             m = RX_BOOLEAN.exec(this.text);
             if (m) {
                 this.skip(m[0].length);
-                return m[0] === 'true';
+                // Normalize Python-style True/False to lowercase
+                return m[0].toLowerCase() === 'true';
             }
             m = RX_NULL.exec(this.text);
             if (m) {
                 this.skip(m[0].length);
+                // Normalize None/undefined to null
                 return null;
             }
         }
@@ -112,6 +138,7 @@ export class JsonParser {
                 if (p === '}') {
                     return obj;
                 } else if (p === ',') {
+                    // Allow trailing comma before }
                     continue;
                 } else if (p) {
                     throw new Error('Expected a key at position ' + this.pos + ' but found ' + this.text);

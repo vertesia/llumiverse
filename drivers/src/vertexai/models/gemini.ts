@@ -7,7 +7,7 @@ import {
     AIModel, Completion, CompletionChunkObject, CompletionResult, ExecutionOptions,
     ExecutionTokenUsage, getMaxTokensLimitVertexAi, JSONObject, JSONSchema, ModelType, PromptOptions, PromptRole,
     PromptSegment, readStreamAsBase64, StatelessExecutionOptions, ToolDefinition, ToolUse,
-    VertexAIGeminiOptions
+    VertexAIGeminiOptions, extractAndParseJSON
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { VertexAIDriver, GenerateContentPrompt } from "../index.js";
@@ -420,7 +420,7 @@ function removeEmptyJSONArray(array: any[], schema: JSONSchema): any[] {
     return cleanedArray.filter(item => !isEmpty(item));
 }
 
-function collectTextParts(content: Content): CompletionResult[] {
+function collectTextParts(content: Content, useStructuredOutput: boolean = false): CompletionResult[] {
     const results: CompletionResult[] = [];
     const parts = content.parts;
     if (parts) {
@@ -432,6 +432,22 @@ function collectTextParts(content: Content): CompletionResult[] {
                         type: "json",
                         value: part.text
                     });
+                } else if (useStructuredOutput && typeof part.text === 'string') {
+                    // When using structured output, Gemini sometimes returns JSON as a string
+                    // Use the robust JSON parser that can handle malformed JSON
+                    try {
+                        const parsed = extractAndParseJSON(part.text);
+                        results.push({
+                            type: "json",
+                            value: parsed
+                        });
+                    } catch (e) {
+                        // If parsing fails, treat as text
+                        results.push({
+                            type: "text",
+                            value: part.text
+                        });
+                    }
                 } else {
                     results.push({
                         type: "text",
@@ -764,7 +780,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
                 // We clean the content before validation, so we can update the conversation.
                 const cleanedContent = cleanEmptyFieldsContent(content, options.result_schema);
-                const textResults = collectTextParts(cleanedContent);
+                const useStructuredOutput = supportsStructuredOutput(options) && !options.tools;
+                const textResults = collectTextParts(cleanedContent, useStructuredOutput);
                 const imageResults = collectInlineDataParts(cleanedContent);
                 result = [...textResults, ...imageResults];
                 conversation = updateConversation(conversation, [cleanedContent]);
@@ -805,6 +822,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const payload = getGeminiPayload(options, prompt);
         const response = await client.models.generateContentStream(payload);
 
+        const useStructuredOutput = supportsStructuredOutput(options) && !options.tools;
         const stream = asyncMap(response, async (item) => {
             const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(item.usageMetadata);
             if (item.candidates && item.candidates.length > 0) {
@@ -822,7 +840,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                             + `content: ${JSON.stringify(candidate.content, null, 2)}, safety: ${JSON.stringify(candidate.safetyRatings, null, 2)}`);
                     }
                     if (candidate.content?.role === 'model') {
-                        const textResults = collectTextParts(candidate.content);
+                        const textResults = collectTextParts(candidate.content, useStructuredOutput);
                         const imageResults = collectInlineDataParts(candidate.content);
                         const combinedResults = [...textResults, ...imageResults];
                         tool_use = collectToolUseParts(candidate.content);
