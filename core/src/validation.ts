@@ -1,8 +1,8 @@
+import { CompletionResult, ResultValidationError } from "@llumiverse/common";
 import { Ajv } from 'ajv';
 import addFormats from 'ajv-formats';
 import { extractAndParseJSON } from "./json.js";
 import { resolveField } from './resolver.js';
-import { CompletionResult, completionResultToString, ResultValidationError } from "@llumiverse/common";
 
 
 const ajv = new Ajv({
@@ -28,6 +28,25 @@ export class ValidationError extends Error implements ResultValidationError {
     }
 }
 
+function parseCompletionAsJson(data: CompletionResult[]) {
+    let lastError: ValidationError | undefined;
+    for (const part of data) {
+        if (part.type === "text") {
+            const text = part.value.trim();
+            try {
+                return extractAndParseJSON(text);
+            } catch (error: any) {
+                lastError = new ValidationError("json_error", error.message);
+            }
+        }
+    }
+    if (!lastError) {
+        lastError = new ValidationError("json_error", "No JSON compatible response found in completion result");
+    }
+    throw lastError;
+}
+
+
 export function validateResult(data: CompletionResult[], schema: Object): CompletionResult[] {
     let json;
     if (Array.isArray(data)) {
@@ -35,9 +54,8 @@ export function validateResult(data: CompletionResult[], schema: Object): Comple
         if (jsonResults.length > 0) {
             json = jsonResults[0].value;
         } else {
-            const stringResult = data.map(completionResultToString).join("");
             try {
-                json = extractAndParseJSON(stringResult);
+                json = parseCompletionAsJson(data);
             } catch (error: any) {
                 throw new ValidationError("json_error", error.message)
             }
