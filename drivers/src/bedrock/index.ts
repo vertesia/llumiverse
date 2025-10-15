@@ -23,7 +23,8 @@ import { forceUploadFile } from "./s3.js";
 import {
     formatTwelvelabsPegasusPrompt,
     TwelvelabsPegasusRequest,
-    TwelvelabsMarengoRequest
+    TwelvelabsMarengoRequest,
+    TwelvelabsMarengoResponse
 } from "./twelvelabs.js";
 
 const supportStreamingCache = new LRUCache<string, boolean>(4096);
@@ -820,8 +821,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
 
         const supportedPublishers = ["amazon", "anthropic", "cohere", "ai21",
-                                    "mistral", "meta", "deepseek", "writer",
-                                    "openai", "twelvelabs", "qwen"];
+            "mistral", "meta", "deepseek", "writer",
+            "openai", "twelvelabs", "qwen"];
         const unsupportedModelsByPublisher = {
             amazon: ["titan-image-generator", "nova-reel", "nova-sonic", "rerank"],
             anthropic: [],
@@ -1029,18 +1030,15 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         const decoder = new TextDecoder();
         const body = decoder.decode(res.body);
-        const result = JSON.parse(body);
+        const result: TwelvelabsMarengoResponse = JSON.parse(body);
 
-        // TwelveLabs Marengo returns an array of embedding objects
-        if (!result.embedding && !Array.isArray(result)) {
+        // TwelveLabs Marengo returns embedding data
+        if (!result.embedding) {
             throw new Error("Embeddings not found in TwelveLabs Marengo response");
         }
 
-        // If it's an array, take the first embedding
-        const embeddingData = Array.isArray(result) ? result[0] : result;
-
         return {
-            values: embeddingData.embedding,
+            values: result.embedding,
             model: model!,
             // TwelveLabs Marengo doesn't return token count in the same way
             token_count: undefined
