@@ -833,7 +833,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             deepseek: [],
             writer: [],
             openai: [],
-            twelvelabs: [],
+            twelvelabs: ["marengo"],
             qwen: [],
         };
 
