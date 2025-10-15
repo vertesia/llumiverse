@@ -2,7 +2,7 @@ import { ModelOptionsInfo, ModelOptions, OptionType, ModelOptionInfoItem } from 
 import { textOptionsFallback } from "./fallback.js";
 
 // Union type of all Bedrock options
-export type BedrockOptions = NovaCanvasOptions | BaseConverseOptions | BedrockClaudeOptions | BedrockPalmyraOptions | BedrockGptOssOptions;
+export type BedrockOptions = NovaCanvasOptions | BaseConverseOptions | BedrockClaudeOptions | BedrockPalmyraOptions | BedrockGptOssOptions | TwelvelabsPegasusOptions | TwelvelabsMarengoOptions;
 
 export interface NovaCanvasOptions {
     _option_id: "bedrock-nova-canvas"
@@ -49,6 +49,22 @@ export interface BedrockGptOssOptions extends BaseConverseOptions {
     reasoning_effort?: "low" | "medium" | "high";
     frequency_penalty?: number;
     presence_penalty?: number;
+}
+
+export interface TwelvelabsPegasusOptions {
+    _option_id: "bedrock-twelvelabs-pegasus";
+    temperature?: number;
+    max_tokens?: number;
+}
+
+export interface TwelvelabsMarengoOptions {
+    _option_id: "bedrock-twelvelabs-marengo";
+    embeddingOption?: "visual-text" | "visual-image" | "audio";
+    startSec?: number;
+    lengthSec?: number;
+    useFixedLengthSec?: boolean;
+    minClipSec?: number;
+    textTruncate?: "start" | "end";
 }
 
 export function getMaxTokensLimitBedrock(model: string): number | undefined {
@@ -134,6 +150,14 @@ export function getMaxTokensLimitBedrock(model: string): number | undefined {
     // OpenAI gpt-oss models
     if (model.includes("gpt-oss")) {
         return 128000;
+    }
+    // TwelveLabs models
+    else if (model.includes("twelvelabs")) {
+        if (model.includes("pegasus")) {
+            return 4096; // Max output tokens for Pegasus
+        }
+        // Marengo is an embedding model, doesn't generate text
+        return undefined;
     }
 
     // Default fallback
@@ -475,6 +499,87 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                 _option_id: "bedrock-gpt-oss",
                 options: [...baseConverseOptionsNoStop, ...gptOssOptions]
             };
+        }
+        else if (model.includes("twelvelabs")) {
+            if (model.includes("pegasus")) {
+                const pegasusOptions: ModelOptionInfoItem[] = [
+                    {
+                        name: "temperature",
+                        type: OptionType.numeric,
+                        min: 0.0,
+                        max: 1.0,
+                        default: 0.2,
+                        step: 0.1,
+                        description: "Controls randomness in the output"
+                    },
+                    {
+                        name: "max_tokens",
+                        type: OptionType.numeric,
+                        min: 1,
+                        max: 4096,
+                        integer: true,
+                        step: 100,
+                        description: "The maximum number of tokens to generate"
+                    }
+                ];
+                return {
+                    _option_id: "bedrock-twelvelabs-pegasus",
+                    options: pegasusOptions
+                };
+            } else if (model.includes("marengo")) {
+                const marengoOptions: ModelOptionInfoItem[] = [
+                    {
+                        name: "embeddingOption",
+                        type: OptionType.enum,
+                        enum: {
+                            "visual-text": "visual-text",
+                            "visual-image": "visual-image",
+                            "audio": "audio"
+                        },
+                        description: "The type of embedding to generate"
+                    },
+                    {
+                        name: "startSec",
+                        type: OptionType.numeric,
+                        min: 0,
+                        step: 0.1,
+                        description: "Start time in seconds for video/audio processing"
+                    },
+                    {
+                        name: "lengthSec",
+                        type: OptionType.numeric,
+                        min: 0,
+                        step: 0.1,
+                        description: "Length in seconds for video/audio processing"
+                    },
+                    {
+                        name: "useFixedLengthSec",
+                        type: OptionType.boolean,
+                        default: false,
+                        description: "Whether to use fixed length for video/audio processing"
+                    },
+                    {
+                        name: "minClipSec",
+                        type: OptionType.numeric,
+                        min: 0,
+                        step: 0.1,
+                        description: "Minimum clip length in seconds"
+                    },
+                    {
+                        name: "textTruncate",
+                        type: OptionType.enum,
+                        enum: {
+                            "start": "start",
+                            "end": "end"
+                        },
+                        description: "How to truncate text if it exceeds the limit"
+                    }
+                ];
+                return {
+                    _option_id: "bedrock-twelvelabs-marengo",
+                    options: marengoOptions
+                };
+            }
         }
 
         //Fallback to converse standard.
