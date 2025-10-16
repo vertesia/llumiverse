@@ -15,8 +15,20 @@ export interface ModelDefinition<PromptT = any> {
 
 export function getModelDefinition(model: string): ModelDefinition {
     const splits = model.split("/");
-    const publisher = splits[1];
-    const modelName = trimModelName(splits[splits.length - 1]);
+
+    // Handle both formats: "publishers/anthropic/models/..." and "locations/.../publishers/anthropic/models/..."
+    let publisher: string | undefined;
+    let modelName: string;
+
+    const publisherIndex = splits.indexOf("publishers");
+    if (publisherIndex !== -1 && publisherIndex + 1 < splits.length) {
+        publisher = splits[publisherIndex + 1];
+        modelName = trimModelName(splits[splits.length - 1]);
+    } else {
+        // Fallback to old logic for backward compatibility
+        publisher = splits[1];
+        modelName = trimModelName(splits[splits.length - 1]);
+    }
 
     if (publisher?.includes("anthropic")) {
         return new ClaudeModelDefinition(modelName);
