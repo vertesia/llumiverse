@@ -9,6 +9,17 @@ import { ModelDefinition } from "../models.js";
 import { MessageCreateParamsBase, MessageCreateParamsNonStreaming, RawMessageStreamEvent } from "@anthropic-ai/sdk/resources/messages.js";
 import { MessageStreamParams } from "@anthropic-ai/sdk/resources/index.mjs";
 
+export const ANTHROPIC_REGIONS: Record<string, string> = {
+    us: "us-east5",
+    eu: "europe-west1",
+    global: "global",
+}
+
+export const NON_GLOBAL_ANTHROPIC_MODELS = [
+    "claude-3-5",
+    "claude-3",
+];
+
 interface ClaudePrompt {
     messages: MessageParam[];
     system?: TextBlockParam[];
