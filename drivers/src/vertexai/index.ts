@@ -380,6 +380,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                         return false;
                     }
                     if (modelFamily.some(family => modelName.includes(family))) {
+                        if (modelName.includes("claude-3-7")) {
+                            return true;
+                        }
                         return !NON_GLOBAL_ANTHROPIC_MODELS.some(nonGlobalModel => modelName.includes(nonGlobalModel));
                     }
                     return false;
