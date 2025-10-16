@@ -1,4 +1,4 @@
-import { DataSource, ExecutionOptions, readStreamAsUint8Array } from "@llumiverse/core";
+import { DataSource, ExecutionOptions, readStreamAsBase64 } from "@llumiverse/core";
 import { PromptSegment, PromptRole } from "@llumiverse/core";
 
 // TwelveLabs Pegasus Request/Response Types
@@ -105,8 +105,7 @@ export async function formatTwelvelabsPegasusPrompt(
         } else {
             // Fall back to base64 encoding
             const stream = await videoFile.getStream();
-            const buffer = await readStreamAsUint8Array(stream);
-            const base64String = Buffer.from(buffer).toString('base64');
+            const base64String = await readStreamAsBase64(stream);
 
             mediaSource = {
                 base64String
@@ -115,8 +114,7 @@ export async function formatTwelvelabsPegasusPrompt(
     } catch (error) {
         // If getting URL fails, use base64 encoding
         const stream = await videoFile.getStream();
-        const buffer = await readStreamAsUint8Array(stream);
-        const base64String = Buffer.from(buffer).toString('base64');
+        const base64String = await readStreamAsBase64(stream);
 
         mediaSource = {
             base64String
