@@ -23,6 +23,7 @@ import { PredictionServiceClient, v1beta1 } from "@google-cloud/aiplatform";
 import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { ImagenModelDefinition, ImagenPrompt } from "./models/imagen.js";
 import { GoogleGenAI, Content, Model } from "@google/genai";
+import { NON_GLOBAL_ANTHROPIC_MODELS, ANTHROPIC_REGIONS } from "./models/claude.js";
 
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
@@ -130,12 +131,34 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return this.llamaClient;
     }
 
-    public getAnthropicClient(): AnthropicVertex {
-        //Lazy initialization
+    public getAnthropicClient(region: string = this.options.region): AnthropicVertex {
+        // Extract region prefix and map if it exists in ANTHROPIC_REGIONS, otherwise use as-is
+        const getRegionPrefix = (r: string) => r.split('-')[0];
+        const regionPrefix = getRegionPrefix(region);
+        const mappedRegion = ANTHROPIC_REGIONS[regionPrefix] || region;
+
+        const defaultRegionPrefix = getRegionPrefix(this.options.region);
+        const defaultMappedRegion = ANTHROPIC_REGIONS[defaultRegionPrefix] || this.options.region;
+
+        // If mapped region is different from default mapped region, create one-off client
+        if (mappedRegion !== defaultMappedRegion) {
+            return new AnthropicVertex({
+                timeout: 20 * 60 * 10000, // Set to 20 minutes, 10 minute default, setting this disables long request error: https://github.com/anthropics/anthropic-sdk-typescript?#long-requests
+                region: mappedRegion,
+                projectId: this.options.project,
+                googleAuth: new GoogleAuth({
+                    scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+                    authClient: this.authClient as JSONClient,
+                    projectId: this.options.project,
+                }),
+            });
+        }
+
+        //Lazy initialization for default region
         if (!this.anthropicClient) {
             this.anthropicClient = new AnthropicVertex({
                 timeout: 20 * 60 * 10000, // Set to 20 minutes, 10 minute default, setting this disables long request error: https://github.com/anthropics/anthropic-sdk-typescript?#long-requests
-                region: "us-east5",
+                region: mappedRegion,
                 projectId: this.options.project,
                 googleAuth: new GoogleAuth({
                     scopes: ["https://www.googleapis.com/auth/cloud-platform"],
@@ -352,6 +375,36 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                     tool_support: modelCapability.tool_support,
                 } satisfies AIModel<string>;
             }));
+
+            // Create global anthropic models for those not in NON_GLOBAL_ANTHROPIC_MODELS
+            if (publisher === 'anthropic') {
+                const globalAnthropicModels = response.filter((model) => {
+                    const modelName = model.name ?? "";
+                    if (retiredModels.some(retiredModel => modelName.includes(retiredModel))) {
+                        return false;
+                    }
+                    if (modelFamily.some(family => modelName.includes(family))) {
+                        if (modelName.includes("claude-3-7")) {
+                            return true;
+                        }
+                        return !NON_GLOBAL_ANTHROPIC_MODELS.some(nonGlobalModel => modelName.includes(nonGlobalModel));
+                    }
+                    return false;
+                }).map(model => {
+                    const modelCapability = getModelCapabilities(model.name ?? '', "vertexai");
+                    return {
+                        id: "locations/global/" + model.name,
+                        name: "Global " + model.name?.split('/').pop(),
+                        provider: 'vertexai',
+                        owner: publisher,
+                        input_modalities: modelModalitiesToArray(modelCapability.input),
+                        output_modalities: modelModalitiesToArray(modelCapability.output),
+                        tool_support: modelCapability.tool_support,
+                    } satisfies AIModel<string>;
+                });
+
+                models = models.concat(globalAnthropicModels);
+            }
 
             // Add additional models that are not in the listing
             for (const additionalModel of additionalModels[publisher as keyof typeof additionalModels]) {
