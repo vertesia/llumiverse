@@ -132,9 +132,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     public getAnthropicClient(region: string = this.options.region): AnthropicVertex {
-        // Map region if it exists in ANTHROPIC_REGIONS, otherwise use as-is
-        const mappedRegion = ANTHROPIC_REGIONS[region] || region;
-        const defaultMappedRegion = ANTHROPIC_REGIONS[this.options.region] || this.options.region;
+        // Extract region prefix and map if it exists in ANTHROPIC_REGIONS, otherwise use as-is
+        const getRegionPrefix = (r: string) => r.split('-')[0];
+        const regionPrefix = getRegionPrefix(region);
+        const mappedRegion = ANTHROPIC_REGIONS[regionPrefix] || region;
+
+        const defaultRegionPrefix = getRegionPrefix(this.options.region);
+        const defaultMappedRegion = ANTHROPIC_REGIONS[defaultRegionPrefix] || this.options.region;
 
         // If mapped region is different from default mapped region, create one-off client
         if (mappedRegion !== defaultMappedRegion) {
