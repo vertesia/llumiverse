@@ -94,11 +94,11 @@ importers:
   drivers:
     dependencies:
       '@anthropic-ai/sdk':
-        specifier: ^0.59.0
-        version: 0.59.0
+        specifier: ^0.66.0
+        version: 0.66.0(zod@3.25.63)
       '@anthropic-ai/vertex-sdk':
-        specifier: ^0.13.0
-        version: 0.13.0
+        specifier: ^0.14.0
+        version: 0.14.0(zod@3.25.63)
       '@aws-sdk/client-bedrock':
         specifier: ^3.840.0
         version: 3.840.0
@@ -215,12 +215,17 @@ importers:
 
 packages:
 
-  '@anthropic-ai/sdk@0.59.0':
-    resolution: {integrity: sha512-m9w9tC+N+GUNprwEOhU3VKKSYwXA1fIevRCe7kOFonV4xu5vxqmqyoLy+dkdVvc5W1F4WUTVE/7I4criaF9gnw==}
+  '@anthropic-ai/sdk@0.66.0':
+    resolution: {integrity: sha512-GBSSby0P4BW/sOdvsTXaHJDPnGEL5tuB4TtsU4SXG7+dVULQ9MkKgNznCALDCgSV5yhrtQlctvEdMqePVIXTiw==}
     hasBin: true
+    peerDependencies:
+      zod: ^3.25.0 || ^4.0.0
+    peerDependenciesMeta:
+      zod:
+        optional: true
 
-  '@anthropic-ai/vertex-sdk@0.13.0':
-    resolution: {integrity: sha512-3ddzAzYvdjGpvdJgJz3NrHS+kqsA8bPYnK+Obd4t6g14w3dtpaA1IMT+mCQXBVA7VyE68h6jkS9AaXHpdGjmGA==}
+  '@anthropic-ai/vertex-sdk@0.14.0':
+    resolution: {integrity: sha512-YIonqYEwQ9ILvpeOUBRBCv+91nzIs/MAZIAJ6yyJ3muwoTbZdEu54A2HcM4nRHH+Gy1vxz0FVau6aGSayXNeWQ==}
 
   '@aws-crypto/crc32@5.2.0':
     resolution: {integrity: sha512-nLbCWqQNgUiwwtFsen1AdzAtvuLRsQS8rYgMuxCrdKf9kOssamGLuPwyTY9wyYblNr9+1XM8v6zoDTPPSIeANg==}
@@ -502,6 +507,10 @@ packages:
   '@azure/storage-blob@12.27.0':
     resolution: {integrity: sha512-IQjj9RIzAKatmNca3D6bT0qJ+Pkox1WZGOg2esJF2YLHb45pQKOwGPIAV+w3rfgkj7zV3RMxpn/c6iftzSOZJQ==}
     engines: {node: '>=18.0.0'}
+
+  '@babel/runtime@7.28.4':
+    resolution: {integrity: sha512-Q/N6JNWvIvPnLDvjlE1OUBLPQHH6l3CltCEsHIujp45zQUSSh8K+gHnaEX45yAT1nyngnINhvWtzN+Nb9D8RAQ==}
+    engines: {node: '>=6.9.0'}
 
   '@esbuild/aix-ppc64@0.25.6':
     resolution: {integrity: sha512-ShbM/3XxwuxjFiuVBHA+d3j5dyac0aEVVq1oluIDf71hUw0aRF59dV/efUsIwFnR6m8JNM2FjZOzmaZ8yG61kw==}
@@ -1936,6 +1945,10 @@ packages:
   json-buffer@3.0.1:
     resolution: {integrity: sha512-4bV5BfR2mqfQTJm+V5tPPdf+ZpuhiIvTuAB5g8kcrXOZpTT/QwwVRWBywX1ozr6lEuPdbHxwaJlm9G6mI2sfSQ==}
 
+  json-schema-to-ts@3.1.1:
+    resolution: {integrity: sha512-+DWg8jCJG2TEnpy7kOm/7/AxaYoaRbjVB4LFZLySZlWn8exGs3A4OLJR966cVvU26N7X9TWxl+Jsw7dzAqKT6g==}
+    engines: {node: '>=16'}
+
   json-schema-traverse@0.4.1:
     resolution: {integrity: sha512-xbbCH5dCYU5T8LcEhhuh7HJ88HXuW3qsI3Y0zOZFKfZEHcpWiHU/Jxzk629Brsab/mMiHQti9wMP+845RPe3Vg==}
 
@@ -2471,6 +2484,9 @@ packages:
   tr46@0.0.3:
     resolution: {integrity: sha512-N3WMsuqV66lT30CrXNbEjx4GEwlow3v6rr4mCcv6prnfwhS01rkgyFdjPNBYd9br7LpXV1+Emh01fHnq2Gdgrw==}
 
+  ts-algebra@2.0.0:
+    resolution: {integrity: sha512-FPAhNPFMrkwz76P7cdjdmiShwMynZYN6SgOujD1urY4oNm80Ou9oMdmbR45LotcKOXoy7wSmHkRFE6Mxbrhefw==}
+
   ts-api-utils@2.1.0:
     resolution: {integrity: sha512-CUgTZL1irw8u29bzrOD/nH85jqyc74D6SshFgujOIA7osm2Rz7dYH77agkx7H4FBNxDq7Cjf+IjaX/8zwFW+ZQ==}
     engines: {node: '>=18.12'}
@@ -2678,15 +2694,20 @@ packages:
 
 snapshots:
 
-  '@anthropic-ai/sdk@0.59.0': {}
-
-  '@anthropic-ai/vertex-sdk@0.13.0':
+  '@anthropic-ai/sdk@0.66.0(zod@3.25.63)':
     dependencies:
-      '@anthropic-ai/sdk': 0.59.0
+      json-schema-to-ts: 3.1.1
+    optionalDependencies:
+      zod: 3.25.63
+
+  '@anthropic-ai/vertex-sdk@0.14.0(zod@3.25.63)':
+    dependencies:
+      '@anthropic-ai/sdk': 0.66.0(zod@3.25.63)
       google-auth-library: 9.15.1
     transitivePeerDependencies:
       - encoding
       - supports-color
+      - zod
 
   '@aws-crypto/crc32@5.2.0':
     dependencies:
@@ -3555,6 +3576,8 @@ snapshots:
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
+
+  '@babel/runtime@7.28.4': {}
 
   '@esbuild/aix-ppc64@0.25.6':
     optional: true
@@ -5177,6 +5200,11 @@ snapshots:
 
   json-buffer@3.0.1: {}
 
+  json-schema-to-ts@3.1.1:
+    dependencies:
+      '@babel/runtime': 7.28.4
+      ts-algebra: 2.0.0
+
   json-schema-traverse@0.4.1: {}
 
   json-schema-traverse@1.0.0: {}
@@ -5752,6 +5780,8 @@ snapshots:
     optional: true
 
   tr46@0.0.3: {}
+
+  ts-algebra@2.0.0: {}
 
   ts-api-utils@2.1.0(typescript@5.9.2):
     dependencies:
