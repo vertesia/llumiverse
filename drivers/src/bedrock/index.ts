@@ -826,7 +826,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const unsupportedModelsByPublisher = {
             amazon: ["titan-image-generator", "nova-reel", "nova-sonic", "rerank"],
             anthropic: [],
-            cohere: ["rerank"],
+            cohere: ["rerank", "embed"],
             ai21: [],
             mistral: [],
             meta: [],
