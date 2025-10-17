@@ -293,7 +293,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         //Some of these use the completions API instead of the chat completions API.
         //Others are for non-text input modalities. Therefore common to both.
         const wordBlacklist = ["embed", "whisper", "transcribe", "audio", "moderation", "tts",
-            "realtime", "dall-e", "babbage", "davinci", "codex", "o1-pro"];
+            "realtime", "dall-e", "babbage", "davinci", "codex", "o1-pro", "computer-use", "sora"];
 
 
         //OpenAI has very little information, filtering based on name.
@@ -304,11 +304,15 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         const models = filter ? result.filter(filter) : result;
         const aiModels = models.map((m) => {
             const modelCapability = getModelCapabilities(m.id, "openai");
+            let owner = m.owned_by;
+            if (owner == "system") {
+                owner = "openai";
+            }
             return {
                 id: m.id,
                 name: m.id,
                 provider: this.provider,
-                owner: m.owned_by,
+                owner: owner,
                 type: m.object === "model" ? ModelType.Text : ModelType.Unknown,
                 can_stream: true,
                 is_multimodal: m.id.includes("gpt-4"),
