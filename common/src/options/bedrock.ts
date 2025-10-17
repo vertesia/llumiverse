@@ -2,7 +2,7 @@ import { ModelOptionsInfo, ModelOptions, OptionType, ModelOptionInfoItem } from 
 import { textOptionsFallback } from "./fallback.js";
 
 // Union type of all Bedrock options
-export type BedrockOptions = NovaCanvasOptions | BaseConverseOptions | BedrockClaudeOptions | BedrockPalmyraOptions | BedrockGptOssOptions;
+export type BedrockOptions = NovaCanvasOptions | BaseConverseOptions | BedrockClaudeOptions | BedrockPalmyraOptions | BedrockGptOssOptions | TwelvelabsPegasusOptions;
 
 export interface NovaCanvasOptions {
     _option_id: "bedrock-nova-canvas"
@@ -49,6 +49,12 @@ export interface BedrockGptOssOptions extends BaseConverseOptions {
     reasoning_effort?: "low" | "medium" | "high";
     frequency_penalty?: number;
     presence_penalty?: number;
+}
+
+export interface TwelvelabsPegasusOptions {
+    _option_id: "bedrock-twelvelabs-pegasus";
+    temperature?: number;
+    max_tokens?: number;
 }
 
 export function getMaxTokensLimitBedrock(model: string): number | undefined {
@@ -134,6 +140,14 @@ export function getMaxTokensLimitBedrock(model: string): number | undefined {
     // OpenAI gpt-oss models
     if (model.includes("gpt-oss")) {
         return 128000;
+    }
+    // TwelveLabs models
+    else if (model.includes("twelvelabs")) {
+        if (model.includes("pegasus")) {
+            return 4096; // Max output tokens for Pegasus
+        }
+        // Marengo is an embedding model, doesn't generate text
+        return undefined;
     }
 
     // Default fallback
@@ -475,6 +489,34 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                 _option_id: "bedrock-gpt-oss",
                 options: [...baseConverseOptionsNoStop, ...gptOssOptions]
             };
+        }
+        else if (model.includes("twelvelabs")) {
+            if (model.includes("pegasus")) {
+                const pegasusOptions: ModelOptionInfoItem[] = [
+                    {
+                        name: "temperature",
+                        type: OptionType.numeric,
+                        min: 0.0,
+                        max: 1.0,
+                        default: 0.2,
+                        step: 0.1,
+                        description: "Controls randomness in the output"
+                    },
+                    {
+                        name: "max_tokens",
+                        type: OptionType.numeric,
+                        min: 1,
+                        max: 4096,
+                        integer: true,
+                        step: 100,
+                        description: "The maximum number of tokens to generate"
+                    }
+                ];
+                return {
+                    _option_id: "bedrock-twelvelabs-pegasus",
+                    options: pegasusOptions
+                };
+            } 
         }
 
         //Fallback to converse standard.

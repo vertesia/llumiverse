@@ -53,8 +53,8 @@
         "vitest": "^3.2.4"
     },
     "dependencies": {
-        "@anthropic-ai/sdk": "^0.59.0",
-        "@anthropic-ai/vertex-sdk": "^0.13.0",
+        "@anthropic-ai/sdk": "^0.66.0",
+        "@anthropic-ai/vertex-sdk": "^0.14.0",
         "@aws-sdk/client-bedrock": "^3.840.0",
         "@aws-sdk/client-bedrock-runtime": "^3.840.0",
         "@aws-sdk/client-s3": "^3.840.0",
