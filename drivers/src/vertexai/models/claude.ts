@@ -9,6 +9,17 @@ import { ModelDefinition } from "../models.js";
 import { MessageCreateParamsBase, MessageCreateParamsNonStreaming, RawMessageStreamEvent } from "@anthropic-ai/sdk/resources/messages.js";
 import { MessageStreamParams } from "@anthropic-ai/sdk/resources/index.mjs";
 
+export const ANTHROPIC_REGIONS: Record<string, string> = {
+    us: "us-east5",
+    europe: "europe-west1",
+    global: "global",
+}
+
+export const NON_GLOBAL_ANTHROPIC_MODELS = [
+    "claude-3-5",
+    "claude-3",
+];
+
 interface ClaudePrompt {
     messages: MessageParam[];
     system?: TextBlockParam[];
@@ -250,7 +261,15 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
     }
 
     async requestTextCompletion(driver: VertexAIDriver, prompt: ClaudePrompt, options: ExecutionOptions): Promise<Completion> {
-        const client = driver.getAnthropicClient();
+        const splits = options.model.split("/");
+        let region: string | undefined = undefined;
+        if (splits[0] === "locations" && splits.length >= 2) {
+            region = splits[1];
+        }
+        const modelName = splits[splits.length - 1];
+        options = { ...options, model: modelName };
+
+        const client = driver.getAnthropicClient(region);
         options.model_options = options.model_options as VertexAIClaudeOptions;
 
         if (options.model_options?._option_id !== "vertexai-claude") {
@@ -287,7 +306,15 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
     }
 
     async requestTextCompletionStream(driver: VertexAIDriver, prompt: ClaudePrompt, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
-        const client = driver.getAnthropicClient();
+        const splits = options.model.split("/");
+        let region: string | undefined = undefined;
+        if (splits[0] === "locations" && splits.length >= 2) {
+            region = splits[1];
+        }
+        const modelName = splits[splits.length - 1];
+        options = { ...options, model: modelName };
+
+        const client = driver.getAnthropicClient(region);
         const model_options = options.model_options as VertexAIClaudeOptions | undefined;
 
         if (model_options?._option_id !== "vertexai-claude") {
@@ -399,8 +426,7 @@ interface RequestOptions {
 }
 
 function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { payload: MessageCreateParamsBase, requestOptions: RequestOptions | undefined } {
-    const splits = options.model.split("/");
-    const modelName = splits[splits.length - 1];
+    const modelName = options.model; // Model name is already extracted in the calling methods
     const model_options = options.model_options as VertexAIClaudeOptions;
 
     // Add beta header for Claude 3.7 models to enable 128k output tokens

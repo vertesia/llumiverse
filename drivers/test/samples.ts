@@ -102,7 +102,7 @@ export const testPrompt_textToImage: NovaMessagesPrompt =
     messages: [{
         role: PromptRole.user,
         content: [{
-            text: "A blue sky with a purple unicorn flying, cosplaying flash"
+            text: "A blue sky with a purple unicorn flying"
         }]
     }]
 }
@@ -112,7 +112,7 @@ export const testPrompt_textToImageGuidance: NovaMessagesPrompt =
     messages: [{
         role: PromptRole.user,
         content: [{
-            text: "A blue sky with a purple unicorn flying, cosplaying flash"
+            text: "A blue sky with a purple unicorn flying"
         },
         {
             image: {
