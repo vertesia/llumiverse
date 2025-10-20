@@ -289,6 +289,44 @@ function getGeminiOptions(model: string, _option?: ModelOptions): ModelOptionsIn
             options
         };
     }
+    // Special handling for gemini-2.5-flash-image
+    if (model.includes("gemini-2.5-flash-image")) {
+        const max_tokens_limit = 32768;
+        const excludeOptions = ["max_tokens", "presence_penalty", "frequency_penalty", "seed", "top_k"];
+        let commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
+
+        // Set max temperature to 2.0 for gemini-2.5-flash-image
+        commonOptions = commonOptions.map((option) => {
+            if (
+                option.name === SharedOptions.temperature &&
+                option.type === OptionType.numeric
+            ) {
+                return {
+                    ...option,
+                    max: 2.0,
+                };
+            }
+            return option;
+        });
+
+        const max_tokens: ModelOptionInfoItem[] = [{
+            name: SharedOptions.max_tokens,
+            type: OptionType.numeric,
+            min: 1,
+            max: max_tokens_limit,
+            integer: true,
+            step: 200,
+            description: "Maximum output tokens"
+        }];
+
+        return {
+            _option_id: "vertexai-gemini",
+            options: [
+                ...max_tokens,
+                ...commonOptions,
+            ]
+        };
+    }
     const max_tokens_limit = getGeminiMaxTokensLimit(model);
     const excludeOptions = ["max_tokens"];
     const commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));

@@ -1,10 +1,9 @@
 
-import { Bedrock } from '@aws-sdk/client-bedrock';
-import { AbstractDriver, CompletionStream, ExecutionResponse, extractAndParseJSON, parseCompletionResultsToJson, completionResultToString } from '@llumiverse/core';
+import { AbstractDriver, AbstractDriver, CompletionStream, ExecutionResponse, extractAndParseJSON, parseCompletionResultsToJson, completionResultToString } from '@llumiverse/core';
 import { expect } from "vitest";
-import { BedrockDriver } from '../src';
+import { completionResultToString, parseCompletionResultsToJson } from './utils.js';
 
-export function assertCompletionOk(r: ExecutionResponse, model?: string, driver?: AbstractDriver) {
+export function assertCompletionOk(r: ExecutionResponse, model?: string, driver?: AbstractDriver: AbstractDriver) {
     expect(r.error).toBeFalsy();
     expect(r.prompt).toBeTruthy();
     //TODO: This just checks for existence of the object,
@@ -19,7 +18,7 @@ export function assertCompletionOk(r: ExecutionResponse, model?: string, driver?
     expect(stringResult.length).toBeGreaterThan(2);
 }
 
-export async function assertStreamingCompletionOk(stream: CompletionStream, jsonMode: boolean=false) {
+export async function assertStreamingCompletionOk(stream: CompletionStream, jsonMode: boolean = false) {
 
     const out: string[] = []
     for await (const chunk of stream) {
@@ -35,7 +34,7 @@ export async function assertStreamingCompletionOk(stream: CompletionStream, json
     if (jsonMode) {
         expect(jsonResult).toStrictEqual(jsonObject);
     }
-    
+
     expect(r.error).toBeFalsy();
     expect(r.prompt).toBeTruthy();
     expect(r.token_usage).toBeTruthy();

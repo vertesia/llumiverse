@@ -20,6 +20,12 @@ import { LRUCache } from "mnemonist";
 import { converseConcatMessages, converseJSONprefill, converseSystemToMessages, formatConversePrompt } from "./converse.js";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
 import { forceUploadFile } from "./s3.js";
+import {
+    formatTwelvelabsPegasusPrompt,
+    TwelvelabsPegasusRequest,
+    TwelvelabsMarengoRequest,
+    TwelvelabsMarengoResponse
+} from "./twelvelabs.js";
 
 const supportStreamingCache = new LRUCache<string, boolean>(4096);
 
@@ -84,7 +90,7 @@ function maxTokenFallbackClaude(option: StatelessExecutionOptions): number {
     }
 }
 
-export type BedrockPrompt = NovaMessagesPrompt | ConverseRequest;
+export type BedrockPrompt = NovaMessagesPrompt | ConverseRequest | TwelvelabsPegasusRequest;
 
 export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockPrompt> {
 
@@ -128,6 +134,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     protected async formatPrompt(segments: PromptSegment[], opts: ExecutionOptions): Promise<BedrockPrompt> {
         if (opts.model.includes("canvas")) {
             return await formatNovaPrompt(segments, opts.result_schema);
+        }
+        if (opts.model.includes("twelvelabs.pegasus")) {
+            return await formatTwelvelabsPegasusPrompt(segments, opts);
         }
         return await formatConversePrompt(segments, opts);
     }
@@ -320,6 +329,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     protected async canStream(options: ExecutionOptions): Promise<boolean> {
+        // // TwelveLabs Pegasus supports streaming according to the documentation
+        // if (options.model.includes("twelvelabs.pegasus")) {
+        //     return true;
+        // }
+
         let canStream = supportStreamingCache.get(options.model);
         if (canStream == null) {
             let type = BedrockModelType.Unknown;
@@ -336,8 +350,15 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return canStream;
     }
 
-    async requestTextCompletion(prompt: ConverseRequest, options: ExecutionOptions): Promise<Completion> {
-        let conversation = updateConversation(options.conversation as ConverseRequest, prompt);
+    async requestTextCompletion(prompt: BedrockPrompt, options: ExecutionOptions): Promise<Completion> {
+        // Handle Twelvelabs Pegasus models
+        if (options.model.includes("twelvelabs.pegasus")) {
+            return this.requestTwelvelabsPegasusCompletion(prompt as TwelvelabsPegasusRequest, options);
+        }
+
+        // Handle other Bedrock models that use Converse API
+        const conversePrompt = prompt as ConverseRequest;
+        let conversation = updateConversation(options.conversation as ConverseRequest, conversePrompt);
 
         const payload = this.preparePayload(conversation, options);
         const executor = this.getExecutor();
@@ -348,7 +369,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         conversation = updateConversation(conversation, {
             messages: [res.output?.message ?? { content: [{ text: "" }], role: "assistant" }],
-            modelId: prompt.modelId,
+            modelId: conversePrompt.modelId,
         });
 
         let tool_use: ToolUse[] | undefined = undefined;
@@ -369,7 +390,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
 
         const completion = {
-            ...this.getExtractedExecution(res, prompt, options),
+            ...this.getExtractedExecution(res, conversePrompt, options),
             original_response: options.include_original_response ? res : undefined,
             conversation: conversation,
             tool_use: tool_use,
@@ -378,8 +399,104 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return completion;
     }
 
-    async requestTextCompletionStream(prompt: ConverseRequest, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
-        const payload = this.preparePayload(prompt, options);
+    private async requestTwelvelabsPegasusCompletion(prompt: TwelvelabsPegasusRequest, options: ExecutionOptions): Promise<Completion> {
+        const executor = this.getExecutor();
+
+        const res = await executor.invokeModel({
+            modelId: options.model,
+            contentType: "application/json",
+            accept: "application/json",
+            body: JSON.stringify(prompt),
+        });
+
+        const decoder = new TextDecoder();
+        const body = decoder.decode(res.body);
+        const result = JSON.parse(body);
+
+        // Extract the response according to TwelveLabs Pegasus format
+        let finishReason: string | undefined;
+        switch (result.finishReason) {
+            case "stop":
+                finishReason = "stop";
+                break;
+            case "length":
+                finishReason = "length";
+                break;
+            default:
+                finishReason = result.finishReason;
+        }
+
+        return {
+            result: result.message ? [{ type: "text" as const, value: result.message }] : [],
+            finish_reason: finishReason,
+            original_response: options.include_original_response ? result : undefined,
+        };
+    }
+
+    private async requestTwelvelabsPegasusCompletionStream(prompt: TwelvelabsPegasusRequest, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+        const executor = this.getExecutor();
+
+        const res = await executor.invokeModelWithResponseStream({
+            modelId: options.model,
+            contentType: "application/json",
+            accept: "application/json",
+            body: JSON.stringify(prompt),
+        });
+
+        if (!res.body) {
+            throw new Error("[Bedrock] Stream not found in response");
+        }
+
+        return transformAsyncIterator(res.body, (chunk: any) => {
+            if (chunk.chunk?.bytes) {
+                const decoder = new TextDecoder();
+                const body = decoder.decode(chunk.chunk.bytes);
+
+                try {
+                    const result = JSON.parse(body);
+
+                    // Extract streaming response according to TwelveLabs Pegasus format
+                    let finishReason: string | undefined;
+                    if (result.finishReason) {
+                        switch (result.finishReason) {
+                            case "stop":
+                                finishReason = "stop";
+                                break;
+                            case "length":
+                                finishReason = "length";
+                                break;
+                            default:
+                                finishReason = result.finishReason;
+                        }
+                    }
+
+                    return {
+                        result: result.delta || result.message ? [{ type: "text" as const, value: result.delta || result.message || "" }] : [],
+                        finish_reason: finishReason,
+                    } satisfies CompletionChunkObject;
+                } catch (error) {
+                    // If JSON parsing fails, return empty chunk
+                    return {
+                        result: [],
+                    } satisfies CompletionChunkObject;
+                }
+            }
+
+            return {
+                result: [],
+            } satisfies CompletionChunkObject;
+        });
+    }
+
+    async requestTextCompletionStream(prompt: BedrockPrompt, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+        // Handle Twelvelabs Pegasus models
+        if (options.model.includes("twelvelabs.pegasus")) {
+            return this.requestTwelvelabsPegasusCompletionStream(prompt as TwelvelabsPegasusRequest, options);
+        }
+
+        // Handle other Bedrock models that use Converse API
+        const conversePrompt = prompt as ConverseRequest;
+        const payload = this.preparePayload(conversePrompt, options);
         const executor = this.getExecutor();
         return executor.converseStream({
             ...payload,
@@ -391,7 +508,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
 
             return transformAsyncIterator(stream, (streamSegment: ConverseStreamOutput) => {
-                return this.getExtractedStream(streamSegment, prompt, options);
+                return this.getExtractedStream(streamSegment, conversePrompt, options);
             });
 
         }).catch((err) => {
@@ -703,17 +820,21 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             foundationModels = foundationModels.filter(foundationFilter);
         }
 
-        const supportedPublishers = ["amazon", "anthropic", "cohere", "ai21", "mistral", "meta", "deepseek", "writer", "openai"];
+        const supportedPublishers = ["amazon", "anthropic", "cohere", "ai21",
+            "mistral", "meta", "deepseek", "writer",
+            "openai", "twelvelabs", "qwen"];
         const unsupportedModelsByPublisher = {
             amazon: ["titan-image-generator", "nova-reel", "nova-sonic", "rerank"],
             anthropic: [],
-            cohere: ["rerank"],
+            cohere: ["rerank", "embed"],
             ai21: [],
             mistral: [],
             meta: [],
             deepseek: [],
             writer: [],
             openai: [],
+            twelvelabs: ["marengo"],
+            qwen: [],
         };
 
         // Helper function to check if model should be filtered out
@@ -839,6 +960,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     async generateEmbeddings({ text, image, model }: EmbeddingsOptions): Promise<EmbeddingsResult> {
 
         this.logger.info("[Bedrock] Generating embeddings with model " + model);
+
+        // Handle TwelveLabs Marengo models
+        if (model?.includes("twelvelabs.marengo")) {
+            return this.generateTwelvelabsMarengoEmbeddings({ text, image, model });
+        }
+
+        // Handle other Bedrock embedding models
         const defaultModel = image ? "amazon.titan-embed-image-v1" : "amazon.titan-embed-text-v2:0";
         const modelID = model ?? defaultModel;
 
@@ -869,6 +997,51 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             values: result.embedding,
             model: modelID,
             token_count: result.inputTextTokenCount
+        };
+    }
+
+    private async generateTwelvelabsMarengoEmbeddings({ text, image, model }: EmbeddingsOptions): Promise<EmbeddingsResult> {
+        const executor = this.getExecutor();
+
+        // Prepare the request payload for TwelveLabs Marengo
+        let invokeBody: TwelvelabsMarengoRequest = {
+            inputType: "text"
+        };
+
+        if (text) {
+            invokeBody.inputText = text;
+            invokeBody.inputType = "text";
+        }
+
+        if (image) {
+            // For the embeddings interface, image is expected to be base64
+            invokeBody.mediaSource = {
+                base64String: image
+            };
+            invokeBody.inputType = "image";
+        }
+
+        const res = await executor.invokeModel({
+            modelId: model!,
+            contentType: "application/json",
+            accept: "application/json",
+            body: JSON.stringify(invokeBody),
+        });
+
+        const decoder = new TextDecoder();
+        const body = decoder.decode(res.body);
+        const result: TwelvelabsMarengoResponse = JSON.parse(body);
+
+        // TwelveLabs Marengo returns embedding data
+        if (!result.embedding) {
+            throw new Error("Embeddings not found in TwelveLabs Marengo response");
+        }
+
+        return {
+            values: result.embedding,
+            model: model!,
+            // TwelveLabs Marengo doesn't return token count in the same way
+            token_count: undefined
         };
     }
 }
