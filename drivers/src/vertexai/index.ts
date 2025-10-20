@@ -22,7 +22,7 @@ import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
 import { PredictionServiceClient, v1beta1 } from "@google-cloud/aiplatform";
 import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { ImagenModelDefinition, ImagenPrompt } from "./models/imagen.js";
-import { GoogleGenAI, Content, Model, Model } from "@google/genai";
+import { GoogleGenAI, Content, Model } from "@google/genai";
 import { NON_GLOBAL_ANTHROPIC_MODELS, ANTHROPIC_REGIONS } from "./models/claude.js";
 
 export interface VertexAIDriverOptions extends DriverOptions {
