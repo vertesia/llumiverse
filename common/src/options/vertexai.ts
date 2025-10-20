@@ -247,46 +247,40 @@ function getImagenOptions(model: string, option?: ModelOptions): ModelOptionsInf
 function getGeminiOptions(model: string, _option?: ModelOptions): ModelOptionsInfo {
     // Special handling for gemini-2.5-flash-image
     if (model.includes("gemini-2.5-flash-image")) {
-        const options: ModelOptionInfoItem[] = [
-            {
-                name: SharedOptions.temperature,
-                type: OptionType.numeric,
-                min: 0.0,
-                max: 2.0,
-                default: 0.7,
-                step: 0.01,
-                description: "Sampling temperature"
-            },
-            {
-                name: SharedOptions.top_p,
-                type: OptionType.numeric,
-                min: 0.0,
-                max: 1.0,
-                step: 0.01,
-                description: "Nucleus sampling probability"
-            },
-            {
-                name: "candidate_count",
-                type: OptionType.numeric,
-                min: 1,
-                max: 8,
-                default: 1,
-                integer: true,
-                description: "Number of candidates to generate"
-            },
-            {
-                name: SharedOptions.max_tokens,
-                type: OptionType.numeric,
-                min: 1,
-                max: 32768,
-                integer: true,
-                step: 200,
-                description: "Maximum output tokens"
+        const max_tokens_limit = 32768;
+        const excludeOptions = ["max_tokens", "presence_penalty", "frequency_penalty", "seed", "top_k"];
+        let commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
+
+        // Set max temperature to 2.0 for gemini-2.5-flash-image
+        commonOptions = commonOptions.map((option) => {
+            if (
+                option.name === SharedOptions.temperature &&
+                option.type === OptionType.numeric
+            ) {
+                return {
+                    ...option,
+                    max: 2.0,
+                };
             }
-        ];
+            return option;
+        });
+
+        const max_tokens: ModelOptionInfoItem[] = [{
+            name: SharedOptions.max_tokens,
+            type: OptionType.numeric,
+            min: 1,
+            max: max_tokens_limit,
+            integer: true,
+            step: 200,
+            description: "Maximum output tokens"
+        }];
+
         return {
             _option_id: "vertexai-gemini",
-            options
+            options: [
+                ...max_tokens,
+                ...commonOptions,
+            ]
         };
     }
     const max_tokens_limit = getGeminiMaxTokensLimit(model);

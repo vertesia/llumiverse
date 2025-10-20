@@ -1,7 +1,7 @@
 import {
     Content, FinishReason, FunctionCallingConfigMode, FunctionDeclaration, GenerateContentConfig, GenerateContentParameters,
     GenerateContentResponseUsageMetadata,
-    HarmBlockThreshold, HarmCategory, Part, SafetySetting, Schema, Tool, Type
+    HarmBlockThreshold, HarmCategory, Modality, Part, SafetySetting, Schema, Tool, Type
 } from "@google/genai";
 import {
     AIModel, Completion, CompletionChunkObject, CompletionResult, ExecutionOptions,
@@ -56,7 +56,15 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
         || options.model.includes("gemini-2.5");
 
     const configNanoBanana: GenerateContentConfig = {
-        responseModalities: ["TEXT", "IMAGE"]
+        systemInstruction: prompt.system,
+        safetySettings: geminiSafetySettings,
+        responseModalities: [Modality.TEXT, Modality.IMAGE], // This is an error if only Text, and Only Image just gets blank responses.
+        candidateCount: 1,
+        //Model options
+        temperature: model_options?.temperature,
+        topP: model_options?.top_p,
+        maxOutputTokens: geminiMaxTokens(options),
+        stopSequences: model_options?.stop_sequence,
     }
 
     const config: GenerateContentConfig = {
@@ -502,7 +510,7 @@ export function mergeConsecutiveRole(contents: Content[] | undefined): Content[]
 const supportedFinishReasons: FinishReason[] = [
     FinishReason.MAX_TOKENS,
     FinishReason.STOP,
-    FinishReason.FINISH_REASON_UNSPECIFIED
+    FinishReason.FINISH_REASON_UNSPECIFIED,
 ]
 
 function geminiMaxTokens(option: StatelessExecutionOptions) {
