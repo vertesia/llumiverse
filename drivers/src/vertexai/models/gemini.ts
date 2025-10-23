@@ -65,6 +65,9 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
         topP: model_options?.top_p,
         maxOutputTokens: geminiMaxTokens(options),
         stopSequences: model_options?.stop_sequence,
+        imageConfig: {
+            aspectRatio: model_options?.image_aspect_ratio,
+        }
     }
 
     const config: GenerateContentConfig = {
@@ -724,7 +727,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         let region: string | undefined = undefined;
         if (splits[0] === "locations" && splits.length >= 2) {
             region = splits[1];
-        } 
+        }
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
 
@@ -792,7 +795,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         let region: string | undefined = undefined;
         if (splits[0] === "locations" && splits.length >= 2) {
             region = splits[1];
-        } 
+        }
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
 
