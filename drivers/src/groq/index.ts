@@ -287,13 +287,13 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
 
             return {
                 result: choice.delta.content ? [{ type: "text", value: choice.delta.content }] : [],
-                finish_reason: finish_reason,
+                finish_reason: finish_reason ?? undefined,
                 token_usage: {
                     prompt: chunk.x_groq?.usage?.prompt_tokens,
                     result: chunk.x_groq?.usage?.completion_tokens,
                     total: chunk.x_groq?.usage?.total_tokens,
                 },
-            } as CompletionChunkObject;
+            } satisfies CompletionChunkObject;
         });
     }
 
