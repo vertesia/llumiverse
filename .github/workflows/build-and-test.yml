@@ -47,6 +47,7 @@ jobs:
         with:
           project_id: "dengenlabs"
           workload_identity_provider: "projects/265888598630/locations/global/workloadIdentityPools/composable-cloud/providers/github"
+          create_credentials_file: true
 
       - uses: "aws-actions/configure-aws-credentials@v4.2.1"
         with:
@@ -64,3 +65,4 @@ jobs:
           BEDROCK_REGION: us-east-1
           GOOGLE_PROJECT_ID: dengenlabs
           GOOGLE_REGION: us-central1
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.gauth.outputs.credentials_file_path }}
