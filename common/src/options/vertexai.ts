@@ -75,6 +75,7 @@ export interface VertexAIGeminiOptions {
     seed?: number;
     include_thoughts?: boolean;
     thinking_budget_tokens?: number;
+    image_aspect_ratio?: "1:1" | "2:3" | "3:2" | "3:4" | "4:3" | "9:16" | "16:9" | "21:9";
 }
 
 export function getVertexAiOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
@@ -275,11 +276,28 @@ function getGeminiOptions(model: string, _option?: ModelOptions): ModelOptionsIn
             description: "Maximum output tokens"
         }];
 
+        const imageAspectRatio: ModelOptionInfoItem[] = [{
+            name: "image_aspect_ratio",
+            type: OptionType.enum,
+            enum: {
+                "1:1": "1:1",
+                "2:3": "2:3",
+                "3:2": "3:2",
+                "3:4": "3:4",
+                "4:3": "4:3",
+                "9:16": "9:16",
+                "16:9": "16:9",
+                "21:9": "21:9"
+            },
+            description: "Aspect ratio of the generated images"
+        }];
+
         return {
             _option_id: "vertexai-gemini",
             options: [
                 ...max_tokens,
                 ...commonOptions,
+                ...imageAspectRatio,
             ]
         };
     }
