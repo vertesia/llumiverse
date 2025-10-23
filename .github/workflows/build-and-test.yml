@@ -48,7 +48,6 @@ jobs:
           project_id: "dengenlabs"
           workload_identity_provider: "projects/265888598630/locations/global/workloadIdentityPools/composable-cloud/providers/github"
           create_credentials_file: true
-          token_format: "access_token"
           access_token_lifetime: "600s"
 
       - uses: "aws-actions/configure-aws-credentials@v4.2.1"
