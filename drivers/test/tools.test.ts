@@ -17,13 +17,17 @@ const drivers: TestDriver[] = [];
 
 
 if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
-    const auth = new GoogleAuth();
-    const client = auth.getClient();
+    const auth = new GoogleAuth({
+        scopes: ['https://www.googleapis.com/auth/cloud-platform'],
+    });
     drivers.push({
         name: "google-vertex",
         driver: new VertexAIDriver({
             project: process.env.GOOGLE_PROJECT_ID as string,
             region: process.env.GOOGLE_REGION as string,
+            googleAuthOptions: {
+                authClient: auth,
+            },
         }),
         models: [
             "publishers/google/models/gemini-2.5-flash",
