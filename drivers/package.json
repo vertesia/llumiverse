@@ -74,7 +74,7 @@
         "@llumiverse/core": "workspace:*",
         "@vertesia/api-fetch-client": "^0.78.0",
         "eventsource": "^4.0.0",
-        "google-auth-library": "^9.15.1",
+        "google-auth-library": "^10.4.0",
         "groq-sdk": "^0.32.0",
         "mnemonist": "^0.40.3",
         "node-web-stream-adapters": "^0.2.1",
