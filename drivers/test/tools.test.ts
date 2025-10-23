@@ -1,6 +1,5 @@
 import { AbstractDriver, ExecutionOptions, Modalities, PromptRole, PromptSegment } from '@llumiverse/core';
 import 'dotenv/config';
-import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from "vitest";
 import { BedrockDriver, OpenAIDriver, VertexAIDriver } from '../src';
 import { completionResultToString } from './utils';
@@ -17,17 +16,11 @@ const drivers: TestDriver[] = [];
 
 
 if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
-    const auth = new GoogleAuth({
-        scopes: ['https://www.googleapis.com/auth/cloud-platform'],
-    });
     drivers.push({
         name: "google-vertex",
         driver: new VertexAIDriver({
             project: process.env.GOOGLE_PROJECT_ID as string,
             region: process.env.GOOGLE_REGION as string,
-            googleAuthOptions: {
-                authClient: auth,
-            },
         }),
         models: [
             "publishers/google/models/gemini-2.5-flash",

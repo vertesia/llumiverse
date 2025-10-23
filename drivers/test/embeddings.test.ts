@@ -1,7 +1,6 @@
 //import { defaultProvider } from "@aws-sdk/credential-provider-node";
 import { Driver } from '@llumiverse/core';
 import 'dotenv/config';
-import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from "vitest";
 import { BedrockDriver, MistralAIDriver, OpenAIDriver, VertexAIDriver, WatsonxDriver } from "../src/index.js";
 
@@ -26,15 +25,9 @@ const IMAGE = await convertImageToBase64(IMAGE_SRC);
 
 let vertex: VertexAIDriver | undefined = undefined;
 if (process.env.GOOGLE_REGION) {
-    const auth = new GoogleAuth({
-        scopes: ['https://www.googleapis.com/auth/cloud-platform'],
-    });
     vertex = new VertexAIDriver({
         project: process.env.GOOGLE_PROJECT_ID as string,
         region: process.env.GOOGLE_REGION as string,
-        googleAuthOptions: {
-            authClient: auth,
-        },
     });
 }
 
