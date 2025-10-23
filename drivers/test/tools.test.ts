@@ -1,6 +1,5 @@
 import { AbstractDriver, ExecutionOptions, Modalities, PromptRole, PromptSegment } from '@llumiverse/core';
 import 'dotenv/config';
-import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from "vitest";
 import { BedrockDriver, OpenAIDriver, VertexAIDriver } from '../src';
 import { completionResultToString } from './utils';
@@ -17,8 +16,6 @@ const drivers: TestDriver[] = [];
 
 
 if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
-    const auth = new GoogleAuth();
-    const client = auth.getClient();
     drivers.push({
         name: "google-vertex",
         driver: new VertexAIDriver({

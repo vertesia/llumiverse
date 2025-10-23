@@ -1,6 +1,5 @@
 import { AIModel, AbstractDriver, ExecutionOptions, Modalities } from '@llumiverse/core';
 import 'dotenv/config';
-import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from "vitest";
 import { AzureOpenAIDriver, BedrockDriver, GroqDriver, MistralAIDriver, OpenAIDriver, TogetherAIDriver, VertexAIDriver, WatsonxDriver, xAIDriver } from '../src';
 import { assertCompletionOk, assertStreamingCompletionOk } from './assertions';
@@ -18,8 +17,6 @@ const drivers: TestDriver[] = [];
 
 
 if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
-    const auth = new GoogleAuth();
-    const client = auth.getClient();
     drivers.push({
         name: "google-vertex",
         driver: new VertexAIDriver({
