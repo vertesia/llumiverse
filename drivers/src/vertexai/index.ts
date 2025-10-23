@@ -139,12 +139,14 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         const defaultRegionPrefix = getRegionPrefix(this.options.region);
         const defaultMappedRegion = ANTHROPIC_REGIONS[defaultRegionPrefix] || this.options.region;
 
-        // Build GoogleAuth options - only include authClient if it's not already a GoogleAuth
-        const googleAuthOptions = {
-            scopes: ["https://www.googleapis.com/auth/cloud-platform"],
-            projectId: this.options.project,
-            ...(this.authClient instanceof GoogleAuth ? {} : { authClient: this.authClient }),
-        };
+        // Use existing auth client directly if it's a GoogleAuth, otherwise wrap it
+        const googleAuth = this.authClient instanceof GoogleAuth
+            ? this.authClient
+            : new GoogleAuth({
+                scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+                projectId: this.options.project,
+                authClient: this.authClient,
+            });
 
         // If mapped region is different from default mapped region, create one-off client
         if (mappedRegion !== defaultMappedRegion) {
@@ -152,7 +154,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 timeout: 20 * 60 * 10000, // Set to 20 minutes, 10 minute default, setting this disables long request error: https://github.com/anthropics/anthropic-sdk-typescript?#long-requests
                 region: mappedRegion,
                 projectId: this.options.project,
-                googleAuth: new GoogleAuth(googleAuthOptions),
+                googleAuth,
             });
         }
 
@@ -162,7 +164,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 timeout: 20 * 60 * 10000, // Set to 20 minutes, 10 minute default, setting this disables long request error: https://github.com/anthropics/anthropic-sdk-typescript?#long-requests
                 region: mappedRegion,
                 projectId: this.options.project,
-                googleAuth: new GoogleAuth(googleAuthOptions),
+                googleAuth,
             });
         }
         return this.anthropicClient;
@@ -171,7 +173,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     public getAIPlatformClient(): v1beta1.ModelServiceClient {
         //Lazy initialization
         if (!this.aiplatform) {
-            const clientOptions = {
+            const clientOptions: any = {
                 projectId: this.options.project,
                 apiEndpoint: `${this.options.region}-${API_BASE_PATH}`,
                 ...(this.authClient instanceof GoogleAuth ? {} : { authClient: this.authClient }),
@@ -184,7 +186,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     public getModelGardenClient(): v1beta1.ModelGardenServiceClient {
         //Lazy initialization
         if (!this.modelGarden) {
-            const clientOptions = {
+            const clientOptions: any = {
                 projectId: this.options.project,
                 apiEndpoint: `${this.options.region}-${API_BASE_PATH}`,
                 ...(this.authClient instanceof GoogleAuth ? {} : { authClient: this.authClient }),
@@ -198,7 +200,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         //Lazy initialization
         if (!this.imagenClient) {
             // TODO: make location configurable, fixed to us-central1 for now
-            const clientOptions = {
+            const clientOptions: any = {
                 projectId: this.options.project,
                 apiEndpoint: `us-central1-${API_BASE_PATH}`,
                 ...(this.authClient instanceof GoogleAuth ? {} : { authClient: this.authClient }),
