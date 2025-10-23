@@ -75,7 +75,7 @@
         "@vertesia/api-fetch-client": "^0.74.0",
         "eventsource": "^4.0.0",
         "google-auth-library": "^9.15.1",
-        "groq-sdk": "^0.30.0",
+        "groq-sdk": "^0.34.0",
         "mnemonist": "^0.40.3",
         "node-web-stream-adapters": "^0.2.1",
         "openai": "^4.104.0",
