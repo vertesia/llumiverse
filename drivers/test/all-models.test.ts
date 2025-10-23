@@ -134,7 +134,9 @@ if (process.env.GROQ_API_KEY) {
             apiKey: process.env.GROQ_API_KEY as string
         }),
         models: [
-            "openai/gpt-oss-20b",
+            //TODO: re enabled when groq has constrained decoding
+            //https://community.groq.com/t/gpt-oss-120b-ignoring-tools/385/29
+        //    "openai/gpt-oss-20b", 
             "llama-3.3-70b-versatile"
         ]
     })
