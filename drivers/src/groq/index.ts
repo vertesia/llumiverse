@@ -4,6 +4,7 @@ import { formatOpenAILikeMultimodalPrompt } from "../openai/openai_format.js";
 
 import Groq from "groq-sdk";
 import type { ChatCompletionMessageParam, ChatCompletionTool } from "groq-sdk/resources/chat/completions";
+import type { FunctionParameters } from "groq-sdk/resources/shared";
 
 interface GroqDriverOptions extends DriverOptions {
     apiKey: string;
@@ -158,7 +159,7 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
             function: {
                 name: tool.name,
                 description: tool.description,
-                parameters: tool.input_schema as any,
+                parameters: tool.input_schema satisfies FunctionParameters,
             }
         }));
     }
