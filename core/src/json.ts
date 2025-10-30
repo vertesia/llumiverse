@@ -5,7 +5,7 @@ function extractJsonFromText(text: string): string {
     const start = text.indexOf("{");
     const end = text.lastIndexOf("}");
     text = text.substring(start, end + 1);
-    return text.replace(/\\n/g, "");
+    return text;
 }
 
 export function extractAndParseJSON(text: string): JSONValue {
