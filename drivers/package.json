@@ -83,5 +83,10 @@
     },
     "ts_dual_module": {
         "outDir": "lib"
+    },
+    "pnpm": {
+        "overrides": {
+            "google-auth-library": "^10.4.2"
+        }
     }
 }
