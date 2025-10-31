@@ -4,8 +4,7 @@ import { jsonrepair } from 'jsonrepair';
 function extractJsonFromText(text: string): string {
     const start = text.indexOf("{");
     const end = text.lastIndexOf("}");
-    text = text.substring(start, end + 1);
-    return text.replace(/\\n/g, "");
+    return text.substring(start, end + 1);
 }
 
 export function extractAndParseJSON(text: string): JSONValue {
