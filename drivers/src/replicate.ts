@@ -15,7 +15,7 @@ import {
 } from "@llumiverse/core";
 import { EventStream } from "@llumiverse/core/async";
 import { EventSource } from "eventsource";
-import Replicate, { Prediction } from "replicate";
+import Replicate, { Prediction, Training } from "replicate";
 
 let cachedTrainableModels: AIModel[] | undefined;
 let cachedTrainableModelsTimestamp: number = 0;
@@ -88,7 +88,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
 
         const source = new EventSource(prediction.urls.stream!);
         source.addEventListener("output", (e: any) => {
-            stream.push({result: [{ type: "text", value: e.data }] });
+            stream.push({ result: [{ type: "text", value: e.data }] });
         });
         source.addEventListener("error", (e: any) => {
             let error: any;
@@ -289,7 +289,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
 
 }
 
-function jobInfo(job: Prediction, modelName?: string): TrainingJob {
+function jobInfo(job: Prediction | Training, modelName?: string): TrainingJob {
     // 'starting' | 'processing' | 'succeeded' | 'failed' | 'canceled'
     const jobStatus = job.status;
     let details: string | undefined;

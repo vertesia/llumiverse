@@ -269,7 +269,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
 
-        const client = driver.getAnthropicClient(region);
+        const client = await driver.getAnthropicClient(region);
         options.model_options = options.model_options as VertexAIClaudeOptions;
 
         if (options.model_options?._option_id !== "vertexai-claude") {
@@ -314,7 +314,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
 
-        const client = driver.getAnthropicClient(region);
+        const client = await driver.getAnthropicClient(region);
         const model_options = options.model_options as VertexAIClaudeOptions | undefined;
 
         if (model_options?._option_id !== "vertexai-claude") {

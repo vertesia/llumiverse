@@ -20,8 +20,8 @@
     "license": "MIT",
     "devDependencies": {
         "@types/json-schema": "^7.0.15",
-        "rimraf": "^6.0.1",
-        "typescript": "^5.9.2"
+        "rimraf": "^6.1.0",
+        "typescript": "^5.9.3"
     },
     "dependencies": {
         "@llumiverse/core": "workspace:*",
