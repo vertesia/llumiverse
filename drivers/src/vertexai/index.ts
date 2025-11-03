@@ -1,9 +1,13 @@
+import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
+import { PredictionServiceClient, v1beta1 } from "@google-cloud/aiplatform";
+import { Content, GoogleGenAI, Model } from "@google/genai";
 import {
     AIModel,
     AbstractDriver,
     Completion,
     CompletionChunkObject,
     DriverOptions,
+    EmbeddingsOptions,
     EmbeddingsResult,
     ExecutionOptions,
     Modalities,
@@ -13,17 +17,12 @@ import {
     modelModalitiesToArray,
 } from "@llumiverse/core";
 import { FetchClient } from "@vertesia/api-fetch-client";
-import { GoogleAuth, GoogleAuthOptions } from "google-auth-library";
-import { JSONClient } from "google-auth-library/build/src/auth/googleauth.js";
+import { GoogleAuth, GoogleAuthOptions, AuthClient } from "google-auth-library";
+import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
 import { TextEmbeddingsOptions, getEmbeddingsForText } from "./embeddings/embeddings-text.js";
 import { getModelDefinition } from "./models.js";
-import { EmbeddingsOptions } from "@llumiverse/core";
-import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
-import { PredictionServiceClient, v1beta1 } from "@google-cloud/aiplatform";
-import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
+import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from "./models/claude.js";
 import { ImagenModelDefinition, ImagenPrompt } from "./models/imagen.js";
-import { GoogleGenAI, Content, Model } from "@google/genai";
-import { NON_GLOBAL_ANTHROPIC_MODELS, ANTHROPIC_REGIONS } from "./models/claude.js";
 
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
@@ -56,7 +55,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     modelGarden: v1beta1.ModelGardenServiceClient | undefined;
     imagenClient: PredictionServiceClient | undefined;
 
-    authClient: JSONClient | GoogleAuth<JSONClient>;
+    googleAuth: GoogleAuth<any>;
+    private authClientPromise: Promise<AuthClient> | undefined;
 
     constructor(options: VertexAIDriverOptions) {
         super(options);
@@ -69,7 +69,15 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         this.llamaClient = undefined;
         this.imagenClient = undefined;
 
-        this.authClient = options.googleAuthOptions?.authClient ?? new GoogleAuth(options.googleAuthOptions);
+        this.googleAuth = new GoogleAuth(options.googleAuthOptions) as GoogleAuth<any>;
+        this.authClientPromise = undefined;
+    }
+
+    private async getAuthClient(): Promise<AuthClient> {
+        if (!this.authClientPromise) {
+            this.authClientPromise = this.googleAuth.getClient();
+        }
+        return this.authClientPromise;
     }
 
     public getGoogleGenAIClient(region: string = this.options.region): GoogleGenAI {
@@ -80,8 +88,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 project: this.options.project,
                 location: region,
                 vertexai: true,
-                googleAuthOptions: {
-                    authClient: this.authClient as JSONClient,
+                googleAuthOptions: this.options.googleAuthOptions || {
+                    scopes: ["https://www.googleapis.com/auth/cloud-platform"],
                 }
             });
         }
@@ -90,8 +98,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 project: this.options.project,
                 location: region,
                 vertexai: true,
-                googleAuthOptions: {
-                    authClient: this.authClient as JSONClient,
+                googleAuthOptions: this.options.googleAuthOptions || {
+                    scopes: ["https://www.googleapis.com/auth/cloud-platform"],
                 }
             });
         }
@@ -105,8 +113,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 region: this.options.region,
                 project: this.options.project,
             }).withAuthCallback(async () => {
-                const accessTokenResponse = await this.authClient.getAccessToken();
-                const token = typeof accessTokenResponse === 'string' ? accessTokenResponse : accessTokenResponse?.token;
+                const token = await this.googleAuth.getAccessToken();
                 return `Bearer ${token}`;
             });
         }
@@ -121,8 +128,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 project: this.options.project,
                 apiVersion: "v1beta1",
             }).withAuthCallback(async () => {
-                const accessTokenResponse = await this.authClient.getAccessToken();
-                const token = typeof accessTokenResponse === 'string' ? accessTokenResponse : accessTokenResponse?.token;
+                const token = await this.googleAuth.getAccessToken();
                 return `Bearer ${token}`;
             });
             // Store the region for potential client reuse
@@ -131,7 +137,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return this.llamaClient;
     }
 
-    public getAnthropicClient(region: string = this.options.region): AnthropicVertex {
+    public async getAnthropicClient(region: string = this.options.region): Promise<AnthropicVertex> {
         // Extract region prefix and map if it exists in ANTHROPIC_REGIONS, otherwise use as-is
         const getRegionPrefix = (r: string) => r.split('-')[0];
         const regionPrefix = getRegionPrefix(region);
@@ -140,17 +146,16 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         const defaultRegionPrefix = getRegionPrefix(this.options.region);
         const defaultMappedRegion = ANTHROPIC_REGIONS[defaultRegionPrefix] || this.options.region;
 
+        // Get auth client to avoid version mismatch with GoogleAuth generic types
+        const authClient = await this.getAuthClient();
+
         // If mapped region is different from default mapped region, create one-off client
         if (mappedRegion !== defaultMappedRegion) {
             return new AnthropicVertex({
                 timeout: 20 * 60 * 10000, // Set to 20 minutes, 10 minute default, setting this disables long request error: https://github.com/anthropics/anthropic-sdk-typescript?#long-requests
                 region: mappedRegion,
                 projectId: this.options.project,
-                googleAuth: new GoogleAuth({
-                    scopes: ["https://www.googleapis.com/auth/cloud-platform"],
-                    authClient: this.authClient as JSONClient,
-                    projectId: this.options.project,
-                }),
+                authClient,
             });
         }
 
@@ -160,48 +165,47 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 timeout: 20 * 60 * 10000, // Set to 20 minutes, 10 minute default, setting this disables long request error: https://github.com/anthropics/anthropic-sdk-typescript?#long-requests
                 region: mappedRegion,
                 projectId: this.options.project,
-                googleAuth: new GoogleAuth({
-                    scopes: ["https://www.googleapis.com/auth/cloud-platform"],
-                    authClient: this.authClient as JSONClient,
-                    projectId: this.options.project,
-                }),
+                authClient,
             });
         }
         return this.anthropicClient;
     }
 
-    public getAIPlatformClient(): v1beta1.ModelServiceClient {
+    public async getAIPlatformClient(): Promise<v1beta1.ModelServiceClient> {
         //Lazy initialization
         if (!this.aiplatform) {
+            const authClient = await this.getAuthClient();
             this.aiplatform = new v1beta1.ModelServiceClient({
                 projectId: this.options.project,
                 apiEndpoint: `${this.options.region}-${API_BASE_PATH}`,
-                authClient: this.authClient as JSONClient,
+                authClient,
             });
         }
         return this.aiplatform;
     }
 
-    public getModelGardenClient(): v1beta1.ModelGardenServiceClient {
+    public async getModelGardenClient(): Promise<v1beta1.ModelGardenServiceClient> {
         //Lazy initialization
         if (!this.modelGarden) {
+            const authClient = await this.getAuthClient();
             this.modelGarden = new v1beta1.ModelGardenServiceClient({
                 projectId: this.options.project,
                 apiEndpoint: `${this.options.region}-${API_BASE_PATH}`,
-                authClient: this.authClient as JSONClient,
+                authClient,
             });
         }
         return this.modelGarden;
     }
 
-    public getImagenClient(): PredictionServiceClient {
+    public async getImagenClient(): Promise<PredictionServiceClient> {
         //Lazy initialization
         if (!this.imagenClient) {
             // TODO: make location configurable, fixed to us-central1 for now
+            const authClient = await this.getAuthClient();
             this.imagenClient = new PredictionServiceClient({
                 projectId: this.options.project,
                 apiEndpoint: `us-central1-${API_BASE_PATH}`,
-                authClient: this.authClient as JSONClient,
+                authClient,
             });
         }
         return this.imagenClient;
@@ -263,8 +267,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
     async listModels(_params?: ModelSearchPayload): Promise<AIModel<string>[]> {
         // Get clients
-        const modelGarden = this.getModelGardenClient();
-        const aiplatform = this.getAIPlatformClient();
+        const modelGarden = await this.getModelGardenClient();
+        const aiplatform = await this.getAIPlatformClient();
         const globalGenAiClient = this.getGoogleGenAIClient("global");
 
         let models: AIModel<string>[] = [];

@@ -366,7 +366,7 @@ export class ImagenModelDefinition {
             parameters,
         };
 
-        const client = driver.getImagenClient();
+        const client = await driver.getImagenClient();
 
         // Predict request
         const [response] = await client.predict(request, { timeout: 120000 * numberOfImages }); //Extended timeout for image generation
