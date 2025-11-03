@@ -28,7 +28,7 @@
             "vite@>=6.0.0 <6.2.6": "^6.4.1",
             "form-data@<2.5.4": "^2.5.4",
             "form-data@>=4.0.0 <4.0.4": "^4.0.4",
-            "google-auth-library": "^10.4.2"
+            "google-auth-library": "^10.5.0"
         }
     }
 }
