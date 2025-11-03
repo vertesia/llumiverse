@@ -47,9 +47,9 @@
     ],
     "devDependencies": {
         "dotenv": "^16.6.1",
-        "rimraf": "^6.0.1",
+        "rimraf": "^6.1.0",
         "ts-dual-module": "^0.6.3",
-        "typescript": "^5.9.2",
+        "typescript": "^5.9.3",
         "vitest": "^3.2.4"
     },
     "dependencies": {
@@ -67,14 +67,14 @@
         "@azure/core-sse": "^2.3.0",
         "@azure/identity": "^4.13.0",
         "@azure/openai": "2.0.0",
-        "@google-cloud/aiplatform": "^3.35.0",
+        "@google-cloud/aiplatform": "^5.12.0",
         "@google/genai": "^1.28.0",
         "@huggingface/inference": "4.13.0",
         "@llumiverse/common": "workspace:*",
         "@llumiverse/core": "workspace:*",
-        "@vertesia/api-fetch-client": "^0.78.0",
+        "@vertesia/api-fetch-client": "^0.79.0",
         "eventsource": "^4.0.0",
-        "google-auth-library": "^9.15.1",
+        "google-auth-library": "^10.4.2",
         "groq-sdk": "^0.34.0",
         "mnemonist": "^0.40.3",
         "node-web-stream-adapters": "^0.2.1",
@@ -83,5 +83,10 @@
     },
     "ts_dual_module": {
         "outDir": "lib"
+    },
+    "pnpm": {
+        "overrides": {
+            "google-auth-library": "^10.4.2"
+        }
     }
 }
