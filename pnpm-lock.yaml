@@ -122,8 +122,8 @@ importers:
         specifier: 1.0.0-beta.6
         version: 1.0.0-beta.6
       '@azure/ai-projects':
-        specifier: 1.0.1
-        version: 1.0.1(ws@8.18.2)(zod@3.25.63)
+        specifier: 1.0.0-beta.10
+        version: 1.0.0-beta.10(ws@8.18.2)(zod@3.25.63)
       '@azure/core-auth':
         specifier: ^1.10.1
         version: 1.10.1
@@ -437,12 +437,12 @@ packages:
     resolution: {integrity: sha512-nBrLsEWm4J2u5LpAPjxADTlq3trDgVZZXHNKabeXZtpq3d3AbN/KGO82R87rdDz5/lYB024rtEf10/q0urNgsA==}
     engines: {node: '>=18.0.0'}
 
-  '@azure/ai-agents@1.1.0':
-    resolution: {integrity: sha512-i8HFA7ql18t/otGrRfTWNOE5HgJf/RqedV3VNbFav5z9iTSexf8k4EeWOb/IWWaCsq0z/S7mihdGPAluPs+nXQ==}
+  '@azure/ai-agents@1.0.0':
+    resolution: {integrity: sha512-8/MZ/Ls7kv2NmwQ0wGzSaFbMST24Apcoorjs9ndGL6uJQ/KGaGCY4haNKzts1wv2oGSI+gBdjbYb0Q+P702pow==}
     engines: {node: '>=20.0.0'}
 
-  '@azure/ai-projects@1.0.1':
-    resolution: {integrity: sha512-5eC9a6hrovqJiLulPy2qMpzK8e9Hnj3TAhV7qpljaKJ3L3PL85v3RKZl0NzzN3BC0FpGD6jg09Uiggr6rZe1sw==}
+  '@azure/ai-projects@1.0.0-beta.10':
+    resolution: {integrity: sha512-y46Ewm7Y0FECWDij05nWmYBtFuX+3+k7A6MEBti7XClX/4KPM2AJMhxWPQAlnrXQMLjKnfPGRymgqTCKMyE3QQ==}
     engines: {node: '>=20.0.0'}
 
   '@azure/core-auth@1.10.1':
@@ -2061,18 +2061,6 @@ packages:
       zod:
         optional: true
 
-  openai@6.7.0:
-    resolution: {integrity: sha512-mgSQXa3O/UXTbA8qFzoa7aydbXBJR5dbLQXCRapAOtoNT+v69sLdKMZzgiakpqhclRnhPggPAXoniVGn2kMY2A==}
-    hasBin: true
-    peerDependencies:
-      ws: ^8.18.0
-      zod: ^3.25 || ^4.0
-    peerDependenciesMeta:
-      ws:
-        optional: true
-      zod:
-        optional: true
-
   optionator@0.9.4:
     resolution: {integrity: sha512-6IpQ7mKUxRcZNLIObR0hz7lxsapSSIYNZJwXPGeF0mTVqGKFIXj1DQcMoT22S3ROcLyY/rz0PWaWZ9ayWmad9g==}
     engines: {node: '>= 0.8.0'}
@@ -3237,7 +3225,7 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@azure/ai-agents@1.1.0':
+  '@azure/ai-agents@1.0.0':
     dependencies:
       '@azure-rest/core-client': 2.3.4
       '@azure/abort-controller': 2.1.2
@@ -3253,11 +3241,12 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@azure/ai-projects@1.0.1(ws@8.18.2)(zod@3.25.63)':
+  '@azure/ai-projects@1.0.0-beta.10(ws@8.18.2)(zod@3.25.63)':
     dependencies:
+      '@azure-rest/ai-inference': 1.0.0-beta.6
       '@azure-rest/core-client': 2.3.4
       '@azure/abort-controller': 2.1.2
-      '@azure/ai-agents': 1.1.0
+      '@azure/ai-agents': 1.0.0
       '@azure/core-auth': 1.10.1
       '@azure/core-lro': 3.2.0
       '@azure/core-paging': 1.6.2
@@ -3267,9 +3256,10 @@ snapshots:
       '@azure/core-util': 1.13.1
       '@azure/logger': 1.1.4
       '@azure/storage-blob': 12.27.0
-      openai: 6.7.0(ws@8.18.2)(zod@3.25.63)
+      openai: 4.104.0(ws@8.18.2)(zod@3.25.63)
       tslib: 2.8.1
     transitivePeerDependencies:
+      - encoding
       - supports-color
       - ws
       - zod
@@ -5057,11 +5047,6 @@ snapshots:
       zod: 3.25.63
     transitivePeerDependencies:
       - encoding
-
-  openai@6.7.0(ws@8.18.2)(zod@3.25.63):
-    optionalDependencies:
-      ws: 8.18.2
-      zod: 3.25.63
 
   optionator@0.9.4:
     dependencies:
