@@ -28,19 +28,35 @@ import {
 } from "@llumiverse/common";
 import { validateResult } from "./validation.js";
 
+// Helper to create logger methods that support both message-only and object-first signatures
+function createConsoleLoggerMethod(consoleMethod: (...args: unknown[]) => void): Logger['info'] {
+    return ((objOrMsg: any, msgOrNever?: any, ...args: (string | number | boolean)[]) => {
+        if (typeof objOrMsg === 'string') {
+            // Message-only: logger.info("message", ...args)
+            consoleMethod(objOrMsg, msgOrNever, ...args);
+        } else if (msgOrNever !== undefined) {
+            // Object-first: logger.info({ obj }, "message", ...args)
+            consoleMethod(msgOrNever, objOrMsg, ...args);
+        } else {
+            // Object-only: logger.info({ obj })
+            consoleMethod(objOrMsg, ...args);
+        }
+    }) as Logger['info'];
+}
+
 const ConsoleLogger: Logger = {
-    debug: console.debug,
-    info: console.info,
-    warn: console.warn,
-    error: console.error,
+    debug: createConsoleLoggerMethod(console.debug.bind(console)),
+    info: createConsoleLoggerMethod(console.info.bind(console)),
+    warn: createConsoleLoggerMethod(console.warn.bind(console)),
+    error: createConsoleLoggerMethod(console.error.bind(console)),
 }
 
 const noop = () => void 0;
 const NoopLogger: Logger = {
-    debug: noop,
-    info: noop,
-    warn: noop,
-    error: noop,
+    debug: noop as Logger['debug'],
+    info: noop as Logger['info'],
+    warn: noop as Logger['warn'],
+    error: noop as Logger['error'],
 }
 
 export function createLogger(logger: Logger | "console" | undefined) {
@@ -130,7 +146,8 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
             try {
                 result.result = validateResult(result.result, options.result_schema);
             } catch (error: any) {
-                this.logger?.error({ err: error, data: result.result }, `[${this.provider}] [${options.model}] ${error.code ? '[' + error.code + '] ' : ''}Result validation error: ${error.message}`);
+                const errorMessage = `[${this.provider}] [${options.model}] ${error.code ? '[' + error.code + '] ' : ''}Result validation error: ${error.message}`;
+                this.logger.error({ err: error, data: result.result }, errorMessage);
                 result.error = {
                     code: error.code || error.name,
                     message: error.message,
