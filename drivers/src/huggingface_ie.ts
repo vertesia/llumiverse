@@ -82,7 +82,7 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
             },
         });
 
-        return transformAsyncIterator(req, (val: TextGenerationStreamOutput) : CompletionChunkObject => {
+        return transformAsyncIterator(req, (val: TextGenerationStreamOutput): CompletionChunkObject => {
             //special like <s> are not part of the result
             if (val.token.special) return { result: [] };
             let finish_reason = val.details?.finish_reason as string;
