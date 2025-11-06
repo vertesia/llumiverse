@@ -324,7 +324,7 @@ export class ImagenModelDefinition {
 
     async requestImageGeneration(driver: VertexAIDriver, prompt: ImagenPrompt, options: ExecutionOptions): Promise<Completion> {
         if (options.model_options?._option_id !== "vertexai-imagen") {
-            driver.logger.warn("Invalid model options", { options: options.model_options });
+            driver.logger.warn({ options: options.model_options }, "Invalid model options");
         }
         options.model_options = options.model_options as ImagenOptions | undefined;
 
@@ -336,7 +336,7 @@ export class ImagenModelDefinition {
 
         driver.logger.info("Task type: " + taskType);
 
-            const modelName = options.model.split("/").pop() ?? '';
+        const modelName = options.model.split("/").pop() ?? '';
 
         // Configure the parent resource
         // TODO: make location configurable, fixed to us-central1 for now
@@ -348,7 +348,7 @@ export class ImagenModelDefinition {
         }
         const instances = [instanceValue];
 
-        let parameter: any = getImagenParameters(taskType, options.model_options ?? {_option_id: "vertexai-imagen"});
+        let parameter: any = getImagenParameters(taskType, options.model_options ?? { _option_id: "vertexai-imagen" });
         parameter.negativePrompt = prompt.negativePrompt ?? undefined;
 
         const numberOfImages = options.model_options?.number_of_images ?? 1;
