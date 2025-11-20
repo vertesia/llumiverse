@@ -332,7 +332,7 @@ export class ImagenModelDefinition {
 
         driver.logger.info("Task type: " + taskType);
 
-            const modelName = options.model.split("/").pop() ?? '';
+        const modelName = options.model.split("/").pop() ?? '';
 
         // Configure the parent resource
         // TODO: make location configurable, fixed to us-central1 for now
@@ -344,7 +344,7 @@ export class ImagenModelDefinition {
         }
         const instances = [instanceValue];
 
-        let parameter: any = getImagenParameters(taskType, options.model_options ?? {_option_id: "vertexai-imagen"});
+        let parameter: any = getImagenParameters(taskType, options.model_options ?? { _option_id: "vertexai-imagen" });
         parameter.negativePrompt = prompt.negativePrompt ?? undefined;
 
         const numberOfImages = options.model_options?.number_of_images ?? 1;
