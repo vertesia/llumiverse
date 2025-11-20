@@ -318,7 +318,11 @@ export interface StatelessExecutionOptions extends PromptOptions {
      */
     include_original_response?: boolean;
     model_options?: ModelOptions;
-    output_modality: Modalities;
+
+    /**
+     * @deprecated This is deprecated. Use CompletionResult.type information instead.
+     */
+    output_modality?: Modalities;
 }
 
 export interface ExecutionOptions extends StatelessExecutionOptions {
@@ -438,6 +442,9 @@ export interface ExecutionTokenUsage {
     total?: number;
 }
 
+/**
+ * @deprecated This is deprecated. Use CompletionResult.type information instead.
+ */
 export enum Modalities {
     text = "text",
     image = "image",
