@@ -7,7 +7,7 @@ import { S3Client } from "@aws-sdk/client-s3";
 import { AwsCredentialIdentity, Provider } from "@aws-sdk/types";
 import {
     AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult,
-    ExecutionOptions, ExecutionTokenUsage, Modalities, PromptSegment,
+    ExecutionOptions, ExecutionTokenUsage, PromptSegment,
     TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions,
     BedrockClaudeOptions, BedrockPalmyraOptions, BedrockGptOssOptions, getMaxTokensLimitBedrock, NovaCanvasOptions,
     modelModalitiesToArray, getModelCapabilities,
@@ -668,10 +668,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
 
+    protected isImageModel(model: string): boolean {
+        return model.includes("titan-image") || model.includes("stable-diffusion") || model.includes("nova-canvas");
+    }
+
     async requestImageGeneration(prompt: NovaMessagesPrompt, options: ExecutionOptions): Promise<Completion> {
-        if (options.output_modality !== Modalities.image) {
-            throw new Error(`Image generation requires image output_modality`);
-        }
         if (options.model_options?._option_id !== "bedrock-nova-canvas") {
             this.logger.warn("Invalid model options", { options: options.model_options });
         }

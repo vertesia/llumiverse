@@ -1,5 +1,5 @@
 import {
-    AIModel, Completion, ExecutionOptions, Modalities,
+    AIModel, Completion, ExecutionOptions,
     ModelType, PromptRole, PromptSegment, readStreamAsBase64, ImagenOptions
 } from "@llumiverse/core";
 import { VertexAIDriver } from "../index.js";
@@ -327,10 +327,6 @@ export class ImagenModelDefinition {
             driver.logger.warn("Invalid model options", { options: options.model_options });
         }
         options.model_options = options.model_options as ImagenOptions | undefined;
-
-        if (options.output_modality !== Modalities.image) {
-            throw new Error(`Image generation requires image output_modality`);
-        }
 
         const taskType: string = options.model_options?.edit_mode ?? ImagenTaskType.TEXT_IMAGE;
 

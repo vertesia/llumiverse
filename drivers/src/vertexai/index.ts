@@ -6,7 +6,6 @@ import {
     DriverOptions,
     EmbeddingsResult,
     ExecutionOptions,
-    Modalities,
     ModelSearchPayload,
     PromptSegment,
     getModelCapabilities,
@@ -220,14 +219,18 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     protected canStream(options: ExecutionOptions): Promise<boolean> {
-        if (options.output_modality == Modalities.image) {
+        if (this.isImageModel(options.model)) {
             return Promise.resolve(false);
         }
         return Promise.resolve(getModelDefinition(options.model).model.can_stream === true);
     }
 
+    protected isImageModel(model: string): boolean {
+        return model.includes("imagen");
+    }
+
     public createPrompt(segments: PromptSegment[], options: ExecutionOptions): Promise<VertexAIPrompt> {
-        if (options.model.includes("imagen")) {
+        if (this.isImageModel(options.model)) {
             return new ImagenModelDefinition(options.model).createPrompt(this, segments, options);
         }
         return getModelDefinition(options.model).createPrompt(this, segments, options);
