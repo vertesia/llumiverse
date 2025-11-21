@@ -23,10 +23,13 @@ const RECORD_MODEL_CAPABILITIES: Record<string, { input: ModelModalities; output
 
 // Populate RECORD_FAMILY_CAPABILITIES as a const record (lowest common denominator for each family)
 const RECORD_FAMILY_CAPABILITIES: Record<string, { input: ModelModalities; output: ModelModalities; tool_support?: boolean }> = {
+    "gemini": { input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
     "gemini-1.5": { input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
     "gemini-2.0": { input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
     "gemini-2.5": { input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
+    "gemini-3.0": { input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
     "gemini-2.5-flash-image": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: true, video: false, audio: false, embed: false }, tool_support: false },
+    "gemini-3.0-pro-image": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: true, video: false, audio: false, embed: false }, tool_support: false },
     "imagen-3.0-generate": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
     "imagen-3.0-fast-generate": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
     "imagen-3.0-capability": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
