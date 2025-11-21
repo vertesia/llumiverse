@@ -1,5 +1,5 @@
 import {
-    AIModel, Completion, ExecutionOptions, Modalities,
+    AIModel, Completion, ExecutionOptions,
     ModelType, PromptRole, PromptSegment, readStreamAsBase64, ImagenOptions
 } from "@llumiverse/core";
 import { VertexAIDriver } from "../index.js";
@@ -328,15 +328,11 @@ export class ImagenModelDefinition {
         }
         options.model_options = options.model_options as ImagenOptions | undefined;
 
-        if (options.output_modality !== Modalities.image) {
-            throw new Error(`Image generation requires image output_modality`);
-        }
-
         const taskType: string = options.model_options?.edit_mode ?? ImagenTaskType.TEXT_IMAGE;
 
         driver.logger.info("Task type: " + taskType);
 
-            const modelName = options.model.split("/").pop() ?? '';
+        const modelName = options.model.split("/").pop() ?? '';
 
         // Configure the parent resource
         // TODO: make location configurable, fixed to us-central1 for now
@@ -348,7 +344,7 @@ export class ImagenModelDefinition {
         }
         const instances = [instanceValue];
 
-        let parameter: any = getImagenParameters(taskType, options.model_options ?? {_option_id: "vertexai-imagen"});
+        let parameter: any = getImagenParameters(taskType, options.model_options ?? { _option_id: "vertexai-imagen" });
         parameter.negativePrompt = prompt.negativePrompt ?? undefined;
 
         const numberOfImages = options.model_options?.number_of_images ?? 1;

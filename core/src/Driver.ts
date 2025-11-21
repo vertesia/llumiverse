@@ -149,22 +149,19 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     }
 
     async _execute(prompt: PromptT, options: ExecutionOptions): Promise<ExecutionResponse<PromptT>> {
-        this.logger.debug(
-            `[${this.provider}] Executing prompt on ${options.model}`);
         try {
             const start = Date.now();
             let result;
 
-            switch (options.output_modality) {
-                case Modalities.text:
-                    result = await this.requestTextCompletion(prompt, options);
-                    this.validateResult(result, options);
-                    break;
-                case Modalities.image:
-                    result = await this.requestImageGeneration(prompt, options);
-                    break;
-                default:
-                    throw new Error(`Unsupported modality: ${options['output_modality'] ?? "No modality specified"}`);
+            if (this.isImageModel(options.model)) {
+                this.logger.debug(
+                    `[${this.provider}] Executing prompt on ${options.model}, image pathway.`);
+                result = await this.requestImageGeneration(prompt, options);
+            } else {
+                this.logger.debug(
+                    `[${this.provider}] Executing prompt on ${options.model}, text pathway.`);
+                result = await this.requestTextCompletion(prompt, options);
+                this.validateResult(result, options);
             }
 
             const execution_time = Date.now() - start;
@@ -175,12 +172,18 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         }
     }
 
+    protected isImageModel(_model: string): boolean {
+        return false;
+    }
+
     // by default no stream is supported. we block and we return all at once
     async stream(segments: PromptSegment[], options: ExecutionOptions): Promise<CompletionStream<PromptT>> {
         const prompt = await this.createPrompt(segments, options);
         const canStream = await this.canStream(options);
         if (options.output_modality === Modalities.text && canStream) {
             return new DefaultCompletionStream(this, prompt, options);
+        } else if (this.isImageModel(options.model)) {
+            return new FallbackCompletionStream(this, prompt, options);
         } else {
             return new FallbackCompletionStream(this, prompt, options);
         }
