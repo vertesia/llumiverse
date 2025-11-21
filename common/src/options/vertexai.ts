@@ -328,17 +328,6 @@ function getGeminiOptions(model: string, _option?: ModelOptions): ModelOptionsIn
                 type: OptionType.boolean,
                 default: false,
                 description: "Include the model's reasoning process in the response"
-            },
-            {
-                name: "thinking_level",
-                type: OptionType.enum,
-                enum: {
-                    "High": ThinkingLevel.HIGH,
-                    "Low": ThinkingLevel.LOW,
-                    "Unspecified": ThinkingLevel.THINKING_LEVEL_UNSPECIFIED
-                },
-                default: ThinkingLevel.LOW,
-                description: "Controls the extent of the model's reasoning."
             }
         ];
 

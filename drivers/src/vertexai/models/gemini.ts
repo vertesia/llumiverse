@@ -547,19 +547,12 @@ function geminiThinkingConfig(option: StatelessExecutionOptions): ThinkingConfig
     if (model_options?.thinking_budget_tokens) {
         return {includeThoughts: include_thoughts, thinkingBudget: model_options.thinking_budget_tokens};
     }
-    if (model_options?.thinking_level) {
-        return { includeThoughts: include_thoughts, thinkingLevel: model_options.thinking_level };
-    }
 
     // Set minimum thinking level by default.
     // Docs: https://ai.google.dev/gemini-api/docs/thinking#set-budget
-    if (option.model.includes("gemini-2.5")) {
+    if (option.model.includes("gemini-2.5") || option.model.includes("gemini-3")) {
         const thinking_budget_tokens = geminiThinkingBudget(option) ?? 0;
         return { includeThoughts: include_thoughts, thinkingBudget: thinking_budget_tokens };
-    }
-    if (option.model.includes("gemini-3")) {
-        const thinking_level = model_options?.thinking_level ?? ThinkingLevel.LOW;
-        return { includeThoughts: include_thoughts, thinkingLevel: thinking_level };
     }
 }
 
