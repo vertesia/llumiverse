@@ -79,8 +79,8 @@ importers:
         version: 3.13.1
     devDependencies:
       '@vertesia/api-fetch-client':
-        specifier: ^0.79.1
-        version: 0.79.1
+        specifier: ^0.79.2
+        version: 0.79.2
       rimraf:
         specifier: ^6.1.2
         version: 6.1.2
@@ -154,8 +154,8 @@ importers:
         specifier: workspace:*
         version: link:../core
       '@vertesia/api-fetch-client':
-        specifier: ^0.79.1
-        version: 0.79.1
+        specifier: ^0.79.2
+        version: 0.79.2
       eventsource:
         specifier: ^4.1.0
         version: 4.1.0
@@ -1261,8 +1261,8 @@ packages:
     resolution: {integrity: sha512-SnbaqayTVFEA6/tYumdF0UmybY0KHyKwGPBXnyckFlrrKdhWFrL3a2HIPXHjht5ZOElKGcXfD2D63P36btb+ww==}
     engines: {node: '>=20.0.0'}
 
-  '@vertesia/api-fetch-client@0.79.1':
-    resolution: {integrity: sha512-52UtbMeZufQxpdv1C8ZcaedmWtJpsB6raSUgk2OX7JIKIEsMt5qF9i51ntnyOCPQ3CdAnrmTPrRAAeW8JBUMPw==}
+  '@vertesia/api-fetch-client@0.79.2':
+    resolution: {integrity: sha512-otBQf3xprGyj3oxV+/COZulA8yotqTx1Cp32qpZe/fl/9FZLiLkRedP5kzy9spr7htWpAqYDQdhgJG/CTuodsA==}
 
   '@vitest/expect@3.2.4':
     resolution: {integrity: sha512-Io0yyORnB6sikFlt8QW5K7slY4OjqNX9jmJQ02QDda8lyM6B5oNgVWoSoKPac8/kgnCUzuHQKrSLtu/uOqqrig==}
@@ -4180,7 +4180,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@vertesia/api-fetch-client@0.79.1':
+  '@vertesia/api-fetch-client@0.79.2':
     dependencies:
       eventsource-parser: 1.1.2
 
