@@ -1,7 +1,7 @@
 import {
     Content, FinishReason, FunctionCallingConfigMode, FunctionDeclaration, GenerateContentConfig, GenerateContentParameters,
     GenerateContentResponseUsageMetadata,
-    HarmBlockThreshold, HarmCategory, Modality, Part, SafetySetting, Schema, ThinkingConfig, ThinkingLevel, Tool, Type
+    HarmBlockThreshold, HarmCategory, Modality, Part, SafetySetting, Schema, ThinkingConfig, Tool, Type
 } from "@google/genai";
 import {
     AIModel, Completion, CompletionChunkObject, CompletionResult, ExecutionOptions,
