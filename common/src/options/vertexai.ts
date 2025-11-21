@@ -23,6 +23,12 @@ export enum ImagenMaskMode {
     MASK_MODE_SEMANTIC = "MASK_MODE_SEMANTIC",
 }
 
+export enum ThinkingLevel {
+    HIGH = "HIGH",
+    LOW = "LOW",
+    THINKING_LEVEL_UNSPECIFIED = "THINKING_LEVEL_UNSPECIFIED"
+}
+
 export interface ImagenOptions {
     _option_id: "vertexai-imagen"
 
@@ -75,6 +81,7 @@ export interface VertexAIGeminiOptions {
     seed?: number;
     include_thoughts?: boolean;
     thinking_budget_tokens?: number;
+    thinking_level?: ThinkingLevel;
     image_aspect_ratio?: "1:1" | "2:3" | "3:2" | "3:4" | "4:3" | "9:16" | "16:9" | "21:9";
 }
 
@@ -246,8 +253,8 @@ function getImagenOptions(model: string, option?: ModelOptions): ModelOptionsInf
 }
 
 function getGeminiOptions(model: string, _option?: ModelOptions): ModelOptionsInfo {
-    // Special handling for gemini-2.5-flash-image
-    if (model.includes("gemini-2.5-flash-image")) {
+    // Special handling for gemini-2.5-flash-image and gemini-3-pro-image
+    if (model.includes("gemini-2.5-flash-image") || model.includes("gemini-3-pro-image")) {
         const max_tokens_limit = 32768;
         const excludeOptions = ["max_tokens", "presence_penalty", "frequency_penalty", "seed", "top_k"];
         let commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
@@ -313,6 +320,27 @@ function getGeminiOptions(model: string, _option?: ModelOptions): ModelOptionsIn
     const seedOption: ModelOptionInfoItem = {
         name: SharedOptions.seed, type: OptionType.numeric, integer: true, description: "The seed for the generation, useful for reproducibility"
     };
+
+    if (model.includes("-3-")) {
+        const geminiThinkingOptions: ModelOptionInfoItem[] = [
+            {
+                name: "include_thoughts",
+                type: OptionType.boolean,
+                default: false,
+                description: "Include the model's reasoning process in the response"
+            }
+        ];
+
+        return {
+            _option_id: "vertexai-gemini",
+            options: [
+                ...max_tokens,
+                ...commonOptions,
+                seedOption,
+                ...geminiThinkingOptions,
+            ]
+        };
+    }
 
     if (model.includes("-2.5-")) {
         // Gemini 2.5 thinking models
@@ -472,10 +500,10 @@ function getLlamaOptions(model: string): ModelOptionsInfo {
 }
 
 function getGeminiMaxTokensLimit(model: string): number {
-    if (model.includes("gemini-2.5-flash-image")) {
+    if (model.includes("gemini-2.5-flash-image") || model.includes("gemini-3-pro-image")) {
         return 32768;
     }
-    if (model.includes("thinking") || model.includes("-2.5-")) {
+    if (model.includes("thinking") || model.includes("-2.5-") || model.includes("-3-")) {
         return 65536;
     }
     if (model.includes("ultra") || model.includes("vision")) {

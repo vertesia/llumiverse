@@ -81,7 +81,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 location: region,
                 vertexai: true,
                 googleAuthOptions: {
-                    authClient: this.authClient as JSONClient,
+                    //TODO: remove when GoogleAuth library is updated
+                    //Hack for newer GenAI library, 
+                    authClient: this.authClient as any,
                 }
             });
         }
@@ -91,7 +93,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 location: region,
                 vertexai: true,
                 googleAuthOptions: {
-                    authClient: this.authClient as JSONClient,
+                    //TODO: remove when GoogleAuth library is updated
+                    //Hack for newer GenAI library,
+                    authClient: this.authClient as any,
                 }
             });
         }
@@ -294,7 +298,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         //Used to exclude retired models that are still in the listing API but not available for use.
         //Or models we do not support yet
         const unsupportedModelsByPublisher = {
-            google: ["gemini-pro", "gemini-ultra", "imagen-product-recontext-preview", "embedding"],
+            google: ["gemini-pro", "gemini-ultra", "imagen-product-recontext-preview", "embedding", "gemini-live-2.5-flash-preview-native-audio"],
             anthropic: [],
             meta: [],
         };
@@ -375,6 +379,46 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                     tool_support: modelCapability.tool_support,
                 } satisfies AIModel<string>;
             }));
+
+            // Create global google gemini models for Gemini 2.5 and later, if missing from GenAI listing
+            if (publisher === 'google') {
+                const globalGeminiModels = response.filter((model) => {
+                    const modelName = model.name ?? "";
+                    if (retiredModels.some(retiredModel => modelName.includes(retiredModel))) {
+                        return false;
+                    }
+                    if (modelFamily.some(family => modelName.includes(family))) {
+                        const versionMatch = modelName.match(/gemini-(\d+(?:\.\d+)?)/);
+                        if (versionMatch) {
+                            const version = parseFloat(versionMatch[1]);
+                            if (version >= 2.5) {
+                                // Check if already present
+                                const shortName = modelName.split('/').pop();
+                                const globalName = "Global " + shortName;
+                                if (models.some(m => m.name === globalName)) {
+                                    return false;
+                                }
+                                return true;
+                            }
+                        }
+                        return false;
+                    }
+                    return false;
+                }).map(model => {
+                    const modelCapability = getModelCapabilities(model.name ?? '', "vertexai");
+                    return {
+                        id: "locations/global/" + model.name,
+                        name: "Global " + model.name?.split('/').pop(),
+                        provider: 'vertexai',
+                        owner: publisher,
+                        input_modalities: modelModalitiesToArray(modelCapability.input),
+                        output_modalities: modelModalitiesToArray(modelCapability.output),
+                        tool_support: modelCapability.tool_support,
+                    } satisfies AIModel<string>;
+                });
+
+                models = models.concat(globalGeminiModels);
+            }
 
             // Create global anthropic models for those not in NON_GLOBAL_ANTHROPIC_MODELS
             if (publisher === 'anthropic') {
