@@ -18,6 +18,7 @@ import {
 } from "@llumiverse/core";
 import { FetchClient } from "@vertesia/api-fetch-client";
 import { GoogleAuth, GoogleAuthOptions, AuthClient } from "google-auth-library";
+import type { ClientOptions as AnthropicVertexClientOptions } from "@anthropic-ai/vertex-sdk";
 import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
 import { TextEmbeddingsOptions, getEmbeddingsForText } from "./embeddings/embeddings-text.js";
 import { getModelDefinition } from "./models.js";
@@ -155,7 +156,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 timeout: 20 * 60 * 10000, // Set to 20 minutes, 10 minute default, setting this disables long request error: https://github.com/anthropics/anthropic-sdk-typescript?#long-requests
                 region: mappedRegion,
                 projectId: this.options.project,
-                authClient,
+                authClient: authClient as unknown as AnthropicVertexClientOptions["authClient"],
             });
         }
 
@@ -165,7 +166,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 timeout: 20 * 60 * 10000, // Set to 20 minutes, 10 minute default, setting this disables long request error: https://github.com/anthropics/anthropic-sdk-typescript?#long-requests
                 region: mappedRegion,
                 projectId: this.options.project,
-                authClient,
+                authClient: authClient as unknown as AnthropicVertexClientOptions["authClient"],
             });
         }
         return this.anthropicClient;
