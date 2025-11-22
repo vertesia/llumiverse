@@ -1,7 +1,7 @@
 import {
     Content, FinishReason, FunctionCallingConfigMode, FunctionDeclaration, GenerateContentConfig, GenerateContentParameters,
     GenerateContentResponseUsageMetadata,
-    HarmBlockThreshold, HarmCategory, Modality, Part, SafetySetting, Schema, Tool, Type
+    HarmBlockThreshold, HarmCategory, Modality, Part, SafetySetting, Schema, ThinkingConfig, Tool, Type
 } from "@google/genai";
 import {
     AIModel, Completion, CompletionChunkObject, CompletionResult, ExecutionOptions,
@@ -92,11 +92,7 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
         presencePenalty: model_options?.presence_penalty,
         frequencyPenalty: model_options?.frequency_penalty,
         seed: model_options?.seed,
-        thinkingConfig: thinkingConfigNeeded ?
-            {
-                includeThoughts: model_options?.include_thoughts ?? false,
-                thinkingBudget: geminiThinkingBudget(options),
-            } : undefined,
+        thinkingConfig: thinkingConfigNeeded ? geminiThinkingConfig(options) : undefined,
     }
 
     return {
@@ -545,6 +541,21 @@ function geminiThinkingBudget(option: StatelessExecutionOptions) {
     return undefined;
 }
 
+function geminiThinkingConfig(option: StatelessExecutionOptions): ThinkingConfig | undefined {
+    const model_options = option.model_options as VertexAIGeminiOptions | undefined;
+    const include_thoughts = model_options?.include_thoughts ?? false;
+    if (model_options?.thinking_budget_tokens) {
+        return {includeThoughts: include_thoughts, thinkingBudget: model_options.thinking_budget_tokens};
+    }
+
+    // Set minimum thinking level by default.
+    // Docs: https://ai.google.dev/gemini-api/docs/thinking#set-budget
+    if (option.model.includes("gemini-2.5") || option.model.includes("gemini-3")) {
+        const thinking_budget_tokens = geminiThinkingBudget(option) ?? 0;
+        return { includeThoughts: include_thoughts, thinkingBudget: thinking_budget_tokens };
+    }
+}
+
 export class GeminiModelDefinition implements ModelDefinition<GenerateContentPrompt> {
 
     model: AIModel
@@ -734,6 +745,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         let conversation = updateConversation(options.conversation as Content[], prompt.contents);
         prompt.contents = conversation;
 
+        // TODO: Remove hack, use global endpoint manually if needed.
         if (options.model.includes("gemini-2.5-flash-image")) {
             region = "global"; // Gemini Flash Image only available in global region, this is for nano-banana model
         }
