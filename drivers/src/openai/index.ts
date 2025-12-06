@@ -93,11 +93,11 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         }
 
         const toolDefs = getToolDefinitions(options.tools);
-        const useTools: boolean = toolDefs ? supportsToolUse(options.model, "openai", true) : false;
+        const useTools: boolean = toolDefs ? supportsToolUse(options.model, this.provider, true) : false;
 
         const mapFn = (chunk: OpenAI.Chat.Completions.ChatCompletionChunk) => {
             let result = undefined
-            if (useTools && this.provider !== "xai" && options.result_schema) {
+            if (useTools && this.provider !== Providers.xai && options.result_schema) {
                 result = chunk.choices[0]?.delta?.tool_calls?.[0].function?.arguments ?? "";
             } else {
                 result = chunk.choices[0]?.delta.content ?? "";
@@ -171,7 +171,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         insert_image_detail(prompt, model_options?.image_detail ?? "auto");
 
         const toolDefs = getToolDefinitions(options.tools);
-        const useTools: boolean = toolDefs ? supportsToolUse(options.model, "openai") : false;
+        const useTools: boolean = toolDefs ? supportsToolUse(options.model, this.provider) : false;
 
         let conversation = updateConversation(options.conversation as ChatCompletionMessageParam[], prompt);
 

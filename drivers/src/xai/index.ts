@@ -1,4 +1,4 @@
-import { AIModel, Completion, DriverOptions, ExecutionOptions, PromptOptions, PromptSegment, Providers } from "@llumiverse/core";
+import { AIModel, DriverOptions, PromptOptions, PromptSegment, Providers } from "@llumiverse/core";
 import { formatOpenAILikeMultimodalPrompt, OpenAIPromptFormatterOptions } from "../openai/openai_format.js";
 import { FetchClient } from "@vertesia/api-fetch-client";
 import OpenAI from "openai";
@@ -48,17 +48,9 @@ export class xAIDriver extends BaseOpenAIDriver {
 
     }
 
-    extractDataFromResponse(_options: ExecutionOptions, result: OpenAI.Chat.Completions.ChatCompletion): Completion {
-        return {
-            result: result.choices[0].message.content ? [{ type: "text", value: result.choices[0].message.content }] : [],
-            finish_reason: result.choices[0].finish_reason,
-            token_usage: {
-                prompt: result.usage?.prompt_tokens,
-                result: result.usage?.completion_tokens,
-                total: result.usage?.total_tokens,
-            }
-        }
-    }
+    // Note: We intentionally do NOT override extractDataFromResponse here.
+    // The base class implementation properly handles tool_calls extraction.
+    // xAI's API is OpenAI-compatible and returns tool_calls in the same format.
 
     async listModels(): Promise<AIModel[]> {
         const [lm, em] = await Promise.all([
