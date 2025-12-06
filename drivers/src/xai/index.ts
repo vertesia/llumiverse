@@ -75,10 +75,12 @@ export class xAIDriver extends BaseOpenAIDriver {
             return {
                 id: model.id,
                 provider: this.provider,
-                name: model.object,
-                description: model.object,
+                name: model.id,
+                description: `${model.id} by ${model.owned_by}`,
                 is_multimodal: model.input_modalities.length > 1,
-                tags: [...model.input_modalities.map(m => `ì:${m}`), ...model.output_modalities.map(m => `ì:${m}`)],
+                input_modalities: model.input_modalities,
+                output_modalities: model.output_modalities,
+                tags: [...model.input_modalities.map(m => `i:${m}`), ...model.output_modalities.map(m => `o:${m}`)],
             } satisfies AIModel;
         });
 
