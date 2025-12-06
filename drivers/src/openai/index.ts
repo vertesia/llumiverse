@@ -512,6 +512,18 @@ function limitedSchemaFormat(schema: JSONSchema): JSONSchema {
     // Defaults not supported
     delete formattedSchema.default;
 
+    // OpenAI requires type field even in non-strict mode
+    // If no type is specified, default to 'object' for properties with format/editor hints,
+    // otherwise 'string' as a safe fallback
+    if (!formattedSchema.type && formattedSchema.description) {
+        // Properties with format: "document" or editor hints are typically objects
+        if (formattedSchema.format === 'document' || formattedSchema.editor) {
+            formattedSchema.type = 'object';
+        } else {
+            formattedSchema.type = 'string';
+        }
+    }
+
     if (formattedSchema?.properties) {
         // Process each property recursively
         for (const propName of Object.keys(formattedSchema.properties)) {
@@ -556,6 +568,11 @@ function openAISchemaFormat(schema: JSONSchema, nesting: number = 0): JSONSchema
         // Process each property recursively
         for (const propName of Object.keys(formattedSchema.properties)) {
             const property = formattedSchema.properties[propName];
+
+            // OpenAI strict mode requires all properties to have a type
+            if (!property?.type) {
+                throw new Error(`Property '${propName}' is missing required 'type' field for OpenAI strict mode`);
+            }
 
             // Recursively process properties
             formattedSchema.properties[propName] = openAISchemaFormat(property, nesting + 1);
