@@ -1,4 +1,4 @@
-import { AIModel, Completion, DriverOptions, ExecutionOptions, PromptOptions, PromptSegment } from "@llumiverse/core";
+import { AIModel, Completion, DriverOptions, ExecutionOptions, PromptOptions, PromptSegment, Providers } from "@llumiverse/core";
 import { formatOpenAILikeMultimodalPrompt, OpenAIPromptFormatterOptions } from "../openai/openai_format.js";
 import { FetchClient } from "@vertesia/api-fetch-client";
 import OpenAI from "openai";
@@ -15,7 +15,7 @@ export interface xAiDriverOptions extends DriverOptions {
 export class xAIDriver extends BaseOpenAIDriver {
 
     service: OpenAI;
-    provider: "xai";
+    readonly provider = Providers.xai;
     xai_service: FetchClient;
     DEFAULT_ENDPOINT = "https://api.x.ai/v1";
 
@@ -31,7 +31,6 @@ export class xAIDriver extends BaseOpenAIDriver {
             baseURL: opts.endpoint ?? this.DEFAULT_ENDPOINT,
         });
         this.xai_service = new FetchClient(opts.endpoint ?? this.DEFAULT_ENDPOINT).withAuthCallback(async () => `Bearer ${opts.apiKey}`);
-        this.provider = "xai";
         //this.formatPrompt = this._formatPrompt; //TODO: fix xai prompt formatting
     }
 

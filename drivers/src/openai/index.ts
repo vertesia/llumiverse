@@ -50,8 +50,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     BaseOpenAIDriverOptions,
     ChatCompletionMessageParam[]
 > {
-    //abstract provider: "azure_openai" | "openai" | "xai" | "azure_foundry";
-    abstract provider: Providers.openai | Providers.azure_openai | "xai" | Providers.azure_foundry;
+    abstract provider: Providers.openai | Providers.azure_openai | Providers.xai | Providers.azure_foundry | Providers.openai_compatible;
     abstract service: OpenAI | AzureOpenAI;
 
     constructor(opts: BaseOpenAIDriverOptions) {
@@ -479,12 +478,14 @@ export function collectTools(toolCalls?: OpenAI.Chat.Completions.ChatCompletionM
 
     const tools: ToolUse[] = [];
     for (const call of toolCalls) {
-        tools.push({
-            id: call.id,
-            tool_name: call.function.name,
-            tool_input: JSON.parse(call.function.arguments),
-        });
-
+        // In OpenAI SDK v6, tool calls can be function or custom type
+        if (call.type === 'function') {
+            tools.push({
+                id: call.id,
+                tool_name: call.function.name,
+                tool_input: JSON.parse(call.function.arguments),
+            });
+        }
     }
     return tools.length > 0 ? tools : undefined;
 }
