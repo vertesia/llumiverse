@@ -33,7 +33,7 @@ const VIDEO_OUTPUT_MODELS = ["video"];
 const AUDIO_OUTPUT_MODELS = ["audio"];
 const TEXT_OUTPUT_MODELS = ["text"];
 const EMBEDDING_OUTPUT_MODELS = ["embed"];
-const TOOL_SUPPORT_MODELS = ["tool", "sonnet", "opus", "gemini", "claude-3-5", "claude-3-7"];
+const TOOL_SUPPORT_MODELS = ["tool", "sonnet", "opus", "gemini", "claude"];
 
 function modelMatches(modelName: string, patterns: string[]): boolean {
     return patterns.some(pattern => modelName.includes(pattern));
