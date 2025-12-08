@@ -1,7 +1,6 @@
 import {
-    HfInference,
-    HfInferenceEndpoint,
-    TextGenerationStreamOutput
+    InferenceClient,
+    TextGenerationStreamOutput,
 } from "@huggingface/inference";
 import {
     AIModel,
@@ -25,7 +24,7 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
     static PROVIDER = "huggingface_ie";
     provider = HuggingFaceIEDriver.PROVIDER;
     service: FetchClient;
-    _executor?: HfInferenceEndpoint;
+    _executor?: InferenceClient;
 
     constructor(
         options: HuggingFaceIEDriverOptions
@@ -60,7 +59,8 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
                     `Endpoint ${model} is not running - current status: ${endpoint.status}`
                 );
 
-            this._executor = new HfInference(this.options.apiKey).endpoint(
+            // Use the new InferenceClient and bind it to the endpoint URL
+            this._executor = new InferenceClient(this.options.apiKey).endpoint(
                 endpoint.url
             );
         }
@@ -69,7 +69,7 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
 
     async requestTextCompletionStream(prompt: string, options: ExecutionOptions) {
         if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", { options: options.model_options });
+            this.logger.warn({ options: options.model_options }, "Invalid model options");
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
@@ -82,8 +82,7 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
             },
         });
 
-
-        return transformAsyncIterator(req, (val: TextGenerationStreamOutput) => {
+        return transformAsyncIterator(req, (val: TextGenerationStreamOutput): CompletionChunkObject => {
             //special like <s> are not part of the result
             if (val.token.special) return { result: [] };
             let finish_reason = val.details?.finish_reason as string;
@@ -96,13 +95,13 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
                 token_usage: {
                     result: val.details?.generated_tokens ?? 0,
                 }
-            } as CompletionChunkObject;
+            };
         });
     }
 
     async requestTextCompletion(prompt: string, options: ExecutionOptions) {
         if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", { options: options.model_options });
+            this.logger.warn({ options: options.model_options }, "Invalid model options");
         }
         options.model_options = options.model_options as TextFallbackOptions;
 

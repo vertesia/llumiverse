@@ -31,7 +31,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
 
     async requestTextCompletion(prompt: string, options: ExecutionOptions): Promise<Completion> {
         if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", { options: options.model_options });
+            this.logger.warn({ options: options.model_options }, "Invalid model options");
         }
         options.model_options = options.model_options as TextFallbackOptions | undefined;
 
@@ -66,7 +66,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
 
     async requestTextCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", { options: options.model_options });
+            this.logger.warn({ options: options.model_options }, "Invalid model options");
         }
         options.model_options = options.model_options as TextFallbackOptions | undefined;
         const payload: WatsonxTextGenerationPayload = {
@@ -152,7 +152,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
         return this.listModels()
             .then(() => true)
             .catch((err) => {
-                this.logger.warn("Failed to connect to WatsonX", { error: err });
+                this.logger.warn({ error: err }, "Failed to connect to WatsonX");
                 return false
             });
     }

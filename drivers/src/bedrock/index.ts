@@ -169,7 +169,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     const type = Object.keys(content).find(
                         key => key !== '$unknown' && content[key as keyof typeof content] !== undefined
                     );
-                    this.logger.info("[Bedrock] Unsupported content response type:", type);
+                    this.logger.info({ type }, "[Bedrock] Unsupported content response type:");
                 }
             }
 
@@ -235,7 +235,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 const type = Object.keys(delta).find(
                     key => key !== '$unknown' && (delta as any)[key] !== undefined
                 );
-                this.logger.info("[Bedrock] Unsupported content response type:", type);
+                this.logger.info({ type }, "[Bedrock] Unsupported content response type:");
             }
         }
 
@@ -512,7 +512,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             });
 
         }).catch((err) => {
-            this.logger.error("[Bedrock] Failed to stream", { error: err });
+            this.logger.error({ error: err }, "[Bedrock] Failed to stream");
             throw err;
         });
     }
@@ -674,7 +674,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
     async requestImageGeneration(prompt: NovaMessagesPrompt, options: ExecutionOptions): Promise<Completion> {
         if (options.model_options?._option_id !== "bedrock-nova-canvas") {
-            this.logger.warn("Invalid model options", { options: options.model_options });
+            this.logger.warn({ options: options.model_options }, "Invalid model options");
         }
         const model_options = options.model_options as NovaCanvasOptions;
 

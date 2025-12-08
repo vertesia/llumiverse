@@ -54,7 +54,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                 opts.azureADTokenProvider = new DefaultAzureCredential();
             }
         } catch (error) {
-            this.logger.error("Failed to initialize Azure AD token provider:", error);
+            this.logger.error({ error }, "Failed to initialize Azure AD token provider:");
             throw new Error("Failed to initialize Azure AD token provider");
         }
 
@@ -89,7 +89,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             deployment = await this.service.deployments.get(deploymentName);
             this.logger.debug(`[Azure Foundry] Deployment ${deploymentName} found`);
         } catch (deploymentError) {
-            this.logger.error(`[Azure Foundry] Deployment ${deploymentName} not found:`, deploymentError);
+            this.logger.error({ deploymentError }, `[Azure Foundry] Deployment ${deploymentName} not found:`);
         }
 
         return (deployment as ModelDeployment).modelPublisher == "OpenAI";
@@ -131,7 +131,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                 }
             });
             if (response.status !== "200") {
-                this.logger.error(`[Azure Foundry] Chat completion request failed:`, response);
+                this.logger.error({ response }, `[Azure Foundry] Chat completion request failed:`);
                 throw new Error(`Chat completion request failed with status ${response.status}: ${response.body}`);
             }
 
@@ -213,12 +213,12 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
                     yield chunk;
                 } catch (parseError) {
-                    this.logger.warn(`[Azure Foundry] Failed to parse streaming response:`, parseError);
+                    this.logger.warn({ parseError }, `[Azure Foundry] Failed to parse streaming response:`);
                     continue;
                 }
             }
         } catch (error) {
-            this.logger.error(`[Azure Foundry] Streaming error:`, error);
+            this.logger.error({ error }, `[Azure Foundry] Streaming error:`);
             throw error;
         }
     }
@@ -233,7 +233,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
         const choice = result.choices?.[0];
         if (!choice) {
-            this.logger?.error("[Azure Foundry] No choices in response", result);
+            this.logger.error({ result }, "[Azure Foundry] No choices in response");
             throw new Error("No choices in response");
         }
 
@@ -241,7 +241,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         const toolCalls = choice.message?.tool_calls;
 
         if (!data && !toolCalls) {
-            this.logger?.error("[Azure Foundry] Response is not valid", result);
+            this.logger.error({ result }, "[Azure Foundry] Response is not valid");
             throw new Error("Response is not valid: no content or tool calls");
         }
 
@@ -291,7 +291,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
             return true;
         } catch (error) {
-            this.logger.error("Azure Foundry connection validation failed:", error);
+            this.logger.error({ error }, "Azure Foundry connection validation failed:");
             return false;
         }
     }
@@ -328,7 +328,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                 }
             });
         } catch (error) {
-            this.logger.error("Azure Foundry text embeddings error:", error);
+            this.logger.error({ error }, "Azure Foundry text embeddings error:");
             throw error;
         }
 
@@ -365,7 +365,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                 }
             });
         } catch (error) {
-            this.logger.error("Azure Foundry image embeddings error:", error);
+            this.logger.error({ error }, "Azure Foundry image embeddings error:");
             throw error;
         }
         if (isUnexpected(response)) {
@@ -395,7 +395,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             // List all deployments in the Azure AI Foundry project
             deploymentsIterable = this.service.deployments.list();
         } catch (error) {
-            this.logger.error("Failed to list deployments:", error);
+            this.logger.error({ error }, "Failed to list deployments:");
             throw new Error("Failed to list deployments in Azure AI Foundry project");
         }
         const deployments: DeploymentUnion[] = [];

@@ -324,7 +324,7 @@ export class ImagenModelDefinition {
 
     async requestImageGeneration(driver: VertexAIDriver, prompt: ImagenPrompt, options: ExecutionOptions): Promise<Completion> {
         if (options.model_options?._option_id !== "vertexai-imagen") {
-            driver.logger.warn("Invalid model options", { options: options.model_options });
+            driver.logger.warn({ options: options.model_options }, "Invalid model options");
         }
         options.model_options = options.model_options as ImagenOptions | undefined;
 
@@ -362,7 +362,7 @@ export class ImagenModelDefinition {
             parameters,
         };
 
-        const client = driver.getImagenClient();
+        const client = await driver.getImagenClient();
 
         // Predict request
         const [response] = await client.predict(request, { timeout: 120000 * numberOfImages }); //Extended timeout for image generation

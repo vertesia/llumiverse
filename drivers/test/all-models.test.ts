@@ -80,7 +80,6 @@ if (process.env.OPENAI_API_KEY) {
         models: [
             "o3-mini",
             "gpt-4o-mini",
-            "o1-mini",
         ]
     }
     )

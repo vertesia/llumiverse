@@ -76,7 +76,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         const data = choice.message.content ?? undefined;
 
         if (!data && !tools) {
-            this.logger?.error("[OpenAI] Response is not valid", result);
+            this.logger.error({ result }, "[OpenAI] Response is not valid");
             throw new Error("Response is not valid: no data");
         }
 
@@ -90,7 +90,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
     async requestTextCompletionStream(prompt: ChatCompletionMessageParam[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         if (options.model_options?._option_id !== "openai-text" && options.model_options?._option_id !== "openai-thinking") {
-            this.logger.warn("Invalid model options", { options: options.model_options });
+            this.logger.warn({ options: options.model_options }, "Invalid model options");
         }
 
         const toolDefs = getToolDefinitions(options.tools);
@@ -163,7 +163,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
     async requestTextCompletion(prompt: ChatCompletionMessageParam[], options: ExecutionOptions): Promise<Completion> {
         if (options.model_options?._option_id !== "openai-text" && options.model_options?._option_id !== "openai-thinking") {
-            this.logger.warn("Invalid model options", { options: options.model_options });
+            this.logger.warn({ options: options.model_options }, "Invalid model options");
         }
 
         convertRoles(prompt, options.model);

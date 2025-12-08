@@ -252,11 +252,24 @@ export interface CompletionStream<PromptT = any> extends AsyncIterable<string> {
     completion: ExecutionResponse<PromptT> | undefined;
 }
 
+/**
+ * Minimal logger interface for LLM drivers.
+ * Follows pino v10 signature: supports message-only or object-first (never message-first).
+ * - Message-only: logger.info("message")
+ * - Object-first: logger.info({ data }, "message")
+ * - PREVENTS: logger.info("message", { data }) - compile error (objects not allowed in ...args)
+ * 
+ * Additional args must be primitives (string | number | boolean) for string interpolation.
+ */
 export interface Logger {
-    debug: (...obj: any[]) => void;
-    info: (...obj: any[]) => void;
-    warn: (...obj: any[]) => void;
-    error: (...obj: any[]) => void;
+    debug(msg: string, ...args: (string | number | boolean)[]): void;
+    debug<T>(obj: T, msg?: T extends string ? never : string, ...args: (string | number | boolean)[]): void;
+    info(msg: string, ...args: (string | number | boolean)[]): void;
+    info<T>(obj: T, msg?: T extends string ? never : string, ...args: (string | number | boolean)[]): void;
+    warn(msg: string, ...args: (string | number | boolean)[]): void;
+    warn<T>(obj: T, msg?: T extends string ? never : string, ...args: (string | number | boolean)[]): void;
+    error(msg: string, ...args: (string | number | boolean)[]): void;
+    error<T>(obj: T, msg?: T extends string ? never : string, ...args: (string | number | boolean)[]): void;
 }
 
 export interface DriverOptions {
