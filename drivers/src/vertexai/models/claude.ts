@@ -269,11 +269,11 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
 
-        const client = driver.getAnthropicClient(region);
+        const client = await driver.getAnthropicClient(region);
         options.model_options = options.model_options as VertexAIClaudeOptions;
 
         if (options.model_options?._option_id !== "vertexai-claude") {
-            driver.logger.warn("Invalid model options", { options: options.model_options });
+            driver.logger.warn({ options: options.model_options }, "Invalid model options");
         }
 
         let conversation = updateConversation(options.conversation as ClaudePrompt, prompt);
@@ -314,11 +314,11 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
 
-        const client = driver.getAnthropicClient(region);
+        const client = await driver.getAnthropicClient(region);
         const model_options = options.model_options as VertexAIClaudeOptions | undefined;
 
         if (model_options?._option_id !== "vertexai-claude") {
-            driver.logger.warn("Invalid model options", { options: options.model_options });
+            driver.logger.warn({ options: options.model_options }, "Invalid model options");
         }
 
         const { payload, requestOptions } = getClaudePayload(options, prompt);

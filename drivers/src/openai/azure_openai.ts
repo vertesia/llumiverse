@@ -9,7 +9,7 @@ export interface AzureOpenAIDriverOptions extends DriverOptions {
      * The credentials to use to access Azure OpenAI
      */
     azureADTokenProvider?: any; //type with azure credentials
-    
+
     apiKey?: string;
 
     endpoint?: string;
@@ -41,7 +41,7 @@ export class AzureOpenAIDriver extends BaseOpenAIDriver {
 
         this.service = new AzureOpenAI({
             apiKey: opts.apiKey,
-            azureADTokenProvider: opts.azureADTokenProvider,          
+            azureADTokenProvider: opts.azureADTokenProvider,
             endpoint: opts.endpoint,
             apiVersion: opts.apiVersion ?? "2024-10-21",
             deployment: opts.deployment
@@ -56,7 +56,7 @@ export class AzureOpenAIDriver extends BaseOpenAIDriver {
         const azureADTokenProvider = getBearerTokenProvider(new DefaultAzureCredential(), scope);
         return azureADTokenProvider;
     }
-    
+
     async listModels(): Promise<AIModel[]> {
         return this._listModels();
     }
@@ -65,7 +65,7 @@ export class AzureOpenAIDriver extends BaseOpenAIDriver {
         if (!this.service.deploymentName) {
             throw new Error("A specific deployment is not set. Azure OpenAI cannot list deployments. Update your endpoint URL to include the deployment name, e.g., https://your-resource.openai.azure.com/openai/deployments/your-deployment/chat/completions");
         }
-            
+
         //Do a test execution to check if the model works and to get the model ID.
         let modelID = this.service.deploymentName;
         try {
@@ -76,7 +76,7 @@ export class AzureOpenAIDriver extends BaseOpenAIDriver {
             });
             modelID = testResponse.model;
         } catch (error) {
-            this.logger.error("Failed to test model for Azure OpenAI listing :", error);
+            this.logger.error({ error }, "Failed to test model for Azure OpenAI listing :");
         }
         const modelCapability = getModelCapabilities(modelID, "openai");
         return [{
