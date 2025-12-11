@@ -109,13 +109,16 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
 
             // Handle assistant messages - handle content arrays if needed
             if (msg.role === 'assistant') {
+                // Filter tool_calls to only include function type (OpenAI v6 has union type)
+                const functionToolCalls = msg.tool_calls?.filter(tc => tc.type === 'function')
+                    .map(tc => ({ id: tc.id, type: tc.type as 'function', function: tc.function }));
                 const assistantMsg: ChatCompletionMessageParam = {
                     role: 'assistant',
                     content: Array.isArray(msg.content)
                         ? msg.content.map(part => 'text' in part ? part.text : '').filter(Boolean).join('\n') || null
                         : msg.content,
                     // Preserve other assistant message properties
-                    ...(msg.tool_calls && { tool_calls: msg.tool_calls }),
+                    ...(functionToolCalls?.length && { tool_calls: functionToolCalls }),
                     ...(msg.name && { name: msg.name })
                 };
                 return assistantMsg;

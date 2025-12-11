@@ -8,6 +8,7 @@ import { VertexAIOptions } from './options/vertexai.js';
 
 export enum Providers {
     openai = 'openai',
+    openai_compatible = 'openai_compatible',
     azure_openai = 'azure_openai',
     azure_foundry = 'azure_foundry',
     huggingface_ie = 'huggingface_ie',
@@ -17,7 +18,8 @@ export enum Providers {
     togetherai = 'togetherai',
     mistralai = 'mistralai',
     groq = 'groq',
-    watsonx = 'watsonx'
+    watsonx = 'watsonx',
+    xai = 'xai'
 }
 
 export interface ProviderParams {
@@ -111,6 +113,21 @@ export const ProviderList: Record<Providers, ProviderParams> = {
         name: "IBM WatsonX",
         requiresApiKey: true,
         requiresEndpointUrl: true,
+        supportSearch: false
+    },
+    xai: {
+        id: Providers.xai,
+        name: "xAI (Grok)",
+        requiresApiKey: true,
+        requiresEndpointUrl: false,
+        supportSearch: false
+    },
+    openai_compatible: {
+        id: Providers.openai_compatible,
+        name: "OpenAI Compatible",
+        requiresApiKey: true,
+        requiresEndpointUrl: true,
+        endpointPlaceholder: "https://api.example.com/v1",
         supportSearch: false
     },
 }

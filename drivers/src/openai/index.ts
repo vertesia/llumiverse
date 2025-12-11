@@ -50,8 +50,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     BaseOpenAIDriverOptions,
     ChatCompletionMessageParam[]
 > {
-    //abstract provider: "azure_openai" | "openai" | "xai" | "azure_foundry";
-    abstract provider: Providers.openai | Providers.azure_openai | "xai" | Providers.azure_foundry;
+    abstract provider: Providers.openai | Providers.azure_openai | Providers.xai | Providers.azure_foundry | Providers.openai_compatible;
     abstract service: OpenAI | AzureOpenAI;
 
     constructor(opts: BaseOpenAIDriverOptions) {
@@ -94,11 +93,11 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         }
 
         const toolDefs = getToolDefinitions(options.tools);
-        const useTools: boolean = toolDefs ? supportsToolUse(options.model, "openai", true) : false;
+        const useTools: boolean = toolDefs ? supportsToolUse(options.model, this.provider, true) : false;
 
         const mapFn = (chunk: OpenAI.Chat.Completions.ChatCompletionChunk) => {
             let result = undefined
-            if (useTools && this.provider !== "xai" && options.result_schema) {
+            if (useTools && this.provider !== Providers.xai && options.result_schema) {
                 result = chunk.choices[0]?.delta?.tool_calls?.[0].function?.arguments ?? "";
             } else {
                 result = chunk.choices[0]?.delta.content ?? "";
@@ -172,7 +171,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         insert_image_detail(prompt, model_options?.image_detail ?? "auto");
 
         const toolDefs = getToolDefinitions(options.tools);
-        const useTools: boolean = toolDefs ? supportsToolUse(options.model, "openai") : false;
+        const useTools: boolean = toolDefs ? supportsToolUse(options.model, this.provider) : false;
 
         let conversation = updateConversation(options.conversation as ChatCompletionMessageParam[], prompt);
 
@@ -479,12 +478,14 @@ export function collectTools(toolCalls?: OpenAI.Chat.Completions.ChatCompletionM
 
     const tools: ToolUse[] = [];
     for (const call of toolCalls) {
-        tools.push({
-            id: call.id,
-            tool_name: call.function.name,
-            tool_input: JSON.parse(call.function.arguments),
-        });
-
+        // In OpenAI SDK v6, tool calls can be function or custom type
+        if (call.type === 'function') {
+            tools.push({
+                id: call.id,
+                tool_name: call.function.name,
+                tool_input: JSON.parse(call.function.arguments),
+            });
+        }
     }
     return tools.length > 0 ? tools : undefined;
 }
@@ -510,6 +511,18 @@ function limitedSchemaFormat(schema: JSONSchema): JSONSchema {
 
     // Defaults not supported
     delete formattedSchema.default;
+
+    // OpenAI requires type field even in non-strict mode
+    // If no type is specified, default to 'object' for properties with format/editor hints,
+    // otherwise 'string' as a safe fallback
+    if (!formattedSchema.type && formattedSchema.description) {
+        // Properties with format: "document" or editor hints are typically objects
+        if (formattedSchema.format === 'document' || formattedSchema.editor) {
+            formattedSchema.type = 'object';
+        } else {
+            formattedSchema.type = 'string';
+        }
+    }
 
     if (formattedSchema?.properties) {
         // Process each property recursively
@@ -555,6 +568,11 @@ function openAISchemaFormat(schema: JSONSchema, nesting: number = 0): JSONSchema
         // Process each property recursively
         for (const propName of Object.keys(formattedSchema.properties)) {
             const property = formattedSchema.properties[propName];
+
+            // OpenAI strict mode requires all properties to have a type
+            if (!property?.type) {
+                throw new Error(`Property '${propName}' is missing required 'type' field for OpenAI strict mode`);
+            }
 
             // Recursively process properties
             formattedSchema.properties[propName] = openAISchemaFormat(property, nesting + 1);
