@@ -10,7 +10,7 @@
 import { AbstractDriver, DataSource, ExecutionOptions, Modalities, PromptRole, PromptSegment } from '@llumiverse/core';
 import 'dotenv/config';
 import { describe, expect, test } from "vitest";
-import { BedrockDriver, OpenAIDriver, VertexAIDriver } from '../src';
+import { BedrockDriver, OpenAIDriver, VertexAIDriver, xAIDriver } from '../src';
 import { completionResultToString } from './utils';
 
 const TIMEOUT = 120 * 1000;
@@ -26,13 +26,23 @@ const drivers: TestDriver[] = [];
 
 if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
     drivers.push({
-        name: "vertexai",
+        name: "vertexai-gemini",
         driver: new VertexAIDriver({
             project: process.env.GOOGLE_PROJECT_ID as string,
             region: process.env.GOOGLE_REGION as string,
         }),
         textModel: "publishers/google/models/gemini-2.5-flash",
         visionModel: "publishers/google/models/gemini-2.5-flash",
+    });
+    // Also test Claude Sonnet 4.5 on VertexAI
+    drivers.push({
+        name: "vertexai-claude",
+        driver: new VertexAIDriver({
+            project: process.env.GOOGLE_PROJECT_ID as string,
+            region: process.env.GOOGLE_REGION as string,
+        }),
+        textModel: "publishers/anthropic/models/claude-sonnet-4-5",
+        visionModel: "publishers/anthropic/models/claude-sonnet-4-5",
     });
 } else {
     console.warn("VertexAI tests are skipped: GOOGLE_PROJECT_ID environment variable is not set");
@@ -57,11 +67,25 @@ if (process.env.BEDROCK_REGION) {
         driver: new BedrockDriver({
             region: process.env.BEDROCK_REGION as string,
         }),
-        textModel: "us.anthropic.claude-opus-4-20250514-v1:0",
-        visionModel: "us.anthropic.claude-opus-4-20250514-v1:0",
+        // Claude Sonnet 4 for text and vision
+        textModel: "us.anthropic.claude-sonnet-4-20250514-v1:0",
+        visionModel: "us.anthropic.claude-sonnet-4-20250514-v1:0",
     });
 } else {
     console.warn("Bedrock tests are skipped: BEDROCK_REGION environment variable is not set");
+}
+
+if (process.env.XAI_API_KEY) {
+    drivers.push({
+        name: "xai",
+        driver: new xAIDriver({
+            apiKey: process.env.XAI_API_KEY as string,
+        }),
+        textModel: "grok-4-1-fast-reasoning",
+        visionModel: "grok-4-1-fast-reasoning",
+    });
+} else {
+    console.warn("xAI tests are skipped: XAI_API_KEY environment variable is not set");
 }
 
 /**
