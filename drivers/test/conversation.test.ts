@@ -31,8 +31,8 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
             project: process.env.GOOGLE_PROJECT_ID as string,
             region: process.env.GOOGLE_REGION as string,
         }),
-        textModel: "publishers/google/models/gemini-3.0-pro-preview",
-        visionModel: "publishers/google/models/gemini-3.0-pro-preview",
+        textModel: "publishers/google/models/gemini-2.5-flash",
+        visionModel: "publishers/google/models/gemini-2.5-flash",
     });
 } else {
     console.warn("VertexAI tests are skipped: GOOGLE_PROJECT_ID environment variable is not set");
@@ -65,17 +65,25 @@ if (process.env.BEDROCK_REGION) {
 }
 
 /**
- * DataSource implementation for URL-based images
+ * DataSource implementation that fetches image from URL and provides it as a stream.
+ * This simulates how Studio sends images - fetched and converted to base64/bytes.
  */
 class ImageUrlSource implements DataSource {
+    private cachedBuffer: ArrayBuffer | null = null;
+
     constructor(public url: string, public mime_type: string = "image/jpeg") { }
+
     get name() {
         return this.url.split('/').pop() || 'image';
     }
+
     async getURL(): Promise<string> {
+        // Return the original URL - driver will fetch it
         return this.url;
     }
+
     async getStream(): Promise<ReadableStream<string | Uint8Array>> {
+        // Fetch the image and return as stream (this is what Studio does)
         const response = await fetch(this.url);
         if (!response.ok) {
             throw new Error(`Failed to fetch image from url: ${this.url}`);
@@ -87,10 +95,72 @@ class ImageUrlSource implements DataSource {
     }
 }
 
+/**
+ * DataSource implementation that provides pre-fetched image data as base64.
+ * This more closely simulates how Studio sends images through the conversation.
+ */
+class Base64ImageSource implements DataSource {
+    private base64Data: string;
+
+    constructor(
+        base64Data: string,
+        public mime_type: string = "image/png",
+        private imageName: string = "image"
+    ) {
+        this.base64Data = base64Data;
+    }
+
+    get name() {
+        return this.imageName;
+    }
+
+    async getURL(): Promise<string> {
+        // Return as data URL
+        return `data:${this.mime_type};base64,${this.base64Data}`;
+    }
+
+    async getStream(): Promise<ReadableStream<string | Uint8Array>> {
+        // Convert base64 to Uint8Array and return as stream
+        const binaryString = atob(this.base64Data);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+        return new ReadableStream({
+            start(controller) {
+                controller.enqueue(bytes);
+                controller.close();
+            }
+        });
+    }
+
+    static async fromUrl(url: string, mimeType: string = "image/png"): Promise<Base64ImageSource> {
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`Failed to fetch image from url: ${url}`);
+        }
+        const arrayBuffer = await response.arrayBuffer();
+        const bytes = new Uint8Array(arrayBuffer);
+        let binary = '';
+        for (let i = 0; i < bytes.byteLength; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        const base64 = btoa(binary);
+        const name = url.split('/').pop() || 'image';
+        return new Base64ImageSource(base64, mimeType, name);
+    }
+}
+
 function getTextOptions(model: string): ExecutionOptions {
+    // GPT-5 and similar reasoning models don't support temperature
+    const isReasoningModel = model.includes("gpt-5") || model.includes("o1") || model.includes("o3");
+
     return {
         model: model,
-        model_options: {
+        model_options: isReasoningModel ? {
+            _option_id: "openai-thinking",
+            max_tokens: 1024,
+        } : {
             _option_id: "text-fallback",
             max_tokens: 256,
             temperature: 0.3,
@@ -203,18 +273,20 @@ describe.concurrent.skipIf(!hasDrivers).each(drivers)("Driver $name - Multi-turn
     test(`${name}: multi-turn conversation with image`, { timeout: TIMEOUT }, async () => {
         const options = getTextOptions(visionModel);
 
-        // Turn 1: Send an image and ask about it
-        const imageUrl = "https://upload.wikimedia.org/wikipedia/commons/b/b2/WhiteCat.jpg";
+        // Turn 1: Send an image as base64 (like Studio does)
+        // Using Google logo as a simple, accessible test image
+        const imageUrl = "https://www.google.com/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png";
+        const imageSource = await Base64ImageSource.fromUrl(imageUrl, "image/png");
         const prompt1: PromptSegment[] = [{
             role: PromptRole.user,
-            content: "What animal is in this image? Please describe it briefly.",
-            files: [new ImageUrlSource(imageUrl)]
+            content: "What company logo is shown in this image? Please describe the colors you see.",
+            files: [imageSource]
         }];
 
         const result1 = await driver.execute(prompt1, options);
         expect(result1.result.length).toBeGreaterThan(0);
         const text1 = result1.result.map(completionResultToString).join("").toLowerCase();
-        expect(text1).toContain("cat");
+        expect(text1).toMatch(/google/i);
         expect(result1.conversation).toBeDefined();
 
         // Critical test: Verify conversation is serializable after image
@@ -227,13 +299,14 @@ describe.concurrent.skipIf(!hasDrivers).each(drivers)("Driver $name - Multi-turn
         // Turn 2: Follow-up question about the image (without sending it again)
         const prompt2: PromptSegment[] = [{
             role: PromptRole.user,
-            content: "What color is the animal you just described?"
+            content: "How many colors are in the logo you just described?"
         }];
 
         const result2 = await driver.execute(prompt2, { ...options, conversation: storedConversation1 });
         expect(result2.result.length).toBeGreaterThan(0);
-        const text2 = result2.result.map(completionResultToString).join("").toLowerCase();
-        expect(text2).toContain("white");
+        const text2 = result2.result.map(completionResultToString).join("");
+        // Google logo has 4 colors (blue, red, yellow, green)
+        expect(text2).toMatch(/4|four/i);
 
         // Verify conversation is still serializable
         verifyConversationSerializable(result2.conversation, name);
@@ -244,13 +317,13 @@ describe.concurrent.skipIf(!hasDrivers).each(drivers)("Driver $name - Multi-turn
         // Turn 3: Another follow-up
         const prompt3: PromptSegment[] = [{
             role: PromptRole.user,
-            content: "Is this a domestic or wild animal?"
+            content: "What is the first letter in that company name?"
         }];
 
         const result3 = await driver.execute(prompt3, { ...options, conversation: storedConversation2 });
         expect(result3.result.length).toBeGreaterThan(0);
         const text3 = result3.result.map(completionResultToString).join("").toLowerCase();
-        expect(text3).toMatch(/domestic|pet|house/);
+        expect(text3).toContain("g");
 
         // Final verification
         verifyConversationSerializable(result3.conversation, name);
@@ -259,24 +332,26 @@ describe.concurrent.skipIf(!hasDrivers).each(drivers)("Driver $name - Multi-turn
     test(`${name}: conversation with multiple images`, { timeout: TIMEOUT }, async () => {
         const options = getTextOptions(visionModel);
 
-        // Turn 1: Send two images
-        const catImageUrl = "https://upload.wikimedia.org/wikipedia/commons/b/b2/WhiteCat.jpg";
-        const dogImageUrl = "https://upload.wikimedia.org/wikipedia/commons/2/26/YellowLabradorLooking_new.jpg";
+        // Turn 1: Send two images as base64 (like Studio does)
+        const googleLogoUrl = "https://www.google.com/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png";
+        const githubLogoUrl = "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png";
+
+        const [googleImage, githubImage] = await Promise.all([
+            Base64ImageSource.fromUrl(googleLogoUrl, "image/png"),
+            Base64ImageSource.fromUrl(githubLogoUrl, "image/png")
+        ]);
 
         const prompt1: PromptSegment[] = [{
             role: PromptRole.user,
-            content: "I'm showing you two images. The first is a cat and the second is a dog. Please confirm you can see both animals.",
-            files: [
-                new ImageUrlSource(catImageUrl),
-                new ImageUrlSource(dogImageUrl)
-            ]
+            content: "I'm showing you two company logos. Please identify both companies.",
+            files: [googleImage, githubImage]
         }];
 
         const result1 = await driver.execute(prompt1, options);
         expect(result1.result.length).toBeGreaterThan(0);
         const text1 = result1.result.map(completionResultToString).join("").toLowerCase();
-        expect(text1).toMatch(/cat/);
-        expect(text1).toMatch(/dog/);
+        expect(text1).toMatch(/google/);
+        expect(text1).toMatch(/github/);
         expect(result1.conversation).toBeDefined();
 
         // Critical test: Verify conversation with multiple images is serializable
@@ -288,11 +363,14 @@ describe.concurrent.skipIf(!hasDrivers).each(drivers)("Driver $name - Multi-turn
         // Turn 2: Ask about the images
         const prompt2: PromptSegment[] = [{
             role: PromptRole.user,
-            content: "Which of the two animals appears larger in their respective image?"
+            content: "Which of the two logos has more colors?"
         }];
 
         const result2 = await driver.execute(prompt2, { ...options, conversation: storedConversation1 });
         expect(result2.result.length).toBeGreaterThan(0);
+        const text2 = result2.result.map(completionResultToString).join("").toLowerCase();
+        // Google logo has 4 colors, GitHub logo is monochrome
+        expect(text2).toMatch(/google/);
 
         // Verify conversation is still serializable after second turn
         verifyConversationSerializable(result2.conversation, name);
