@@ -1104,6 +1104,33 @@ function getToolDefinition(tool: ToolDefinition): Tool.ToolSpecMember {
 }
 
 /**
+ * Recursively removes undefined values from an object.
+ * AWS Bedrock's additionalModelRequestFields must be valid JSON, and undefined is not valid JSON.
+ * Any unrecognized parameters will cause an exception.
+ */
+function removeUndefinedValues<T extends Record<string, any>>(obj: T): Partial<T> {
+    if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) {
+        return obj;
+    }
+
+    const cleaned: any = {};
+    for (const [key, value] of Object.entries(obj)) {
+        if (value !== undefined) {
+            if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+                const cleanedNested = removeUndefinedValues(value);
+                // Only include nested objects if they have properties after cleaning
+                if (Object.keys(cleanedNested).length > 0) {
+                    cleaned[key] = cleanedNested;
+                }
+            } else {
+                cleaned[key] = value;
+            }
+        }
+    }
+    return cleaned;
+}
+
+/**
  * Update the conversation messages
  * @param prompt
  * @param response
