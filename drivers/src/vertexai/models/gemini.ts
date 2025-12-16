@@ -8,7 +8,7 @@ import {
     ExecutionTokenUsage, getMaxTokensLimitVertexAi, JSONObject, JSONSchema, ModelType, PromptOptions, PromptRole,
     PromptSegment, readStreamAsBase64, StatelessExecutionOptions, ToolDefinition, ToolUse,
     VertexAIGeminiOptions, stripBase64ImagesFromConversation,
-    getConversationMeta, incrementConversationTurn
+    getConversationMeta, incrementConversationTurn, unwrapConversationArray
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { VertexAIDriver, GenerateContentPrompt } from "../index.js";
@@ -743,7 +743,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
 
-        let conversation = updateConversation(options.conversation as Content[], prompt.contents);
+        let conversation = updateConversation(options.conversation, prompt.contents);
         prompt.contents = conversation;
 
         // TODO: Remove hack, use global endpoint manually if needed.
@@ -915,8 +915,11 @@ function getToolFunction(tool: ToolDefinition): FunctionDeclaration {
  * @param response
  * @returns
  */
-function updateConversation(conversation: Content[], prompt: Content[]): Content[] {
-    return (conversation || [] satisfies Content[]).concat(prompt);
+function updateConversation(conversation: unknown, prompt: Content[]): Content[] {
+    // Unwrap array if wrapped, otherwise treat as array
+    const unwrapped = unwrapConversationArray<Content>(conversation);
+    const convArray = unwrapped ?? (conversation as Content[] || []);
+    return convArray.concat(prompt);
 }
 /**
  *

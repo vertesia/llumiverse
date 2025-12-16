@@ -190,14 +190,37 @@ export function getConversationMeta(conversation: unknown): ConversationMeta {
     return { turnNumber: 0 };
 }
 
+/** Key used to wrap array conversations to preserve their type through JSON serialization */
+const ARRAY_WRAPPER_KEY = '_arrayConversation';
+
 /**
  * Set metadata on a conversation object.
+ * Arrays are wrapped in an object to preserve their type through JSON serialization.
  */
 export function setConversationMeta(conversation: unknown, meta: ConversationMeta): unknown {
+    if (Array.isArray(conversation)) {
+        // Wrap arrays in an object to preserve their array nature through JSON serialization
+        return { [ARRAY_WRAPPER_KEY]: conversation, [META_KEY]: meta };
+    }
     if (typeof conversation === 'object' && conversation !== null) {
         return { ...conversation as object, [META_KEY]: meta };
     }
     return conversation;
+}
+
+/**
+ * Unwrap a conversation array that was wrapped by setConversationMeta.
+ * If the conversation is not a wrapped array, returns undefined.
+ * Use this to extract the actual message array from a conversation object.
+ */
+export function unwrapConversationArray<T = unknown>(conversation: unknown): T[] | undefined {
+    if (typeof conversation === 'object' && conversation !== null) {
+        const c = conversation as Record<string, unknown>;
+        if (Array.isArray(c[ARRAY_WRAPPER_KEY])) {
+            return c[ARRAY_WRAPPER_KEY] as T[];
+        }
+    }
+    return undefined;
 }
 
 /**

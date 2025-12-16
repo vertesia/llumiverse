@@ -25,6 +25,7 @@ import {
     stripBase64ImagesFromConversation,
     getConversationMeta,
     incrementConversationTurn,
+    unwrapConversationArray,
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { formatOpenAILikeMultimodalPrompt } from "./openai_format.js";
@@ -176,7 +177,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         const toolDefs = getToolDefinitions(options.tools);
         const useTools: boolean = toolDefs ? supportsToolUse(options.model, this.provider) : false;
 
-        let conversation = updateConversation(options.conversation as ChatCompletionMessageParam[], prompt);
+        let conversation = updateConversation(options.conversation, prompt);
 
         let parsedSchema: JSONSchema | undefined = undefined;
         let strictMode = false;
@@ -473,14 +474,19 @@ function openAiFinishReason(finish_reason?: string): string | undefined {
     return finish_reason;
 }
 
-function updateConversation(conversation: ChatCompletionMessageParam[], message: ChatCompletionMessageParam[]): ChatCompletionMessageParam[] {
+function updateConversation(conversation: unknown, message: ChatCompletionMessageParam[]): ChatCompletionMessageParam[] {
     if (!message) {
-        return conversation;
+        // Unwrap array if wrapped, otherwise treat as array
+        const unwrapped = unwrapConversationArray<ChatCompletionMessageParam>(conversation);
+        return unwrapped ?? (conversation as ChatCompletionMessageParam[] || []);
     }
     if (!conversation) {
         return message;
     }
-    return [...conversation, ...message];
+    // Unwrap array if wrapped, otherwise treat as array
+    const unwrapped = unwrapConversationArray<ChatCompletionMessageParam>(conversation);
+    const convArray = unwrapped ?? (conversation as ChatCompletionMessageParam[]);
+    return [...convArray, ...message];
 }
 
 export function collectTools(toolCalls?: OpenAI.Chat.Completions.ChatCompletionMessageToolCall[]): ToolUse[] | undefined {
