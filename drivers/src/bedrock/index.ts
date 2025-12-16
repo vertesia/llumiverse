@@ -6,13 +6,20 @@ import { BedrockRuntime, ConverseRequest, ConverseResponse, ConverseStreamOutput
 import { S3Client } from "@aws-sdk/client-s3";
 import { AwsCredentialIdentity, Provider } from "@aws-sdk/types";
 import {
-    AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult,
-    ExecutionOptions, ExecutionTokenUsage, PromptSegment,
-    TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions,
-    BedrockClaudeOptions, BedrockPalmyraOptions, BedrockGptOssOptions, getMaxTokensLimitBedrock, NovaCanvasOptions,
-    modelModalitiesToArray, getModelCapabilities,
+    AbstractDriver, AIModel,
+    BedrockClaudeOptions,
+    BedrockGptOssOptions,
+    BedrockPalmyraOptions,
+    Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult,
+    ExecutionOptions, ExecutionTokenUsage,
+    getMaxTokensLimitBedrock,
+    getModelCapabilities,
+    modelModalitiesToArray,
+    ModelOptions,
+    NovaCanvasOptions,
+    PromptSegment,
     StatelessExecutionOptions,
-    ModelOptions
+    TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions
 } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
@@ -22,9 +29,9 @@ import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from ".
 import { forceUploadFile } from "./s3.js";
 import {
     formatTwelvelabsPegasusPrompt,
-    TwelvelabsPegasusRequest,
     TwelvelabsMarengoRequest,
-    TwelvelabsMarengoResponse
+    TwelvelabsMarengoResponse,
+    TwelvelabsPegasusRequest
 } from "./twelvelabs.js";
 
 const supportStreamingCache = new LRUCache<string, boolean>(4096);
@@ -114,7 +121,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             this._executor = new BedrockRuntime({
                 region: this.options.region,
                 credentials: this.options.credentials,
-
             });
         }
         return this._executor;
