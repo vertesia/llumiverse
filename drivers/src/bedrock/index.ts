@@ -642,22 +642,38 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             prompt.messages = converseJSONprefill(prompt.messages);
         }
 
+        // Clean undefined values from additionalField since AWS Bedrock requires valid JSON
+        // and will throw an exception for unrecognized parameters
+        const cleanedAdditionalFields = removeUndefinedValues(additionalField);
+        const cleanedModelOptions = removeUndefinedValues({
+            maxTokens: model_options.max_tokens,
+            temperature: model_options.temperature,
+            topP: model_options.top_p,
+            stopSequences: model_options.stop_sequence,
+        } satisfies InferenceConfiguration);
+
+        //Construct the final request payload
+        // We only add fields that are defined to avoid AWS errors
         const request: ConverseRequest = {
-            messages: prompt.messages,
-            system: prompt.system,
             modelId: options.model,
-            inferenceConfig: {
-                maxTokens: model_options.max_tokens,
-                temperature: model_options.temperature,
-                topP: model_options.top_p,
-                stopSequences: model_options.stop_sequence,
-            } satisfies InferenceConfiguration,
-            additionalModelRequestFields: {
-                ...additionalField,
-            }
         };
 
-        //Only add tools if they are defined and not empty
+        if (prompt.messages) {
+            request.messages = prompt.messages;
+        }
+
+        if (prompt.system) {
+            request.system = prompt.system;
+        }
+
+        if (Object.keys(cleanedModelOptions).length > 0) {
+            request.inferenceConfig = cleanedModelOptions
+        }
+
+        if (Object.keys(cleanedAdditionalFields).length > 0) {
+            request.additionalModelRequestFields = cleanedAdditionalFields;
+        }
+
         if (tool_defs?.length) {
             request.toolConfig = {
                 tools: tool_defs,
