@@ -1,5 +1,12 @@
 import { describe, expect, test } from "vitest";
-import { stripBinaryFromConversation, stripBase64ImagesFromConversation } from "../src/conversation-utils";
+import {
+    stripBinaryFromConversation,
+    stripBase64ImagesFromConversation,
+    getConversationMeta,
+    setConversationMeta,
+    incrementConversationTurn,
+    deserializeBinaryFromStorage
+} from "../src/conversation-utils";
 
 const IMAGE_PLACEHOLDER = '[Image removed from conversation history]';
 const DOCUMENT_PLACEHOLDER = '[Document removed from conversation history]';
@@ -210,5 +217,309 @@ describe('stripBase64ImagesFromConversation', () => {
         expect(result.content[0]).toEqual({ type: 'text', text: 'Hello' });
         expect(result.content[1]).toEqual({ type: 'text', text: IMAGE_PLACEHOLDER });
         expect(result.content[2]).toEqual({ type: 'text', text: 'World' });
+    });
+});
+
+describe('turn-based stripping', () => {
+    describe('conversation metadata', () => {
+        test('should return default metadata for objects without metadata', () => {
+            const conversation = { messages: [] };
+            const meta = getConversationMeta(conversation);
+            expect(meta.turnNumber).toBe(0);
+        });
+
+        test('should return default metadata for null/undefined', () => {
+            expect(getConversationMeta(null)).toEqual({ turnNumber: 0 });
+            expect(getConversationMeta(undefined)).toEqual({ turnNumber: 0 });
+        });
+
+        test('should set and get metadata correctly', () => {
+            const conversation = { messages: [] };
+            const updated = setConversationMeta(conversation, { turnNumber: 5 });
+            const meta = getConversationMeta(updated);
+            expect(meta.turnNumber).toBe(5);
+        });
+
+        test('should increment turn number', () => {
+            const conversation = { messages: [] };
+            const turn1 = incrementConversationTurn(conversation);
+            expect(getConversationMeta(turn1).turnNumber).toBe(1);
+
+            const turn2 = incrementConversationTurn(turn1);
+            expect(getConversationMeta(turn2).turnNumber).toBe(2);
+
+            const turn3 = incrementConversationTurn(turn2);
+            expect(getConversationMeta(turn3).turnNumber).toBe(3);
+        });
+    });
+
+    describe('keepForTurns option', () => {
+        test('should serialize binary data when keepForTurns > currentTurn', () => {
+            const input = {
+                content: [{
+                    image: {
+                        format: 'png',
+                        source: { bytes: new Uint8Array([137, 80, 78, 71]) }
+                    }
+                }]
+            };
+
+            // Keep for 3 turns, current turn is 1 - should serialize not strip
+            const result = stripBinaryFromConversation(input, {
+                keepForTurns: 3,
+                currentTurn: 1
+            }) as any;
+
+            // Should have serialized format (bytes._base64), not placeholder
+            expect(result.content[0].image.source.bytes._base64).toBeDefined();
+            expect(result.content[0].image.source.bytes._base64).toBe('iVBORw=='); // Base64 of [137, 80, 78, 71]
+        });
+
+        test('should strip when currentTurn >= keepForTurns', () => {
+            const input = {
+                content: [{
+                    image: {
+                        format: 'png',
+                        source: { bytes: new Uint8Array([137, 80, 78, 71]) }
+                    }
+                }]
+            };
+
+            // Keep for 2 turns, current turn is 2 - should strip
+            const result = stripBinaryFromConversation(input, {
+                keepForTurns: 2,
+                currentTurn: 2
+            }) as any;
+
+            expect(result.content[0]).toEqual({ text: IMAGE_PLACEHOLDER });
+        });
+
+        test('should strip when currentTurn > keepForTurns', () => {
+            const input = {
+                content: [{
+                    image: {
+                        format: 'png',
+                        source: { bytes: new Uint8Array([137, 80, 78, 71]) }
+                    }
+                }]
+            };
+
+            // Keep for 2 turns, current turn is 5 - should strip
+            const result = stripBinaryFromConversation(input, {
+                keepForTurns: 2,
+                currentTurn: 5
+            }) as any;
+
+            expect(result.content[0]).toEqual({ text: IMAGE_PLACEHOLDER });
+        });
+
+        test('should strip immediately when keepForTurns is 0', () => {
+            const input = {
+                content: [{
+                    image: {
+                        format: 'png',
+                        source: { bytes: new Uint8Array([137, 80, 78, 71]) }
+                    }
+                }]
+            };
+
+            const result = stripBinaryFromConversation(input, {
+                keepForTurns: 0,
+                currentTurn: 0
+            }) as any;
+
+            expect(result.content[0]).toEqual({ text: IMAGE_PLACEHOLDER });
+        });
+
+        test('should use turn number from metadata when currentTurn not provided', () => {
+            let conversation: any = {
+                content: [{
+                    image: {
+                        format: 'png',
+                        source: { bytes: new Uint8Array([137, 80, 78, 71]) }
+                    }
+                }]
+            };
+
+            // Set turn number to 1 in metadata
+            conversation = setConversationMeta(conversation, { turnNumber: 1 });
+
+            // Keep for 3 turns - should serialize (turn 1 < 3)
+            const result = stripBinaryFromConversation(conversation, {
+                keepForTurns: 3
+            }) as any;
+
+            expect(result.content[0].image.source.bytes._base64).toBeDefined();
+        });
+    });
+
+    describe('serialization and deserialization', () => {
+        test('should serialize Uint8Array to base64 for safe storage', () => {
+            const originalBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+            const input = {
+                content: [{
+                    image: {
+                        format: 'png',
+                        source: { bytes: originalBytes }
+                    }
+                }]
+            };
+
+            // Serialize for storage
+            const serialized = stripBinaryFromConversation(input, {
+                keepForTurns: 5,
+                currentTurn: 1
+            }) as any;
+
+            // Should be base64 encoded (bytes becomes { _base64: ... })
+            expect(serialized.content[0].image.source.bytes._base64).toBeDefined();
+
+            // Should survive JSON.stringify/parse
+            const jsonString = JSON.stringify(serialized);
+            const parsed = JSON.parse(jsonString);
+            expect(parsed.content[0].image.source.bytes._base64).toBe(serialized.content[0].image.source.bytes._base64);
+
+            // Should be deserializable back to Uint8Array
+            const deserialized = deserializeBinaryFromStorage(parsed) as any;
+            expect(deserialized.content[0].image.source.bytes).toBeInstanceOf(Uint8Array);
+            expect(Array.from(deserialized.content[0].image.source.bytes)).toEqual(Array.from(originalBytes));
+        });
+
+        test('should strip serialized images when threshold exceeded', () => {
+            // Start with serialized data (as if it was stored and restored)
+            // The serialized format has bytes: { _base64: '...' }
+            const serializedConversation = {
+                content: [{
+                    image: {
+                        format: 'png',
+                        source: { bytes: { _base64: 'iVBORw0KGgo=' } }
+                    }
+                }],
+                _llumiverse_meta: { turnNumber: 3 }
+            };
+
+            // Now strip with threshold of 2 turns (current turn 3 >= 2)
+            const result = stripBinaryFromConversation(serializedConversation, {
+                keepForTurns: 2,
+                currentTurn: 3
+            }) as any;
+
+            // Should be stripped to placeholder
+            expect(result.content[0]).toEqual({ text: IMAGE_PLACEHOLDER });
+        });
+    });
+
+    describe('base64 images turn-based stripping', () => {
+        test('should keep base64 images when keepForTurns > currentTurn', () => {
+            const input = {
+                content: [{
+                    type: 'image_url',
+                    image_url: { url: 'data:image/png;base64,abc123' }
+                }]
+            };
+
+            // Keep for 3 turns, current turn is 1 - should keep
+            const result = stripBase64ImagesFromConversation(input, {
+                keepForTurns: 3,
+                currentTurn: 1
+            }) as any;
+
+            // Should still have the image URL
+            expect(result.content[0].image_url.url).toBe('data:image/png;base64,abc123');
+        });
+
+        test('should strip base64 images when currentTurn >= keepForTurns', () => {
+            const input = {
+                content: [{
+                    type: 'image_url',
+                    image_url: { url: 'data:image/png;base64,abc123' }
+                }]
+            };
+
+            // Keep for 2 turns, current turn is 3 - should strip
+            const result = stripBase64ImagesFromConversation(input, {
+                keepForTurns: 2,
+                currentTurn: 3
+            }) as any;
+
+            expect(result.content[0]).toEqual({ type: 'text', text: IMAGE_PLACEHOLDER });
+        });
+    });
+});
+
+describe('conversation serialization safety', () => {
+    test('conversation with binary data should survive JSON roundtrip when serialized', () => {
+        const originalConversation = {
+            messages: [{
+                content: [{
+                    image: {
+                        format: 'png',
+                        source: { bytes: new Uint8Array([137, 80, 78, 71]) }
+                    }
+                }]
+            }]
+        };
+
+        // Serialize for storage (keeping for 5 turns)
+        const serialized = stripBinaryFromConversation(originalConversation, {
+            keepForTurns: 5,
+            currentTurn: 1
+        });
+
+        // Simulate storage: JSON stringify and parse
+        const stored = JSON.stringify(serialized);
+        const restored = JSON.parse(stored);
+
+        // The restored conversation should NOT have corrupted numeric keys
+        // This was the original bug we fixed
+        // The bytes field should be { _base64: ... }, not { "0": 137, "1": 80, ... }
+        const bytesObj = restored.messages[0].content[0].image.source.bytes;
+        const keys = Object.keys(bytesObj);
+        expect(keys).not.toContain('0');
+        expect(keys).not.toContain('1');
+        expect(keys).toContain('_base64');
+    });
+
+    test('conversation with stripped data should survive JSON roundtrip', () => {
+        const originalConversation = {
+            messages: [{
+                content: [{
+                    image: {
+                        format: 'png',
+                        source: { bytes: new Uint8Array([137, 80, 78, 71]) }
+                    }
+                }]
+            }]
+        };
+
+        // Strip immediately
+        const stripped = stripBinaryFromConversation(originalConversation);
+
+        // Simulate storage: JSON stringify and parse
+        const stored = JSON.stringify(stripped);
+        const restored = JSON.parse(stored);
+
+        // Should have text placeholder
+        expect(restored.messages[0].content[0]).toEqual({ text: IMAGE_PLACEHOLDER });
+    });
+
+    test('metadata should be preserved through serialization and stripping', () => {
+        let conversation: any = { messages: [] };
+        conversation = incrementConversationTurn(conversation);
+        conversation = incrementConversationTurn(conversation);
+
+        expect(getConversationMeta(conversation).turnNumber).toBe(2);
+
+        // Serialize for storage
+        const serialized = stripBinaryFromConversation(conversation, {
+            keepForTurns: 5,
+            currentTurn: 2
+        });
+
+        // JSON roundtrip
+        const restored = JSON.parse(JSON.stringify(serialized));
+
+        // Metadata should be preserved
+        expect(getConversationMeta(restored).turnNumber).toBe(2);
     });
 });

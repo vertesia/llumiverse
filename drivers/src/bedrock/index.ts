@@ -13,7 +13,10 @@ import {
     modelModalitiesToArray, getModelCapabilities,
     StatelessExecutionOptions,
     ModelOptions,
-    stripBinaryFromConversation
+    stripBinaryFromConversation,
+    deserializeBinaryFromStorage,
+    getConversationMeta,
+    incrementConversationTurn
 } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
@@ -359,7 +362,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         // Handle other Bedrock models that use Converse API
         const conversePrompt = prompt as ConverseRequest;
-        let conversation = updateConversation(options.conversation as ConverseRequest, conversePrompt);
+
+        // Deserialize any base64-encoded binary data back to Uint8Array before API call
+        const incomingConversation = deserializeBinaryFromStorage(options.conversation) as ConverseRequest;
+        let conversation = updateConversation(incomingConversation, conversePrompt);
 
         const payload = this.preparePayload(conversation, options);
         const executor = this.getExecutor();
@@ -372,6 +378,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             messages: [res.output?.message ?? { content: [{ text: "" }], role: "assistant" }],
             modelId: conversePrompt.modelId,
         });
+
+        // Increment turn counter for deferred stripping
+        conversation = incrementConversationTurn(conversation) as ConverseRequest;
 
         let tool_use: ToolUse[] | undefined = undefined;
         //Get tool requests, we check tool use regardless of finish reason, as you can hit length and still get a valid response.
@@ -390,11 +399,17 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             tool_use = undefined;
         }
 
+        // Strip/serialize binary data based on options.stripImagesAfterTurns
+        const currentTurn = getConversationMeta(conversation).turnNumber;
+        const strippedConversation = stripBinaryFromConversation(conversation, {
+            keepForTurns: options.stripImagesAfterTurns ?? 0,
+            currentTurn
+        });
+
         const completion = {
             ...this.getExtractedExecution(res, conversePrompt, options),
             original_response: options.include_original_response ? res : undefined,
-            // Strip binary data (Uint8Array) from conversation to prevent JSON.stringify corruption
-            conversation: stripBinaryFromConversation(conversation),
+            conversation: strippedConversation,
             tool_use: tool_use,
         };
 

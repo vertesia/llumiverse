@@ -23,6 +23,8 @@ import {
     modelModalitiesToArray,
     supportsToolUse,
     stripBase64ImagesFromConversation,
+    getConversationMeta,
+    incrementConversationTurn,
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { formatOpenAILikeMultimodalPrompt } from "./openai_format.js";
@@ -218,8 +220,16 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         }
 
         conversation = updateConversation(conversation, createPromptFromResponse(res.choices[0].message));
-        // Strip large base64 image data from conversation to reduce storage bloat
-        completion.conversation = stripBase64ImagesFromConversation(conversation);
+
+        // Increment turn counter for deferred stripping
+        conversation = incrementConversationTurn(conversation) as ChatCompletionMessageParam[];
+
+        // Strip large base64 image data based on options.stripImagesAfterTurns
+        const currentTurn = getConversationMeta(conversation).turnNumber;
+        completion.conversation = stripBase64ImagesFromConversation(conversation, {
+            keepForTurns: options.stripImagesAfterTurns ?? 0,
+            currentTurn
+        });
 
         return completion;
     }

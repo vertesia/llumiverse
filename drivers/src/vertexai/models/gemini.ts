@@ -7,7 +7,8 @@ import {
     AIModel, Completion, CompletionChunkObject, CompletionResult, ExecutionOptions,
     ExecutionTokenUsage, getMaxTokensLimitVertexAi, JSONObject, JSONSchema, ModelType, PromptOptions, PromptRole,
     PromptSegment, readStreamAsBase64, StatelessExecutionOptions, ToolDefinition, ToolUse,
-    VertexAIGeminiOptions, stripBase64ImagesFromConversation
+    VertexAIGeminiOptions, stripBase64ImagesFromConversation,
+    getConversationMeta, incrementConversationTurn
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { VertexAIDriver, GenerateContentPrompt } from "../index.js";
@@ -792,13 +793,22 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             finish_reason = "tool_use";
         }
 
+        // Increment turn counter for deferred stripping
+        conversation = incrementConversationTurn(conversation) as Content[];
+
+        // Strip large base64 image data based on options.stripImagesAfterTurns
+        const currentTurn = getConversationMeta(conversation).turnNumber;
+        const strippedConversation = stripBase64ImagesFromConversation(conversation, {
+            keepForTurns: options.stripImagesAfterTurns ?? 0,
+            currentTurn
+        });
+
         return {
             result: result && result.length > 0 ? result : [{ type: "text" as const, value: '' }],
             token_usage: token_usage,
             finish_reason: finish_reason,
             original_response: options.include_original_response ? response : undefined,
-            // Strip large base64 image data from conversation to reduce storage bloat
-            conversation: stripBase64ImagesFromConversation(conversation),
+            conversation: strippedConversation,
             tool_use
         } satisfies Completion;
     }

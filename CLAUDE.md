@@ -41,6 +41,54 @@ The main abstractions are:
 - Error handling: use proper error types and propagation, especially with async code
 - Formatting: follows Prettier configuration
 
+## Multi-Turn Conversations
+
+Llumiverse supports multi-turn conversations via the `conversation` property in `ExecutionOptions`. The conversation object is driver-specific and opaque - you receive it from one execution and pass it to the next.
+
+### Image Handling in Conversations
+
+Images in conversations can cause issues:
+- **Bedrock**: Stores images as `Uint8Array` which corrupts during `JSON.stringify()` (becomes `{ "0": 137, "1": 80, ... }`)
+- **OpenAI/Gemini**: Stores images as base64 strings which can bloat storage
+
+To address this, drivers automatically strip/serialize images based on `stripImagesAfterTurns`:
+
+```typescript
+// Strip images immediately after each turn (default)
+driver.execute(prompt, {
+    model: "...",
+    stripImagesAfterTurns: 0  // or undefined
+});
+
+// Keep images for 3 turns before stripping
+driver.execute(prompt, {
+    model: "...",
+    stripImagesAfterTurns: 3
+});
+
+// Never strip images (for short conversations)
+driver.execute(prompt, {
+    model: "...",
+    stripImagesAfterTurns: Infinity
+});
+```
+
+When `stripImagesAfterTurns > 0`:
+- Bedrock: `Uint8Array` is converted to `{ _base64: '...' }` for safe JSON serialization, then deserialized back before API calls
+- OpenAI/Gemini: Base64 strings are preserved as-is (already JSON-safe)
+
+Turn counting is automatic via `_llumiverse_meta.turnNumber` in the conversation object.
+
+### Utility Functions
+
+The following functions are exported from `@llumiverse/core` for advanced use cases:
+
+- `stripBinaryFromConversation(obj, options?)` - Strip/serialize Bedrock binary data
+- `stripBase64ImagesFromConversation(obj, options?)` - Strip OpenAI/Gemini base64 images
+- `deserializeBinaryFromStorage(obj)` - Restore `Uint8Array` from serialized `{ _base64: '...' }` format
+- `getConversationMeta(conversation)` - Get turn metadata
+- `incrementConversationTurn(conversation)` - Increment turn number
+
 ## Testing
 
 Tests require API keys for the various LLM providers stored as environment variables:
@@ -59,6 +107,8 @@ Tests can be found in:
 - `drivers/test/tools.test.ts` - Tests for LLM tool functionality
 - `drivers/test/embeddings.test.ts` - Tests for embedding functionality
 - `drivers/test/image-gen.test.ts` - Tests for image generation
+- `drivers/test/conversation.test.ts` - Tests for multi-turn conversations with images
+- `core/test/conversation-strip.test.ts` - Unit tests for conversation stripping utilities
 
 ## Adding a New Driver
 
