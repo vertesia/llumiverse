@@ -22,6 +22,7 @@ import {
     getModelCapabilities,
     modelModalitiesToArray,
     supportsToolUse,
+    stripBase64ImagesFromConversation,
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { formatOpenAILikeMultimodalPrompt } from "./openai_format.js";
@@ -217,7 +218,8 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         }
 
         conversation = updateConversation(conversation, createPromptFromResponse(res.choices[0].message));
-        completion.conversation = conversation;
+        // Strip large base64 image data from conversation to reduce storage bloat
+        completion.conversation = stripBase64ImagesFromConversation(conversation);
 
         return completion;
     }

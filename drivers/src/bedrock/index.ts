@@ -12,7 +12,8 @@ import {
     BedrockClaudeOptions, BedrockPalmyraOptions, BedrockGptOssOptions, getMaxTokensLimitBedrock, NovaCanvasOptions,
     modelModalitiesToArray, getModelCapabilities,
     StatelessExecutionOptions,
-    ModelOptions
+    ModelOptions,
+    stripBinaryFromConversation
 } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
@@ -392,7 +393,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const completion = {
             ...this.getExtractedExecution(res, conversePrompt, options),
             original_response: options.include_original_response ? res : undefined,
-            conversation: conversation,
+            // Strip binary data (Uint8Array) from conversation to prevent JSON.stringify corruption
+            conversation: stripBinaryFromConversation(conversation),
             tool_use: tool_use,
         };
 

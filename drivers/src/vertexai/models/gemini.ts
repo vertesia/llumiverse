@@ -7,7 +7,7 @@ import {
     AIModel, Completion, CompletionChunkObject, CompletionResult, ExecutionOptions,
     ExecutionTokenUsage, getMaxTokensLimitVertexAi, JSONObject, JSONSchema, ModelType, PromptOptions, PromptRole,
     PromptSegment, readStreamAsBase64, StatelessExecutionOptions, ToolDefinition, ToolUse,
-    VertexAIGeminiOptions
+    VertexAIGeminiOptions, stripBase64ImagesFromConversation
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { VertexAIDriver, GenerateContentPrompt } from "../index.js";
@@ -797,7 +797,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             token_usage: token_usage,
             finish_reason: finish_reason,
             original_response: options.include_original_response ? response : undefined,
-            conversation,
+            // Strip large base64 image data from conversation to reduce storage bloat
+            conversation: stripBase64ImagesFromConversation(conversation),
             tool_use
         } satisfies Completion;
     }
