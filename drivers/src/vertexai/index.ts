@@ -4,12 +4,17 @@ import { Content, GoogleGenAI, Model } from "@google/genai";
 import {
     AIModel,
     AbstractDriver,
+    BatchJob,
+    BatchJobType,
     Completion,
     CompletionChunkObject,
+    CreateBatchJobOptions,
     DriverOptions,
     EmbeddingsOptions,
     EmbeddingsResult,
     ExecutionOptions,
+    ListBatchJobsOptions,
+    ListBatchJobsResult,
     ModelSearchPayload,
     PromptSegment,
     getModelCapabilities,
@@ -18,7 +23,28 @@ import {
 import { FetchClient } from "@vertesia/api-fetch-client";
 import { GoogleAuth, GoogleAuthOptions, AuthClient } from "google-auth-library";
 import type { ClientOptions as AnthropicVertexClientOptions } from "@anthropic-ai/vertex-sdk";
-import { VertexAIBatchClient } from "./batch/index.js";
+import {
+    createGeminiBatchJob,
+    getGeminiBatchJob,
+    listGeminiBatchJobs,
+    cancelGeminiBatchJob,
+    deleteGeminiBatchJob,
+    isTerminalState,
+} from "./batch/gemini-batch.js";
+import {
+    createClaudeBatchJob,
+    getClaudeBatchJob,
+    listClaudeBatchJobs,
+    cancelClaudeBatchJob,
+    deleteClaudeBatchJob,
+} from "./batch/claude-batch.js";
+import {
+    createEmbeddingsBatchJob,
+    getEmbeddingsBatchJob,
+    cancelEmbeddingsBatchJob,
+    deleteEmbeddingsBatchJob,
+} from "./batch/embeddings-batch.js";
+import { decodeBatchJobId } from "./batch/types.js";
 import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
 import { TextEmbeddingsOptions, getEmbeddingsForText } from "./embeddings/embeddings-text.js";
 import { getModelDefinition } from "./models.js";
@@ -55,7 +81,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     llamaClient: FetchClient & { region?: string } | undefined;
     modelGarden: v1beta1.ModelGardenServiceClient | undefined;
     imagenClient: PredictionServiceClient | undefined;
-    private batchClient: VertexAIBatchClient | undefined;
 
     googleAuth: GoogleAuth<any>;
     private authClientPromise: Promise<AuthClient> | undefined;
@@ -211,29 +236,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             });
         }
         return this.imagenClient;
-    }
-
-    /**
-     * Gets the batch client for creating and managing batch jobs.
-     *
-     * @returns The VertexAIBatchClient instance
-     *
-     * @example
-     * ```typescript
-     * const batchClient = driver.getBatchClient();
-     * const job = await batchClient.createBatchJob({
-     *     model: 'gemini-2.0-flash',
-     *     type: BatchJobType.inference,
-     *     source: { gcsUris: ['gs://bucket/input.jsonl'] },
-     *     destination: { gcsUri: 'gs://bucket/output/' },
-     * });
-     * ```
-     */
-    public getBatchClient(): VertexAIBatchClient {
-        if (!this.batchClient) {
-            this.batchClient = new VertexAIBatchClient(this);
-        }
-        return this.batchClient;
     }
 
     validateResult(result: Completion, options: ExecutionOptions) {
@@ -520,6 +522,122 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             model: options.model,
         };
         return getEmbeddingsForText(this, text_options);
+    }
+
+    // ============== Batch Operations ==============
+
+    /**
+     * Creates a new batch job for inference or embeddings.
+     * Routes to the appropriate implementation based on model and job type.
+     */
+    async createBatchJob(options: CreateBatchJobOptions): Promise<BatchJob> {
+        if (options.type === BatchJobType.embeddings) {
+            return createEmbeddingsBatchJob(this, options);
+        }
+        const modelLower = options.model.toLowerCase();
+        if (modelLower.includes("claude") || modelLower.includes("anthropic")) {
+            return createClaudeBatchJob(this, options);
+        }
+        return createGeminiBatchJob(this, options);
+    }
+
+    /**
+     * Gets a batch job by ID.
+     * The job ID encodes the provider for routing (e.g., "gemini:...", "claude:...").
+     */
+    async getBatchJob(jobId: string): Promise<BatchJob> {
+        const { provider, providerJobId } = decodeBatchJobId(jobId);
+        switch (provider) {
+            case "claude":
+                return getClaudeBatchJob(this, providerJobId);
+            case "embeddings":
+                return getEmbeddingsBatchJob(this, providerJobId);
+            case "gemini":
+            default:
+                return getGeminiBatchJob(this, providerJobId);
+        }
+    }
+
+    /**
+     * Lists batch jobs from all providers (Gemini and Claude).
+     */
+    async listBatchJobs(options?: ListBatchJobsOptions): Promise<ListBatchJobsResult> {
+        const [geminiResult, claudeResult] = await Promise.all([
+            listGeminiBatchJobs(this, options),
+            listClaudeBatchJobs(this, options).catch(() => ({ jobs: [], nextPageToken: undefined })),
+        ]);
+
+        return {
+            jobs: [...geminiResult.jobs, ...claudeResult.jobs],
+            nextPageToken: geminiResult.nextPageToken || claudeResult.nextPageToken,
+        };
+    }
+
+    /**
+     * Cancels a running batch job.
+     */
+    async cancelBatchJob(jobId: string): Promise<BatchJob> {
+        const { provider, providerJobId } = decodeBatchJobId(jobId);
+        switch (provider) {
+            case "claude":
+                return cancelClaudeBatchJob(this, providerJobId);
+            case "embeddings":
+                return cancelEmbeddingsBatchJob(this, providerJobId);
+            case "gemini":
+            default:
+                return cancelGeminiBatchJob(this, providerJobId);
+        }
+    }
+
+    /**
+     * Deletes a batch job.
+     */
+    async deleteBatchJob(jobId: string): Promise<void> {
+        const { provider, providerJobId } = decodeBatchJobId(jobId);
+        switch (provider) {
+            case "claude":
+                return deleteClaudeBatchJob(this, providerJobId);
+            case "embeddings":
+                return deleteEmbeddingsBatchJob(this, providerJobId);
+            case "gemini":
+            default:
+                return deleteGeminiBatchJob(this, providerJobId);
+        }
+    }
+
+    /**
+     * Waits for a batch job to complete (reach a terminal state).
+     *
+     * @param jobId - The batch job ID to wait for
+     * @param pollIntervalMs - Polling interval in milliseconds (default: 30000)
+     * @param maxWaitMs - Maximum wait time in milliseconds (default: 24 hours)
+     * @returns The completed batch job
+     * @throws Error if timeout is reached
+     */
+    async waitForBatchJobCompletion(
+        jobId: string,
+        pollIntervalMs: number = 30000,
+        maxWaitMs: number = 24 * 60 * 60 * 1000
+    ): Promise<BatchJob> {
+        const startTime = Date.now();
+
+        while (true) {
+            const job = await this.getBatchJob(jobId);
+
+            if (isTerminalState(job.status)) {
+                return job;
+            }
+
+            if (Date.now() - startTime > maxWaitMs) {
+                throw new Error(`Batch job ${jobId} did not complete within ${maxWaitMs}ms`);
+            }
+
+            await this.sleep(pollIntervalMs);
+        }
+    }
+
+    private sleep(ms: number): Promise<void> {
+        return new Promise(resolve => setTimeout(resolve, ms));
     }
 }
 
