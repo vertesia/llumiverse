@@ -229,7 +229,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         // Strip large base64 image data based on options.stripImagesAfterTurns
         const currentTurn = getConversationMeta(conversation).turnNumber;
         const stripOptions = {
-            keepForTurns: options.stripImagesAfterTurns ?? 0,
+            keepForTurns: options.stripImagesAfterTurns ?? Infinity,
             currentTurn,
             textMaxTokens: options.stripTextMaxTokens
         };
