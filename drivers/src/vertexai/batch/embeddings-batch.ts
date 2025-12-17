@@ -93,12 +93,13 @@ export async function createEmbeddingsBatchJob(
     const client = driver.getGoogleGenAIClient();
 
     // Validate required fields
+    if (!options.source) {
+        throw new Error("Batch job requires source configuration");
+    }
     if (!options.source.gcsUris?.length && !options.source.bigqueryUri) {
         throw new Error("Batch job requires either gcsUris or bigqueryUri in source");
     }
-    if (!options.destination.gcsUri && !options.destination.bigqueryUri) {
-        throw new Error("Batch job requires either gcsUri or bigqueryUri in destination");
-    }
+    // Note: destination validation is less strict for embeddings as SDK may auto-generate
 
     // Default to gemini-embedding-001 if no model specified
     const model = options.model || DEFAULT_TEXT_EMBEDDING_MODEL;

@@ -72,8 +72,14 @@ export async function createGeminiBatchJob(
     const client = driver.getGoogleGenAIClient();
 
     // Validate required fields
+    if (!options.source) {
+        throw new Error("Batch job requires source configuration");
+    }
     if (!options.source.gcsUris?.length && !options.source.bigqueryUri) {
         throw new Error("Batch job requires either gcsUris or bigqueryUri in source");
+    }
+    if (!options.destination) {
+        throw new Error("Batch job requires destination configuration");
     }
     if (!options.destination.gcsUri && !options.destination.bigqueryUri) {
         throw new Error("Batch job requires either gcsUri or bigqueryUri in destination");

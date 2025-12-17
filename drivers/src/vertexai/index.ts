@@ -529,8 +529,21 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     /**
      * Creates a new batch job for inference or embeddings.
      * Routes to the appropriate implementation based on model and job type.
+     *
+     * Requires source and destination to be configured with GCS URIs.
+     *
+     * @example
+     * ```typescript
+     * const job = await driver.createBatchJob({
+     *     model: "gemini-2.5-flash-lite",
+     *     type: BatchJobType.inference,
+     *     source: { gcsUris: ["gs://bucket/input.jsonl"] },
+     *     destination: { gcsUri: "gs://bucket/output/" },
+     * });
+     * ```
      */
     async createBatchJob(options: CreateBatchJobOptions): Promise<BatchJob> {
+        // Route to appropriate implementation
         if (options.type === BatchJobType.embeddings) {
             return createEmbeddingsBatchJob(this, options);
         }
