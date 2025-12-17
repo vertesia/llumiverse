@@ -84,3 +84,34 @@ Examples demonstrating how to use Llumiverse can be found in the `examples/src` 
 - `examples/src/bedrock.ts` - Example for using AWS Bedrock
 - `examples/src/vertexai.ts` - Example for using Google Vertex AI
 - And more for other providers
+
+## Batch API
+
+Llumiverse supports batch processing for high-throughput, cost-effective workloads. Batch operations are async jobs that process multiple requests from files (GCS, S3, etc.) with typically 50% cost reduction and 24hr target turnaround.
+
+### Common Batch Types (`@llumiverse/common`)
+
+Provider-agnostic batch types are defined in `common/src/batch.ts`:
+- `BatchJob` - Unified batch job representation
+- `BatchJobStatus` - Job states: `pending`, `running`, `succeeded`, `failed`, `cancelled`, `partial`
+- `BatchJobType` - Job types: `inference`, `embeddings`
+- `CreateBatchJobOptions` - Options for creating batch jobs
+- `ListBatchJobsOptions` / `ListBatchJobsResult` - Pagination for listing jobs
+
+### Adding Batch Support to a Driver
+
+1. Create a `batch/` directory in the driver folder
+2. Create provider-specific types in `batch/types.ts`
+3. Implement batch operations (create, get, list, cancel, delete)
+4. Create a `BatchClient` class that orchestrates operations
+5. Add `getBatchClient()` method to the driver class
+6. Map provider job states to unified `BatchJobStatus`
+
+### Reference Implementation
+
+See `drivers/src/vertexai/batch/` for the reference implementation:
+- `types.ts` - Provider-specific types and state mapping
+- `gemini-batch.ts` - Gemini inference batches (SDK-based)
+- `claude-batch.ts` - Claude batches (REST API)
+- `embeddings-batch.ts` - Embedding batches
+- `index.ts` - `VertexAIBatchClient` orchestrator
