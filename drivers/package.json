@@ -68,6 +68,7 @@
         "@azure/identity": "^4.13.0",
         "@azure/openai": "2.0.0",
         "@google-cloud/aiplatform": "^6.0.0",
+        "@google-cloud/storage": "^7.18.0",
         "@google/genai": "^1.34.0",
         "@huggingface/inference": "4.13.4",
         "@llumiverse/common": "workspace:*",
