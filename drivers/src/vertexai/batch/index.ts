@@ -37,6 +37,10 @@
 // Re-export types for convenience
 export * from "./types.js";
 
+// Re-export GCS helpers and formatters
+export * from "./gcs-helpers.js";
+export * from "./formatters.js";
+
 // Re-export utility functions for advanced usage
 export {
     createGeminiBatchJob,
