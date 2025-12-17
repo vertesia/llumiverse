@@ -366,6 +366,24 @@ export interface ExecutionOptions extends StatelessExecutionOptions {
      * that can be passed here to restore the context when a new prompt is sent to the model.
      */
     conversation?: unknown | null;
+    /**
+     * Number of turns to keep images in conversation history before stripping them.
+     * - 0 (default): Strip images immediately after each turn
+     * - 1: Keep images for current turn only, strip in next turn
+     * - N: Keep images for N turns before stripping
+     * - undefined: Same as 0, strip immediately
+     *
+     * Images are stripped to prevent JSON.stringify corruption (Uint8Array) and reduce storage bloat (base64).
+     */
+    stripImagesAfterTurns?: number;
+
+    /**
+     * Maximum tokens to keep for text content in tool results.
+     * Text exceeding this limit will be truncated with a "[Content truncated...]" marker.
+     * - undefined/0: No text truncation (default)
+     * - N > 0: Truncate text to approximately N tokens (using ~4 chars/token estimate)
+     */
+    stripTextMaxTokens?: number;
 }
 
 //Common names to share between different models
