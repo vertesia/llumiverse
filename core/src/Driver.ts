@@ -8,15 +8,19 @@ import { DefaultCompletionStream, FallbackCompletionStream } from "./CompletionS
 import { formatTextPrompt } from "./formatters/index.js";
 import {
     AIModel,
+    BatchJob,
     Completion,
     CompletionChunkObject,
     CompletionStream,
+    CreateBatchJobOptions,
     DataSource,
     DriverOptions,
     EmbeddingsOptions,
     EmbeddingsResult,
     ExecutionOptions,
     ExecutionResponse,
+    ListBatchJobsOptions,
+    ListBatchJobsResult,
     Logger,
     Modalities,
     ModelSearchPayload,
@@ -105,6 +109,13 @@ export interface Driver<PromptT = unknown> {
     //generate embeddings for a given text or image
     generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult>;
 
+    // Batch operations for high-throughput, cost-effective processing
+    createBatchJob(options: CreateBatchJobOptions): Promise<BatchJob>;
+    getBatchJob(jobId: string): Promise<BatchJob>;
+    listBatchJobs(options?: ListBatchJobsOptions): Promise<ListBatchJobsResult>;
+    cancelBatchJob(jobId: string): Promise<BatchJob>;
+    deleteBatchJob(jobId: string): Promise<void>;
+
 }
 
 /**
@@ -139,6 +150,27 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     getTrainingJob(_jobId: string): Promise<TrainingJob> {
         throw new Error("Method not implemented.");
+    }
+
+    // Default batch implementations - override in drivers that support batch
+    createBatchJob(_options: CreateBatchJobOptions): Promise<BatchJob> {
+        throw new Error("Batch operations not implemented for this driver.");
+    }
+
+    getBatchJob(_jobId: string): Promise<BatchJob> {
+        throw new Error("Batch operations not implemented for this driver.");
+    }
+
+    listBatchJobs(_options?: ListBatchJobsOptions): Promise<ListBatchJobsResult> {
+        throw new Error("Batch operations not implemented for this driver.");
+    }
+
+    cancelBatchJob(_jobId: string): Promise<BatchJob> {
+        throw new Error("Batch operations not implemented for this driver.");
+    }
+
+    deleteBatchJob(_jobId: string): Promise<void> {
+        throw new Error("Batch operations not implemented for this driver.");
     }
 
     validateResult(result: Completion, options: ExecutionOptions) {
