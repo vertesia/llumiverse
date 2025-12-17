@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
     stripBinaryFromConversation,
     stripBase64ImagesFromConversation,
+    truncateLargeTextInConversation,
     getConversationMeta,
     setConversationMeta,
     incrementConversationTurn,
@@ -444,6 +445,128 @@ describe('turn-based stripping', () => {
 
             expect(result.content[0]).toEqual({ type: 'text', text: IMAGE_PLACEHOLDER });
         });
+    });
+});
+
+const TEXT_TRUNCATED_MARKER = '\n\n[Content truncated - exceeded token limit]';
+
+describe('truncateLargeTextInConversation', () => {
+    test('should not truncate when textMaxTokens is not set', () => {
+        const input = {
+            content: [{ text: 'a'.repeat(100000) }]
+        };
+
+        const result = truncateLargeTextInConversation(input) as any;
+
+        expect(result.content[0].text.length).toBe(100000);
+    });
+
+    test('should not truncate when textMaxTokens is 0', () => {
+        const input = {
+            content: [{ text: 'a'.repeat(100000) }]
+        };
+
+        const result = truncateLargeTextInConversation(input, { textMaxTokens: 0 }) as any;
+
+        expect(result.content[0].text.length).toBe(100000);
+    });
+
+    test('should truncate text exceeding token limit', () => {
+        // 10000 tokens = ~40000 chars
+        const longText = 'a'.repeat(50000);
+        const input = {
+            content: [{ text: longText }]
+        };
+
+        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as any;
+
+        // Should be truncated to ~40000 chars + marker
+        expect(result.content[0].text.length).toBeLessThan(50000);
+        expect(result.content[0].text).toContain(TEXT_TRUNCATED_MARKER);
+        expect(result.content[0].text.substring(0, 40000)).toBe('a'.repeat(40000));
+    });
+
+    test('should not truncate text within token limit', () => {
+        const shortText = 'Hello world';
+        const input = {
+            content: [{ text: shortText }]
+        };
+
+        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as any;
+
+        expect(result.content[0].text).toBe(shortText);
+    });
+
+    test('should truncate nested text in Bedrock tool results', () => {
+        const longText = 'x'.repeat(50000);
+        const input = {
+            messages: [{
+                content: [{
+                    toolResult: {
+                        toolUseId: 'abc123',
+                        content: [{
+                            text: longText
+                        }]
+                    }
+                }]
+            }]
+        };
+
+        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as any;
+
+        const resultText = result.messages[0].content[0].toolResult.content[0].text;
+        expect(resultText.length).toBeLessThan(50000);
+        expect(resultText).toContain(TEXT_TRUNCATED_MARKER);
+    });
+
+    test('should truncate OpenAI tool message content string', () => {
+        const longText = 'y'.repeat(50000);
+        const input = {
+            messages: [{
+                role: 'tool',
+                content: longText,
+                tool_call_id: 'call_123'
+            }]
+        };
+
+        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as any;
+
+        expect(result.messages[0].content.length).toBeLessThan(50000);
+        expect(result.messages[0].content).toContain(TEXT_TRUNCATED_MARKER);
+    });
+
+    test('should preserve conversation metadata during truncation', () => {
+        const longText = 'z'.repeat(50000);
+        const input = {
+            content: [{ text: longText }],
+            _llumiverse_meta: { turnNumber: 5 }
+        };
+
+        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as any;
+
+        expect(result._llumiverse_meta).toEqual({ turnNumber: 5 });
+        expect(result.content[0].text).toContain(TEXT_TRUNCATED_MARKER);
+    });
+
+    test('should handle arrays with mixed short and long text', () => {
+        const input = {
+            items: [
+                { text: 'short' },
+                { text: 'w'.repeat(50000) },
+                { text: 'also short' }
+            ]
+        };
+
+        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as any;
+
+        expect(result.items[0].text).toBe('short');
+        expect(result.items[1].text).toContain(TEXT_TRUNCATED_MARKER);
+        expect(result.items[2].text).toBe('also short');
+    });
+
+    test('should handle null and undefined', () => {
+        expect(truncateLargeTextInConversation(null, { textMaxTokens: 100 })).toBeNull();
+        expect(truncateLargeTextInConversation(undefined, { textMaxTokens: 100 })).toBeUndefined();
     });
 });
 

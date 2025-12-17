@@ -13,6 +13,7 @@
 const IMAGE_PLACEHOLDER = '[Image removed from conversation history]';
 const DOCUMENT_PLACEHOLDER = '[Document removed from conversation history]';
 const VIDEO_PLACEHOLDER = '[Video removed from conversation history]';
+const TEXT_TRUNCATED_MARKER = '\n\n[Content truncated - exceeded token limit]';
 
 /** Metadata key used to store turn information in conversations */
 const META_KEY = '_llumiverse_meta';
@@ -40,6 +41,13 @@ export interface StripOptions {
      * If not provided, will be read from conversation metadata.
      */
     currentTurn?: number;
+    /**
+     * Maximum tokens for text content in tool results.
+     * Text exceeding this limit will be truncated.
+     * - undefined/0: No truncation (default)
+     * - N > 0: Truncate text to approximately N tokens (~4 chars/token)
+     */
+    textMaxTokens?: number;
 }
 
 /**
@@ -419,6 +427,67 @@ function stripBase64ImagesFromConversationInternal(obj: unknown): unknown {
                 result[key] = value;
             } else {
                 result[key] = stripBase64ImagesFromConversationInternal(value);
+            }
+        }
+        return result;
+    }
+
+    return obj;
+}
+
+/** Approximate characters per token for text truncation */
+const CHARS_PER_TOKEN = 4;
+
+/**
+ * Truncate large text content in conversation to reduce storage and context bloat.
+ *
+ * This function finds text strings in tool results and truncates them if they
+ * exceed the specified token limit (using ~4 chars/token estimate).
+ *
+ * Works with:
+ * - Bedrock: toolResult.content[].text
+ * - OpenAI: tool message content (string)
+ * - Gemini: function response content
+ *
+ * @param obj The conversation object to truncate text in
+ * @param options Options including textMaxTokens
+ * @returns A new object with large text content truncated
+ */
+export function truncateLargeTextInConversation(obj: unknown, options?: StripOptions): unknown {
+    const maxTokens = options?.textMaxTokens;
+
+    // If no max tokens specified or 0, don't truncate
+    if (!maxTokens || maxTokens <= 0) {
+        return obj;
+    }
+
+    const maxChars = maxTokens * CHARS_PER_TOKEN;
+    return truncateLargeTextInternal(obj, maxChars);
+}
+
+function truncateLargeTextInternal(obj: unknown, maxChars: number): unknown {
+    if (obj === null || obj === undefined) return obj;
+
+    // Truncate large strings
+    if (typeof obj === 'string') {
+        if (obj.length > maxChars) {
+            return obj.substring(0, maxChars) + TEXT_TRUNCATED_MARKER;
+        }
+        return obj;
+    }
+
+    if (Array.isArray(obj)) {
+        return obj.map(item => truncateLargeTextInternal(item, maxChars));
+    }
+
+    if (typeof obj === 'object') {
+        const result: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(obj)) {
+            // Preserve metadata without truncation
+            if (key === META_KEY) {
+                result[key] = value;
+            } else {
+                result[key] = truncateLargeTextInternal(value, maxChars);
             }
         }
         return result;

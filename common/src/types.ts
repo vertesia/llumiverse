@@ -376,6 +376,14 @@ export interface ExecutionOptions extends StatelessExecutionOptions {
      * Images are stripped to prevent JSON.stringify corruption (Uint8Array) and reduce storage bloat (base64).
      */
     stripImagesAfterTurns?: number;
+
+    /**
+     * Maximum tokens to keep for text content in tool results.
+     * Text exceeding this limit will be truncated with a "[Content truncated...]" marker.
+     * - undefined/0: No text truncation (default)
+     * - N > 0: Truncate text to approximately N tokens (using ~4 chars/token estimate)
+     */
+    stripTextMaxTokens?: number;
 }
 
 //Common names to share between different models

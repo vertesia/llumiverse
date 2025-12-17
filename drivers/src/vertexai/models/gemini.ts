@@ -7,7 +7,7 @@ import {
     AIModel, Completion, CompletionChunkObject, CompletionResult, ExecutionOptions,
     ExecutionTokenUsage, getMaxTokensLimitVertexAi, JSONObject, JSONSchema, ModelType, PromptOptions, PromptRole,
     PromptSegment, readStreamAsBase64, StatelessExecutionOptions, ToolDefinition, ToolUse,
-    VertexAIGeminiOptions, stripBase64ImagesFromConversation,
+    VertexAIGeminiOptions, stripBase64ImagesFromConversation, truncateLargeTextInConversation,
     getConversationMeta, incrementConversationTurn, unwrapConversationArray
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
@@ -798,17 +798,22 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         // Strip large base64 image data based on options.stripImagesAfterTurns
         const currentTurn = getConversationMeta(conversation).turnNumber;
-        const strippedConversation = stripBase64ImagesFromConversation(conversation, {
+        const stripOptions = {
             keepForTurns: options.stripImagesAfterTurns ?? 0,
-            currentTurn
-        });
+            currentTurn,
+            textMaxTokens: options.stripTextMaxTokens
+        };
+        let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions);
+
+        // Truncate large text content if configured
+        processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
 
         return {
             result: result && result.length > 0 ? result : [{ type: "text" as const, value: '' }],
             token_usage: token_usage,
             finish_reason: finish_reason,
             original_response: options.include_original_response ? response : undefined,
-            conversation: strippedConversation,
+            conversation: processedConversation,
             tool_use
         } satisfies Completion;
     }

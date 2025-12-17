@@ -14,6 +14,7 @@ import {
     StatelessExecutionOptions,
     ModelOptions,
     stripBinaryFromConversation,
+    truncateLargeTextInConversation,
     deserializeBinaryFromStorage,
     getConversationMeta,
     incrementConversationTurn
@@ -401,15 +402,20 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         // Strip/serialize binary data based on options.stripImagesAfterTurns
         const currentTurn = getConversationMeta(conversation).turnNumber;
-        const strippedConversation = stripBinaryFromConversation(conversation, {
+        const stripOptions = {
             keepForTurns: options.stripImagesAfterTurns ?? 0,
-            currentTurn
-        });
+            currentTurn,
+            textMaxTokens: options.stripTextMaxTokens
+        };
+        let processedConversation = stripBinaryFromConversation(conversation, stripOptions);
+
+        // Truncate large text content if configured
+        processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
 
         const completion = {
             ...this.getExtractedExecution(res, conversePrompt, options),
             original_response: options.include_original_response ? res : undefined,
-            conversation: strippedConversation,
+            conversation: processedConversation,
             tool_use: tool_use,
         };
 

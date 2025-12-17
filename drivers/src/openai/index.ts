@@ -23,6 +23,7 @@ import {
     modelModalitiesToArray,
     supportsToolUse,
     stripBase64ImagesFromConversation,
+    truncateLargeTextInConversation,
     getConversationMeta,
     incrementConversationTurn,
     unwrapConversationArray,
@@ -227,10 +228,17 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
         // Strip large base64 image data based on options.stripImagesAfterTurns
         const currentTurn = getConversationMeta(conversation).turnNumber;
-        completion.conversation = stripBase64ImagesFromConversation(conversation, {
+        const stripOptions = {
             keepForTurns: options.stripImagesAfterTurns ?? 0,
-            currentTurn
-        });
+            currentTurn,
+            textMaxTokens: options.stripTextMaxTokens
+        };
+        let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions);
+
+        // Truncate large text content if configured
+        processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+
+        completion.conversation = processedConversation;
 
         return completion;
     }
