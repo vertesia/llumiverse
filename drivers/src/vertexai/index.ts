@@ -18,6 +18,7 @@ import {
 import { FetchClient } from "@vertesia/api-fetch-client";
 import { GoogleAuth, GoogleAuthOptions, AuthClient } from "google-auth-library";
 import type { ClientOptions as AnthropicVertexClientOptions } from "@anthropic-ai/vertex-sdk";
+import { VertexAIBatchClient } from "./batch/index.js";
 import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
 import { TextEmbeddingsOptions, getEmbeddingsForText } from "./embeddings/embeddings-text.js";
 import { getModelDefinition } from "./models.js";
@@ -54,6 +55,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     llamaClient: FetchClient & { region?: string } | undefined;
     modelGarden: v1beta1.ModelGardenServiceClient | undefined;
     imagenClient: PredictionServiceClient | undefined;
+    private batchClient: VertexAIBatchClient | undefined;
 
     googleAuth: GoogleAuth<any>;
     private authClientPromise: Promise<AuthClient> | undefined;
@@ -209,6 +211,29 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             });
         }
         return this.imagenClient;
+    }
+
+    /**
+     * Gets the batch client for creating and managing batch jobs.
+     *
+     * @returns The VertexAIBatchClient instance
+     *
+     * @example
+     * ```typescript
+     * const batchClient = driver.getBatchClient();
+     * const job = await batchClient.createBatchJob({
+     *     model: 'gemini-2.0-flash',
+     *     type: BatchJobType.inference,
+     *     source: { gcsUris: ['gs://bucket/input.jsonl'] },
+     *     destination: { gcsUri: 'gs://bucket/output/' },
+     * });
+     * ```
+     */
+    public getBatchClient(): VertexAIBatchClient {
+        if (!this.batchClient) {
+            this.batchClient = new VertexAIBatchClient(this);
+        }
+        return this.batchClient;
     }
 
     validateResult(result: Completion, options: ExecutionOptions) {
