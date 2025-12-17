@@ -8,6 +8,25 @@ This document provides detailed information for implementing batch support in ad
 
 ## Architecture
 
+### Core Driver Interface
+
+Batch methods are defined on the core `Driver` interface in `core/src/Driver.ts`:
+
+```typescript
+export interface Driver<PromptT = unknown> {
+    // ... other methods ...
+
+    // Batch operations for high-throughput, cost-effective processing
+    createBatchJob(options: CreateBatchJobOptions): Promise<BatchJob>;
+    getBatchJob(jobId: string): Promise<BatchJob>;
+    listBatchJobs(options?: ListBatchJobsOptions): Promise<ListBatchJobsResult>;
+    cancelBatchJob(jobId: string): Promise<BatchJob>;
+    deleteBatchJob(jobId: string): Promise<void>;
+}
+```
+
+The `AbstractDriver` provides default "not implemented" methods. Drivers that support batch override these methods.
+
 ### Common Types (already implemented)
 
 Location: `common/src/batch.ts`
@@ -59,10 +78,10 @@ export interface CreateBatchJobOptions {
 ```
 drivers/src/{provider}/
 ├── batch/
-│   ├── index.ts           # {Provider}BatchClient class
+│   ├── index.ts           # Re-exports utility functions
 │   ├── types.ts           # Provider-specific types & state mapping
 │   └── {model}-batch.ts   # Model-specific implementations (if needed)
-└── index.ts               # Add getBatchClient() method
+└── index.ts               # Implement batch methods on driver class
 ```
 
 ---
@@ -236,17 +255,24 @@ await client.send(new StopModelInvocationJobCommand({
   - [ ] Job state mapping function
   - [ ] Job ID encoding/decoding (if multi-model routing needed)
 
-- [ ] Create `batch/index.ts` with `{Provider}BatchClient`:
-  - [ ] `createBatchJob(options)` → `BatchJob`
-  - [ ] `getBatchJob(jobId)` → `BatchJob`
-  - [ ] `listBatchJobs(options?)` → `ListBatchJobsResult`
-  - [ ] `cancelBatchJob(jobId)` → `BatchJob`
-  - [ ] `deleteBatchJob(jobId)` → `void` (if supported)
-  - [ ] `waitForCompletion(jobId, pollInterval?, maxWait?)` → `BatchJob`
+- [ ] Create `batch/` utility files (e.g., `{model}-batch.ts`):
+  - [ ] `createBatchJob(driver, options)` → `BatchJob`
+  - [ ] `getBatchJob(driver, jobId)` → `BatchJob`
+  - [ ] `listBatchJobs(driver, options?)` → `ListBatchJobsResult`
+  - [ ] `cancelBatchJob(driver, jobId)` → `BatchJob`
+  - [ ] `deleteBatchJob(driver, jobId)` → `void` (if supported)
+
+- [ ] Create `batch/index.ts`:
+  - [ ] Re-export utility functions and types
 
 - [ ] Update driver `index.ts`:
-  - [ ] Add `private batchClient` field
-  - [ ] Add `getBatchClient()` method
+  - [ ] Import utility functions
+  - [ ] Override `createBatchJob(options)` method
+  - [ ] Override `getBatchJob(jobId)` method
+  - [ ] Override `listBatchJobs(options?)` method
+  - [ ] Override `cancelBatchJob(jobId)` method
+  - [ ] Override `deleteBatchJob(jobId)` method
+  - [ ] Add `waitForBatchJobCompletion(jobId, pollInterval?, maxWait?)` helper (optional)
 
 - [ ] Add tests in `drivers/test/batch-{provider}.test.ts`
 
@@ -280,23 +306,31 @@ export interface BatchJobSource {
 ### File: `vertexai/batch/types.ts`
 
 Key patterns:
-- State mapping function
-- Job ID encoding with provider prefix
+- State mapping function (`mapGeminiJobState`, `mapClaudeJobState`)
+- Job ID encoding with provider prefix (`encodeBatchJobId`, `decodeBatchJobId`)
 - Provider-specific API types
 
 ### File: `vertexai/batch/gemini-batch.ts`
 
 Key patterns:
-- SDK-based implementation
+- SDK-based implementation using `@google/genai`
 - Mapping SDK response to common `BatchJob`
-- Handling completion stats type conversion
+- Handling completion stats type conversion (SDK returns strings, we need numbers)
 
-### File: `vertexai/batch/index.ts`
+### File: `vertexai/batch/claude-batch.ts`
 
 Key patterns:
-- Model routing based on name patterns
-- Unified interface across model types
-- `waitForCompletion` polling implementation
+- REST API-based implementation using `FetchClient`
+- Different endpoint structure than Gemini
+- Similar job mapping to common types
+
+### File: `vertexai/index.ts`
+
+Key patterns:
+- Batch methods implemented directly on driver class
+- Model routing based on name patterns (claude/anthropic → Claude, embeddings → embeddings, else → Gemini)
+- Job ID decoding for routing `getBatchJob`, `cancelBatchJob`, `deleteBatchJob`
+- `waitForBatchJobCompletion` helper method with polling
 
 ---
 
@@ -322,9 +356,8 @@ Test file structure:
 describe('Bedrock Batch', () => {
     it('should create inference batch job', async () => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
-        const batchClient = driver.getBatchClient();
 
-        const job = await batchClient.createBatchJob({
+        const job = await driver.createBatchJob({
             model: 'anthropic.claude-3-haiku-20240307-v1:0',
             type: BatchJobType.inference,
             source: { s3Uris: ['s3://bucket/input.jsonl'] },
