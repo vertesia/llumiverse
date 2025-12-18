@@ -3,24 +3,21 @@ name: publish-npm-packages
 on:
   workflow_dispatch:
     inputs:
-      ref:
-        description: 'The Git reference to checkout'
-        required: true
-        default: 'main'
       dry_run:
         description: 'Dry run mode (skip actual publish)'
         required: false
         type: boolean
         default: true
       version_type:
-        description: 'Version bump type (patch, minor, major)'
+        description: 'Version type (dev creates timestamped version, others bump version)'
         required: false
         type: choice
         options:
+          - dev
           - patch
           - minor
           - major
-        default: patch
+        default: dev
 
 permissions:
   id-token: write  # Required for OIDC between GitHub and NPM
@@ -33,8 +30,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref }}
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -50,6 +45,6 @@ jobs:
       - run: pnpm install
 
       - name: Publish all packages
-        run: ./.github/bin/publish-all-packages.sh "${{ inputs.ref }}" "${{ inputs.dry_run }}" "${{ inputs.version_type }}"
+        run: ./.github/bin/publish-all-packages.sh "${{ github.ref_name }}" "${{ inputs.dry_run }}" "${{ inputs.version_type }}"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

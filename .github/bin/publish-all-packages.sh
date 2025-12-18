@@ -5,11 +5,11 @@ set -e
 # Usage: publish-all-packages.sh <ref> [dry-run] [version-type]
 #   ref: Git reference (main or preview)
 #   dry-run: Optional boolean (true/false) for dry run mode
-#   version-type: Optional version bump type (patch, minor, major)
+#   version-type: Version type (dev, patch, minor, major)
 
 REF=$1
 DRY_RUN=${2:-false}
-VERSION_TYPE=${3:-patch}
+VERSION_TYPE=${3:-dev}
 
 if [ -z "$REF" ]; then
   echo "Error: Missing required argument: ref"
@@ -18,8 +18,8 @@ if [ -z "$REF" ]; then
 fi
 
 # Validate version type
-if [[ ! "$VERSION_TYPE" =~ ^(patch|minor|major)$ ]]; then
-  echo "Error: Invalid version type '$VERSION_TYPE'. Must be patch, minor, or major."
+if [[ ! "$VERSION_TYPE" =~ ^(dev|patch|minor|major)$ ]]; then
+  echo "Error: Invalid version type '$VERSION_TYPE'. Must be dev, patch, minor, or major."
   exit 1
 fi
 
@@ -37,15 +37,23 @@ PACKAGES=(common core drivers)
 # Step 1: Update all package versions
 echo "=== Updating package versions ==="
 
+# Determine npm tag based on branch
 if [ "$REF" = "main" ]; then
-  # Main: create dev version with date/time stamp
+  npm_tag="dev"
+elif [ "$REF" = "preview" ]; then
+  npm_tag="latest"
+else
+  npm_tag="experimental"
+fi
+
+if [ "$VERSION_TYPE" = "dev" ]; then
+  # Dev: create dev version with date/time stamp
   # Use format without leading zeros to avoid npm stripping them
   base_version=$(pnpm pkg get version | tr -d '"')
   date_part=$(date -u +"%Y%m%d")
   time_part=$(date -u +"%H%M%S" | sed 's/^0*//')  # Remove leading zeros
   dev_version="${base_version}-dev.${date_part}.${time_part}"
   echo "Updating to dev version ${dev_version}"
-  npm_tag="dev"
 
   # Update root package.json
   npm version ${dev_version} --no-git-tag-version --workspaces=false
@@ -53,9 +61,8 @@ if [ "$REF" = "main" ]; then
   # Update all workspace packages
   pnpm -r --filter "./*" exec npm version ${dev_version} --no-git-tag-version
 else
-  # Other branches (preview, release): bump version
+  # Release: bump version (patch, minor, or major)
   echo "Bumping ${VERSION_TYPE} version"
-  npm_tag="latest"
 
   # Update root package.json
   npm version ${VERSION_TYPE} --no-git-tag-version --workspaces=false
@@ -97,7 +104,7 @@ if [ "$DRY_RUN" = "true" ]; then
   failed_packages=()
 
   # Get the expected version
-  if [ "$REF" = "main" ]; then
+  if [ "$VERSION_TYPE" = "dev" ]; then
     expected_version="${dev_version}"
   else
     expected_version=$(pnpm pkg get version | tr -d '"')
@@ -168,8 +175,8 @@ if [ "$DRY_RUN" = "true" ]; then
   fi
 fi
 
-# Step 4: Commit version changes (only for non-main branches + not dry-run)
-if [ "$REF" != "main" ] && [ "$DRY_RUN" = "false" ]; then
+# Step 4: Commit version changes (only for release versions + not dry-run)
+if [ "$VERSION_TYPE" != "dev" ] && [ "$DRY_RUN" = "false" ]; then
   echo "=== Committing version changes ==="
 
   git config user.email "github-actions[bot]@users.noreply.github.com"
