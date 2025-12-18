@@ -1,0 +1,50 @@
+name: publish-npm-packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run mode (skip actual publish)'
+        required: false
+        type: boolean
+        default: true
+      version_type:
+        description: 'Version type (dev creates timestamped version, others bump version)'
+        required: false
+        type: choice
+        options:
+          - dev
+          - patch
+          - minor
+          - major
+        default: dev
+
+permissions:
+  id-token: write  # Required for OIDC between GitHub and NPM
+  contents: write  # Required to push version changes
+
+jobs:
+  publish:
+    name: Publish all packages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+          cache: "pnpm"
+
+      # Ensure npm 11.5.1 or later is installed
+      - name: Update npm
+        run: npm install -g npm@latest
+      - run: npm --version
+
+      - run: pnpm install
+
+      - name: Publish all packages
+        run: ./.github/bin/publish-all-packages.sh "${{ github.ref_name }}" "${{ inputs.dry_run }}" "${{ inputs.version_type }}"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
