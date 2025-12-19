@@ -137,8 +137,8 @@ describe.skipIf(!canRunTests)('VertexAI Batch: Instant Operations', () => {
             const job = await driver!.createBatchJob({
                 model: config.geminiModel,
                 type: BatchJobType.inference,
-                source: { gcsUris: [config.gcsInputUri!] },
-                destination: { gcsUri: config.gcsOutputUri },
+                source: { gcsUris: [`${config.gcsInputUri}input-sample-gemini.jsonl`] },
+                destination: { gcsUri: `${config.gcsOutputUri}gemini-sample/` },
                 displayName: `test-gemini-${Date.now()}`,
             });
 
@@ -189,8 +189,8 @@ describe.skipIf(!canRunTests)('VertexAI Batch: Instant Operations', () => {
             const job = await driver!.createBatchJob({
                 model: config.claudeModel,
                 type: BatchJobType.inference,
-                source: { gcsUris: [config.gcsInputUri!] },
-                destination: { gcsUri: config.gcsOutputUri },
+                source: { gcsUris: [`${config.gcsInputUri}input-sample-claude.jsonl`] },
+                destination: { gcsUri: `${config.gcsOutputUri}claude-sample/` },
                 displayName: `test-claude-${Date.now()}`,
             });
 
@@ -240,8 +240,8 @@ describe.skipIf(!canRunTests)('VertexAI Batch: Instant Operations', () => {
             const job = await driver!.createBatchJob({
                 model: config.embeddingModel,
                 type: BatchJobType.embeddings,
-                source: { gcsUris: [config.gcsInputUri!] },
-                destination: { gcsUri: config.gcsOutputUri },
+                source: { gcsUris: [`${config.gcsInputUri}input-sample-embeddings.jsonl`] },
+                destination: { gcsUri: `${config.gcsOutputUri}embeddings-sample/` },
                 displayName: `test-embeddings-${Date.now()}`,
             });
 

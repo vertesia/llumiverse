@@ -86,6 +86,8 @@ describe.skipIf(!canRunTests)('VertexAI Batch: Wait for Completion', () => {
     // ============== Gemini Completion Test ==============
 
     describe('Gemini inference - wait for completion', () => {
+        const testId = Math.random().toString(36).substring(7);
+
         test('should create and wait for Gemini batch job to complete', { timeout: TIMEOUT }, async () => {
             console.log('Creating Gemini batch job...');
             console.log(`  Model: ${config.geminiModel}`);
@@ -98,8 +100,8 @@ describe.skipIf(!canRunTests)('VertexAI Batch: Wait for Completion', () => {
             const createdJob = await driver!.createBatchJob({
                 model: config.geminiModel,
                 type: BatchJobType.inference,
-                source: { gcsUris: [config.gcsInputUri!] },
-                destination: { gcsUri: config.gcsOutputUri },
+                source: { gcsUris: [`${config.gcsInputUri}input-sample-gemini.jsonl`] },
+                destination: { gcsUri: `${config.gcsOutputUri}gemini-completion-${testId}/` },
                 displayName: `test-gemini-completion-${Date.now()}`,
             });
 
@@ -140,6 +142,8 @@ describe.skipIf(!canRunTests)('VertexAI Batch: Wait for Completion', () => {
     // ============== Claude Completion Test ==============
 
     describe('Claude inference - wait for completion', () => {
+        const testId = Math.random().toString(36).substring(7);
+
         test('should create and wait for Claude batch job to complete', { timeout: TIMEOUT }, async () => {
             console.log('Creating Claude batch job...');
             console.log(`  Model: ${config.claudeModel}`);
@@ -150,8 +154,8 @@ describe.skipIf(!canRunTests)('VertexAI Batch: Wait for Completion', () => {
             const createdJob = await driver!.createBatchJob({
                 model: config.claudeModel,
                 type: BatchJobType.inference,
-                source: { gcsUris: [config.gcsInputUri!] },
-                destination: { gcsUri: config.gcsOutputUri },
+                source: { gcsUris: [`${config.gcsInputUri}input-sample-claude.jsonl`] },
+                destination: { gcsUri: `${config.gcsOutputUri}claude-completion-${testId}/` },
                 displayName: `test-claude-completion-${Date.now()}`,
             });
 
@@ -185,6 +189,8 @@ describe.skipIf(!canRunTests)('VertexAI Batch: Wait for Completion', () => {
     // ============== Embeddings Completion Test ==============
 
     describe('Embeddings - wait for completion', () => {
+        const testId = Math.random().toString(36).substring(7);
+
         test('should create and wait for embeddings batch job to complete', { timeout: TIMEOUT }, async () => {
             console.log('Creating embeddings batch job...');
             console.log(`  Model: ${config.embeddingModel}`);
@@ -195,8 +201,8 @@ describe.skipIf(!canRunTests)('VertexAI Batch: Wait for Completion', () => {
             const createdJob = await driver!.createBatchJob({
                 model: config.embeddingModel,
                 type: BatchJobType.embeddings,
-                source: { gcsUris: [config.gcsInputUri!] },
-                destination: { gcsUri: config.gcsOutputUri },
+                source: { gcsUris: [`${config.gcsInputUri}input-sample-embeddings.jsonl`] },
+                destination: { gcsUri: `${config.gcsOutputUri}embeddings-completion-${testId}/` },
                 displayName: `test-embeddings-completion-${Date.now()}`,
             });
 
@@ -230,13 +236,15 @@ describe.skipIf(!canRunTests)('VertexAI Batch: Wait for Completion', () => {
     // ============== Delete Test ==============
 
     describe('Delete batch job', () => {
+        const testId = Math.random().toString(36).substring(7);
+
         test('should create, cancel, and delete a batch job', { timeout: TIMEOUT }, async () => {
             // Create a job to delete
             const createdJob = await driver!.createBatchJob({
                 model: config.geminiModel,
                 type: BatchJobType.inference,
-                source: { gcsUris: [config.gcsInputUri!] },
-                destination: { gcsUri: config.gcsOutputUri },
+                source: { gcsUris: [`${config.gcsInputUri}input-sample-gemini.jsonl`] },
+                destination: { gcsUri: `${config.gcsOutputUri}delete-${testId}/` },
                 displayName: `test-delete-${Date.now()}`,
             });
 
