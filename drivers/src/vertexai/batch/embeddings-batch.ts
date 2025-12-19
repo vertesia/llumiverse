@@ -3,6 +3,7 @@
  * Supports batch text and multimodal embeddings.
  */
 
+import { BatchJob as SDKBatchJob } from "@google/genai";
 import {
     BatchJob,
     BatchJobType,
@@ -18,7 +19,6 @@ import {
     listGeminiBatchJobs,
 } from "./gemini-batch.js";
 import { encodeBatchJobId, mapGeminiJobState } from "./types.js";
-import { BatchJob as SDKBatchJob } from "@google/genai";
 
 /**
  * Default embedding model for text embeddings.
@@ -90,7 +90,7 @@ export async function createEmbeddingsBatchJob(
     driver: VertexAIDriver,
     options: CreateBatchJobOptions
 ): Promise<BatchJob> {
-    const client = driver.getGoogleGenAIClient();
+    const client = driver.getGoogleGenAIClient(undefined, "GEMINI");
 
     // Validate required fields
     if (!options.source) {
@@ -108,17 +108,23 @@ export async function createEmbeddingsBatchJob(
     // It supports fileName (for file uploads) or inlinedRequests
     // For GCS-based batch embeddings, we may need to use the standard batches.create
     // For now, use the file-based approach which is more common for large batches
-    const batchJob = await client.batches.createEmbeddings({
-        model,
-        src: {
-            // The SDK expects fileName for file-based input
-            // If using GCS, upload the file first and pass the file name
-            fileName: options.source.gcsUris?.[0],
-        },
-        config: {
-            displayName: options.displayName,
-        },
-    });
+    let batchJob: SDKBatchJob;
+    try {
+        batchJob = await client.batches.createEmbeddings({
+            model,
+            src: {
+                // The SDK expects fileName for file-based input
+                // If using GCS, upload the file first and pass the file name
+                fileName: options.source.gcsUris?.[0],
+            },
+            config: {
+                displayName: options.displayName,
+            },
+        });
+    } catch (error) {
+        console.log("Error creating embeddings batch job:", error);
+        throw new Error(`Failed to create embeddings batch job: ${error}`);
+    }
 
     return mapEmbeddingsBatchJob(batchJob);
 }
@@ -178,5 +184,5 @@ export function isMultimodalEmbeddingModel(model: string): boolean {
  */
 export function isTextEmbeddingModel(model: string): boolean {
     return model.toLowerCase().includes("embedding") &&
-           !isMultimodalEmbeddingModel(model);
+        !isMultimodalEmbeddingModel(model);
 }

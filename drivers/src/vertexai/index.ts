@@ -107,8 +107,21 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return this.authClientPromise;
     }
 
-    public getGoogleGenAIClient(region: string = this.options.region): GoogleGenAI {
+    public getGoogleGenAIClient(region: string = this.options.region, api: "VERTEXAI" | "GEMINI" = "VERTEXAI"): GoogleGenAI {
         //Lazy initialization
+
+        //Gemini API - sometimes called Gemini Developer API
+        if (api == "GEMINI") {
+            return new GoogleGenAI({
+                vertexai: false,
+                googleAuthOptions: this.options.googleAuthOptions || {
+                    scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+                },
+                //apiKey: process.env.GEMINI_API_KEY || undefined,
+            });
+        }
+
+        //Vertex AI API
         if (region !== this.options.region) {
             //Get one off client for different region
             return new GoogleGenAI({
