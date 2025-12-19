@@ -1,3 +1,4 @@
+import type { ClientOptions as AnthropicVertexClientOptions } from "@anthropic-ai/vertex-sdk";
 import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { PredictionServiceClient, v1beta1 } from "@google-cloud/aiplatform";
 import { Content, GoogleGenAI, Model } from "@google/genai";
@@ -21,29 +22,28 @@ import {
     modelModalitiesToArray,
 } from "@llumiverse/core";
 import { FetchClient } from "@vertesia/api-fetch-client";
-import { GoogleAuth, GoogleAuthOptions, AuthClient } from "google-auth-library";
-import type { ClientOptions as AnthropicVertexClientOptions } from "@anthropic-ai/vertex-sdk";
+import { AuthClient, GoogleAuth, GoogleAuthOptions } from "google-auth-library";
 import {
-    createGeminiBatchJob,
-    getGeminiBatchJob,
-    listGeminiBatchJobs,
-    cancelGeminiBatchJob,
-    deleteGeminiBatchJob,
-    isTerminalState,
-} from "./batch/gemini-batch.js";
-import {
+    cancelClaudeBatchJob,
     createClaudeBatchJob,
+    deleteClaudeBatchJob,
     getClaudeBatchJob,
     listClaudeBatchJobs,
-    cancelClaudeBatchJob,
-    deleteClaudeBatchJob,
 } from "./batch/claude-batch.js";
 import {
-    createEmbeddingsBatchJob,
-    getEmbeddingsBatchJob,
     cancelEmbeddingsBatchJob,
+    createEmbeddingsBatchJob,
     deleteEmbeddingsBatchJob,
+    getEmbeddingsBatchJob,
 } from "./batch/embeddings-batch.js";
+import {
+    cancelGeminiBatchJob,
+    createGeminiBatchJob,
+    deleteGeminiBatchJob,
+    getGeminiBatchJob,
+    isTerminalState,
+    listGeminiBatchJobs,
+} from "./batch/gemini-batch.js";
 import { decodeBatchJobId } from "./batch/types.js";
 import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
 import { TextEmbeddingsOptions, getEmbeddingsForText } from "./embeddings/embeddings-text.js";
