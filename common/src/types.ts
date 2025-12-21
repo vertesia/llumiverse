@@ -224,7 +224,12 @@ export interface ToolDefinition {
 export interface ToolUse<ParamsT = JSONObject> {
     id: string,
     tool_name: string,
-    tool_input: ParamsT | null
+    tool_input: ParamsT | null,
+    /**
+     * Gemini thinking models require thought_signature to be passed back with tool results.
+     * This preserves the model's reasoning state during multi-turn tool use.
+     */
+    thought_signature?: string,
 }
 
 export interface Completion {
@@ -486,6 +491,11 @@ export interface PromptSegment {
      * The tool use id if the segment is a tool response
      */
     tool_use_id?: string;
+    /**
+     * Gemini thinking models require thought_signature to be passed back with tool results.
+     * This should be copied from the ToolUse.thought_signature when sending tool responses.
+     */
+    thought_signature?: string;
     files?: DataSource[]
 }
 
