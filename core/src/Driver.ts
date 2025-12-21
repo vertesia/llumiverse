@@ -248,12 +248,14 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
      *
      * @param prompt - The prompt that was sent (includes prior conversation context)
      * @param result - The completion results from the streamed response
+     * @param toolUse - The tool calls from the streamed response (if any)
      * @param options - The execution options
      * @returns The updated conversation context, or undefined if not supported
      */
     buildStreamingConversation(
         _prompt: PromptT,
         _result: unknown[],
+        _toolUse: unknown[] | undefined,
         _options: ExecutionOptions
     ): unknown | undefined {
         // Default implementation returns undefined - drivers can override

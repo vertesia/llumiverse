@@ -201,6 +201,11 @@ export interface CompletionChunkObject {
     result: CompletionResult[];
     token_usage?: ExecutionTokenUsage;
     finish_reason?: "stop" | "length" | string;
+    /**
+     * Tool calls returned by the model during streaming.
+     * Each chunk may contain partial tool call information that needs to be aggregated.
+     */
+    tool_use?: ToolUse[];
 }
 
 export interface ToolDefinition {

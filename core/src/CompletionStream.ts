@@ -1,4 +1,4 @@
-import { CompletionStream, DriverOptions, ExecutionOptions, ExecutionResponse, ExecutionTokenUsage } from "@llumiverse/common";
+import { CompletionStream, DriverOptions, ExecutionOptions, ExecutionResponse, ExecutionTokenUsage, ToolUse } from "@llumiverse/common";
 import { AbstractDriver } from "./Driver.js";
 
 export class DefaultCompletionStream<PromptT = any> implements CompletionStream<PromptT> {
@@ -17,6 +17,7 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
         this.completion = undefined;
         this.chunks = 0;
         const accumulatedResults: any[] = []; // Accumulate CompletionResult[] from chunks
+        const accumulatedToolUse: Map<string, ToolUse> = new Map(); // Accumulate tool_use by id
 
         this.driver.logger.debug(
             `[${this.driver.provider}] Streaming Execution of ${this.options.model} with prompt`,
@@ -44,6 +45,36 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
                             //Math.max used as some models report final token count at beginning of stream
                             promptTokens = Math.max(promptTokens, chunk.token_usage.prompt ?? 0);
                             resultTokens = Math.max(resultTokens ?? 0, chunk.token_usage.result ?? 0);
+                        }
+                        // Accumulate tool_use from chunks
+                        // Note: During streaming, tool_input comes as string chunks that need concatenation
+                        if (chunk.tool_use && chunk.tool_use.length > 0) {
+                            for (const tool of chunk.tool_use) {
+                                const existing = accumulatedToolUse.get(tool.id);
+                                if (existing) {
+                                    // Merge tool input (for streaming where arguments come as string pieces)
+                                    if (tool.tool_input !== null && tool.tool_input !== undefined) {
+                                        const existingInput = existing.tool_input as unknown;
+                                        const newInput = tool.tool_input as unknown;
+                                        if (typeof existingInput === 'string' && typeof newInput === 'string') {
+                                            // Concatenate string arguments
+                                            (existing as any).tool_input = existingInput + newInput;
+                                        } else if (existingInput && typeof existingInput === 'object' && newInput && typeof newInput === 'object') {
+                                            // Merge objects
+                                            existing.tool_input = { ...(existingInput as object), ...(newInput as object) } as any;
+                                        } else {
+                                            existing.tool_input = tool.tool_input;
+                                        }
+                                    }
+                                    // Update tool name if provided (might come in later chunk)
+                                    if (tool.tool_name) {
+                                        existing.tool_name = tool.tool_name;
+                                    }
+                                } else {
+                                    // New tool call
+                                    accumulatedToolUse.set(tool.id, { ...tool });
+                                }
+                            }
                         }
                         if (Array.isArray(chunk.result) && chunk.result.length > 0) {
                             // Process each result in the chunk, combining consecutive text/JSON
@@ -118,6 +149,22 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
         const tokens: ExecutionTokenUsage | undefined = resultTokens ?
             { prompt: promptTokens, result: resultTokens, total: resultTokens + promptTokens, } : undefined
 
+        // Convert accumulated tool_use Map to array
+        const toolUseArray = accumulatedToolUse.size > 0 ? Array.from(accumulatedToolUse.values()) : undefined;
+
+        // Parse tool_input strings as JSON if needed (streaming sends arguments as string chunks)
+        if (toolUseArray) {
+            for (const tool of toolUseArray) {
+                if (typeof tool.tool_input === 'string') {
+                    try {
+                        tool.tool_input = JSON.parse(tool.tool_input);
+                    } catch {
+                        // Keep as string if not valid JSON
+                    }
+                }
+            }
+        }
+
         this.completion = {
             result: accumulatedResults, // Return the accumulated CompletionResult[] instead of text
             prompt: this.prompt,
@@ -125,12 +172,14 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
             token_usage: tokens,
             finish_reason: finish_reason,
             chunks: this.chunks,
+            tool_use: toolUseArray,
         }
 
         // Build conversation context for multi-turn support
         const conversation = this.driver.buildStreamingConversation(
             this.prompt,
             accumulatedResults,
+            toolUseArray,
             this.options
         );
         if (conversation !== undefined) {

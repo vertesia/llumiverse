@@ -264,6 +264,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     buildStreamingConversation(
         prompt: VertexAIPrompt,
         result: unknown[],
+        toolUse: unknown[] | undefined,
         options: ExecutionOptions
     ): Content[] | undefined {
         // Only handle Gemini-style prompts with contents array
@@ -290,10 +291,27 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             })
             .join('');
 
+        // Build parts array for assistant message
+        const parts: any[] = [];
+        if (textContent) {
+            parts.push({ text: textContent });
+        }
+        // Add function calls if present (Gemini format)
+        if (toolUse && toolUse.length > 0) {
+            for (const tool of toolUse as any[]) {
+                parts.push({
+                    functionCall: {
+                        name: tool.tool_name,
+                        args: tool.tool_input,
+                    }
+                });
+            }
+        }
+
         // Build assistant message in Gemini Content format
         const assistantContent: Content = {
             role: 'model',
-            parts: [{ text: textContent }]
+            parts: parts.length > 0 ? parts : [{ text: '' }]
         };
 
         // Unwrap array if wrapped, otherwise treat as array

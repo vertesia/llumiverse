@@ -362,6 +362,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     buildStreamingConversation(
         prompt: BedrockPrompt,
         result: unknown[],
+        toolUse: unknown[] | undefined,
         options: ExecutionOptions
     ): ConverseRequest | undefined {
         // Only handle ConverseRequest prompts (not NovaMessagesPrompt or TwelvelabsPegasusRequest)
@@ -395,10 +396,28 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         // Start with the conversation from options combined with the prompt
         let conversation = updateConversation(incomingConversation, conversePrompt);
 
+        // Build assistant message content
+        const messageContent: any[] = [];
+        if (textContent) {
+            messageContent.push({ text: textContent });
+        }
+        // Add tool use blocks if present
+        if (toolUse && toolUse.length > 0) {
+            for (const tool of toolUse as ToolUse[]) {
+                messageContent.push({
+                    toolUse: {
+                        toolUseId: tool.id,
+                        name: tool.tool_name,
+                        input: tool.tool_input,
+                    }
+                });
+            }
+        }
+
         // Add assistant message
         const assistantMessage: ConverseRequest = {
             messages: [{
-                content: [{ text: textContent }],
+                content: messageContent.length > 0 ? messageContent : [{ text: '' }],
                 role: "assistant"
             }],
             modelId: conversePrompt.modelId,

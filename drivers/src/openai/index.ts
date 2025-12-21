@@ -108,6 +108,17 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                 result = chunk.choices[0]?.delta.content ?? "";
             }
 
+            // Capture tool_calls from streaming chunks
+            let tool_use: ToolUse[] | undefined = undefined;
+            const deltaToolCalls = chunk.choices[0]?.delta?.tool_calls;
+            if (deltaToolCalls && deltaToolCalls.length > 0) {
+                tool_use = deltaToolCalls.map(tc => ({
+                    id: tc.id || `tool_${tc.index}`,  // Use index as fallback ID for streaming
+                    tool_name: tc.function?.name || '',
+                    tool_input: tc.function?.arguments || '' as any,  // Arguments come as string chunks
+                }));
+            }
+
             return {
                 result: textToCompletionResult(result),
                 finish_reason: openAiFinishReason(chunk.choices[0]?.finish_reason ?? undefined),         //Uses expected "stop" , "length" format
@@ -115,7 +126,8 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                     prompt: chunk.usage?.prompt_tokens,
                     result: chunk.usage?.completion_tokens,
                     total: (chunk.usage?.prompt_tokens ?? 0) + (chunk.usage?.completion_tokens ?? 0),
-                }
+                },
+                tool_use,
             } satisfies CompletionChunkObject;
         };
 
@@ -260,6 +272,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     buildStreamingConversation(
         prompt: ChatCompletionMessageParam[],
         result: unknown[],
+        toolUse: unknown[] | undefined,
         options: ExecutionOptions
     ): ChatCompletionMessageParam[] | undefined {
         // Build assistant message from accumulated CompletionResult[]
@@ -282,14 +295,25 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             })
             .join('');
 
+        // Convert ToolUse[] to OpenAI tool_calls format
+        const toolCalls = toolUse && toolUse.length > 0
+            ? (toolUse as ToolUse[]).map(t => ({
+                id: t.id,
+                type: 'function' as const,
+                function: {
+                    name: t.tool_name,
+                    arguments: typeof t.tool_input === 'string' ? t.tool_input : JSON.stringify(t.tool_input ?? {}),
+                }
+            }))
+            : undefined;
+
         const assistantMessage: ChatCompletionMessageParam = {
             role: 'assistant',
-            content: [{
+            content: textContent ? [{
                 type: 'text',
                 text: textContent
-            }],
-            // Note: tool_calls are not captured in streaming path
-            // This is a limitation - if we need tool calls, we'd need to accumulate them separately
+            }] : null,
+            tool_calls: toolCalls,
         };
 
         // Start with the conversation from options or the prompt
