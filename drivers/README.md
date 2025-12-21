@@ -52,6 +52,11 @@ Vercel's SDK is fantastic for frontend/full-stack React/Next.js applications.
 
 ---
 
+## Requirements
+
+* Node.js 18+
+* Bun 1.0+
+
 ## Installation
 
 **For most use cases (recommended):**
@@ -144,6 +149,68 @@ const embedding = await driver.generateEmbeddings({
 });
 
 console.log(embedding.values); // [0.012, -0.34, ...]
+```
+
+## Advanced Features
+
+### Tool Calling (Function Calling)
+
+Llumiverse normalizes tool definitions across providers (OpenAI, Bedrock, Vertex, etc.), allowing you to define tools once and use them anywhere.
+
+```typescript
+import { ToolDefinition } from "@llumiverse/core";
+
+// 1. Define the tool
+const getWeatherTool: ToolDefinition = {
+    name: "get_weather",
+    description: "Get the current weather in a given location",
+    input_schema: {
+        type: "object",
+        properties: {
+            location: { type: "string" },
+            unit: { type: "string", enum: ["celsius", "fahrenheit"] }
+        },
+        required: ["location"]
+    }
+};
+
+// 2. Execute with tools
+const response = await driver.execute(prompt, {
+    model: "gpt-4o",
+    tools: [getWeatherTool]
+});
+
+// 3. Handle the tool use
+if (response.tool_use) {
+    for (const tool of response.tool_use) {
+        console.log(`Executing ${tool.tool_name} with args:`, tool.tool_input);
+        // ... call your actual function ...
+    }
+}
+```
+
+### Structured Outputs (JSON Schemas)
+
+Enforce a specific JSON structure for the response. Llumiverse handles the schema conversion for the underlying provider (e.g., using `response_format` for OpenAI or equivalent techniques for others).
+
+```typescript
+const schema = {
+    type: "object",
+    properties: {
+        sentiment: { type: "string", enum: ["positive", "neutral", "negative"] },
+        confidence: { type: "number" }
+    },
+    required: ["sentiment", "confidence"]
+};
+
+const response = await driver.execute(prompt, {
+    model: "gpt-4o",
+    result_schema: schema
+});
+
+// The result is automatically parsed
+const data = response.result[0].value;
+console.log(data.sentiment); // "positive"
 ```
 
 ## Contributing
