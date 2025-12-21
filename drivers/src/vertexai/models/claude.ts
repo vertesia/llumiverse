@@ -321,7 +321,10 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
             driver.logger.warn({ options: options.model_options }, "Invalid model options");
         }
 
-        const { payload, requestOptions } = getClaudePayload(options, prompt);
+        // Include conversation history (same as non-streaming)
+        const conversation = updateConversation(options.conversation as ClaudePrompt, prompt);
+
+        const { payload, requestOptions } = getClaudePayload(options, conversation);
         const streamingPayload: MessageStreamParams = { ...payload, stream: true };
 
         const response_stream = await client.messages.stream(streamingPayload, requestOptions);

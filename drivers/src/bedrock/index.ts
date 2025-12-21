@@ -604,7 +604,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         // Handle other Bedrock models that use Converse API
         const conversePrompt = prompt as ConverseRequest;
-        const payload = this.preparePayload(conversePrompt, options);
+
+        // Include conversation history (same as non-streaming)
+        // Deserialize any base64-encoded binary data back to Uint8Array before API call
+        const incomingConversation = deserializeBinaryFromStorage(options.conversation) as ConverseRequest;
+        const conversation = updateConversation(incomingConversation, conversePrompt);
+
+        const payload = this.preparePayload(conversation, options);
         const executor = this.getExecutor();
         return executor.converseStream({
             ...payload,

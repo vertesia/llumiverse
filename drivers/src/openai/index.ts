@@ -97,6 +97,9 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             this.logger.warn({ options: options.model_options }, "Invalid model options");
         }
 
+        // Include conversation history (same as non-streaming)
+        const conversation = updateConversation(options.conversation, prompt);
+
         const toolDefs = getToolDefinitions(options.tools);
         const useTools: boolean = toolDefs ? supportsToolUse(options.model, this.provider, true) : false;
 
@@ -153,7 +156,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             stream: true,
             stream_options: { include_usage: true },
             model: options.model,
-            messages: prompt,
+            messages: conversation,
             reasoning_effort: model_options?.reasoning_effort,
             temperature: model_options?.temperature,
             top_p: model_options?.top_p,

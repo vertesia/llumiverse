@@ -827,6 +827,10 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
 
+        // Include conversation history in prompt contents (same as non-streaming)
+        const conversation = updateConversation(options.conversation, prompt.contents);
+        prompt.contents = conversation;
+
         if (options.model.includes("gemini-2.5-flash-image")) {
             region = "global"; // Gemini Flash Image only available in global region, this is for nano-banana model
         }
