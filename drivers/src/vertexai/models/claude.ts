@@ -446,6 +446,60 @@ function createPromptFromResponse(response: Message): ClaudePrompt {
 }
 
 /**
+ * Merge consecutive user messages in the conversation.
+ * This is required because Anthropic's API expects all tool_result blocks
+ * from a single assistant turn to be in one user message.
+ * When multiple tool results are added as separate user messages,
+ * we need to merge them before sending to the API.
+ */
+export function mergeConsecutiveUserMessages(messages: MessageParam[]): MessageParam[] {
+    if (messages.length === 0) return [];
+
+    // Check if any merging is needed
+    const needsMerging = messages.some((msg, i) =>
+        i < messages.length - 1 &&
+        msg.role === 'user' &&
+        messages[i + 1].role === 'user'
+    );
+
+    if (!needsMerging) {
+        return messages;
+    }
+
+    const result: MessageParam[] = [];
+    let i = 0;
+
+    while (i < messages.length) {
+        const current = messages[i];
+
+        if (current.role === 'user') {
+            // Collect all consecutive user messages
+            const mergedContent: MessageParam['content'] = [];
+
+            while (i < messages.length && messages[i].role === 'user') {
+                const userMsg = messages[i];
+                if (Array.isArray(userMsg.content)) {
+                    mergedContent.push(...userMsg.content);
+                } else if (typeof userMsg.content === 'string') {
+                    mergedContent.push({ type: 'text', text: userMsg.content });
+                }
+                i++;
+            }
+
+            result.push({
+                role: 'user',
+                content: mergedContent
+            });
+        } else {
+            result.push(current);
+            i++;
+        }
+    }
+
+    return result;
+}
+
+/**
  * Update the conversation messages
  * @param prompt
  * @param response
@@ -455,8 +509,10 @@ function updateConversation(conversation: ClaudePrompt | undefined | null, promp
     const baseSystemMessages = conversation?.system || [];
     const baseMessages = conversation?.messages || [];
     const system = baseSystemMessages.concat(prompt.system || []);
+    // Merge consecutive user messages to ensure tool_result blocks are properly grouped
+    const mergedMessages = mergeConsecutiveUserMessages(baseMessages.concat(prompt.messages || []));
     return {
-        messages: baseMessages.concat(prompt.messages || []),
+        messages: mergedMessages,
         system: system.length > 0 ? system : undefined // If system is empty, set to undefined
     };
 }

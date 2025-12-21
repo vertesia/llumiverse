@@ -399,4 +399,162 @@ describe.concurrent.skipIf(!hasDrivers).each(drivers)("Driver $name - Multi-turn
         // Verify conversation is still serializable after second turn
         verifyConversationSerializable(result2.conversation, name);
     });
+
+    /**
+     * STREAMING CONVERSATION TESTS
+     * These tests verify that streaming (driver.stream()) properly maintains
+     * conversation context across multiple turns.
+     *
+     * This was a bug where streaming didn't include conversation history in the API call,
+     * causing the model to lose context between turns.
+     */
+
+    test(`${name}: STREAMING multi-turn text conversation (3 turns)`, { timeout: TIMEOUT }, async () => {
+        const options = getTextOptions(textModel);
+
+        // Helper to consume stream and get completion
+        async function streamToCompletion(stream: AsyncIterable<string>) {
+            const chunks: string[] = [];
+            for await (const chunk of stream) {
+                chunks.push(chunk);
+            }
+            return chunks.join('');
+        }
+
+        // Turn 1: Ask a question using streaming
+        const prompt1: PromptSegment[] = [{
+            role: PromptRole.user,
+            content: "I'm thinking of a secret word. The word is 'elephant'. Remember this word."
+        }];
+
+        const stream1 = await driver.stream(prompt1, options);
+        const text1 = await streamToCompletion(stream1);
+        expect(text1.length).toBeGreaterThan(0);
+        expect(stream1.completion).toBeDefined();
+        expect(stream1.completion?.conversation).toBeDefined();
+
+        // Verify conversation is serializable
+        verifyConversationSerializable(stream1.completion?.conversation, name);
+
+        // Simulate storage: serialize and deserialize the conversation
+        const storedConversation1 = JSON.parse(JSON.stringify(stream1.completion?.conversation));
+
+        // Turn 2: Follow-up question using streaming
+        const prompt2: PromptSegment[] = [{
+            role: PromptRole.user,
+            content: "What was the secret word I told you?"
+        }];
+
+        const stream2 = await driver.stream(prompt2, { ...options, conversation: storedConversation1 });
+        const text2 = await streamToCompletion(stream2);
+        expect(text2.length).toBeGreaterThan(0);
+        // The model should remember "elephant" from the conversation context
+        expect(text2.toLowerCase()).toContain("elephant");
+        expect(stream2.completion?.conversation).toBeDefined();
+
+        // Verify conversation is still serializable
+        verifyConversationSerializable(stream2.completion?.conversation, name);
+
+        // Simulate storage again
+        const storedConversation2 = JSON.parse(JSON.stringify(stream2.completion?.conversation));
+
+        // Turn 3: Another follow-up using streaming
+        const prompt3: PromptSegment[] = [{
+            role: PromptRole.user,
+            content: "How many letters are in that secret word?"
+        }];
+
+        const stream3 = await driver.stream(prompt3, { ...options, conversation: storedConversation2 });
+        const text3 = await streamToCompletion(stream3);
+        expect(text3.length).toBeGreaterThan(0);
+        // "elephant" has 8 letters
+        expect(text3).toMatch(/8|eight/i);
+
+        // Final verification
+        verifyConversationSerializable(stream3.completion?.conversation, name);
+    });
+
+    test(`${name}: STREAMING conversation preserves context after JSON serialization`, { timeout: TIMEOUT }, async () => {
+        const options = getTextOptions(textModel);
+
+        // Helper to consume stream and get completion
+        async function streamToCompletion(stream: AsyncIterable<string>) {
+            for await (const _chunk of stream) {
+                // Just consume the stream
+            }
+        }
+
+        // Turn 1: Establish context with streaming
+        const prompt1: PromptSegment[] = [{
+            role: PromptRole.user,
+            content: "My name is TestUser123. Please greet me by name."
+        }];
+
+        const stream1 = await driver.stream(prompt1, options);
+        await streamToCompletion(stream1);
+        expect(stream1.completion?.conversation).toBeDefined();
+
+        // Critical: Simulate how Studio stores conversations (JSON serialize/deserialize)
+        const serialized = JSON.stringify(stream1.completion?.conversation);
+        const storedConversation = JSON.parse(serialized);
+
+        // Turn 2: Verify context survives serialization in streaming mode
+        const prompt2: PromptSegment[] = [{
+            role: PromptRole.user,
+            content: "What is my name?"
+        }];
+
+        const stream2 = await driver.stream(prompt2, { ...options, conversation: storedConversation });
+        await streamToCompletion(stream2);
+
+        // Get the result text from completion
+        const text2 = stream2.completion?.result.map(completionResultToString).join("") || "";
+
+        // The model should remember "TestUser123" from the serialized conversation
+        expect(text2).toContain("TestUser123");
+    });
+
+    test(`${name}: STREAMING vs non-streaming produce consistent conversation context`, { timeout: TIMEOUT }, async () => {
+        const options = getTextOptions(textModel);
+
+        // Helper to consume stream
+        async function streamToCompletion(stream: AsyncIterable<string>) {
+            for await (const _chunk of stream) {
+                // Just consume
+            }
+        }
+
+        // First turn with non-streaming
+        const prompt1: PromptSegment[] = [{
+            role: PromptRole.user,
+            content: "Remember this code: ALPHA-7749"
+        }];
+
+        const result1 = await driver.execute(prompt1, options);
+        const storedConversation1 = JSON.parse(JSON.stringify(result1.conversation));
+
+        // Second turn with streaming - should work with conversation from non-streaming
+        const prompt2: PromptSegment[] = [{
+            role: PromptRole.user,
+            content: "What code did I tell you to remember?"
+        }];
+
+        const stream2 = await driver.stream(prompt2, { ...options, conversation: storedConversation1 });
+        await streamToCompletion(stream2);
+
+        const text2 = stream2.completion?.result.map(completionResultToString).join("") || "";
+        expect(text2).toContain("ALPHA-7749");
+
+        // Third turn back to non-streaming - should work with conversation from streaming
+        const storedConversation2 = JSON.parse(JSON.stringify(stream2.completion?.conversation));
+
+        const prompt3: PromptSegment[] = [{
+            role: PromptRole.user,
+            content: "What were the numbers in that code?"
+        }];
+
+        const result3 = await driver.execute(prompt3, { ...options, conversation: storedConversation2 });
+        const text3 = result3.result.map(completionResultToString).join("");
+        expect(text3).toContain("7749");
+    });
 });
