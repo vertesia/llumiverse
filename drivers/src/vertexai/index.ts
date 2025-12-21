@@ -6,6 +6,7 @@ import {
     AbstractDriver,
     Completion,
     CompletionChunkObject,
+    CompletionResult,
     DriverOptions,
     EmbeddingsOptions,
     EmbeddingsResult,
@@ -14,6 +15,11 @@ import {
     PromptSegment,
     getModelCapabilities,
     modelModalitiesToArray,
+    stripBase64ImagesFromConversation,
+    truncateLargeTextInConversation,
+    getConversationMeta,
+    incrementConversationTurn,
+    unwrapConversationArray,
 } from "@llumiverse/core";
 import { FetchClient } from "@vertesia/api-fetch-client";
 import { GoogleAuth, GoogleAuthOptions, AuthClient } from "google-auth-library";
@@ -249,6 +255,72 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         options: ExecutionOptions,
     ): Promise<AsyncIterable<CompletionChunkObject>> {
         return getModelDefinition(options.model).requestTextCompletionStream(this, prompt, options);
+    }
+
+    /**
+     * Build conversation context after streaming completion.
+     * Reconstructs the assistant message from accumulated results and applies stripping.
+     */
+    buildStreamingConversation(
+        prompt: VertexAIPrompt,
+        result: unknown[],
+        options: ExecutionOptions
+    ): Content[] | undefined {
+        // Only handle Gemini-style prompts with contents array
+        if (!('contents' in prompt) || !Array.isArray(prompt.contents)) {
+            return undefined;
+        }
+
+        const completionResults = result as CompletionResult[];
+
+        // Convert accumulated results to text content for assistant message
+        const textContent = completionResults
+            .map(r => {
+                switch (r.type) {
+                    case 'text':
+                        return r.value;
+                    case 'json':
+                        return typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
+                    case 'image':
+                        // Skip images in conversation - they're in the result
+                        return '';
+                    default:
+                        return String((r as any).value || '');
+                }
+            })
+            .join('');
+
+        // Build assistant message in Gemini Content format
+        const assistantContent: Content = {
+            role: 'model',
+            parts: [{ text: textContent }]
+        };
+
+        // Unwrap array if wrapped, otherwise treat as array
+        const unwrapped = unwrapConversationArray<Content>(options.conversation);
+        const existingConversation = unwrapped ?? (options.conversation as Content[] || []);
+
+        // Combine existing conversation + prompt contents + assistant response
+        let conversation: Content[] = [
+            ...existingConversation,
+            ...prompt.contents,
+            assistantContent
+        ];
+
+        // Increment turn counter
+        conversation = incrementConversationTurn(conversation) as Content[];
+
+        // Apply stripping based on options
+        const currentTurn = getConversationMeta(conversation).turnNumber;
+        const stripOptions = {
+            keepForTurns: options.stripImagesAfterTurns ?? Infinity,
+            currentTurn,
+            textMaxTokens: options.stripTextMaxTokens
+        };
+        let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions);
+        processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+
+        return processedConversation as Content[];
     }
 
     async requestImageGeneration(

@@ -6,7 +6,7 @@ import { BedrockRuntime, ConverseRequest, ConverseResponse, ConverseStreamOutput
 import { S3Client } from "@aws-sdk/client-s3";
 import { AwsCredentialIdentity, Provider } from "@aws-sdk/types";
 import {
-    AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult,
+    AbstractDriver, AIModel, Completion, CompletionChunkObject, CompletionResult, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult,
     ExecutionOptions, ExecutionTokenUsage, PromptSegment,
     TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions,
     BedrockClaudeOptions, BedrockPalmyraOptions, BedrockGptOssOptions, getMaxTokensLimitBedrock, NovaCanvasOptions,
@@ -353,6 +353,72 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             supportStreamingCache.set(options.model, canStream);
         }
         return canStream;
+    }
+
+    /**
+     * Build conversation context after streaming completion.
+     * Reconstructs the assistant message from accumulated results and applies stripping.
+     */
+    buildStreamingConversation(
+        prompt: BedrockPrompt,
+        result: unknown[],
+        options: ExecutionOptions
+    ): ConverseRequest | undefined {
+        // Only handle ConverseRequest prompts (not NovaMessagesPrompt or TwelvelabsPegasusRequest)
+        if (options.model.includes("canvas") || options.model.includes("twelvelabs.pegasus")) {
+            return undefined;
+        }
+
+        const conversePrompt = prompt as ConverseRequest;
+        const completionResults = result as CompletionResult[];
+
+        // Convert accumulated results to text content for assistant message
+        const textContent = completionResults
+            .map(r => {
+                switch (r.type) {
+                    case 'text':
+                        return r.value;
+                    case 'json':
+                        return typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
+                    case 'image':
+                        // Skip images in conversation - they're in the result
+                        return '';
+                    default:
+                        return String((r as any).value || '');
+                }
+            })
+            .join('');
+
+        // Deserialize any base64-encoded binary data back to Uint8Array
+        const incomingConversation = deserializeBinaryFromStorage(options.conversation) as ConverseRequest;
+
+        // Start with the conversation from options combined with the prompt
+        let conversation = updateConversation(incomingConversation, conversePrompt);
+
+        // Add assistant message
+        const assistantMessage: ConverseRequest = {
+            messages: [{
+                content: [{ text: textContent }],
+                role: "assistant"
+            }],
+            modelId: conversePrompt.modelId,
+        };
+        conversation = updateConversation(conversation, assistantMessage);
+
+        // Increment turn counter
+        conversation = incrementConversationTurn(conversation) as ConverseRequest;
+
+        // Apply stripping based on options
+        const currentTurn = getConversationMeta(conversation).turnNumber;
+        const stripOptions = {
+            keepForTurns: options.stripImagesAfterTurns ?? Infinity,
+            currentTurn,
+            textMaxTokens: options.stripTextMaxTokens
+        };
+        let processedConversation = stripBinaryFromConversation(conversation, stripOptions);
+        processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+
+        return processedConversation as ConverseRequest;
     }
 
     async requestTextCompletion(prompt: BedrockPrompt, options: ExecutionOptions): Promise<Completion> {

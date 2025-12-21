@@ -127,6 +127,16 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
             chunks: this.chunks,
         }
 
+        // Build conversation context for multi-turn support
+        const conversation = this.driver.buildStreamingConversation(
+            this.prompt,
+            accumulatedResults,
+            this.options
+        );
+        if (conversation !== undefined) {
+            this.completion.conversation = conversation;
+        }
+
         try {
             if (this.completion) {
                 this.driver.validateResult(this.completion, this.options);
