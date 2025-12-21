@@ -326,6 +326,9 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
 
         const response_stream = await client.messages.stream(streamingPayload, requestOptions);
 
+        // Track current tool use being built from streaming
+        let currentToolUse: { id: string; name: string; inputJson: string } | null = null;
+
         const stream = asyncMap(response_stream, async (streamEvent: RawMessageStreamEvent) => {
             switch (streamEvent.type) {
                 case "message_start":
@@ -345,6 +348,22 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                         finish_reason: claudeFinishReason(streamEvent.delta.stop_reason ?? undefined),
                     } satisfies CompletionChunkObject;
                 case "content_block_start":
+                    // Handle tool_use blocks
+                    if (streamEvent.content_block.type === "tool_use") {
+                        currentToolUse = {
+                            id: streamEvent.content_block.id,
+                            name: streamEvent.content_block.name,
+                            inputJson: ''
+                        };
+                        return {
+                            result: [],
+                            tool_use: [{
+                                id: streamEvent.content_block.id,
+                                tool_name: streamEvent.content_block.name,
+                                tool_input: '' as any // Will be accumulated via input_json_delta
+                            }]
+                        } satisfies CompletionChunkObject;
+                    }
                     // Handle redacted thinking blocks
                     if (streamEvent.content_block.type === "redacted_thinking" && model_options?.include_thoughts) {
                         return {
@@ -359,6 +378,19 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                             return {
                                 result: streamEvent.delta.text ? [{ type: "text", value: streamEvent.delta.text }] : []
                             } satisfies CompletionChunkObject;
+                        case "input_json_delta":
+                            // Accumulate tool input JSON
+                            if (currentToolUse && streamEvent.delta.partial_json) {
+                                return {
+                                    result: [],
+                                    tool_use: [{
+                                        id: currentToolUse.id,
+                                        tool_name: '', // Name already sent in content_block_start
+                                        tool_input: streamEvent.delta.partial_json as any
+                                    }]
+                                } satisfies CompletionChunkObject;
+                            }
+                            break;
                         case "thinking_delta":
                             if (model_options?.include_thoughts) {
                                 return {
@@ -377,6 +409,10 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                     }
                     break;
                 case "content_block_stop":
+                    // Reset current tool use tracking when block ends
+                    if (currentToolUse) {
+                        currentToolUse = null;
+                    }
                     // Handle the end of content blocks, for redacted thinking blocks
                     if (model_options?.include_thoughts) {
                         return {
