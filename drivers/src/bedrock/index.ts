@@ -6,18 +6,26 @@ import { BedrockRuntime, ConverseRequest, ConverseResponse, ConverseStreamOutput
 import { S3Client } from "@aws-sdk/client-s3";
 import { AwsCredentialIdentity, Provider } from "@aws-sdk/types";
 import {
-    AbstractDriver, AIModel, Completion, CompletionChunkObject, CompletionResult, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult,
-    ExecutionOptions, ExecutionTokenUsage, PromptSegment,
-    TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions,
-    BedrockClaudeOptions, BedrockPalmyraOptions, BedrockGptOssOptions, getMaxTokensLimitBedrock, NovaCanvasOptions,
-    modelModalitiesToArray, getModelCapabilities,
-    StatelessExecutionOptions,
+    AbstractDriver, AIModel,
+    BedrockClaudeOptions,
+    BedrockGptOssOptions,
+    BedrockPalmyraOptions,
+    Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult,
+    ExecutionOptions, ExecutionTokenUsage,
+    getMaxTokensLimitBedrock,
+    getModelCapabilities,
+    modelModalitiesToArray,
     ModelOptions,
+    NovaCanvasOptions,
+    PromptSegment,
+    StatelessExecutionOptions,
     stripBinaryFromConversation,
     truncateLargeTextInConversation,
     deserializeBinaryFromStorage,
     getConversationMeta,
-    incrementConversationTurn
+    incrementConversationTurn,
+    TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions,
+    CompletionResult
 } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
@@ -27,9 +35,9 @@ import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from ".
 import { forceUploadFile } from "./s3.js";
 import {
     formatTwelvelabsPegasusPrompt,
-    TwelvelabsPegasusRequest,
     TwelvelabsMarengoRequest,
-    TwelvelabsMarengoResponse
+    TwelvelabsMarengoResponse,
+    TwelvelabsPegasusRequest
 } from "./twelvelabs.js";
 
 const supportStreamingCache = new LRUCache<string, boolean>(4096);
@@ -119,7 +127,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             this._executor = new BedrockRuntime({
                 region: this.options.region,
                 credentials: this.options.credentials,
-
             });
         }
         return this._executor;
@@ -756,22 +763,38 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             prompt.messages = converseJSONprefill(prompt.messages);
         }
 
+        // Clean undefined values from additionalField since AWS Bedrock requires valid JSON
+        // and will throw an exception for unrecognized parameters
+        const cleanedAdditionalFields = removeUndefinedValues(additionalField);
+        const cleanedModelOptions = removeUndefinedValues({
+            maxTokens: model_options.max_tokens,
+            temperature: model_options.temperature,
+            topP: model_options.top_p,
+            stopSequences: model_options.stop_sequence,
+        } satisfies InferenceConfiguration);
+
+        //Construct the final request payload
+        // We only add fields that are defined to avoid AWS errors
         const request: ConverseRequest = {
-            messages: prompt.messages,
-            system: prompt.system,
             modelId: options.model,
-            inferenceConfig: {
-                maxTokens: model_options.max_tokens,
-                temperature: model_options.temperature,
-                topP: model_options.top_p,
-                stopSequences: model_options.stop_sequence,
-            } satisfies InferenceConfiguration,
-            additionalModelRequestFields: {
-                ...additionalField,
-            }
         };
 
-        //Only add tools if they are defined and not empty
+        if (prompt.messages) {
+            request.messages = prompt.messages;
+        }
+
+        if (prompt.system) {
+            request.system = prompt.system;
+        }
+
+        if (Object.keys(cleanedModelOptions).length > 0) {
+            request.inferenceConfig = cleanedModelOptions
+        }
+
+        if (Object.keys(cleanedAdditionalFields).length > 0) {
+            request.additionalModelRequestFields = cleanedAdditionalFields;
+        }
+
         if (tool_defs?.length) {
             request.toolConfig = {
                 tools: tool_defs,
@@ -1199,6 +1222,33 @@ function getToolDefinition(tool: ToolDefinition): Tool.ToolSpecMember {
             }
         }
     }
+}
+
+/**
+ * Recursively removes undefined values from an object.
+ * AWS Bedrock's additionalModelRequestFields must be valid JSON, and undefined is not valid JSON.
+ * Any unrecognized parameters will cause an exception.
+ */
+function removeUndefinedValues<T extends Record<string, any>>(obj: T): Partial<T> {
+    if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) {
+        return obj;
+    }
+
+    const cleaned: any = {};
+    for (const [key, value] of Object.entries(obj)) {
+        if (value !== undefined) {
+            if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+                const cleanedNested = removeUndefinedValues(value);
+                // Only include nested objects if they have properties after cleaning
+                if (Object.keys(cleanedNested).length > 0) {
+                    cleaned[key] = cleanedNested;
+                }
+            } else {
+                cleaned[key] = value;
+            }
+        }
+    }
+    return cleaned;
 }
 
 /**
