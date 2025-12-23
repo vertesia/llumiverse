@@ -2,46 +2,25 @@ import { ModelModalities } from "../types.js";
 
 // Record of Vertex AI model capabilities keyed by model ID (last path segment, lowercased)
 const RECORD_MODEL_CAPABILITIES: Record<string, { input: ModelModalities; output: ModelModalities; tool_support?: boolean }> = {
-    "gemini-1.5-flash-002": { input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "gemini-1.5-pro-002": { input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "gemini-2.0-flash-001": { input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
     "gemini-2.0-flash-lite-001": { input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: false },
-    "gemini-2.5-flash-preview-04-17": { input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "gemini-2.5-pro-preview-05-06": { input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "imagen-3.0-generate-002": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
-    "imagen-3.0-capability-001": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
-    "imagen-4.0-generate-preview-05-20": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
-    "claude-3-opus": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "claude-3-haiku": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "claude-3-5-sonnet": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "claude-3-5-haiku": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "claude-3-5-sonnet-v2": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "claude-3-7-sonnet": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "claude-opus-4": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "claude-sonnet-4": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
 };
 
 // Populate RECORD_FAMILY_CAPABILITIES as a const record (lowest common denominator for each family)
 const RECORD_FAMILY_CAPABILITIES: Record<string, { input: ModelModalities; output: ModelModalities; tool_support?: boolean }> = {
-    "gemini": { input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "gemini-1.5": { input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "gemini-2.0": { input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "gemini-2.5": { input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "gemini-3.0": { input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "gemini-2.5-flash-image": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: true, video: false, audio: false, embed: false }, tool_support: false },
-    "gemini-3.0-pro-image": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: true, video: false, audio: false, embed: false }, tool_support: false },
-    "imagen-3.0-generate": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
-    "imagen-3.0-fast-generate": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
-    "imagen-3.0-capability": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
-    "imagen-4.0-generate": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
-    "imagen-4.0-ultra-generate": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
-    "imagen-4.0-fast-generate": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
-    "imagen-4.0-capability": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
-    "claude-3-5": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "claude-3-7": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "claude-3": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "claude": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "llama": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: false },
+    "gemini":                   { input: { text: true, image: true, video: true, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
+    "gemini-2.5-flash-image":   { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: true, video: false, audio: false, embed: false }, tool_support: false },
+    "gemini-3.0-pro-image":     { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: true, video: false, audio: false, embed: false }, tool_support: false },
+    "gemini-3.0-flash-image":   { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: true, video: false, audio: false, embed: false }, tool_support: false },
+    'imagen':                   { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
+    "imagen-3.0":               { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
+    "imagen-3.0-capability":    { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
+    "imagen-4.0":               { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
+    "imagen-4.0-capability":    { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
+    "claude":                   { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
+    "llama":                    { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
+    "llama-2":                  { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: false },
+    "llama-3.2":                { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
+    "llama-4":                  { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
 };
 
 // Fallback pattern lists for inferring modalities and tool support
@@ -54,7 +33,7 @@ const VIDEO_OUTPUT_MODELS = ["video"];
 const AUDIO_OUTPUT_MODELS = ["audio"];
 const TEXT_OUTPUT_MODELS = ["text"];
 const EMBEDDING_OUTPUT_MODELS = ["embed"];
-const TOOL_SUPPORT_MODELS = ["tool", "sonnet", "opus", "gemini", "claude-3-5", "claude-3-7"];
+const TOOL_SUPPORT_MODELS = ["tool", "sonnet", "opus", "gemini", "claude"];
 
 function modelMatches(modelName: string, patterns: string[]): boolean {
     return patterns.some(pattern => modelName.includes(pattern));
