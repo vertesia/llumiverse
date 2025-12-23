@@ -302,7 +302,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         //Used to exclude retired models that are still in the listing API but not available for use.
         //Or models we do not support yet
         const unsupportedModelsByPublisher = {
-            google: ["gemini-pro", "gemini-ultra", "imagen-product-recontext-preview", "embedding", "gemini-live-2.5-flash-preview-native-audio"],
+            google: ["gemini-pro", "gemini-ultra", "imagen-product-recontext-preview", "embedding", "gemini-live-2.5-flash-preview-native-audio", "computer-use-preview"],
             anthropic: [],
             meta: [],
         };
