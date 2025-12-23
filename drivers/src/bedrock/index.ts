@@ -24,7 +24,8 @@ import {
     deserializeBinaryFromStorage,
     getConversationMeta,
     incrementConversationTurn,
-    TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions
+    TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions,
+    CompletionResult
 } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
@@ -361,6 +362,91 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return canStream;
     }
 
+    /**
+     * Build conversation context after streaming completion.
+     * Reconstructs the assistant message from accumulated results and applies stripping.
+     */
+    buildStreamingConversation(
+        prompt: BedrockPrompt,
+        result: unknown[],
+        toolUse: unknown[] | undefined,
+        options: ExecutionOptions
+    ): ConverseRequest | undefined {
+        // Only handle ConverseRequest prompts (not NovaMessagesPrompt or TwelvelabsPegasusRequest)
+        if (options.model.includes("canvas") || options.model.includes("twelvelabs.pegasus")) {
+            return undefined;
+        }
+
+        const conversePrompt = prompt as ConverseRequest;
+        const completionResults = result as CompletionResult[];
+
+        // Convert accumulated results to text content for assistant message
+        const textContent = completionResults
+            .map(r => {
+                switch (r.type) {
+                    case 'text':
+                        return r.value;
+                    case 'json':
+                        return typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
+                    case 'image':
+                        // Skip images in conversation - they're in the result
+                        return '';
+                    default:
+                        return String((r as any).value || '');
+                }
+            })
+            .join('');
+
+        // Deserialize any base64-encoded binary data back to Uint8Array
+        const incomingConversation = deserializeBinaryFromStorage(options.conversation) as ConverseRequest;
+
+        // Start with the conversation from options combined with the prompt
+        let conversation = updateConversation(incomingConversation, conversePrompt);
+
+        // Build assistant message content
+        const messageContent: any[] = [];
+        if (textContent) {
+            messageContent.push({ text: textContent });
+        }
+        // Add tool use blocks if present
+        if (toolUse && toolUse.length > 0) {
+            for (const tool of toolUse as ToolUse[]) {
+                messageContent.push({
+                    toolUse: {
+                        toolUseId: tool.id,
+                        name: tool.tool_name,
+                        input: tool.tool_input,
+                    }
+                });
+            }
+        }
+
+        // Add assistant message
+        const assistantMessage: ConverseRequest = {
+            messages: [{
+                content: messageContent.length > 0 ? messageContent : [{ text: '' }],
+                role: "assistant"
+            }],
+            modelId: conversePrompt.modelId,
+        };
+        conversation = updateConversation(conversation, assistantMessage);
+
+        // Increment turn counter
+        conversation = incrementConversationTurn(conversation) as ConverseRequest;
+
+        // Apply stripping based on options
+        const currentTurn = getConversationMeta(conversation).turnNumber;
+        const stripOptions = {
+            keepForTurns: options.stripImagesAfterTurns ?? Infinity,
+            currentTurn,
+            textMaxTokens: options.stripTextMaxTokens
+        };
+        let processedConversation = stripBinaryFromConversation(conversation, stripOptions);
+        processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+
+        return processedConversation as ConverseRequest;
+    }
+
     async requestTextCompletion(prompt: BedrockPrompt, options: ExecutionOptions): Promise<Completion> {
         // Handle Twelvelabs Pegasus models
         if (options.model.includes("twelvelabs.pegasus")) {
@@ -525,7 +611,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         // Handle other Bedrock models that use Converse API
         const conversePrompt = prompt as ConverseRequest;
-        const payload = this.preparePayload(conversePrompt, options);
+
+        // Include conversation history (same as non-streaming)
+        // Deserialize any base64-encoded binary data back to Uint8Array before API call
+        const incomingConversation = deserializeBinaryFromStorage(options.conversation) as ConverseRequest;
+        const conversation = updateConversation(incomingConversation, conversePrompt);
+
+        const payload = this.preparePayload(conversation, options);
         const executor = this.getExecutor();
         return executor.converseStream({
             ...payload,

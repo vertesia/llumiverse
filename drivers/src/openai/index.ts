@@ -97,6 +97,9 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             this.logger.warn({ options: options.model_options }, "Invalid model options");
         }
 
+        // Include conversation history (same as non-streaming)
+        const conversation = updateConversation(options.conversation, prompt);
+
         const toolDefs = getToolDefinitions(options.tools);
         const useTools: boolean = toolDefs ? supportsToolUse(options.model, this.provider, true) : false;
 
@@ -108,6 +111,17 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                 result = chunk.choices[0]?.delta.content ?? "";
             }
 
+            // Capture tool_calls from streaming chunks
+            let tool_use: ToolUse[] | undefined = undefined;
+            const deltaToolCalls = chunk.choices[0]?.delta?.tool_calls;
+            if (deltaToolCalls && deltaToolCalls.length > 0) {
+                tool_use = deltaToolCalls.map(tc => ({
+                    id: tc.id || `tool_${tc.index}`,  // Use index as fallback ID for streaming
+                    tool_name: tc.function?.name || '',
+                    tool_input: tc.function?.arguments || '' as any,  // Arguments come as string chunks
+                }));
+            }
+
             return {
                 result: textToCompletionResult(result),
                 finish_reason: openAiFinishReason(chunk.choices[0]?.finish_reason ?? undefined),         //Uses expected "stop" , "length" format
@@ -115,7 +129,8 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                     prompt: chunk.usage?.prompt_tokens,
                     result: chunk.usage?.completion_tokens,
                     total: (chunk.usage?.prompt_tokens ?? 0) + (chunk.usage?.completion_tokens ?? 0),
-                }
+                },
+                tool_use,
             } satisfies CompletionChunkObject;
         };
 
@@ -141,7 +156,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             stream: true,
             stream_options: { include_usage: true },
             model: options.model,
-            messages: prompt,
+            messages: conversation,
             reasoning_effort: model_options?.reasoning_effort,
             temperature: model_options?.temperature,
             top_p: model_options?.top_p,
@@ -251,6 +266,79 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             return Promise.resolve(false);
         }
         return Promise.resolve(true);
+    }
+
+    /**
+     * Build conversation context after streaming completion.
+     * Reconstructs the assistant message from accumulated results and applies stripping.
+     */
+    buildStreamingConversation(
+        prompt: ChatCompletionMessageParam[],
+        result: unknown[],
+        toolUse: unknown[] | undefined,
+        options: ExecutionOptions
+    ): ChatCompletionMessageParam[] | undefined {
+        // Build assistant message from accumulated CompletionResult[]
+        const completionResults = result as CompletionResult[];
+
+        // Convert accumulated results to text content for assistant message
+        const textContent = completionResults
+            .map(r => {
+                switch (r.type) {
+                    case 'text':
+                        return r.value;
+                    case 'json':
+                        return typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
+                    case 'image':
+                        // Skip images in conversation - they're in the result
+                        return '';
+                    default:
+                        return String((r as any).value || '');
+                }
+            })
+            .join('');
+
+        // Convert ToolUse[] to OpenAI tool_calls format
+        const toolCalls = toolUse && toolUse.length > 0
+            ? (toolUse as ToolUse[]).map(t => ({
+                id: t.id,
+                type: 'function' as const,
+                function: {
+                    name: t.tool_name,
+                    arguments: typeof t.tool_input === 'string' ? t.tool_input : JSON.stringify(t.tool_input ?? {}),
+                }
+            }))
+            : undefined;
+
+        const assistantMessage: ChatCompletionMessageParam = {
+            role: 'assistant',
+            content: textContent ? [{
+                type: 'text',
+                text: textContent
+            }] : null,
+            tool_calls: toolCalls,
+        };
+
+        // Start with the conversation from options or the prompt
+        let conversation = updateConversation(options.conversation, prompt);
+
+        // Add assistant message
+        conversation = updateConversation(conversation, [assistantMessage]);
+
+        // Increment turn counter
+        conversation = incrementConversationTurn(conversation) as ChatCompletionMessageParam[];
+
+        // Apply stripping based on options
+        const currentTurn = getConversationMeta(conversation).turnNumber;
+        const stripOptions = {
+            keepForTurns: options.stripImagesAfterTurns ?? Infinity,
+            currentTurn,
+            textMaxTokens: options.stripTextMaxTokens
+        };
+        let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions);
+        processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+
+        return processedConversation as ChatCompletionMessageParam[];
     }
 
     createTrainingPrompt(options: TrainingPromptOptions): Promise<string> {

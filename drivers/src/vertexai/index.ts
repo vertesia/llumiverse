@@ -6,6 +6,7 @@ import {
     AbstractDriver,
     Completion,
     CompletionChunkObject,
+    CompletionResult,
     DriverOptions,
     EmbeddingsOptions,
     EmbeddingsResult,
@@ -14,6 +15,11 @@ import {
     PromptSegment,
     getModelCapabilities,
     modelModalitiesToArray,
+    stripBase64ImagesFromConversation,
+    truncateLargeTextInConversation,
+    getConversationMeta,
+    incrementConversationTurn,
+    unwrapConversationArray,
 } from "@llumiverse/core";
 import { FetchClient } from "@vertesia/api-fetch-client";
 import { GoogleAuth, GoogleAuthOptions, AuthClient } from "google-auth-library";
@@ -249,6 +255,186 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         options: ExecutionOptions,
     ): Promise<AsyncIterable<CompletionChunkObject>> {
         return getModelDefinition(options.model).requestTextCompletionStream(this, prompt, options);
+    }
+
+    /**
+     * Build conversation context after streaming completion.
+     * Reconstructs the assistant message from accumulated results and applies stripping.
+     * Handles both Gemini (Content[]) and Claude (ClaudePrompt) formats.
+     */
+    buildStreamingConversation(
+        prompt: VertexAIPrompt,
+        result: unknown[],
+        toolUse: unknown[] | undefined,
+        options: ExecutionOptions
+    ): Content[] | unknown | undefined {
+        // Handle Claude-style prompts (has 'messages' array)
+        if ('messages' in prompt && Array.isArray((prompt as any).messages)) {
+            return this.buildClaudeStreamingConversation(prompt as any, result, toolUse, options);
+        }
+
+        // Only handle Gemini-style prompts with contents array
+        if (!('contents' in prompt) || !Array.isArray(prompt.contents)) {
+            return undefined;
+        }
+
+        const completionResults = result as CompletionResult[];
+
+        // Convert accumulated results to text content for assistant message
+        const textContent = completionResults
+            .map(r => {
+                switch (r.type) {
+                    case 'text':
+                        return r.value;
+                    case 'json':
+                        return typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
+                    case 'image':
+                        // Skip images in conversation - they're in the result
+                        return '';
+                    default:
+                        return String((r as any).value || '');
+                }
+            })
+            .join('');
+
+        // Build parts array for assistant message
+        const parts: any[] = [];
+        if (textContent) {
+            parts.push({ text: textContent });
+        }
+        // Add function calls if present (Gemini format)
+        if (toolUse && toolUse.length > 0) {
+            for (const tool of toolUse as any[]) {
+                parts.push({
+                    functionCall: {
+                        name: tool.tool_name,
+                        args: tool.tool_input,
+                    }
+                });
+            }
+        }
+
+        // Build assistant message in Gemini Content format
+        const assistantContent: Content = {
+            role: 'model',
+            parts: parts.length > 0 ? parts : [{ text: '' }]
+        };
+
+        // Unwrap array if wrapped, otherwise treat as array
+        const unwrapped = unwrapConversationArray<Content>(options.conversation);
+        const existingConversation = unwrapped ?? (options.conversation as Content[] || []);
+
+        // Combine existing conversation + prompt contents + assistant response
+        let conversation: Content[] = [
+            ...existingConversation,
+            ...prompt.contents,
+            assistantContent
+        ];
+
+        // Increment turn counter
+        conversation = incrementConversationTurn(conversation) as Content[];
+
+        // Apply stripping based on options
+        const currentTurn = getConversationMeta(conversation).turnNumber;
+        const stripOptions = {
+            keepForTurns: options.stripImagesAfterTurns ?? Infinity,
+            currentTurn,
+            textMaxTokens: options.stripTextMaxTokens
+        };
+        let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions);
+        processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+
+        return processedConversation as Content[];
+    }
+
+    /**
+     * Build conversation for Claude streaming.
+     * Creates assistant message with tool_use blocks in Claude's ContentBlock format.
+     */
+    private buildClaudeStreamingConversation(
+        prompt: { messages: unknown[]; system?: unknown[] },
+        result: unknown[],
+        toolUse: unknown[] | undefined,
+        options: ExecutionOptions
+    ): unknown {
+        const completionResults = result as CompletionResult[];
+
+        // Convert accumulated results to text content
+        const textContent = completionResults
+            .map(r => {
+                switch (r.type) {
+                    case 'text':
+                        return r.value;
+                    case 'json':
+                        return typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
+                    case 'image':
+                        return '';
+                    default:
+                        return String((r as any).value || '');
+                }
+            })
+            .join('');
+
+        // Build Claude-style ContentBlock array for assistant message
+        const content: unknown[] = [];
+
+        // Add text block if there's text content
+        if (textContent) {
+            content.push({
+                type: 'text',
+                text: textContent
+            });
+        }
+
+        // Add tool_use blocks in Claude format
+        if (toolUse && toolUse.length > 0) {
+            for (const tool of toolUse as any[]) {
+                content.push({
+                    type: 'tool_use',
+                    id: tool.id,
+                    name: tool.tool_name,
+                    input: tool.tool_input ?? {}
+                });
+            }
+        }
+
+        // Build assistant message
+        const assistantMessage = {
+            role: 'assistant',
+            content: content.length > 0 ? content : [{ type: 'text', text: '' }]
+        };
+
+        // Get existing conversation or start fresh
+        const existingMessages = (options.conversation as any)?.messages ?? [];
+        const existingSystem = (options.conversation as any)?.system ?? prompt.system;
+
+        // Combine: existing conversation + new prompt messages + assistant response
+        const newMessages = [
+            ...existingMessages,
+            ...prompt.messages,
+            assistantMessage
+        ];
+
+        // Build the new conversation in ClaudePrompt format
+        const conversation = {
+            messages: newMessages,
+            system: existingSystem
+        };
+
+        // Increment turn counter
+        const withTurn = incrementConversationTurn(conversation);
+
+        // Apply stripping based on options
+        const currentTurn = getConversationMeta(withTurn).turnNumber;
+        const stripOptions = {
+            keepForTurns: options.stripImagesAfterTurns ?? Infinity,
+            currentTurn,
+            textMaxTokens: options.stripTextMaxTokens
+        };
+        let processedConversation = stripBase64ImagesFromConversation(withTurn, stripOptions);
+        processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+
+        return processedConversation;
     }
 
     async requestImageGeneration(

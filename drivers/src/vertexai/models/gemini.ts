@@ -468,11 +468,17 @@ function collectToolUseParts(content: Content): ToolUse[] | undefined {
     const parts = content.parts ?? [];
     for (const part of parts) {
         if (part.functionCall) {
-            out.push({
+            const toolUse: ToolUse = {
                 id: part.functionCall.name ?? '',
                 tool_name: part.functionCall.name ?? '',
                 tool_input: part.functionCall.args as JSONObject,
-            });
+            };
+            // Capture thought_signature for Gemini thinking models (2.5+/3.0+)
+            // This must be passed back with the function response
+            if (part.thoughtSignature) {
+                toolUse.thought_signature = part.thoughtSignature;
+            }
+            out.push(toolUse);
         }
     }
     return out.length > 0 ? out : undefined;
@@ -624,16 +630,18 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 if (!msg.tool_use_id) {
                     throw new Error("Tool response missing tool_use_id");
                 }
+                // Build functionResponse part with optional thought_signature for Gemini thinking models
+                const functionResponsePart: Part = {
+                    functionResponse: {
+                        name: msg.tool_use_id,
+                        response: formatFunctionResponse(msg.content || ''),
+                    },
+                    // Include thought_signature if provided (required for Gemini 2.5+/3.0+ thinking models)
+                    thoughtSignature: msg.thought_signature,
+                };
                 contents.push({
                     role: 'user',
-                    parts: [
-                        {
-                            functionResponse: {
-                                name: msg.tool_use_id,
-                                response: formatFunctionResponse(msg.content || ''),
-                            }
-                        }
-                    ]
+                    parts: [functionResponsePart]
                 });
             } else {    // PromptRole.user, PromptRole.assistant, PromptRole.safety
                 const parts: Part[] = [];
@@ -826,6 +834,10 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         }
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
+
+        // Include conversation history in prompt contents (same as non-streaming)
+        const conversation = updateConversation(options.conversation, prompt.contents);
+        prompt.contents = conversation;
 
         if (options.model.includes("gemini-2.5-flash-image")) {
             region = "global"; // Gemini Flash Image only available in global region, this is for nano-banana model
