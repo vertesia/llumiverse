@@ -8,6 +8,7 @@ import { VertexAIOptions } from './options/vertexai.js';
 
 export enum Providers {
     openai = 'openai',
+    openai_compatible = 'openai_compatible',
     azure_openai = 'azure_openai',
     azure_foundry = 'azure_foundry',
     huggingface_ie = 'huggingface_ie',
@@ -17,7 +18,8 @@ export enum Providers {
     togetherai = 'togetherai',
     mistralai = 'mistralai',
     groq = 'groq',
-    watsonx = 'watsonx'
+    watsonx = 'watsonx',
+    xai = 'xai'
 }
 
 export interface ProviderParams {
@@ -111,6 +113,21 @@ export const ProviderList: Record<Providers, ProviderParams> = {
         name: "IBM WatsonX",
         requiresApiKey: true,
         requiresEndpointUrl: true,
+        supportSearch: false
+    },
+    xai: {
+        id: Providers.xai,
+        name: "xAI (Grok)",
+        requiresApiKey: true,
+        requiresEndpointUrl: false,
+        supportSearch: false
+    },
+    openai_compatible: {
+        id: Providers.openai_compatible,
+        name: "OpenAI Compatible",
+        requiresApiKey: true,
+        requiresEndpointUrl: true,
+        endpointPlaceholder: "https://api.example.com/v1",
         supportSearch: false
     },
 }
@@ -349,6 +366,24 @@ export interface ExecutionOptions extends StatelessExecutionOptions {
      * that can be passed here to restore the context when a new prompt is sent to the model.
      */
     conversation?: unknown | null;
+    /**
+     * Number of turns to keep images in conversation history before stripping them.
+     * - 0 (default): Strip images immediately after each turn
+     * - 1: Keep images for current turn only, strip in next turn
+     * - N: Keep images for N turns before stripping
+     * - undefined: Same as 0, strip immediately
+     *
+     * Images are stripped to prevent JSON.stringify corruption (Uint8Array) and reduce storage bloat (base64).
+     */
+    stripImagesAfterTurns?: number;
+
+    /**
+     * Maximum tokens to keep for text content in tool results.
+     * Text exceeding this limit will be truncated with a "[Content truncated...]" marker.
+     * - undefined/0: No text truncation (default)
+     * - N > 0: Truncate text to approximately N tokens (using ~4 chars/token estimate)
+     */
+    stripTextMaxTokens?: number;
 }
 
 //Common names to share between different models
