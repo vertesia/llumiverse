@@ -68,7 +68,7 @@
         "url": "git+ssh://git@github.com/vertesia/llumiverse.git"
     },
     "devDependencies": {
-        "@vertesia/api-fetch-client": "^0.79.3",
+        "@vertesia/api-fetch-client": "^0.80.0",
         "rimraf": "^6.1.2",
         "ts-dual-module": "^0.6.3",
         "typescript": "^5.9.3",
@@ -76,7 +76,7 @@
     },
     "dependencies": {
         "@llumiverse/common": "workspace:*",
-        "@types/node": "^22.19.1",
+        "@types/node": "^22.19.3",
         "ajv": "^8.17.1",
         "ajv-formats": "^3.0.1",
         "jsonrepair": "^3.13.1"
