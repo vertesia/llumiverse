@@ -521,23 +521,18 @@ function mapResponseStream(stream: AsyncIterable<OpenAI.Responses.ResponseStream
                         result: [],
                         tool_use: [toolUse],
                     } satisfies CompletionChunkObject;
-                } else if (event.type === 'response.function_call_arguments.done') {
+                }
+                // Note: We don't emit response.function_call_arguments.done because the arguments were already
+                // streamed via delta events. Emitting it again would duplicate the tool_input content.
+                // We only update the metadata to ensure the tool name is captured.
+                else if (event.type === 'response.function_call_arguments.done') {
+                    // Just update metadata, don't yield (arguments already accumulated from delta events)
                     const metadata = toolCallMetadata.get(event.item_id);
                     const syntheticId = metadata?.syntheticId ?? `tool_${event.output_index}`;
                     const tool_name = metadata?.name ?? event.name ?? '';
                     if (event.item_id) {
                         toolCallMetadata.set(event.item_id, { syntheticId, name: tool_name });
                     }
-                    const toolUse: ToolUse & { _actual_id?: string } = {
-                        id: syntheticId,
-                        _actual_id: event.item_id,
-                        tool_name,
-                        tool_input: event.arguments as any,
-                    };
-                    yield {
-                        result: [],
-                        tool_use: [toolUse],
-                    } satisfies CompletionChunkObject;
                 } else if (event.type === 'response.output_text.delta') {
                     yield {
                         result: textToCompletionResult(event.delta),
