@@ -2,7 +2,7 @@ import { DefaultAzureCredential, getBearerTokenProvider, TokenCredential } from 
 import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, getModelCapabilities, modelModalitiesToArray, Providers } from "@llumiverse/core";
 import { AIProjectClient, DeploymentUnion, ModelDeployment } from '@azure/ai-projects';
 import { isUnexpected } from "@azure-rest/ai-inference";
-import { ChatCompletionMessageParam } from "openai/resources";
+import type OpenAI from "openai";
 import type {
     ChatCompletionsOutput,
     ChatCompletionsToolCall,
@@ -11,6 +11,9 @@ import type {
 import { AzureOpenAIDriver } from "../openai/azure_openai.js";
 import { createSseStream, NodeJSReadableStream } from "@azure/core-sse";
 import { formatOpenAILikeMultimodalPrompt } from "../openai/openai_format.js";
+
+type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
+type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
 export interface AzureFoundryDriverOptions extends DriverOptions {
     /**
      * The credentials to use to access Azure AI Foundry
@@ -27,12 +30,12 @@ export interface AzureFoundryInferencePrompt {
 }
 
 export interface AzureFoundryOpenAIPrompt {
-    messages: ChatCompletionMessageParam[]
+    messages: ResponseInputItem[]
 }
 
 export type AzureFoundryPrompt = AzureFoundryInferencePrompt | AzureFoundryOpenAIPrompt
 
-export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions, ChatCompletionMessageParam[]> {
+export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions, ResponseInputItem[]> {
     service: AIProjectClient;
     readonly provider = Providers.azure_foundry;
 
@@ -99,7 +102,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         return Promise.resolve(true);
     }
 
-    async requestTextCompletion(prompt: ChatCompletionMessageParam[], options: ExecutionOptions): Promise<Completion> {
+    async requestTextCompletion(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<Completion> {
         const { deploymentName } = parseAzureFoundryModelId(options.model);
         const model_options = options.model_options as any;
         const isOpenAI = await this.isOpenAIDeployment(options.model);
@@ -116,10 +119,12 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
         } else {
             // Use the chat completions client from the inference operations
+            // Convert ResponseInputItem[] to ChatRequestMessage[] for non-OpenAI inference
+            const messages = convertToInferenceMessages(prompt);
             const chatClient = this.service.inference.chatCompletions({ apiVersion: this.INFERENCE_API_VERSION });
             response = await chatClient.post({
                 body: {
-                    messages: prompt,
+                    messages,
                     max_tokens: model_options?.max_tokens,
                     model: deploymentName,
                     stream: true,
@@ -139,7 +144,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         }
     }
 
-    async requestTextCompletionStream(prompt: ChatCompletionMessageParam[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+    async requestTextCompletionStream(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         const { deploymentName } = parseAzureFoundryModelId(options.model);
         const model_options = options.model_options as any;
         const isOpenAI = await this.isOpenAIDeployment(options.model);
@@ -151,10 +156,12 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             const stream = await subDriver.requestTextCompletionStream(prompt, modifiedOptions);
             return stream;
         } else {
+            // Convert ResponseInputItem[] to ChatRequestMessage[] for non-OpenAI inference
+            const messages = convertToInferenceMessages(prompt);
             const chatClient = this.service.inference.chatCompletions({ apiVersion: this.INFERENCE_API_VERSION });
             const response = await chatClient.post({
                 body: {
-                    messages: prompt,
+                    messages,
                     max_tokens: model_options?.max_tokens,
                     model: deploymentName,
                     stream: true,
@@ -455,4 +462,46 @@ export function parseAzureFoundryModelId(compositeId: string): { deploymentName:
 
 export function isCompositeModelId(modelId: string): boolean {
     return modelId.includes('::');
+}
+
+/**
+ * Convert ResponseInputItem[] to ChatRequestMessage[] for Azure AI Inference API
+ */
+function convertToInferenceMessages(items: ResponseInputItem[]): ChatRequestMessage[] {
+    const messages: ChatRequestMessage[] = [];
+
+    for (const item of items) {
+        // Handle EasyInputMessage (has role and content)
+        if ('role' in item && 'content' in item) {
+            const msg = item as EasyInputMessage;
+            let content: string;
+            if (typeof msg.content === 'string') {
+                content = msg.content;
+            } else if (Array.isArray(msg.content)) {
+                // Extract text from content array
+                content = msg.content
+                    .filter((part): part is OpenAI.Responses.ResponseInputText => part.type === 'input_text')
+                    .map(part => part.text)
+                    .join('\n');
+            } else {
+                content = '';
+            }
+
+            messages.push({
+                role: msg.role as 'system' | 'user' | 'assistant',
+                content
+            });
+        }
+        // Handle function_call_output
+        else if ('type' in item && item.type === 'function_call_output') {
+            const output = item as OpenAI.Responses.ResponseInputItem.FunctionCallOutput;
+            messages.push({
+                role: 'tool',
+                content: typeof output.output === 'string' ? output.output : JSON.stringify(output.output),
+                tool_call_id: output.call_id,
+            } as ChatRequestMessage);
+        }
+    }
+
+    return messages;
 }

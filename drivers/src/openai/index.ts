@@ -29,10 +29,11 @@ import {
     unwrapConversationArray,
 } from "@llumiverse/core";
 import OpenAI, { AzureOpenAI } from "openai";
-import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { formatOpenAILikeMultimodalPrompt } from "./openai_format.js";
 
-type ResponseInputMessageContentList = OpenAI.Responses.ResponseInputMessageContentList;
+// Response API types
+type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
+type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
 
 // Helper function to convert string to CompletionResult[]
 function textToCompletionResult(text: string): CompletionResult[] {
@@ -53,7 +54,7 @@ export interface BaseOpenAIDriverOptions extends DriverOptions {
 
 export abstract class BaseOpenAIDriver extends AbstractDriver<
     BaseOpenAIDriverOptions,
-    ChatCompletionMessageParam[]
+    ResponseInputItem[]
 > {
     abstract provider: Providers.openai | Providers.azure_openai | Providers.xai | Providers.azure_foundry | Providers.openai_compatible;
     abstract service: OpenAI | AzureOpenAI;
@@ -85,7 +86,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         };
     }
 
-    async requestTextCompletionStream(prompt: ChatCompletionMessageParam[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+    async requestTextCompletionStream(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         if (options.model_options?._option_id !== "openai-text" && options.model_options?._option_id !== "openai-thinking") {
             this.logger.warn({ options: options.model_options }, "Invalid model options");
         }
@@ -115,12 +116,11 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         }
 
         const reasoning = model_options?.reasoning_effort ? { effort: model_options.reasoning_effort } : undefined;
-        const input = chatMessagesToResponseInput(conversation);
 
         const stream = await this.service.responses.create({
             stream: true,
             model: options.model,
-            input,
+            input: conversation,
             reasoning,
             temperature: model_options?.temperature,
             top_p: model_options?.top_p,
@@ -139,7 +139,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         return mapResponseStream(stream);
     }
 
-    async requestTextCompletion(prompt: ChatCompletionMessageParam[], options: ExecutionOptions): Promise<Completion> {
+    async requestTextCompletion(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<Completion> {
         if (options.model_options?._option_id !== "openai-text" && options.model_options?._option_id !== "openai-thinking") {
             this.logger.warn({ options: options.model_options }, "Invalid model options");
         }
@@ -168,12 +168,11 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         }
 
         const reasoning = model_options?.reasoning_effort ? { effort: model_options.reasoning_effort } : undefined;
-        const input = chatMessagesToResponseInput(conversation);
 
         const res = await this.service.responses.create({
             stream: false,
             model: options.model,
-            input,
+            input: conversation,
             reasoning,
             temperature: model_options?.temperature,
             top_p: model_options?.top_p,
@@ -197,7 +196,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         conversation = updateConversation(conversation, createAssistantMessageFromCompletion(completion));
 
         // Increment turn counter for deferred stripping
-        conversation = incrementConversationTurn(conversation) as ChatCompletionMessageParam[];
+        conversation = incrementConversationTurn(conversation) as ResponseInputItem[];
 
         // Strip large base64 image data based on options.stripImagesAfterTurns
         const currentTurn = getConversationMeta(conversation).turnNumber;
@@ -231,45 +230,41 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
      * Reconstructs the assistant message from accumulated results and applies stripping.
      */
     buildStreamingConversation(
-        prompt: ChatCompletionMessageParam[],
+        prompt: ResponseInputItem[],
         result: unknown[],
         toolUse: unknown[] | undefined,
         options: ExecutionOptions
-    ): ChatCompletionMessageParam[] | undefined {
+    ): ResponseInputItem[] | undefined {
         // Build assistant message from accumulated CompletionResult[]
         const completionResults = result as CompletionResult[];
 
         const textContent = completionResultsToText(completionResults);
 
-        // Convert ToolUse[] to OpenAI tool_calls format
-        const toolCalls = toolUse && toolUse.length > 0
-            ? (toolUse as ToolUse[]).map(t => ({
-                id: t.id,
-                type: 'function' as const,
-                function: {
-                    name: t.tool_name,
-                    arguments: typeof t.tool_input === 'string' ? t.tool_input : JSON.stringify(t.tool_input ?? {}),
-                }
-            }))
-            : undefined;
-
-        const assistantMessage: ChatCompletionMessageParam = {
-            role: 'assistant',
-            content: textContent ? [{
-                type: 'text',
-                text: textContent
-            }] : null,
-            tool_calls: toolCalls,
-        };
-
         // Start with the conversation from options or the prompt
         let conversation = updateConversation(options.conversation, prompt);
 
-        // Add assistant message
-        conversation = updateConversation(conversation, [assistantMessage]);
+        // Add assistant message as EasyInputMessage
+        if (textContent) {
+            const assistantMessage: EasyInputMessage = {
+                role: 'assistant',
+                content: textContent,
+            };
+            conversation = updateConversation(conversation, [assistantMessage]);
+        }
+
+        // Add function calls as separate items (Response API format)
+        if (toolUse && toolUse.length > 0) {
+            const functionCalls: OpenAI.Responses.ResponseFunctionToolCall[] = (toolUse as ToolUse[]).map(t => ({
+                type: 'function_call' as const,
+                call_id: t.id,
+                name: t.tool_name,
+                arguments: typeof t.tool_input === 'string' ? t.tool_input : JSON.stringify(t.tool_input ?? {}),
+            }));
+            conversation = updateConversation(conversation, functionCalls);
+        }
 
         // Increment turn counter
-        conversation = incrementConversationTurn(conversation) as ChatCompletionMessageParam[];
+        conversation = incrementConversationTurn(conversation) as ResponseInputItem[];
 
         // Apply stripping based on options
         const currentTurn = getConversationMeta(conversation).turnNumber;
@@ -281,7 +276,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions);
         processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
 
-        return processedConversation as ChatCompletionMessageParam[];
+        return processedConversation as ResponseInputItem[];
     }
 
     createTrainingPrompt(options: TrainingPromptOptions): Promise<string> {
@@ -460,117 +455,35 @@ function completionResultsToText(completionResults: CompletionResult[] | undefin
         .join('');
 }
 
-function createAssistantMessageFromCompletion(completion: Completion): ChatCompletionMessageParam[] {
+function createAssistantMessageFromCompletion(completion: Completion): ResponseInputItem[] {
     const textContent = completionResultsToText(completion.result);
-    const toolCalls = completion.tool_use && completion.tool_use.length > 0
-        ? completion.tool_use.map(t => ({
-            id: t.id,
-            type: 'function' as const,
-            function: {
+    const result: ResponseInputItem[] = [];
+
+    // Add assistant text message if present
+    if (textContent) {
+        const assistantMessage: EasyInputMessage = {
+            role: 'assistant',
+            content: textContent,
+        };
+        result.push(assistantMessage);
+    }
+
+    // Add function calls as separate items (Response API format)
+    if (completion.tool_use && completion.tool_use.length > 0) {
+        for (const t of completion.tool_use) {
+            const functionCall: OpenAI.Responses.ResponseFunctionToolCall = {
+                type: 'function_call',
+                call_id: t.id,
                 name: t.tool_name,
                 arguments: typeof t.tool_input === 'string'
                     ? t.tool_input
                     : JSON.stringify(t.tool_input ?? {}),
-            }
-        }))
-        : undefined;
-
-    if (!textContent && (!toolCalls || toolCalls.length === 0)) {
-        return [];
-    }
-
-    return [{
-        role: 'assistant',
-        content: textContent ? [{
-            type: 'text',
-            text: textContent
-        }] : null,
-        tool_calls: toolCalls,
-    }];
-}
-
-function mapMessageContent(content: ChatCompletionMessageParam["content"]): string | ResponseInputMessageContentList | undefined {
-    if (!content) {
-        return undefined;
-    }
-    if (typeof content === 'string') {
-        return content;
-    }
-
-    const mappedParts: ResponseInputMessageContentList = [];
-    for (const part of content) {
-        if (typeof part === 'string') {
-            mappedParts.push({
-                type: 'input_text',
-                text: part,
-            });
-            continue;
-        }
-        if ((part as any).type === 'input_text' || (part as any).type === 'input_image') {
-            mappedParts.push(part as unknown as OpenAI.Responses.ResponseInputContent);
-            continue;
-        }
-        if (part.type === 'text') {
-            mappedParts.push({
-                type: 'input_text',
-                text: part.text,
-            });
-        } else if (part.type === 'image_url') {
-            mappedParts.push({
-                type: 'input_image',
-                image_url: part.image_url?.url,
-                detail: (part.image_url?.detail as 'low' | 'high' | 'auto' | undefined) ?? 'auto',
-            });
+            };
+            result.push(functionCall);
         }
     }
 
-    return mappedParts.length > 0 ? mappedParts : undefined;
-}
-
-function chatMessagesToResponseInput(messages: ChatCompletionMessageParam[]): OpenAI.Responses.ResponseInput {
-    const responseInput: OpenAI.Responses.ResponseInput = [];
-
-    for (const message of messages ?? []) {
-        const content = mapMessageContent(message.content);
-        if (message.role === 'tool') {
-            const callId = (message as any).tool_call_id;
-            if (callId) {
-                responseInput.push({
-                    type: 'function_call_output',
-                    call_id: callId,
-                    output: typeof message.content === 'string'
-                        ? message.content
-                        : JSON.stringify(message.content),
-                });
-            }
-            continue;
-        }
-
-        if (message.role === 'assistant' && Array.isArray((message as any).tool_calls)) {
-            const toolCalls = (message as any).tool_calls as OpenAI.Chat.Completions.ChatCompletionMessageToolCall[];
-            for (const tc of toolCalls) {
-                if (tc.type !== 'function') {
-                    continue;
-                }
-                responseInput.push({
-                    type: 'function_call',
-                    call_id: tc.id,
-                    id: tc.id,
-                    name: tc.function.name,
-                    arguments: tc.function.arguments,
-                });
-            }
-        }
-
-        if (content !== undefined) {
-            responseInput.push({
-                role: message.role as any,
-                content,
-            });
-        }
-    }
-
-    return responseInput;
+    return result;
 }
 
 function mapResponseStream(stream: AsyncIterable<OpenAI.Responses.ResponseStreamEvent>): AsyncIterable<CompletionChunkObject> {
@@ -646,44 +559,45 @@ function mapResponseStream(stream: AsyncIterable<OpenAI.Responses.ResponseStream
     };
 }
 
-function insert_image_detail(messages: ChatCompletionMessageParam[], detail_level: string): ChatCompletionMessageParam[] {
-    if (detail_level == "auto" || detail_level == "low" || detail_level == "high") {
-        for (const message of messages) {
-            if (message.role !== 'assistant' && message.content) {
-                for (const part of message.content) {
-                    if (typeof part === "string") {
-                        continue;
-                    }
-                    if (part.type === 'image_url') {
-                        part.image_url = { ...part.image_url, detail: detail_level };
+function insert_image_detail(items: ResponseInputItem[], detail_level: string): ResponseInputItem[] {
+    if (detail_level === "auto" || detail_level === "low" || detail_level === "high") {
+        for (const item of items) {
+            // Check if it's an EasyInputMessage or Message with content array
+            if ('role' in item && 'content' in item && item.role !== 'assistant') {
+                const content = (item as EasyInputMessage).content;
+                if (Array.isArray(content)) {
+                    for (const part of content) {
+                        if (typeof part === 'object' && part.type === 'input_image') {
+                            (part as any).detail = detail_level;
+                        }
                     }
                 }
             }
         }
     }
-    return messages;
+    return items;
 }
 
-function convertRoles(messages: ChatCompletionMessageParam[], model: string): ChatCompletionMessageParam[] {
+function convertRoles(items: ResponseInputItem[], model: string): ResponseInputItem[] {
     //New openai models use developer role instead of system
     if (model.includes("o1") || model.includes("o3")) {
         if (model.includes("o1-mini") || model.includes("o1-preview")) {
             //o1-mini and o1-preview support neither system nor developer
-            for (const message of messages) {
-                if (message.role === 'system') {
-                    (message.role as any) = 'user';
+            for (const item of items) {
+                if ('role' in item && (item as EasyInputMessage).role === 'system') {
+                    (item as any).role = 'user';
                 }
             }
         } else {
             //Models newer than o1 use developer role
-            for (const message of messages) {
-                if (message.role === 'system') {
-                    (message.role as any) = 'developer';
+            for (const item of items) {
+                if ('role' in item && (item as EasyInputMessage).role === 'system') {
+                    (item as any).role = 'developer';
                 }
             }
         }
     }
-    return messages
+    return items;
 }
 
 //Structured output support is typically aligned with tool use support
@@ -722,19 +636,19 @@ function getToolDefinition(toolDef: ToolDefinition): OpenAI.Responses.FunctionTo
     };
 }
 
-function updateConversation(conversation: unknown, message: ChatCompletionMessageParam[]): ChatCompletionMessageParam[] {
-    if (!message) {
+function updateConversation(conversation: unknown, items: ResponseInputItem[]): ResponseInputItem[] {
+    if (!items) {
         // Unwrap array if wrapped, otherwise treat as array
-        const unwrapped = unwrapConversationArray<ChatCompletionMessageParam>(conversation);
-        return unwrapped ?? (conversation as ChatCompletionMessageParam[] || []);
+        const unwrapped = unwrapConversationArray<ResponseInputItem>(conversation);
+        return unwrapped ?? (conversation as ResponseInputItem[] || []);
     }
     if (!conversation) {
-        return message;
+        return items;
     }
     // Unwrap array if wrapped, otherwise treat as array
-    const unwrapped = unwrapConversationArray<ChatCompletionMessageParam>(conversation);
-    const convArray = unwrapped ?? (conversation as ChatCompletionMessageParam[]);
-    return [...convArray, ...message];
+    const unwrapped = unwrapConversationArray<ResponseInputItem>(conversation);
+    const convArray = unwrapped ?? (conversation as ResponseInputItem[]);
+    return [...convArray, ...items];
 }
 
 export function collectTools(output?: OpenAI.Responses.ResponseOutputItem[]): ToolUse[] | undefined {
