@@ -112,14 +112,20 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             }
 
             // Capture tool_calls from streaming chunks
+            // OpenAI sends tool_call id only in the first chunk, subsequent chunks have only index
+            // We use index as the accumulation key and store the actual id when available
             let tool_use: ToolUse[] | undefined = undefined;
             const deltaToolCalls = chunk.choices[0]?.delta?.tool_calls;
             if (deltaToolCalls && deltaToolCalls.length > 0) {
                 tool_use = deltaToolCalls.map(tc => ({
-                    id: tc.id || `tool_${tc.index}`,  // Use index as fallback ID for streaming
+                    // Use index-based ID for consistent accumulation across chunks
+                    // The actual tc.id is only present in the first chunk
+                    id: `tool_${tc.index}`,
+                    // Store the actual ID if present (will be merged in CompletionStream)
+                    _actual_id: tc.id,
                     tool_name: tc.function?.name || '',
                     tool_input: tc.function?.arguments || '' as any,  // Arguments come as string chunks
-                }));
+                } as ToolUse & { _actual_id?: string }));
             }
 
             return {
