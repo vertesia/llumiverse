@@ -14,12 +14,12 @@ export function getModelCapabilities(model: string, provider?: string | Provider
     }
     const capabilities = _getModelCapabilities(model, provider);
     // Globally disable audio and video for all models, as we don't support them yet
-    // We also do not support tool use while streaming
     // TODO: Remove this when we add support.
     capabilities.input.audio = false;
     capabilities.output.audio = false;
     capabilities.output.video = false;
-    capabilities.tool_support_streaming = false;
+    // Preserve tool_support_streaming from provider-specific capabilities if set,
+    // otherwise default to false for providers that haven't been verified
     return capabilities;
 }
 

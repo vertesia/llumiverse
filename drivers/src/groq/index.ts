@@ -3,8 +3,12 @@ import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatOpenAILikeMultimodalPrompt } from "../openai/openai_format.js";
 
 import Groq from "groq-sdk";
+import type OpenAI from "openai";
 import type { ChatCompletionMessageParam, ChatCompletionTool } from "groq-sdk/resources/chat/completions";
 import type { FunctionParameters } from "groq-sdk/resources/shared";
+
+type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
+type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
 
 interface GroqDriverOptions extends DriverOptions {
     apiKey: string;
@@ -49,107 +53,13 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
 
     protected async formatPrompt(segments: PromptSegment[], opts: ExecutionOptions): Promise<ChatCompletionMessageParam[]> {
         // Use OpenAI's multimodal formatter as base then convert to Groq types
-        const openaiMessages = await formatOpenAILikeMultimodalPrompt(segments, {
+        const responseItems = await formatOpenAILikeMultimodalPrompt(segments, {
             ...opts,
             multimodal: true,
         });
 
-        // Convert OpenAI ChatCompletionMessageParam[] to Groq ChatCompletionMessageParam[]
-        // Handle differences between OpenAI and Groq SDK types
-        const groqMessages: ChatCompletionMessageParam[] = openaiMessages.map(msg => {
-            // Handle OpenAI developer messages - convert to system messages for Groq
-            if (msg.role === 'developer' || msg.role === 'system') {
-                const systemMsg: ChatCompletionMessageParam = {
-                    role: 'system',
-                    content: Array.isArray(msg.content)
-                        ? msg.content.map(part => part.text).join('\n')
-                        : msg.content,
-                    // Preserve name if present
-                    ...(msg.name && { name: msg.name })
-                };
-                return systemMsg;
-            }
-
-            // Handle user messages - filter content parts to only supported types
-            if (msg.role === 'user') {
-                let content: string | Array<{ type: 'text', text: string } | { type: 'image_url', image_url: { url: string, detail?: 'auto' | 'low' | 'high' } }> | undefined = undefined;
-
-                if (typeof msg.content === 'string') {
-                    content = msg.content;
-                } else if (Array.isArray(msg.content)) {
-                    // Filter to only text and image_url parts that Groq supports
-                    const supportedParts = msg.content.filter(part =>
-                        part.type === 'text' || part.type === 'image_url'
-                    ).map(part => {
-                        if (part.type === 'text') {
-                            return { type: 'text' as const, text: part.text };
-                        } else if (part.type === 'image_url') {
-                            return {
-                                type: 'image_url' as const,
-                                image_url: {
-                                    url: part.image_url.url,
-                                    ...(part.image_url.detail && { detail: part.image_url.detail })
-                                }
-                            };
-                        }
-                        return null;
-                    }).filter(Boolean) as Array<{ type: 'text', text: string } | { type: 'image_url', image_url: { url: string, detail?: 'auto' | 'low' | 'high' } }>;
-
-                    content = supportedParts.length > 0 ? supportedParts : 'Content not supported';
-                }
-
-                const userMsg: ChatCompletionMessageParam = {
-                    role: 'user',
-                    content: content ?? "",
-                    // Preserve name if present
-                    ...(msg.name && { name: msg.name })
-                };
-                return userMsg;
-            }
-
-            // Handle assistant messages - handle content arrays if needed
-            if (msg.role === 'assistant') {
-                // Filter tool_calls to only include function type (OpenAI v6 has union type)
-                const functionToolCalls = msg.tool_calls?.filter(tc => tc.type === 'function')
-                    .map(tc => ({ id: tc.id, type: tc.type as 'function', function: tc.function }));
-                const assistantMsg: ChatCompletionMessageParam = {
-                    role: 'assistant',
-                    content: Array.isArray(msg.content)
-                        ? msg.content.map(part => 'text' in part ? part.text : '').filter(Boolean).join('\n') || null
-                        : msg.content,
-                    // Preserve other assistant message properties
-                    ...(functionToolCalls?.length && { tool_calls: functionToolCalls }),
-                    ...(msg.name && { name: msg.name })
-                };
-                return assistantMsg;
-            }
-
-            // For tool and function messages, they should be compatible
-            if (msg.role === 'tool') {
-                const toolMsg: ChatCompletionMessageParam = {
-                    role: 'tool',
-                    tool_call_id: msg.tool_call_id,
-                    content: Array.isArray(msg.content)
-                        ? msg.content.map(part => part.text).join('\n')
-                        : msg.content
-                };
-                return toolMsg;
-            }
-
-            if (msg.role === 'function') {
-                const functionMsg: ChatCompletionMessageParam = {
-                    role: 'function',
-                    name: msg.name,
-                    content: msg.content
-                };
-                return functionMsg;
-            }
-
-            // Fallback - should not reach here but provides type safety
-            throw new Error(`Unsupported message role: ${(msg as any).role}`);
-        });
-
-        return groqMessages;
+        // Convert ResponseInputItem[] to Groq ChatCompletionMessageParam[]
+        return convertResponseItemsToGroqMessages(responseItems);
     }
 
     private getToolDefinitions(tools: ToolDefinition[] | undefined): ChatCompletionTool[] | undefined {
@@ -345,4 +255,117 @@ function updateConversation(
     messages: ChatCompletionMessageParam[]
 ): ChatCompletionMessageParam[] {
     return (conversation || []).concat(messages);
+}
+
+/**
+ * Convert ResponseInputItem[] to Groq ChatCompletionMessageParam[]
+ */
+function convertResponseItemsToGroqMessages(items: ResponseInputItem[]): ChatCompletionMessageParam[] {
+    const messages: ChatCompletionMessageParam[] = [];
+
+    for (const item of items) {
+        // Handle EasyInputMessage (has role and content)
+        if ('role' in item && 'content' in item) {
+            const msg = item as EasyInputMessage;
+            const role = msg.role;
+
+            // Handle system/developer messages
+            if (role === 'system' || role === 'developer') {
+                let content: string;
+                if (typeof msg.content === 'string') {
+                    content = msg.content;
+                } else if (Array.isArray(msg.content)) {
+                    content = msg.content
+                        .filter((part): part is OpenAI.Responses.ResponseInputText => part.type === 'input_text')
+                        .map(part => part.text)
+                        .join('\n');
+                } else {
+                    content = '';
+                }
+                messages.push({ role: 'system', content });
+                continue;
+            }
+
+            // Handle user messages
+            if (role === 'user') {
+                let content: string | Array<{ type: 'text', text: string } | { type: 'image_url', image_url: { url: string, detail?: 'auto' | 'low' | 'high' } }>;
+                if (typeof msg.content === 'string') {
+                    content = msg.content;
+                } else if (Array.isArray(msg.content)) {
+                    const parts: Array<{ type: 'text', text: string } | { type: 'image_url', image_url: { url: string, detail?: 'auto' | 'low' | 'high' } }> = [];
+                    for (const part of msg.content) {
+                        if (part.type === 'input_text') {
+                            parts.push({ type: 'text', text: part.text });
+                        } else if (part.type === 'input_image') {
+                            const imgPart = part as OpenAI.Responses.ResponseInputImage;
+                            if (imgPart.image_url) {
+                                parts.push({
+                                    type: 'image_url',
+                                    image_url: {
+                                        url: imgPart.image_url,
+                                        ...(imgPart.detail && { detail: imgPart.detail })
+                                    }
+                                });
+                            }
+                        }
+                    }
+                    content = parts.length > 0 ? parts : '';
+                } else {
+                    content = '';
+                }
+                messages.push({ role: 'user', content });
+                continue;
+            }
+
+            // Handle assistant messages
+            if (role === 'assistant') {
+                let content: string | null;
+                if (typeof msg.content === 'string') {
+                    content = msg.content;
+                } else if (Array.isArray(msg.content)) {
+                    content = msg.content
+                        .filter((part): part is OpenAI.Responses.ResponseInputText => part.type === 'input_text')
+                        .map(part => part.text)
+                        .join('\n') || null;
+                } else {
+                    content = null;
+                }
+                messages.push({ role: 'assistant', content });
+                continue;
+            }
+        }
+
+        // Handle function_call_output (tool response)
+        if ('type' in item && item.type === 'function_call_output') {
+            const output = item as OpenAI.Responses.ResponseInputItem.FunctionCallOutput;
+            messages.push({
+                role: 'tool',
+                tool_call_id: output.call_id,
+                content: typeof output.output === 'string' ? output.output : JSON.stringify(output.output),
+            });
+            continue;
+        }
+
+        // Handle function_call (assistant tool call)
+        if ('type' in item && item.type === 'function_call') {
+            const call = item as OpenAI.Responses.ResponseFunctionToolCall;
+            // Groq expects tool_calls in assistant message, but we handle them separately
+            // This is a simplification - in practice tool_calls come from model responses
+            messages.push({
+                role: 'assistant',
+                content: null,
+                tool_calls: [{
+                    id: call.call_id,
+                    type: 'function',
+                    function: {
+                        name: call.name,
+                        arguments: call.arguments,
+                    }
+                }]
+            });
+            continue;
+        }
+    }
+
+    return messages;
 }

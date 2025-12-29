@@ -3,16 +3,12 @@
 
 import { PromptRole, PromptOptions, PromptSegment } from "@llumiverse/common";
 import { readStreamAsBase64 } from "@llumiverse/core";
+import type OpenAI from "openai";
 
-import type {
-    ChatCompletionMessageParam,
-    ChatCompletionContentPartText,
-    ChatCompletionContentPartImage,
-    ChatCompletionUserMessageParam,
-    ChatCompletionSystemMessageParam,
-    ChatCompletionAssistantMessageParam,
-    ChatCompletionToolMessageParam
-} from 'openai/resources/chat/completions';
+// Types for Response API
+type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
+type ResponseInputContent = OpenAI.Responses.ResponseInputContent;
+type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
 
 export interface OpenAITextMessage {
     content: string;
@@ -47,14 +43,14 @@ export function formatOpenAILikeTextPrompt(segments: PromptSegment[]): OpenAITex
 }
 
 
-export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[], opts: PromptOptions & OpenAIPromptFormatterOptions): Promise<ChatCompletionMessageParam[]> {
-    const system: ChatCompletionMessageParam[] = [];
-    const safety: ChatCompletionMessageParam[] = [];
-    const others: ChatCompletionMessageParam[] = [];
+export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[], opts: PromptOptions & OpenAIPromptFormatterOptions): Promise<ResponseInputItem[]> {
+    const system: ResponseInputItem[] = [];
+    const safety: ResponseInputItem[] = [];
+    const others: ResponseInputItem[] = [];
 
     for (const msg of segments) {
 
-        const parts: (ChatCompletionContentPartImage | ChatCompletionContentPartText)[] = [];
+        const parts: ResponseInputContent[] = [];
 
         //generate the parts based on PromptSegment
         if (msg.files) {
@@ -62,54 +58,56 @@ export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[]
                 const stream = await file.getStream();
                 const data = await readStreamAsBase64(stream);
                 parts.push({
-                    type: "image_url",
-                    image_url: {
-                        url: `data:${file.mime_type || "image/jpeg"};base64,${data}`,
-                        //detail: "auto"  //This is modified just before execution to "low" | "high" | "auto"
-                    },
+                    type: "input_image",
+                    image_url: `data:${file.mime_type || "image/jpeg"};base64,${data}`,
+                    detail: "auto",
                 })
             }
         }
 
         if (msg.content) {
             parts.push({
+                type: "input_text",
                 text: msg.content,
-                type: "text"
             })
         }
 
 
         if (msg.role === PromptRole.system) {
             // For system messages, filter to only text parts
-            const textParts = parts.filter((part): part is ChatCompletionContentPartText => part.type === 'text');
-            const systemMsg: ChatCompletionSystemMessageParam = {
+            const textParts = parts.filter((part): part is OpenAI.Responses.ResponseInputText => part.type === 'input_text');
+            const textContent = textParts.length === 1 && !msg.files ? textParts[0].text : textParts;
+            const systemMsg: EasyInputMessage = {
                 role: "system",
-                content: textParts.length === 1 && !msg.files ? textParts[0].text : textParts
+                content: textContent,
             };
             system.push(systemMsg);
 
             if (opts.useToolForFormatting && opts.schema) {
                 system.forEach(s => {
-                    if (typeof s.content === 'string') {
-                        s.content = "TOOL: " + s.content;
-                    } else if (Array.isArray(s.content)) {
-                        s.content.forEach((c: any) => {
-                            if (c.type === "text") c.text = "TOOL: " + c.text;
-                        });
+                    if ((s as EasyInputMessage).role === 'system') {
+                        const sysMsg = s as EasyInputMessage;
+                        if (typeof sysMsg.content === 'string') {
+                            sysMsg.content = "TOOL: " + sysMsg.content;
+                        } else if (Array.isArray(sysMsg.content)) {
+                            sysMsg.content.forEach((c: any) => {
+                                if (c.type === "input_text") c.text = "TOOL: " + c.text;
+                            });
+                        }
                     }
                 });
             }
 
         } else if (msg.role === PromptRole.safety) {
-            const textParts = parts.filter((part): part is ChatCompletionContentPartText => part.type === 'text');
-            const safetyMsg: ChatCompletionSystemMessageParam = {
+            const textParts = parts.filter((part): part is OpenAI.Responses.ResponseInputText => part.type === 'input_text');
+            const safetyMsg: EasyInputMessage = {
                 role: "system",
-                content: textParts
+                content: textParts,
             };
 
             if (Array.isArray(safetyMsg.content)) {
                 safetyMsg.content.forEach((c: any) => {
-                    if (c.type === "text") c.text = "DO NOT IGNORE - IMPORTANT: " + c.text;
+                    if (c.type === "input_text") c.text = "DO NOT IGNORE - IMPORTANT: " + c.text;
                 });
             }
 
@@ -118,35 +116,27 @@ export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[]
             if (!msg.tool_use_id) {
                 throw new Error("Tool use id is required for tool messages")
             }
-            const toolMsg: ChatCompletionToolMessageParam = {
-                role: "tool",
-                tool_call_id: msg.tool_use_id,
-                content: msg.content || ""
+            const toolOutputMsg: OpenAI.Responses.ResponseInputItem.FunctionCallOutput = {
+                type: "function_call_output",
+                call_id: msg.tool_use_id,
+                output: msg.content || ""
             };
-            others.push(toolMsg);
+            others.push(toolOutputMsg);
         } else if (msg.role !== PromptRole.negative && msg.role !== PromptRole.mask) {
-            if (msg.role === 'assistant') {
-                const assistantMsg: ChatCompletionAssistantMessageParam = {
-                    role: 'assistant',
-                    content: parts as (ChatCompletionContentPartText)[]
-                };
-                others.push(assistantMsg);
-            } else {
-                const userMsg: ChatCompletionUserMessageParam = {
-                    role: 'user',
-                    content: parts
-                };
-                others.push(userMsg);
-            }
+            const inputMsg: EasyInputMessage = {
+                role: msg.role === 'assistant' ? 'assistant' : 'user',
+                content: parts,
+            };
+            others.push(inputMsg);
         }
 
     }
 
     if (opts.result_schema && !opts.useToolForFormatting) {
-        const schemaMsg: ChatCompletionSystemMessageParam = {
+        const schemaMsg: EasyInputMessage = {
             role: "system",
             content: [{
-                type: "text",
+                type: "input_text",
                 text: "IMPORTANT: only answer using JSON, and respecting the schema included below, between the <response_schema> tags. " + `<response_schema>${JSON.stringify(opts.result_schema)}</response_schema>`
             }]
         };
@@ -154,7 +144,7 @@ export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[]
     }
 
     // put system messages first and safety last
-    return ([] as ChatCompletionMessageParam[]).concat(system).concat(others).concat(safety);
+    return ([] as ResponseInputItem[]).concat(system).concat(others).concat(safety);
 
 }
 

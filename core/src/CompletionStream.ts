@@ -70,6 +70,10 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
                                     if (tool.tool_name) {
                                         existing.tool_name = tool.tool_name;
                                     }
+                                    // Update actual ID if provided (OpenAI sends id only in first chunk)
+                                    if ((tool as any)._actual_id) {
+                                        (existing as any)._actual_id = (tool as any)._actual_id;
+                                    }
                                 } else {
                                     // New tool call
                                     accumulatedToolUse.set(tool.id, { ...tool });
@@ -152,9 +156,15 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
         // Convert accumulated tool_use Map to array
         const toolUseArray = accumulatedToolUse.size > 0 ? Array.from(accumulatedToolUse.values()) : undefined;
 
-        // Parse tool_input strings as JSON if needed (streaming sends arguments as string chunks)
+        // Finalize tool calls: restore actual IDs and parse JSON arguments
         if (toolUseArray) {
             for (const tool of toolUseArray) {
+                // Restore actual ID from OpenAI (was stored in _actual_id during streaming)
+                if ((tool as any)._actual_id) {
+                    tool.id = (tool as any)._actual_id;
+                    delete (tool as any)._actual_id;
+                }
+                // Parse tool_input strings as JSON if needed (streaming sends arguments as string chunks)
                 if (typeof tool.tool_input === 'string') {
                     try {
                         tool.tool_input = JSON.parse(tool.tool_input);
