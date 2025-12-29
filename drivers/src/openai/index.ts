@@ -542,11 +542,10 @@ function mapResponseStream(stream: AsyncIterable<OpenAI.Responses.ResponseStream
                     yield {
                         result: textToCompletionResult(event.delta),
                     } satisfies CompletionChunkObject;
-                } else if (event.type === 'response.output_text.done') {
-                    yield {
-                        result: textToCompletionResult(event.text),
-                    } satisfies CompletionChunkObject;
-                } else if (event.type === 'response.completed' || event.type === 'response.incomplete' || event.type === 'response.failed') {
+                }
+                // Note: We don't emit response.output_text.done because the text was already
+                // streamed via delta events. Emitting it again would duplicate the content.
+                else if (event.type === 'response.completed' || event.type === 'response.incomplete' || event.type === 'response.failed') {
                     const finalTools = collectTools(event.response.output);
                     yield {
                         result: [],
