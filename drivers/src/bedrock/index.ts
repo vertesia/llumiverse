@@ -6,13 +6,26 @@ import { BedrockRuntime, ConverseRequest, ConverseResponse, ConverseStreamOutput
 import { S3Client } from "@aws-sdk/client-s3";
 import { AwsCredentialIdentity, Provider } from "@aws-sdk/types";
 import {
-    AbstractDriver, AIModel, Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult,
-    ExecutionOptions, ExecutionTokenUsage, PromptSegment,
-    TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions,
-    BedrockClaudeOptions, BedrockPalmyraOptions, BedrockGptOssOptions, getMaxTokensLimitBedrock, NovaCanvasOptions,
-    modelModalitiesToArray, getModelCapabilities,
+    AbstractDriver, AIModel,
+    BedrockClaudeOptions,
+    BedrockGptOssOptions,
+    BedrockPalmyraOptions,
+    Completion, CompletionChunkObject, DataSource, DriverOptions, EmbeddingsOptions, EmbeddingsResult,
+    ExecutionOptions, ExecutionTokenUsage,
+    getMaxTokensLimitBedrock,
+    getModelCapabilities,
+    modelModalitiesToArray,
+    ModelOptions,
+    NovaCanvasOptions,
+    PromptSegment,
     StatelessExecutionOptions,
-    ModelOptions
+    stripBinaryFromConversation,
+    truncateLargeTextInConversation,
+    deserializeBinaryFromStorage,
+    getConversationMeta,
+    incrementConversationTurn,
+    TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions,
+    CompletionResult
 } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
@@ -22,9 +35,9 @@ import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from ".
 import { forceUploadFile } from "./s3.js";
 import {
     formatTwelvelabsPegasusPrompt,
-    TwelvelabsPegasusRequest,
     TwelvelabsMarengoRequest,
-    TwelvelabsMarengoResponse
+    TwelvelabsMarengoResponse,
+    TwelvelabsPegasusRequest
 } from "./twelvelabs.js";
 
 const supportStreamingCache = new LRUCache<string, boolean>(4096);
@@ -114,7 +127,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             this._executor = new BedrockRuntime({
                 region: this.options.region,
                 credentials: this.options.credentials,
-
             });
         }
         return this._executor;
@@ -350,6 +362,91 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return canStream;
     }
 
+    /**
+     * Build conversation context after streaming completion.
+     * Reconstructs the assistant message from accumulated results and applies stripping.
+     */
+    buildStreamingConversation(
+        prompt: BedrockPrompt,
+        result: unknown[],
+        toolUse: unknown[] | undefined,
+        options: ExecutionOptions
+    ): ConverseRequest | undefined {
+        // Only handle ConverseRequest prompts (not NovaMessagesPrompt or TwelvelabsPegasusRequest)
+        if (options.model.includes("canvas") || options.model.includes("twelvelabs.pegasus")) {
+            return undefined;
+        }
+
+        const conversePrompt = prompt as ConverseRequest;
+        const completionResults = result as CompletionResult[];
+
+        // Convert accumulated results to text content for assistant message
+        const textContent = completionResults
+            .map(r => {
+                switch (r.type) {
+                    case 'text':
+                        return r.value;
+                    case 'json':
+                        return typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
+                    case 'image':
+                        // Skip images in conversation - they're in the result
+                        return '';
+                    default:
+                        return String((r as any).value || '');
+                }
+            })
+            .join('');
+
+        // Deserialize any base64-encoded binary data back to Uint8Array
+        const incomingConversation = deserializeBinaryFromStorage(options.conversation) as ConverseRequest;
+
+        // Start with the conversation from options combined with the prompt
+        let conversation = updateConversation(incomingConversation, conversePrompt);
+
+        // Build assistant message content
+        const messageContent: any[] = [];
+        if (textContent) {
+            messageContent.push({ text: textContent });
+        }
+        // Add tool use blocks if present
+        if (toolUse && toolUse.length > 0) {
+            for (const tool of toolUse as ToolUse[]) {
+                messageContent.push({
+                    toolUse: {
+                        toolUseId: tool.id,
+                        name: tool.tool_name,
+                        input: tool.tool_input,
+                    }
+                });
+            }
+        }
+
+        // Add assistant message
+        const assistantMessage: ConverseRequest = {
+            messages: [{
+                content: messageContent.length > 0 ? messageContent : [{ text: '' }],
+                role: "assistant"
+            }],
+            modelId: conversePrompt.modelId,
+        };
+        conversation = updateConversation(conversation, assistantMessage);
+
+        // Increment turn counter
+        conversation = incrementConversationTurn(conversation) as ConverseRequest;
+
+        // Apply stripping based on options
+        const currentTurn = getConversationMeta(conversation).turnNumber;
+        const stripOptions = {
+            keepForTurns: options.stripImagesAfterTurns ?? Infinity,
+            currentTurn,
+            textMaxTokens: options.stripTextMaxTokens
+        };
+        let processedConversation = stripBinaryFromConversation(conversation, stripOptions);
+        processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+
+        return processedConversation as ConverseRequest;
+    }
+
     async requestTextCompletion(prompt: BedrockPrompt, options: ExecutionOptions): Promise<Completion> {
         // Handle Twelvelabs Pegasus models
         if (options.model.includes("twelvelabs.pegasus")) {
@@ -358,7 +455,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         // Handle other Bedrock models that use Converse API
         const conversePrompt = prompt as ConverseRequest;
-        let conversation = updateConversation(options.conversation as ConverseRequest, conversePrompt);
+
+        // Deserialize any base64-encoded binary data back to Uint8Array before API call
+        const incomingConversation = deserializeBinaryFromStorage(options.conversation) as ConverseRequest;
+        let conversation = updateConversation(incomingConversation, conversePrompt);
 
         const payload = this.preparePayload(conversation, options);
         const executor = this.getExecutor();
@@ -371,6 +471,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             messages: [res.output?.message ?? { content: [{ text: "" }], role: "assistant" }],
             modelId: conversePrompt.modelId,
         });
+
+        // Increment turn counter for deferred stripping
+        conversation = incrementConversationTurn(conversation) as ConverseRequest;
 
         let tool_use: ToolUse[] | undefined = undefined;
         //Get tool requests, we check tool use regardless of finish reason, as you can hit length and still get a valid response.
@@ -389,10 +492,22 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             tool_use = undefined;
         }
 
+        // Strip/serialize binary data based on options.stripImagesAfterTurns
+        const currentTurn = getConversationMeta(conversation).turnNumber;
+        const stripOptions = {
+            keepForTurns: options.stripImagesAfterTurns ?? Infinity,
+            currentTurn,
+            textMaxTokens: options.stripTextMaxTokens
+        };
+        let processedConversation = stripBinaryFromConversation(conversation, stripOptions);
+
+        // Truncate large text content if configured
+        processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+
         const completion = {
             ...this.getExtractedExecution(res, conversePrompt, options),
             original_response: options.include_original_response ? res : undefined,
-            conversation: conversation,
+            conversation: processedConversation,
             tool_use: tool_use,
         };
 
@@ -496,7 +611,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         // Handle other Bedrock models that use Converse API
         const conversePrompt = prompt as ConverseRequest;
-        const payload = this.preparePayload(conversePrompt, options);
+
+        // Include conversation history (same as non-streaming)
+        // Deserialize any base64-encoded binary data back to Uint8Array before API call
+        const incomingConversation = deserializeBinaryFromStorage(options.conversation) as ConverseRequest;
+        const conversation = updateConversation(incomingConversation, conversePrompt);
+
+        const payload = this.preparePayload(conversation, options);
         const executor = this.getExecutor();
         return executor.converseStream({
             ...payload,
@@ -642,22 +763,38 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             prompt.messages = converseJSONprefill(prompt.messages);
         }
 
+        // Clean undefined values from additionalField since AWS Bedrock requires valid JSON
+        // and will throw an exception for unrecognized parameters
+        const cleanedAdditionalFields = removeUndefinedValues(additionalField);
+        const cleanedModelOptions = removeUndefinedValues({
+            maxTokens: model_options.max_tokens,
+            temperature: model_options.temperature,
+            topP: model_options.top_p,
+            stopSequences: model_options.stop_sequence,
+        } satisfies InferenceConfiguration);
+
+        //Construct the final request payload
+        // We only add fields that are defined to avoid AWS errors
         const request: ConverseRequest = {
-            messages: prompt.messages,
-            system: prompt.system,
             modelId: options.model,
-            inferenceConfig: {
-                maxTokens: model_options.max_tokens,
-                temperature: model_options.temperature,
-                topP: model_options.top_p,
-                stopSequences: model_options.stop_sequence,
-            } satisfies InferenceConfiguration,
-            additionalModelRequestFields: {
-                ...additionalField,
-            }
         };
 
-        //Only add tools if they are defined and not empty
+        if (prompt.messages) {
+            request.messages = prompt.messages;
+        }
+
+        if (prompt.system) {
+            request.system = prompt.system;
+        }
+
+        if (Object.keys(cleanedModelOptions).length > 0) {
+            request.inferenceConfig = cleanedModelOptions
+        }
+
+        if (Object.keys(cleanedAdditionalFields).length > 0) {
+            request.additionalModelRequestFields = cleanedAdditionalFields;
+        }
+
         if (tool_defs?.length) {
             request.toolConfig = {
                 tools: tool_defs,
@@ -1085,6 +1222,33 @@ function getToolDefinition(tool: ToolDefinition): Tool.ToolSpecMember {
             }
         }
     }
+}
+
+/**
+ * Recursively removes undefined values from an object.
+ * AWS Bedrock's additionalModelRequestFields must be valid JSON, and undefined is not valid JSON.
+ * Any unrecognized parameters will cause an exception.
+ */
+function removeUndefinedValues<T extends Record<string, any>>(obj: T): Partial<T> {
+    if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) {
+        return obj;
+    }
+
+    const cleaned: any = {};
+    for (const [key, value] of Object.entries(obj)) {
+        if (value !== undefined) {
+            if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+                const cleanedNested = removeUndefinedValues(value);
+                // Only include nested objects if they have properties after cleaning
+                if (Object.keys(cleanedNested).length > 0) {
+                    cleaned[key] = cleanedNested;
+                }
+            } else {
+                cleaned[key] = value;
+            }
+        }
+    }
+    return cleaned;
 }
 
 /**

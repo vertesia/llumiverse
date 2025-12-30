@@ -1,300 +1,223 @@
-# Llumiverse - Universal LLM Connectors for Node.js
+# Llumiverse - The Universal, Lightweight LLM Driver
 
 ![Build](https://github.com/vertesia/llumiverse/actions/workflows/build-and-test.yml/badge.svg)
 [![npm version](https://badge.fury.io/js/%40llumiverse%2Fcore.svg)](https://badge.fury.io/js/%40llumiverse%2Fcore)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
-LLumiverse is a universal interface for interacting with Large Language Models, for the Typescript/Javascript ecosystem. It provides a lightweight modular library for interacting with various LLM models and execution platforms.
+**Llumiverse** is the unified connectivity layer for the Large Language Model ecosystem. It provides a robust, modular, and strongly-typed interface for interacting with almost any AI provider in Node.js, Bun, and TypeScript environments.
 
-It solely focuses on abstracting LLMs and their execution platforms, and does not provide prompt templating, or RAG, or chains, letting you pick the best tool for the job.
+> **Think of it as the "JDBC" or "ODBC" for LLMs.**
 
-The following LLM platforms are supported in the current version:
+It solely focuses on **abstracting the connection and execution protocol**, letting you switch providers with zero code changes. It does **not** enforce prompt templating, rigid chain structures, or "magic" orchestration logic. You build the application; we handle the plumbing.
 
-| Provider | Completion | Chat | Model Listing | Multimodal | Fine-Tuning |
-| --- | :-: | :-: | :-: | :-: | :-: |
-| AWS Bedrock | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Azure OpenAI | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Google Vertex AI | ✅ | ✅ | ✅ | ✅ | By Request |
-| Groq | ✅ | ✅ | ✅ | N/A | N/A |
-| HuggingFace Inference Endpoints | ✅ | ✅ | N/A | N/A | N/A |
-| IBM WatsonX | ✅ | ✅ | ✅ | N/A | By Request |
-| Mistral AI | ✅ | ✅ | ✅ | N/A | By Request |
-| OpenAI | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Replicate | ✅ | ✅ | ✅ | N/A | ✅ |
-| Together AI| ✅ | ✅ | ✅ | N/A | By Request |
+### Why Llumiverse?
 
-New capabilities and platform can easily be added by creating a new driver for the platform.
+*   **🚫 No Vendor Lock-in:** Switch from OpenAI to Vertex AI to Bedrock in minutes.
+*   **🧩 Modular & Lightweight:** Install only what you need. Zero bloat.
+*   **🛡️ Type-Safe:** First-class TypeScript support with normalized interfaces for completion, streaming, and tool use.
+*   **⚡ Universal Support:** Works in Node.js, serverless functions, and Bun.
 
+---
+
+### Supported Platforms
+
+| Provider | Completion | Chat | Streaming | Multimodal | Tool Calling | Embeddings |
+| :--- | :-: | :-: | :-: | :-: | :-: | :-: |
+| **AWS Bedrock** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Azure Foundry** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Azure OpenAI** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Google Vertex AI** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Groq** | ✅ | ✅ | ✅ | N/A | ✅ | N/A |
+| **HuggingFace** | ✅ | ✅ | ✅ | N/A | N/A | N/A |
+| **IBM WatsonX** | ✅ | ✅ | ✅ | N/A | N/A | ✅ |
+| **Mistral AI** | ✅ | ✅ | ✅ | N/A | ✅ | ✅ |
+| **OpenAI** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **OpenAI Compatible** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Replicate** | ✅ | ✅ | ✅ | N/A | N/A | N/A |
+| **Together AI** | ✅ | ✅ | ✅ | N/A | N/A | N/A |
+| **xAI (Grok)** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+---
+
+### Llumiverse vs. The Rest
+
+**Vs. LangChain / LlamaIndex:**
+These are **application frameworks** that provide high-level abstractions for chains, memory, and RAG. Llumiverse is a **driver** library. It operates at a lower level.
+*   *Use Llumiverse if:* You want full control over your prompt logic, you want to build your own custom framework, or you simply need a clean, unified way to call an API without the weight of a massive dependency tree.
+*   *Use LangChain if:* You want pre-built "chains" and are okay with higher complexity and abstraction overhead.
+
+**Vs. Vercel AI SDK:**
+Vercel's SDK is fantastic for frontend/full-stack React/Next.js applications.
+*   *Use Llumiverse if:* You are building backend services, background workers, CLI tools, or generic Node.js applications where frontend-specific hooks aren't relevant. Llumiverse is environment-agnostic.
+
+---
 
 ## Requirements
 
-* node v22+, or bun 1.0+
+* Node.js 18+
+* Bun 1.0+
 
-## Installation 
+## Installation
 
-1. If you want to use llumiverse to execute prompt completion on various supported providers then install `@llumiverse/core` and `@llumiverse/drivers`
-
-```
+**For most use cases (recommended):**
+```bash
 npm install @llumiverse/core @llumiverse/drivers
 ```
 
-2. If you only want to use typescript types or other structures from llumiverse you only need to install `@llumiverse/core`
+*   `@llumiverse/core`: The interfaces, types, and base abstractions.
+*   `@llumiverse/drivers`: The concrete implementations for all supported providers.
 
-```
-npm install @llumiverse/core
-```
+## Quick Start
 
-3. If you want to develop a new llumiverse driver for an unsupported LLM provider you only need to install `@llumiverse/core`
+### 1. Initialize a Driver
 
-```
-npm install @llumiverse/core
-```
+Each driver takes normalized options but may require specific credentials (API keys, regions, project IDs).
 
-## Usage
-
-First, you need to instantiate a driver instance for the target LLM platform you want to interact too. Each driver accepts its own set of parameters when instantiating.
-
-### OpenAI driver
-
-```javascript
+```typescript
+// OpenAI
 import { OpenAIDriver } from "@llumiverse/drivers";
+const driver = new OpenAIDriver({ apiKey: process.env.OPENAI_API_KEY });
 
-// create an instance of the OpenAI driver 
-const driver = new OpenAIDriver({
-    apiKey: "YOUR_OPENAI_API_KEY"
-});
-```
-
-### Bedrock driver
-
-In this example, we will instantiate the Bedrock driver using credentials from the Shared Credentials File (i.e. ~/.aws/credentials).
-Learn more on how to [setup AWS credentials in node](https://docs.aws.amazon.com/sdk-for-javascript/v3/developer-guide/setting-credentials-node.html). 
-
-```javascript
-import { BedrockDriver } from "@llumiverse/drivers";
-
-const driver = new BedrockDriver({
-    region: 'us-west-2'
-});
-```
-
-### VertexAI driver
-
-For the following example to work you need to define a `GOOGLE_APPLICATION_CREDENTIALS` environment variable.
-
-```javascript 
+// Google Vertex AI
 import { VertexAIDriver } from "@llumiverse/drivers";
 const driver = new VertexAIDriver({
-    project: 'YOUR_GCLOUD_PROJECT',
+    project: process.env.GOOGLE_PROJECT_ID,
     region: 'us-central1'
 });
+
+// AWS Bedrock (uses local AWS credentials automatically)
+import { BedrockDriver } from "@llumiverse/drivers";
+const driver = new BedrockDriver({ region: 'us-west-2' });
+
+// ... and many more!
 ```
 
-### Replicate driver
+### 2. Execute a Prompt (Standard)
 
-```javascript
-import { ReplicateDriver } from "@llumiverse/drivers";
+The execution API is normalized. You send a `PromptSegment[]` and get a `Completion` object, regardless of the provider.
 
-const driver = new ReplicateDriver({
-    apiKey: "YOUR_REPLICATE_API_KEY"
-});
-```
+```typescript
+import { PromptRole } from "@llumiverse/core";
 
-### TogetherAI driver
-
-```javascript
-import { TogetherAIDriver } from "@llumiverse/drivers";
-
-const driver = new TogetherAIDriver({
-    apiKey: "YOUR_TOGETHER_AI_API_KEY"
-});
-```
-
-### HuggingFace driver
-
-```javascript
-import { HuggingFaceIEDriver } from "@llumiverse/drivers";
-
-const driver = new HuggingFaceIEDriver({
-    apiKey: "YOUR_HUGGINGFACE_API_KEY",
-    endpoint_url: "YOUR_HUGGINGFACE_ENDPOINT",
-});
-```
-
-### Listing available models
-
-Once you instantiated a driver you can list the available models. Some drivers accept an argument for the `listModel` method to search for matching models. Some drivers like for example `replicate` are listing a preselected set of models. To list other models you need to perform a search by giving a text query as an argument.
-
-In the following example, we are assuming that we have already instantiated a driver, which is available as the `driver` variable.
-
-
-```javascript
-import { AIModel } from "@llumiverse/core";
-
-// instantiate the desired driver
-const driver = createDriverInstance();
-
-// list available models on the target LLM. (some drivers may require a search parameter to discover more models)
-const models: AIModel[] = await driver.listModels();
-
-console.log('# Available Models:');
-for (const model of models) {
-    console.log(`${model.name} [${model.id}]`);
-}
-```
-
-### Execute a prompt 
-
-To execute a prompt we need to create a prompt in the LLumiverse format and pass it to the driver `execute` method. 
-
-The prompt format is very similar to the OpenAI prompt format. It is an array of messages with a `content` and a `role` property. The roles can be any of `"user" | "system" | "assistant" | "safety"`. 
-
-The `safety` role is similar to `system` but has a greater precedence over the other messages. Thus, it will override any `user` or `system` message that is saying something contrary to the `safety` message.
-
-In order to execute a prompt we also need to specify a target model, given a model ID which is known by the target LLM. We may also specify execution options like `temperature`, `max_tokens` etc.
-
-In the following example, we are again assuming that we have already instantiated a driver, which is available as the `driver` variable. 
-
-Also, we are assuming the model ID we want to target is available as the `model` variable. To get a list of the existing models (and their IDs) you can list the model as we shown in the previous example
-
-Here is an example of model IDs depending on the driver type:
-* OpenAI: `gpt-3.5-turbo`
-* Bedrock: `arn:aws:bedrock:us-west-2::foundation-model/cohere.command-text-v14`
-* VertexAI: `text-bison`
-* Replicate: `meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3`
-* TogetherAI: `mistralai/Mistral-7B-instruct-v0.1`
-* HuggingFace: `aws-mistral-7b-instruct-v0-1-015`
-
-
-```javascript
-import { PromptRole, PromptSegment } from "@llumiverse/core";
-
-
-// instantiate the desired driver
-const driver = createDriverInstance();
-const model = "the-model-id"; // change with your desired model ID
-
-// create the prompt.
-const prompt: PromptSegment[] = [
+// 1. Create a generic prompt
+const prompt = [
+    {
+        role: PromptRole.system,
+        content: "You are a helpful coding assistant."
+    },
     {
         role: PromptRole.user,
-        content: 'Please, write a short story about winter in Paris, in no more than 512 characters.'
+        content: "Write a hello world in Python."
     }
-]
+];
 
-// execute a model and wait for the response
-console.log(`\n# Executing prompt on ${model} model: ${prompt}`);
+// 2. Execute against ANY driver
 const response = await driver.execute(prompt, {
-    model,
-    temperature: 0.6,
+    model: "gpt-4o", // or "gemini-1.5-pro", "anthropic.claude-3-sonnet-20240229-v1:0", etc.
+    temperature: 0.7,
     max_tokens: 1024
 });
 
-console.log('\n# LLM response:', response.result)
-console.log('# Response took', response.execution_time, 'ms')
-console.log('# Token usage:', response.token_usage);
+console.log(response.result[0].value);
 ```
 
+### 3. Stream a Response
 
-### Execute a prompt in streaming mode
+Streaming is standardized into an `AsyncIterable`.
 
-In this example, we will execute a prompt and will stream the result to display it on the console as it is returned by the target LLM platform. 
-
-**Note** that some models don't support streaming. In that case, the driver will simulate a streaming using a single chunk of text corresponding to the entire response.
-
-
-```javascript
-import { PromptRole, PromptSegment } from "@llumiverse/core";
-
-// instantiate the desired driver
-const driver = createDriverInstance();
-const model = "the-model-id"; // change with your desired model ID
-
-// create the prompt.
-const prompt: PromptSegment[] = [
-    {
-        role: PromptRole.user,
-        content: 'Please, write a short story about winter in Paris, in no more than 512 characters.'
-    }
-]
-
-// execute the prompt in streaming mode 
-console.log(`\n# Executing prompt on model ${model} in streaming mode: ${prompt}`);
+```typescript
 const stream = await driver.stream(prompt, {
-    model,
-    temperature: 0.6,
-    max_tokens: 1024
+    model: "gpt-4o",
+    temperature: 0.7
 });
 
-// print the streaming response as it comes
 for await (const chunk of stream) {
     process.stdout.write(chunk);
 }
 
-// when the response stream is consumed we can get the final response using stream.completion field.
-const streamingResponse = stream.completion!;
-
-console.log('\n# LLM response:', streamingResponse.result)
-console.log('# Response took', streamingResponse.execution_time, 'ms')
-console.log('# Token usage:', streamingResponse.token_usage);
+// Access the full assembled response afterwards if needed
+console.log("\nFull response:", stream.completion.result[0].value);
 ```
 
-### Generate embeddings
+### 4. Generate Embeddings
 
-LLumiverse drivers expose a method to generate vector embeddings for a given text.
-Drivers supporting embeddings as of v0.10.0 are `bedrock`, `openai`, `vertexai`.
-If embeddings are not yet supported the generateEmbeddings method will throws an error.
+Embeddings are normalized to a simple `{ values: number[] }` structure.
 
-Here is an example on using the `vertexai` driver. For the example to work you need to define a `GOOGLE_APPLICATION_CREDENTIALS` env variable to be able to access your gcloud project
-
-```javascript
-import { VertexAIDriver } from "@llumiverse/drivers";
-
-const driver = new VertexAIDriver({
-    project: 'your-project-id',
-    region: 'us-central1' // your zone
+```typescript
+const embedding = await driver.generateEmbeddings({
+    content: "Llumiverse is awesome."
 });
 
-const r = await vertex.generateEmbeddings({ content: "Hello world!" });
-
-// print the vector
-console.log('Embeddings: ', v.values);
+console.log(embedding.values); // [0.012, -0.34, ...]
 ```
 
-The result object contains the vector as the `values` property, the `model` used to generate the embeddings and an optional `token_count` which if defined is the token count of the input text. 
-Depending on the driver, the result may contain additional properties. 
+## Advanced Features
 
-Also you can specify a specific model to be used or pass other driver supported parameter. 
+### Tool Calling (Function Calling)
 
-**Example:**
+Llumiverse normalizes tool definitions across providers (OpenAI, Bedrock, Vertex, etc.), allowing you to define tools once and use them anywhere.
 
-```javascript
-import { VertexAIDriver } from "@llumiverse/drivers";
+```typescript
+import { ToolDefinition } from "@llumiverse/core";
 
-const driver = new VertexAIDriver({
-    project: 'your-project-id',
-    region: 'us-central1' // your zone
+// 1. Define the tool
+const getWeatherTool: ToolDefinition = {
+    name: "get_weather",
+    description: "Get the current weather in a given location",
+    input_schema: {
+        type: "object",
+        properties: {
+            location: { type: "string" },
+            unit: { type: "string", enum: ["celsius", "fahrenheit"] }
+        },
+        required: ["location"]
+    }
+};
+
+// 2. Execute with tools
+const response = await driver.execute(prompt, {
+    model: "gpt-4o",
+    tools: [getWeatherTool]
 });
 
-const r = await vertex.generateEmbeddings({ 
-    content: "Hello world!", 
-    model: "textembedding-gecko@002",  
-    task_type: "SEMANTIC_SIMILARITY"
-});
-
-// print the vector
-console.log('Embeddings: ', v.values);
+// 3. Handle the tool use
+if (response.tool_use) {
+    for (const tool of response.tool_use) {
+        console.log(`Executing ${tool.tool_name} with args:`, tool.tool_input);
+        // ... call your actual function ...
+    }
+}
 ```
 
-The `task_type` parameter is specific to the [textembedding-gecko model](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/text-embeddings). 
+### Structured Outputs (JSON Schemas)
 
+Enforce a specific JSON structure for the response. Llumiverse handles the schema conversion for the underlying provider (e.g., using `response_format` for OpenAI or equivalent techniques for others).
+
+```typescript
+const schema = {
+    type: "object",
+    properties: {
+        sentiment: { type: "string", enum: ["positive", "neutral", "negative"] },
+        confidence: { type: "number" }
+    },
+    required: ["sentiment", "confidence"]
+};
+
+const response = await driver.execute(prompt, {
+    model: "gpt-4o",
+    result_schema: schema
+});
+
+// The result is automatically parsed
+const data = response.result[0].value;
+console.log(data.sentiment); // "positive"
+```
 
 ## Contributing
 
-Contributions are welcome!
-Please see [CONTRIBUTING.md](https://github.com/vertesia/llumiverse/blob/main/CONTRIBUTING.md) for more details.
-
+We welcome contributions! Whether it's a new driver, a bug fix, or a docs improvement.
+Please see [CONTRIBUTING.md](https://github.com/vertesia/llumiverse/blob/main/CONTRIBUTING.md) for details.
 
 ## License
 
-Llumiverse is licensed under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). Feel free to use it accordingly.
+Apache 2.0

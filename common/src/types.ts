@@ -8,6 +8,7 @@ import { VertexAIOptions } from './options/vertexai.js';
 
 export enum Providers {
     openai = 'openai',
+    openai_compatible = 'openai_compatible',
     azure_openai = 'azure_openai',
     azure_foundry = 'azure_foundry',
     huggingface_ie = 'huggingface_ie',
@@ -17,7 +18,8 @@ export enum Providers {
     togetherai = 'togetherai',
     mistralai = 'mistralai',
     groq = 'groq',
-    watsonx = 'watsonx'
+    watsonx = 'watsonx',
+    xai = 'xai'
 }
 
 export interface ProviderParams {
@@ -113,6 +115,21 @@ export const ProviderList: Record<Providers, ProviderParams> = {
         requiresEndpointUrl: true,
         supportSearch: false
     },
+    xai: {
+        id: Providers.xai,
+        name: "xAI (Grok)",
+        requiresApiKey: true,
+        requiresEndpointUrl: false,
+        supportSearch: false
+    },
+    openai_compatible: {
+        id: Providers.openai_compatible,
+        name: "OpenAI Compatible",
+        requiresApiKey: true,
+        requiresEndpointUrl: true,
+        endpointPlaceholder: "https://api.example.com/v1",
+        supportSearch: false
+    },
 }
 
 // ============== Embeddings ===============
@@ -184,6 +201,11 @@ export interface CompletionChunkObject {
     result: CompletionResult[];
     token_usage?: ExecutionTokenUsage;
     finish_reason?: "stop" | "length" | string;
+    /**
+     * Tool calls returned by the model during streaming.
+     * Each chunk may contain partial tool call information that needs to be aggregated.
+     */
+    tool_use?: ToolUse[];
 }
 
 export interface ToolDefinition {
@@ -202,7 +224,12 @@ export interface ToolDefinition {
 export interface ToolUse<ParamsT = JSONObject> {
     id: string,
     tool_name: string,
-    tool_input: ParamsT | null
+    tool_input: ParamsT | null,
+    /**
+     * Gemini thinking models require thought_signature to be passed back with tool results.
+     * This preserves the model's reasoning state during multi-turn tool use.
+     */
+    thought_signature?: string,
 }
 
 export interface Completion {
@@ -349,6 +376,24 @@ export interface ExecutionOptions extends StatelessExecutionOptions {
      * that can be passed here to restore the context when a new prompt is sent to the model.
      */
     conversation?: unknown | null;
+    /**
+     * Number of turns to keep images in conversation history before stripping them.
+     * - 0 (default): Strip images immediately after each turn
+     * - 1: Keep images for current turn only, strip in next turn
+     * - N: Keep images for N turns before stripping
+     * - undefined: Same as 0, strip immediately
+     *
+     * Images are stripped to prevent JSON.stringify corruption (Uint8Array) and reduce storage bloat (base64).
+     */
+    stripImagesAfterTurns?: number;
+
+    /**
+     * Maximum tokens to keep for text content in tool results.
+     * Text exceeding this limit will be truncated with a "[Content truncated...]" marker.
+     * - undefined/0: No text truncation (default)
+     * - N > 0: Truncate text to approximately N tokens (using ~4 chars/token estimate)
+     */
+    stripTextMaxTokens?: number;
 }
 
 //Common names to share between different models
@@ -446,6 +491,11 @@ export interface PromptSegment {
      * The tool use id if the segment is a tool response
      */
     tool_use_id?: string;
+    /**
+     * Gemini thinking models require thought_signature to be passed back with tool results.
+     * This should be copied from the ToolUse.thought_signature when sending tool responses.
+     */
+    thought_signature?: string;
     files?: DataSource[]
 }
 

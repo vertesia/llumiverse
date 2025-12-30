@@ -140,7 +140,7 @@ export const testPrompt_imageVariations: NovaMessagesPrompt =
         {
             image: {
                 format: "jpeg",
-                source: { bytes: await getImageAsBase64(new ImageUrlSource("https://upload.wikimedia.org/wikipedia/commons/thumb/b/bf/Krakow_-_Kosciol_Mariacki.jpg/1000px-Krakow_-_Kosciol_Mariacki.jpg")), }
+                source: { bytes: await getImageAsBase64(new ImageUrlSource("https://upload.wikimedia.org/wikipedia/commons/b/b5/Mariacki.jpg")), }
             }
         }
         ]

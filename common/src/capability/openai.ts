@@ -1,15 +1,19 @@
 import { ModelModalities } from "../types.js";
 
+// OpenAI model capability type - tool_support_streaming defaults to tool_support for OpenAI models
+type OpenAIModelCapability = { input: ModelModalities; output: ModelModalities; tool_support?: boolean; tool_support_streaming?: boolean };
+
 // Record of OpenAI model capabilities keyed by model ID (lowercased)
-const RECORD_MODEL_CAPABILITIES: Record<string, { input: ModelModalities; output: ModelModalities; tool_support?: boolean }> = {
-    "chatgpt-4o-latest": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: false }
+const RECORD_MODEL_CAPABILITIES: Record<string, OpenAIModelCapability> = {
+    "chatgpt-4o-latest": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true }
 };
 
 // Populate RECORD_FAMILY_CAPABILITIES as a const record (lowest common denominator for each family)
-const RECORD_FAMILY_CAPABILITIES: Record<string, { input: ModelModalities; output: ModelModalities; tool_support?: boolean }> = {
+// For OpenAI, tool_support_streaming matches tool_support since the API supports tools while streaming
+const RECORD_FAMILY_CAPABILITIES: Record<string, OpenAIModelCapability> = {
     "gpt":              { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
     "gpt-3.5":          { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: false },
-    "gpt-4":            { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: false },
+    "gpt-4":            { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
     "gpt-4-turbo":      { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
     "gpt-4o":           { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
     "gpt-4.1":          { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
@@ -49,11 +53,18 @@ function normalizeOpenAIModelName(modelName: string): string {
 /**
  * Get the full ModelCapabilities for an OpenAI model.
  * Checks RECORD_MODEL_CAPABILITIES first, then falls back to pattern-based inference.
+ * For OpenAI models, tool_support_streaming defaults to tool_support since the API supports tools while streaming.
  */
-export function getModelCapabilitiesOpenAI(model: string): { input: ModelModalities; output: ModelModalities; tool_support?: boolean } {
+export function getModelCapabilitiesOpenAI(model: string): { input: ModelModalities; output: ModelModalities; tool_support?: boolean; tool_support_streaming?: boolean } {
     const normalized = normalizeOpenAIModelName(model);
     const record = RECORD_MODEL_CAPABILITIES[normalized];
-    if (record) return record;
+    if (record) {
+        // Default tool_support_streaming to tool_support for OpenAI models
+        return {
+            ...record,
+            tool_support_streaming: record.tool_support_streaming ?? record.tool_support
+        };
+    }
     let bestFamilyKey = undefined;
     let bestFamilyLength = 0;
     for (const key of Object.keys(RECORD_FAMILY_CAPABILITIES)) {
@@ -63,7 +74,12 @@ export function getModelCapabilitiesOpenAI(model: string): { input: ModelModalit
         }
     }
     if (bestFamilyKey) {
-        return RECORD_FAMILY_CAPABILITIES[bestFamilyKey];
+        const family = RECORD_FAMILY_CAPABILITIES[bestFamilyKey];
+        // Default tool_support_streaming to tool_support for OpenAI models
+        return {
+            ...family,
+            tool_support_streaming: family.tool_support_streaming ?? family.tool_support
+        };
     }
     const input: ModelModalities = {
         text: modelMatches(normalized, TEXT_INPUT_MODELS) || undefined,
@@ -80,5 +96,6 @@ export function getModelCapabilitiesOpenAI(model: string): { input: ModelModalit
         embed: modelMatches(normalized, EMBEDDING_OUTPUT_MODELS) || undefined
     };
     const tool_support = modelMatches(normalized, TOOL_SUPPORT_MODELS) || undefined;
-    return { input, output, tool_support };
+    // Default tool_support_streaming to tool_support for OpenAI models
+    return { input, output, tool_support, tool_support_streaming: tool_support };
 }
