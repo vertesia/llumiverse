@@ -1,0 +1,123 @@
+name: code-sync
+
+on:
+  push:
+    branches:
+      - preview
+  workflow_dispatch: # mainly for testing
+    inputs:
+      from_branch:
+        description: "From which branch to sync code with main"
+        required: true
+        default: "preview"
+      from_sha:
+        description: "From which commit SHA to sync code with main"
+        required: false
+        default: ""
+
+env:
+  FROM_BRANCH: ${{ inputs.from_branch || github.ref_name }}
+
+permissions:
+  contents: write # required for pushing changes to the repository
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      sync_ref: ${{ steps.sync.outputs.SYNC_REF }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all because we need to access info from different branches
+          fetch-tags: false
+
+      - name: Code Sync
+        id: sync
+        run: |
+          export SOURCE_REF="${{ env.FROM_BRANCH }}"
+          export SOURCE_SHA="$(git rev-parse 'origin/${{ env.FROM_BRANCH }}')"
+          export SOURCE_MSG="$(git log --format="%cd: %s by %an" --date=short -1 $SOURCE_SHA)"
+
+          export TARGET_REF="main"
+          export TARGET_SHA="$(git rev-parse origin/main)"
+          export TARGET_MSG="$(git log --format="%cd: %s by %an" --date=short -1 $TARGET_SHA)"
+
+          export TEMP_BRANCH="sync-${SOURCE_SHA::7}"
+
+          cat << EOF >> $GITHUB_STEP_SUMMARY
+          Type   | Item      | Value
+          :----- | :-------- | :---------------
+          Source | commit    | ${SOURCE_MSG}
+          Source | ref       | \`${SOURCE_REF}\` ([\`${SOURCE_SHA}\`](https://github.com/${{ github.repository }}/commit/${SOURCE_SHA}))
+          Target | commit    | ${TARGET_MSG}
+          Target | ref       | \`${TARGET_REF}\` ([\`${TARGET_SHA}\`](https://github.com/${{ github.repository }}/commit/${TARGET_SHA}))
+          Other  | branch    | \`${TEMP_BRANCH}\`
+          EOF
+
+          bash .github/bin/sync-code.sh
+          is_sync_success=$?
+
+          if [ $is_sync_success -eq 0 ]; then
+            echo "Code sync successful. Pushing changes to the repository."
+            git push origin $TEMP_BRANCH
+            echo "SYNC_REF=${TEMP_BRANCH}" >> $GITHUB_OUTPUT
+          else
+            echo "Code sync failed. Please check the logs for details."
+            exit 1
+          fi
+
+  # TODO: Add tests for the synced code
+
+  push:
+    needs:
+      - sync
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all because we need to access info from different branches
+          fetch-tags: false
+          ref: ${{ needs.sync.outputs.sync_ref }}
+          # ssh-key: ${{ secrets.DEPLOY_KEY }} # Use deploy key to bypass branch protection rules
+
+      - name: Push changes to main branch
+        run: |
+          set -x
+
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+
+          git checkout main
+
+          # note: --ff-only ensures that the merge will only succeed if it can be fast-forwarded. This avoids creating
+          # a merge commit and keeps the history clean. If failed, user should trigger the workflow again, or resolving
+          # conflicts and then sync manually.
+          git merge --ff-only --no-edit ${{ needs.sync.outputs.sync_ref }}
+
+          git push origin main
+
+  cleanup:
+    runs-on: ubuntu-latest
+    needs:
+      - sync
+      - push
+    # Always run cleanup, even if previous jobs failed. For example, if the tests fail or the push
+    # is not fast-forward, we still want to clean up the temporary branch.
+    if: ${{ always() }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all because we need to access info from different branches
+          fetch-tags: false
+
+      - name: Cleanup temporary branch
+        run: |
+          set -x
+
+          TEMP_BRANCH="${{ needs.sync.outputs.sync_ref }}"
+          git branch -D "$TEMP_BRANCH" || true # Ignore if branch does not exist
+          git push origin --delete "$TEMP_BRANCH" || true # Ignore if branch does not exist
