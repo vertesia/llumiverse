@@ -54,8 +54,8 @@ Vercel's SDK is fantastic for frontend/full-stack React/Next.js applications.
 
 ## Requirements
 
-* Node.js 18+
-* Bun 1.0+
+* Node.js 22+
+* Bun 1.0+ (experimental support)
 
 ## Installation
 
