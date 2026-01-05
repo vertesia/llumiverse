@@ -3,6 +3,8 @@
  * Supports batch inference and embeddings across multiple providers.
  */
 
+import { ModelOptions, Providers } from "./types.js";
+
 // ============== Batch Job Status ===============
 
 /**
@@ -37,27 +39,46 @@ export enum BatchJobType {
 // ============== Batch Job Source/Destination ===============
 
 /**
- * Source configuration for batch input data.
- * Supports GCS and BigQuery sources.
+ * Base batch source - flexible for all providers.
+ * Use this at API boundaries when provider is unknown.
  */
-export interface BatchJobSource {
+export interface BatchSource {
+    [key: string]: any;
+}
+
+/**
+ * Source configuration for batch input data.
+ * Supports GCS, BigQuery, and inline sources.
+ */
+export interface GCSBatchSource extends BatchSource {
     /** GCS URIs for input JSONL files */
     gcsUris?: string[];
     /** BigQuery table URI for input data */
     bigqueryUri?: string;
+    /** Inline requests (for testing or small batches) */
+    inlinedRequests?: any[];
+}
+
+/**
+ * Base batch destination - flexible for all providers.
+ * Use this at API boundaries when provider is unknown.
+ */
+export interface BatchDestination {
+    [key: string]: any;
 }
 
 /**
  * Destination configuration for batch output data.
- * Supports GCS and BigQuery destinations.
+ * Supports GCS, BigQuery, and inline destinations.
  */
-export interface BatchJobDestination {
+export interface GCSBatchDestination extends BatchDestination {
     /** GCS URI prefix for output files */
     gcsUri?: string;
     /** BigQuery table URI for output data */
     bigqueryUri?: string;
+    /** Inline destination (results returned directly, for testing) */
+    inline?: boolean;
 }
-
 // ============== Batch Job Error & Stats ===============
 
 /**
@@ -90,21 +111,13 @@ export interface BatchJobStats {
  * Main batch job interface representing a batch processing job.
  * This is the unified representation returned by all batch operations.
  */
-export interface BatchJob {
+export interface BatchJob<T, U> extends CreateBatchJobOptions<T, U> {
     /** Unique job identifier (provider-generated) */
     id: string;
     /** Human-readable display name */
     displayName?: string;
     /** Current job status */
     status: BatchJobStatus;
-    /** Type of batch operation */
-    type: BatchJobType;
-    /** Model used for the batch job */
-    model: string;
-    /** Source configuration */
-    source: BatchJobSource;
-    /** Destination configuration */
-    destination?: BatchJobDestination;
     /** Job creation timestamp */
     createdAt?: Date;
     /** Job completion timestamp */
@@ -114,7 +127,7 @@ export interface BatchJob {
     /** Job statistics */
     stats?: BatchJobStats;
     /** Provider identifier (e.g., "vertexai", "openai") */
-    provider: string;
+    provider: Providers;
     /** Original provider-specific job ID/name */
     providerJobId?: string;
 }
@@ -124,19 +137,19 @@ export interface BatchJob {
 /**
  * Options for creating a new batch job.
  */
-export interface CreateBatchJobOptions {
+export interface CreateBatchJobOptions<T, U> {
     /** Model to use for the batch job */
     model: string;
     /** Type of batch operation */
     type: BatchJobType;
-    /** Source configuration for input data */
-    source: BatchJobSource;
-    /** Destination configuration for output data */
-    destination: BatchJobDestination;
     /** Optional display name for the job */
     displayName?: string;
     /** Model-specific options/parameters */
-    modelOptions?: Record<string, unknown>;
+    modelOptions?: ModelOptions;
+    /** Source configuration for input data */
+    source: T;
+    /** Destination configuration for output data, must be specified if request is not inline */
+    destination?: U;
 }
 
 /**
@@ -154,9 +167,9 @@ export interface ListBatchJobsOptions {
 /**
  * Result from listing batch jobs.
  */
-export interface ListBatchJobsResult {
+export interface ListBatchJobsResult<T, U> {
     /** List of batch jobs */
-    jobs: BatchJob[];
+    jobs: BatchJob<T, U>[];
     /** Token for next page (if more results exist) */
     nextPageToken?: string;
 }

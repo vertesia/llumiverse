@@ -8,8 +8,11 @@ import {
     BatchJob,
     BatchJobType,
     CreateBatchJobOptions,
+    GCSBatchDestination,
+    GCSBatchSource,
     ListBatchJobsOptions,
     ListBatchJobsResult,
+    Providers,
 } from "@llumiverse/common";
 import { VertexAIDriver } from "../index.js";
 import {
@@ -33,7 +36,7 @@ export const DEFAULT_MULTIMODAL_EMBEDDING_MODEL = "multimodalembedding@001";
 /**
  * Maps a Google GenAI SDK BatchJob to our unified BatchJob type for embeddings.
  */
-function mapEmbeddingsBatchJob(sdkJob: SDKBatchJob): BatchJob {
+function mapEmbeddingsBatchJob(sdkJob: SDKBatchJob): BatchJob<GCSBatchSource, GCSBatchDestination> {
     const providerJobId = sdkJob.name || "";
 
     return {
@@ -72,7 +75,7 @@ function mapEmbeddingsBatchJob(sdkJob: SDKBatchJob): BatchJob {
                     ? sdkJob.completionStats.failedCount
                     : parseInt(String(sdkJob.completionStats.failedCount || 0), 10)),
         } : undefined,
-        provider: "vertexai",
+        provider: Providers.vertexai,
         providerJobId,
     };
 }
@@ -88,8 +91,8 @@ function mapEmbeddingsBatchJob(sdkJob: SDKBatchJob): BatchJob {
  */
 export async function createEmbeddingsBatchJob(
     driver: VertexAIDriver,
-    options: CreateBatchJobOptions
-): Promise<BatchJob> {
+    options: CreateBatchJobOptions<GCSBatchSource, GCSBatchDestination>
+): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>> {
     const client = driver.getGoogleGenAIClient(undefined, "GEMINI");
 
     // Validate required fields
@@ -136,7 +139,7 @@ export async function createEmbeddingsBatchJob(
 export async function getEmbeddingsBatchJob(
     driver: VertexAIDriver,
     providerJobId: string
-): Promise<BatchJob> {
+): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>> {
     return getGeminiBatchJob(driver, providerJobId, BatchJobType.embeddings);
 }
 
@@ -148,7 +151,7 @@ export async function getEmbeddingsBatchJob(
 export async function listEmbeddingsBatchJobs(
     driver: VertexAIDriver,
     options?: ListBatchJobsOptions
-): Promise<ListBatchJobsResult> {
+): Promise<ListBatchJobsResult<GCSBatchSource, GCSBatchDestination>> {
     return listGeminiBatchJobs(driver, options, BatchJobType.embeddings);
 }
 
@@ -158,7 +161,7 @@ export async function listEmbeddingsBatchJobs(
 export async function cancelEmbeddingsBatchJob(
     driver: VertexAIDriver,
     providerJobId: string
-): Promise<BatchJob> {
+): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>> {
     return cancelGeminiBatchJob(driver, providerJobId, BatchJobType.embeddings);
 }
 

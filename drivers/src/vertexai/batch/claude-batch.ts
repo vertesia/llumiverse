@@ -7,8 +7,11 @@ import {
     BatchJob,
     BatchJobType,
     CreateBatchJobOptions,
+    GCSBatchDestination,
+    GCSBatchSource,
     ListBatchJobsOptions,
     ListBatchJobsResult,
+    Providers,
 } from "@llumiverse/common";
 import { VertexAIDriver } from "../index.js";
 import {
@@ -38,7 +41,7 @@ function extractClaudeModelName(model: string): string {
 /**
  * Maps a Claude batch job response to our unified BatchJob type.
  */
-function mapClaudeBatchJob(response: ClaudeBatchJobResponse): BatchJob {
+function mapClaudeBatchJob(response: ClaudeBatchJobResponse): BatchJob<GCSBatchSource, GCSBatchDestination> {
     const providerJobId = response.name;
 
     return {
@@ -70,7 +73,7 @@ function mapClaudeBatchJob(response: ClaudeBatchJobResponse): BatchJob {
                 (parseInt(response.completionStats.failedCount, 10) || 0) +
                 (parseInt(response.completionStats.incompleteCount || "0", 10) || 0),
         } : undefined,
-        provider: "vertexai",
+        provider: Providers.vertexai,
         providerJobId,
     };
 }
@@ -80,8 +83,8 @@ function mapClaudeBatchJob(response: ClaudeBatchJobResponse): BatchJob {
  */
 export async function createClaudeBatchJob(
     driver: VertexAIDriver,
-    options: CreateBatchJobOptions
-): Promise<BatchJob> {
+    options: CreateBatchJobOptions<GCSBatchSource, GCSBatchDestination>
+): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>> {
     const client = driver.getFetchClient();
 
     // Validate required fields
@@ -121,7 +124,7 @@ export async function createClaudeBatchJob(
                 ? { outputUri: options.destination.bigqueryUri }
                 : undefined,
         },
-        modelParameters: options.modelOptions,
+        //modelParameters: options.modelOptions,  //TODO: support model parameters
     };
 
     const response = await client.post("/batchPredictionJobs", {
@@ -138,7 +141,7 @@ export async function createClaudeBatchJob(
 export async function getClaudeBatchJob(
     driver: VertexAIDriver,
     providerJobId: string
-): Promise<BatchJob> {
+): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>> {
     const client = driver.getFetchClient();
 
     // The providerJobId is expected to be the full path like:
@@ -177,7 +180,7 @@ function extractJobPath(providerJobId: string): string {
 export async function listClaudeBatchJobs(
     driver: VertexAIDriver,
     options?: ListBatchJobsOptions
-): Promise<ListBatchJobsResult> {
+): Promise<ListBatchJobsResult<GCSBatchSource,GCSBatchDestination>> {
     const client = driver.getFetchClient();
 
     // Build query parameters
@@ -214,7 +217,7 @@ export async function listClaudeBatchJobs(
 export async function cancelClaudeBatchJob(
     driver: VertexAIDriver,
     providerJobId: string
-): Promise<BatchJob> {
+): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>> {
     const client = driver.getFetchClient();
 
     const jobPath = extractJobPath(providerJobId);

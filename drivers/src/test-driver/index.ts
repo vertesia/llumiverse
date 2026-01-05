@@ -11,7 +11,7 @@ export enum TestDriverModels {
     validationError = "validation-error",
 }
 
-export class TestDriver implements Driver<PromptSegment[]> {
+export class TestDriver implements Driver<PromptSegment[], any, any> {
     provider = "test";
 
     createTrainingPrompt(): Promise<string> {
@@ -89,16 +89,16 @@ export class TestDriver implements Driver<PromptSegment[]> {
     }
 
     // Batch operations - not implemented for test driver
-    createBatchJob(_options: CreateBatchJobOptions): Promise<BatchJob> {
+    createBatchJob(_options: CreateBatchJobOptions<any, any>): Promise<BatchJob<any, any>> {
         throw new Error("Method not implemented.");
     }
-    getBatchJob(_jobId: string): Promise<BatchJob> {
+    getBatchJob(_jobId: string): Promise<BatchJob<any, any>> {
         throw new Error("Method not implemented.");
     }
-    listBatchJobs(_options?: ListBatchJobsOptions): Promise<ListBatchJobsResult> {
+    listBatchJobs(_options?: ListBatchJobsOptions): Promise<ListBatchJobsResult<any, any>> {
         throw new Error("Method not implemented.");
     }
-    cancelBatchJob(_jobId: string): Promise<BatchJob> {
+    cancelBatchJob(_jobId: string): Promise<BatchJob<any, any>> {
         throw new Error("Method not implemented.");
     }
     deleteBatchJob(_jobId: string): Promise<void> {

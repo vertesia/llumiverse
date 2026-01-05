@@ -26,6 +26,8 @@ import {
     getConversationMeta,
     incrementConversationTurn,
     unwrapConversationArray,
+    GCSBatchDestination,
+    GCSBatchSource,
 } from "@llumiverse/core";
 import { FetchClient } from "@vertesia/api-fetch-client";
 import { AuthClient, GoogleAuth, GoogleAuthOptions } from "google-auth-library";
@@ -76,7 +78,11 @@ export function trimModelName(model: string) {
     return i > -1 ? model.substring(0, i) : model;
 }
 
-export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, VertexAIPrompt> {
+export class VertexAIDriver extends AbstractDriver<
+    VertexAIDriverOptions,
+    VertexAIPrompt,
+    GCSBatchSource,
+    GCSBatchDestination> {
     static PROVIDER = "vertexai";
     provider = VertexAIDriver.PROVIDER;
 
@@ -741,7 +747,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
      * });
      * ```
      */
-    async createBatchJob(options: CreateBatchJobOptions): Promise<BatchJob> {
+    async createBatchJob(options: CreateBatchJobOptions<GCSBatchSource, GCSBatchDestination>): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>> {
         // Route to appropriate implementation
         if (options.type === BatchJobType.embeddings) {
             return createEmbeddingsBatchJob(this, options);
@@ -757,7 +763,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
      * Gets a batch job by ID.
      * The job ID encodes the provider for routing (e.g., "gemini:...", "claude:...").
      */
-    async getBatchJob(jobId: string): Promise<BatchJob> {
+    async getBatchJob(jobId: string): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>> {
         const { provider, providerJobId } = decodeBatchJobId(jobId);
         switch (provider) {
             case "claude":
@@ -773,7 +779,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     /**
      * Lists batch jobs from all providers (Gemini and Claude).
      */
-    async listBatchJobs(options?: ListBatchJobsOptions): Promise<ListBatchJobsResult> {
+    async listBatchJobs(options?: ListBatchJobsOptions): Promise<ListBatchJobsResult<GCSBatchSource, GCSBatchDestination>> {
         const [geminiResult, claudeResult] = await Promise.all([
             listGeminiBatchJobs(this, options),
             listClaudeBatchJobs(this, options).catch(() => ({ jobs: [], nextPageToken: undefined })),
@@ -788,7 +794,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     /**
      * Cancels a running batch job.
      */
-    async cancelBatchJob(jobId: string): Promise<BatchJob> {
+    async cancelBatchJob(jobId: string): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>> {
         const { provider, providerJobId } = decodeBatchJobId(jobId);
         switch (provider) {
             case "claude":
@@ -830,7 +836,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         jobId: string,
         pollIntervalMs: number = 30000,
         maxWaitMs: number = 24 * 60 * 60 * 1000
-    ): Promise<BatchJob> {
+    ): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>> {
         const startTime = Date.now();
 
         while (true) {

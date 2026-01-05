@@ -9,8 +9,11 @@ import {
     BatchJobStatus,
     BatchJobType,
     CreateBatchJobOptions,
+    GCSBatchDestination,
+    GCSBatchSource,
     ListBatchJobsOptions,
     ListBatchJobsResult,
+    Providers,
 } from "@llumiverse/common";
 import { VertexAIDriver } from "../index.js";
 import { encodeBatchJobId, mapGeminiJobState } from "./types.js";
@@ -18,7 +21,7 @@ import { encodeBatchJobId, mapGeminiJobState } from "./types.js";
 /**
  * Maps a Google GenAI SDK BatchJob to our unified BatchJob type.
  */
-function mapGeminiBatchJob(sdkJob: SDKBatchJob, type: BatchJobType = BatchJobType.inference): BatchJob {
+function mapGeminiBatchJob(sdkJob: SDKBatchJob, type: BatchJobType = BatchJobType.inference): BatchJob<GCSBatchSource, GCSBatchDestination> {
     const providerJobId = sdkJob.name || "";
 
     return {
@@ -57,7 +60,7 @@ function mapGeminiBatchJob(sdkJob: SDKBatchJob, type: BatchJobType = BatchJobTyp
                     ? sdkJob.completionStats.failedCount
                     : parseInt(String(sdkJob.completionStats.failedCount || 0), 10)),
         } : undefined,
-        provider: "vertexai",
+        provider: Providers.vertexai,
         providerJobId,
     };
 }
@@ -67,8 +70,8 @@ function mapGeminiBatchJob(sdkJob: SDKBatchJob, type: BatchJobType = BatchJobTyp
  */
 export async function createGeminiBatchJob(
     driver: VertexAIDriver,
-    options: CreateBatchJobOptions
-): Promise<BatchJob> {
+    options: CreateBatchJobOptions<GCSBatchSource, GCSBatchDestination>
+): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>> {
     const client = driver.getGoogleGenAIClient();
 
     // Validate required fields
@@ -108,7 +111,7 @@ export async function getGeminiBatchJob(
     driver: VertexAIDriver,
     providerJobId: string,
     type: BatchJobType = BatchJobType.inference
-): Promise<BatchJob> {
+): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>>{
     const client = driver.getGoogleGenAIClient();
 
     const batchJob = await client.batches.get({ name: providerJobId });
@@ -123,7 +126,7 @@ export async function listGeminiBatchJobs(
     driver: VertexAIDriver,
     options?: ListBatchJobsOptions,
     type: BatchJobType = BatchJobType.inference
-): Promise<ListBatchJobsResult> {
+): Promise<ListBatchJobsResult<GCSBatchSource, GCSBatchDestination>> {
     const client = driver.getGoogleGenAIClient();
 
     const pager = await client.batches.list({
@@ -133,7 +136,7 @@ export async function listGeminiBatchJobs(
         },
     });
 
-    const jobs: BatchJob[] = [];
+    const jobs: BatchJob<GCSBatchSource, GCSBatchDestination>[] = [];
     for await (const job of pager) {
         jobs.push(mapGeminiBatchJob(job, type));
         // If we've reached the page size, stop iterating
@@ -157,7 +160,7 @@ export async function cancelGeminiBatchJob(
     driver: VertexAIDriver,
     providerJobId: string,
     type: BatchJobType = BatchJobType.inference
-): Promise<BatchJob> {
+): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>> {
     const client = driver.getGoogleGenAIClient();
 
     await client.batches.cancel({ name: providerJobId });
