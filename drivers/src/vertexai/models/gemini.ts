@@ -5,13 +5,20 @@ import {
 } from "@google/genai";
 import {
     AIModel, Completion, CompletionChunkObject, CompletionResult, ExecutionOptions,
-    ExecutionTokenUsage, getMaxTokensLimitVertexAi, JSONObject, JSONSchema, ModelType, PromptOptions, PromptRole,
-    PromptSegment, readStreamAsBase64, StatelessExecutionOptions, ToolDefinition, ToolUse,
-    VertexAIGeminiOptions, stripBase64ImagesFromConversation, truncateLargeTextInConversation,
-    getConversationMeta, incrementConversationTurn, unwrapConversationArray
+    ExecutionTokenUsage,
+    getConversationMeta,
+    getMaxTokensLimitVertexAi,
+    incrementConversationTurn,
+    JSONObject, JSONSchema, ModelType, PromptOptions, PromptRole,
+    PromptSegment, readStreamAsBase64, StatelessExecutionOptions,
+    stripBase64ImagesFromConversation,
+    ToolDefinition, ToolUse,
+    truncateLargeTextInConversation,
+    unwrapConversationArray,
+    VertexAIGeminiOptions
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
-import { VertexAIDriver, GenerateContentPrompt } from "../index.js";
+import { GenerateContentPrompt, VertexAIDriver } from "../index.js";
 import { ModelDefinition } from "../models.js";
 
 function supportsStructuredOutput(options: PromptOptions): boolean {
@@ -552,7 +559,7 @@ function geminiThinkingConfig(option: StatelessExecutionOptions): ThinkingConfig
     const model_options = option.model_options as VertexAIGeminiOptions | undefined;
     const include_thoughts = model_options?.include_thoughts ?? false;
     if (model_options?.thinking_budget_tokens) {
-        return {includeThoughts: include_thoughts, thinkingBudget: model_options.thinking_budget_tokens};
+        return { includeThoughts: include_thoughts, thinkingBudget: model_options.thinking_budget_tokens };
     }
 
     // Set minimum thinking level by default.
@@ -655,14 +662,29 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 // File content handling
                 if (msg.files) {
                     for (const f of msg.files) {
-                        const stream = await f.getStream();
-                        const data = await readStreamAsBase64(stream);
-                        parts.push({
-                            inlineData: {
-                                data,
-                                mimeType: f.mime_type
-                            }
-                        });
+                        const fileUrl = await f.getURL();                     
+                        const isGsUrl = fileUrl.startsWith('gs://');
+
+                        if (isGsUrl) {
+                            parts.push({
+                                fileData: {
+                                    fileUri: fileUrl,
+                                    mimeType: f.mime_type
+                                }
+                            });
+                        } else {
+                            // Inline data handling
+                            const stream = await f.getStream();
+                            // 50MB limit, Model limit is 20MB, setting higher to avoid teething troubles
+                            const data = await readStreamAsBase64(stream, 50 * 1024 * 1024); 
+                            _driver.logger.debug(`[GeminiModelDefinition] Inlining data for file ${f.name}, mimeType: ${f.mime_type}, size (mb): ${data.length /1024/1024}`);
+                            parts.push({
+                                inlineData: {
+                                    data,
+                                    mimeType: f.mime_type
+                                }
+                            });
+                        }
                     }
                 }
 
@@ -925,6 +947,33 @@ function getToolFunction(tool: ToolDefinition): FunctionDeclaration {
     };
 }
 
+/**
+ * Convert GCS HTTPS URL to gs:// URI format
+ * @param httpsUrl - HTTPS URL like https://storage.googleapis.com/bucket/path
+ * @returns GCS URI like gs://bucket/path
+ */
+// function convertGCSHttpToUri(httpsUrl: string): string {
+//     try {
+//         const url = new URL(httpsUrl);
+//         if (url.hostname === 'storage.googleapis.com') {
+//             // URL format: https://storage.googleapis.com/bucket/path/to/file
+//             const pathParts = url.pathname.split('/').filter(p => p);
+//             if (pathParts.length >= 2) {
+//                 const bucket = pathParts[0];
+//                 const path = pathParts.slice(1).join('/');
+//                 return `gs://${bucket}/${path}`;
+//             }
+//         } else if (url.hostname.endsWith('.storage.googleapis.com')) {
+//             // URL format: https://bucket.storage.googleapis.com/path/to/file
+//             const bucket = url.hostname.split('.')[0];
+//             const path = url.pathname.slice(1); // Remove leading /
+//             return `gs://${bucket}/${path}`;
+//         }
+//     } catch (err) {
+//         // If URL parsing fails, return as-is
+//     }
+//     return httpsUrl;
+// }
 
 /**
  * Update the conversation messages
@@ -938,6 +987,7 @@ function updateConversation(conversation: unknown, prompt: Content[]): Content[]
     const convArray = unwrapped ?? (conversation as Content[] || []);
     return convArray.concat(prompt);
 }
+
 /**
  *
  * Gemini supports JSON output in the response. so we test if the response is a valid JSON object. otherwise we treat the response as a string.
