@@ -99,27 +99,35 @@ export async function createEmbeddingsBatchJob(
     if (!options.source) {
         throw new Error("Batch job requires source configuration");
     }
-    if (!options.source.gcsUris?.length && !options.source.bigqueryUri) {
-        throw new Error("Batch job requires either gcsUris or bigqueryUri in source");
+    if (!options.source.gcsUris?.length && !options.source.bigqueryUri && !options.source.inlinedRequests?.length) {
+        throw new Error("Batch job requires either gcsUris, bigqueryUri, or inlinedRequests in source");
     }
     // Note: destination validation is less strict for embeddings as SDK may auto-generate
 
     // Default to gemini-embedding-001 if no model specified
     const model = options.model || DEFAULT_TEXT_EMBEDDING_MODEL;
 
-    // Note: createEmbeddings API is experimental and has limited source options
-    // It supports fileName (for file uploads) or inlinedRequests
-    // For GCS-based batch embeddings, we may need to use the standard batches.create
-    // For now, use the file-based approach which is more common for large batches
+    // Note: createEmbeddings API is experimental
+    // It supports fileName (for file uploads), inlinedRequests, or GCS URIs
     let batchJob: SDKBatchJob;
     try {
+        // Build source configuration based on what's provided
+        const src: any = {};
+
+        if (options.source.inlinedRequests?.length) {
+            // Use inline requests for testing or small batches
+            src.inlinedRequests = options.source.inlinedRequests;
+        } else if (options.source.gcsUris?.length) {
+            // Use fileName for GCS-based input
+            src.fileName = options.source.gcsUris[0];
+        } else if (options.source.bigqueryUri) {
+            // Note: BigQuery may not be directly supported, may need alternative approach
+            src.bigqueryUri = options.source.bigqueryUri;
+        }
+
         batchJob = await client.batches.createEmbeddings({
             model,
-            src: {
-                // The SDK expects fileName for file-based input
-                // If using GCS, upload the file first and pass the file name
-                fileName: options.source.gcsUris?.[0],
-            },
+            src,
             config: {
                 displayName: options.displayName,
             },
