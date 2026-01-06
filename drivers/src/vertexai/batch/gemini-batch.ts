@@ -72,7 +72,7 @@ export async function createGeminiBatchJob(
     driver: VertexAIDriver,
     options: CreateBatchJobOptions<GCSBatchSource, GCSBatchDestination>
 ): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>> {
-    const client = driver.getGoogleGenAIClient();
+    const client = await driver.getGoogleGenAIClient();
 
     // Validate required fields
     if (!options.source) {
@@ -112,7 +112,7 @@ export async function getGeminiBatchJob(
     providerJobId: string,
     type: BatchJobType = BatchJobType.inference
 ): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>>{
-    const client = driver.getGoogleGenAIClient();
+    const client = await driver.getGoogleGenAIClient();
 
     const batchJob = await client.batches.get({ name: providerJobId });
 
@@ -127,7 +127,7 @@ export async function listGeminiBatchJobs(
     options?: ListBatchJobsOptions,
     type: BatchJobType = BatchJobType.inference
 ): Promise<ListBatchJobsResult<GCSBatchSource, GCSBatchDestination>> {
-    const client = driver.getGoogleGenAIClient();
+    const client = await driver.getGoogleGenAIClient();
 
     const pager = await client.batches.list({
         config: {
@@ -161,7 +161,7 @@ export async function cancelGeminiBatchJob(
     providerJobId: string,
     type: BatchJobType = BatchJobType.inference
 ): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>> {
-    const client = driver.getGoogleGenAIClient();
+    const client = await driver.getGoogleGenAIClient();
 
     await client.batches.cancel({ name: providerJobId });
 
@@ -176,7 +176,7 @@ export async function deleteGeminiBatchJob(
     driver: VertexAIDriver,
     providerJobId: string
 ): Promise<void> {
-    const client = driver.getGoogleGenAIClient();
+    const client = await driver.getGoogleGenAIClient();
 
     await client.batches.delete({ name: providerJobId });
 }

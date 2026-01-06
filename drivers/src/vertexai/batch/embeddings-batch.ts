@@ -93,7 +93,7 @@ export async function createEmbeddingsBatchJob(
     driver: VertexAIDriver,
     options: CreateBatchJobOptions<GCSBatchSource, GCSBatchDestination>
 ): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>> {
-    const client = driver.getGoogleGenAIClient(undefined, "GEMINI");
+    const client = await driver.getGoogleGenAIClient(undefined, "GEMINI");
 
     // Validate required fields
     if (!options.source) {

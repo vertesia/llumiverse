@@ -110,6 +110,8 @@ export class VertexAIDriver extends AbstractDriver<
 
         this.googleAuth = new GoogleAuth(options.googleAuthOptions) as GoogleAuth<any>;
         this.authClientPromise = undefined;
+
+        this.logger.debug({ options: this.options }, "VertexAIDriver initialized with options:");
     }
 
     private async getAuthClient(): Promise<AuthClient> {
@@ -119,16 +121,23 @@ export class VertexAIDriver extends AbstractDriver<
         return this.authClientPromise;
     }
 
-    public getGoogleGenAIClient(region: string = this.options.region, api: "VERTEXAI" | "GEMINI" = "VERTEXAI"): GoogleGenAI {
+    public async getGoogleGenAIClient(region: string = this.options.region, api: "VERTEXAI" | "GEMINI" = "VERTEXAI"): Promise<GoogleGenAI> {
         //Lazy initialization
 
         //Gemini API - sometimes called Gemini Developer API
         if (api == "GEMINI") {
+            this.logger.debug({ region }, "Getting Gemini GoogleGenAI client for region:");
+            this.logger.debug({ googleAuthOptions: this.options.googleAuthOptions }, "googleAuthOptions:");
             return new GoogleGenAI({
                 vertexai: false,
-                googleAuthOptions: this.options.googleAuthOptions || {
-                    scopes: ["https://www.googleapis.com/auth/cloud-platform"],
-                },
+                googleAuthOptions: {
+                    authClient: this.options.googleAuthOptions?.authClient,
+                    scopes: ['https://www.googleapis.com/auth/cloud-platform', 'https://www.googleapis.com/auth/generative-language.retriever'],
+                }
+                // googleAuthOptions: this.options.googleAuthOptions || {
+                //     authClient: await this.getAuthClient(),
+                //     scopes: ['https://www.googleapis.com/auth/cloud-platform', 'https://www.googleapis.com/auth/generative-language.retriever'],
+                // },
                 //apiKey: process.env.GEMINI_API_KEY || undefined,
             });
         }
@@ -505,7 +514,7 @@ export class VertexAIDriver extends AbstractDriver<
         // Get clients
         const modelGarden = await this.getModelGardenClient();
         const aiplatform = await this.getAIPlatformClient();
-        const globalGenAiClient = this.getGoogleGenAIClient("global");
+        const globalGenAiClient = await this.getGoogleGenAIClient("global");
 
         let models: AIModel<string>[] = [];
 
