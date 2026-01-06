@@ -516,6 +516,48 @@ function updateConversation(conversation: ClaudePrompt | undefined | null, promp
         system: system.length > 0 ? system : undefined // If system is empty, set to undefined
     };
 }
+
+/**
+ * Sanitize messages by removing empty text blocks.
+ * Claude API rejects messages with empty text content blocks ("text content blocks must be non-empty").
+ * This handles cases where streaming was interrupted and left empty text blocks.
+ *
+ * - Filters out empty text blocks from each message's content
+ * - Removes messages entirely if they have no content after filtering
+ */
+function sanitizeMessages(messages: MessageParam[]): MessageParam[] {
+    const result: MessageParam[] = [];
+
+    for (const message of messages) {
+        if (typeof message.content === 'string') {
+            // String content - keep only if non-empty
+            if (message.content.trim()) {
+                result.push(message);
+            }
+            continue;
+        }
+
+        // Array content - filter out empty text blocks
+        const filteredContent = message.content.filter(block => {
+            if (block.type === 'text') {
+                return block.text && block.text.trim().length > 0;
+            }
+            // Keep all non-text blocks (tool_use, tool_result, image, etc.)
+            return true;
+        });
+
+        // Only include message if it has content after filtering
+        if (filteredContent.length > 0) {
+            result.push({
+                ...message,
+                content: filteredContent
+            });
+        }
+    }
+
+    return result;
+}
+
 interface RequestOptions {
     headers?: Record<string, string>;
 }
@@ -535,8 +577,11 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
         };
     }
 
+    // Sanitize messages to remove empty text blocks (can occur from interrupted streaming)
+    const sanitizedMessages = sanitizeMessages(prompt.messages);
+
     const payload = {
-        messages: prompt.messages,
+        messages: sanitizedMessages,
         system: prompt.system,
         tools: options.tools, // we are using the same shape as claude for tools
         temperature: model_options?.temperature,
