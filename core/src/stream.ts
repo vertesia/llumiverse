@@ -21,7 +21,7 @@ export async function readStreamAsUint8Array(stream: ReadableStream, maxSize?: n
         if (maxSize && totalLength > maxSize) {
             throw new Error(
                 `Inline data stream size exceeds maximum allowed size of ${(maxSize / 1024 / 1024).toFixed(0)}MB. ` +
-                `For large files (especially videos), use cloud storage instead of inline data.` +
+                `For large files (especially videos), use cloud storage instead of inline data. ` +
                 `Model providers have their own limits on maximum data size which should be lower than this limit.`
             );
         }
