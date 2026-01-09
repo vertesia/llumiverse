@@ -314,22 +314,24 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             }
         }
 
-        // Build assistant message in Gemini Content format
-        const assistantContent: Content = {
-            role: 'model',
-            parts: parts.length > 0 ? parts : [{ text: '' }]
-        };
-
         // Unwrap array if wrapped, otherwise treat as array
         const unwrapped = unwrapConversationArray<Content>(options.conversation);
         const existingConversation = unwrapped ?? (options.conversation as Content[] || []);
 
-        // Combine existing conversation + prompt contents + assistant response
+        // Combine existing conversation + prompt contents
         let conversation: Content[] = [
             ...existingConversation,
             ...prompt.contents,
-            assistantContent
         ];
+
+        // Only add assistant message if there's actual content
+        // (Empty text parts can cause API errors)
+        if (parts.length > 0) {
+            conversation.push({
+                role: 'model',
+                parts: parts
+            });
+        }
 
         // Increment turn counter
         conversation = incrementConversationTurn(conversation) as Content[];
@@ -398,22 +400,24 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             }
         }
 
-        // Build assistant message
-        const assistantMessage = {
-            role: 'assistant',
-            content: content.length > 0 ? content : [{ type: 'text', text: '' }]
-        };
-
         // Get existing conversation or start fresh
         const existingMessages = (options.conversation as any)?.messages ?? [];
         const existingSystem = (options.conversation as any)?.system ?? prompt.system;
 
-        // Combine: existing conversation + new prompt messages + assistant response
+        // Build the new messages array
         const newMessages = [
             ...existingMessages,
             ...prompt.messages,
-            assistantMessage
         ];
+
+        // Only add assistant message if there's actual content
+        // (Claude API rejects empty text content blocks)
+        if (content.length > 0) {
+            newMessages.push({
+                role: 'assistant',
+                content: content
+            });
+        }
 
         // Build the new conversation in ClaudePrompt format
         const conversation = {
