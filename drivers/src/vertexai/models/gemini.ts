@@ -663,7 +663,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 if (msg.files) {
                     for (const f of msg.files) {
                         const fileUrl = await f.getURL();                     
-                        const isGsUrl = fileUrl.startsWith('gs://');
+                        const isGsUrl = fileUrl.startsWith('gs://') || fileUrl.startsWith('https://storage.googleapis.com/');
 
                         if (isGsUrl) {
                             parts.push({
