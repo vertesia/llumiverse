@@ -81,7 +81,7 @@ jobs:
           fetch-depth: 0 # Fetch all because we need to access info from different branches
           fetch-tags: false
           ref: ${{ needs.sync.outputs.sync_ref }}
-          # ssh-key: ${{ secrets.DEPLOY_KEY }} # Use deploy key to bypass branch protection rules
+          ssh-key: ${{ secrets.DEPLOY_KEY }} # Use deploy key to bypass branch protection rules
 
       - name: Push changes to main branch
         run: |
