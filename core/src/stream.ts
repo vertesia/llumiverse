@@ -17,6 +17,7 @@ export async function readStreamAsUint8Array(stream: ReadableStream): Promise<Ui
         const uint8Chunk = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
         
         chunks.push(uint8Chunk);
+        totalLength += uint8Chunk.length;
     }
     
     const combined = new Uint8Array(totalLength);
