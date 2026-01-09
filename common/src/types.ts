@@ -211,9 +211,10 @@ export interface CompletionChunkObject {
 export interface ToolDefinition {
     name: string,
     description?: string,
+    default?: boolean,
     input_schema: {
         type: 'object';
-        properties?: JSONSchema | null | undefined;
+        properties?: Record<string, JSONSchema> | null | undefined;
         [k: string]: unknown;
     },
 }
