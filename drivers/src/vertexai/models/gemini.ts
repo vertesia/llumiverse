@@ -675,8 +675,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                         } else {
                             // Inline data handling
                             const stream = await f.getStream();
-                            // 50MB limit, Model limit is 20MB, setting higher to avoid teething troubles
-                            const data = await readStreamAsBase64(stream, 50 * 1024 * 1024); 
+                            // 510MB limit, Model limit is 500MB, setting higher to avoid teething troubles
+                            const data = await readStreamAsBase64(stream, 510 * 1024 * 1024); 
                             _driver.logger.debug(`[GeminiModelDefinition] Inlining data for file ${f.name}, mimeType: ${f.mime_type}, size (mb): ${data.length /1024/1024}`);
                             parts.push({
                                 inlineData: {
