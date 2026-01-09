@@ -662,8 +662,11 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 // File content handling
                 if (msg.files) {
                     for (const f of msg.files) {
-                        const fileUrl = await f.getURL();                     
+                        let fileUrl = await f.getURL();                     
                         const isGsUrl = fileUrl.startsWith('gs://') || fileUrl.startsWith('https://storage.googleapis.com/');
+                        _driver.logger.debug(`[GeminiModelDefinition] Adding file to prompt, isGsUrl=${isGsUrl}, url=${fileUrl}`);
+                        fileUrl = convertGCSHttpToUri(fileUrl);
+                        _driver.logger.debug(`[GeminiModelDefinition] Converted file URL to URI: ${fileUrl}`);
 
                         if (isGsUrl) {
                             parts.push({
@@ -956,6 +959,34 @@ function updateConversation(conversation: unknown, prompt: Content[]): Content[]
     const unwrapped = unwrapConversationArray<Content>(conversation);
     const convArray = unwrapped ?? (conversation as Content[] || []);
     return convArray.concat(prompt);
+}
+
+/**
+ * Convert GCS HTTPS URL to gs:// URI format
+ * @param httpsUrl - HTTPS URL like https://storage.googleapis.com/bucket/path
+ * @returns GCS URI like gs://bucket/path
+ */
+function convertGCSHttpToUri(httpsUrl: string): string {
+    try {
+        const url = new URL(httpsUrl);
+        if (url.hostname === 'storage.googleapis.com') {
+            // URL format: https://storage.googleapis.com/bucket/path/to/file
+            const pathParts = url.pathname.split('/').filter(p => p);
+            if (pathParts.length >= 2) {
+                const bucket = pathParts[0];
+                const path = pathParts.slice(1).join('/');
+                return `gs://${bucket}/${path}`;
+            }
+        } else if (url.hostname.endsWith('.storage.googleapis.com')) {
+            // URL format: https://bucket.storage.googleapis.com/path/to/file
+            const bucket = url.hostname.split('.')[0];
+            const path = url.pathname.slice(1); // Remove leading /
+            return `gs://${bucket}/${path}`;
+        }
+    } catch (err) {
+        // If URL parsing fails, return as-is
+    }
+    return httpsUrl;
 }
 
 /**
