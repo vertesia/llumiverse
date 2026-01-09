@@ -946,34 +946,6 @@ function getToolFunction(tool: ToolDefinition): FunctionDeclaration {
 }
 
 /**
- * Convert GCS HTTPS URL to gs:// URI format
- * @param httpsUrl - HTTPS URL like https://storage.googleapis.com/bucket/path
- * @returns GCS URI like gs://bucket/path
- */
-// function convertGCSHttpToUri(httpsUrl: string): string {
-//     try {
-//         const url = new URL(httpsUrl);
-//         if (url.hostname === 'storage.googleapis.com') {
-//             // URL format: https://storage.googleapis.com/bucket/path/to/file
-//             const pathParts = url.pathname.split('/').filter(p => p);
-//             if (pathParts.length >= 2) {
-//                 const bucket = pathParts[0];
-//                 const path = pathParts.slice(1).join('/');
-//                 return `gs://${bucket}/${path}`;
-//             }
-//         } else if (url.hostname.endsWith('.storage.googleapis.com')) {
-//             // URL format: https://bucket.storage.googleapis.com/path/to/file
-//             const bucket = url.hostname.split('.')[0];
-//             const path = url.pathname.slice(1); // Remove leading /
-//             return `gs://${bucket}/${path}`;
-//         }
-//     } catch (err) {
-//         // If URL parsing fails, return as-is
-//     }
-//     return httpsUrl;
-// }
-
-/**
  * Update the conversation messages
  * @param prompt
  * @param response
