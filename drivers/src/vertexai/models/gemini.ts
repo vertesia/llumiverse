@@ -5,13 +5,20 @@ import {
 } from "@google/genai";
 import {
     AIModel, Completion, CompletionChunkObject, CompletionResult, ExecutionOptions,
-    ExecutionTokenUsage, getMaxTokensLimitVertexAi, JSONObject, JSONSchema, ModelType, PromptOptions, PromptRole,
-    PromptSegment, readStreamAsBase64, StatelessExecutionOptions, ToolDefinition, ToolUse,
-    VertexAIGeminiOptions, stripBase64ImagesFromConversation, truncateLargeTextInConversation,
-    getConversationMeta, incrementConversationTurn, unwrapConversationArray
+    ExecutionTokenUsage,
+    getConversationMeta,
+    getMaxTokensLimitVertexAi,
+    incrementConversationTurn,
+    JSONObject, JSONSchema, ModelType, PromptOptions, PromptRole,
+    PromptSegment, readStreamAsBase64, StatelessExecutionOptions,
+    stripBase64ImagesFromConversation,
+    ToolDefinition, ToolUse,
+    truncateLargeTextInConversation,
+    unwrapConversationArray,
+    VertexAIGeminiOptions
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
-import { VertexAIDriver, GenerateContentPrompt } from "../index.js";
+import { GenerateContentPrompt, VertexAIDriver } from "../index.js";
 import { ModelDefinition } from "../models.js";
 
 function supportsStructuredOutput(options: PromptOptions): boolean {
@@ -552,7 +559,7 @@ function geminiThinkingConfig(option: StatelessExecutionOptions): ThinkingConfig
     const model_options = option.model_options as VertexAIGeminiOptions | undefined;
     const include_thoughts = model_options?.include_thoughts ?? false;
     if (model_options?.thinking_budget_tokens) {
-        return {includeThoughts: include_thoughts, thinkingBudget: model_options.thinking_budget_tokens};
+        return { includeThoughts: include_thoughts, thinkingBudget: model_options.thinking_budget_tokens };
     }
 
     // Set minimum thinking level by default.
@@ -655,14 +662,27 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 // File content handling
                 if (msg.files) {
                     for (const f of msg.files) {
-                        const stream = await f.getStream();
-                        const data = await readStreamAsBase64(stream);
-                        parts.push({
-                            inlineData: {
-                                data,
-                                mimeType: f.mime_type
-                            }
-                        });
+                        let fileUrl = await f.getURL();                     
+                        const isGsUrl = fileUrl.startsWith('gs://') || fileUrl.startsWith('https://storage.googleapis.com/');
+
+                        if (isGsUrl) {
+                            parts.push({
+                                fileData: {
+                                    fileUri: fileUrl,
+                                    mimeType: f.mime_type
+                                }
+                            });
+                        } else {
+                            // Inline data handling
+                            const stream = await f.getStream();
+                            const data = await readStreamAsBase64(stream); 
+                            parts.push({
+                                inlineData: {
+                                    data,
+                                    mimeType: f.mime_type
+                                }
+                            });
+                        }
                     }
                 }
 
@@ -925,7 +945,6 @@ function getToolFunction(tool: ToolDefinition): FunctionDeclaration {
     };
 }
 
-
 /**
  * Update the conversation messages
  * @param prompt
@@ -938,6 +957,7 @@ function updateConversation(conversation: unknown, prompt: Content[]): Content[]
     const convArray = unwrapped ?? (conversation as Content[] || []);
     return convArray.concat(prompt);
 }
+
 /**
  *
  * Gemini supports JSON output in the response. so we test if the response is a valid JSON object. otherwise we treat the response as a string.
