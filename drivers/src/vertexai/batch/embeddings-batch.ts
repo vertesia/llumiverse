@@ -1,6 +1,10 @@
 /**
- * Embeddings batch operations using the @google/genai SDK.
+ * Embeddings batch operations using the @google/genai SDK and HTTP API.
  * Supports batch text and multimodal embeddings.
+ *
+ * Two implementations are available:
+ * - SDK-based: Uses @google/genai SDK (experimental batches.createEmbeddings)
+ * - HTTP-based: Uses direct HTTP calls to the Generative Language API
  */
 
 import { BatchJob as SDKBatchJob } from "@google/genai";
@@ -21,7 +25,15 @@ import {
     getGeminiBatchJob,
     listGeminiBatchJobs,
 } from "./gemini-batch.js";
-import { encodeBatchJobId, mapGeminiJobState } from "./types.js";
+import {
+    encodeBatchJobId,
+    GeminiAsyncBatchEmbedRequest,
+    GeminiBatchResource,
+    GeminiListBatchesResponse,
+    GeminiOperationResponse,
+    mapGeminiBatchState,
+    mapGeminiJobState,
+} from "./types.js";
 
 /**
  * Default embedding model for text embeddings.
@@ -89,7 +101,7 @@ function mapEmbeddingsBatchJob(sdkJob: SDKBatchJob): BatchJob<GCSBatchSource, GC
  * @param options - Batch job options
  * @returns The created batch job
  */
-export async function createEmbeddingsBatchJob(
+export async function createEmbeddingsBatchJobSDK(
     driver: VertexAIDriver,
     options: CreateBatchJobOptions<GCSBatchSource, GCSBatchDestination>
 ): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>> {
@@ -196,4 +208,246 @@ export function isMultimodalEmbeddingModel(model: string): boolean {
 export function isTextEmbeddingModel(model: string): boolean {
     return model.toLowerCase().includes("embedding") &&
         !isMultimodalEmbeddingModel(model);
+}
+
+// ============== HTTP-based Implementations ===============
+
+/**
+ * Maps a Gemini API batch resource to our unified BatchJob type.
+ */
+function mapHTTPBatchJob(batch: GeminiBatchResource): BatchJob<GCSBatchSource, GCSBatchDestination> {
+    const providerJobId = batch.name || "";
+
+    return {
+        id: encodeBatchJobId("embeddings", providerJobId),
+        displayName: batch.displayName,
+        status: mapGeminiBatchState(batch.state),
+        type: BatchJobType.embeddings,
+        model: batch.model || "",
+        source: {
+            // Gemini API uses fileName for file-based input
+            gcsUris: batch.inputConfig?.fileName ? [batch.inputConfig.fileName] : undefined,
+            inlinedRequests: batch.inputConfig?.requests,
+        },
+        destination: batch.output?.responsesFile ? {
+            gcsUri: batch.output.responsesFile,
+        } : undefined,
+        createdAt: batch.createTime ? new Date(batch.createTime) : undefined,
+        completedAt: batch.endTime ? new Date(batch.endTime) : undefined,
+        error: batch.error ? {
+            code: String(batch.error.code || "UNKNOWN"),
+            message: batch.error.message || "Unknown error",
+            details: batch.error.details?.map(d => JSON.stringify(d)).join("; "),
+        } : undefined,
+        stats: batch.batchStats ? {
+            totalRequests: batch.batchStats.requestCount,
+            completedRequests: batch.batchStats.successfulRequestCount,
+            failedRequests: batch.batchStats.failedRequestCount,
+        } : undefined,
+        provider: Providers.vertexai,
+        providerJobId,
+    };
+}
+
+/**
+ * Normalizes model name to the format expected by the Gemini API.
+ * Ensures model is in format "models/{model}" without version suffix.
+ */
+function normalizeModelForGeminiApi(model: string): string {
+    // Remove any version suffix (e.g., @001)
+    const baseModel = model.includes("@") ? model.split("@")[0] : model;
+    // Ensure it has the models/ prefix
+    return baseModel.startsWith("models/") ? baseModel : `models/${baseModel}`;
+}
+
+/**
+ * Creates an embeddings batch job using HTTP API.
+ * Uses the Generative Language API's asyncBatchEmbedContent endpoint.
+ *
+ * @param driver - The VertexAI driver instance
+ * @param options - Batch job options
+ * @returns The created batch job
+ */
+export async function createEmbeddingsBatchJobHTTP(
+    driver: VertexAIDriver,
+    options: CreateBatchJobOptions<GCSBatchSource, GCSBatchDestination>
+): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>> {
+    const client = driver.getGeminiApiFetchClient();
+
+    // Validate required fields
+    if (!options.source) {
+        throw new Error("Batch job requires source configuration");
+    }
+    if (!options.source.gcsUris?.length && !options.source.inlinedRequests?.length) {
+        throw new Error("Batch job requires either gcsUris (file reference) or inlinedRequests in source");
+    }
+
+    // Default to gemini-embedding-001 if no model specified
+    const model = normalizeModelForGeminiApi(options.model || DEFAULT_TEXT_EMBEDDING_MODEL);
+
+    // Build the request body
+    const requestBody: GeminiAsyncBatchEmbedRequest = {
+        batch: {
+            model,
+            displayName: options.displayName || `embeddings-batch-${Date.now()}`,
+            inputConfig: {},
+        },
+    };
+
+    // Set input configuration
+    if (options.source.inlinedRequests?.length) {
+        requestBody.batch.inputConfig.requests = options.source.inlinedRequests;
+    } else if (options.source.gcsUris?.length) {
+        // For Gemini API, fileName should be a File resource reference
+        requestBody.batch.inputConfig.fileName = options.source.gcsUris[0];
+    }
+
+    // Make the HTTP request
+    // Endpoint: POST /models/{model}:asyncBatchEmbedContent
+    const endpoint = `/${model}:asyncBatchEmbedContent`;
+
+    let response: GeminiOperationResponse;
+    try {
+        response = await client.post(endpoint, {
+            payload: requestBody,
+        }) as GeminiOperationResponse;
+    } catch (error) {
+        console.log("Error creating embeddings batch job via HTTP:", error);
+        throw new Error(`Failed to create embeddings batch job: ${error}`);
+    }
+
+    // The response is an Operation. If done, response contains the batch.
+    // Otherwise, we need to extract the batch info from metadata or poll.
+    if (response.done && response.response) {
+        return mapHTTPBatchJob(response.response);
+    }
+
+    // If not done yet, create a minimal batch job from operation info
+    // The operation name typically contains the batch ID
+    const operationName = response.name || "";
+    return {
+        id: encodeBatchJobId("embeddings", operationName),
+        displayName: options.displayName,
+        status: mapGeminiBatchState("BATCH_STATE_PENDING"),
+        type: BatchJobType.embeddings,
+        model: options.model || DEFAULT_TEXT_EMBEDDING_MODEL,
+        source: options.source,
+        destination: options.destination,
+        provider: Providers.vertexai,
+        providerJobId: operationName,
+    };
+}
+
+/**
+ * Gets an embeddings batch job by ID using HTTP API.
+ *
+ * @param driver - The VertexAI driver instance
+ * @param providerJobId - The provider job ID (format: batches/{batchId})
+ * @returns The batch job
+ */
+export async function getEmbeddingsBatchJobHTTP(
+    driver: VertexAIDriver,
+    providerJobId: string
+): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>> {
+    const client = driver.getGeminiApiFetchClient();
+
+    // Endpoint: GET /batches/{batchId}
+    const endpoint = `/${providerJobId}`;
+
+    let response: GeminiBatchResource;
+    try {
+        response = await client.get(endpoint) as GeminiBatchResource;
+    } catch (error) {
+        throw new Error(`Failed to get embeddings batch job: ${error}`);
+    }
+
+    return mapHTTPBatchJob(response);
+}
+
+/**
+ * Lists embeddings batch jobs using HTTP API.
+ *
+ * @param driver - The VertexAI driver instance
+ * @param options - List options
+ * @returns List of batch jobs
+ */
+export async function listEmbeddingsBatchJobsHTTP(
+    driver: VertexAIDriver,
+    options?: ListBatchJobsOptions
+): Promise<ListBatchJobsResult<GCSBatchSource, GCSBatchDestination>> {
+    const client = driver.getGeminiApiFetchClient();
+
+    // Build query parameters
+    const params: Record<string, string> = {};
+    if (options?.pageSize) {
+        params.pageSize = String(options.pageSize);
+    }
+    if (options?.pageToken) {
+        params.pageToken = options.pageToken;
+    }
+
+    // Endpoint: GET /batches
+    const queryString = Object.keys(params).length > 0
+        ? "?" + new URLSearchParams(params).toString()
+        : "";
+
+    let response: GeminiListBatchesResponse;
+    try {
+        response = await client.get(`/batches${queryString}`) as GeminiListBatchesResponse;
+    } catch (error) {
+        throw new Error(`Failed to list embeddings batch jobs: ${error}`);
+    }
+
+    return {
+        jobs: (response.batches || []).map(mapHTTPBatchJob),
+        nextPageToken: response.nextPageToken,
+    };
+}
+
+/**
+ * Cancels an embeddings batch job using HTTP API.
+ *
+ * @param driver - The VertexAI driver instance
+ * @param providerJobId - The provider job ID (format: batches/{batchId})
+ * @returns The cancelled batch job
+ */
+export async function cancelEmbeddingsBatchJobHTTP(
+    driver: VertexAIDriver,
+    providerJobId: string
+): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>> {
+    const client = driver.getGeminiApiFetchClient();
+
+    // Endpoint: POST /batches/{batchId}:cancel
+    const endpoint = `/${providerJobId}:cancel`;
+
+    try {
+        await client.post(endpoint, { payload: {} });
+    } catch (error) {
+        throw new Error(`Failed to cancel embeddings batch job: ${error}`);
+    }
+
+    // Get the updated job status
+    return getEmbeddingsBatchJobHTTP(driver, providerJobId);
+}
+
+/**
+ * Deletes an embeddings batch job using HTTP API.
+ *
+ * @param driver - The VertexAI driver instance
+ * @param providerJobId - The provider job ID (format: batches/{batchId})
+ */
+export async function deleteEmbeddingsBatchJobHTTP(
+    driver: VertexAIDriver,
+    providerJobId: string
+): Promise<void> {
+    const client = driver.getGeminiApiFetchClient();
+
+    // Endpoint: DELETE /batches/{batchId}
+    const endpoint = `/${providerJobId}`;
+
+    try {
+        await client.delete(endpoint);
+    } catch (error) {
+        throw new Error(`Failed to delete embeddings batch job: ${error}`);
+    }
 }

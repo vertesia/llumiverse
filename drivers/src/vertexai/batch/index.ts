@@ -38,34 +38,32 @@
 export * from "./types.js";
 
 // Re-export GCS helpers and formatters
-export * from "./gcs-helpers.js";
 export * from "./formatters.js";
+export * from "./gcs-helpers.js";
 
 // Re-export utility functions for advanced usage
 export {
-    createGeminiBatchJob,
-    getGeminiBatchJob,
-    listGeminiBatchJobs,
-    cancelGeminiBatchJob,
-    deleteGeminiBatchJob,
-    isTerminalState,
+    cancelGeminiBatchJob, createGeminiBatchJob, deleteGeminiBatchJob, getGeminiBatchJob, isTerminalState, listGeminiBatchJobs
 } from "./gemini-batch.js";
 
 export {
-    createClaudeBatchJob,
-    getClaudeBatchJob,
-    listClaudeBatchJobs,
-    cancelClaudeBatchJob,
-    deleteClaudeBatchJob,
+    cancelClaudeBatchJob, createClaudeBatchJob, deleteClaudeBatchJob, getClaudeBatchJob,
+    listClaudeBatchJobs
 } from "./claude-batch.js";
 
 export {
-    createEmbeddingsBatchJob,
-    getEmbeddingsBatchJob,
-    cancelEmbeddingsBatchJob,
-    deleteEmbeddingsBatchJob,
-    DEFAULT_TEXT_EMBEDDING_MODEL,
     DEFAULT_MULTIMODAL_EMBEDDING_MODEL,
+    DEFAULT_TEXT_EMBEDDING_MODEL,
+    cancelEmbeddingsBatchJob,
+    cancelEmbeddingsBatchJobHTTP,
+    createEmbeddingsBatchJobHTTP,
+    createEmbeddingsBatchJobSDK as createEmbeddingsBatchJob,
+    deleteEmbeddingsBatchJob,
+    deleteEmbeddingsBatchJobHTTP,
+    getEmbeddingsBatchJob,
+    getEmbeddingsBatchJobHTTP,
     isMultimodalEmbeddingModel,
     isTextEmbeddingModel,
+    listEmbeddingsBatchJobsHTTP,
 } from "./embeddings-batch.js";
+

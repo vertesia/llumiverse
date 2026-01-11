@@ -15,19 +15,19 @@ import {
     EmbeddingsOptions,
     EmbeddingsResult,
     ExecutionOptions,
+    GCSBatchDestination,
+    GCSBatchSource,
     ListBatchJobsOptions,
     ListBatchJobsResult,
     ModelSearchPayload,
     PromptSegment,
+    getConversationMeta,
     getModelCapabilities,
+    incrementConversationTurn,
     modelModalitiesToArray,
     stripBase64ImagesFromConversation,
     truncateLargeTextInConversation,
-    getConversationMeta,
-    incrementConversationTurn,
     unwrapConversationArray,
-    GCSBatchDestination,
-    GCSBatchSource,
 } from "@llumiverse/core";
 import { FetchClient } from "@vertesia/api-fetch-client";
 import { AuthClient, GoogleAuth, GoogleAuthOptions } from "google-auth-library";
@@ -40,7 +40,7 @@ import {
 } from "./batch/claude-batch.js";
 import {
     cancelEmbeddingsBatchJob,
-    createEmbeddingsBatchJob,
+    createEmbeddingsBatchJobHTTP,
     deleteEmbeddingsBatchJob,
     getEmbeddingsBatchJob,
 } from "./batch/embeddings-batch.js";
@@ -89,6 +89,7 @@ export class VertexAIDriver extends AbstractDriver<
     aiplatform: v1beta1.ModelServiceClient | undefined;
     anthropicClient: AnthropicVertex | undefined;
     fetchClient: FetchClient | undefined;
+    geminiApiClient: FetchClient | undefined;
     googleGenAI: GoogleGenAI | undefined;
     llamaClient: FetchClient & { region?: string } | undefined;
     modelGarden: v1beta1.ModelGardenServiceClient | undefined;
@@ -102,7 +103,8 @@ export class VertexAIDriver extends AbstractDriver<
 
         this.aiplatform = undefined;
         this.anthropicClient = undefined;
-        this.fetchClient = undefined
+        this.fetchClient = undefined;
+        this.geminiApiClient = undefined;
         this.googleGenAI = undefined;
         this.modelGarden = undefined;
         this.llamaClient = undefined;
@@ -128,12 +130,14 @@ export class VertexAIDriver extends AbstractDriver<
         if (api == "GEMINI") {
             this.logger.debug({ region }, "Getting Gemini GoogleGenAI client for region:");
             this.logger.debug({ googleAuthOptions: this.options.googleAuthOptions }, "googleAuthOptions:");
+
             return new GoogleGenAI({
                 vertexai: false,
-                googleAuthOptions: {
-                    authClient: this.options.googleAuthOptions?.authClient,
-                    scopes: ['https://www.googleapis.com/auth/cloud-platform', 'https://www.googleapis.com/auth/generative-language.retriever'],
-                }
+                apiKey: process.env.GOOGLE_GEMINI_API_KEY_TEST || undefined,
+                // googleAuthOptions: {
+                //     authClient: this.options.googleAuthOptions?.authClient,
+                //     scopes: ['https://www.googleapis.com/auth/cloud-platform', 'https://www.googleapis.com/auth/generative-language.retriever'],
+                // }
                 // googleAuthOptions: this.options.googleAuthOptions || {
                 //     authClient: await this.getAuthClient(),
                 //     scopes: ['https://www.googleapis.com/auth/cloud-platform', 'https://www.googleapis.com/auth/generative-language.retriever'],
@@ -179,6 +183,23 @@ export class VertexAIDriver extends AbstractDriver<
             });
         }
         return this.fetchClient;
+    }
+
+    /**
+     * Gets a FetchClient configured for the Generative Language API (Gemini API).
+     * Uses API key authentication via x-goog-api-key header.
+     */
+    public getGeminiApiFetchClient(): FetchClient {
+        if (!this.geminiApiClient) {
+            // TODO: Make API key configurable via driver options
+            const apiKey = process.env.GOOGLE_GEMINI_API_KEY_TEST || "";
+            this.geminiApiClient = new FetchClient("https://generativelanguage.googleapis.com/v1beta")
+                .withHeaders({
+                    "Content-Type": "application/json",
+                    "x-goog-api-key": apiKey,
+                });
+        }
+        return this.geminiApiClient;
     }
 
     public getLLamaClient(region: string = "us-central1"): FetchClient {
@@ -759,7 +780,7 @@ export class VertexAIDriver extends AbstractDriver<
     async createBatchJob(options: CreateBatchJobOptions<GCSBatchSource, GCSBatchDestination>): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>> {
         // Route to appropriate implementation
         if (options.type === BatchJobType.embeddings) {
-            return createEmbeddingsBatchJob(this, options);
+            return createEmbeddingsBatchJobHTTP(this, options);
         }
         const modelLower = options.model.toLowerCase();
         if (modelLower.includes("claude") || modelLower.includes("anthropic")) {

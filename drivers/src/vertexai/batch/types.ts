@@ -211,3 +211,181 @@ export function decodeBatchJobId(jobId: string): { provider: BatchProvider; prov
     const providerJobId = jobId.substring(colonIndex + 1);
     return { provider, providerJobId };
 }
+
+// ============== Gemini API HTTP Types ===============
+
+/**
+ * Gemini API batch state enum values.
+ * Used by the Generative Language API (not Vertex AI).
+ */
+export type GeminiBatchState =
+    | "BATCH_STATE_UNSPECIFIED"
+    | "BATCH_STATE_PENDING"
+    | "BATCH_STATE_RUNNING"
+    | "BATCH_STATE_SUCCEEDED"
+    | "BATCH_STATE_FAILED"
+    | "BATCH_STATE_CANCELLED"
+    | "BATCH_STATE_EXPIRED";
+
+/**
+ * Maps Gemini API batch state to unified BatchJobStatus.
+ */
+export function mapGeminiBatchState(state: string | undefined): BatchJobStatus {
+    if (!state) return BatchJobStatus.pending;
+    switch (state) {
+        case "BATCH_STATE_PENDING":
+            return BatchJobStatus.pending;
+        case "BATCH_STATE_RUNNING":
+            return BatchJobStatus.running;
+        case "BATCH_STATE_SUCCEEDED":
+            return BatchJobStatus.succeeded;
+        case "BATCH_STATE_FAILED":
+        case "BATCH_STATE_EXPIRED":
+            return BatchJobStatus.failed;
+        case "BATCH_STATE_CANCELLED":
+            return BatchJobStatus.cancelled;
+        default:
+            return BatchJobStatus.pending;
+    }
+}
+
+/**
+ * Batch stats from Gemini API response.
+ */
+export interface GeminiBatchStats {
+    /** Total number of requests in the batch */
+    requestCount?: number;
+    /** Number of successfully completed requests */
+    successfulRequestCount?: number;
+    /** Number of failed requests */
+    failedRequestCount?: number;
+    /** Number of pending requests */
+    pendingRequestCount?: number;
+}
+
+/**
+ * Input configuration for Gemini API batch.
+ * Either fileName or requests must be provided.
+ */
+export interface GeminiBatchInputConfig {
+    /** Reference to a File containing requests (format: files/{fileId}) */
+    fileName?: string;
+    /** Inline requests for batch processing */
+    requests?: GeminiInlinedEmbedRequest[];
+}
+
+/**
+ * Inline embed content request for batch embeddings.
+ */
+export interface GeminiInlinedEmbedRequest {
+    /** Model to use (format: models/{model}) */
+    model?: string;
+    /** Content to embed */
+    content: {
+        parts: Array<{ text: string }>;
+    };
+    /** Task type for embeddings */
+    taskType?: string;
+    /** Title for document embeddings */
+    title?: string;
+    /** Output dimensionality */
+    outputDimensionality?: number;
+}
+
+/**
+ * Output configuration for Gemini API batch.
+ */
+export interface GeminiBatchOutputConfig {
+    /** File ID containing JSONL responses */
+    responsesFile?: string;
+    /** Inline responses (when input was inlined) */
+    inlinedResponses?: Array<{
+        embedding?: {
+            values: number[];
+        };
+        error?: {
+            code: number;
+            message: string;
+        };
+    }>;
+}
+
+/**
+ * Gemini API batch resource returned by get/list operations.
+ */
+export interface GeminiBatchResource {
+    /** Resource name (format: batches/{batchId}) */
+    name?: string;
+    /** Model used for the batch (format: models/{model}) */
+    model?: string;
+    /** User-defined display name */
+    displayName?: string;
+    /** Current batch state */
+    state?: GeminiBatchState;
+    /** Input configuration */
+    inputConfig?: GeminiBatchInputConfig;
+    /** Output configuration (populated after completion) */
+    output?: GeminiBatchOutputConfig;
+    /** Creation timestamp (RFC 3339) */
+    createTime?: string;
+    /** Completion timestamp (RFC 3339) */
+    endTime?: string;
+    /** Last update timestamp (RFC 3339) */
+    updateTime?: string;
+    /** Batch statistics */
+    batchStats?: GeminiBatchStats;
+    /** Priority value (higher = earlier processing) */
+    priority?: number;
+    /** Error information if failed */
+    error?: {
+        code: number;
+        message: string;
+        details?: unknown[];
+    };
+}
+
+/**
+ * Request body for asyncBatchEmbedContent endpoint.
+ */
+export interface GeminiAsyncBatchEmbedRequest {
+    batch: {
+        /** Model to use (format: models/{model}) */
+        model: string;
+        /** User-defined display name */
+        displayName: string;
+        /** Input configuration */
+        inputConfig: GeminiBatchInputConfig;
+        /** Priority value (optional, default 0) */
+        priority?: number;
+    };
+}
+
+/**
+ * Operation response from async Gemini API methods.
+ */
+export interface GeminiOperationResponse {
+    /** Server-assigned operation name */
+    name?: string;
+    /** Service-specific metadata */
+    metadata?: Record<string, unknown>;
+    /** Whether the operation is complete */
+    done?: boolean;
+    /** Error if operation failed */
+    error?: {
+        code: number;
+        message: string;
+        details?: unknown[];
+    };
+    /** Successful response (the batch resource) */
+    response?: GeminiBatchResource;
+}
+
+/**
+ * List batches response from Gemini API.
+ */
+export interface GeminiListBatchesResponse {
+    /** List of batch resources */
+    batches?: GeminiBatchResource[];
+    /** Token for next page */
+    nextPageToken?: string;
+}
