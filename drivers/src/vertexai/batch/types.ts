@@ -408,3 +408,60 @@ export interface GeminiListBatchesResponse {
     /** Token for next page */
     nextPageToken?: string;
 }
+
+// ============== Gemini File API Types ===============
+
+/**
+ * State of a file in the Gemini File API.
+ */
+export type GeminiFileState = "STATE_UNSPECIFIED" | "PROCESSING" | "ACTIVE" | "FAILED";
+
+/**
+ * File resource from the Gemini File API.
+ * Represents an uploaded file that can be used in batch operations.
+ */
+export interface GeminiFileResource {
+    /** Resource name (format: files/{fileId}) */
+    name: string;
+    /** User-defined display name */
+    displayName?: string;
+    /** MIME type of the file */
+    mimeType: string;
+    /** Size of the file in bytes (as string) */
+    sizeBytes: string;
+    /** Creation timestamp (RFC 3339) */
+    createTime: string;
+    /** Last update timestamp (RFC 3339) */
+    updateTime: string;
+    /** Expiration timestamp (RFC 3339) - files are automatically deleted after this time */
+    expirationTime?: string;
+    /** SHA-256 hash of the file content */
+    sha256Hash?: string;
+    /** Full URI for accessing the file */
+    uri: string;
+    /** Current file state */
+    state: GeminiFileState;
+    /** Error information if processing failed */
+    error?: {
+        code: number;
+        message: string;
+    };
+}
+
+/**
+ * Response from uploading a file to the Gemini File API.
+ */
+export interface GeminiUploadFileResponse {
+    /** The uploaded file resource */
+    file: GeminiFileResource;
+}
+
+/**
+ * Response from listing files in the Gemini File API.
+ */
+export interface GeminiListFilesResponse {
+    /** List of file resources */
+    files?: GeminiFileResource[];
+    /** Token for next page */
+    nextPageToken?: string;
+}

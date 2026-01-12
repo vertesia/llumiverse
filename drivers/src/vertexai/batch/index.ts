@@ -39,7 +39,6 @@ export * from "./types.js";
 
 // Re-export GCS helpers and formatters
 export * from "./formatters.js";
-export * from "./gcs-helpers.js";
 
 // Re-export utility functions for advanced usage
 export {
