@@ -272,6 +272,7 @@ export async function createEmbeddingsBatchJobHTTP(
     driver: VertexAIDriver,
     options: CreateBatchJobOptions<GCSBatchSource, GCSBatchDestination>
 ): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>> {
+    driver.logger.debug("Creating embeddings batch job via HTTP API");
     const client = driver.getGeminiApiFetchClient();
 
     // Validate required fields

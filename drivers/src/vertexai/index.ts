@@ -63,6 +63,7 @@ export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
     region: string;
     googleAuthOptions?: GoogleAuthOptions;
+    apiKey?: string;
 }
 
 export interface GenerateContentPrompt {
@@ -133,7 +134,7 @@ export class VertexAIDriver extends AbstractDriver<
 
             return new GoogleGenAI({
                 vertexai: false,
-                apiKey: process.env.GOOGLE_GEMINI_API_KEY_TEST || undefined,
+                apiKey: this.options.apiKey,
                 // googleAuthOptions: {
                 //     authClient: this.options.googleAuthOptions?.authClient,
                 //     scopes: ['https://www.googleapis.com/auth/cloud-platform', 'https://www.googleapis.com/auth/generative-language.retriever'],
@@ -187,17 +188,37 @@ export class VertexAIDriver extends AbstractDriver<
 
     /**
      * Gets a FetchClient configured for the Generative Language API (Gemini API).
-     * Uses API key authentication via x-goog-api-key header.
+     * Supports both API key (via x-goog-api-key) and OAuth (via Bearer token).
+     * If an API key is provided in options or env, it is used.
+     * Otherwise, it falls back to the GoogleAuth strategy (ADC, Service Account, etc.).
      */
     public getGeminiApiFetchClient(): FetchClient {
         if (!this.geminiApiClient) {
-            // TODO: Make API key configurable via driver options
-            const apiKey = process.env.GOOGLE_GEMINI_API_KEY_TEST || "";
-            this.geminiApiClient = new FetchClient("https://generativelanguage.googleapis.com/v1beta")
+            const apiKey = this.options.apiKey;
+
+            const client = new FetchClient("https://generativelanguage.googleapis.com/v1beta")
                 .withHeaders({
                     "Content-Type": "application/json",
+                });
+
+            if (apiKey) {
+                client.withHeaders({
                     "x-goog-api-key": apiKey,
                 });
+            } else {
+                // Use OAuth via Google Auth library (ADC / Service Account / User Credentials)
+                if (this.options.project) {
+                    client.withHeaders({
+                        "x-goog-user-project": this.options.project,
+                    });
+                }
+
+                client.withAuthCallback(async () => {
+                    const token = await this.googleAuth.getAccessToken();
+                    return `Bearer ${token}`;
+                });
+            }
+            this.geminiApiClient = client;
         }
         return this.geminiApiClient;
     }
