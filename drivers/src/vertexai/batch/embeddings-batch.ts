@@ -331,7 +331,7 @@ export async function createEmbeddingsBatchJobHTTP(
             payload: requestBody,
         }) as GeminiOperationResponse;
     } catch (error) {
-        console.log("Error creating embeddings batch job via HTTP:", error);
+        console.log("Error creating embeddings batch job via HTTP:", JSON.stringify(error));
         throw new Error(`Failed to create embeddings batch job: ${error}`);
     }
 

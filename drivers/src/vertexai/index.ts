@@ -52,7 +52,14 @@ import {
     isTerminalState,
     listGeminiBatchJobs,
 } from "./batch/gemini-batch.js";
-import { decodeBatchJobId } from "./batch/types.js";
+import {
+    deleteGeminiFile,
+    getGeminiFile,
+    listGeminiFiles,
+    uploadFileToGemini,
+    waitForFileActive,
+} from "./batch/gemini-files.js";
+import { decodeBatchJobId, GeminiFileResource } from "./batch/types.js";
 import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
 import { TextEmbeddingsOptions, getEmbeddingsForText } from "./embeddings/embeddings-text.js";
 import { getModelDefinition } from "./models.js";
@@ -63,7 +70,7 @@ export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
     region: string;
     googleAuthOptions?: GoogleAuthOptions;
-    apiKey?: string;
+    geminiApiKey?: string;
 }
 
 export interface GenerateContentPrompt {
@@ -129,21 +136,18 @@ export class VertexAIDriver extends AbstractDriver<
 
         //Gemini API - sometimes called Gemini Developer API
         if (api == "GEMINI") {
-            this.logger.debug({ region }, "Getting Gemini GoogleGenAI client for region:");
-            this.logger.debug({ googleAuthOptions: this.options.googleAuthOptions }, "googleAuthOptions:");
-
+            //Prefer OAuth if available
+            if (this.options.googleAuthOptions) {
+                this.logger.info("Using OAuth credentials for Gemini API client");
+                return new GoogleGenAI({
+                    vertexai: false,
+                    googleAuthOptions: this.options.googleAuthOptions,
+                });
+            }
+            this.logger.info("Using API Key for Gemini API client");
             return new GoogleGenAI({
                 vertexai: false,
-                apiKey: this.options.apiKey,
-                // googleAuthOptions: {
-                //     authClient: this.options.googleAuthOptions?.authClient,
-                //     scopes: ['https://www.googleapis.com/auth/cloud-platform', 'https://www.googleapis.com/auth/generative-language.retriever'],
-                // }
-                // googleAuthOptions: this.options.googleAuthOptions || {
-                //     authClient: await this.getAuthClient(),
-                //     scopes: ['https://www.googleapis.com/auth/cloud-platform', 'https://www.googleapis.com/auth/generative-language.retriever'],
-                // },
-                //apiKey: process.env.GEMINI_API_KEY || undefined,
+                apiKey: this.options.geminiApiKey,
             });
         }
 
@@ -192,16 +196,16 @@ export class VertexAIDriver extends AbstractDriver<
      * If an API key is provided in options or env, it is used.
      * Otherwise, it falls back to the GoogleAuth strategy (ADC, Service Account, etc.).
      */
-    public getGeminiApiFetchClient(): FetchClient {
+    public getGeminiApiFetchClient(useAPIkey: boolean = false): FetchClient {
         if (!this.geminiApiClient) {
-            const apiKey = this.options.apiKey;
+            const apiKey = this.options.geminiApiKey;
 
             const client = new FetchClient("https://generativelanguage.googleapis.com/v1beta")
                 .withHeaders({
                     "Content-Type": "application/json",
                 });
 
-            if (apiKey) {
+            if (apiKey && useAPIkey) {
                 client.withHeaders({
                     "x-goog-api-key": apiKey,
                 });
@@ -872,6 +876,90 @@ export class VertexAIDriver extends AbstractDriver<
             default:
                 return deleteGeminiBatchJob(this, providerJobId);
         }
+    }
+
+    // ============== Gemini File API Methods ===============
+
+    /**
+     * Uploads a file to the Gemini File API.
+     *
+     * Files uploaded through this API can be used in batch operations
+     * like batch embeddings. Files are automatically deleted after 48 hours.
+     *
+     * @param content - The file content (string, Buffer, or Blob)
+     * @param mimeType - MIME type of the file (e.g., "application/jsonl")
+     * @param displayName - Optional display name for the file
+     * @returns The uploaded file resource with name in format "files/{fileId}"
+     *
+     * @example
+     * ```typescript
+     * const file = await driver.uploadGeminiFile(
+     *     '{"content": "Hello"}\n{"content": "World"}',
+     *     'application/jsonl',
+     *     'my-batch-input.jsonl'
+     * );
+     * console.log(file.name); // "files/abc123xyz"
+     * ```
+     */
+    async uploadGeminiFile(
+        content: string | Buffer | Blob,
+        mimeType: string,
+        displayName?: string
+    ): Promise<GeminiFileResource> {
+        return uploadFileToGemini(this, content, mimeType, displayName);
+    }
+
+    /**
+     * Gets a file resource from the Gemini File API.
+     *
+     * @param fileId - The file ID (format: "files/{fileId}" or just "{fileId}")
+     * @returns The file resource
+     */
+    async getGeminiFile(fileId: string): Promise<GeminiFileResource> {
+        return getGeminiFile(this, fileId);
+    }
+
+    /**
+     * Lists files from the Gemini File API.
+     *
+     * @param pageSize - Optional number of files to return per page
+     * @param pageToken - Optional token for pagination
+     * @returns List of file resources and optional next page token
+     */
+    async listGeminiFiles(
+        pageSize?: number,
+        pageToken?: string
+    ): Promise<{ files: GeminiFileResource[]; nextPageToken?: string }> {
+        return listGeminiFiles(this, pageSize, pageToken);
+    }
+
+    /**
+     * Deletes a file from the Gemini File API.
+     *
+     * @param fileId - The file ID (format: "files/{fileId}" or just "{fileId}")
+     */
+    async deleteGeminiFile(fileId: string): Promise<void> {
+        return deleteGeminiFile(this, fileId);
+    }
+
+    /**
+     * Waits for a file to reach ACTIVE state.
+     *
+     * Files may be in PROCESSING state immediately after upload.
+     * This function polls until the file is ACTIVE or FAILED.
+     *
+     * @param fileId - The file ID
+     * @param maxWaitMs - Maximum time to wait in milliseconds (default: 60000)
+     * @param pollIntervalMs - Polling interval in milliseconds (default: 1000)
+     * @returns The file resource in ACTIVE state
+     * @throws Error if file fails processing or timeout is reached
+     */
+    async waitForGeminiFileActive(
+        fileId: string,
+        maxWaitMs: number = 60000,
+        pollIntervalMs: number = 1000
+    ): Promise<GeminiFileResource> {
+        return waitForFileActive(this, fileId, maxWaitMs, pollIntervalMs);
     }
 
     /**
