@@ -218,6 +218,10 @@ export function isTextEmbeddingModel(model: string): boolean {
 function mapHTTPBatchJob(batch: GeminiBatchResource): BatchJob<GCSBatchSource, GCSBatchDestination> {
     const providerJobId = batch.name || "";
 
+    // Extract inline requests from nested structure if present
+    // API returns: inputConfig.requests.requests[].request
+    const inlinedRequests = batch.inputConfig?.requests?.requests?.map(wrapper => wrapper.request);
+
     return {
         id: encodeBatchJobId("embeddings", providerJobId),
         displayName: batch.displayName,
@@ -227,7 +231,7 @@ function mapHTTPBatchJob(batch: GeminiBatchResource): BatchJob<GCSBatchSource, G
         source: {
             // Gemini API uses fileName for file-based input
             gcsUris: batch.inputConfig?.fileName ? [batch.inputConfig.fileName] : undefined,
-            inlinedRequests: batch.inputConfig?.requests,
+            inlinedRequests: inlinedRequests,
         },
         destination: batch.output?.responsesFile ? {
             gcsUri: batch.output.responsesFile,
@@ -297,7 +301,21 @@ export async function createEmbeddingsBatchJobHTTP(
 
     // Set input configuration
     if (options.source.inlinedRequests?.length) {
-        requestBody.batch.inputConfig.requests = options.source.inlinedRequests;
+        // Transform inlined requests to the nested structure expected by the API
+        // API expects: inputConfig.requests.requests[].request.content
+        // Input should have: req.content as { parts: [{ text: string }] }
+        requestBody.batch.inputConfig.requests = {
+            requests: options.source.inlinedRequests.map((req: any) => ({
+                request: {
+                    model: req.model || model,
+                    content: req.content,
+                    taskType: req.taskType,
+                    title: req.title,
+                    outputDimensionality: req.outputDimensionality,
+                },
+                metadata: req.metadata,
+            })),
+        };
     } else if (options.source.gcsUris?.length) {
         // For Gemini API, fileName should be a File resource reference
         requestBody.batch.inputConfig.fileName = options.source.gcsUris[0];

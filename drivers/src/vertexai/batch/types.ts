@@ -270,14 +270,33 @@ export interface GeminiBatchStats {
 export interface GeminiBatchInputConfig {
     /** Reference to a File containing requests (format: files/{fileId}) */
     fileName?: string;
-    /** Inline requests for batch processing */
-    requests?: GeminiInlinedEmbedRequest[];
+    /** Inline requests container for batch processing */
+    requests?: GeminiInlinedEmbedRequestsContainer;
 }
 
 /**
- * Inline embed content request for batch embeddings.
+ * Container for inline embed content requests.
+ * Wraps the array of individual requests.
  */
-export interface GeminiInlinedEmbedRequest {
+export interface GeminiInlinedEmbedRequestsContainer {
+    /** Array of inline embed content requests */
+    requests: GeminiInlinedEmbedRequestWrapper[];
+}
+
+/**
+ * Wrapper for a single inline embed content request.
+ */
+export interface GeminiInlinedEmbedRequestWrapper {
+    /** The actual embed content request */
+    request: GeminiEmbedContentRequest;
+    /** Optional metadata associated with this request */
+    metadata?: Record<string, unknown>;
+}
+
+/**
+ * Embed content request for batch embeddings.
+ */
+export interface GeminiEmbedContentRequest {
     /** Model to use (format: models/{model}) */
     model?: string;
     /** Content to embed */
