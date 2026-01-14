@@ -560,6 +560,7 @@ function sanitizeMessages(messages: MessageParam[]): MessageParam[] {
 
 /**
  * Fix orphaned tool_use blocks in the conversation.
+ * @exported for testing
  *
  * When an agent is stopped mid-tool-execution, the assistant message contains tool_use blocks
  * but no corresponding tool_result was added. The Anthropic API requires that every tool_use
@@ -568,7 +569,7 @@ function sanitizeMessages(messages: MessageParam[]): MessageParam[] {
  * This function detects such cases and injects synthetic tool_result blocks indicating
  * the tools were interrupted, allowing the conversation to continue.
  */
-function fixOrphanedToolUse(messages: MessageParam[]): MessageParam[] {
+export function fixOrphanedToolUse(messages: MessageParam[]): MessageParam[] {
     if (messages.length < 2) return messages;
 
     const result: MessageParam[] = [];

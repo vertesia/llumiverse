@@ -1281,7 +1281,7 @@ function updateConversation(conversation: ConverseRequest, prompt: ConverseReque
  * This function detects such cases and injects synthetic toolResult blocks indicating
  * the tools were interrupted, allowing the conversation to continue.
  */
-function fixOrphanedToolUse(messages: Message[]): Message[] {
+export function fixOrphanedToolUse(messages: Message[]): Message[] {
     if (messages.length < 2) return messages;
 
     const result: Message[] = [];
