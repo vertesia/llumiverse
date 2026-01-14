@@ -40,7 +40,7 @@ import {
 } from "./batch/claude-batch.js";
 import {
     cancelEmbeddingsBatchJob,
-    createEmbeddingsBatchJobHTTP,
+    createEmbeddingsBatchJobSDK,
     deleteEmbeddingsBatchJob,
     getEmbeddingsBatchJob,
 } from "./batch/embeddings-batch.js";
@@ -118,7 +118,7 @@ export class VertexAIDriver extends AbstractDriver<
         this.llamaClient = undefined;
         this.imagenClient = undefined;
 
-        this.googleAuth = new GoogleAuth(options.googleAuthOptions) as GoogleAuth<any>;
+        this.googleAuth = new GoogleAuth(options.googleAuthOptions);
         this.authClientPromise = undefined;
 
         this.logger.debug({ options: this.options }, "VertexAIDriver initialized with options:");
@@ -139,9 +139,10 @@ export class VertexAIDriver extends AbstractDriver<
             //Prefer OAuth if available
             if (this.options.googleAuthOptions) {
                 this.logger.info("Using OAuth credentials for Gemini API client");
+                const auth = await this.getAuthClient();
                 return new GoogleGenAI({
                     vertexai: false,
-                    googleAuthOptions: this.options.googleAuthOptions,
+                    googleAuthOptions: { authClient: auth },
                 });
             }
             this.logger.info("Using API Key for Gemini API client");
@@ -805,7 +806,7 @@ export class VertexAIDriver extends AbstractDriver<
     async createBatchJob(options: CreateBatchJobOptions<GCSBatchSource, GCSBatchDestination>): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>> {
         // Route to appropriate implementation
         if (options.type === BatchJobType.embeddings) {
-            return createEmbeddingsBatchJobHTTP(this, options);
+            return createEmbeddingsBatchJobSDK(this, options);
         }
         const modelLower = options.model.toLowerCase();
         if (modelLower.includes("claude") || modelLower.includes("anthropic")) {
@@ -902,7 +903,7 @@ export class VertexAIDriver extends AbstractDriver<
      * ```
      */
     async uploadGeminiFile(
-        content: string | Buffer | Blob,
+        content: string | Blob,
         mimeType: string,
         displayName?: string
     ): Promise<GeminiFileResource> {

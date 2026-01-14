@@ -7,7 +7,7 @@
  * - HTTP-based: Uses direct HTTP calls to the Generative Language API
  */
 
-import { BatchJob as SDKBatchJob } from "@google/genai";
+import { EmbeddingsBatchJobSource, BatchJob as SDKBatchJob } from "@google/genai";
 import {
     BatchJob,
     BatchJobType,
@@ -124,17 +124,26 @@ export async function createEmbeddingsBatchJobSDK(
     let batchJob: SDKBatchJob;
     try {
         // Build source configuration based on what's provided
-        const src: any = {};
+        const src: EmbeddingsBatchJobSource = {};
 
         if (options.source.inlinedRequests?.length) {
+            console.log("Creating embeddings batch job with inlined requests:", JSON.stringify(options.source.inlinedRequests, null, 2));
             // Use inline requests for testing or small batches
-            src.inlinedRequests = options.source.inlinedRequests;
+            // Note: The SDK expects 'contents' to be Content[], but our options usually come
+            // wrapped as { content: Content, ... }. We need to extract the content.
+            const contents = options.source.inlinedRequests.map((req: any) => {
+                const content = req.content || req;
+                // Ensure parts is present
+                if (!content.parts && typeof content.text === 'string') {
+                    return { parts: [{ text: content.text }] };
+                }
+                return content;
+            });
+            console.log("Mapped contents:", JSON.stringify(contents, null, 2));
+            src.inlinedRequests = { contents };
         } else if (options.source.gcsUris?.length) {
             // Use fileName for GCS-based input
             src.fileName = options.source.gcsUris[0];
-        } else if (options.source.bigqueryUri) {
-            // Note: BigQuery may not be directly supported, may need alternative approach
-            src.bigqueryUri = options.source.bigqueryUri;
         }
 
         batchJob = await client.batches.createEmbeddings({
