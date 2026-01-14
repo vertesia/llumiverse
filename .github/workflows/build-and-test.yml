@@ -35,7 +35,7 @@ jobs:
           run_install: false
       - uses: actions/setup-node@main
         with:
-          node-version: 22.x
+          node-version: 22.22.0
           cache: "pnpm"
       - run: pnpm install
       - run: pnpm eslint
@@ -48,7 +48,7 @@ jobs:
           project_id: "dengenlabs"
           workload_identity_provider: "projects/265888598630/locations/global/workloadIdentityPools/composable-cloud/providers/github"
 
-      - uses: "aws-actions/configure-aws-credentials@v4.2.1"
+      - uses: "aws-actions/configure-aws-credentials@v4.3.1"
         with:
           audience: sts.amazonaws.com
           role-to-assume: arn:aws:iam::716085231028:role/ComposablePromptExecutor
