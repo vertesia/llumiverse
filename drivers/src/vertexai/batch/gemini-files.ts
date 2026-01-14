@@ -62,7 +62,7 @@ function mapFileResource(file: any): GeminiFileResource {
  */
 export async function uploadFileToGemini(
     driver: VertexAIDriver,
-    content: string | Buffer | Blob,
+    content: string | Blob,
     mimeType: string,
     displayName?: string
 ): Promise<GeminiFileResource> {
@@ -72,28 +72,23 @@ export async function uploadFileToGemini(
     // Convert content to Blob for SDK
     let blob: Blob;
     if (typeof content === "string") {
-        blob = new Blob([content], { type: mimeType });
-    } else if (content instanceof Blob) {
-        blob = content;
+        blob = new Blob([content]);
     } else {
-        // Buffer - slice to create a new ArrayBuffer (avoids SharedArrayBuffer TypeScript issues)
-        const arrayBuffer = content.buffer.slice(
-            content.byteOffset,
-            content.byteOffset + content.byteLength
-        ) as ArrayBuffer;
-        blob = new Blob([arrayBuffer], { type: mimeType });
+        blob = content;
     }
 
     driver.logger.debug({ displayName, mimeType, size: blob.size }, "Uploading file to Gemini File API");
+    driver.logger.info({ blob }, "File content blob");
+    driver.logger.info({ blob: JSON.stringify(blob) }, "File content blob stringified");
 
     // Use SDK's files.upload method
     try {
         const result = await client.files.upload({
             file: blob,
-            config: {
-                mimeType,
-                displayName: displayName || `upload-${Date.now()}`,
-            },
+            // config: {
+            //     //mimeType,
+            //     displayName: displayName || `upload-${Date.now()}`,
+            // },
         });
 
         driver.logger.debug({ name: result.name, state: result.state }, "File uploaded to Gemini File API");
