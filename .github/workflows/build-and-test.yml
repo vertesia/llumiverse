@@ -35,20 +35,20 @@ jobs:
           run_install: false
       - uses: actions/setup-node@main
         with:
-          node-version: 22.x
+          node-version: 24.13.0
           cache: "pnpm"
       - run: pnpm install
       - run: pnpm eslint
       - run: pnpm build
 
       - name: Authenticate with Google Cloud
-        uses: "google-github-actions/auth@v2"
+        uses: "google-github-actions/auth@v3"
         id: gauth
         with:
           project_id: "dengenlabs"
           workload_identity_provider: "projects/265888598630/locations/global/workloadIdentityPools/composable-cloud/providers/github"
 
-      - uses: "aws-actions/configure-aws-credentials@v4.2.1"
+      - uses: "aws-actions/configure-aws-credentials@v5.1.1"
         with:
           audience: sts.amazonaws.com
           role-to-assume: arn:aws:iam::716085231028:role/ComposablePromptExecutor
