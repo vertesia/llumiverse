@@ -2,7 +2,7 @@ import {
     Bedrock, CreateModelCustomizationJobCommand, FoundationModelSummary, GetModelCustomizationJobCommand,
     GetModelCustomizationJobCommandOutput, ModelCustomizationJobStatus, ModelModality, StopModelCustomizationJobCommand
 } from "@aws-sdk/client-bedrock";
-import { BedrockRuntime, ConverseRequest, ConverseResponse, ConverseStreamOutput, InferenceConfiguration, Tool } from "@aws-sdk/client-bedrock-runtime";
+import { BedrockRuntime, ContentBlock, ConverseRequest, ConverseResponse, ConverseStreamOutput, InferenceConfiguration, Message, Tool } from "@aws-sdk/client-bedrock-runtime";
 import { S3Client } from "@aws-sdk/client-s3";
 import { AwsCredentialIdentity, Provider } from "@aws-sdk/types";
 import {
@@ -1261,11 +1261,108 @@ function updateConversation(conversation: ConverseRequest, prompt: ConverseReque
     const combinedMessages = [...(conversation?.messages || []), ...(prompt.messages || [])];
     const combinedSystem = prompt.system || conversation?.system;
 
+    // Fix orphaned toolUse blocks before returning
+    const fixedMessages = fixOrphanedToolUse(combinedMessages);
+
     return {
         modelId: prompt?.modelId || conversation?.modelId,
-        messages: combinedMessages.length > 0 ? combinedMessages : [],
+        messages: fixedMessages.length > 0 ? fixedMessages : [],
         system: combinedSystem && combinedSystem.length > 0 ? combinedSystem : undefined,
     };
+}
+
+/**
+ * Fix orphaned toolUse blocks in the conversation.
+ *
+ * When an agent is stopped mid-tool-execution, the assistant message contains toolUse blocks
+ * but no corresponding toolResult was added. The AWS Converse API requires that every toolUse
+ * must be followed by a toolResult in the next user message.
+ *
+ * This function detects such cases and injects synthetic toolResult blocks indicating
+ * the tools were interrupted, allowing the conversation to continue.
+ */
+function fixOrphanedToolUse(messages: Message[]): Message[] {
+    if (messages.length < 2) return messages;
+
+    const result: Message[] = [];
+
+    for (let i = 0; i < messages.length; i++) {
+        const current = messages[i];
+        result.push(current);
+
+        // Check if this is an assistant message with toolUse blocks
+        if (current.role === 'assistant' && current.content) {
+            const toolUseBlocks = current.content.filter(
+                (block): block is ContentBlock.ToolUseMember => 'toolUse' in block && !!block.toolUse
+            );
+
+            if (toolUseBlocks.length > 0) {
+                // Check if the next message is a user message with matching toolResults
+                const nextMessage = messages[i + 1];
+
+                if (nextMessage && nextMessage.role === 'user' && nextMessage.content) {
+                    // Get toolResult IDs from the next message
+                    const toolResultIds = new Set(
+                        nextMessage.content
+                            .filter((block): block is ContentBlock.ToolResultMember => 'toolResult' in block && !!block.toolResult)
+                            .map(block => block.toolResult!.toolUseId)
+                    );
+
+                    // Find orphaned toolUse blocks (no matching toolResult)
+                    const orphanedToolUse = toolUseBlocks.filter(block => !toolResultIds.has(block.toolUse!.toolUseId));
+
+                    if (orphanedToolUse.length > 0) {
+                        // Inject synthetic toolResults for orphaned toolUse
+                        const syntheticResults: ContentBlock[] = orphanedToolUse.map(block => ({
+                            toolResult: {
+                                toolUseId: block.toolUse!.toolUseId,
+                                content: [{
+                                    text: `[Tool interrupted: The user stopped the operation before "${block.toolUse!.name}" could execute.]`
+                                }]
+                            }
+                        }));
+
+                        // Prepend synthetic results to the next user message
+                        const updatedNextMessage: Message = {
+                            ...nextMessage,
+                            content: [...syntheticResults, ...nextMessage.content]
+                        };
+
+                        // Replace the next message in our iteration
+                        messages[i + 1] = updatedNextMessage;
+                    }
+                } else if (nextMessage && nextMessage.role === 'user' && !nextMessage.content) {
+                    // Next message is a user message but has no content
+                    // We need to add toolResults
+                    const syntheticResults: ContentBlock[] = toolUseBlocks.map(block => ({
+                        toolResult: {
+                            toolUseId: block.toolUse!.toolUseId,
+                            content: [{
+                                text: `[Tool interrupted: The user stopped the operation before "${block.toolUse!.name}" could execute.]`
+                            }]
+                        }
+                    }));
+
+                    const updatedNextMessage: Message = {
+                        role: 'user',
+                        content: syntheticResults
+                    };
+
+                    messages[i + 1] = updatedNextMessage;
+                } else if (!nextMessage) {
+                    // No next message - remove the toolUse blocks from the assistant message
+                    const filteredContent = current.content.filter(block => !('toolUse' in block));
+                    if (filteredContent.length > 0) {
+                        result[result.length - 1] = { ...current, content: filteredContent };
+                    } else {
+                        result.pop(); // Remove the message entirely if only toolUse
+                    }
+                }
+            }
+        }
+    }
+
+    return result;
 }
 
 function formatAmazonModalities(modalities: ModelModality[]): string[] {
