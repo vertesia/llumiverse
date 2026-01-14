@@ -1357,15 +1357,9 @@ export function fixOrphanedToolUse(messages: Message[]): Message[] {
                     };
 
                     messages[i + 1] = updatedNextMessage;
-                } else if (!nextMessage) {
-                    // No next message - remove the toolUse blocks from the assistant message
-                    const filteredContent = current.content.filter(block => !block.toolUse);
-                    if (filteredContent.length > 0) {
-                        result[result.length - 1] = { ...current, content: filteredContent };
-                    } else {
-                        result.pop(); // Remove the message entirely if only toolUse
-                    }
                 }
+                // Note: If there's no nextMessage, we leave the conversation as-is.
+                // The toolUse blocks are expected to be there - the next turn will provide toolResults.
             }
         }
     }
