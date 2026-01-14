@@ -1292,32 +1292,40 @@ export function fixOrphanedToolUse(messages: Message[]): Message[] {
 
         // Check if this is an assistant message with toolUse blocks
         if (current.role === 'assistant' && current.content) {
-            const toolUseBlocks = current.content.filter(
-                (block): block is ContentBlock.ToolUseMember => 'toolUse' in block && !!block.toolUse
-            );
+            // Extract toolUse blocks using simple property check (same pattern as existing Bedrock code)
+            const toolUseBlocks: Array<{ toolUseId: string; name: string }> = [];
+            for (const block of current.content) {
+                if (block.toolUse?.toolUseId) {
+                    toolUseBlocks.push({
+                        toolUseId: block.toolUse.toolUseId,
+                        name: block.toolUse.name ?? 'unknown'
+                    });
+                }
+            }
 
             if (toolUseBlocks.length > 0) {
                 // Check if the next message is a user message with matching toolResults
                 const nextMessage = messages[i + 1];
 
                 if (nextMessage && nextMessage.role === 'user' && nextMessage.content) {
-                    // Get toolResult IDs from the next message
-                    const toolResultIds = new Set(
-                        nextMessage.content
-                            .filter((block): block is ContentBlock.ToolResultMember => 'toolResult' in block && !!block.toolResult)
-                            .map(block => block.toolResult!.toolUseId)
-                    );
+                    // Get toolResult IDs from the next message using simple property check
+                    const toolResultIds = new Set<string>();
+                    for (const block of nextMessage.content) {
+                        if (block.toolResult?.toolUseId) {
+                            toolResultIds.add(block.toolResult.toolUseId);
+                        }
+                    }
 
                     // Find orphaned toolUse blocks (no matching toolResult)
-                    const orphanedToolUse = toolUseBlocks.filter(block => !toolResultIds.has(block.toolUse!.toolUseId));
+                    const orphanedToolUse = toolUseBlocks.filter(tu => !toolResultIds.has(tu.toolUseId));
 
                     if (orphanedToolUse.length > 0) {
                         // Inject synthetic toolResults for orphaned toolUse
-                        const syntheticResults: ContentBlock[] = orphanedToolUse.map(block => ({
+                        const syntheticResults: ContentBlock[] = orphanedToolUse.map(tu => ({
                             toolResult: {
-                                toolUseId: block.toolUse!.toolUseId,
+                                toolUseId: tu.toolUseId,
                                 content: [{
-                                    text: `[Tool interrupted: The user stopped the operation before "${block.toolUse!.name}" could execute.]`
+                                    text: `[Tool interrupted: The user stopped the operation before "${tu.name}" could execute.]`
                                 }]
                             }
                         }));
@@ -1334,11 +1342,11 @@ export function fixOrphanedToolUse(messages: Message[]): Message[] {
                 } else if (nextMessage && nextMessage.role === 'user' && !nextMessage.content) {
                     // Next message is a user message but has no content
                     // We need to add toolResults
-                    const syntheticResults: ContentBlock[] = toolUseBlocks.map(block => ({
+                    const syntheticResults: ContentBlock[] = toolUseBlocks.map(tu => ({
                         toolResult: {
-                            toolUseId: block.toolUse!.toolUseId,
+                            toolUseId: tu.toolUseId,
                             content: [{
-                                text: `[Tool interrupted: The user stopped the operation before "${block.toolUse!.name}" could execute.]`
+                                text: `[Tool interrupted: The user stopped the operation before "${tu.name}" could execute.]`
                             }]
                         }
                     }));
@@ -1351,7 +1359,7 @@ export function fixOrphanedToolUse(messages: Message[]): Message[] {
                     messages[i + 1] = updatedNextMessage;
                 } else if (!nextMessage) {
                     // No next message - remove the toolUse blocks from the assistant message
-                    const filteredContent = current.content.filter(block => !('toolUse' in block));
+                    const filteredContent = current.content.filter(block => !block.toolUse);
                     if (filteredContent.length > 0) {
                         result[result.length - 1] = { ...current, content: filteredContent };
                     } else {
