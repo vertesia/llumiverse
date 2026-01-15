@@ -1182,6 +1182,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             token_count: undefined
         };
     }
+
+    /**
+     * Cleanup AWS SDK clients when the driver is evicted from the cache.
+     */
+    destroy(): void {
+        this._executor?.destroy();
+        this._service?.destroy();
+    }
 }
 
 function jobInfo(job: GetModelCustomizationJobCommandOutput, jobId: string): TrainingJob {

@@ -686,6 +686,15 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         };
         return getEmbeddingsForText(this, text_options);
     }
+
+    /**
+     * Cleanup Google Cloud clients when the driver is evicted from the cache.
+     */
+    destroy(): void {
+        this.aiplatform?.close();
+        this.modelGarden?.close();
+        this.imagenClient?.close();
+    }
 }
 
 //'us-central1-aiplatform.googleapis.com',
