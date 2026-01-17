@@ -7,6 +7,7 @@
  * API Documentation: https://ai.google.dev/api/files
  */
 
+import type { FetchClient } from "@vertesia/api-fetch-client";
 import type { VertexAIDriver } from "../index.js";
 import {
     GeminiFileResource,
@@ -37,6 +38,7 @@ function mapFileResource(file: any): GeminiFileResource {
         name: file.name || "",
         displayName: file.displayName,
         mimeType: file.mimeType || "",
+        downloadUri: file.downloadUri,
         sizeBytes: String(file.sizeBytes || "0"),
         createTime: file.createTime || "",
         updateTime: file.updateTime || "",
@@ -44,11 +46,68 @@ function mapFileResource(file: any): GeminiFileResource {
         sha256Hash: file.sha256Hash,
         uri: file.uri || "",
         state: mapFileState(file.state),
+        source: file.source,
         error: file.error ? {
             code: file.error.code || 0,
             message: file.error.message || "Unknown error",
         } : undefined,
     };
+}
+
+export interface RegisterGeminiFilesOptions {
+    /** Cloud Storage URIs (gs://...) that should be registered with Gemini. */
+    uris: string[];
+    /** Optional quota project override for billing headers. */
+    quotaProject?: string;
+    /** Advanced override for testing; defaults to driver's Gemini fetch client. */
+    fetchClient?: FetchClient;
+}
+
+export interface GeminiRegisterFilesResponse {
+    /** Canonical Gemini file resources corresponding to the registered URIs. */
+    files: GeminiFileResource[];
+    /** Raw JSON payload from the API in case callers need extra fields. */
+    raw: unknown;
+    /** Underlying HTTP response for header/status inspection. */
+    httpResponse?: Response;
+}
+
+/**
+ * Registers existing GCS objects with the Gemini File service via HTTP.
+ * This fills the gap in the JS SDK until register_files ships upstream.
+ */
+export async function registerGeminiFiles(
+    driver: VertexAIDriver,
+    options: RegisterGeminiFilesOptions
+): Promise<GeminiRegisterFilesResponse> {
+    const { uris, quotaProject, fetchClient } = options;
+
+    if (!Array.isArray(uris) || uris.length === 0) {
+        throw new Error("registerGeminiFiles requires at least one gs:// URI");
+    }
+
+    const client = fetchClient ?? driver.getGeminiApiFetchClient();
+    const headers = quotaProject ? { "x-goog-user-project": quotaProject } : undefined;
+
+    try {
+        const payload = await client.post("/files:register", {
+            payload: { uris },
+            headers,
+        });
+
+        const files = Array.isArray(payload?.files)
+            ? payload.files.map(mapFileResource)
+            : [];
+
+        return {
+            files,
+            raw: payload,
+            httpResponse: client.response,
+        };
+    } catch (error) {
+        driver.logger.error({ error, uriCount: uris.length }, "Gemini files: register failed");
+        throw error;
+    }
 }
 
 /**
@@ -85,10 +144,10 @@ export async function uploadFileToGemini(
     try {
         const result = await client.files.upload({
             file: blob,
-            // config: {
-            //     //mimeType,
-            //     displayName: displayName || `upload-${Date.now()}`,
-            // },
+            config: {
+                mimeType,
+                //displayName: displayName || `upload-${Date.now()}`,
+            },
         });
 
         driver.logger.debug({ name: result.name, state: result.state }, "File uploaded to Gemini File API");

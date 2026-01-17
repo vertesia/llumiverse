@@ -427,6 +427,8 @@ export interface GeminiFileResource {
     displayName?: string;
     /** MIME type of the file */
     mimeType: string;
+    /** Pre-signed download URL for the file contents */
+    downloadUri?: string;
     /** Size of the file in bytes (as string) */
     sizeBytes: string;
     /** Creation timestamp (RFC 3339) */
@@ -441,6 +443,8 @@ export interface GeminiFileResource {
     uri: string;
     /** Current file state */
     state: GeminiFileState;
+    /** Source of the file resource (e.g., FILE_SOURCE_STORAGE) */
+    source?: string;
     /** Error information if processing failed */
     error?: {
         code: number;

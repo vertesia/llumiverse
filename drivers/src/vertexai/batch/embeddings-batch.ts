@@ -25,6 +25,7 @@ import {
     getGeminiBatchJob,
     listGeminiBatchJobs,
 } from "./gemini-batch.js";
+import { registerGeminiFiles } from "./gemini-files.js";
 import {
     encodeBatchJobId,
     GeminiAsyncBatchEmbedRequest,
@@ -123,28 +124,40 @@ export async function createEmbeddingsBatchJobSDK(
     // It supports fileName (for file uploads), inlinedRequests, or GCS URIs
     let batchJob: SDKBatchJob;
     try {
-        // Build source configuration based on what's provided
-        const src: EmbeddingsBatchJobSource = {};
-
-        if (options.source.inlinedRequests?.length) {
-            console.log("Creating embeddings batch job with inlined requests:", JSON.stringify(options.source.inlinedRequests, null, 2));
-            // Use inline requests for testing or small batches
-            // Note: The SDK expects 'contents' to be Content[], but our options usually come
-            // wrapped as { content: Content, ... }. We need to extract the content.
-            const contents = options.source.inlinedRequests.map((req: any) => {
-                const content = req.content || req;
-                // Ensure parts is present
-                if (!content.parts && typeof content.text === 'string') {
-                    return { parts: [{ text: content.text }] };
-                }
-                return content;
-            });
-            console.log("Mapped contents:", JSON.stringify(contents, null, 2));
-            src.inlinedRequests = { contents };
-        } else if (options.source.gcsUris?.length) {
-            // Use fileName for GCS-based input
-            src.fileName = options.source.gcsUris[0];
+        // Temporary hard-coded registration for manual testing until dynamic wiring lands
+        const gcsUri = options.source.gcsUris?.[0];
+        if (!gcsUri) {
+            throw new Error("Currently only GCS URI source is supported for embeddings batch job creation");
         }
+        const registration = await registerGeminiFiles(driver, { uris: [gcsUri] });
+        const registeredFileName = registration.files[0]?.name;
+
+        if (!registeredFileName) {
+            throw new Error("Gemini file registration did not return a file reference");
+        }
+
+        // Build source configuration based on what's provided
+        const src: EmbeddingsBatchJobSource = { fileName: registeredFileName };
+
+        // if (options.source.inlinedRequests?.length) {
+        //     console.log("Creating embeddings batch job with inlined requests:", JSON.stringify(options.source.inlinedRequests, null, 2));
+        //     // Use inline requests for testing or small batches
+        //     // Note: The SDK expects 'contents' to be Content[], but our options usually come
+        //     // wrapped as { content: Content, ... }. We need to extract the content.
+        //     const contents = options.source.inlinedRequests.map((req: any) => {
+        //         const content = req.content || req;
+        //         // Ensure parts is present
+        //         if (!content.parts && typeof content.text === 'string') {
+        //             return { parts: [{ text: content.text }] };
+        //         }
+        //         return content;
+        //     });
+        //     console.log("Mapped contents:", JSON.stringify(contents, null, 2));
+        //     src.inlinedRequests = { contents };
+        // } else if (options.source.gcsUris?.length) {
+        //     // Use fileName for GCS-based input
+        //     src.fileName = options.source.gcsUris[0];
+        // }
 
         batchJob = await client.batches.createEmbeddings({
             model,
@@ -153,6 +166,7 @@ export async function createEmbeddingsBatchJobSDK(
                 displayName: options.displayName,
             },
         });
+        console.log("Embeddings batch job created with ID:", JSON.stringify(batchJob));
     } catch (error) {
         console.log("Error creating embeddings batch job:", error);
         throw new Error(`Failed to create embeddings batch job: ${error}`);
