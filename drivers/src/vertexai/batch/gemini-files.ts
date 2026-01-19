@@ -89,6 +89,29 @@ export async function registerGeminiFiles(
     const client = fetchClient ?? driver.getGeminiApiFetchClient();
     const headers = quotaProject ? { "x-goog-user-project": quotaProject } : undefined;
 
+    // Log auth configuration for debugging
+    driver.logger.debug({
+        quotaProject,
+        hasCustomHeaders: !!headers,
+        clientBaseHeaders: client.headers,
+        uriCount: uris.length,
+    }, "registerGeminiFiles: Auth configuration");
+
+    // Add request logging callback to see what's actually being sent
+    const originalOnRequest = client.onRequest;
+    client.onRequest = (req) => {
+        const headers: Record<string, string> = {};
+        req.headers.forEach((value, key) => {
+            headers[key] = value;
+        });
+        driver.logger.info({
+            url: req.url,
+            method: req.method,
+            headers,
+        }, "registerGeminiFiles: Outgoing HTTP request");
+        if (originalOnRequest) originalOnRequest(req);
+    };
+
     try {
         const payload = await client.post("/files:register", {
             payload: { uris },

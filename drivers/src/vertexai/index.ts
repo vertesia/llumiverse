@@ -59,7 +59,7 @@ import {
     uploadFileToGemini,
     waitForFileActive,
 } from "./batch/gemini-files.js";
-import { decodeBatchJobId, GeminiFileResource } from "./batch/types.js";
+import { GeminiFileResource, decodeBatchJobId } from "./batch/types.js";
 import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
 import { TextEmbeddingsOptions, getEmbeddingsForText } from "./embeddings/embeddings-text.js";
 import { getModelDefinition } from "./models.js";
@@ -201,6 +201,13 @@ export class VertexAIDriver extends AbstractDriver<
         if (!this.geminiApiClient) {
             const apiKey = this.options.geminiApiKey;
 
+            this.logger.debug({
+                useAPIkey,
+                hasApiKey: !!apiKey,
+                project: this.options.project,
+                region: this.options.region,
+            }, "getGeminiApiFetchClient: Initializing Gemini API client");
+
             const client = new FetchClient("https://generativelanguage.googleapis.com/v1beta")
                 .withHeaders({
                     "Content-Type": "application/json",
@@ -210,12 +217,18 @@ export class VertexAIDriver extends AbstractDriver<
                 client.withHeaders({
                     "x-goog-api-key": apiKey,
                 });
+                this.logger.debug("getGeminiApiFetchClient: Using API key authentication");
             } else {
                 // Use OAuth via Google Auth library (ADC / Service Account / User Credentials)
                 if (this.options.project) {
                     client.withHeaders({
                         "x-goog-user-project": this.options.project,
                     });
+                    this.logger.info({
+                        project: this.options.project,
+                    }, "getGeminiApiFetchClient: Set x-goog-user-project header for OAuth");
+                } else {
+                    this.logger.warn("getGeminiApiFetchClient: No project ID available for x-goog-user-project header");
                 }
 
                 client.withAuthCallback(async () => {
