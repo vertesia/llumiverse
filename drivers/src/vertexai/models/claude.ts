@@ -558,6 +558,94 @@ function sanitizeMessages(messages: MessageParam[]): MessageParam[] {
     return result;
 }
 
+/**
+ * Fix orphaned tool_use blocks in the conversation.
+ * @exported for testing
+ *
+ * When an agent is stopped mid-tool-execution, the assistant message contains tool_use blocks
+ * but no corresponding tool_result was added. The Anthropic API requires that every tool_use
+ * must be followed by a tool_result in the next user message.
+ *
+ * This function detects such cases and injects synthetic tool_result blocks indicating
+ * the tools were interrupted, allowing the conversation to continue.
+ */
+export function fixOrphanedToolUse(messages: MessageParam[]): MessageParam[] {
+    if (messages.length < 2) return messages;
+
+    const result: MessageParam[] = [];
+
+    for (let i = 0; i < messages.length; i++) {
+        const current = messages[i];
+        result.push(current);
+
+        // Check if this is an assistant message with tool_use blocks
+        if (current.role === 'assistant' && Array.isArray(current.content)) {
+            const toolUseBlocks = current.content.filter(
+                (block): block is ContentBlockParam & { type: 'tool_use'; id: string; name: string } =>
+                    block.type === 'tool_use'
+            );
+
+            if (toolUseBlocks.length > 0) {
+                // Check if the next message is a user message with matching tool_results
+                const nextMessage = messages[i + 1];
+
+                if (nextMessage && nextMessage.role === 'user' && Array.isArray(nextMessage.content)) {
+                    // Get tool_result IDs from the next message
+                    const toolResultIds = new Set(
+                        nextMessage.content
+                            .filter((block): block is ToolResultBlockParam => block.type === 'tool_result')
+                            .map(block => block.tool_use_id)
+                    );
+
+                    // Find orphaned tool_use blocks (no matching tool_result)
+                    const orphanedToolUse = toolUseBlocks.filter(block => !toolResultIds.has(block.id));
+
+                    if (orphanedToolUse.length > 0) {
+                        // Inject synthetic tool_results for orphaned tool_use
+                        const syntheticResults: ToolResultBlockParam[] = orphanedToolUse.map(block => ({
+                            type: 'tool_result',
+                            tool_use_id: block.id,
+                            content: `[Tool interrupted: The user stopped the operation before "${block.name}" could execute.]`
+                        }));
+
+                        // Prepend synthetic results to the next user message
+                        const updatedNextMessage: MessageParam = {
+                            ...nextMessage,
+                            content: [...syntheticResults, ...nextMessage.content]
+                        };
+
+                        // Replace the next message in our iteration
+                        messages[i + 1] = updatedNextMessage;
+                    }
+                } else if (nextMessage && nextMessage.role === 'user') {
+                    // Next message is a user message but not array content (plain text)
+                    // We need to convert it and add tool_results
+                    const syntheticResults: ToolResultBlockParam[] = toolUseBlocks.map(block => ({
+                        type: 'tool_result',
+                        tool_use_id: block.id,
+                        content: `[Tool interrupted: The user stopped the operation before "${block.name}" could execute.]`
+                    }));
+
+                    const textContent: TextBlockParam = typeof nextMessage.content === 'string'
+                        ? { type: 'text', text: nextMessage.content }
+                        : { type: 'text', text: '' };
+
+                    const updatedNextMessage: MessageParam = {
+                        role: 'user',
+                        content: [...syntheticResults, textContent]
+                    };
+
+                    messages[i + 1] = updatedNextMessage;
+                }
+                // Note: If there's no nextMessage, we leave the conversation as-is.
+                // The tool_use blocks are expected to be there - the next turn will provide tool_results.
+            }
+        }
+    }
+
+    return result;
+}
+
 interface RequestOptions {
     headers?: Record<string, string>;
 }
@@ -577,8 +665,10 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
         };
     }
 
+    // Fix orphaned tool_use blocks (can occur when agent is stopped mid-tool-execution)
+    const fixedMessages = fixOrphanedToolUse(prompt.messages);
     // Sanitize messages to remove empty text blocks (can occur from interrupted streaming)
-    const sanitizedMessages = sanitizeMessages(prompt.messages);
+    const sanitizedMessages = sanitizeMessages(fixedMessages);
 
     const payload = {
         messages: sanitizedMessages,

@@ -305,12 +305,18 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         // Add function calls if present (Gemini format)
         if (toolUse && toolUse.length > 0) {
             for (const tool of toolUse as any[]) {
-                parts.push({
+                const functionCallPart: any = {
                     functionCall: {
                         name: tool.tool_name,
                         args: tool.tool_input,
                     }
-                });
+                };
+                // Include thought_signature for Gemini thinking models (2.5+/3.0+)
+                // This must be preserved in the conversation for subsequent API calls
+                if (tool.thought_signature) {
+                    functionCallPart.thoughtSignature = tool.thought_signature;
+                }
+                parts.push(functionCallPart);
             }
         }
 
@@ -685,6 +691,15 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             model: options.model,
         };
         return getEmbeddingsForText(this, text_options);
+    }
+
+    /**
+     * Cleanup Google Cloud clients when the driver is evicted from the cache.
+     */
+    destroy(): void {
+        this.aiplatform?.close();
+        this.modelGarden?.close();
+        this.imagenClient?.close();
     }
 }
 
