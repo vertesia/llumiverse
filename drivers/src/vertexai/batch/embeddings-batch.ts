@@ -129,7 +129,7 @@ export async function createEmbeddingsBatchJobSDK(
         if (!gcsUri) {
             throw new Error("Currently only GCS URI source is supported for embeddings batch job creation");
         }
-        const registration = await registerGeminiFiles(driver, { uris: [gcsUri] });
+        const registration = await registerGeminiFiles(driver, { uris: [gcsUri], quotaProject: driver.options.project });
         const registeredFileName = registration.files[0]?.name;
 
         if (!registeredFileName) {
