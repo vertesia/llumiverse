@@ -118,6 +118,13 @@ export class VertexAIDriver extends AbstractDriver<
         this.llamaClient = undefined;
         this.imagenClient = undefined;
 
+        if (options.googleAuthOptions) {
+            options.googleAuthOptions.scopes = [
+                "https://www.googleapis.com/auth/cloud-platform",
+                "https://www.googleapis.com/auth/generative-language",
+                "https://www.googleapis.com/auth/devstorage.read_only"
+            ];
+        }
         this.googleAuth = new GoogleAuth(options.googleAuthOptions);
         this.authClientPromise = undefined;
 
