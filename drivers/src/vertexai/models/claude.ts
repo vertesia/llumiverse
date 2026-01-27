@@ -670,10 +670,19 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
     // Sanitize messages to remove empty text blocks (can occur from interrupted streaming)
     const sanitizedMessages = sanitizeMessages(fixedMessages);
 
+    // Validate tools have input_schema.type set to 'object' as required by the Anthropic SDK
+    if (options.tools) {
+        for (const tool of options.tools) {
+            if (tool.input_schema.type !== 'object') {
+                throw new Error(`Tool "${tool.name}" has invalid input_schema.type: expected "object", got "${tool.input_schema.type}"`);
+            }
+        }
+    }
+
     const payload = {
         messages: sanitizedMessages,
         system: prompt.system,
-        tools: options.tools, // we are using the same shape as claude for tools
+        tools: options.tools as MessageCreateParamsBase['tools'],
         temperature: model_options?.temperature,
         model: modelName,
         max_tokens: maxToken(options),
