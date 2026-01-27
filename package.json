@@ -18,7 +18,7 @@
         "typescript-eslint": "^8.48.1",
         "vitest": "^4.0.16"
     },
-    "packageManager": "pnpm@10.20.0",
+    "packageManager": "pnpm@10.28.2",
     "pnpm": {
         "overrides": {
             "rollup": "$rollup",
