@@ -526,6 +526,13 @@ const supportedFinishReasons: FinishReason[] = [
     FinishReason.FINISH_REASON_UNSPECIFIED,
 ]
 
+// Finish reasons that indicate tool call issues but should be recovered gracefully
+// instead of throwing an error. The tool_use is still extracted and returned
+// so the workflow can generate a proper toolError response.
+const recoverableToolCallReasons = [
+    'UNEXPECTED_TOOL_CALL', // Model called an undeclared tool
+]
+
 function geminiMaxTokens(option: StatelessExecutionOptions) {
     const model_options = option.model_options as VertexAIGeminiOptions | undefined;
     if (model_options?.max_tokens) {
@@ -797,7 +804,9 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             }
             const content = candidate.content;
 
-            if (candidate.finishReason && !supportedFinishReasons.includes(candidate.finishReason)) {
+            // Check for unsupported finish reasons, but allow recoverable tool call issues
+            const isRecoverableToolCall = recoverableToolCallReasons.includes(candidate.finishReason as string);
+            if (candidate.finishReason && !supportedFinishReasons.includes(candidate.finishReason) && !isRecoverableToolCall) {
                 throw new Error(`Unsupported finish reason: ${candidate.finishReason}, `
                     + `finish message: ${candidate.finishMessage}, `
                     + `content: ${JSON.stringify(content, null, 2)}, safety: ${JSON.stringify(candidate.safetyRatings, null, 2)}`);
@@ -805,6 +814,13 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
             if (content) {
                 tool_use = collectToolUseParts(content);
+
+                // For recoverable tool call issues, log warning but continue processing
+                // The workflow will handle the invalid tool call gracefully
+                if (isRecoverableToolCall && tool_use && tool_use.length > 0) {
+                    console.warn(`[Gemini] Recoverable tool call issue (${candidate.finishReason}): ` +
+                        `Model tried to call undeclared tool(s): ${tool_use.map(t => t.tool_name).join(', ')}`);
+                }
 
                 // We clean the content before validation, so we can update the conversation.
                 const cleanedContent = cleanEmptyFieldsContent(content, options.result_schema);
@@ -879,7 +895,9 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                         case FinishReason.STOP: finish_reason = "stop"; break;
                         default: finish_reason = candidate.finishReason;
                     }
-                    if (candidate.finishReason && !supportedFinishReasons.includes(candidate.finishReason)) {
+                    // Check for unsupported finish reasons, but allow recoverable tool call issues
+                    const isRecoverableToolCall = recoverableToolCallReasons.includes(candidate.finishReason as string);
+                    if (candidate.finishReason && !supportedFinishReasons.includes(candidate.finishReason) && !isRecoverableToolCall) {
                         throw new Error(`Unsupported finish reason: ${candidate.finishReason}, `
                             + `finish message: ${candidate.finishMessage}, `
                             + `content: ${JSON.stringify(candidate.content, null, 2)}, safety: ${JSON.stringify(candidate.safetyRatings, null, 2)}`);
@@ -891,6 +909,11 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                         tool_use = collectToolUseParts(candidate.content);
                         if (tool_use) {
                             finish_reason = "tool_use";
+                            // Log warning for recoverable tool call issues
+                            if (isRecoverableToolCall) {
+                                console.warn(`[Gemini] Recoverable tool call issue (${candidate.finishReason}): ` +
+                                    `Model tried to call undeclared tool(s): ${tool_use.map(t => t.tool_name).join(', ')}`);
+                            }
                         }
                         return {
                             result: combinedResults.length > 0 ? combinedResults : [],
