@@ -5,18 +5,18 @@ on:
     inputs:
       dry_run:
         description: 'Dry run mode (skip actual publish)'
-        required: false
+        required: true
         type: boolean
         default: true
       version_type:
         description: 'Version type (dev creates timestamped version, others bump version)'
-        required: false
+        required: true
         type: choice
         options:
-          - dev
-          - patch
-          - minor
           - major
+          - minor
+          - patch
+          - dev
         default: dev
 
 permissions:
@@ -45,6 +45,8 @@ jobs:
       - run: pnpm install
 
       - name: Publish all packages
-        run: ./.github/bin/publish-all-packages.sh --ref "${{ github.ref_name }}" $(if [ "${{ inputs.dry_run }}" = "true" ]; then echo "--dry-run"; fi) --version-type "${{ inputs.version_type }}"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          ./.github/bin/publish-all-packages.sh \
+              --ref "${{ github.ref_name }}" \
+              --dry-run "${{ inputs.dry_run }}" \
+              --version-type "${{ inputs.version_type }}"
