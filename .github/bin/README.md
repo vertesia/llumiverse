@@ -18,8 +18,7 @@ The `publish-all-packages.sh` script handles publishing the following packages i
 ### Parameters
 
 - `--ref` (required): Git reference - `main` for dev builds, other branches for releases
-- `--version-type` (required): Version bump type (`major`, `minor`, `patch`, `dev`)
-  - `major` increases the major version in the package version
+- `--version-type` (required): Version bump type (`minor`, `patch`, `dev`)
   - `minor` increases the minor version in the package version
   - `patch` increases the patch version in the package version
   - `dev` creates a new development version in format `{base-version}-dev.{date}.{time}`, such as `1.0.0-dev.20260128.144200Z`. Note that the time part contains 'Z', which means that the time is in UTC; it also allows NPM to use leading zeros, as it turns the segment into alphanumeric.
@@ -75,7 +74,7 @@ The `publish-all-packages.sh` script handles publishing the following packages i
 
 **Steps**:
 1. Bumps root `package.json` version using semantic versioning
-   - Bump type: specified by `version-type` parameter (patch/minor/major)
+   - Bump type: specified by `version-type` parameter (patch/minor)
 2. Updates all package versions to match
    - Version format: standard semver (e.g., `0.23.0` → `0.23.1` for patch)
 3. Publishes all packages in dependency order
@@ -142,7 +141,7 @@ The script is designed to be run from the `publish-npm.yaml` GitHub Actions work
 
 - `ref`: Text input for git reference (default: `main`) → maps to `--ref`
 - `dry_run`: Checkbox (default: true for safety) → maps to `--dry-run true` or `--dry-run false`
-- `version_type`: Dropdown for `patch`, `minor`, `major`, or `dev` → maps to `--version-type`
+- `version_type`: Dropdown for `patch`, `minor`, or `dev` → maps to `--version-type`
 
 ## Key Features
 

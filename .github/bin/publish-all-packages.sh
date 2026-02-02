@@ -5,7 +5,7 @@ set -e
 # Usage: publish-all-packages.sh --ref <ref> [--dry-run [true|false]] --version-type <type>
 #   --ref: Git reference (main or other branches)
 #   --dry-run: Optional flag for dry run mode (value can be true, false, or omitted which means true)
-#   --version-type: Version type (dev, patch, minor, major)
+#   --version-type: Version type (dev, patch, minor)
 
 # Default values
 REF=""
@@ -63,8 +63,8 @@ if [ -z "$VERSION_TYPE" ]; then
 fi
 
 # Validate version type
-if [[ ! "$VERSION_TYPE" =~ ^(dev|patch|minor|major)$ ]]; then
-  echo "Error: Invalid version type '$VERSION_TYPE'. Must be dev, patch, minor, or major."
+if [[ ! "$VERSION_TYPE" =~ ^(dev|patch|minor)$ ]]; then
+  echo "Error: Invalid version type '$VERSION_TYPE'. Must be dev, patch, or minor."
   exit 1
 fi
 
@@ -104,23 +104,23 @@ if [ "$VERSION_TYPE" = "dev" ]; then
   echo "Updating to dev version ${dev_version}"
 
   # Update root package.json
-  npm version ${dev_version} --no-git-tag-version --workspaces=false
+  npm version "${dev_version}" --no-git-tag-version --workspaces=false
 
   # Update all workspace packages
-  pnpm -r --filter "./*" exec npm version ${dev_version} --no-git-tag-version
+  pnpm -r --filter "./*" exec npm version "${dev_version}" --no-git-tag-version
 else
-  # Release: bump version (patch, minor, or major)
+  # Release: bump version (patch or minor)
   echo "Bumping ${VERSION_TYPE} version"
 
   # Update root package.json
-  npm version ${VERSION_TYPE} --no-git-tag-version --workspaces=false
+  npm version "${VERSION_TYPE}" --no-git-tag-version --workspaces=false
 
   # Get the new version from root
   new_version=$(pnpm pkg get version | tr -d '"')
   echo "Setting all packages to version ${new_version}"
 
   # Set all workspace packages to the same version as root
-  pnpm -r --filter "./*" exec npm version ${new_version} --no-git-tag-version
+  pnpm -r --filter "./*" exec npm version "${new_version}" --no-git-tag-version
 fi
 
 # Step 2: Publish packages (in dependency order)
