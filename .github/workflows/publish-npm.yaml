@@ -24,7 +24,7 @@ permissions:
 
 jobs:
   publish:
-    name: Publish all packages
+    name: Publish NPM packages ${{ inputs.dry_run && '[dry-run]' || '' }}[${{ inputs.version_type }}]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
