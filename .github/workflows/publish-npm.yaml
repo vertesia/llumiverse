@@ -13,7 +13,6 @@ on:
         required: true
         type: choice
         options:
-          - major
           - minor
           - patch
           - dev
@@ -30,6 +29,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ssh-key: ${{ secrets.DEPLOY_KEY }} # Use deploy key to bypass branch protection rules
+
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
