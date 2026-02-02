@@ -30,7 +30,8 @@ update_package_versions() {
 
   if [ "$VERSION_TYPE" = "dev" ]; then
     # Dev: create dev version with date/time stamp
-    base_version=$(pnpm pkg get version | tr -d '"')
+    # Strip any existing -dev* suffix to avoid duplication (e.g., 1.0.0-dev.xxx or 1.0.0-dev → 1.0.0)
+    base_version=$(pnpm pkg get version | tr -d '"' | sed 's/-dev.*//')
     date_part=$(date -u +"%Y%m%d")
     time_part=$(date -u +"%H%M%SZ")
     dev_version="${base_version}-dev.${date_part}.${time_part}"
