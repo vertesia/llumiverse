@@ -1,6 +1,6 @@
 # NPM Package Publishing Scripts
 
-This directory contains scripts for publishing llumiverse packages to NPM with different versioning strategies.
+The file `publish-all-packages.sh` contains logic for publishing llumiverse packages to NPM with different versioning strategies.
 
 ## Overview
 
@@ -12,27 +12,36 @@ The `publish-all-packages.sh` script handles publishing the following packages i
 ## Usage
 
 ```bash
-./publish-all-packages.sh <ref> [dry-run] [version-type]
+./publish-all-packages.sh --ref <ref> --version-type <type> --dry-run <value>
 ```
 
 ### Parameters
 
-- `ref` (required): Git reference - `main` for dev builds, other branches for releases
-- `dry-run` (optional): Boolean (`true`/`false`) for dry run mode. Default: `false`
-- `version-type` (optional): Version bump type (`patch`, `minor`, `major`) - only used for non-main branches. Default: `patch`
+- `--ref` (required): Git reference - `main` for dev builds, `preview` for releases. Publishing releases outside of `preview` branch is forbidden.
+- `--version-type` (required): Version bump type (`minor`, `patch`, `dev`)
+  - `minor` increases the minor version in the package version
+  - `patch` increases the patch version in the package version
+  - `dev` creates a new development version in format `{base-version}-dev.{date}.{time}`, such as `1.0.0-dev.20260128.144200Z`. Note that the time part contains 'Z', which means that the time is in UTC; it also allows NPM to use leading zeros, as it turns the segment into alphanumeric.
+- `--dry-run` (optional): Flag to enable dry run mode. The value can be `true`, `false` or no value (which means `true`). If not specified, it means that it is not a dry-run.
 
 ### Examples
 
 ```bash
 # Dry run for main branch
-./publish-all-packages.sh main true
+./publish-all-packages.sh --ref main --dry-run --version-type dev
+./publish-all-packages.sh --ref main --dry-run true --version-type dev
 
 # Publish release with patch bump
-./publish-all-packages.sh preview false patch
+./publish-all-packages.sh --ref preview --dry-run --version-type patch
 
 # Publish release with minor bump
-./publish-all-packages.sh preview false minor
+./publish-all-packages.sh --ref preview --version-type minor
 ```
+
+### NPM Tags
+
+* `dev` tag is used when using the changing a dev version.
+* `latest` tag is used when changing a release version (minor, patch)
 
 ## Scenarios
 
@@ -45,12 +54,11 @@ The `publish-all-packages.sh` script handles publishing the following packages i
    - Version format: `{base-version}-dev.{YYYYMMDD}.{time}` (e.g., `0.23.0-dev.20251218.131500`)
 2. Publishes all packages in dependency order
    - NPM tag: `dev`
-3. **Does NOT commit** changes to git (these are temporary dev builds)
+3. Commit and push changes back to the branch (only if dry-run is false), but do not create Git tag
 
 **Result**:
 - All packages published with `dev` tag
 - Consumers can install with: `npm install @llumiverse/core@dev`
-- Git repository remains unchanged
 
 **Example**:
 ```bash
@@ -71,7 +79,7 @@ The `publish-all-packages.sh` script handles publishing the following packages i
 
 **Steps**:
 1. Bumps root `package.json` version using semantic versioning
-   - Bump type: specified by `version-type` parameter (patch/minor/major)
+   - Bump type: specified by `version-type` parameter (patch/minor)
 2. Updates all package versions to match
    - Version format: standard semver (e.g., `0.23.0` → `0.23.1` for patch)
 3. Publishes all packages in dependency order
@@ -107,12 +115,13 @@ The `publish-all-packages.sh` script handles publishing the following packages i
 - No git commits are made
 
 **Usage**:
+
 ```bash
 # Test main branch publishing
-./publish-all-packages.sh main true
+./publish-all-packages.sh --ref main --dry-run --version-type dev
 
 # Test release publishing with minor bump
-./publish-all-packages.sh preview true minor
+./publish-all-packages.sh --ref preview --dry-run --version-type minor
 ```
 
 **Result**:
@@ -127,16 +136,17 @@ The script is designed to be run from the `publish-npm.yaml` GitHub Actions work
 
 ```yaml
 - name: Publish all packages
-  run: ./.github/bin/publish-all-packages.sh "${{ inputs.ref }}" "${{ inputs.dry_run }}" "${{ inputs.version_type }}"
-  env:
-    NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+  run: ./.github/bin/publish-all-packages.sh \
+      --ref "${{ inputs.ref }}" \
+      --dry-run "${{ inputs.dry_run }}" \
+      --version-type "${{ inputs.version_type }}"
 ```
 
 ### Workflow Inputs
 
-- `ref`: Text input for git reference (default: `main`)
-- `dry_run`: Checkbox (default: true for safety)
-- `version_type`: Dropdown for `patch`, `minor`, or `major`
+- `ref`: Text input for git reference (default: `main`) → maps to `--ref`
+- `dry_run`: Checkbox (default: true for safety) → maps to `--dry-run true` or `--dry-run false`
+- `version_type`: Dropdown for `patch`, `minor`, or `dev` → maps to `--version-type`
 
 ## Key Features
 
@@ -170,6 +180,5 @@ In dry run mode, the script:
 
 ### Requirements
 
-- `NODE_AUTH_TOKEN` environment variable (for NPM authentication)
 - pnpm workspace setup
 - npm 11.5.1 or later
