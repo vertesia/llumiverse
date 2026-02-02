@@ -2,18 +2,49 @@
 set -e
 
 # Script to publish all llumiverse packages to NPM
-# Usage: publish-all-packages.sh <ref> [dry-run] [version-type]
-#   ref: Git reference (main or preview)
-#   dry-run: Optional boolean (true/false) for dry run mode
-#   version-type: Version type (dev, patch, minor, major)
+# Usage: publish-all-packages.sh --ref <ref> [--dry-run] --version-type <type>
+#   --ref: Git reference (main or other branches)
+#   --dry-run: Optional flag for dry run mode
+#   --version-type: Version type (dev, patch, minor, major)
 
-REF=$1
-DRY_RUN=${2:-false}
-VERSION_TYPE=${3:-dev}
+# Default values
+REF=""
+DRY_RUN=false
+VERSION_TYPE=""
 
+# Parse named arguments
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --ref)
+      REF="$2"
+      shift 2
+      ;;
+    --dry-run)
+      DRY_RUN=true
+      shift
+      ;;
+    --version-type)
+      VERSION_TYPE="$2"
+      shift 2
+      ;;
+    *)
+      echo "Error: Unknown argument '$1'"
+      echo "Usage: $0 --ref <ref> [--dry-run] --version-type <type>"
+      exit 1
+      ;;
+  esac
+done
+
+# Validate required arguments
 if [ -z "$REF" ]; then
-  echo "Error: Missing required argument: ref"
-  echo "Usage: $0 <ref> [dry-run] [version-type]"
+  echo "Error: Missing required argument: --ref"
+  echo "Usage: $0 --ref <ref> [--dry-run] --version-type <type>"
+  exit 1
+fi
+
+if [ -z "$VERSION_TYPE" ]; then
+  echo "Error: Missing required argument: --version-type"
+  echo "Usage: $0 --ref <ref> [--dry-run] --version-type <type>"
   exit 1
 fi
 
@@ -179,14 +210,20 @@ if [ "$DRY_RUN" = "true" ]; then
   fi
 fi
 
-# Step 4: Commit version changes (only for release versions + not dry-run)
-if [ "$VERSION_TYPE" != "dev" ] && [ "$DRY_RUN" = "false" ]; then
+# Step 4: Commit version changes (only if not dry-run)
+if [ "$DRY_RUN" = "false" ]; then
   echo "=== Committing version changes ==="
 
   git config user.email "github-actions[bot]@users.noreply.github.com"
   git config user.name "github-actions[bot]"
   git add .
-  git commit -m "chore: bump package versions (${VERSION_TYPE})"
+
+  if [ "$VERSION_TYPE" = "dev" ]; then
+    git commit -m "chore: bump package versions (dev: ${dev_version})"
+  else
+    git commit -m "chore: bump package versions (${VERSION_TYPE})"
+  fi
+
   git push origin ${REF}
 
   echo "Version changes pushed to ${REF}"

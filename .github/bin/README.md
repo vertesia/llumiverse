@@ -12,14 +12,14 @@ The `publish-all-packages.sh` script handles publishing the following packages i
 ## Usage
 
 ```bash
-./publish-all-packages.sh <ref> [dry-run] [version-type]
+./publish-all-packages.sh --ref <ref> [--dry-run] --version-type <type>
 ```
 
 ### Parameters
 
-- `ref` (required): Git reference - `main` for dev builds, other branches for releases
-- `dry-run` (optional): Boolean (`true`/`false`) for dry run mode. Default: `false`
-- `version-type` (required): Version bump type (`major`, `minor`, `patch`, `dev`)
+- `--ref` (required): Git reference - `main` for dev builds, other branches for releases
+- `--dry-run` (optional): Flag to enable dry run mode (no value needed)
+- `--version-type` (required): Version bump type (`major`, `minor`, `patch`, `dev`)
   - `major` increases the major version in the package version
   - `minor` increases the minor version in the package version
   - `patch` increases the patch version in the package version
@@ -131,16 +131,16 @@ The script is designed to be run from the `publish-npm.yaml` GitHub Actions work
 
 ```yaml
 - name: Publish all packages
-  run: ./.github/bin/publish-all-packages.sh "${{ inputs.ref }}" "${{ inputs.dry_run }}" "${{ inputs.version_type }}"
+  run: ./.github/bin/publish-all-packages.sh --ref "${{ inputs.ref }}" ${{ inputs.dry_run && '--dry-run' || '' }} --version-type "${{ inputs.version_type }}"
   env:
     NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
 
 ### Workflow Inputs
 
-- `ref`: Text input for git reference (default: `main`)
-- `dry_run`: Checkbox (default: true for safety)
-- `version_type`: Dropdown for `patch`, `minor`, or `major`
+- `ref`: Text input for git reference (default: `main`) → maps to `--ref`
+- `dry_run`: Checkbox (default: true for safety) → maps to `--dry-run` flag
+- `version_type`: Dropdown for `patch`, `minor`, `major`, or `dev` → maps to `--version-type`
 
 ## Key Features
 
