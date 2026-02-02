@@ -66,20 +66,19 @@ publish_packages() {
 
       pkg_version=$(pnpm pkg get version | tr -d '"')
 
-      # Prepare tag argument if npm_tag is set
-      if [ -n "$npm_tag" ]; then
-        tag_arg="--tag ${npm_tag}"
-        echo "Publishing @llumiverse/${pkg}@${pkg_version} with tag ${npm_tag}"
-      else
-        tag_arg=""
-        echo "Publishing @llumiverse/${pkg}@${pkg_version} (no tag)"
+      # Fail if npm_tag is not set (safety check to prevent publishing without explicit tag)
+      if [ -z "$npm_tag" ]; then
+        echo "Error: npm_tag is not set. This indicates an invalid ref/version-type combination."
+        exit 1
       fi
+
+      echo "Publishing @llumiverse/${pkg}@${pkg_version} with tag ${npm_tag}"
 
       # Publish
       if [ -n "$DRY_RUN_FLAG" ]; then
-        pnpm publish --access public ${tag_arg} --no-git-checks ${DRY_RUN_FLAG}
+        pnpm publish --access public --tag "${npm_tag}" --no-git-checks ${DRY_RUN_FLAG}
       else
-        pnpm publish --access public ${tag_arg} --no-git-checks
+        pnpm publish --access public --tag "${npm_tag}" --no-git-checks
       fi
 
       cd ..
