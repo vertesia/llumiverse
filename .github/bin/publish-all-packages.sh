@@ -22,7 +22,7 @@ update_package_versions() {
   echo "=== Updating package versions ==="
 
   # Determine npm tag based on branch and version type
-  if [ "$VERSION_TYPE" = "dev" ] && [ "$REF" = "main" ]; then
+  if [ "$VERSION_TYPE" = "dev" ]; then
     npm_tag="dev"
   elif [[ "$VERSION_TYPE" =~ ^(patch|minor)$ ]] && [ "$REF" = "preview" ]; then
     npm_tag="latest"
