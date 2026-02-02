@@ -17,7 +17,7 @@ The `publish-all-packages.sh` script handles publishing the following packages i
 
 ### Parameters
 
-- `--ref` (required): Git reference - `main` for dev builds, other branches for releases
+- `--ref` (required): Git reference - `main` for dev builds, `preview` for releases. Publishing releases outside of `preview` branch is forbidden.
 - `--version-type` (required): Version bump type (`minor`, `patch`, `dev`)
   - `minor` increases the minor version in the package version
   - `patch` increases the patch version in the package version

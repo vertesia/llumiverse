@@ -3,9 +3,9 @@ set -e
 
 # Script to publish all llumiverse packages to NPM
 # Usage: publish-all-packages.sh --ref <ref> [--dry-run [true|false]] --version-type <type>
-#   --ref: Git reference (main or other branches)
+#   --ref: Git reference (main for dev builds, preview for releases)
 #   --dry-run: Optional flag for dry run mode (value can be true, false, or omitted which means true)
-#   --version-type: Version type (dev, patch, minor)
+#   --version-type: Version type (dev, patch, minor). Release versions (patch, minor) require --ref preview.
 
 # Default values
 REF=""
@@ -65,6 +65,13 @@ fi
 # Validate version type
 if [[ ! "$VERSION_TYPE" =~ ^(dev|patch|minor)$ ]]; then
   echo "Error: Invalid version type '$VERSION_TYPE'. Must be dev, patch, or minor."
+  exit 1
+fi
+
+# Validate that release versions (minor, patch) can only be published from 'preview' branch
+if [[ "$VERSION_TYPE" =~ ^(patch|minor)$ ]] && [ "$REF" != "preview" ]; then
+  echo "Error: Release versions (patch, minor) can only be published from the 'preview' branch."
+  echo "Current branch: $REF"
   exit 1
 fi
 
