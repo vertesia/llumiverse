@@ -178,7 +178,7 @@ commit_and_push() {
     git commit -m "chore: bump package versions (${VERSION_TYPE})"
   fi
 
-  git push origin ${REF}
+  git push origin "$REF"
 
   echo "Version changes pushed to ${REF}"
 }
@@ -268,12 +268,15 @@ fi
 # =============================================================================
 
 update_package_versions
+
+if [ "$DRY_RUN" = "false" ]; then
+  commit_and_push
+fi
+
 publish_packages
 
 if [ "$DRY_RUN" = "true" ]; then
   verify_published_packages
-else
-  commit_and_push
 fi
 
 echo "=== Done ==="
