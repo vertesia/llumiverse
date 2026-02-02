@@ -45,6 +45,6 @@ jobs:
       - run: pnpm install
 
       - name: Publish all packages
-        run: ./.github/bin/publish-all-packages.sh "${{ github.ref_name }}" "${{ inputs.dry_run }}" "${{ inputs.version_type }}"
+        run: ./.github/bin/publish-all-packages.sh --ref "${{ github.ref_name }}" $(if [ "${{ inputs.dry_run }}" = "true" ]; then echo "--dry-run"; fi) --version-type "${{ inputs.version_type }}"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -12,24 +12,25 @@ The `publish-all-packages.sh` script handles publishing the following packages i
 ## Usage
 
 ```bash
-./publish-all-packages.sh --ref <ref> [--dry-run] --version-type <type>
+./publish-all-packages.sh --ref <ref> --version-type <type> --dry-run <value>
 ```
 
 ### Parameters
 
 - `--ref` (required): Git reference - `main` for dev builds, other branches for releases
-- `--dry-run` (optional): Flag to enable dry run mode (no value needed)
 - `--version-type` (required): Version bump type (`major`, `minor`, `patch`, `dev`)
   - `major` increases the major version in the package version
   - `minor` increases the minor version in the package version
   - `patch` increases the patch version in the package version
   - `dev` creates a new development version in format `{base-version}-dev.{date}.{time}`, such as `1.0.0-dev.20260128.144200`
+- `--dry-run` (optional): Flag to enable dry run mode. The value can be `true`, `false` or no value (which means `true`). If not specified, it means that it is not a dry-run.
 
 ### Examples
 
 ```bash
 # Dry run for main branch
 ./publish-all-packages.sh --ref main --dry-run --version-type dev
+./publish-all-packages.sh --ref main --dry-run true --version-type dev
 
 # Publish release with patch bump
 ./publish-all-packages.sh --ref preview --dry-run --version-type patch
@@ -131,7 +132,7 @@ The script is designed to be run from the `publish-npm.yaml` GitHub Actions work
 
 ```yaml
 - name: Publish all packages
-  run: ./.github/bin/publish-all-packages.sh --ref "${{ inputs.ref }}" ${{ inputs.dry_run && '--dry-run' || '' }} --version-type "${{ inputs.version_type }}"
+  run: ./.github/bin/publish-all-packages.sh --ref "${{ inputs.ref }}" --dry-run "${{ inputs.dry_run }}" --version-type "${{ inputs.version_type }}"
   env:
     NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 ```
@@ -139,7 +140,7 @@ The script is designed to be run from the `publish-npm.yaml` GitHub Actions work
 ### Workflow Inputs
 
 - `ref`: Text input for git reference (default: `main`) → maps to `--ref`
-- `dry_run`: Checkbox (default: true for safety) → maps to `--dry-run` flag
+- `dry_run`: Checkbox (default: true for safety) → maps to `--dry-run true` or `--dry-run false`
 - `version_type`: Dropdown for `patch`, `minor`, `major`, or `dev` → maps to `--version-type`
 
 ## Key Features

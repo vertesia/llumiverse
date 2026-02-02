@@ -2,9 +2,9 @@
 set -e
 
 # Script to publish all llumiverse packages to NPM
-# Usage: publish-all-packages.sh --ref <ref> [--dry-run] --version-type <type>
+# Usage: publish-all-packages.sh --ref <ref> [--dry-run [true|false]] --version-type <type>
 #   --ref: Git reference (main or other branches)
-#   --dry-run: Optional flag for dry run mode
+#   --dry-run: Optional flag for dry run mode (value can be true, false, or omitted which means true)
 #   --version-type: Version type (dev, patch, minor, major)
 
 # Default values
@@ -20,8 +20,22 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --dry-run)
-      DRY_RUN=true
-      shift
+      # Check if next argument is a value (true/false) or another flag/end of args
+      if [[ -n "$2" && "$2" != --* ]]; then
+        if [[ "$2" = "true" ]]; then
+          DRY_RUN=true
+        elif [[ "$2" = "false" ]]; then
+          DRY_RUN=false
+        else
+          echo "Error: Invalid value for --dry-run '$2'. Must be 'true' or 'false'."
+          exit 1
+        fi
+        shift 2
+      else
+        # No value provided, default to true
+        DRY_RUN=true
+        shift
+      fi
       ;;
     --version-type)
       VERSION_TYPE="$2"
@@ -29,7 +43,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       echo "Error: Unknown argument '$1'"
-      echo "Usage: $0 --ref <ref> [--dry-run] --version-type <type>"
+      echo "Usage: $0 --ref <ref> [--dry-run [true|false]] --version-type <type>"
       exit 1
       ;;
   esac
@@ -38,13 +52,13 @@ done
 # Validate required arguments
 if [ -z "$REF" ]; then
   echo "Error: Missing required argument: --ref"
-  echo "Usage: $0 --ref <ref> [--dry-run] --version-type <type>"
+  echo "Usage: $0 --ref <ref> [--dry-run [true|false]] --version-type <type>"
   exit 1
 fi
 
 if [ -z "$VERSION_TYPE" ]; then
   echo "Error: Missing required argument: --version-type"
-  echo "Usage: $0 --ref <ref> [--dry-run] --version-type <type>"
+  echo "Usage: $0 --ref <ref> [--dry-run [true|false]] --version-type <type>"
   exit 1
 fi
 
