@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: 'Dry run mode (skip actual publish)'
+        description: Dry Run
         required: true
         type: boolean
         default: true
       version_type:
-        description: 'Version type (dev creates timestamped version, others bump version)'
+        description: 'Version Change Strategy'
         required: true
         type: choice
         options:
