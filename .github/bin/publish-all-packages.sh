@@ -32,7 +32,11 @@ else
 fi
 
 # Packages to publish (in dependency order)
-PACKAGES=(common core drivers)
+PACKAGES=(
+  common
+  core
+  drivers
+)
 
 # Step 1: Update all package versions
 echo "=== Updating package versions ==="

@@ -19,19 +19,23 @@ The `publish-all-packages.sh` script handles publishing the following packages i
 
 - `ref` (required): Git reference - `main` for dev builds, other branches for releases
 - `dry-run` (optional): Boolean (`true`/`false`) for dry run mode. Default: `false`
-- `version-type` (optional): Version bump type (`patch`, `minor`, `major`) - only used for non-main branches. Default: `patch`
+- `version-type` (required): Version bump type (`major`, `minor`, `patch`, `dev`)
+  - `major` increases the major version in the package version
+  - `minor` increases the minor version in the package version
+  - `patch` increases the patch version in the package version
+  - `dev` creates a new development version in format `{base-version}-dev.{date}.{time}`, such as `1.0.0-dev.20260128.144200`
 
 ### Examples
 
 ```bash
 # Dry run for main branch
-./publish-all-packages.sh main true
+./publish-all-packages.sh --ref main --dry-run --version-type dev
 
 # Publish release with patch bump
-./publish-all-packages.sh preview false patch
+./publish-all-packages.sh --ref preview --dry-run --version-type patch
 
 # Publish release with minor bump
-./publish-all-packages.sh preview false minor
+./publish-all-packages.sh --ref preview --version-type minor
 ```
 
 ## Scenarios
@@ -45,12 +49,11 @@ The `publish-all-packages.sh` script handles publishing the following packages i
    - Version format: `{base-version}-dev.{YYYYMMDD}.{time}` (e.g., `0.23.0-dev.20251218.131500`)
 2. Publishes all packages in dependency order
    - NPM tag: `dev`
-3. **Does NOT commit** changes to git (these are temporary dev builds)
+3. Commit and push changes back to the branch (only if dry-run is false), but do not create Git tag
 
 **Result**:
 - All packages published with `dev` tag
 - Consumers can install with: `npm install @llumiverse/core@dev`
-- Git repository remains unchanged
 
 **Example**:
 ```bash
@@ -107,12 +110,13 @@ The `publish-all-packages.sh` script handles publishing the following packages i
 - No git commits are made
 
 **Usage**:
+
 ```bash
 # Test main branch publishing
-./publish-all-packages.sh main true
+./publish-all-packages.sh --ref main --dry-run --version-type dev
 
 # Test release publishing with minor bump
-./publish-all-packages.sh preview true minor
+./publish-all-packages.sh --ref preview --dry-run --version-type minor
 ```
 
 **Result**:
