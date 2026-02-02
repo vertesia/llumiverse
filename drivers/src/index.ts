@@ -5,6 +5,7 @@ export * from "./huggingface_ie.js";
 export * from "./mistral/index.js";
 export * from "./openai/azure_openai.js";
 export * from "./openai/openai.js";
+export * from "./openai/openai_compatible.js";
 export * from "./replicate.js";
 export * from "./test-driver/index.js";
 export * from "./togetherai/index.js";

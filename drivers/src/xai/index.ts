@@ -1,4 +1,4 @@
-import { AIModel, Completion, DriverOptions, ExecutionOptions, PromptOptions, PromptSegment } from "@llumiverse/core";
+import { AIModel, DriverOptions, PromptOptions, PromptSegment, Providers } from "@llumiverse/core";
 import { formatOpenAILikeMultimodalPrompt, OpenAIPromptFormatterOptions } from "../openai/openai_format.js";
 import { FetchClient } from "@vertesia/api-fetch-client";
 import OpenAI from "openai";
@@ -15,7 +15,7 @@ export interface xAiDriverOptions extends DriverOptions {
 export class xAIDriver extends BaseOpenAIDriver {
 
     service: OpenAI;
-    provider: "xai";
+    readonly provider = Providers.xai;
     xai_service: FetchClient;
     DEFAULT_ENDPOINT = "https://api.x.ai/v1";
 
@@ -31,7 +31,6 @@ export class xAIDriver extends BaseOpenAIDriver {
             baseURL: opts.endpoint ?? this.DEFAULT_ENDPOINT,
         });
         this.xai_service = new FetchClient(opts.endpoint ?? this.DEFAULT_ENDPOINT).withAuthCallback(async () => `Bearer ${opts.apiKey}`);
-        this.provider = "xai";
         //this.formatPrompt = this._formatPrompt; //TODO: fix xai prompt formatting
     }
 
@@ -49,17 +48,9 @@ export class xAIDriver extends BaseOpenAIDriver {
 
     }
 
-    extractDataFromResponse(_options: ExecutionOptions, result: OpenAI.Chat.Completions.ChatCompletion): Completion {
-        return {
-            result: result.choices[0].message.content ? [{ type: "text", value: result.choices[0].message.content }] : [],
-            finish_reason: result.choices[0].finish_reason,
-            token_usage: {
-                prompt: result.usage?.prompt_tokens,
-                result: result.usage?.completion_tokens,
-                total: result.usage?.total_tokens,
-            }
-        }
-    }
+    // Note: We intentionally do NOT override extractDataFromResponse here.
+    // The base class implementation properly handles tool_calls extraction.
+    // xAI's API is OpenAI-compatible and returns tool_calls in the same format.
 
     async listModels(): Promise<AIModel[]> {
         const [lm, em] = await Promise.all([
@@ -76,10 +67,12 @@ export class xAIDriver extends BaseOpenAIDriver {
             return {
                 id: model.id,
                 provider: this.provider,
-                name: model.object,
-                description: model.object,
+                name: model.id,
+                description: `${model.id} by ${model.owned_by}`,
                 is_multimodal: model.input_modalities.length > 1,
-                tags: [...model.input_modalities.map(m => `ì:${m}`), ...model.output_modalities.map(m => `ì:${m}`)],
+                input_modalities: model.input_modalities,
+                output_modalities: model.output_modalities,
+                tags: [...model.input_modalities.map(m => `i:${m}`), ...model.output_modalities.map(m => `o:${m}`)],
             } satisfies AIModel;
         });
 

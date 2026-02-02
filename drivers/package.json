@@ -1,6 +1,6 @@
 {
     "name": "@llumiverse/drivers",
-    "version": "0.23.0",
+    "version": "0.24.0",
     "type": "module",
     "description": "LLM driver implementations. Currently supported are: openai, huggingface, bedrock, replicate.",
     "files": [
@@ -50,16 +50,16 @@
         "rimraf": "^6.1.2",
         "ts-dual-module": "^0.6.3",
         "typescript": "^5.9.3",
-        "vitest": "^3.2.4"
+        "vitest": "^4.0.16"
     },
     "dependencies": {
         "@anthropic-ai/sdk": "^0.71.2",
         "@anthropic-ai/vertex-sdk": "^0.14.0",
-        "@aws-sdk/client-bedrock": "^3.946.0",
-        "@aws-sdk/client-bedrock-runtime": "^3.946.0",
-        "@aws-sdk/client-s3": "^3.946.0",
-        "@aws-sdk/credential-providers": "^3.946.0",
-        "@aws-sdk/lib-storage": "^3.946.0",
+        "@aws-sdk/client-bedrock": "^3.952.0",
+        "@aws-sdk/client-bedrock-runtime": "^3.952.0",
+        "@aws-sdk/client-s3": "^3.952.0",
+        "@aws-sdk/credential-providers": "^3.952.0",
+        "@aws-sdk/lib-storage": "^3.952.0",
         "@aws-sdk/types": "^3.936.0",
         "@azure-rest/ai-inference": "1.0.0-beta.6",
         "@azure/ai-projects": "1.0.0-beta.10",
@@ -67,7 +67,7 @@
         "@azure/core-sse": "^2.3.0",
         "@azure/identity": "^4.13.0",
         "@azure/openai": "2.0.0",
-        "@google-cloud/aiplatform": "^5.14.0",
+        "@google-cloud/aiplatform": "^6.0.0",
         "@google/genai": "^1.31.0",
         "@huggingface/inference": "4.13.4",
         "@llumiverse/common": "workspace:*",
@@ -78,8 +78,8 @@
         "groq-sdk": "^0.37.0",
         "mnemonist": "^0.40.3",
         "node-web-stream-adapters": "^0.2.1",
-        "openai": "^4.104.0",
-        "replicate": "^1.4.0"
+        "openai": "^6.10.0",
+        "replicate": "^1.3.1"
     },
     "ts_dual_module": {
         "outDir": "lib"

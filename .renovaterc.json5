@@ -30,6 +30,17 @@
       "rangeStrategy": "bump"
     },
     {
+      "groupName": "Vertesia libraries",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchPackageNames": [
+        "@vertesia/**",
+        "ts-dual-module"
+      ],
+      "rangeStrategy": "bump"
+    },
+    {
       "groupName": "package manager dependencies",
       "matchManagers": [
         "npm"
@@ -39,6 +50,18 @@
         "pnpm"
       ],
       "rangeStrategy": "bump"
+    },
+    // Overrides go at the bottom, highest precedence
+    {
+      "groupName": "Package Overrides",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchDepTypes": [
+        "overrides"
+      ],
+      "rangeStrategy": "bump",
+      "schedule": "* * * * 4" // Thursday
     }
-  ],
+  ]
 }

@@ -5,12 +5,20 @@ import {
 } from "@google/genai";
 import {
     AIModel, Completion, CompletionChunkObject, CompletionResult, ExecutionOptions,
-    ExecutionTokenUsage, getMaxTokensLimitVertexAi, JSONObject, JSONSchema, ModelType, PromptOptions, PromptRole,
-    PromptSegment, readStreamAsBase64, StatelessExecutionOptions, ToolDefinition, ToolUse,
+    ExecutionTokenUsage,
+    getConversationMeta,
+    getMaxTokensLimitVertexAi,
+    incrementConversationTurn,
+    JSONObject, JSONSchema, ModelType, PromptOptions, PromptRole,
+    PromptSegment, readStreamAsBase64, StatelessExecutionOptions,
+    stripBase64ImagesFromConversation,
+    ToolDefinition, ToolUse,
+    truncateLargeTextInConversation,
+    unwrapConversationArray,
     VertexAIGeminiOptions
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
-import { VertexAIDriver, GenerateContentPrompt } from "../index.js";
+import { GenerateContentPrompt, VertexAIDriver } from "../index.js";
 import { ModelDefinition } from "../models.js";
 
 function supportsStructuredOutput(options: PromptOptions): boolean {
@@ -467,11 +475,17 @@ function collectToolUseParts(content: Content): ToolUse[] | undefined {
     const parts = content.parts ?? [];
     for (const part of parts) {
         if (part.functionCall) {
-            out.push({
+            const toolUse: ToolUse = {
                 id: part.functionCall.name ?? '',
                 tool_name: part.functionCall.name ?? '',
                 tool_input: part.functionCall.args as JSONObject,
-            });
+            };
+            // Capture thought_signature for Gemini thinking models (2.5+/3.0+)
+            // This must be passed back with the function response
+            if (part.thoughtSignature) {
+                toolUse.thought_signature = part.thoughtSignature;
+            }
+            out.push(toolUse);
         }
     }
     return out.length > 0 ? out : undefined;
@@ -545,7 +559,7 @@ function geminiThinkingConfig(option: StatelessExecutionOptions): ThinkingConfig
     const model_options = option.model_options as VertexAIGeminiOptions | undefined;
     const include_thoughts = model_options?.include_thoughts ?? false;
     if (model_options?.thinking_budget_tokens) {
-        return {includeThoughts: include_thoughts, thinkingBudget: model_options.thinking_budget_tokens};
+        return { includeThoughts: include_thoughts, thinkingBudget: model_options.thinking_budget_tokens };
     }
 
     // Set minimum thinking level by default.
@@ -623,16 +637,18 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 if (!msg.tool_use_id) {
                     throw new Error("Tool response missing tool_use_id");
                 }
+                // Build functionResponse part with optional thought_signature for Gemini thinking models
+                const functionResponsePart: Part = {
+                    functionResponse: {
+                        name: msg.tool_use_id,
+                        response: formatFunctionResponse(msg.content || ''),
+                    },
+                    // Include thought_signature if provided (required for Gemini 2.5+/3.0+ thinking models)
+                    thoughtSignature: msg.thought_signature,
+                };
                 contents.push({
                     role: 'user',
-                    parts: [
-                        {
-                            functionResponse: {
-                                name: msg.tool_use_id,
-                                response: formatFunctionResponse(msg.content || ''),
-                            }
-                        }
-                    ]
+                    parts: [functionResponsePart]
                 });
             } else {    // PromptRole.user, PromptRole.assistant, PromptRole.safety
                 const parts: Part[] = [];
@@ -646,14 +662,27 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 // File content handling
                 if (msg.files) {
                     for (const f of msg.files) {
-                        const stream = await f.getStream();
-                        const data = await readStreamAsBase64(stream);
-                        parts.push({
-                            inlineData: {
-                                data,
-                                mimeType: f.mime_type
-                            }
-                        });
+                        let fileUrl = await f.getURL();                     
+                        const isGsUrl = fileUrl.startsWith('gs://') || fileUrl.startsWith('https://storage.googleapis.com/');
+
+                        if (isGsUrl) {
+                            parts.push({
+                                fileData: {
+                                    fileUri: fileUrl,
+                                    mimeType: f.mime_type
+                                }
+                            });
+                        } else {
+                            // Inline data handling
+                            const stream = await f.getStream();
+                            const data = await readStreamAsBase64(stream); 
+                            parts.push({
+                                inlineData: {
+                                    data,
+                                    mimeType: f.mime_type
+                                }
+                            });
+                        }
                     }
                 }
 
@@ -742,7 +771,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
 
-        let conversation = updateConversation(options.conversation as Content[], prompt.contents);
+        let conversation = updateConversation(options.conversation, prompt.contents);
         prompt.contents = conversation;
 
         // TODO: Remove hack, use global endpoint manually if needed.
@@ -792,12 +821,27 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             finish_reason = "tool_use";
         }
 
+        // Increment turn counter for deferred stripping
+        conversation = incrementConversationTurn(conversation) as Content[];
+
+        // Strip large base64 image data based on options.stripImagesAfterTurns
+        const currentTurn = getConversationMeta(conversation).turnNumber;
+        const stripOptions = {
+            keepForTurns: options.stripImagesAfterTurns ?? Infinity,
+            currentTurn,
+            textMaxTokens: options.stripTextMaxTokens
+        };
+        let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions);
+
+        // Truncate large text content if configured
+        processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+
         return {
             result: result && result.length > 0 ? result : [{ type: "text" as const, value: '' }],
             token_usage: token_usage,
             finish_reason: finish_reason,
             original_response: options.include_original_response ? response : undefined,
-            conversation,
+            conversation: processedConversation,
             tool_use
         } satisfies Completion;
     }
@@ -810,6 +854,10 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         }
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
+
+        // Include conversation history in prompt contents (same as non-streaming)
+        const conversation = updateConversation(options.conversation, prompt.contents);
+        prompt.contents = conversation;
 
         if (options.model.includes("gemini-2.5-flash-image")) {
             region = "global"; // Gemini Flash Image only available in global region, this is for nano-banana model
@@ -897,16 +945,19 @@ function getToolFunction(tool: ToolDefinition): FunctionDeclaration {
     };
 }
 
-
 /**
  * Update the conversation messages
  * @param prompt
  * @param response
  * @returns
  */
-function updateConversation(conversation: Content[], prompt: Content[]): Content[] {
-    return (conversation || [] satisfies Content[]).concat(prompt);
+function updateConversation(conversation: unknown, prompt: Content[]): Content[] {
+    // Unwrap array if wrapped, otherwise treat as array
+    const unwrapped = unwrapConversationArray<Content>(conversation);
+    const convArray = unwrapped ?? (conversation as Content[] || []);
+    return convArray.concat(prompt);
 }
+
 /**
  *
  * Gemini supports JSON output in the response. so we test if the response is a valid JSON object. otherwise we treat the response as a string.
