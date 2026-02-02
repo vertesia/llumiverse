@@ -105,6 +105,11 @@ export interface Driver<PromptT = unknown> {
     //generate embeddings for a given text or image
     generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult>;
 
+    /**
+     * Optional cleanup method called when the driver is evicted from the cache.
+     * Override this in driver implementations that need to release resources.
+     */
+    destroy?(): void;
 }
 
 /**
@@ -280,4 +285,11 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     //generate embeddings for a given text
     abstract generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult>;
 
+    /**
+     * Cleanup method called when the driver is evicted from the cache.
+     * Override this in driver implementations that need to release resources.
+     */
+    destroy(): void {
+        // No-op by default
+    }
 }
