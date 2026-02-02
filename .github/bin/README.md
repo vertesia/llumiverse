@@ -22,7 +22,7 @@ The `publish-all-packages.sh` script handles publishing the following packages i
   - `major` increases the major version in the package version
   - `minor` increases the minor version in the package version
   - `patch` increases the patch version in the package version
-  - `dev` creates a new development version in format `{base-version}-dev.{date}.{time}`, such as `1.0.0-dev.20260128.144200`
+  - `dev` creates a new development version in format `{base-version}-dev.{date}.{time}`, such as `1.0.0-dev.20260128.144200Z`. Note that the time part contains 'Z', which means that the time is in UTC; it also allows NPM to use leading zeros, as it turns the segment into alphanumeric.
 - `--dry-run` (optional): Flag to enable dry run mode. The value can be `true`, `false` or no value (which means `true`). If not specified, it means that it is not a dry-run.
 
 ### Examples
@@ -132,9 +132,10 @@ The script is designed to be run from the `publish-npm.yaml` GitHub Actions work
 
 ```yaml
 - name: Publish all packages
-  run: ./.github/bin/publish-all-packages.sh --ref "${{ inputs.ref }}" --dry-run "${{ inputs.dry_run }}" --version-type "${{ inputs.version_type }}"
-  env:
-    NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+  run: ./.github/bin/publish-all-packages.sh \
+      --ref "${{ inputs.ref }}" \
+      --dry-run "${{ inputs.dry_run }}" \
+      --version-type "${{ inputs.version_type }}"
 ```
 
 ### Workflow Inputs
@@ -175,6 +176,5 @@ In dry run mode, the script:
 
 ### Requirements
 
-- `NODE_AUTH_TOKEN` environment variable (for NPM authentication)
 - pnpm workspace setup
 - npm 11.5.1 or later

@@ -97,10 +97,9 @@ fi
 
 if [ "$VERSION_TYPE" = "dev" ]; then
   # Dev: create dev version with date/time stamp
-  # Use format without leading zeros to avoid npm stripping them
   base_version=$(pnpm pkg get version | tr -d '"')
   date_part=$(date -u +"%Y%m%d")
-  time_part=$(date -u +"%H%M%S" | sed 's/^0*//')  # Remove leading zeros
+  time_part=$(date -u +"%H%M%SZ")
   dev_version="${base_version}-dev.${date_part}.${time_part}"
   echo "Updating to dev version ${dev_version}"
 
