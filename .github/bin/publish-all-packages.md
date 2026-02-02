@@ -1,6 +1,6 @@
 # NPM Package Publishing Scripts
 
-This directory contains scripts for publishing llumiverse packages to NPM with different versioning strategies.
+The file `publish-all-packages.sh` contains logic for publishing llumiverse packages to NPM with different versioning strategies.
 
 ## Overview
 
@@ -37,6 +37,11 @@ The `publish-all-packages.sh` script handles publishing the following packages i
 # Publish release with minor bump
 ./publish-all-packages.sh --ref preview --version-type minor
 ```
+
+### NPM Tags
+
+* `dev` tag is used when using the changing a dev version.
+* `latest` tag is used when changing a release version (minor, patch)
 
 ## Scenarios
 
