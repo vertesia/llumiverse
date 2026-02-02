@@ -183,6 +183,52 @@ commit_and_push() {
   echo "Version changes pushed to ${REF}"
 }
 
+write_github_summary() {
+  # Skip if not running in GitHub Actions
+  if [ -z "$GITHUB_STEP_SUMMARY" ]; then
+    echo "Skipping GitHub summary (not running in GitHub Actions)"
+    return
+  fi
+
+  echo "=== Writing GitHub Summary ==="
+
+  # Get the version
+  if [ "$VERSION_TYPE" = "dev" ]; then
+    version="${dev_version}"
+  else
+    version=$(pnpm pkg get version | tr -d '"')
+  fi
+
+  # Determine title based on dry run mode
+  if [ "$DRY_RUN" = "true" ]; then
+    title="## 🧪 Dry Run Summary"
+  else
+    title="## 📦 Published Packages"
+  fi
+
+  # Write summary table
+  cat >> "$GITHUB_STEP_SUMMARY" << EOF
+${title}
+
+| Package | Version |
+| ------- | ------- |
+EOF
+
+  for pkg in "${PACKAGES[@]}"; do
+    pkg_name="@llumiverse/${pkg}"
+    pkg_url="https://www.npmjs.com/package/@llumiverse/${pkg}?activeTab=versions"
+    echo "| \`${pkg_name}\` | [${version}](${pkg_url}) |" >> "$GITHUB_STEP_SUMMARY"
+  done
+
+  # Add metadata
+  cat >> "$GITHUB_STEP_SUMMARY" << EOF
+
+**NPM Tag:** \`${npm_tag}\`
+**Branch:** \`${REF}\`
+**Dry Run:** \`${DRY_RUN}\`
+EOF
+}
+
 # =============================================================================
 # Argument parsing and validation
 # =============================================================================
@@ -278,5 +324,7 @@ publish_packages
 if [ "$DRY_RUN" = "true" ]; then
   verify_published_packages
 fi
+
+write_github_summary
 
 echo "=== Done ==="
