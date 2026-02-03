@@ -3,13 +3,8 @@ name: publish-npm-packages
 on:
   workflow_dispatch:
     inputs:
-      dry_run:
-        description: Dry Run
-        required: true
-        type: boolean
-        default: true
       version_type:
-        description: 'Version Change Strategy'
+        description: Version Change Strategy
         required: true
         type: choice
         options:
@@ -17,6 +12,11 @@ on:
           - patch
           - dev
         default: dev
+      dry_run:
+        description: Dry Run
+        required: true
+        type: boolean
+        default: true
 
 permissions:
   id-token: write  # Required for OIDC between GitHub and NPM
