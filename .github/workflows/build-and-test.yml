@@ -67,7 +67,7 @@ jobs:
 
   notify-repo-composableai:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/repo-dispatch')
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/preview' || startsWith(github.ref, 'refs/heads/repo-dispatch'))
     needs:
       - build
       - test
@@ -85,6 +85,6 @@ jobs:
               "event_type": "update-git-submodule-request",
               "client_payload": {
                 "llumiverse_sha": "${{ github.sha }}",
-                "branch": "main"
+                "branch": "${{ github.ref_name }}"
               }
             }'
