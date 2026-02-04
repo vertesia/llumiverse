@@ -1,6 +1,5 @@
 /**
  * Returns the context window size (input + output) for a given model.
- * This is used to calculate appropriate checkpoint thresholds.
  */
 export function getContextWindowSize(model: string): number {
     // Claude models
@@ -26,16 +25,4 @@ export function getContextWindowSize(model: string): number {
     if (model.includes('mistral-large')) return 128_000;
 
     return 128_000; // conservative default
-}
-
-/**
- * Returns the recommended checkpoint threshold for a given model.
- * Uses 75% of the context window to leave room for:
- * - The checkpoint summarization call
- * - Tool definitions and system prompts
- * - Buffer for continuation after checkpoint
- */
-export function getDefaultCheckpointThreshold(model: string): number {
-    const contextWindow = getContextWindowSize(model);
-    return Math.floor(contextWindow * 0.75);
 }
