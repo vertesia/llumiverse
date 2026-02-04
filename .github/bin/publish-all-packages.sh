@@ -2,10 +2,11 @@
 set -e
 
 # Script to publish all llumiverse packages to NPM
-# Usage: publish-all-packages.sh --ref <ref> [--dry-run [true|false]] --version-type <type>
+# Usage: publish-all-packages.sh --ref <ref> --release-type <type> --bump-type <type> [--dry-run [true|false]]
 #   --ref: Git reference (main for dev builds, preview for releases)
+#   --release-type: Release type (release, snapshot). Release creates stable versions, snapshot creates dev versions.
+#   --bump-type: Bump type (minor, patch, keep). How to change the version.
 #   --dry-run: Optional flag for dry run mode (value can be true, false, or omitted which means true)
-#   --version-type: Version type (dev, patch, minor). Release versions (patch, minor) require --ref preview.
 
 # Packages to publish (in dependency order)
 PACKAGES=(
@@ -21,41 +22,47 @@ PACKAGES=(
 update_package_versions() {
   echo "=== Updating package versions ==="
 
-  # Determine npm tag based on branch and version type
-  if [ "$VERSION_TYPE" = "dev" ]; then
+  # Determine npm tag based on release type
+  if [ "$RELEASE_TYPE" = "snapshot" ]; then
     npm_tag="dev"
-  elif [[ "$VERSION_TYPE" =~ ^(patch|minor)$ ]] && [ "$REF" = "preview" ]; then
+  else
     npm_tag="latest"
   fi
 
-  if [ "$VERSION_TYPE" = "dev" ]; then
-    # Dev: create dev version with date/time stamp
-    # Strip any existing -dev* suffix to avoid duplication (e.g., 1.0.0-dev.xxx or 1.0.0-dev → 1.0.0)
-    base_version=$(pnpm pkg get version | tr -d '"' | sed 's/-dev.*//')
+  # Get current version and strip any existing -dev* suffix to get base version
+  current_version=$(pnpm pkg get version | tr -d '"')
+  base_version=$(echo "$current_version" | sed 's/-dev.*//')
+
+  # Apply bump if needed (for both snapshot and release)
+  if [ "$BUMP_TYPE" = "minor" ]; then
+    # Bump minor version: X.Y.Z -> X.(Y+1).0
+    IFS='.' read -r major minor patch <<< "$base_version"
+    base_version="${major}.$((minor + 1)).0"
+    echo "Bumped minor version to ${base_version}"
+  elif [ "$BUMP_TYPE" = "patch" ]; then
+    # Bump patch version: X.Y.Z -> X.Y.(Z+1)
+    IFS='.' read -r major minor patch <<< "$base_version"
+    base_version="${major}.${minor}.$((patch + 1))"
+    echo "Bumped patch version to ${base_version}"
+  fi
+
+  if [ "$RELEASE_TYPE" = "snapshot" ]; then
+    # Snapshot: create dev version with date/time stamp
     date_part=$(date -u +"%Y%m%d")
     time_part=$(date -u +"%H%M%SZ")
-    dev_version="${base_version}-dev.${date_part}.${time_part}"
-    echo "Updating to dev version ${dev_version}"
-
-    # Update root package.json
-    npm version "${dev_version}" --no-git-tag-version --workspaces=false
-
-    # Update all workspace packages
-    pnpm -r --filter "./*" exec npm version "${dev_version}" --no-git-tag-version
+    new_version="${base_version}-dev.${date_part}.${time_part}"
+    echo "Updating to snapshot version ${new_version}"
   else
-    # Release: bump version (patch or minor)
-    echo "Bumping ${VERSION_TYPE} version"
-
-    # Update root package.json
-    npm version "${VERSION_TYPE}" --no-git-tag-version --workspaces=false
-
-    # Get the new version from root
-    new_version=$(pnpm pkg get version | tr -d '"')
-    echo "Setting all packages to version ${new_version}"
-
-    # Set all workspace packages to the same version as root
-    pnpm -r --filter "./*" exec npm version "${new_version}" --no-git-tag-version
+    # Release: use base version as-is
+    new_version="${base_version}"
+    echo "Updating to release version ${new_version}"
   fi
+
+  # Update root package.json
+  npm version "${new_version}" --no-git-tag-version --workspaces=false
+
+  # Update all workspace packages
+  pnpm -r --filter "./*" exec npm version "${new_version}" --no-git-tag-version
 }
 
 publish_packages() {
@@ -93,12 +100,8 @@ verify_published_packages() {
   # Array to track failed packages
   failed_packages=()
 
-  # Get the expected version
-  if [ "$VERSION_TYPE" = "dev" ]; then
-    expected_version="${dev_version}"
-  else
-    expected_version=$(pnpm pkg get version | tr -d '"')
-  fi
+  # Get the expected version from root package.json
+  expected_version=$(pnpm pkg get version | tr -d '"')
 
   for pkg in "${PACKAGES[@]}"; do
     if [ -d "$pkg" ]; then
@@ -168,14 +171,17 @@ verify_published_packages() {
 commit_and_push() {
   echo "=== Committing version changes ==="
 
+  # Get the version from root package.json
+  version=$(pnpm pkg get version | tr -d '"')
+
   git config user.email "github-actions[bot]@users.noreply.github.com"
   git config user.name "github-actions[bot]"
   git add .
 
-  if [ "$VERSION_TYPE" = "dev" ]; then
-    git commit -m "chore: bump package versions (dev: ${dev_version})"
+  if [ "$RELEASE_TYPE" = "release" ]; then
+    git commit -m "chore: release ${version}"
   else
-    git commit -m "chore: bump package versions (${VERSION_TYPE})"
+    git commit -m "chore: snapshot ${version}"
   fi
 
   git push origin "$REF"
@@ -192,12 +198,8 @@ write_github_summary() {
 
   echo "=== Writing GitHub Summary ==="
 
-  # Get the version
-  if [ "$VERSION_TYPE" = "dev" ]; then
-    version="${dev_version}"
-  else
-    version=$(pnpm pkg get version | tr -d '"')
-  fi
+  # Get the version from root package.json
+  version=$(pnpm pkg get version | tr -d '"')
 
   # Determine title based on dry run mode
   if [ "$DRY_RUN" = "true" ]; then
@@ -236,7 +238,8 @@ EOF
 # Default values
 REF=""
 DRY_RUN=false
-VERSION_TYPE=""
+RELEASE_TYPE=""
+BUMP_TYPE=""
 
 # Parse named arguments
 while [[ $# -gt 0 ]]; do
@@ -263,13 +266,17 @@ while [[ $# -gt 0 ]]; do
         shift
       fi
       ;;
-    --version-type)
-      VERSION_TYPE="$2"
+    --release-type)
+      RELEASE_TYPE="$2"
+      shift 2
+      ;;
+    --bump-type)
+      BUMP_TYPE="$2"
       shift 2
       ;;
     *)
       echo "Error: Unknown argument '$1'"
-      echo "Usage: $0 --ref <ref> [--dry-run [true|false]] --version-type <type>"
+      echo "Usage: $0 --ref <ref> --release-type <type> --bump-type <type> [--dry-run [true|false]]"
       exit 1
       ;;
   esac
@@ -278,25 +285,37 @@ done
 # Validate required arguments
 if [ -z "$REF" ]; then
   echo "Error: Missing required argument: --ref"
-  echo "Usage: $0 --ref <ref> [--dry-run [true|false]] --version-type <type>"
+  echo "Usage: $0 --ref <ref> --release-type <type> --bump-type <type> [--dry-run [true|false]]"
   exit 1
 fi
 
-if [ -z "$VERSION_TYPE" ]; then
-  echo "Error: Missing required argument: --version-type"
-  echo "Usage: $0 --ref <ref> [--dry-run [true|false]] --version-type <type>"
+if [ -z "$RELEASE_TYPE" ]; then
+  echo "Error: Missing required argument: --release-type"
+  echo "Usage: $0 --ref <ref> --release-type <type> --bump-type <type> [--dry-run [true|false]]"
   exit 1
 fi
 
-# Validate version type
-if [[ ! "$VERSION_TYPE" =~ ^(dev|patch|minor)$ ]]; then
-  echo "Error: Invalid version type '$VERSION_TYPE'. Must be dev, patch, or minor."
+if [ -z "$BUMP_TYPE" ]; then
+  echo "Error: Missing required argument: --bump-type"
+  echo "Usage: $0 --ref <ref> --release-type <type> --bump-type <type> [--dry-run [true|false]]"
   exit 1
 fi
 
-# Validate that release versions (minor, patch) can only be published from 'preview' branch
-if [[ "$VERSION_TYPE" =~ ^(patch|minor)$ ]] && [ "$REF" != "preview" ]; then
-  echo "Error: Release versions (patch, minor) can only be published from the 'preview' branch."
+# Validate release type
+if [[ ! "$RELEASE_TYPE" =~ ^(release|snapshot)$ ]]; then
+  echo "Error: Invalid release type '$RELEASE_TYPE'. Must be 'release' or 'snapshot'."
+  exit 1
+fi
+
+# Validate bump type
+if [[ ! "$BUMP_TYPE" =~ ^(minor|patch|keep)$ ]]; then
+  echo "Error: Invalid bump type '$BUMP_TYPE'. Must be 'minor', 'patch', or 'keep'."
+  exit 1
+fi
+
+# Validate that releases can only be published from 'preview' branch
+if [ "$RELEASE_TYPE" = "release" ] && [ "$REF" != "preview" ]; then
+  echo "Error: Release versions can only be published from the 'preview' branch."
   echo "Current branch: $REF"
   exit 1
 fi
