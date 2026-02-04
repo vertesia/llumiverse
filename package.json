@@ -1,6 +1,6 @@
 {
     "name": "@llumiverse/parent",
-    "version": "0.24.0-dev.20260203.164053Z",
+    "version": "0.25.0-dev.20260204.110528Z",
     "private": true,
     "scripts": {
         "bump": "pnpm exec wst bump minor",
