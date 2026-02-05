@@ -3,24 +3,28 @@ name: publish-npm-packages
 on:
   workflow_dispatch:
     inputs:
-      ref:
-        description: 'The Git reference to checkout'
+      release_type:
+        description: Release Type
         required: true
-        default: 'main'
-      dry_run:
-        description: 'Dry run mode (skip actual publish)'
-        required: false
-        type: boolean
-        default: true
-      version_type:
-        description: 'Version bump type (patch, minor, major)'
-        required: false
         type: choice
         options:
+          - snapshot
+          - release
+        default: snapshot
+      bump_type:
+        description: Version Bump
+        required: true
+        type: choice
+        options:
+          - keep
           - patch
           - minor
-          - major
-        default: patch
+        default: keep
+      dry_run:
+        description: Dry Run
+        required: true
+        type: boolean
+        default: true
 
 permissions:
   id-token: write  # Required for OIDC between GitHub and NPM
@@ -28,13 +32,14 @@ permissions:
 
 jobs:
   publish:
-    name: Publish all packages
+    name: Publish NPM packages ${{ inputs.dry_run && '[dry-run]' || '' }}[${{ inputs.release_type }}/${{ inputs.bump_type }}]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ssh-key: ${{ secrets.DEPLOY_KEY }} # Use deploy key to bypass branch protection rules
+
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -50,6 +55,9 @@ jobs:
       - run: pnpm install
 
       - name: Publish all packages
-        run: ./.github/bin/publish-all-packages.sh "${{ inputs.ref }}" "${{ inputs.dry_run }}" "${{ inputs.version_type }}"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          ./.github/bin/publish-all-packages.sh \
+              --ref "${{ github.ref_name }}" \
+              --release-type "${{ inputs.release_type }}" \
+              --bump-type "${{ inputs.bump_type }}" \
+              --dry-run "${{ inputs.dry_run }}"

@@ -1,6 +1,6 @@
 {
     "name": "@llumiverse/common",
-    "version": "1.0.0-dev.20260128.144200",
+    "version": "1.0.0-dev.20260202.145450Z",
     "type": "module",
     "description": "Public types, enums and options used by Llumiverse API.",
     "files": [
@@ -71,8 +71,8 @@
         "rimraf": "^6.1.2",
         "ts-dual-module": "^0.6.3",
         "typescript": "^5.9.3",
-        "vitest": "^4.0.16",
-        "@types/node": "^22.19.1"
+        "vitest": "^4.0.18",
+        "@types/node": "^22.19.7"
     },
     "dependencies": {},
     "ts_dual_module": {

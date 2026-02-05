@@ -1,6 +1,6 @@
 {
     "name": "@llumiverse/parent",
-    "version": "1.0.0-dev",
+    "version": "1.0.0-dev.20260202.145450Z",
     "private": true,
     "scripts": {
         "bump": "pnpm exec wst bump minor",
@@ -11,12 +11,12 @@
     },
     "devDependencies": {
         "cross-spawn": "^7.0.6",
-        "eslint": "^9.39.1",
+        "eslint": "^9.39.2",
         "npm-ws-tools": "^0.3.0",
-        "rollup": "^4.53.3",
+        "rollup": "^4.57.1",
         "typescript": "^5.9.3",
-        "typescript-eslint": "^8.48.1",
-        "vitest": "^4.0.16"
+        "typescript-eslint": "^8.54.0",
+        "vitest": "^4.0.18"
     },
     "packageManager": "pnpm@10.20.0",
     "pnpm": {
@@ -24,7 +24,7 @@
             "rollup": "$rollup",
             "cross-spawn": "$cross-spawn",
             "brace-expansion@>=2.0.0 <3.0.0": "^2.0.2",
-            "esbuild@<=0.24.2": "^0.27.1",
+            "esbuild@<=0.24.2": "^0.27.2",
             "vite@>=6.0.0 <6.2.6": "^6.4.1",
             "form-data@<2.5.4": "^2.5.4",
             "form-data@>=4.0.0 <4.0.4": "^4.0.5",
@@ -32,7 +32,8 @@
             "google-auth-library": "^10.5.0",
             "js-yaml@>=4.0.0 <4.1.1": "^4.1.1",
             "jws@>=3.0.0 <3.2.3": "^3.2.3",
-            "jws@>=4.0.0 <4.0.1": "^4.0.1"
+            "jws@>=4.0.0 <4.0.1": "^4.0.1",
+            "@isaacs/brace-expansion@>=5.0.0 <6.0.0": "^5.0.1"
         }
     }
 }
