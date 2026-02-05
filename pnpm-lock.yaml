@@ -156,8 +156,8 @@ importers:
         specifier: workspace:*
         version: link:../core
       '@vertesia/api-fetch-client':
-        specifier: ^0.81.1
-        version: 0.81.1
+        specifier: ^0.82.0
+        version: 0.82.0
       eventsource:
         specifier: ^4.1.0
         version: 4.1.0
@@ -1261,6 +1261,9 @@ packages:
   '@vertesia/api-fetch-client@0.81.1':
     resolution: {integrity: sha512-NpCvYKGnh2EKqJvWNkOdtyX68ek3EjVbplI85/ISCxKIxuYc12GcJ/5eMRqtQfJXRLa8PY5DOdZgdX3zSZhIeQ==}
 
+  '@vertesia/api-fetch-client@0.82.0':
+    resolution: {integrity: sha512-EokTLaDQTJjEXcE1XzC1Fp1A9xYHYlUC1DFDfO26F5BRvU1PK5vMw0Rb4yiu5x9j8JfTEC+FoY3hPt1zbXwTaA==}
+
   '@vitest/expect@4.0.16':
     resolution: {integrity: sha512-eshqULT2It7McaJkQGLkPjPjNph+uevROGuIMJdG3V+0BSR2w9u6J9Lwu+E8cK5TETlfou8GRijhafIMhXsimA==}
 
@@ -1692,6 +1695,7 @@ packages:
 
   glob@10.5.0:
     resolution: {integrity: sha512-DfXN8DfhJ7NH3Oe7cFmu3NCu1wKbkReJ8TorzSAFbSKrlNaQSKfIzqYqVY8zlbs2NLBbWpRiU52GX2PbaBVNkg==}
+    deprecated: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
     hasBin: true
 
   glob@13.0.0:
@@ -4110,6 +4114,10 @@ snapshots:
       - supports-color
 
   '@vertesia/api-fetch-client@0.81.1':
+    dependencies:
+      eventsource-parser: 1.1.2
+
+  '@vertesia/api-fetch-client@0.82.0':
     dependencies:
       eventsource-parser: 1.1.2
 
