@@ -50,7 +50,7 @@
         "rimraf": "^6.1.2",
         "ts-dual-module": "^0.6.3",
         "typescript": "^5.9.3",
-        "vitest": "^4.0.16"
+        "vitest": "^4.0.18"
     },
     "dependencies": {
         "@anthropic-ai/sdk": "^0.71.2",
