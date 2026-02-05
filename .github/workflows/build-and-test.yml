@@ -64,3 +64,27 @@ jobs:
           BEDROCK_REGION: us-east-1
           GOOGLE_PROJECT_ID: dengenlabs
           GOOGLE_REGION: us-central1
+
+  notify-repo-composableai:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/preview' || startsWith(github.ref, 'refs/heads/repo-dispatch')
+    needs:
+      - build
+      - test
+    steps:
+      - name: Notify repository vertesia/composableai
+        run: |
+          curl -L \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.REPO_COMPOSABLEAI_ACCESS_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --fail-with-body \
+            https://api.github.com/repos/vertesia/composableai/dispatches \
+            -d '{
+              "event_type": "update-git-submodule-request",
+              "client_payload": {
+                "llumiverse_sha": "${{ github.sha }}",
+                "branch": "${{ github.ref_name }}"
+              }
+            }'

@@ -1,6 +1,6 @@
 {
     "name": "@llumiverse/parent",
-    "version": "1.0.0-dev",
+    "version": "1.0.0-dev.20260202.145450Z",
     "private": true,
     "scripts": {
         "bump": "pnpm exec wst bump minor",
@@ -32,7 +32,8 @@
             "google-auth-library": "^10.5.0",
             "js-yaml@>=4.0.0 <4.1.1": "^4.1.1",
             "jws@>=3.0.0 <3.2.3": "^3.2.3",
-            "jws@>=4.0.0 <4.0.1": "^4.0.1"
+            "jws@>=4.0.0 <4.0.1": "^4.0.1",
+            "@isaacs/brace-expansion@>=5.0.0 <6.0.0": "^5.0.1"
         }
     }
 }
