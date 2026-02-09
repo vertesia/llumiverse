@@ -217,7 +217,6 @@ export interface CompletionChunkObject {
 export interface ToolDefinition {
     name: string,
     description?: string,
-    default?: boolean,
     input_schema: {
         type?: unknown;
         properties?: Record<string, unknown> | null | undefined;
