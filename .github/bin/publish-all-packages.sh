@@ -142,6 +142,22 @@ verify_published_packages() {
           fi
         fi
 
+        # Verify build output (lib/esm and lib/cjs folders)
+        has_esm=$(tar -tzf "$tarball" | grep -c '^package/lib/esm/' || true)
+        has_cjs=$(tar -tzf "$tarball" | grep -c '^package/lib/cjs/' || true)
+        if [ "$has_esm" -gt 0 ]; then
+          echo "  ✓ lib/esm: ${has_esm} files"
+        else
+          echo "  ✗ WARNING: lib/esm folder missing from tarball"
+          has_issues=true
+        fi
+        if [ "$has_cjs" -gt 0 ]; then
+          echo "  ✓ lib/cjs: ${has_cjs} files"
+        else
+          echo "  ✗ WARNING: lib/cjs folder missing from tarball"
+          has_issues=true
+        fi
+
         # Add to failed packages if there were issues
         if [ "$has_issues" = true ]; then
           failed_packages+=("${pkg_name}")
@@ -333,6 +349,9 @@ fi
 # =============================================================================
 
 update_package_versions
+
+echo "=== Building all packages ==="
+pnpm build
 
 if [ "$DRY_RUN" = "false" ]; then
   commit_and_push
