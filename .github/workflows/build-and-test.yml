@@ -70,7 +70,6 @@ jobs:
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/preview' || startsWith(github.ref, 'refs/heads/repo-dispatch')
     needs:
       - build
-      - test
     steps:
       - name: Notify repository vertesia/composableai
         run: |
