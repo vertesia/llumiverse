@@ -208,12 +208,20 @@ export interface CompletionChunkObject {
     tool_use?: ToolUse[];
 }
 
+/**
+ * Tool definition for LLM tool use.
+ * The input_schema uses a permissive type to support both:
+ * - AJV's JSONSchemaType<T> for type-safe schema generation
+ * - Plain object schemas for simpler cases
+ */
 export interface ToolDefinition {
     name: string,
     description?: string,
     input_schema: {
-        type: 'object';
-        properties?: JSONSchema | null | undefined;
+        type?: unknown;
+        properties?: Record<string, unknown> | null | undefined;
+        required?: readonly string[] | string[];
+        additionalProperties?: unknown;
         [k: string]: unknown;
     },
 }
