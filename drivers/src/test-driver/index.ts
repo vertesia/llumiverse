@@ -1,4 +1,4 @@
-import { AIModel, AIModelStatus, CompletionStream, Driver, EmbeddingsResult, ExecutionOptions, ExecutionResponse, ModelType, PromptSegment, TrainingJob } from "@llumiverse/core";
+import { AIModel, AIModelStatus, BatchJob, CompletionStream, CreateBatchJobOptions, Driver, EmbeddingsResult, ExecutionOptions, ExecutionResponse, ListBatchJobsOptions, ListBatchJobsResult, ModelType, PromptSegment, TrainingJob } from "@llumiverse/core";
 import { TestErrorCompletionStream } from "./TestErrorCompletionStream.js";
 import { TestValidationErrorCompletionStream } from "./TestValidationErrorCompletionStream.js";
 import { createValidationErrorCompletion, sleep, throwError } from "./utils.js";
@@ -11,7 +11,7 @@ export enum TestDriverModels {
     validationError = "validation-error",
 }
 
-export class TestDriver implements Driver<PromptSegment[]> {
+export class TestDriver implements Driver<PromptSegment[], any, any> {
     provider = "test";
 
     createTrainingPrompt(): Promise<string> {
@@ -85,6 +85,23 @@ export class TestDriver implements Driver<PromptSegment[]> {
         throw new Error("Method not implemented.");
     }
     generateEmbeddings(): Promise<EmbeddingsResult> {
+        throw new Error("Method not implemented.");
+    }
+
+    // Batch operations - not implemented for test driver
+    createBatchJob(_options: CreateBatchJobOptions<any, any>): Promise<BatchJob<any, any>> {
+        throw new Error("Method not implemented.");
+    }
+    getBatchJob(_jobId: string): Promise<BatchJob<any, any>> {
+        throw new Error("Method not implemented.");
+    }
+    listBatchJobs(_options?: ListBatchJobsOptions): Promise<ListBatchJobsResult<any, any>> {
+        throw new Error("Method not implemented.");
+    }
+    cancelBatchJob(_jobId: string): Promise<BatchJob<any, any>> {
+        throw new Error("Method not implemented.");
+    }
+    deleteBatchJob(_jobId: string): Promise<void> {
         throw new Error("Method not implemented.");
     }
 

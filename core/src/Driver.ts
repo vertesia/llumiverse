@@ -4,19 +4,23 @@
  * (eg: OpenAI, HuggingFace, etc.)
  */
 
-import { DefaultCompletionStream, FallbackCompletionStream } from "./CompletionStream.js";
-import { formatTextPrompt } from "./formatters/index.js";
 import {
     AIModel,
+    BatchDestination,
+    BatchJob,
+    BatchSource,
     Completion,
     CompletionChunkObject,
     CompletionStream,
+    CreateBatchJobOptions,
     DataSource,
     DriverOptions,
     EmbeddingsOptions,
     EmbeddingsResult,
     ExecutionOptions,
     ExecutionResponse,
+    ListBatchJobsOptions,
+    ListBatchJobsResult,
     Logger,
     Modalities,
     ModelSearchPayload,
@@ -26,6 +30,8 @@ import {
     TrainingOptions,
     TrainingPromptOptions
 } from "@llumiverse/common";
+import { DefaultCompletionStream, FallbackCompletionStream } from "./CompletionStream.js";
+import { formatTextPrompt } from "./formatters/index.js";
 import { validateResult } from "./validation.js";
 
 // Helper to create logger methods that support both message-only and object-first signatures
@@ -69,7 +75,7 @@ export function createLogger(logger: Logger | "console" | undefined) {
     }
 }
 
-export interface Driver<PromptT = unknown> {
+export interface Driver<PromptT = unknown, BatchSourceT = unknown, BatchDestinationT = unknown> {
 
     /**
      *
@@ -105,12 +111,24 @@ export interface Driver<PromptT = unknown> {
     //generate embeddings for a given text or image
     generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult>;
 
+    // Batch operations for high-throughput, cost-effective processing
+    createBatchJob(options: CreateBatchJobOptions<BatchSourceT, BatchDestinationT>): Promise<BatchJob<BatchSourceT, BatchDestinationT>>;
+    getBatchJob(jobId: string): Promise<BatchJob<BatchSourceT, BatchDestinationT>>;
+    listBatchJobs(options?: ListBatchJobsOptions): Promise<ListBatchJobsResult<BatchSourceT, BatchDestinationT>>;
+    cancelBatchJob(jobId: string): Promise<BatchJob<BatchSourceT, BatchDestinationT>>;
+    deleteBatchJob(jobId: string): Promise<void>;
+
 }
 
 /**
  * To be implemented by each driver
  */
-export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOptions, PromptT = unknown> implements Driver<PromptT> {
+export abstract class AbstractDriver<
+    OptionsT extends DriverOptions = DriverOptions,
+    PromptT = unknown,
+    BatchSourceT extends BatchSource = BatchSource,
+    BatchDestinationT extends BatchDestination = BatchDestination
+> implements Driver<PromptT, BatchSourceT, BatchDestinationT> {
     options: OptionsT;
     logger: Logger;
 
@@ -139,6 +157,27 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     getTrainingJob(_jobId: string): Promise<TrainingJob> {
         throw new Error("Method not implemented.");
+    }
+
+    // Default batch implementations - override in drivers that support batch
+    createBatchJob(_options: CreateBatchJobOptions<BatchSourceT, BatchDestinationT>): Promise<BatchJob<BatchSourceT, BatchDestinationT>> {
+        throw new Error("Batch operations not implemented for this driver.");
+    }
+
+    getBatchJob(_jobId: string): Promise<BatchJob<BatchSourceT, BatchDestinationT>> {
+        throw new Error("Batch operations not implemented for this driver.");
+    }
+
+    listBatchJobs(_options?: ListBatchJobsOptions): Promise<ListBatchJobsResult<BatchSourceT, BatchDestinationT>> {
+        throw new Error("Batch operations not implemented for this driver.");
+    }
+
+    cancelBatchJob(_jobId: string): Promise<BatchJob<BatchSourceT, BatchDestinationT>> {
+        throw new Error("Batch operations not implemented for this driver.");
+    }
+
+    deleteBatchJob(_jobId: string): Promise<void> {
+        throw new Error("Batch operations not implemented for this driver.");
     }
 
     validateResult(result: Completion, options: ExecutionOptions) {

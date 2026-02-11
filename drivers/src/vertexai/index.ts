@@ -1,29 +1,65 @@
+import type { ClientOptions as AnthropicVertexClientOptions } from "@anthropic-ai/vertex-sdk";
 import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { PredictionServiceClient, v1beta1 } from "@google-cloud/aiplatform";
 import { Content, GoogleGenAI, Model } from "@google/genai";
 import {
     AIModel,
     AbstractDriver,
+    BatchJob,
+    BatchJobType,
     Completion,
     CompletionChunkObject,
     CompletionResult,
+    CreateBatchJobOptions,
     DriverOptions,
     EmbeddingsOptions,
     EmbeddingsResult,
     ExecutionOptions,
+    GCSBatchDestination,
+    GCSBatchSource,
+    ListBatchJobsOptions,
+    ListBatchJobsResult,
     ModelSearchPayload,
     PromptSegment,
+    getConversationMeta,
     getModelCapabilities,
+    incrementConversationTurn,
     modelModalitiesToArray,
     stripBase64ImagesFromConversation,
     truncateLargeTextInConversation,
-    getConversationMeta,
-    incrementConversationTurn,
     unwrapConversationArray,
 } from "@llumiverse/core";
 import { FetchClient } from "@vertesia/api-fetch-client";
-import { GoogleAuth, GoogleAuthOptions, AuthClient } from "google-auth-library";
-import type { ClientOptions as AnthropicVertexClientOptions } from "@anthropic-ai/vertex-sdk";
+import { AuthClient, GoogleAuth, GoogleAuthOptions } from "google-auth-library";
+import {
+    cancelClaudeBatchJob,
+    createClaudeBatchJob,
+    deleteClaudeBatchJob,
+    getClaudeBatchJob,
+    listClaudeBatchJobs,
+} from "./batch/claude-batch.js";
+import {
+    cancelEmbeddingsBatchJob,
+    createEmbeddingsBatchJobSDK,
+    deleteEmbeddingsBatchJob,
+    getEmbeddingsBatchJob,
+} from "./batch/embeddings-batch.js";
+import {
+    cancelGeminiBatchJob,
+    createGeminiBatchJob,
+    deleteGeminiBatchJob,
+    getGeminiBatchJob,
+    isTerminalState,
+    listGeminiBatchJobs,
+} from "./batch/gemini-batch.js";
+import {
+    deleteGeminiFile,
+    getGeminiFile,
+    listGeminiFiles,
+    uploadFileToGemini,
+    waitForFileActive,
+} from "./batch/gemini-files.js";
+import { GeminiFileResource, decodeBatchJobId } from "./batch/types.js";
 import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
 import { TextEmbeddingsOptions, getEmbeddingsForText } from "./embeddings/embeddings-text.js";
 import { getModelDefinition } from "./models.js";
@@ -34,6 +70,7 @@ export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
     region: string;
     googleAuthOptions?: GoogleAuthOptions;
+    geminiApiKey?: string;
 }
 
 export interface GenerateContentPrompt {
@@ -49,13 +86,18 @@ export function trimModelName(model: string) {
     return i > -1 ? model.substring(0, i) : model;
 }
 
-export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, VertexAIPrompt> {
+export class VertexAIDriver extends AbstractDriver<
+    VertexAIDriverOptions,
+    VertexAIPrompt,
+    GCSBatchSource,
+    GCSBatchDestination> {
     static PROVIDER = "vertexai";
     provider = VertexAIDriver.PROVIDER;
 
     aiplatform: v1beta1.ModelServiceClient | undefined;
     anthropicClient: AnthropicVertex | undefined;
     fetchClient: FetchClient | undefined;
+    geminiApiClient: FetchClient | undefined;
     googleGenAI: GoogleGenAI | undefined;
     llamaClient: FetchClient & { region?: string } | undefined;
     modelGarden: v1beta1.ModelGardenServiceClient | undefined;
@@ -69,25 +111,58 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
         this.aiplatform = undefined;
         this.anthropicClient = undefined;
-        this.fetchClient = undefined
+        this.fetchClient = undefined;
+        this.geminiApiClient = undefined;
         this.googleGenAI = undefined;
         this.modelGarden = undefined;
         this.llamaClient = undefined;
         this.imagenClient = undefined;
 
-        this.googleAuth = new GoogleAuth(options.googleAuthOptions) as GoogleAuth<any>;
+        if (options.googleAuthOptions) {
+            options.googleAuthOptions.scopes = [
+                "https://www.googleapis.com/auth/cloud-platform",
+                "https://www.googleapis.com/auth/generative-language",
+                "https://www.googleapis.com/auth/devstorage.read_only"
+            ];
+        }
+        this.googleAuth = new GoogleAuth(options.googleAuthOptions);
         this.authClientPromise = undefined;
+
+        this.logger.debug({ options: this.options }, "VertexAIDriver initialized with options:");
     }
 
-    private async getAuthClient(): Promise<AuthClient> {
+    async getAuthClient(): Promise<AuthClient> {
         if (!this.authClientPromise) {
             this.authClientPromise = this.googleAuth.getClient();
         }
         return this.authClientPromise;
     }
 
-    public getGoogleGenAIClient(region: string = this.options.region): GoogleGenAI {
+    public async getGoogleGenAIClient(region: string = this.options.region, api: "VERTEXAI" | "GEMINI" = "VERTEXAI"): Promise<GoogleGenAI> {
         //Lazy initialization
+
+        //Gemini API - sometimes called Gemini Developer API
+        if (api == "GEMINI") {
+            this.logger.info("Using API Key for Gemini API client");
+            this.logger.info(this.options.geminiApiKey ?? process.env.GEMINI_API_KEY);
+            if (this.options.geminiApiKey || process.env.GEMINI_API_KEY) {
+                return new GoogleGenAI({
+                    vertexai: false,
+                    apiKey: this.options.geminiApiKey ?? process.env.GEMINI_API_KEY,
+                });
+            }
+
+            if (this.options.googleAuthOptions) {
+                this.logger.info("Using OAuth credentials for Gemini API client");
+                const auth = await this.getAuthClient();
+                return new GoogleGenAI({
+                    vertexai: false,
+                    googleAuthOptions: { authClient: auth },
+                });
+            }
+        }
+
+        //Vertex AI API
         if (region !== this.options.region) {
             //Get one off client for different region
             return new GoogleGenAI({
@@ -124,6 +199,56 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             });
         }
         return this.fetchClient;
+    }
+
+    /**
+     * Gets a FetchClient configured for the Generative Language API (Gemini API).
+     * Supports both API key (via x-goog-api-key) and OAuth (via Bearer token).
+     * If an API key is provided in options or env, it is used.
+     * Otherwise, it falls back to the GoogleAuth strategy (ADC, Service Account, etc.).
+     */
+    public getGeminiApiFetchClient(useAPIkey: boolean = false): FetchClient {
+        if (!this.geminiApiClient) {
+            const apiKey = this.options.geminiApiKey;
+
+            this.logger.debug({
+                useAPIkey,
+                hasApiKey: !!apiKey,
+                project: this.options.project,
+                region: this.options.region,
+            }, "getGeminiApiFetchClient: Initializing Gemini API client");
+
+            const client = new FetchClient("https://generativelanguage.googleapis.com/v1beta")
+                .withHeaders({
+                    "Content-Type": "application/json",
+                });
+
+            if (apiKey && useAPIkey) {
+                client.withHeaders({
+                    "x-goog-api-key": apiKey,
+                });
+                this.logger.debug("getGeminiApiFetchClient: Using API key authentication");
+            } else {
+                // Use OAuth via Google Auth library (ADC / Service Account / User Credentials)
+                if (this.options.project) {
+                    client.withHeaders({
+                        "x-goog-user-project": this.options.project,
+                    });
+                    this.logger.info({
+                        project: this.options.project,
+                    }, "getGeminiApiFetchClient: Set x-goog-user-project header for OAuth");
+                } else {
+                    this.logger.warn("getGeminiApiFetchClient: No project ID available for x-goog-user-project header");
+                }
+
+                client.withAuthCallback(async () => {
+                    const token = await this.googleAuth.getAccessToken();
+                    return `Bearer ${token}`;
+                });
+            }
+            this.geminiApiClient = client;
+        }
+        return this.geminiApiClient;
     }
 
     public getLLamaClient(region: string = "us-central1"): FetchClient {
@@ -459,7 +584,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         // Get clients
         const modelGarden = await this.getModelGardenClient();
         const aiplatform = await this.getAIPlatformClient();
-        const globalGenAiClient = this.getGoogleGenAIClient("global");
+        const globalGenAiClient = await this.getGoogleGenAIClient("global");
 
         let models: AIModel<string>[] = [];
 
@@ -681,6 +806,219 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             model: options.model,
         };
         return getEmbeddingsForText(this, text_options);
+    }
+
+    // ============== Batch Operations ==============
+
+    /**
+     * Creates a new batch job for inference or embeddings.
+     * Routes to the appropriate implementation based on model and job type.
+     *
+     * Requires source and destination to be configured with GCS URIs.
+     *
+     * @example
+     * ```typescript
+     * const job = await driver.createBatchJob({
+     *     model: "gemini-2.5-flash-lite",
+     *     type: BatchJobType.inference,
+     *     source: { gcsUris: ["gs://bucket/input.jsonl"] },
+     *     destination: { gcsUri: "gs://bucket/output/" },
+     * });
+     * ```
+     */
+    async createBatchJob(options: CreateBatchJobOptions<GCSBatchSource, GCSBatchDestination>): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>> {
+        // Route to appropriate implementation
+        if (options.type === BatchJobType.embeddings) {
+            return createEmbeddingsBatchJobSDK(this, options);
+        }
+        const modelLower = options.model.toLowerCase();
+        if (modelLower.includes("claude") || modelLower.includes("anthropic")) {
+            return createClaudeBatchJob(this, options);
+        }
+        return createGeminiBatchJob(this, options);
+    }
+
+    /**
+     * Gets a batch job by ID.
+     * The job ID encodes the provider for routing (e.g., "gemini:...", "claude:...").
+     */
+    async getBatchJob(jobId: string): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>> {
+        const { provider, providerJobId } = decodeBatchJobId(jobId);
+        switch (provider) {
+            case "claude":
+                return getClaudeBatchJob(this, providerJobId);
+            case "embeddings":
+                return getEmbeddingsBatchJob(this, providerJobId);
+            case "gemini":
+            default:
+                return getGeminiBatchJob(this, providerJobId);
+        }
+    }
+
+    /**
+     * Lists batch jobs from all providers (Gemini and Claude).
+     */
+    async listBatchJobs(options?: ListBatchJobsOptions): Promise<ListBatchJobsResult<GCSBatchSource, GCSBatchDestination>> {
+        const [geminiResult, claudeResult] = await Promise.all([
+            listGeminiBatchJobs(this, options),
+            listClaudeBatchJobs(this, options).catch(() => ({ jobs: [], nextPageToken: undefined })),
+        ]);
+
+        return {
+            jobs: [...geminiResult.jobs, ...claudeResult.jobs],
+            nextPageToken: geminiResult.nextPageToken || claudeResult.nextPageToken,
+        };
+    }
+
+    /**
+     * Cancels a running batch job.
+     */
+    async cancelBatchJob(jobId: string): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>> {
+        const { provider, providerJobId } = decodeBatchJobId(jobId);
+        switch (provider) {
+            case "claude":
+                return cancelClaudeBatchJob(this, providerJobId);
+            case "embeddings":
+                return cancelEmbeddingsBatchJob(this, providerJobId);
+            case "gemini":
+            default:
+                return cancelGeminiBatchJob(this, providerJobId);
+        }
+    }
+
+    /**
+     * Deletes a batch job.
+     */
+    async deleteBatchJob(jobId: string): Promise<void> {
+        const { provider, providerJobId } = decodeBatchJobId(jobId);
+        switch (provider) {
+            case "claude":
+                return deleteClaudeBatchJob(this, providerJobId);
+            case "embeddings":
+                return deleteEmbeddingsBatchJob(this, providerJobId);
+            case "gemini":
+            default:
+                return deleteGeminiBatchJob(this, providerJobId);
+        }
+    }
+
+    // ============== Gemini File API Methods ===============
+
+    /**
+     * Uploads a file to the Gemini File API.
+     *
+     * Files uploaded through this API can be used in batch operations
+     * like batch embeddings. Files are automatically deleted after 48 hours.
+     *
+     * @param content - The file content (string, Buffer, or Blob)
+     * @param mimeType - MIME type of the file (e.g., "application/jsonl")
+     * @param displayName - Optional display name for the file
+     * @returns The uploaded file resource with name in format "files/{fileId}"
+     *
+     * @example
+     * ```typescript
+     * const file = await driver.uploadGeminiFile(
+     *     '{"content": "Hello"}\n{"content": "World"}',
+     *     'application/jsonl',
+     *     'my-batch-input.jsonl'
+     * );
+     * console.log(file.name); // "files/abc123xyz"
+     * ```
+     */
+    async uploadGeminiFile(
+        content: string | Blob,
+        mimeType: string,
+        displayName?: string
+    ): Promise<GeminiFileResource> {
+        return uploadFileToGemini(this, content, mimeType, displayName);
+    }
+
+    /**
+     * Gets a file resource from the Gemini File API.
+     *
+     * @param fileId - The file ID (format: "files/{fileId}" or just "{fileId}")
+     * @returns The file resource
+     */
+    async getGeminiFile(fileId: string): Promise<GeminiFileResource> {
+        return getGeminiFile(this, fileId);
+    }
+
+    /**
+     * Lists files from the Gemini File API.
+     *
+     * @param pageSize - Optional number of files to return per page
+     * @param pageToken - Optional token for pagination
+     * @returns List of file resources and optional next page token
+     */
+    async listGeminiFiles(
+        pageSize?: number,
+        pageToken?: string
+    ): Promise<{ files: GeminiFileResource[]; nextPageToken?: string }> {
+        return listGeminiFiles(this, pageSize, pageToken);
+    }
+
+    /**
+     * Deletes a file from the Gemini File API.
+     *
+     * @param fileId - The file ID (format: "files/{fileId}" or just "{fileId}")
+     */
+    async deleteGeminiFile(fileId: string): Promise<void> {
+        return deleteGeminiFile(this, fileId);
+    }
+
+    /**
+     * Waits for a file to reach ACTIVE state.
+     *
+     * Files may be in PROCESSING state immediately after upload.
+     * This function polls until the file is ACTIVE or FAILED.
+     *
+     * @param fileId - The file ID
+     * @param maxWaitMs - Maximum time to wait in milliseconds (default: 60000)
+     * @param pollIntervalMs - Polling interval in milliseconds (default: 1000)
+     * @returns The file resource in ACTIVE state
+     * @throws Error if file fails processing or timeout is reached
+     */
+    async waitForGeminiFileActive(
+        fileId: string,
+        maxWaitMs: number = 60000,
+        pollIntervalMs: number = 1000
+    ): Promise<GeminiFileResource> {
+        return waitForFileActive(this, fileId, maxWaitMs, pollIntervalMs);
+    }
+
+    /**
+     * Waits for a batch job to complete (reach a terminal state).
+     *
+     * @param jobId - The batch job ID to wait for
+     * @param pollIntervalMs - Polling interval in milliseconds (default: 30000)
+     * @param maxWaitMs - Maximum wait time in milliseconds (default: 24 hours)
+     * @returns The completed batch job
+     * @throws Error if timeout is reached
+     */
+    async waitForBatchJobCompletion(
+        jobId: string,
+        pollIntervalMs: number = 30000,
+        maxWaitMs: number = 24 * 60 * 60 * 1000
+    ): Promise<BatchJob<GCSBatchSource, GCSBatchDestination>> {
+        const startTime = Date.now();
+
+        while (true) {
+            const job = await this.getBatchJob(jobId);
+
+            if (isTerminalState(job.status)) {
+                return job;
+            }
+
+            if (Date.now() - startTime > maxWaitMs) {
+                throw new Error(`Batch job ${jobId} did not complete within ${maxWaitMs}ms`);
+            }
+
+            await this.sleep(pollIntervalMs);
+        }
+    }
+
+    private sleep(ms: number): Promise<void> {
+        return new Promise(resolve => setTimeout(resolve, ms));
     }
 }
 

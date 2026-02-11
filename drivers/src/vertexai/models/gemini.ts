@@ -779,7 +779,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             region = "global"; // Gemini Flash Image only available in global region, this is for nano-banana model
         }
 
-        const client = driver.getGoogleGenAIClient(region);
+        const client = await driver.getGoogleGenAIClient(region);
 
         const payload = getGeminiPayload(options, prompt);
         const response = await client.models.generateContent(payload);
@@ -863,7 +863,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             region = "global"; // Gemini Flash Image only available in global region, this is for nano-banana model
         }
 
-        const client = driver.getGoogleGenAIClient(region);
+        const client = await driver.getGoogleGenAIClient(region);
 
         const payload = getGeminiPayload(options, prompt);
         const response = await client.models.generateContentStream(payload);
