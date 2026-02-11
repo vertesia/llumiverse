@@ -2,7 +2,7 @@ import {
     Bedrock, CreateModelCustomizationJobCommand, FoundationModelSummary, GetModelCustomizationJobCommand,
     GetModelCustomizationJobCommandOutput, ModelCustomizationJobStatus, ModelModality, StopModelCustomizationJobCommand
 } from "@aws-sdk/client-bedrock";
-import { BedrockRuntime, ConverseRequest, ConverseResponse, ConverseStreamOutput, InferenceConfiguration, Tool } from "@aws-sdk/client-bedrock-runtime";
+import { BedrockRuntime, ContentBlock, ConverseRequest, ConverseResponse, ConverseStreamOutput, InferenceConfiguration, Message, Tool } from "@aws-sdk/client-bedrock-runtime";
 import { S3Client } from "@aws-sdk/client-s3";
 import { AwsCredentialIdentity, Provider } from "@aws-sdk/types";
 import {
@@ -1182,6 +1182,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             token_count: undefined
         };
     }
+
+    /**
+     * Cleanup AWS SDK clients when the driver is evicted from the cache.
+     */
+    destroy(): void {
+        this._executor?.destroy();
+        this._service?.destroy();
+    }
 }
 
 function jobInfo(job: GetModelCustomizationJobCommandOutput, jobId: string): TrainingJob {
@@ -1261,11 +1269,110 @@ function updateConversation(conversation: ConverseRequest, prompt: ConverseReque
     const combinedMessages = [...(conversation?.messages || []), ...(prompt.messages || [])];
     const combinedSystem = prompt.system || conversation?.system;
 
+    // Fix orphaned toolUse blocks before returning
+    const fixedMessages = fixOrphanedToolUse(combinedMessages);
+
     return {
         modelId: prompt?.modelId || conversation?.modelId,
-        messages: combinedMessages.length > 0 ? combinedMessages : [],
+        messages: fixedMessages.length > 0 ? fixedMessages : [],
         system: combinedSystem && combinedSystem.length > 0 ? combinedSystem : undefined,
     };
+}
+
+/**
+ * Fix orphaned toolUse blocks in the conversation.
+ *
+ * When an agent is stopped mid-tool-execution, the assistant message contains toolUse blocks
+ * but no corresponding toolResult was added. The AWS Converse API requires that every toolUse
+ * must be followed by a toolResult in the next user message.
+ *
+ * This function detects such cases and injects synthetic toolResult blocks indicating
+ * the tools were interrupted, allowing the conversation to continue.
+ */
+export function fixOrphanedToolUse(messages: Message[]): Message[] {
+    if (messages.length < 2) return messages;
+
+    const result: Message[] = [];
+
+    for (let i = 0; i < messages.length; i++) {
+        const current = messages[i];
+        result.push(current);
+
+        // Check if this is an assistant message with toolUse blocks
+        if (current.role === 'assistant' && current.content) {
+            // Extract toolUse blocks using simple property check (same pattern as existing Bedrock code)
+            const toolUseBlocks: Array<{ toolUseId: string; name: string }> = [];
+            for (const block of current.content) {
+                if (block.toolUse?.toolUseId) {
+                    toolUseBlocks.push({
+                        toolUseId: block.toolUse.toolUseId,
+                        name: block.toolUse.name ?? 'unknown'
+                    });
+                }
+            }
+
+            if (toolUseBlocks.length > 0) {
+                // Check if the next message is a user message with matching toolResults
+                const nextMessage = messages[i + 1];
+
+                if (nextMessage && nextMessage.role === 'user' && nextMessage.content) {
+                    // Get toolResult IDs from the next message using simple property check
+                    const toolResultIds = new Set<string>();
+                    for (const block of nextMessage.content) {
+                        if (block.toolResult?.toolUseId) {
+                            toolResultIds.add(block.toolResult.toolUseId);
+                        }
+                    }
+
+                    // Find orphaned toolUse blocks (no matching toolResult)
+                    const orphanedToolUse = toolUseBlocks.filter(tu => !toolResultIds.has(tu.toolUseId));
+
+                    if (orphanedToolUse.length > 0) {
+                        // Inject synthetic toolResults for orphaned toolUse
+                        const syntheticResults: ContentBlock[] = orphanedToolUse.map(tu => ({
+                            toolResult: {
+                                toolUseId: tu.toolUseId,
+                                content: [{
+                                    text: `[Tool interrupted: The user stopped the operation before "${tu.name}" could execute.]`
+                                }]
+                            }
+                        }));
+
+                        // Prepend synthetic results to the next user message
+                        const updatedNextMessage: Message = {
+                            ...nextMessage,
+                            content: [...syntheticResults, ...nextMessage.content]
+                        };
+
+                        // Replace the next message in our iteration
+                        messages[i + 1] = updatedNextMessage;
+                    }
+                } else if (nextMessage && nextMessage.role === 'user' && !nextMessage.content) {
+                    // Next message is a user message but has no content
+                    // We need to add toolResults
+                    const syntheticResults: ContentBlock[] = toolUseBlocks.map(tu => ({
+                        toolResult: {
+                            toolUseId: tu.toolUseId,
+                            content: [{
+                                text: `[Tool interrupted: The user stopped the operation before "${tu.name}" could execute.]`
+                            }]
+                        }
+                    }));
+
+                    const updatedNextMessage: Message = {
+                        role: 'user',
+                        content: syntheticResults
+                    };
+
+                    messages[i + 1] = updatedNextMessage;
+                }
+                // Note: If there's no nextMessage, we leave the conversation as-is.
+                // The toolUse blocks are expected to be there - the next turn will provide toolResults.
+            }
+        }
+    }
+
+    return result;
 }
 
 function formatAmazonModalities(modalities: ModelModality[]): string[] {

@@ -1,6 +1,6 @@
 {
     "name": "@llumiverse/core",
-    "version": "0.25.1",
+    "version": "1.0.0-dev.20260202.145450Z",
     "type": "module",
     "description": "Provide an universal API to LLMs. Support for existing LLMs can be added by writing a driver.",
     "files": [
@@ -72,14 +72,14 @@
         "rimraf": "^6.1.2",
         "ts-dual-module": "^0.6.3",
         "typescript": "^5.9.3",
-        "vitest": "^4.0.16"
+        "vitest": "^4.0.18"
     },
     "dependencies": {
         "@llumiverse/common": "workspace:*",
-        "@types/node": "^22.19.1",
+        "@types/node": "^22.19.7",
         "ajv": "^8.17.1",
         "ajv-formats": "^3.0.1",
-        "jsonrepair": "^3.13.1"
+        "jsonrepair": "^3.13.2"
     },
     "ts_dual_module": {
         "outDir": "lib",
