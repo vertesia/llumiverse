@@ -7,7 +7,7 @@
  * - HTTP-based: Uses direct HTTP calls to the Generative Language API
  */
 
-import { EmbeddingsBatchJobSource, BatchJob as SDKBatchJob } from "@google/genai";
+import { BatchJob as SDKBatchJob } from "@google/genai";
 import {
     BatchJob,
     BatchJobType,
@@ -18,6 +18,7 @@ import {
     ListBatchJobsResult,
     Providers,
 } from "@llumiverse/common";
+//import { GoogleAuth } from "google-auth-library";
 import { VertexAIDriver } from "../index.js";
 import {
     cancelGeminiBatchJob,
@@ -25,7 +26,6 @@ import {
     getGeminiBatchJob,
     listGeminiBatchJobs,
 } from "./gemini-batch.js";
-import { registerGeminiFiles } from "./gemini-files.js";
 import {
     encodeBatchJobId,
     GeminiAsyncBatchEmbedRequest,
@@ -35,6 +35,7 @@ import {
     mapGeminiBatchState,
     mapGeminiJobState,
 } from "./types.js";
+//import { registerGeminiFiles } from "./gemini-files.js";
 
 /**
  * Default embedding model for text embeddings.
@@ -118,7 +119,7 @@ export async function createEmbeddingsBatchJobSDK(
     // Note: destination validation is less strict for embeddings as SDK may auto-generate
 
     // Default to gemini-embedding-001 if no model specified
-    const model = options.model || DEFAULT_TEXT_EMBEDDING_MODEL;
+    ///const model = options.model || DEFAULT_TEXT_EMBEDDING_MODEL;
 
     // Note: createEmbeddings API is experimental
     // It supports fileName (for file uploads), inlinedRequests, or GCS URIs
@@ -129,15 +130,36 @@ export async function createEmbeddingsBatchJobSDK(
         if (!gcsUri) {
             throw new Error("Currently only GCS URI source is supported for embeddings batch job creation");
         }
-        const registration = await registerGeminiFiles(driver, { uris: [gcsUri], quotaProject: driver.options.project });
-        const registeredFileName = registration.files[0]?.name;
 
-        if (!registeredFileName) {
-            throw new Error("Gemini file registration did not return a file reference");
-        }
+        // driver.logger.debug({ gcsUri }, "Registering file for embeddings batch job");
+        // if (true) {
+        //     //Try register files with the SDK first
+        //     //const authClient = await driver.getAuthClient();
+        //     const auth = new GoogleAuth({
+        //         authClient : await driver.getAuthClient(),
+        //         scopes:
+        //             'https://www.googleapis.com/auth/cloud-platform, https://www.googleapis.com/auth/devstorage.read_only',
+        //     });
+
+        //     const registrationSDK = await client.files.registerFiles({
+        //         auth: auth,
+        //         uris: ['gs://generativeai-downloads/data/jetpack.png'],
+        //         //uris: [gcsUri],
+        //     });
+        //     driver.logger.debug({ registrationSDK }, "File registration SDK response");
+        // }
+
+        // const registration = await registerGeminiFiles(driver, { uris: [gcsUri], quotaProject: driver.options.project });
+        // const registeredFileName = registration.files[0]?.name;
+        // //const registeredFileName = registrationSDK?.files?.[0]?.name;
+
+        // if (!registeredFileName) {
+        //     throw new Error("Gemini file registration did not return a file reference");
+        // }
 
         // Build source configuration based on what's provided
-        const src: EmbeddingsBatchJobSource = { fileName: registeredFileName };
+        ///const src: EmbeddingsBatchJobSource = { fileName: registeredFileName };
+        //const src: EmbeddingsBatchJobSource = { fileName: gcsUri };
 
         // if (options.source.inlinedRequests?.length) {
         //     console.log("Creating embeddings batch job with inlined requests:", JSON.stringify(options.source.inlinedRequests, null, 2));
@@ -159,11 +181,25 @@ export async function createEmbeddingsBatchJobSDK(
         //     src.fileName = options.source.gcsUris[0];
         // }
 
+        const embeddingModel = 'models/gemini-embedding-001';
+
+        // 1. Define the inline requests for embedding
+        const inlinedRequests = {
+            // Optional: Configure output dimensionality
+            // config: { outputDimensionality: 5 },
+            contents: [
+                { parts: [{ text: 'Hello world!' }] },
+                { parts: [{ text: 'How are you?' }] },
+                { parts: [{ text: 'This is an example of batch embedding.' }] },
+                { parts: [{ text: 'Google AI Studio.' }] },
+            ],
+        };
+
         batchJob = await client.batches.createEmbeddings({
-            model,
-            src,
+            model: embeddingModel,
+            src: {inlinedRequests: inlinedRequests},
             config: {
-                displayName: options.displayName,
+                displayName: "TestBatch" + Date.now(),
             },
         });
         console.log("Embeddings batch job created with ID:", JSON.stringify(batchJob));

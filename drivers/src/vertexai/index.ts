@@ -131,7 +131,7 @@ export class VertexAIDriver extends AbstractDriver<
         this.logger.debug({ options: this.options }, "VertexAIDriver initialized with options:");
     }
 
-    private async getAuthClient(): Promise<AuthClient> {
+    async getAuthClient(): Promise<AuthClient> {
         if (!this.authClientPromise) {
             this.authClientPromise = this.googleAuth.getClient();
         }
@@ -143,7 +143,15 @@ export class VertexAIDriver extends AbstractDriver<
 
         //Gemini API - sometimes called Gemini Developer API
         if (api == "GEMINI") {
-            //Prefer OAuth if available
+            this.logger.info("Using API Key for Gemini API client");
+            this.logger.info(this.options.geminiApiKey ?? process.env.GEMINI_API_KEY);
+            if (this.options.geminiApiKey || process.env.GEMINI_API_KEY) {
+                return new GoogleGenAI({
+                    vertexai: false,
+                    apiKey: this.options.geminiApiKey ?? process.env.GEMINI_API_KEY,
+                });
+            }
+
             if (this.options.googleAuthOptions) {
                 this.logger.info("Using OAuth credentials for Gemini API client");
                 const auth = await this.getAuthClient();
@@ -152,11 +160,6 @@ export class VertexAIDriver extends AbstractDriver<
                     googleAuthOptions: { authClient: auth },
                 });
             }
-            this.logger.info("Using API Key for Gemini API client");
-            return new GoogleGenAI({
-                vertexai: false,
-                apiKey: this.options.geminiApiKey,
-            });
         }
 
         //Vertex AI API
