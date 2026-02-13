@@ -19,7 +19,6 @@
     },
     "license": "MIT",
     "devDependencies": {
-        "@types/json-schema": "^7.0.15",
         "rimraf": "^6.1.2",
         "typescript": "^5.9.3"
     },
