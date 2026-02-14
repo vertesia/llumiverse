@@ -241,8 +241,10 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
             content: "15 degrees"
         } satisfies PromptSegment], { ...options, conversation: r.conversation });
         const stringResult = r.result.map(completionResultToString).join("");
-        expect(stringResult.includes("15 degrees")).toBeTruthy();
-        //console.log("#######Result:", r.result, model);
+        if (!stringResult.includes("15")) {
+            console.error(`[${model}] Tool result not found in response:`, stringResult);
+        }
+        expect(stringResult.includes("15")).toBeTruthy();
     });
 
 });
