@@ -163,9 +163,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 if (content.text) {
                     resultText += content.text;
                 } else if (content.reasoningContent) {
-                    // Get reasoning content only if include_thoughts is true
+                    // Extract reasoning content if include_thoughts is true, or if it's a
+                    // reasoning-only model (e.g. DeepSeek R1) that returns no text blocks
                     const claudeOptions = options?.model_options as BedrockClaudeOptions;
-                    if (claudeOptions?.include_thoughts) {
+                    const isReasoningModel = options?.model?.includes('deepseek') && options?.model?.includes('r1');
+                    if (claudeOptions?.include_thoughts || isReasoningModel) {
                         if (content.reasoningContent.reasoningText) {
                             reasoning += content.reasoningContent.reasoningText.text;
                         } else if (content.reasoningContent.redactedContent) {
@@ -210,8 +212,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         let stop_reason = "";
         let token_usage: ExecutionTokenUsage | undefined;
 
-        // Check if we should include thoughts
-        const shouldIncludeThoughts = options && (options.model_options as BedrockClaudeOptions)?.include_thoughts;
+        // Check if we should include thoughts (always true for reasoning-only models like DeepSeek R1)
+        const isReasoningModel = options?.model?.includes('deepseek') && options?.model?.includes('r1');
+        const shouldIncludeThoughts = isReasoningModel || (options && (options.model_options as BedrockClaudeOptions)?.include_thoughts);
 
         // Handle content block start events (for reasoning blocks)
         if (result.contentBlockStart) {
