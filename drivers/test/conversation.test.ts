@@ -73,13 +73,31 @@ if (process.env.OPENAI_API_KEY) {
 
 if (process.env.BEDROCK_REGION) {
     drivers.push({
-        name: "bedrock",
+        name: "bedrock-claude",
         driver: new BedrockDriver({
             region: process.env.BEDROCK_REGION as string,
         }),
         // Claude Sonnet 4 for text and vision
         textModel: "us.anthropic.claude-sonnet-4-20250514-v1:0",
         visionModel: "us.anthropic.claude-sonnet-4-20250514-v1:0",
+    });
+    drivers.push({
+        name: "bedrock-deepseek-v3",
+        driver: new BedrockDriver({
+            region: process.env.BEDROCK_REGION as string,
+        }),
+        // DeepSeek V3.2 for text only (no vision support)
+        textModel: "deepseek.v3.2",
+        visionModel: "deepseek.v3.2",
+    });
+    drivers.push({
+        name: "bedrock-deepseek-r1",
+        driver: new BedrockDriver({
+            region: process.env.BEDROCK_REGION as string,
+        }),
+        // DeepSeek R1 for text only (no vision support)
+        textModel: "us.deepseek.r1-v1:0",
+        visionModel: "us.deepseek.r1-v1:0",
     });
 } else {
     console.warn("Bedrock tests are skipped: BEDROCK_REGION environment variable is not set");
