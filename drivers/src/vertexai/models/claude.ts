@@ -698,7 +698,7 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
         temperature: model_options?.temperature,
         model: modelName,
         max_tokens: maxToken(options),
-        top_p: model_options?.top_p,
+        top_p: model_options?.temperature != null ? undefined : model_options?.top_p,
         top_k: model_options?.top_k,
         stop_sequences: model_options?.stop_sequence,
         thinking: model_options?.thinking_mode ?
