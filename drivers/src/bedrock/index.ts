@@ -769,7 +769,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const cleanedModelOptions = removeUndefinedValues({
             maxTokens: model_options.max_tokens,
             temperature: model_options.temperature,
-            topP: model_options.top_p,
+            topP: model_options.temperature != null ? undefined : model_options.top_p,
             stopSequences: model_options.stop_sequence,
         } satisfies InferenceConfiguration);
 
