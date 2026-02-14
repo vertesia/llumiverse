@@ -36,13 +36,23 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
     });
     // Also test Claude Sonnet 4.5 on VertexAI
     drivers.push({
-        name: "vertexai-claude",
+        name: "vertexai-claude-sonnet",
         driver: new VertexAIDriver({
             project: process.env.GOOGLE_PROJECT_ID as string,
             region: process.env.GOOGLE_REGION as string,
         }),
         textModel: "publishers/anthropic/models/claude-sonnet-4-5",
         visionModel: "publishers/anthropic/models/claude-sonnet-4-5",
+    });
+    // Also test Claude Opus 4.6 on VertexAI
+    drivers.push({
+        name: "vertexai-claude-opus",
+        driver: new VertexAIDriver({
+            project: process.env.GOOGLE_PROJECT_ID as string,
+            region: process.env.GOOGLE_REGION as string,
+        }),
+        textModel: "publishers/anthropic/models/claude-opus-4-6",
+        visionModel: "publishers/anthropic/models/claude-opus-4-6",
     });
 } else {
     console.warn("VertexAI tests are skipped: GOOGLE_PROJECT_ID environment variable is not set");
