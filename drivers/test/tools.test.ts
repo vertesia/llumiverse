@@ -113,7 +113,6 @@ if (process.env.BEDROCK_REGION) {
         //Use foundation models and inference profiles to test the driver
         models: [
             "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-            "deepseek.v3.2",
             //"us.writer.palmyra-x5-v1:0" // Only in us-west-2
         ],
     });

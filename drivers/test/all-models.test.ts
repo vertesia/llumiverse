@@ -116,8 +116,6 @@ if (process.env.BEDROCK_REGION) {
         //Use foundation models and inference profiles to test the driver
         models: [
             "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-            "deepseek.v3.2",
-            "us.deepseek.r1-v1:0",
             "us.meta.llama3-3-70b-instruct-v1:0",
             "us.amazon.nova-micro-v1:0",
             "ai21.jamba-1-5-mini-v1:0",
