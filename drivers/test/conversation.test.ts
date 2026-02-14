@@ -18,7 +18,7 @@ const TIMEOUT = 120 * 1000;
 interface TestDriver {
     driver: AbstractDriver;
     textModel: string;
-    visionModel: string;
+    visionModel?: string;
     name: string;
 }
 
@@ -88,7 +88,6 @@ if (process.env.BEDROCK_REGION) {
         }),
         // DeepSeek V3.2 for text only (no vision support)
         textModel: "deepseek.v3.2",
-        visionModel: "deepseek.v3.2",
     });
     drivers.push({
         name: "bedrock-deepseek-r1",
@@ -97,7 +96,6 @@ if (process.env.BEDROCK_REGION) {
         }),
         // DeepSeek R1 for text only (no vision support)
         textModel: "us.deepseek.r1-v1:0",
-        visionModel: "us.deepseek.r1-v1:0",
     });
 } else {
     console.warn("Bedrock tests are skipped: BEDROCK_REGION environment variable is not set");
@@ -322,8 +320,8 @@ describe.concurrent.skipIf(!hasDrivers).each(drivers)("Driver $name - Multi-turn
         verifyConversationSerializable(result3.conversation, name);
     });
 
-    test(`${name}: multi-turn conversation with image`, { timeout: TIMEOUT }, async () => {
-        const options = getTextOptions(visionModel);
+    test.skipIf(!visionModel)(`${name}: multi-turn conversation with image`, { timeout: TIMEOUT }, async () => {
+        const options = getTextOptions(visionModel!);
 
         // Turn 1: Send an image as base64 (like Studio does)
         // Using Google logo as a simple, accessible test image
@@ -381,8 +379,8 @@ describe.concurrent.skipIf(!hasDrivers).each(drivers)("Driver $name - Multi-turn
         verifyConversationSerializable(result3.conversation, name);
     });
 
-    test(`${name}: conversation with multiple images`, { timeout: TIMEOUT }, async () => {
-        const options = getTextOptions(visionModel);
+    test.skipIf(!visionModel)(`${name}: conversation with multiple images`, { timeout: TIMEOUT }, async () => {
+        const options = getTextOptions(visionModel!);
 
         // Turn 1: Send two images as base64 (like Studio does)
         const googleLogoUrl = "https://www.google.com/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png";

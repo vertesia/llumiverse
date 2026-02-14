@@ -467,8 +467,15 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             ...payload,
         });
 
+        // Strip reasoningContent from assistant messages before storing in conversation
+        // (DeepSeek R1 returns reasoning blocks but rejects them in subsequent user turns)
+        const assistantMsg = res.output?.message ?? { content: [{ text: "" }], role: "assistant" };
+        if (assistantMsg.content) {
+            assistantMsg.content = assistantMsg.content.filter((c: any) => !c.reasoningContent);
+        }
+
         conversation = updateConversation(conversation, {
-            messages: [res.output?.message ?? { content: [{ text: "" }], role: "assistant" }],
+            messages: [assistantMsg],
             modelId: conversePrompt.modelId,
         });
 
@@ -735,7 +742,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 min_tokens: palmyraOptions?.min_tokens,
             }
         } else if (options.model.includes("deepseek")) {
-            //DeepSeek models support no additional options
+            // DeepSeek models: no additional options, no stopSequences, only one of temperature/top_p
+            model_options.stop_sequence = undefined;
+            model_options.top_p = undefined;
         } else if (options.model.includes("gpt-oss")) {
             const gptOssOptions = model_options as ModelOptions as BedrockGptOssOptions;
             additionalField = {
