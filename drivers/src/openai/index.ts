@@ -12,6 +12,7 @@ import {
     ExecutionTokenUsage,
     JSONSchema,
     ModelType,
+    OpenAiImageOptions,
     Providers,
     ToolDefinition,
     ToolUse,
@@ -426,7 +427,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     async requestImageGeneration(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<Completion> {
         this.logger.debug(`[${this.provider}] Generating image with model ${options.model}`);
 
-        const model_options = options.model_options as any;
+        const model_options = options.model_options as OpenAiImageOptions;
 
         // Extract prompt text from ResponseInputItem[]
         let promptText = "";
