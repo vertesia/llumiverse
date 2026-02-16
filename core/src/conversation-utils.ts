@@ -32,7 +32,8 @@ export interface ConversationMeta {
 export interface StripOptions {
     /**
      * Number of turns to keep images before stripping.
-     * - 0 or undefined: Strip immediately (default)
+     * - Infinity or undefined: Never strip (default — callers must opt in)
+     * - 0: Strip immediately
      * - N > 0: Keep images for N turns, then strip
      */
     keepForTurns?: number;
@@ -152,6 +153,30 @@ function isOpenAIBase64ImageBlock(obj: unknown): boolean {
 }
 
 /**
+ * Check if an object is an Anthropic base64 image block: { type: "image", source: { type: "base64", data: "...", media_type: "..." } }
+ */
+function isAnthropicBase64ImageBlock(obj: unknown): boolean {
+    if (typeof obj !== 'object' || obj === null) return false;
+    const o = obj as Record<string, unknown>;
+    if (o.type !== 'image') return false;
+    if (!o.source || typeof o.source !== 'object') return false;
+    const src = o.source as Record<string, unknown>;
+    return src.type === 'base64' && typeof src.data === 'string';
+}
+
+/**
+ * Check if an object is an Anthropic base64 document block: { type: "document", source: { type: "base64", data: "...", media_type: "..." } }
+ */
+function isAnthropicBase64DocumentBlock(obj: unknown): boolean {
+    if (typeof obj !== 'object' || obj === null) return false;
+    const o = obj as Record<string, unknown>;
+    if (o.type !== 'document') return false;
+    if (!o.source || typeof o.source !== 'object') return false;
+    const src = o.source as Record<string, unknown>;
+    return src.type === 'base64' && typeof src.data === 'string';
+}
+
+/**
  * Check if an object is a Gemini inlineData block with large base64 data
  */
 function isGeminiInlineDataBlock(obj: unknown): boolean {
@@ -247,15 +272,16 @@ export function incrementConversationTurn(conversation: unknown): unknown {
  * subsequent API calls that expect binary data.
  *
  * This function either:
- * - Strips images immediately (keepForTurns = 0, default)
- * - Serializes images to base64 for safe storage, then strips after N turns
+ * - Serializes images to base64 for safe storage (keepForTurns = Infinity, default)
+ * - Strips images immediately (keepForTurns = 0)
+ * - Strips images after N turns
  *
  * @param obj The conversation object to strip binary data from
  * @param options Optional settings for turn-based stripping
  * @returns A new object with binary content handled appropriately
  */
 export function stripBinaryFromConversation(obj: unknown, options?: StripOptions): unknown {
-    const { keepForTurns = 0 } = options ?? {};
+    const { keepForTurns = Infinity } = options ?? {};
     const currentTurn = options?.currentTurn ?? getConversationMeta(obj).turnNumber;
 
     // If we should keep images and haven't exceeded the turn threshold,
@@ -385,7 +411,7 @@ function stripBinaryFromConversationInternal(obj: unknown): unknown {
  * @returns A new object with image blocks replaced with text placeholders
  */
 export function stripBase64ImagesFromConversation(obj: unknown, options?: StripOptions): unknown {
-    const { keepForTurns = 0 } = options ?? {};
+    const { keepForTurns = Infinity } = options ?? {};
     const currentTurn = options?.currentTurn ?? getConversationMeta(obj).turnNumber;
 
     // If we should keep images and haven't exceeded the turn threshold, don't strip
@@ -414,6 +440,14 @@ function stripBase64ImagesFromConversationInternal(obj: unknown): unknown {
             // Replace entire Gemini inlineData blocks with text blocks
             if (isGeminiInlineDataBlock(item)) {
                 return { text: IMAGE_PLACEHOLDER };
+            }
+            // Replace Anthropic base64 image blocks with text blocks
+            if (isAnthropicBase64ImageBlock(item)) {
+                return { type: 'text', text: IMAGE_PLACEHOLDER };
+            }
+            // Replace Anthropic base64 document blocks with text blocks
+            if (isAnthropicBase64DocumentBlock(item)) {
+                return { type: 'text', text: DOCUMENT_PLACEHOLDER };
             }
             return stripBase64ImagesFromConversationInternal(item);
         });
