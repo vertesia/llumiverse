@@ -216,6 +216,13 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     }
 
     protected canStream(_options: ExecutionOptions): Promise<boolean> {
+        // Image generation models don't support streaming
+        if (_options.model.includes("dall-e")
+            || _options.model.includes("gpt-image")
+            || _options.model.includes("chatgpt-image")) {
+            return Promise.resolve(false);
+        }
+
         if (_options.model.includes("o1")
             && !(_options.model.includes("mini") || _options.model.includes("preview"))) {
             //o1 full does not support streaming
@@ -339,7 +346,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         //Some of these use the completions API instead of the chat completions API.
         //Others are for non-text input modalities. Therefore common to both.
         const wordBlacklist = ["embed", "whisper", "transcribe", "audio", "moderation", "tts",
-            "realtime", "dall-e", "babbage", "davinci", "codex", "o1-pro", "computer-use", "sora"];
+            "realtime", "babbage", "davinci", "codex", "o1-pro", "computer-use", "sora"];
 
 
         //OpenAI has very little information, filtering based on name.
@@ -359,9 +366,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                 name: m.id,
                 provider: this.provider,
                 owner: owner,
-                type: m.object === "model" ? ModelType.Text : ModelType.Unknown,
-                can_stream: true,
-                is_multimodal: m.id.includes("gpt-4"),
+                type: modelType,
                 input_modalities: modelModalitiesToArray(modelCapability.input),
                 output_modalities: modelModalitiesToArray(modelCapability.output),
                 tool_support: modelCapability.tool_support,
@@ -394,6 +399,102 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         }
 
         return { values: embeddings, model } satisfies EmbeddingsResult;
+    }
+
+    /**
+     * Determine if a model is specifically an image generation model (not conversational image model)
+     */
+    isImageModel(model: string): boolean {
+        // DALL-E models are standalone image generation
+        // gpt-image models can generate images in conversations, not standalone
+        return model.includes("dall-e");
+    }
+
+    /**
+     * Request image generation from standalone Images API
+     * Supports: DALL-E 2, DALL-E 3, GPT-image models (for edit/variation)
+     */
+    async requestImageGeneration(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<Completion> {
+        this.logger.debug(`[${this.provider}] Generating image with model ${options.model}`);
+
+        const model_options = options.model_options as any;
+
+        // Extract prompt text from ResponseInputItem[]
+        let promptText = "";
+        for (const item of prompt) {
+            if ('content' in item && typeof item.content === 'string') {
+                promptText += item.content + "\\n";
+            } else if ('content' in item && Array.isArray(item.content)) {
+                // Extract text from content array
+                for (const part of item.content) {
+                    if ('type' in part && part.type === 'input_text' && 'text' in part) {
+                        promptText += part.text + "\\n";
+                    }
+                }
+            }
+        }
+        promptText = promptText.trim();
+
+        try {
+            const generateParams: any = {
+                model: options.model,
+                prompt: promptText,
+                size: model_options?.size || "1024x1024",
+                n: model_options?.n || 1,
+            };
+
+            // Add DALL-E specific options
+            if (options.model.includes("dall-e")) {
+                generateParams.response_format = model_options?.response_format || "url";
+
+                if (options.model.includes("dall-e-3")) {
+                    generateParams.quality = model_options?.image_quality || "standard";
+                    if (model_options?.style) {
+                        generateParams.style = model_options.style;
+                    }
+                }
+            }
+
+            const response = await this.service.images.generate(generateParams);
+
+            // Convert response to CompletionResults
+            const results: CompletionResult[] = [];
+
+            if (response.data) {
+                for (const image of response.data) {
+                    let imageValue: string;
+
+                    if (image.b64_json) {
+                        // Base64 format
+                        imageValue = `data:image/png;base64,${image.b64_json}`;
+                    } else if (image.url) {
+                        // URL format
+                        imageValue = image.url;
+                    } else {
+                        continue;
+                    }
+
+                    results.push({
+                        type: "image",
+                        value: imageValue
+                    });
+                }
+            }
+
+            return {
+                result: results
+            };
+
+        } catch (error: any) {
+            this.logger.error({ error }, `[${this.provider}] Image generation failed`);
+            return {
+                result: [],
+                error: {
+                    message: error.message,
+                    code: error.code || 'GENERATION_FAILED'
+                }
+            };
+        }
     }
 
 }
