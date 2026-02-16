@@ -163,9 +163,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 if (content.text) {
                     resultText += content.text;
                 } else if (content.reasoningContent) {
-                    // Get reasoning content only if include_thoughts is true
+                    // Extract reasoning content if include_thoughts is true, or if it's a
+                    // reasoning-only model (e.g. DeepSeek R1) that returns no text blocks
                     const claudeOptions = options?.model_options as BedrockClaudeOptions;
-                    if (claudeOptions?.include_thoughts) {
+                    const isReasoningModel = options?.model?.includes('deepseek') && options?.model?.includes('r1');
+                    if (claudeOptions?.include_thoughts || isReasoningModel) {
                         if (content.reasoningContent.reasoningText) {
                             reasoning += content.reasoningContent.reasoningText.text;
                         } else if (content.reasoningContent.redactedContent) {
@@ -210,8 +212,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         let stop_reason = "";
         let token_usage: ExecutionTokenUsage | undefined;
 
-        // Check if we should include thoughts
-        const shouldIncludeThoughts = options && (options.model_options as BedrockClaudeOptions)?.include_thoughts;
+        // Check if we should include thoughts (always true for reasoning-only models like DeepSeek R1)
+        const isReasoningModel = options?.model?.includes('deepseek') && options?.model?.includes('r1');
+        const shouldIncludeThoughts = isReasoningModel || (options && (options.model_options as BedrockClaudeOptions)?.include_thoughts);
 
         // Handle content block start events (for reasoning blocks)
         if (result.contentBlockStart) {
@@ -467,8 +470,15 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             ...payload,
         });
 
+        // Strip reasoningContent from assistant messages before storing in conversation
+        // (DeepSeek R1 returns reasoning blocks but rejects them in subsequent user turns)
+        const assistantMsg = res.output?.message ?? { content: [{ text: "" }], role: "assistant" };
+        if (assistantMsg.content) {
+            assistantMsg.content = assistantMsg.content.filter((c: any) => !c.reasoningContent);
+        }
+
         conversation = updateConversation(conversation, {
-            messages: [res.output?.message ?? { content: [{ text: "" }], role: "assistant" }],
+            messages: [assistantMsg],
             modelId: conversePrompt.modelId,
         });
 
@@ -735,7 +745,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 min_tokens: palmyraOptions?.min_tokens,
             }
         } else if (options.model.includes("deepseek")) {
-            //DeepSeek models support no additional options
+            // DeepSeek models: no additional options, no stopSequences, only one of temperature/top_p
+            model_options.stop_sequence = undefined;
+            model_options.top_p = undefined;
         } else if (options.model.includes("gpt-oss")) {
             const gptOssOptions = model_options as ModelOptions as BedrockGptOssOptions;
             additionalField = {
@@ -769,7 +781,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const cleanedModelOptions = removeUndefinedValues({
             maxTokens: model_options.max_tokens,
             temperature: model_options.temperature,
-            topP: model_options.top_p,
+            topP: model_options.temperature != null ? undefined : model_options.top_p,
             stopSequences: model_options.stop_sequence,
         } satisfies InferenceConfiguration);
 

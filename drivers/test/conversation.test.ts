@@ -18,7 +18,7 @@ const TIMEOUT = 120 * 1000;
 interface TestDriver {
     driver: AbstractDriver;
     textModel: string;
-    visionModel: string;
+    visionModel?: string;
     name: string;
 }
 
@@ -36,13 +36,23 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
     });
     // Also test Claude Sonnet 4.5 on VertexAI
     drivers.push({
-        name: "vertexai-claude",
+        name: "vertexai-claude-sonnet",
         driver: new VertexAIDriver({
             project: process.env.GOOGLE_PROJECT_ID as string,
             region: process.env.GOOGLE_REGION as string,
         }),
         textModel: "publishers/anthropic/models/claude-sonnet-4-5",
         visionModel: "publishers/anthropic/models/claude-sonnet-4-5",
+    });
+    // Also test Claude Opus 4.6 on VertexAI
+    drivers.push({
+        name: "vertexai-claude-opus",
+        driver: new VertexAIDriver({
+            project: process.env.GOOGLE_PROJECT_ID as string,
+            region: process.env.GOOGLE_REGION as string,
+        }),
+        textModel: "publishers/anthropic/models/claude-opus-4-6",
+        visionModel: "publishers/anthropic/models/claude-opus-4-6",
     });
 } else {
     console.warn("VertexAI tests are skipped: GOOGLE_PROJECT_ID environment variable is not set");
@@ -63,7 +73,7 @@ if (process.env.OPENAI_API_KEY) {
 
 if (process.env.BEDROCK_REGION) {
     drivers.push({
-        name: "bedrock",
+        name: "bedrock-claude",
         driver: new BedrockDriver({
             region: process.env.BEDROCK_REGION as string,
         }),
@@ -294,8 +304,8 @@ describe.concurrent.skipIf(!hasDrivers).each(drivers)("Driver $name - Multi-turn
         verifyConversationSerializable(result3.conversation, name);
     });
 
-    test(`${name}: multi-turn conversation with image`, { timeout: TIMEOUT }, async () => {
-        const options = getTextOptions(visionModel);
+    test.skipIf(!visionModel)(`${name}: multi-turn conversation with image`, { timeout: TIMEOUT }, async () => {
+        const options = getTextOptions(visionModel!);
 
         // Turn 1: Send an image as base64 (like Studio does)
         // Using Google logo as a simple, accessible test image
@@ -353,8 +363,8 @@ describe.concurrent.skipIf(!hasDrivers).each(drivers)("Driver $name - Multi-turn
         verifyConversationSerializable(result3.conversation, name);
     });
 
-    test(`${name}: conversation with multiple images`, { timeout: TIMEOUT }, async () => {
-        const options = getTextOptions(visionModel);
+    test.skipIf(!visionModel)(`${name}: conversation with multiple images`, { timeout: TIMEOUT }, async () => {
+        const options = getTextOptions(visionModel!);
 
         // Turn 1: Send two images as base64 (like Studio does)
         const googleLogoUrl = "https://www.google.com/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png";
