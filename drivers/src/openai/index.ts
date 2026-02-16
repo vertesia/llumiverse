@@ -12,7 +12,8 @@ import {
     ExecutionTokenUsage,
     JSONSchema,
     ModelType,
-    OpenAiImageOptions,
+    OpenAiDalleOptions,
+    OpenAiGptImageOptions,
     Providers,
     ToolDefinition,
     ToolUse,
@@ -429,7 +430,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     async requestImageGeneration(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<Completion> {
         this.logger.debug(`[${this.provider}] Generating image with model ${options.model}`);
 
-        const model_options = options.model_options as OpenAiImageOptions;
+        const model_options = options.model_options as OpenAiDalleOptions | OpenAiGptImageOptions;
 
         // Extract prompt text from ResponseInputItem[]
         let promptText = "";
@@ -452,19 +453,23 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                 model: options.model,
                 prompt: promptText,
                 size: model_options?.size || "1024x1024",
-                n: model_options?.n || 1,
             };
 
             // Add DALL-E specific options
-            if (options.model.includes("dall-e")) {
-                generateParams.response_format = model_options?.response_format || "url";
+            if (options.model.includes("dall-e") && model_options?._option_id === "openai-dalle") {
+                const dalleOptions = model_options as OpenAiDalleOptions;
+                generateParams.n = dalleOptions.n || 1;
+                generateParams.response_format = dalleOptions.response_format || "url";
 
                 if (options.model.includes("dall-e-3")) {
-                    generateParams.quality = model_options?.image_quality || "standard";
-                    if (model_options?.style) {
-                        generateParams.style = model_options.style;
+                    generateParams.quality = dalleOptions.image_quality || "standard";
+                    if (dalleOptions.style) {
+                        generateParams.style = dalleOptions.style;
                     }
                 }
+            } else {
+                // Default for other models
+                generateParams.n = 1;
             }
 
             const response = await this.service.images.generate(generateParams);

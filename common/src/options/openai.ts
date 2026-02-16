@@ -2,7 +2,7 @@ import { ModelOptionInfoItem, ModelOptions, ModelOptionsInfo, OptionType, Shared
 import { textOptionsFallback } from "./fallback.js";
 
 // Union type of all OpenAI options
-export type OpenAiOptions = OpenAiThinkingOptions | OpenAiTextOptions | OpenAiImageOptions;
+export type OpenAiOptions = OpenAiThinkingOptions | OpenAiTextOptions | OpenAiDalleOptions | OpenAiGptImageOptions;
 
 export interface OpenAiThinkingOptions {
     _option_id: "openai-thinking",
@@ -22,14 +22,19 @@ export interface OpenAiTextOptions {
     stop_sequence?: string[],
     image_detail?: "low" | "high" | "auto",
 }
-
-export interface OpenAiImageOptions {
-    _option_id: "openai-image",
-    size?: "256x256" | "512x512" | "1024x1024" | "1792x1024" | "1024x1792" | "1024x1536" | "1536x1024" | "auto",
-    image_quality?: "low" | "medium" | "high" | "standard" | "hd" | "auto",
+export interface OpenAiDalleOptions {
+    _option_id: "openai-dalle",
+    size?: "256x256" | "512x512" | "1024x1024" | "1792x1024" | "1024x1792",
+    image_quality?: "standard" | "hd",
     style?: "vivid" | "natural",
     response_format?: "url" | "b64_json",
-    n?: number, // Number of images to generate
+    n?: number,
+}
+
+export interface OpenAiGptImageOptions {
+    _option_id: "openai-gpt-image",
+    size?: "1024x1024" | "1024x1536" | "1536x1024" | "auto",
+    image_quality?: "low" | "medium" | "high" | "auto",
     background?: "transparent" | "opaque" | "auto",
     output_format?: "png" | "webp" | "jpeg",
 }
@@ -135,7 +140,7 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
         ] : [];
 
         return {
-            _option_id: "openai-image",
+            _option_id: isGPTImage ? "openai-gpt-image" : "openai-dalle",
             options: [
                 ...baseImageOptions,
                 ...gptImageOptions,
