@@ -411,13 +411,15 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         return { values: embeddings, model } satisfies EmbeddingsResult;
     }
 
+    imageModels = ["dall-e", "gpt-image", "chatgpt-image"];
+
     /**
      * Determine if a model is specifically an image generation model (not conversational image model)
      */
     isImageModel(model: string): boolean {
         // DALL-E models are standalone image generation
         // gpt-image models can generate images in conversations, not standalone
-        return model.includes("dall-e");
+        return this.imageModels.some(imageModel => model.includes(imageModel));
     }
 
     /**
