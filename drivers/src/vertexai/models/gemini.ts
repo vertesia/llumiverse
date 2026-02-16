@@ -435,7 +435,11 @@ function removeEmptyJSONArray(array: any[], schema: JSONSchema): any[] {
     return cleanedArray.filter(item => !isEmpty(item));
 }
 
-function collectTextParts(content: Content): CompletionResult[] {
+/**
+ * Collect all parts (text and images) from content in order.
+ * This preserves the original ordering of text and image parts.
+ */
+function extractCompletionResults(content: Content): CompletionResult[] {
     const results: CompletionResult[] = [];
     const parts = content.parts;
     if (parts) {
@@ -445,18 +449,7 @@ function collectTextParts(content: Content): CompletionResult[] {
                     type: "text",
                     value: part.text
                 });
-            }
-        }
-    }
-    return results;
-}
-
-function collectInlineDataParts(content: Content): CompletionResult[] {
-    const results: CompletionResult[] = [];
-    const parts = content.parts;
-    if (parts) {
-        for (const part of parts) {
-            if (part.inlineData) {
+            } else if (part.inlineData) {
                 const base64ImageBytes: string = part.inlineData.data ?? "";
                 const mimeType = part.inlineData.mimeType ?? "image/png";
                 const imageUrl = `data:${mimeType};base64,${base64ImageBytes}`;
@@ -824,9 +817,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
                 // We clean the content before validation, so we can update the conversation.
                 const cleanedContent = cleanEmptyFieldsContent(content, options.result_schema);
-                const textResults = collectTextParts(cleanedContent);
-                const imageResults = collectInlineDataParts(cleanedContent);
-                result = [...textResults, ...imageResults];
+                // Collect all parts in order (text and images)
+                result = extractCompletionResults(cleanedContent);
                 conversation = updateConversation(conversation, [cleanedContent]);
             }
         }
@@ -903,9 +895,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                             + `content: ${JSON.stringify(candidate.content, null, 2)}, safety: ${JSON.stringify(candidate.safetyRatings, null, 2)}`);
                     }
                     if (candidate.content?.role === 'model') {
-                        const textResults = collectTextParts(candidate.content);
-                        const imageResults = collectInlineDataParts(candidate.content);
-                        const combinedResults = [...textResults, ...imageResults];
+                        // Collect all parts in order (text and images)
+                        const combinedResults = extractCompletionResults(candidate.content);
                         tool_use = collectToolUseParts(candidate.content);
                         if (tool_use) {
                             finish_reason = "tool_use";

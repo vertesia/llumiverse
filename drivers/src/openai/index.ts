@@ -71,15 +71,16 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         const tokenInfo = mapUsage(result.usage);
 
         const tools = collectTools(result.output);
-        const data = extractTextFromResponse(result);
+        // Collect all parts in order (text and images)
+        const allResults = extractCompletionResults(result.output);
 
-        if (!data && !tools) {
+        if (allResults.length === 0 && !tools) {
             this.logger.error({ result }, "[OpenAI] Response is not valid");
             throw new Error("Response is not valid: no data");
         }
 
         return {
-            result: textToCompletionResult(data || ''),
+            result: allResults,
             token_usage: tokenInfo,
             finish_reason: responseFinishReason(result, tools),
             tool_use: tools,
@@ -361,6 +362,14 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             if (owner == "system") {
                 owner = "openai";
             }
+
+            // Determine model type based on capabilities
+            let modelType = ModelType.Text;
+            if (m.id.includes("dall-e") || m.id.includes("gpt-image")) {
+                modelType = ModelType.Image;
+            }
+
+
             return {
                 id: m.id,
                 name: m.id,
@@ -770,6 +779,43 @@ export function collectTools(output?: OpenAI.Responses.ResponseOutputItem[]): To
     return tools.length > 0 ? tools : undefined;
 }
 
+/**
+ * Collect all parts (text and images) from response output in order.
+ * This preserves the original ordering of text and image parts.
+ */
+function extractCompletionResults(output?: OpenAI.Responses.ResponseOutputItem[]): CompletionResult[] {
+    if (!output) {
+        return [];
+    }
+
+    const results: CompletionResult[] = [];
+    for (const item of output) {
+        if (item.type === 'message') {
+            // Extract text from message content
+            for (const part of item.content) {
+                if (part.type === 'output_text' && part.text) {
+                    results.push({
+                        type: "text",
+                        value: part.text
+                    });
+                }
+            }
+        } else if (item.type === 'image_generation_call' && 'result' in item && item.result) {
+            // GPT-image models return base64 encoded images in result field
+            const base64Data = item.result;
+            // Format as data URL for consistency with other image outputs
+            const imageUrl = base64Data.startsWith('data:')
+                ? base64Data
+                : `data:image/png;base64,${base64Data}`;
+            results.push({
+                type: "image",
+                value: imageUrl
+            });
+        }
+    }
+    return results;
+}
+
 //For strict mode false
 function limitedSchemaFormat(schema: JSONSchema): JSONSchema {
     const formattedSchema = { ...schema };
@@ -858,26 +904,6 @@ function openAISchemaFormat(schema: JSONSchema, nesting: number = 0): JSONSchema
     }
 
     return formattedSchema
-}
-
-function extractTextFromResponse(response: OpenAI.Responses.Response): string {
-    if (response.output_text) {
-        return response.output_text;
-    }
-
-    const collected: string[] = [];
-    for (const item of response.output ?? []) {
-        if (item.type === 'message') {
-            const text = item.content
-                .map(part => part.type === 'output_text' ? part.text : '')
-                .join('');
-            if (text) {
-                collected.push(text);
-            }
-        }
-    }
-
-    return collected.join("\n");
 }
 
 function responseFinishReason(response: OpenAI.Responses.Response, tools?: ToolUse[] | undefined): string | undefined {
