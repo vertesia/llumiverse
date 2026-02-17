@@ -612,10 +612,12 @@ function getToolDefinition(toolDef: ToolDefinition): OpenAI.Responses.FunctionTo
     let strictMode = false;
     if (toolDef.input_schema) {
         try {
+            //TODO: type assertion here is not safe, does not work with satisfies
             parsedSchema = openAISchemaFormat(toolDef.input_schema as JSONSchema);
             strictMode = true;
         }
         catch (e) {
+            //TODO: type assertion here is not safe, does not work with satisfies
             parsedSchema = limitedSchemaFormat(toolDef.input_schema as JSONSchema);
             strictMode = false;
         }

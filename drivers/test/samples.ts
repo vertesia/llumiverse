@@ -50,7 +50,7 @@ class ImageUrlSource implements DataSource {
         return this.url;
     }
     async getStream(): Promise<ReadableStream<string | Uint8Array>> {
-        const stream = await fetch(this.url).then(r => {
+        const stream = await fetchWithFallback(this.url).then(r => {
             if (!r.ok) {
                 throw new Error("Failed to fetch image from url: " + this.url);
             }
@@ -61,6 +61,21 @@ class ImageUrlSource implements DataSource {
         } else {
             return stream;
         }
+    }
+}
+
+/** Fetch with timeout and fallback to a placeholder image */
+async function fetchWithFallback(url: string): Promise<Response> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    try {
+        const res = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeout);
+        return res;
+    } catch {
+        clearTimeout(timeout);
+        console.warn(`Failed to fetch ${url}, falling back to placeholder image`);
+        return fetch('https://picsum.photos/800/600.jpg');
     }
 }
 

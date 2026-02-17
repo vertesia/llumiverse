@@ -13,8 +13,10 @@ const IMAGE_PLACEHOLDER = '[Image removed from conversation history]';
 const DOCUMENT_PLACEHOLDER = '[Document removed from conversation history]';
 const VIDEO_PLACEHOLDER = '[Video removed from conversation history]';
 
+const FORCE_STRIP = { keepForTurns: 0, currentTurn: 0 };
+
 describe('stripBinaryFromConversation', () => {
-    test('should replace Bedrock image block with text block', () => {
+    test('should replace Bedrock image block with text block when force stripping', () => {
         const input = {
             messages: [{
                 content: [{
@@ -33,11 +35,28 @@ describe('stripBinaryFromConversation', () => {
             }]
         };
 
-        const result = stripBinaryFromConversation(input) as any;
+        const result = stripBinaryFromConversation(input, FORCE_STRIP) as any;
 
         expect(result.messages[0].content[0].toolResult.content[0].text).toBe('Image loaded');
         // Image block should be replaced with text block
         expect(result.messages[0].content[0].toolResult.content[1]).toEqual({ text: IMAGE_PLACEHOLDER });
+    });
+
+    test('should serialize (not strip) by default when no options provided', () => {
+        const input = {
+            messages: [{
+                content: [{
+                    image: {
+                        format: 'png',
+                        source: { bytes: new Uint8Array([137, 80, 78, 71]) }
+                    }
+                }]
+            }]
+        };
+
+        // Default keepForTurns=Infinity means serialize for safe JSON storage
+        const result = stripBinaryFromConversation(input) as any;
+        expect(result.messages[0].content[0].image.source.bytes._base64).toBeDefined();
     });
 
     test('should preserve structure when no Uint8Array present', () => {
@@ -69,7 +88,7 @@ describe('stripBinaryFromConversation', () => {
             new Uint8Array([4, 5, 6])
         ];
 
-        const result = stripBinaryFromConversation(input) as any[];
+        const result = stripBinaryFromConversation(input, FORCE_STRIP) as any[];
 
         expect(result[0].text).toBe('normal');
         expect(result[1]).toBe(IMAGE_PLACEHOLDER);
@@ -89,7 +108,7 @@ describe('stripBinaryFromConversation', () => {
             }
         }];
 
-        const result = stripBinaryFromConversation(input) as any[];
+        const result = stripBinaryFromConversation(input, FORCE_STRIP) as any[];
         expect(result[0]).toEqual({ text: DOCUMENT_PLACEHOLDER });
     });
 
@@ -101,7 +120,7 @@ describe('stripBinaryFromConversation', () => {
             }
         }];
 
-        const result = stripBinaryFromConversation(input) as any[];
+        const result = stripBinaryFromConversation(input, FORCE_STRIP) as any[];
         expect(result[0]).toEqual({ text: VIDEO_PLACEHOLDER });
     });
 
@@ -116,7 +135,7 @@ describe('stripBinaryFromConversation', () => {
             ]
         };
 
-        const result = stripBinaryFromConversation(input) as any;
+        const result = stripBinaryFromConversation(input, FORCE_STRIP) as any;
 
         expect(result.content[0]).toEqual({ text: 'First' });
         expect(result.content[1]).toEqual({ text: IMAGE_PLACEHOLDER });
@@ -139,9 +158,24 @@ describe('stripBase64ImagesFromConversation', () => {
             }]
         };
 
-        const result = stripBase64ImagesFromConversation(input) as any;
+        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as any;
         // Should be replaced with text block
         expect(result.messages[0].content[0]).toEqual({ type: 'text', text: IMAGE_PLACEHOLDER });
+    });
+
+    test('should be a no-op by default when no options provided', () => {
+        const input = {
+            messages: [{
+                content: [{
+                    type: 'image_url',
+                    image_url: { url: 'data:image/png;base64,abc123' }
+                }]
+            }]
+        };
+
+        // Default keepForTurns=Infinity means don't strip
+        const result = stripBase64ImagesFromConversation(input) as any;
+        expect(result.messages[0].content[0].image_url.url).toBe('data:image/png;base64,abc123');
     });
 
     test('should replace Gemini inlineData block with text block', () => {
@@ -156,7 +190,7 @@ describe('stripBase64ImagesFromConversation', () => {
             }]
         };
 
-        const result = stripBase64ImagesFromConversation(input) as any;
+        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as any;
         // Should be replaced with text block
         expect(result.parts[0]).toEqual({ text: IMAGE_PLACEHOLDER });
     });
@@ -171,7 +205,7 @@ describe('stripBase64ImagesFromConversation', () => {
             }]
         };
 
-        const result = stripBase64ImagesFromConversation(input) as any;
+        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as any;
         expect(result.parts[0].inlineData.data).toBe('short');
     });
 
@@ -185,7 +219,7 @@ describe('stripBase64ImagesFromConversation', () => {
             }]
         };
 
-        const result = stripBase64ImagesFromConversation(input) as any;
+        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as any;
         // Should NOT be stripped - only base64 data URLs are stripped
         expect(result.messages[0].content[0].image_url.url).toBe('https://example.com/image.jpg');
     });
@@ -200,8 +234,76 @@ describe('stripBase64ImagesFromConversation', () => {
             url: 'data:text/plain;base64,SGVsbG8gV29ybGQ='
         };
 
-        const result = stripBase64ImagesFromConversation(input) as any;
+        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as any;
         expect(result.url).toBe('data:text/plain;base64,SGVsbG8gV29ybGQ=');
+    });
+
+    test('should replace Anthropic base64 image block with text block', () => {
+        const input = {
+            messages: [{
+                role: 'user',
+                content: [
+                    { type: 'text', text: 'Here is an image' },
+                    {
+                        type: 'image',
+                        source: {
+                            type: 'base64',
+                            data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk',
+                            media_type: 'image/png'
+                        }
+                    }
+                ]
+            }]
+        };
+
+        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as any;
+
+        expect(result.messages[0].content[0]).toEqual({ type: 'text', text: 'Here is an image' });
+        expect(result.messages[0].content[1]).toEqual({ type: 'text', text: IMAGE_PLACEHOLDER });
+    });
+
+    test('should replace Anthropic base64 document block with text block', () => {
+        const input = {
+            messages: [{
+                role: 'user',
+                content: [
+                    { type: 'text', text: 'Here is a document' },
+                    {
+                        type: 'document',
+                        source: {
+                            type: 'base64',
+                            data: 'JVBERi0xLjQKJeLjz9MKMSAwIG9iago=',
+                            media_type: 'application/pdf'
+                        }
+                    }
+                ]
+            }]
+        };
+
+        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as any;
+
+        expect(result.messages[0].content[0]).toEqual({ type: 'text', text: 'Here is a document' });
+        expect(result.messages[0].content[1]).toEqual({ type: 'text', text: DOCUMENT_PLACEHOLDER });
+    });
+
+    test('should not strip Anthropic image block with URL source', () => {
+        const input = {
+            messages: [{
+                role: 'user',
+                content: [{
+                    type: 'image',
+                    source: {
+                        type: 'url',
+                        url: 'https://example.com/image.png'
+                    }
+                }]
+            }]
+        };
+
+        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as any;
+
+        // URL-based images should not be stripped
+        expect(result.messages[0].content[0].source.url).toBe('https://example.com/image.png');
     });
 
     test('should handle mixed content with images and text', () => {
@@ -213,7 +315,7 @@ describe('stripBase64ImagesFromConversation', () => {
             ]
         };
 
-        const result = stripBase64ImagesFromConversation(input) as any;
+        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as any;
 
         expect(result.content[0]).toEqual({ type: 'text', text: 'Hello' });
         expect(result.content[1]).toEqual({ type: 'text', text: IMAGE_PLACEHOLDER });
@@ -615,8 +717,8 @@ describe('conversation serialization safety', () => {
             }]
         };
 
-        // Strip immediately
-        const stripped = stripBinaryFromConversation(originalConversation);
+        // Strip immediately (explicit keepForTurns: 0)
+        const stripped = stripBinaryFromConversation(originalConversation, FORCE_STRIP);
 
         // Simulate storage: JSON stringify and parse
         const stored = JSON.stringify(stripped);

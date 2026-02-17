@@ -28,8 +28,8 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
         }),
         models: [
             "publishers/google/models/gemini-2.5-flash-lite",
-            "publishers/anthropic/models/claude-3-7-sonnet",
-            "publishers/meta/models/llama-4-scout-17b-16e-instruct-maas"
+            "publishers/anthropic/models/claude-sonnet-4-5",
+            "publishers/anthropic/models/claude-opus-4-6",
         ]
     })
 } else {
@@ -115,7 +115,7 @@ if (process.env.BEDROCK_REGION) {
         }),
         //Use foundation models and inference profiles to test the driver
         models: [
-            "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             "us.meta.llama3-3-70b-instruct-v1:0",
             "us.amazon.nova-micro-v1:0",
             "ai21.jamba-1-5-mini-v1:0",

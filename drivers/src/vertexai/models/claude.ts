@@ -1,7 +1,8 @@
 import { ContentBlock, ContentBlockParam, DocumentBlockParam, ImageBlockParam, Message, MessageParam, TextBlockParam, ToolResultBlockParam } from "@anthropic-ai/sdk/resources/index.js";
 import {
     AIModel, Completion, CompletionChunkObject, ExecutionOptions, getMaxTokensLimitVertexAi, JSONObject, ModelType,
-    PromptRole, PromptSegment, readStreamAsBase64, readStreamAsString, StatelessExecutionOptions, ToolUse, VertexAIClaudeOptions
+    PromptRole, PromptSegment, readStreamAsBase64, readStreamAsString, StatelessExecutionOptions, ToolUse, VertexAIClaudeOptions,
+    getConversationMeta, incrementConversationTurn, stripBase64ImagesFromConversation, truncateLargeTextInConversation
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { VertexAIDriver } from "../index.js";
@@ -291,6 +292,17 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
 
         conversation = updateConversation(conversation, createPromptFromResponse(result));
 
+        // Increment turn counter and apply stripping (same pattern as other drivers)
+        conversation = incrementConversationTurn(conversation) as ClaudePrompt;
+        const currentTurn = getConversationMeta(conversation).turnNumber;
+        const stripOptions = {
+            keepForTurns: options.stripImagesAfterTurns ?? Infinity,
+            currentTurn,
+            textMaxTokens: options.stripTextMaxTokens,
+        };
+        let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions);
+        processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+
         return {
             result: text ? [{ type: "text", value: text }] : [{ type: "text", value: '' }],
             tool_use,
@@ -301,7 +313,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
             },
             // make sure we set finish_reason to the correct value (claude is normally setting this by itself)
             finish_reason: tool_use ? "tool_use" : claudeFinishReason(result?.stop_reason ?? ''),
-            conversation
+            conversation: processedConversation
         } satisfies Completion;
     }
 
@@ -686,7 +698,7 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
         temperature: model_options?.temperature,
         model: modelName,
         max_tokens: maxToken(options),
-        top_p: model_options?.top_p,
+        top_p: model_options?.temperature != null ? undefined : model_options?.top_p,
         top_k: model_options?.top_k,
         stop_sequences: model_options?.stop_sequence,
         thinking: model_options?.thinking_mode ?

@@ -27,7 +27,8 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
         }),
         models: [
             "publishers/google/models/gemini-2.5-flash",
-            "publishers/anthropic/models/claude-3-7-sonnet",
+            "publishers/anthropic/models/claude-sonnet-4-5",
+            "publishers/anthropic/models/claude-opus-4-6",
         ]
     })
 }
@@ -111,7 +112,7 @@ if (process.env.BEDROCK_REGION) {
         }),
         //Use foundation models and inference profiles to test the driver
         models: [
-            "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             //"us.writer.palmyra-x5-v1:0" // Only in us-west-2
         ],
     });
@@ -240,8 +241,10 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
             content: "15 degrees"
         } satisfies PromptSegment], { ...options, conversation: r.conversation });
         const stringResult = r.result.map(completionResultToString).join("");
-        expect(stringResult.includes("15 degrees")).toBeTruthy();
-        //console.log("#######Result:", r.result, model);
+        if (!stringResult.includes("15")) {
+            console.error(`[${model}] Tool result not found in response:`, stringResult);
+        }
+        expect(stringResult.includes("15")).toBeTruthy();
     });
 
 });

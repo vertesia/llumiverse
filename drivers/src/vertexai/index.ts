@@ -19,7 +19,6 @@ import {
     truncateLargeTextInConversation,
     getConversationMeta,
     incrementConversationTurn,
-    unwrapConversationArray,
 } from "@llumiverse/core";
 import { FetchClient } from "@vertesia/api-fetch-client";
 import { GoogleAuth, GoogleAuthOptions, AuthClient } from "google-auth-library";
@@ -320,13 +319,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             }
         }
 
-        // Unwrap array if wrapped, otherwise treat as array
-        const unwrapped = unwrapConversationArray<Content>(options.conversation);
-        const existingConversation = unwrapped ?? (options.conversation as Content[] || []);
-
-        // Combine existing conversation + prompt contents
+        // prompt.contents already includes the conversation history
+        // (merged in requestTextCompletionStream via updateConversation),
+        // so we use it directly — do NOT prepend options.conversation again.
         let conversation: Content[] = [
-            ...existingConversation,
             ...prompt.contents,
         ];
 
@@ -406,7 +402,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             }
         }
 
-        // Get existing conversation or start fresh
+        // Claude's requestTextCompletionStream does NOT mutate prompt.messages
+        // to include history, so we must prepend options.conversation here.
         const existingMessages = (options.conversation as any)?.messages ?? [];
         const existingSystem = (options.conversation as any)?.system ?? prompt.system;
 
