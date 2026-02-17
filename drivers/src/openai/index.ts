@@ -430,7 +430,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     async requestImageGeneration(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<Completion> {
         this.logger.debug(`[${this.provider}] Generating image with model ${options.model}`);
 
-        const model_options = options.model_options as OpenAiDalleOptions | OpenAiGptImageOptions;
+        const model_options = options.model_options as OpenAiDalleOptions | OpenAiGptImageOptions | undefined;
 
         // Extract prompt text from ResponseInputItem[]
         let promptText = "";
@@ -449,21 +449,21 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         promptText = promptText.trim();
 
         try {
-            const generateParams: any = {
+            const generateParams: OpenAI.Images.ImageGenerateParamsNonStreaming = {
                 model: options.model,
                 prompt: promptText,
                 size: model_options?.size || "1024x1024",
             };
 
             // Add DALL-E specific options
-            if (options.model.includes("dall-e") && model_options?._option_id === "openai-dalle") {
-                const dalleOptions = model_options as OpenAiDalleOptions;
-                generateParams.n = dalleOptions.n || 1;
-                generateParams.response_format = dalleOptions.response_format || "url";
+            if (options.model.includes("dall-e") || model_options?._option_id === "openai-dalle") {
+                const dalleOptions = model_options as OpenAiDalleOptions | undefined;
+                generateParams.n = dalleOptions?.n || 1;
+                generateParams.response_format = dalleOptions?.response_format || "b64_json";
 
                 if (options.model.includes("dall-e-3")) {
-                    generateParams.quality = dalleOptions.image_quality || "standard";
-                    if (dalleOptions.style) {
+                    generateParams.quality = dalleOptions?.image_quality || "standard";
+                    if (dalleOptions?.style) {
                         generateParams.style = dalleOptions.style;
                     }
                 }

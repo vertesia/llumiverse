@@ -122,7 +122,7 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
                 name: "response_format",
                 type: OptionType.enum,
                 enum: { "URL": "url", "Base64 JSON": "b64_json" },
-                default: "url",
+                default: "b64_json",
                 description: "The format of the response"
             }
         ] : [];
