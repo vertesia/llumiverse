@@ -1,4 +1,4 @@
-import { AIModel, AbstractDriver, ExecutionOptions, Modalities } from '@llumiverse/core';
+import { AIModel, AbstractDriver, ExecutionOptions, getMaxTokensLimitBedrock, getMaxTokensLimitVertexAi, Modalities, PromptSegment } from '@llumiverse/core';
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from "vitest";
@@ -261,6 +261,32 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
         console.log("Result for streaming with schema " + model, JSON.stringify(out));
     });
 
+
+    test.each(models)(`${name}: max_tokens at documented limit on %s`, { timeout: TIMEOUT, retry: 1 }, async (model) => {
+        // Resolve the documented max_tokens limit for this provider+model
+        let limit: number | undefined;
+        if (driver.provider === 'bedrock') {
+            limit = getMaxTokensLimitBedrock(model);
+        } else if (driver.provider === 'vertexai') {
+            limit = getMaxTokensLimitVertexAi(model);
+        }
+        // Skip providers we don't have a limit function for
+        if (!limit) return;
+
+        const shortPrompt: PromptSegment[] = [{ role: 'user', content: 'Say "ok".' }];
+        const r = await driver.execute(shortPrompt, {
+            model,
+            model_options: {
+                _option_id: 'text-fallback',
+                max_tokens: limit,
+                temperature: 0,
+            },
+            output_modality: Modalities.text,
+        });
+        // If the provider rejects our limit value, r.error will be set
+        expect(r.error).toBeFalsy();
+        expect(r.finish_reason).toBeTruthy();
+    });
 
     test.each(models)(`${name}: multimodal test - describe image with %s`, { timeout: TIMEOUT, retry: 2 }, async (model) => {
 
