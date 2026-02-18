@@ -558,6 +558,9 @@ function getGeminiMaxTokensLimit(model: string): number {
 
 function getClaudeMaxTokensLimit(model: string): number {
     if (model.includes("-4-")) {
+        if (model.includes("opus-4-6")) {
+            return 128000;
+        }
         if (model.includes("opus-")) {
             return 32768;
         }

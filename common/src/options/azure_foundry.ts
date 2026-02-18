@@ -129,6 +129,9 @@ export function getMaxTokensLimitAzureFoundry(model: string): number | undefined
     // Claude models
     if (modelLower.includes("claude")) {
         if (modelLower.includes("-4-")) {
+            if (modelLower.includes("opus-4-6")) {
+                return 128000;
+            }
             if (modelLower.includes("opus")) {
                 return 32768;
             }
