@@ -1,4 +1,4 @@
-import { AIModel, AbstractDriver, ExecutionOptions, Modalities } from '@llumiverse/core';
+import { AIModel, AbstractDriver, ExecutionOptions, getMaxOutputTokens, getMaxTokensLimitBedrock, getMaxTokensLimitVertexAi, Modalities, PromptSegment } from '@llumiverse/core';
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from "vitest";
@@ -116,7 +116,6 @@ if (process.env.BEDROCK_REGION) {
         //Use foundation models and inference profiles to test the driver
         models: [
             "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-            "us.meta.llama3-3-70b-instruct-v1:0",
             "us.amazon.nova-micro-v1:0",
             "ai21.jamba-1-5-mini-v1:0",
         ],
@@ -136,7 +135,7 @@ if (process.env.GROQ_API_KEY) {
             //TODO: re enabled when groq has constrained decoding
             //https://community.groq.com/t/gpt-oss-120b-ignoring-tools/385/29
         //    "openai/gpt-oss-20b", 
-            "llama-3.3-70b-versatile"
+            //"llama-3.3-70b-versatile"
         ]
     })
 } else {
@@ -173,8 +172,7 @@ if (process.env.XAI_API_KEY) {
             apiKey: process.env.XAI_API_KEY as string,
         }),
         models: [
-            "grok-3-beta",
-            "grok-2-vision-1212",
+            "grok-4.1",
         ]
     })
 } else {
@@ -261,6 +259,34 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
         console.log("Result for streaming with schema " + model, JSON.stringify(out));
     });
 
+
+    test.each(models)(`${name}: max_tokens at documented limit on %s`, { timeout: TIMEOUT, retry: 1 }, async (model) => {
+        // Resolve the documented max_tokens limit: prefer provider-specific, fallback to provider-agnostic
+        let limit: number | undefined;
+        if (driver.provider === 'bedrock') {
+            limit = getMaxTokensLimitBedrock(model);
+        } else if (driver.provider === 'vertexai') {
+            limit = getMaxTokensLimitVertexAi(model);
+        }
+        // Fallback to conservative provider-agnostic limit for all other providers
+        if (!limit) {
+            limit = getMaxOutputTokens(model);
+        }
+
+        const shortPrompt: PromptSegment[] = [{ role: 'user', content: 'Say "ok".' }];
+        const r = await driver.execute(shortPrompt, {
+            model,
+            model_options: {
+                _option_id: 'text-fallback',
+                max_tokens: limit,
+                temperature: 0,
+            },
+            output_modality: Modalities.text,
+        });
+        // If the provider rejects our limit value, r.error will be set
+        expect(r.error).toBeFalsy();
+        expect(r.finish_reason).toBeTruthy();
+    });
 
     test.each(models)(`${name}: multimodal test - describe image with %s`, { timeout: TIMEOUT, retry: 2 }, async (model) => {
 

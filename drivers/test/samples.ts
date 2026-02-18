@@ -3,7 +3,11 @@ import { NovaMessagesPrompt } from "@llumiverse/core/formatters";
 import { createReadStream } from "fs";
 import { JSONSchema } from "@llumiverse/core";
 import { createReadableStreamFromReadable } from "node-web-stream-adapters";
-import { basename, resolve } from "path";
+import { basename, dirname, resolve } from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const LOCAL_FALLBACK_IMAGE = resolve(__dirname, "hello_world.jpg");
 
 export const testPrompt_color: PromptSegment[] = [
     {
@@ -50,32 +54,25 @@ class ImageUrlSource implements DataSource {
         return this.url;
     }
     async getStream(): Promise<ReadableStream<string | Uint8Array>> {
-        const stream = await fetchWithFallback(this.url).then(r => {
-            if (!r.ok) {
-                throw new Error("Failed to fetch image from url: " + this.url);
-            }
-            return r.body;
-        })
-        if (!stream) {
-            throw new Error("No content from url: " + this.url);
-        } else {
-            return stream;
-        }
+        return fetchWithFallback(this.url);
     }
 }
 
-/** Fetch with timeout and fallback to a placeholder image */
-async function fetchWithFallback(url: string): Promise<Response> {
+/** Fetch with timeout and fallback to a local test image */
+async function fetchWithFallback(url: string): Promise<ReadableStream<Uint8Array>> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10_000);
     try {
         const res = await fetch(url, { signal: controller.signal });
         clearTimeout(timeout);
-        return res;
-    } catch {
+        if (!res.ok || !res.body) {
+            throw new Error(`HTTP ${res.status}`);
+        }
+        return res.body;
+    } catch (err) {
         clearTimeout(timeout);
-        console.warn(`Failed to fetch ${url}, falling back to placeholder image`);
-        return fetch('https://picsum.photos/800/600.jpg');
+        console.warn(`Failed to fetch ${url} (${err}), falling back to local test image`);
+        return createReadableStreamFromReadable(createReadStream(LOCAL_FALLBACK_IMAGE));
     }
 }
 
