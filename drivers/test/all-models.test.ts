@@ -172,8 +172,7 @@ if (process.env.XAI_API_KEY) {
             apiKey: process.env.XAI_API_KEY as string,
         }),
         models: [
-            "grok-3-beta",
-            "grok-2-vision-1212",
+            "grok-4.1",
         ]
     })
 } else {
