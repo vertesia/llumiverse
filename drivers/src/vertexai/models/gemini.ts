@@ -539,9 +539,7 @@ function geminiMaxTokens(option: StatelessExecutionOptions) {
         return model_options.max_tokens;
     }
     if (option.model.includes("gemini-2.5")) {
-        const maxSupportedTokens = getMaxTokensLimitVertexAi(option.model);
-        const thinkingBudget = geminiThinkingBudget(option) ?? 0;
-        return Math.min(maxSupportedTokens, 16000 + thinkingBudget);
+        return getMaxTokensLimitVertexAi(option.model);
     }
     return undefined;
 }
