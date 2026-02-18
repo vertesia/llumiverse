@@ -4,8 +4,6 @@
  * (eg: OpenAI, HuggingFace, etc.)
  */
 
-import { DefaultCompletionStream, FallbackCompletionStream } from "./CompletionStream.js";
-import { formatTextPrompt } from "./formatters/index.js";
 import {
     AIModel,
     Completion,
@@ -17,8 +15,8 @@ import {
     EmbeddingsResult,
     ExecutionOptions,
     ExecutionResponse,
-    Logger,
     LlumiverseErrorContext,
+    Logger,
     ModelSearchPayload,
     PromptOptions,
     PromptSegment,
@@ -26,6 +24,8 @@ import {
     TrainingOptions,
     TrainingPromptOptions
 } from "@llumiverse/common";
+import { DefaultCompletionStream, FallbackCompletionStream } from "./CompletionStream.js";
+import { formatTextPrompt } from "./formatters/index.js";
 import { LlumiverseError } from "./LlumiverseError.js";
 import { validateResult } from "./validation.js";
 
@@ -307,19 +307,19 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         context: LlumiverseErrorContext
     ): LlumiverseError {
         // Extract status code from common locations
-        const statusCode = (error as any)?.status 
-            || (error as any)?.statusCode 
+        const statusCode = (error as any)?.status
+            || (error as any)?.statusCode
             || (error as any)?.code
             || 'unknown';
-        
+
         // Extract message
-        const message = error instanceof Error 
-            ? error.message 
+        const message = error instanceof Error
+            ? error.message
             : String(error);
-        
+
         // Determine retryability
         const retryable = this.isRetryableError(statusCode, message);
-        
+
         return new LlumiverseError(
             `[${this.provider}] ${message}`,
             statusCode,
@@ -345,28 +345,28 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
             if (statusCode >= 500 && statusCode < 600) return true; // Server errors
             return false; // 4xx client errors not retryable
         }
-        
+
         // Message-based detection for non-HTTP errors
         const lowerMessage = message.toLowerCase();
-        
+
         // Rate limit variations
         if (lowerMessage.includes('rate') && lowerMessage.includes('limit')) return true;
-        
+
         // Timeout variations (timeout, timed out, time out)
         if (lowerMessage.includes('timeout')) return true;
         if (lowerMessage.includes('timed') && lowerMessage.includes('out')) return true;
         if (lowerMessage.includes('time') && lowerMessage.includes('out')) return true;
-        
+
         // Resource exhausted variations
         if (lowerMessage.includes('resource') && lowerMessage.includes('exhaust')) return true;
-        
+
         // Other retryable patterns
         if (lowerMessage.includes('retry')) return true;
         if (lowerMessage.includes('overload')) return true;
         if (lowerMessage.includes('throttl')) return true;
         if (lowerMessage.includes('429')) return true;
         if (lowerMessage.includes('529')) return true;
-        
+
         return false; // Unknown errors not retryable by default
     }
 

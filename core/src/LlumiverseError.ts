@@ -35,20 +35,20 @@ export class LlumiverseError extends Error {
      * Can be a number or string depending on the provider.
      */
     readonly code: number | string;
-    
+
     /** 
      * Whether this error is retryable.
      * True for transient errors (rate limits, timeouts, server errors).
      * False for permanent errors (auth failures, invalid requests, malformed schemas).
      */
     readonly retryable: boolean;
-    
+
     /**
      * Context about where and how the error occurred.
      * Includes provider, model, operation type, and optionally the prompt.
      */
     readonly context: LlumiverseErrorContext;
-    
+
     /**
      * The original error from the provider SDK.
      * Preserved for debugging and detailed error inspection.
@@ -88,8 +88,8 @@ export class LlumiverseError extends Error {
             context: this.context,
             stack: this.stack,
             // Include original error message if available
-            originalErrorMessage: this.originalError instanceof Error 
-                ? this.originalError.message 
+            originalErrorMessage: this.originalError instanceof Error
+                ? this.originalError.message
                 : String(this.originalError),
         };
     }

@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { LlumiverseError } from './LlumiverseError.js';
 import { LlumiverseErrorContext } from '@llumiverse/common';
+import { describe, expect, it } from 'vitest';
+import { LlumiverseError } from './LlumiverseError.js';
 
 describe('LlumiverseError', () => {
     const mockContext: LlumiverseErrorContext = {
@@ -34,7 +34,7 @@ describe('LlumiverseError', () => {
         it('should preserve stack trace from original error', () => {
             const originalError = new Error('Original error');
             const originalStack = originalError.stack;
-            
+
             const error = new LlumiverseError(
                 'Wrapped error',
                 500,
