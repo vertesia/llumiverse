@@ -1,4 +1,5 @@
 import { ModelOptionsInfo, ModelOptionInfoItem, ModelOptions, OptionType, SharedOptions } from "../types.js";
+import { getMaxOutputTokens } from "./context-windows.js";
 
 // Helper function to parse composite model IDs
 function parseAzureFoundryModelId(compositeId: string): { deploymentName: string; baseModel: string } {
@@ -126,27 +127,9 @@ export function getMaxTokensLimitAzureFoundry(model: string): number | undefined
             return 131072;
         }
     }
-    // Claude models
+    // Claude models — delegate to provider-agnostic limits
     if (modelLower.includes("claude")) {
-        if (modelLower.includes("-4-")) {
-            if (modelLower.includes("opus-4-6")) {
-                return 128000;
-            }
-            if (modelLower.includes("opus-4-5")) {
-                return 64000;
-            }
-            if (modelLower.includes("opus")) {
-                return 32768; // Opus 4.0, 4.1
-            }
-            return 64000; // Sonnet 4.x, Haiku 4.5
-        }
-        if (modelLower.includes("3-7")) {
-            return 64000;
-        }
-        if (modelLower.includes("3-5")) {
-            return 8192;
-        }
-        return 4096;
+        return getMaxOutputTokens(modelLower);
     }
     // Llama models
     if (modelLower.includes("llama")) {

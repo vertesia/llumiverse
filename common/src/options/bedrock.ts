@@ -1,4 +1,5 @@
 import { ModelOptionsInfo, ModelOptions, OptionType, ModelOptionInfoItem } from "../types.js";
+import { getMaxOutputTokens } from "./context-windows.js";
 import { textOptionsFallback } from "./fallback.js";
 
 // Union type of all Bedrock options
@@ -58,29 +59,11 @@ export interface TwelvelabsPegasusOptions {
 }
 
 export function getMaxTokensLimitBedrock(model: string): number | undefined {
-    // Claude models
+    // Claude models — delegate to provider-agnostic limits,
+    // override only where Bedrock supports extended output (128K for 3.7)
     if (model.includes("claude")) {
-        if (model.includes("-4-")) {
-            if (model.includes("opus-4-6")) {
-                return 128000;
-            }
-            if (model.includes("opus-4-5")) {
-                return 64000;
-            }
-            if (model.includes("opus-")) {
-                return 32768; // Opus 4.0, 4.1
-            }
-            return 64000; // Sonnet 4.x, Haiku 4.5
-        }
-        else if (model.includes("-3-7-")) {
-            return 128000;
-        }
-        else if (model.includes("-3-5-")) {
-            return 8192;
-        }
-        else {
-            return 4096;
-        }
+        if (model.includes("-3-7-")) return 128000;
+        return getMaxOutputTokens(model);
     }
     // Amazon models
     else if (model.includes("amazon")) {

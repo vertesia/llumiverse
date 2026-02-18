@@ -1,4 +1,4 @@
-import { AIModel, AbstractDriver, ExecutionOptions, getMaxTokensLimitBedrock, getMaxTokensLimitVertexAi, Modalities, PromptSegment } from '@llumiverse/core';
+import { AIModel, AbstractDriver, ExecutionOptions, getMaxOutputTokens, getMaxTokensLimitBedrock, getMaxTokensLimitVertexAi, Modalities, PromptSegment } from '@llumiverse/core';
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from "vitest";
@@ -263,15 +263,17 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
 
 
     test.each(models)(`${name}: max_tokens at documented limit on %s`, { timeout: TIMEOUT, retry: 1 }, async (model) => {
-        // Resolve the documented max_tokens limit for this provider+model
+        // Resolve the documented max_tokens limit: prefer provider-specific, fallback to provider-agnostic
         let limit: number | undefined;
         if (driver.provider === 'bedrock') {
             limit = getMaxTokensLimitBedrock(model);
         } else if (driver.provider === 'vertexai') {
             limit = getMaxTokensLimitVertexAi(model);
         }
-        // Skip providers we don't have a limit function for
-        if (!limit) return;
+        // Fallback to conservative provider-agnostic limit for all other providers
+        if (!limit) {
+            limit = getMaxOutputTokens(model);
+        }
 
         const shortPrompt: PromptSegment[] = [{ role: 'user', content: 'Say "ok".' }];
         const r = await driver.execute(shortPrompt, {
