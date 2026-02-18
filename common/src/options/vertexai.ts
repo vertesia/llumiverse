@@ -549,7 +549,7 @@ function getGeminiMaxTokensLimit(model: string): number {
         return 32768;
     }
     if (model.includes("thinking") || model.includes("-2.5-") || model.includes("-3-")) {
-        return 65536;
+        return 65535; // API upper bound is exclusive
     }
     if (model.includes("ultra") || model.includes("vision")) {
         return 2048;
