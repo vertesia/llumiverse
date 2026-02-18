@@ -172,6 +172,21 @@ export interface ResultValidationError {
     data?: CompletionResult[];
 }
 
+/**
+ * Context information for LlumiverseError.
+ * Provides details about where and how the error occurred.
+ */
+export interface LlumiverseErrorContext {
+    /** The provider that generated the error (e.g., 'openai', 'bedrock', 'vertexai') */
+    provider: string;
+    /** The model that was being used when the error occurred */
+    model: string;
+    /** The operation that failed */
+    operation: 'execute' | 'stream';
+    /** The prompt that caused the error (optional, for debugging) */
+    prompt?: unknown;
+}
+
 // ============== Result Types ===============
 
 export interface BaseResult {
