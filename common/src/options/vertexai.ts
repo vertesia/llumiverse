@@ -561,7 +561,7 @@ function getClaudeMaxTokensLimit(model: string): number {
         if (model.includes("opus-")) {
             return 32768;
         }
-        return 65536;
+        return 64000;
     }
     else if (model.includes("-3-7-")) {
         return 128000;

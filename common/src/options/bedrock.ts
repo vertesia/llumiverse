@@ -64,10 +64,10 @@ export function getMaxTokensLimitBedrock(model: string): number | undefined {
             if (model.includes("opus-")) {
                 return 32768;
             }
-            return 65536;
+            return 64000;
         }
         else if (model.includes("-3-7-")) {
-            return 131072;
+            return 128000;
         }
         else if (model.includes("-3-5-")) {
             return 8192;
@@ -98,7 +98,7 @@ export function getMaxTokensLimitBedrock(model: string): number | undefined {
             return 4096;
         }
         if (model.includes("pixtral-large")) {
-            return 131072;
+            return 4096;
         }
         return 8192;
     }
@@ -117,7 +117,7 @@ export function getMaxTokensLimitBedrock(model: string): number | undefined {
     // Cohere models
     else if (model.includes("cohere.command")) {
         if (model.includes("command-a")) {
-            return 8192;
+            return 8000;
         }
         return 4096;
     }
@@ -139,7 +139,7 @@ export function getMaxTokensLimitBedrock(model: string): number | undefined {
     }
     // OpenAI gpt-oss models
     if (model.includes("gpt-oss")) {
-        return 128000;
+        return 8192;
     }
     // TwelveLabs models
     else if (model.includes("twelvelabs")) {
