@@ -116,7 +116,6 @@ if (process.env.BEDROCK_REGION) {
         //Use foundation models and inference profiles to test the driver
         models: [
             "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-            "us.meta.llama3-3-70b-instruct-v1:0",
             "us.amazon.nova-micro-v1:0",
             "ai21.jamba-1-5-mini-v1:0",
         ],
@@ -136,7 +135,7 @@ if (process.env.GROQ_API_KEY) {
             //TODO: re enabled when groq has constrained decoding
             //https://community.groq.com/t/gpt-oss-120b-ignoring-tools/385/29
         //    "openai/gpt-oss-20b", 
-            "llama-3.3-70b-versatile"
+            //"llama-3.3-70b-versatile"
         ]
     })
 } else {
