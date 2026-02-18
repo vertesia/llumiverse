@@ -277,7 +277,7 @@ describe('BedrockDriver Error Handling', () => {
 
             expect(error).toBeInstanceOf(LlumiverseError);
             expect(error.code).toBeUndefined(); // No numeric status code available
-            expect(error.retryable).toBe(false); // Unknown errors not retryable by default
+            expect(error.retryable).toBeUndefined(); // Unknown errors - let consumer decide
         });
 
         it('should preserve original error for debugging', () => {

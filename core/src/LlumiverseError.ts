@@ -44,10 +44,15 @@ export class LlumiverseError extends Error {
 
     /** 
      * Whether this error is retryable.
-     * True for transient errors (rate limits, timeouts, server errors).
-     * False for permanent errors (auth failures, invalid requests, malformed schemas).
+     * - True: Definitely retryable (rate limits, timeouts, server errors)
+     * - False: Definitely not retryable (auth failures, invalid requests, malformed schemas)
+     * - Undefined: Unknown retryability - allows consumers to decide default behavior
+     * 
+     * When undefined, consumers can choose their retry strategy:
+     * - Conservative: Don't retry unknown errors (avoid spam)
+     * - Resilient: Retry unknown errors (prioritize success)
      */
-    readonly retryable: boolean;
+    readonly retryable?: boolean;
 
     /**
      * Context about where and how the error occurred.
@@ -63,7 +68,7 @@ export class LlumiverseError extends Error {
 
     constructor(
         message: string,
-        retryable: boolean,
+        retryable: boolean | undefined,
         context: LlumiverseErrorContext,
         originalError: unknown,
         code?: number,

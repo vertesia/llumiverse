@@ -1,3 +1,4 @@
+import type { ClientOptions as AnthropicVertexClientOptions } from "@anthropic-ai/vertex-sdk";
 import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { PredictionServiceClient, v1beta1 } from "@google-cloud/aiplatform";
 import { Content, GoogleGenAI, Model } from "@google/genai";
@@ -11,18 +12,19 @@ import {
     EmbeddingsOptions,
     EmbeddingsResult,
     ExecutionOptions,
+    LlumiverseError,
+    LlumiverseErrorContext,
     ModelSearchPayload,
     PromptSegment,
+    getConversationMeta,
     getModelCapabilities,
+    incrementConversationTurn,
     modelModalitiesToArray,
     stripBase64ImagesFromConversation,
     truncateLargeTextInConversation,
-    getConversationMeta,
-    incrementConversationTurn,
 } from "@llumiverse/core";
 import { FetchClient } from "@vertesia/api-fetch-client";
-import { GoogleAuth, GoogleAuthOptions, AuthClient } from "google-auth-library";
-import type { ClientOptions as AnthropicVertexClientOptions } from "@anthropic-ai/vertex-sdk";
+import { AuthClient, GoogleAuth, GoogleAuthOptions } from "google-auth-library";
 import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
 import { TextEmbeddingsOptions, getEmbeddingsForText } from "./embeddings/embeddings-text.js";
 import { getModelDefinition } from "./models.js";
@@ -697,6 +699,36 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         this.aiplatform?.close();
         this.modelGarden?.close();
         this.imagenClient?.close();
+    }
+
+    /**
+     * Format VertexAI errors by routing to model-specific error handlers.
+     * Each model definition (Gemini, Claude, Llama) can provide custom error parsing
+     * based on their specific SDK error structures.
+     * 
+     * @param error - The error from the VertexAI/model SDK
+     * @param context - Context about where the error occurred
+     * @returns A standardized LlumiverseError
+     */
+    public formatLlumiverseError(
+        error: unknown,
+        context: LlumiverseErrorContext
+    ): LlumiverseError {
+        // Get the model definition for this request
+        const modelDef = getModelDefinition(context.model);
+
+        // If the model definition provides custom error handling, use it
+        if (modelDef.formatLlumiverseError) {
+            try {
+                return modelDef.formatLlumiverseError(this, error, context);
+            } catch (formattingError) {
+                // If model-specific handler throws, fall through to default handling
+                // This allows model handlers to explicitly opt out for certain errors
+            }
+        }
+
+        // Fall back to default AbstractDriver error handling
+        return super.formatLlumiverseError(error, context);
     }
 }
 

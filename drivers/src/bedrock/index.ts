@@ -251,13 +251,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
      * @param errorName - The AWS error name (e.g., "ThrottlingException")
      * @param httpStatusCode - The HTTP status code if available
      * @param fault - The fault type ("client" or "server")
-     * @returns True if the error is retryable
+     * @returns True if retryable, false if not retryable, undefined if unknown
      */
     private isBedrockErrorRetryable(
         errorName: string,
         httpStatusCode: number | undefined,
         fault: string | undefined
-    ): boolean {
+    ): boolean | undefined {
         // Check specific AWS error types first
         switch (errorName) {
             // Retryable errors
@@ -289,8 +289,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if (fault === 'server') return true;
         if (fault === 'client') return false;
 
-        // Unknown error type, default to not retryable for safety
-        return false;
+        // Unknown error type - let consumer decide retry strategy
+        return undefined;
     }
 
     getExtractedExecution(result: ConverseResponse, _prompt?: BedrockPrompt, options?: ExecutionOptions): CompletionChunkObject {

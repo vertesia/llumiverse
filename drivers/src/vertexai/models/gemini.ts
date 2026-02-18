@@ -1,3 +1,4 @@
+import type { ApiError } from "@google/genai";
 import {
     Content, FinishReason, FunctionCallingConfigMode, FunctionDeclaration, GenerateContentConfig, GenerateContentParameters,
     GenerateContentResponseUsageMetadata,
@@ -9,7 +10,7 @@ import {
     getConversationMeta,
     getMaxTokensLimitVertexAi,
     incrementConversationTurn,
-    JSONObject, JSONSchema, ModelType, PromptOptions, PromptRole,
+    JSONObject, JSONSchema, LlumiverseError, LlumiverseErrorContext, ModelType, PromptOptions, PromptRole,
     PromptSegment, readStreamAsBase64, StatelessExecutionOptions,
     stripBase64ImagesFromConversation,
     ToolDefinition, ToolUse,
@@ -669,7 +670,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 // File content handling
                 if (msg.files) {
                     for (const f of msg.files) {
-                        let fileUrl = await f.getURL();                     
+                        let fileUrl = await f.getURL();
                         const isGsUrl = fileUrl.startsWith('gs://') || fileUrl.startsWith('https://storage.googleapis.com/');
 
                         if (isGsUrl) {
@@ -682,7 +683,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                         } else {
                             // Inline data handling
                             const stream = await f.getStream();
-                            const data = await readStreamAsBase64(stream); 
+                            const data = await readStreamAsBase64(stream);
                             parts.push({
                                 inlineData: {
                                     data,
@@ -933,6 +934,144 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         });
 
         return stream;
+    }
+
+    /**
+     * Format Google API errors into LlumiverseError with proper status codes and retryability.
+     * 
+     * Google API errors follow AIP-193 standard:
+     * - ApiError.status: HTTP status code
+     * - ApiError.message: Error message
+     * 
+     * Common error codes:
+     * - 400 (INVALID_ARGUMENT): Invalid request parameters
+     * - 401 (UNAUTHENTICATED): Authentication required
+     * - 403 (PERMISSION_DENIED): Insufficient permissions
+     * - 404 (NOT_FOUND): Resource not found
+     * - 429 (RESOURCE_EXHAUSTED): Rate limit/quota exceeded
+     * - 500 (INTERNAL): Internal server error
+     * - 503 (UNAVAILABLE): Service temporarily unavailable
+     * - 504 (DEADLINE_EXCEEDED): Request timeout
+     * 
+     * @see https://google.aip.dev/193
+     * @see https://docs.cloud.google.com/vertex-ai/generative-ai/docs/model-reference/api-errors
+     */
+    formatLlumiverseError(
+        _driver: VertexAIDriver,
+        error: unknown,
+        context: LlumiverseErrorContext
+    ): LlumiverseError {
+        // Check if it's a Google API error with status code
+        const isApiError = this.isGoogleApiError(error);
+
+        if (!isApiError) {
+            // Not a Google API error, use default handling
+            // This will be called by the driver's default formatLlumiverseError
+            throw error;
+        }
+
+        const apiError = error as ApiError;
+        const httpStatusCode = apiError.status;
+
+        // Extract error message
+        let message = apiError.message || String(error);
+
+        // Build user-facing message with status code
+        let userMessage = message;
+
+        // Include status code in message (for end-user visibility)
+        if (httpStatusCode) {
+            userMessage = `[${httpStatusCode}] ${userMessage}`;
+        }
+
+        // Determine retryability based on Google error codes
+        const retryable = this.isGeminiErrorRetryable(httpStatusCode);
+
+        // Extract error name/type from message if present
+        const errorName = this.extractErrorName(message);
+
+        return new LlumiverseError(
+            `[${context.provider}] ${userMessage}`,
+            retryable,
+            context,
+            error,
+            httpStatusCode,
+            errorName
+        );
+    }
+
+    /**
+     * Type guard to check if error is a Google API error.
+     */
+    private isGoogleApiError(error: unknown): error is ApiError {
+        return (
+            error !== null &&
+            typeof error === 'object' &&
+            'status' in error &&
+            typeof (error as any).status === 'number' &&
+            'message' in error
+        );
+    }
+
+    /**
+     * Determine if a Google API error is retryable based on HTTP status code.
+     * 
+     * Retryable errors (per Google AIP-194):
+     * - 408 (REQUEST_TIMEOUT): Request timeout
+     * - 429 (RESOURCE_EXHAUSTED): Rate limit exceeded, quota exhausted
+     * - 500 (INTERNAL): Internal server error
+     * - 502 (BAD_GATEWAY): Bad gateway
+     * - 503 (UNAVAILABLE): Service temporarily unavailable
+     * - 504 (DEADLINE_EXCEEDED): Gateway timeout
+     * 
+     * Non-retryable errors:
+     * - 400 (INVALID_ARGUMENT): Invalid request parameters
+     * - 401 (UNAUTHENTICATED): Authentication required
+     * - 403 (PERMISSION_DENIED): Insufficient permissions
+     * - 404 (NOT_FOUND): Resource not found
+     * - 409 (CONFLICT): Resource conflict
+     * - Other 4xx client errors
+     * 
+     * @param httpStatusCode - The HTTP status code from the API error
+     * @returns True if retryable, false if not retryable, undefined if unknown
+     */
+    private isGeminiErrorRetryable(httpStatusCode: number): boolean | undefined {
+        // Retryable status codes
+        if (httpStatusCode === 408) return true; // Request timeout
+        if (httpStatusCode === 429) return true; // Rate limit/quota
+        if (httpStatusCode === 502) return true; // Bad gateway
+        if (httpStatusCode === 503) return true; // Service unavailable
+        if (httpStatusCode === 504) return true; // Gateway timeout
+        if (httpStatusCode >= 500 && httpStatusCode < 600) return true; // Other 5xx server errors
+        
+        // Non-retryable 4xx client errors
+        if (httpStatusCode >= 400 && httpStatusCode < 500) return false;
+
+        // Unknown status codes - let consumer decide retry strategy
+        return undefined;
+    }
+
+    /**
+     * Extract error type name from error message.
+     * Google errors often include the error type in the message.
+     * Examples: "INVALID_ARGUMENT", "RESOURCE_EXHAUSTED", "PERMISSION_DENIED"
+     */
+    private extractErrorName(message: string): string | undefined {
+        // Common Google error patterns
+        const patterns = [
+            /^([A-Z_]+):/,  // "ERROR_NAME: message"
+            /\[([A-Z_]+)\]/, // "[ERROR_NAME] message"
+            /^(\w+Error):/,  // "ErrorTypeError: message"
+        ];
+
+        for (const pattern of patterns) {
+            const match = message.match(pattern);
+            if (match) {
+                return match[1];
+            }
+        }
+
+        return undefined;
     }
 
 }

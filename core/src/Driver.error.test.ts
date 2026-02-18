@@ -123,10 +123,10 @@ describe('AbstractDriver Error Formatting', () => {
                 expect(driver['isRetryableError'](undefined, 'HTTP 529 error')).toBe(true);
             });
 
-            it('should mark unknown messages as not retryable', () => {
-                expect(driver['isRetryableError'](undefined, 'Invalid API key')).toBe(false);
-                expect(driver['isRetryableError'](undefined, 'Bad request')).toBe(false);
-                expect(driver['isRetryableError'](undefined, 'Model not found')).toBe(false);
+            it('should mark unknown messages as undefined (let consumer decide)', () => {
+                expect(driver['isRetryableError'](undefined, 'Invalid API key')).toBeUndefined();
+                expect(driver['isRetryableError'](undefined, 'Bad request')).toBeUndefined();
+                expect(driver['isRetryableError'](undefined, 'Model not found')).toBeUndefined();
             });
         });
     });
@@ -173,7 +173,7 @@ describe('AbstractDriver Error Formatting', () => {
             const formatted = driver['formatLlumiverseError'](originalError, mockContext);
 
             expect(formatted.code).toBeUndefined();
-            expect(formatted.retryable).toBe(false);
+            expect(formatted.retryable).toBeUndefined(); // Unknown retryability
         });
 
         it('should handle non-Error objects', () => {

@@ -343,9 +343,9 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
      * 
      * @param statusCode - The HTTP status code (if available)
      * @param message - The error message
-     * @returns True if the error is retryable
+     * @returns True if retryable, false if not retryable, undefined if unknown
      */
-    protected isRetryableError(statusCode: number | undefined, message: string): boolean {
+    protected isRetryableError(statusCode: number | undefined, message: string): boolean | undefined {
         // Numeric status codes
         if (statusCode !== undefined) {
             if (statusCode === 429 || statusCode === 408) return true; // Rate limit, timeout
@@ -375,7 +375,8 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         if (lowerMessage.includes('429')) return true;
         if (lowerMessage.includes('529')) return true;
 
-        return false; // Unknown errors not retryable by default
+        // Unknown errors - let consumer decide retry strategy
+        return undefined;
     }
 
     abstract requestTextCompletion(prompt: PromptT, options: ExecutionOptions): Promise<Completion>;
