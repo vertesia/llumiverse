@@ -31,10 +31,16 @@ import { LlumiverseErrorContext } from "@llumiverse/common";
  */
 export class LlumiverseError extends Error {
     /** 
-     * HTTP status code (e.g., 429, 500) or provider-specific error code.
-     * Can be a number or string depending on the provider.
+     * HTTP status code (e.g., 429, 500) if available.
+     * Undefined if the error doesn't have a numeric status code.
      */
-    readonly code: number | string;
+    readonly code?: number;
+
+    /**
+     * Provider-specific error name/type (e.g., "ThrottlingException", "ValidationException").
+     * Optional - used to preserve the semantic error type from the provider SDK.
+     */
+    readonly name: string;
 
     /** 
      * Whether this error is retryable.
@@ -57,13 +63,14 @@ export class LlumiverseError extends Error {
 
     constructor(
         message: string,
-        code: number | string,
         retryable: boolean,
         context: LlumiverseErrorContext,
-        originalError: unknown
+        originalError: unknown,
+        code?: number,
+        name?: string
     ) {
         super(message);
-        this.name = 'LlumiverseError';
+        this.name = name || 'LlumiverseError';
         this.code = code;
         this.retryable = retryable;
         this.context = context;

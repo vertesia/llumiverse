@@ -86,47 +86,47 @@ describe('AbstractDriver Error Formatting', () => {
 
         describe('message-based detection', () => {
             it('should detect rate limit in message', () => {
-                expect(driver['isRetryableError']('unknown', 'Rate limit exceeded')).toBe(true);
-                expect(driver['isRetryableError']('unknown', 'You have hit the rate limit')).toBe(true);
-                expect(driver['isRetryableError']('unknown', 'RATE_LIMIT_EXCEEDED')).toBe(true);
+                expect(driver['isRetryableError'](undefined, 'Rate limit exceeded')).toBe(true);
+                expect(driver['isRetryableError'](undefined, 'You have hit the rate limit')).toBe(true);
+                expect(driver['isRetryableError'](undefined, 'RATE_LIMIT_EXCEEDED')).toBe(true);
             });
 
             it('should detect timeout in message', () => {
-                expect(driver['isRetryableError']('unknown', 'Request timeout')).toBe(true);
-                expect(driver['isRetryableError']('unknown', 'Connection timed out')).toBe(true);
-                expect(driver['isRetryableError']('unknown', 'TIMEOUT_ERROR')).toBe(true);
+                expect(driver['isRetryableError'](undefined, 'Request timeout')).toBe(true);
+                expect(driver['isRetryableError'](undefined, 'Connection timed out')).toBe(true);
+                expect(driver['isRetryableError'](undefined, 'TIMEOUT_ERROR')).toBe(true);
             });
 
             it('should detect retry in message', () => {
-                expect(driver['isRetryableError']('unknown', 'Please retry later')).toBe(true);
-                expect(driver['isRetryableError']('unknown', 'Retry the request')).toBe(true);
+                expect(driver['isRetryableError'](undefined, 'Please retry later')).toBe(true);
+                expect(driver['isRetryableError'](undefined, 'Retry the request')).toBe(true);
             });
 
             it('should detect overload in message', () => {
-                expect(driver['isRetryableError']('unknown', 'Service overloaded')).toBe(true);
-                expect(driver['isRetryableError']('unknown', 'Server is overload')).toBe(true);
-                expect(driver['isRetryableError']('unknown', 'System overloaded')).toBe(true);
+                expect(driver['isRetryableError'](undefined, 'Service overloaded')).toBe(true);
+                expect(driver['isRetryableError'](undefined, 'Server is overload')).toBe(true);
+                expect(driver['isRetryableError'](undefined, 'System overloaded')).toBe(true);
             });
 
             it('should detect resource exhausted in message', () => {
-                expect(driver['isRetryableError']('unknown', 'Resource exhausted')).toBe(true);
-                expect(driver['isRetryableError']('unknown', 'Resources exhausted')).toBe(true);
+                expect(driver['isRetryableError'](undefined, 'Resource exhausted')).toBe(true);
+                expect(driver['isRetryableError'](undefined, 'Resources exhausted')).toBe(true);
             });
 
             it('should detect throttle in message', () => {
-                expect(driver['isRetryableError']('unknown', 'Request throttled')).toBe(true);
-                expect(driver['isRetryableError']('unknown', 'Throttling exception')).toBe(true);
+                expect(driver['isRetryableError'](undefined, 'Request throttled')).toBe(true);
+                expect(driver['isRetryableError'](undefined, 'Throttling exception')).toBe(true);
             });
 
             it('should detect status codes in message', () => {
-                expect(driver['isRetryableError']('unknown', 'Error 429: Too many requests')).toBe(true);
-                expect(driver['isRetryableError']('unknown', 'HTTP 529 error')).toBe(true);
+                expect(driver['isRetryableError'](undefined, 'Error 429: Too many requests')).toBe(true);
+                expect(driver['isRetryableError'](undefined, 'HTTP 529 error')).toBe(true);
             });
 
             it('should mark unknown messages as not retryable', () => {
-                expect(driver['isRetryableError']('unknown', 'Invalid API key')).toBe(false);
-                expect(driver['isRetryableError']('unknown', 'Bad request')).toBe(false);
-                expect(driver['isRetryableError']('unknown', 'Model not found')).toBe(false);
+                expect(driver['isRetryableError'](undefined, 'Invalid API key')).toBe(false);
+                expect(driver['isRetryableError'](undefined, 'Bad request')).toBe(false);
+                expect(driver['isRetryableError'](undefined, 'Model not found')).toBe(false);
             });
         });
     });
@@ -167,12 +167,12 @@ describe('AbstractDriver Error Formatting', () => {
             expect(formatted.retryable).toBe(true);
         });
 
-        it('should use "unknown" when no status code found', () => {
+        it('should use undefined when no status code found', () => {
             const originalError = new Error('Generic error');
 
             const formatted = driver['formatLlumiverseError'](originalError, mockContext);
 
-            expect(formatted.code).toBe('unknown');
+            expect(formatted.code).toBeUndefined();
             expect(formatted.retryable).toBe(false);
         });
 
@@ -223,10 +223,11 @@ describe('AbstractDriver Error Formatting', () => {
                 if ((error as any).type === 'custom_retryable') {
                     return new LlumiverseError(
                         `[${this.provider}] Custom retryable error`,
-                        'CUSTOM_ERROR',
                         true,
                         context,
-                        error
+                        error,
+                        undefined,
+                        'CUSTOM_ERROR'
                     );
                 }
                 // Fall back to default
@@ -240,7 +241,8 @@ describe('AbstractDriver Error Formatting', () => {
 
             const formatted = customDriver['formatLlumiverseError'](customError, mockContext);
 
-            expect(formatted.code).toBe('CUSTOM_ERROR');
+            expect(formatted.name).toBe('CUSTOM_ERROR');
+            expect(formatted.code).toBeUndefined();
             expect(formatted.retryable).toBe(true);
             expect(formatted.message).toContain('Custom retryable error');
         });

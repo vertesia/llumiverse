@@ -306,11 +306,18 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         error: unknown,
         context: LlumiverseErrorContext
     ): LlumiverseError {
-        // Extract status code from common locations
-        const statusCode = (error as any)?.status
+        // Extract status code from common locations (only if numeric)
+        let code: number | undefined;
+        const rawCode = (error as any)?.status
             || (error as any)?.statusCode
-            || (error as any)?.code
-            || 'unknown';
+            || (error as any)?.code;
+
+        if (typeof rawCode === 'number') {
+            code = rawCode;
+        }
+
+        // Extract error name if available
+        const errorName = (error as any)?.name;
 
         // Extract message
         const message = error instanceof Error
@@ -318,14 +325,15 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
             : String(error);
 
         // Determine retryability
-        const retryable = this.isRetryableError(statusCode, message);
+        const retryable = this.isRetryableError(code, message);
 
         return new LlumiverseError(
             `[${this.provider}] ${message}`,
-            statusCode,
             retryable,
             context,
-            error
+            error,
+            code,
+            errorName
         );
     }
 
@@ -333,13 +341,13 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
      * Determine if an error is retryable based on status code and message.
      * Can be overridden by drivers for provider-specific logic.
      * 
-     * @param statusCode - The HTTP status code or error code
+     * @param statusCode - The HTTP status code (if available)
      * @param message - The error message
      * @returns True if the error is retryable
      */
-    protected isRetryableError(statusCode: number | string, message: string): boolean {
+    protected isRetryableError(statusCode: number | undefined, message: string): boolean {
         // Numeric status codes
-        if (typeof statusCode === 'number') {
+        if (statusCode !== undefined) {
             if (statusCode === 429 || statusCode === 408) return true; // Rate limit, timeout
             if (statusCode === 529) return true; // Overloaded
             if (statusCode >= 500 && statusCode < 600) return true; // Server errors

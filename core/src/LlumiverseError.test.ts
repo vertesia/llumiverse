@@ -15,15 +15,16 @@ describe('LlumiverseError', () => {
             const originalError = new Error('Original error');
             const error = new LlumiverseError(
                 'Test error message',
-                429,
                 true,
                 mockContext,
-                originalError
+                originalError,
+                429,
+                'RateLimitError'
             );
 
             expect(error).toBeInstanceOf(Error);
             expect(error).toBeInstanceOf(LlumiverseError);
-            expect(error.name).toBe('LlumiverseError');
+            expect(error.name).toBe('RateLimitError');
             expect(error.message).toBe('Test error message');
             expect(error.code).toBe(429);
             expect(error.retryable).toBe(true);
@@ -37,37 +38,39 @@ describe('LlumiverseError', () => {
 
             const error = new LlumiverseError(
                 'Wrapped error',
-                500,
                 true,
                 mockContext,
-                originalError
+                originalError,
+                500
             );
 
             expect(error.stack).toBe(originalStack);
         });
 
-        it('should handle string codes', () => {
+        it('should handle undefined code', () => {
             const error = new LlumiverseError(
                 'Test error',
-                'ThrottlingException',
                 true,
                 mockContext,
-                new Error('AWS error')
+                new Error('Unknown error')
             );
 
-            expect(error.code).toBe('ThrottlingException');
+            expect(error.code).toBeUndefined();
+            expect(error.name).toBe('LlumiverseError'); // Default name
         });
 
         it('should handle non-retryable errors', () => {
             const error = new LlumiverseError(
                 'Auth error',
-                401,
                 false,
                 mockContext,
-                new Error('Unauthorized')
+                new Error('Unauthorized'),
+                401,
+                'AuthenticationError'
             );
 
             expect(error.retryable).toBe(false);
+            expect(error.name).toBe('AuthenticationError');
         });
     });
 
@@ -76,15 +79,16 @@ describe('LlumiverseError', () => {
             const originalError = new Error('Original error');
             const error = new LlumiverseError(
                 'Test error',
-                429,
                 true,
                 mockContext,
-                originalError
+                originalError,
+                429,
+                'RateLimitError'
             );
 
             const json = error.toJSON();
 
-            expect(json).toHaveProperty('name', 'LlumiverseError');
+            expect(json).toHaveProperty('name', 'RateLimitError');
             expect(json).toHaveProperty('message', 'Test error');
             expect(json).toHaveProperty('code', 429);
             expect(json).toHaveProperty('retryable', true);
@@ -96,10 +100,10 @@ describe('LlumiverseError', () => {
         it('should handle non-Error original error', () => {
             const error = new LlumiverseError(
                 'Test error',
-                500,
                 true,
                 mockContext,
-                'string error'
+                'string error',
+                500
             );
 
             const json = error.toJSON();
@@ -111,10 +115,10 @@ describe('LlumiverseError', () => {
         it('should return true for LlumiverseError instances', () => {
             const error = new LlumiverseError(
                 'Test error',
-                500,
                 true,
                 mockContext,
-                new Error('Original')
+                new Error('Original'),
+                500
             );
 
             expect(LlumiverseError.isLlumiverseError(error)).toBe(true);
@@ -138,10 +142,10 @@ describe('LlumiverseError', () => {
         it('should handle rate limit errors', () => {
             const error = new LlumiverseError(
                 'Rate limit exceeded',
-                429,
                 true,
                 { ...mockContext, operation: 'execute' as const },
-                new Error('Too many requests')
+                new Error('Too many requests'),
+                429
             );
 
             expect(error.retryable).toBe(true);
@@ -151,10 +155,10 @@ describe('LlumiverseError', () => {
         it('should handle server errors', () => {
             const error = new LlumiverseError(
                 'Internal server error',
-                500,
                 true,
                 { ...mockContext, operation: 'stream' as const },
-                new Error('Server error')
+                new Error('Server error'),
+                500
             );
 
             expect(error.retryable).toBe(true);
@@ -164,10 +168,10 @@ describe('LlumiverseError', () => {
         it('should handle authentication errors', () => {
             const error = new LlumiverseError(
                 'Invalid API key',
-                401,
                 false,
                 mockContext,
-                new Error('Unauthorized')
+                new Error('Unauthorized'),
+                401
             );
 
             expect(error.retryable).toBe(false);
@@ -177,10 +181,10 @@ describe('LlumiverseError', () => {
         it('should handle validation errors', () => {
             const error = new LlumiverseError(
                 'Invalid request',
-                400,
                 false,
                 mockContext,
-                new Error('Bad request')
+                new Error('Bad request'),
+                400
             );
 
             expect(error.retryable).toBe(false);
@@ -190,10 +194,10 @@ describe('LlumiverseError', () => {
         it('should handle timeout errors', () => {
             const error = new LlumiverseError(
                 'Request timeout',
-                408,
                 true,
                 mockContext,
-                new Error('Timeout')
+                new Error('Timeout'),
+                408
             );
 
             expect(error.retryable).toBe(true);
@@ -203,10 +207,10 @@ describe('LlumiverseError', () => {
         it('should handle service overloaded errors', () => {
             const error = new LlumiverseError(
                 'Service overloaded',
-                529,
                 true,
                 mockContext,
-                new Error('Overloaded')
+                new Error('Overloaded'),
+                529
             );
 
             expect(error.retryable).toBe(true);
@@ -218,10 +222,10 @@ describe('LlumiverseError', () => {
         it('should include provider information', () => {
             const error = new LlumiverseError(
                 'Error',
-                500,
                 true,
                 { ...mockContext, provider: 'openai' },
-                new Error('Test')
+                new Error('Test'),
+                500
             );
 
             expect(error.context.provider).toBe('openai');
@@ -230,10 +234,10 @@ describe('LlumiverseError', () => {
         it('should include model information', () => {
             const error = new LlumiverseError(
                 'Error',
-                500,
                 true,
                 { ...mockContext, model: 'gpt-4' },
-                new Error('Test')
+                new Error('Test'),
+                500
             );
 
             expect(error.context.model).toBe('gpt-4');
@@ -242,18 +246,18 @@ describe('LlumiverseError', () => {
         it('should include operation type', () => {
             const executeError = new LlumiverseError(
                 'Error',
-                500,
                 true,
                 { ...mockContext, operation: 'execute' as const },
-                new Error('Test')
+                new Error('Test'),
+                500
             );
 
             const streamError = new LlumiverseError(
                 'Error',
-                500,
                 true,
                 { ...mockContext, operation: 'stream' as const },
-                new Error('Test')
+                new Error('Test'),
+                500
             );
 
             expect(executeError.context.operation).toBe('execute');
@@ -263,18 +267,18 @@ describe('LlumiverseError', () => {
         it('should optionally include prompt', () => {
             const errorWithPrompt = new LlumiverseError(
                 'Error',
-                500,
                 true,
                 { ...mockContext, prompt: 'test prompt' },
-                new Error('Test')
+                new Error('Test'),
+                500
             );
 
             const errorWithoutPrompt = new LlumiverseError(
                 'Error',
-                500,
                 true,
                 { provider: 'test', model: 'test', operation: 'execute' as const },
-                new Error('Test')
+                new Error('Test'),
+                500
             );
 
             expect(errorWithPrompt.context.prompt).toBe('test prompt');
