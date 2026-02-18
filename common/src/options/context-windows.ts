@@ -18,7 +18,7 @@ export function getMaxOutputTokens(model: string): number {
     if (model.includes('gemini')) {
         if (model.includes('-1.0-')) return 2_048;
         if (model.includes('flash-image') || model.includes('pro-image')) return 32_768;
-        return 65_536; // Gemini 1.5, 2.0, 2.5, 3
+        return 65_535; // Gemini 1.5, 2.0, 2.5, 3 — API upper bound is exclusive
     }
     // OpenAI o-series
     if (model.includes('o1-mini')) return 65_536;

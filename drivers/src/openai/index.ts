@@ -116,14 +116,15 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         }
 
         const reasoning = model_options?.reasoning_effort ? { effort: model_options.reasoning_effort } : undefined;
+        const isReasoningModel = /\b(o1|o3|o4)\b/.test(options.model);
 
         const stream = await this.service.responses.create({
             stream: true,
             model: options.model,
             input: conversation,
             reasoning,
-            temperature: model_options?.temperature,
-            top_p: model_options?.top_p,
+            temperature: isReasoningModel ? undefined : model_options?.temperature,
+            top_p: isReasoningModel ? undefined : model_options?.top_p,
             max_output_tokens: model_options?.max_tokens,
             tools: useTools ? toolDefs : undefined,
             text: parsedSchema ? {
@@ -168,14 +169,15 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         }
 
         const reasoning = model_options?.reasoning_effort ? { effort: model_options.reasoning_effort } : undefined;
+        const isReasoningModel = /\b(o1|o3|o4)\b/.test(options.model);
 
         const res = await this.service.responses.create({
             stream: false,
             model: options.model,
             input: conversation,
             reasoning,
-            temperature: model_options?.temperature,
-            top_p: model_options?.top_p,
+            temperature: isReasoningModel ? undefined : model_options?.temperature,
+            top_p: isReasoningModel ? undefined : model_options?.top_p,
             max_output_tokens: model_options?.max_tokens, //TODO: use max_tokens for older models, currently relying on OpenAI to handle it
             tools: useTools ? toolDefs : undefined,
             text: parsedSchema ? {
