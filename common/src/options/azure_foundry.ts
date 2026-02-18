@@ -132,10 +132,13 @@ export function getMaxTokensLimitAzureFoundry(model: string): number | undefined
             if (modelLower.includes("opus-4-6")) {
                 return 128000;
             }
-            if (modelLower.includes("opus")) {
-                return 32768;
+            if (modelLower.includes("opus-4-5")) {
+                return 64000;
             }
-            return 64000;
+            if (modelLower.includes("opus")) {
+                return 32768; // Opus 4.0, 4.1
+            }
+            return 64000; // Sonnet 4.x, Haiku 4.5
         }
         if (modelLower.includes("3-7")) {
             return 64000;

@@ -561,10 +561,13 @@ function getClaudeMaxTokensLimit(model: string): number {
         if (model.includes("opus-4-6")) {
             return 128000;
         }
-        if (model.includes("opus-")) {
-            return 32768;
+        if (model.includes("opus-4-5")) {
+            return 64000;
         }
-        return 64000;
+        if (model.includes("opus-")) {
+            return 32768; // Opus 4.0, 4.1
+        }
+        return 64000; // Sonnet 4.x, Haiku 4.5
     }
     else if (model.includes("-3-7-")) {
         return 128000;
