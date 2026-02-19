@@ -153,7 +153,6 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
                 provider: this.driver.provider,
                 model: this.options.model,
                 operation: 'stream',
-                prompt: this.prompt
             });
         }
 
@@ -231,7 +230,6 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
                 provider: this.driver.provider,
                 model: this.options.model,
                 operation: 'stream',
-                prompt: this.prompt
             });
         }
     }
@@ -281,7 +279,6 @@ export class FallbackCompletionStream<PromptT = any> implements CompletionStream
                 provider: this.driver.provider,
                 model: this.options.model,
                 operation: 'stream',
-                prompt: this.prompt
             });
         }
     }

@@ -175,7 +175,6 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
                 provider: this.provider,
                 model: options.model,
                 operation: 'execute',
-                prompt
             });
         });
     }
@@ -209,7 +208,6 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
                 provider: this.provider,
                 model: options.model,
                 operation: 'execute',
-                prompt
             });
         }
     }

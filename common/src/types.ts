@@ -183,8 +183,6 @@ export interface LlumiverseErrorContext {
     model: string;
     /** The operation that failed */
     operation: 'execute' | 'stream';
-    /** The prompt that caused the error (optional, for debugging) */
-    prompt?: unknown;
 }
 
 // ============== Result Types ===============
