@@ -1,6 +1,13 @@
-import { CompletionStream, DriverOptions, ExecutionOptions, ExecutionResponse, ExecutionTokenUsage, ToolUse } from "@llumiverse/common";
+import {
+    CompletionStream,
+    DriverOptions,
+    ExecutionOptions,
+    ExecutionResponse,
+    ExecutionTokenUsage,
+    ToolUse,
+    LlumiverseError
+} from "@llumiverse/common";
 import { AbstractDriver } from "./Driver.js";
-import { LlumiverseError } from "./LlumiverseError.js";
 
 export class DefaultCompletionStream<PromptT = any> implements CompletionStream<PromptT> {
 

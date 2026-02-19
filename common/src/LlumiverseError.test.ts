@@ -1,13 +1,11 @@
-import { LlumiverseErrorContext } from '@llumiverse/common';
+import { LlumiverseErrorContext, LlumiverseError } from '@llumiverse/common';
 import { describe, expect, it } from 'vitest';
-import { LlumiverseError } from './LlumiverseError.js';
 
 describe('LlumiverseError', () => {
     const mockContext: LlumiverseErrorContext = {
         provider: 'test-provider',
         model: 'test-model',
         operation: 'execute' as const,
-        prompt: { test: 'prompt' },
     };
 
     describe('constructor', () => {
@@ -262,27 +260,6 @@ describe('LlumiverseError', () => {
 
             expect(executeError.context.operation).toBe('execute');
             expect(streamError.context.operation).toBe('stream');
-        });
-
-        it('should optionally include prompt', () => {
-            const errorWithPrompt = new LlumiverseError(
-                'Error',
-                true,
-                { ...mockContext, prompt: 'test prompt' },
-                new Error('Test'),
-                500
-            );
-
-            const errorWithoutPrompt = new LlumiverseError(
-                'Error',
-                true,
-                { provider: 'test', model: 'test', operation: 'execute' as const },
-                new Error('Test'),
-                500
-            );
-
-            expect(errorWithPrompt.context.prompt).toBe('test prompt');
-            expect(errorWithoutPrompt.context.prompt).toBeUndefined();
         });
     });
 });

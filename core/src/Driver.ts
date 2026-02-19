@@ -23,11 +23,11 @@ import {
     Providers,
     TrainingJob,
     TrainingOptions,
-    TrainingPromptOptions
+    TrainingPromptOptions,
+    LlumiverseError
 } from "@llumiverse/common";
 import { DefaultCompletionStream, FallbackCompletionStream } from "./CompletionStream.js";
 import { formatTextPrompt } from "./formatters/index.js";
-import { LlumiverseError } from "./LlumiverseError.js";
 import { validateResult } from "./validation.js";
 
 // Helper to create logger methods that support both message-only and object-first signatures
