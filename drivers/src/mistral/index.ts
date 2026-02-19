@@ -68,14 +68,17 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
+        const requestPayload = _makeChatCompletionRequest({
+            model: options.model,
+            messages: messages,
+            maxTokens: options.model_options?.max_tokens,
+            temperature: options.model_options?.temperature,
+            responseFormat: this.getResponseFormat(options),
+        });
+        this.logger.debug({ payload: JSON.stringify(requestPayload) }, "Mistral request payload");
+
         const res = await this.client.post('/v1/chat/completions', {
-            payload: _makeChatCompletionRequest({
-                model: options.model,
-                messages: messages,
-                maxTokens: options.model_options?.max_tokens,
-                temperature: options.model_options?.temperature,
-                responseFormat: this.getResponseFormat(options),
-            })
+            payload: requestPayload,
         }) as ChatCompletionResponse;
 
         const choice = res.choices[0];
@@ -99,17 +102,20 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
+        const streamPayload = _makeChatCompletionRequest({
+            model: options.model,
+            messages: messages,
+            maxTokens: options.model_options?.max_tokens,
+            temperature: options.model_options?.temperature,
+            topP: options.model_options?.top_p,
+            responseFormat: this.getResponseFormat(options),
+            stream: true,
+            stopSequences: options.model_options?.stop_sequence,
+        });
+        this.logger.debug({ payload: JSON.stringify(streamPayload) }, "Mistral stream request payload");
+
         const stream = await this.client.post('/v1/chat/completions', {
-            payload: _makeChatCompletionRequest({
-                model: options.model,
-                messages: messages,
-                maxTokens: options.model_options?.max_tokens,
-                temperature: options.model_options?.temperature,
-                topP: options.model_options?.top_p,
-                responseFormat: this.getResponseFormat(options),
-                stream: true,
-                stopSequences: options.model_options?.stop_sequence,
-            }),
+            payload: streamPayload,
             reader: 'sse'
         });
 
@@ -191,22 +197,19 @@ function _makeChatCompletionRequest({
     topP,
     randomSeed,
     stream,
-    safeMode,
-    safePrompt,
     toolChoice,
     responseFormat,
     stopSequences,
 }: CompletionRequestParams) {
     return {
-        model: model,
-        messages: messages,
+        model,
+        messages,
         tools: tools ?? undefined,
         temperature: temperature ?? undefined,
         max_tokens: maxTokens ?? undefined,
         top_p: topP ?? undefined,
         random_seed: randomSeed ?? undefined,
         stream: stream ?? undefined,
-        safe_prompt: (safeMode || safePrompt) ?? undefined,
         tool_choice: toolChoice ?? undefined,
         response_format: responseFormat ?? undefined,
         stop: stopSequences ?? undefined,
