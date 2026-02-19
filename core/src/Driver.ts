@@ -20,6 +20,7 @@ import {
     ModelSearchPayload,
     PromptOptions,
     PromptSegment,
+    Providers,
     TrainingJob,
     TrainingOptions,
     TrainingPromptOptions
@@ -120,7 +121,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     options: OptionsT;
     logger: Logger;
 
-    abstract provider: string; // the provider name
+    abstract provider: Providers | string; // the provider name
 
     constructor(opts: OptionsT) {
         this.options = opts;
