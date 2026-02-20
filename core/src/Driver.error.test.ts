@@ -8,10 +8,10 @@ import {
     ExecutionOptions,
     LlumiverseErrorContext,
     ModelSearchPayload,
+    LlumiverseError,
 } from '@llumiverse/common';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { AbstractDriver } from './Driver.js';
-import { LlumiverseError } from './LlumiverseError.js';
 
 // Simple test driver implementation
 class TestDriver extends AbstractDriver<DriverOptions, string> {
