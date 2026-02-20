@@ -20,6 +20,7 @@ import {
     getMaxTokensLimitBedrock,
     getModelCapabilities,
     incrementConversationTurn,
+    LlumiverseError, LlumiverseErrorContext,
     modelModalitiesToArray,
     ModelOptions,
     NovaCanvasOptions,
@@ -188,6 +189,143 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             return await formatTwelvelabsPegasusPrompt(segments, opts);
         }
         return await formatConversePrompt(segments, opts);
+    }
+
+    /**
+     * Format AWS Bedrock errors into LlumiverseError with proper status codes and retryability.
+     * 
+     * AWS SDK errors provide:
+     * - error.name: The exception type (e.g., "ThrottlingException")
+     * - error.$metadata.httpStatusCode: The HTTP status code
+     * - error.$metadata.requestId: The AWS request ID for tracking
+     * - error.$fault: "client" or "server" indicating error category
+     * 
+     * @param error - The AWS SDK error
+     * @param context - Context about where the error occurred
+     * @returns A standardized LlumiverseError
+     */
+    public formatLlumiverseError(
+        error: unknown,
+        context: LlumiverseErrorContext
+    ): LlumiverseError {
+        // Check if it's an AWS SDK error with $metadata
+        const awsError = error as any;
+        const hasMetadata = awsError?.$metadata !== undefined;
+
+        if (!hasMetadata) {
+            // Not an AWS SDK error, use default handling
+            return super.formatLlumiverseError(error, context);
+        }
+
+        // Extract AWS-specific fields
+        const errorName = awsError.name || 'UnknownError';
+        const httpStatusCode = awsError.$metadata?.httpStatusCode;
+        const requestId = awsError.$metadata?.requestId;
+        const fault = awsError.$fault; // "client" or "server"
+
+        // Extract error message - handle both Error instances and plain objects
+        let message: string;
+        if (error instanceof Error) {
+            message = error.message;
+        } else if (typeof awsError.message === 'string') {
+            message = awsError.message;
+        } else {
+            message = String(error);
+        }
+
+        // Build user-facing message with error name and status code
+        let userMessage = message;
+
+        // Include status code in message if available (for end-user visibility)
+        if (httpStatusCode) {
+            userMessage = `[${httpStatusCode}] ${userMessage}`;
+        }
+
+        // Prefix with error name if it's meaningful (not just "Error")
+        if (errorName && errorName !== 'Error' && errorName !== 'UnknownError') {
+            userMessage = `${errorName}: ${userMessage}`;
+        }
+
+        // Add request ID if available (useful for AWS support)
+        if (requestId) {
+            userMessage += ` (Request ID: ${requestId})`;
+        }
+
+        // Determine retryability based on AWS error types
+        const retryable = this.isBedrockErrorRetryable(errorName, httpStatusCode, fault);
+
+        return new LlumiverseError(
+            `[${this.provider}] ${userMessage}`,
+            retryable,
+            context,
+            error,
+            httpStatusCode, // Only set code if we have numeric status code
+            errorName       // Preserve AWS error name
+        );
+    }
+
+    /**
+     * Determine if a Bedrock error is retryable based on error type and status.
+     * 
+     * Retryable errors:
+     * - ThrottlingException: Rate limit exceeded, retry with backoff
+     * - ServiceUnavailableException: Service temporarily down
+     * - InternalServerException: Server-side error
+     * - ServiceQuotaExceededException: Quota exhausted, may recover
+     * - 5xx status codes: Server errors
+     * - 429, 408 status codes: Rate limit, timeout
+     * 
+     * Non-retryable errors:
+     * - ValidationException: Invalid request parameters
+     * - AccessDeniedException: Authentication/authorization failure
+     * - ResourceNotFoundException: Resource doesn't exist
+     * - ConflictException: Resource state conflict
+     * - ResourceInUseException: Resource locked by another operation
+     * - 4xx status codes (except 429, 408): Client errors
+     * 
+     * @param errorName - The AWS error name (e.g., "ThrottlingException")
+     * @param httpStatusCode - The HTTP status code if available
+     * @param fault - The fault type ("client" or "server")
+     * @returns True if retryable, false if not retryable, undefined if unknown
+     */
+    private isBedrockErrorRetryable(
+        errorName: string,
+        httpStatusCode: number | undefined,
+        fault: string | undefined
+    ): boolean | undefined {
+        // Check specific AWS error types first
+        switch (errorName) {
+            // Retryable errors
+            case 'ThrottlingException':
+            case 'ServiceUnavailableException':
+            case 'InternalServerException':
+            case 'ServiceQuotaExceededException':
+                return true;
+
+            // Non-retryable errors
+            case 'ValidationException':
+            case 'AccessDeniedException':
+            case 'ResourceNotFoundException':
+            case 'ConflictException':
+            case 'ResourceInUseException':
+            case 'TooManyTagsException':
+                return false;
+        }
+
+        // If we have HTTP status code, use it
+        if (httpStatusCode !== undefined) {
+            if (httpStatusCode === 429 || httpStatusCode === 408) return true; // Rate limit, timeout
+            if (httpStatusCode === 529) return true; // Overloaded
+            if (httpStatusCode >= 500 && httpStatusCode < 600) return true; // Server errors
+            if (httpStatusCode >= 400 && httpStatusCode < 500) return false; // Client errors
+        }
+
+        // Fall back to fault type
+        if (fault === 'server') return true;
+        if (fault === 'client') return false;
+
+        // Unknown error type - let consumer decide retry strategy
+        return undefined;
     }
 
     getExtractedExecution(result: ConverseResponse, _prompt?: BedrockPrompt, options?: ExecutionOptions): CompletionChunkObject {

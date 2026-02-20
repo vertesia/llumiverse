@@ -1,4 +1,12 @@
-import { CompletionStream, DriverOptions, ExecutionOptions, ExecutionResponse, ExecutionTokenUsage, ToolUse } from "@llumiverse/common";
+import {
+    CompletionStream,
+    DriverOptions,
+    ExecutionOptions,
+    ExecutionResponse,
+    ExecutionTokenUsage,
+    ToolUse,
+    LlumiverseError
+} from "@llumiverse/common";
 import { AbstractDriver } from "./Driver.js";
 
 export class DefaultCompletionStream<PromptT = any> implements CompletionStream<PromptT> {
@@ -144,8 +152,15 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
                 }
             }
         } catch (error: any) {
-            error.prompt = this.prompt;
-            throw error;
+            // Don't wrap if already a LlumiverseError
+            if (LlumiverseError.isLlumiverseError(error)) {
+                throw error;
+            }
+            throw this.driver.formatLlumiverseError(error, {
+                provider: this.driver.provider,
+                model: this.options.model,
+                operation: 'stream',
+            });
         }
 
         // Return undefined for the ExecutionTokenUsage object if there is nothing to fill it with.
@@ -214,8 +229,15 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
                 this.driver.validateResult(this.completion, this.options);
             }
         } catch (error: any) {
-            error.prompt = this.prompt;
-            throw error;
+            // Don't wrap if already a LlumiverseError
+            if (LlumiverseError.isLlumiverseError(error)) {
+                throw error;
+            }
+            throw this.driver.formatLlumiverseError(error, {
+                provider: this.driver.provider,
+                model: this.options.model,
+                operation: 'stream',
+            });
         }
     }
 
@@ -256,8 +278,15 @@ export class FallbackCompletionStream<PromptT = any> implements CompletionStream
             yield content;
             this.completion = completion; // Return the original completion with untouched CompletionResult[]
         } catch (error: any) {
-            error.prompt = this.prompt;
-            throw error;
+            // Don't wrap if already a LlumiverseError
+            if (LlumiverseError.isLlumiverseError(error)) {
+                throw error;
+            }
+            throw this.driver.formatLlumiverseError(error, {
+                provider: this.driver.provider,
+                model: this.options.model,
+                operation: 'stream',
+            });
         }
     }
 }
