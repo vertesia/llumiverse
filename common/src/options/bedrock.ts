@@ -1,4 +1,5 @@
 import { ModelOptionsInfo, ModelOptions, OptionType, ModelOptionInfoItem } from "../types.js";
+import { getMaxOutputTokens } from "./context-windows.js";
 import { textOptionsFallback } from "./fallback.js";
 
 // Union type of all Bedrock options
@@ -58,23 +59,11 @@ export interface TwelvelabsPegasusOptions {
 }
 
 export function getMaxTokensLimitBedrock(model: string): number | undefined {
-    // Claude models
+    // Claude models — delegate to provider-agnostic limits,
+    // override only where Bedrock supports extended output (128K for 3.7)
     if (model.includes("claude")) {
-        if (model.includes("-4-")) {
-            if (model.includes("opus-")) {
-                return 32768;
-            }
-            return 65536;
-        }
-        else if (model.includes("-3-7-")) {
-            return 131072;
-        }
-        else if (model.includes("-3-5-")) {
-            return 8192;
-        }
-        else {
-            return 4096;
-        }
+        if (model.includes("-3-7-")) return 128000;
+        return getMaxOutputTokens(model);
     }
     // Amazon models
     else if (model.includes("amazon")) {
@@ -98,7 +87,7 @@ export function getMaxTokensLimitBedrock(model: string): number | undefined {
             return 4096;
         }
         if (model.includes("pixtral-large")) {
-            return 131072;
+            return 4096;
         }
         return 8192;
     }
@@ -117,7 +106,7 @@ export function getMaxTokensLimitBedrock(model: string): number | undefined {
     // Cohere models
     else if (model.includes("cohere.command")) {
         if (model.includes("command-a")) {
-            return 8192;
+            return 8000;
         }
         return 4096;
     }
@@ -139,7 +128,7 @@ export function getMaxTokensLimitBedrock(model: string): number | undefined {
     }
     // OpenAI gpt-oss models
     if (model.includes("gpt-oss")) {
-        return 128000;
+        return 8192;
     }
     // TwelveLabs models
     else if (model.includes("twelvelabs")) {
