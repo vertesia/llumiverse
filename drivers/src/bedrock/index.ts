@@ -105,6 +105,42 @@ function maxTokenFallbackClaude(option: StatelessExecutionOptions): number {
     }
 }
 
+/**
+ * Parse Claude model version from model string.
+ * @param modelString - The model identifier string
+ * @returns An object with major and minor version numbers, or null if not parseable
+ */
+function parseClaudeVersion(modelString: string): { major: number; minor: number } | null {
+    // Match pattern: claude-[optional variant]-{major}-[optional 1-2 digit minor]
+    // The minor version is limited to 1-2 digits to avoid matching dates (YYYYMMDD format)
+    const match = modelString.match(/claude-(?:[a-z]+-)?(\d+)(?:-(\d{1,2}))?(?:-|\b)/);
+    if (match) {
+        return {
+            major: parseInt(match[1], 10),
+            minor: match[2] ? parseInt(match[2], 10) : 0
+        };
+    }
+    return null;
+}
+
+/**
+ * Check if a Claude model version is greater than or equal to a target version.
+ * @returns true if the model version is >= target version, false otherwise
+ */
+function isClaudeVersionGTE(modelString: string, targetMajor: number, targetMinor: number): boolean {
+    const version = parseClaudeVersion(modelString);
+    if (!version) {
+        return false;
+    }
+    if (version.major > targetMajor) {
+        return true;
+    }
+    if (version.major === targetMajor && version.minor >= targetMinor) {
+        return true;
+    }
+    return false;
+}
+
 export type BedrockPrompt = NovaMessagesPrompt | ConverseRequest | TwelvelabsPegasusRequest;
 
 export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockPrompt> {
@@ -819,6 +855,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                         anthropic_beta: ["output-128k-2025-02-19"]
                     };
                 }
+            }
+            // Claude 4.6 and later versions don't support JSON prefill
+            if (isClaudeVersionGTE(options.model, 4, 6)) {
+                supportsJSONPrefill = false;
             }
             //Needs max_tokens to be set
             if (!model_options.max_tokens) {

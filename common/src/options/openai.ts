@@ -1,8 +1,8 @@
-import { ModelOptionsInfo, ModelOptionInfoItem, ModelOptions, OptionType, SharedOptions } from "../types.js";
+import { ModelOptionInfoItem, ModelOptions, ModelOptionsInfo, OptionType, SharedOptions } from "../types.js";
 import { textOptionsFallback } from "./fallback.js";
 
-// Union type of all Bedrock options
-export type OpenAiOptions = OpenAiThinkingOptions | OpenAiTextOptions;
+// Union type of all OpenAI options
+export type OpenAiOptions = OpenAiThinkingOptions | OpenAiTextOptions | OpenAiDalleOptions | OpenAiGptImageOptions;
 
 export interface OpenAiThinkingOptions {
     _option_id: "openai-thinking",
@@ -22,6 +22,22 @@ export interface OpenAiTextOptions {
     stop_sequence?: string[],
     image_detail?: "low" | "high" | "auto",
 }
+export interface OpenAiDalleOptions {
+    _option_id: "openai-dalle",
+    size?: "256x256" | "512x512" | "1024x1024" | "1792x1024" | "1024x1792",
+    image_quality?: "standard" | "hd",
+    style?: "vivid" | "natural",
+    response_format?: "url" | "b64_json",
+    n?: number,
+}
+
+export interface OpenAiGptImageOptions {
+    _option_id: "openai-gpt-image",
+    size?: "1024x1024" | "1024x1536" | "1536x1024" | "auto",
+    image_quality?: "low" | "medium" | "high" | "auto",
+    background?: "transparent" | "opaque" | "auto",
+    output_format?: "png" | "webp" | "jpeg",
+}
 
 export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOptionsInfo {
     const visionOptions: ModelOptionInfoItem[] = isVisionModel(model) ? [
@@ -30,6 +46,109 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
             default: "auto", description: "Controls how the model processes an input image."
         },
     ] : [];
+
+    // Image generation models
+    if (isImageModel(model)) {
+        const isGPTImage = model.includes("gpt-image") || model.includes("chatgpt-image");
+        const isDallE2 = model.includes("dall-e-2");
+        const isDallE3 = model.includes("dall-e-3");
+
+        const sizeOptions: Record<string, string> = {};
+        if (isGPTImage) {
+            sizeOptions["1024x1024"] = "1024x1024";
+            sizeOptions["1024x1536"] = "1024x1536";
+            sizeOptions["1536x1024"] = "1536x1024";
+            sizeOptions["Auto"] = "auto";
+        } else if (isDallE2) {
+            sizeOptions["256x256"] = "256x256";
+            sizeOptions["512x512"] = "512x512";
+            sizeOptions["1024x1024"] = "1024x1024";
+        } else if (isDallE3) {
+            sizeOptions["1024x1024"] = "1024x1024";
+            sizeOptions["1792x1024"] = "1792x1024";
+            sizeOptions["1024x1792"] = "1024x1792";
+        }
+
+        const baseImageOptions: ModelOptionInfoItem[] = [
+            {
+                name: "size",
+                type: OptionType.enum,
+                enum: sizeOptions,
+                default: "1024x1024",
+                description: "The size of the generated image"
+            }
+        ];
+
+        const gptImageOptions: ModelOptionInfoItem[] = isGPTImage ? [
+            {
+                name: "image_quality",
+                type: OptionType.enum,
+                enum: { "Low": "low", "Medium": "medium", "High": "high", "Auto": "auto" },
+                default: "auto",
+                description: "The quality of the generated image"
+            },
+            {
+                name: "background",
+                type: OptionType.enum,
+                enum: { "Transparent": "transparent", "Opaque": "opaque", "Auto": "auto" },
+                default: "auto",
+                description: "The background setting for the image"
+            },
+            {
+                name: "output_format",
+                type: OptionType.enum,
+                enum: { "PNG": "png", "WebP": "webp", "JPEG": "jpeg" },
+                default: "png",
+                description: "The output format for the image"
+            }
+        ] : [];
+
+        const dalleOptions: ModelOptionInfoItem[] = (isDallE2 || isDallE3) ? [
+            {
+                name: "image_quality",
+                type: OptionType.enum,
+                enum: isDallE3 ? { "Standard": "standard", "HD": "hd" } : { "Standard": "standard" },
+                default: "standard",
+                description: "The quality of the generated image"
+            },
+            {
+                name: "style",
+                type: OptionType.enum,
+                enum: { "Vivid": "vivid", "Natural": "natural" },
+                default: "vivid",
+                description: "The style of the generated image (DALL-E 3 only)"
+            },
+            {
+                name: "response_format",
+                type: OptionType.enum,
+                enum: { "URL": "url", "Base64 JSON": "b64_json" },
+                default: "b64_json",
+                description: "The format of the response"
+            }
+        ] : [];
+
+        const nImagesOption: ModelOptionInfoItem[] = isDallE2 ? [
+            {
+                name: "n",
+                type: OptionType.numeric,
+                min: 1,
+                max: 10,
+                default: 1,
+                integer: true,
+                description: "Number of images to generate (DALL-E 2 only)"
+            }
+        ] : [];
+
+        return {
+            _option_id: isGPTImage ? "openai-gpt-image" : "openai-dalle",
+            options: [
+                ...baseImageOptions,
+                ...gptImageOptions,
+                ...dalleOptions,
+                ...nImagesOption,
+            ]
+        };
+    }
 
     if (model.includes("o1") || model.includes("o3")) {
         //Is thinking text model
@@ -148,4 +267,8 @@ function isO1Full(model: string): boolean {
 
 function isVisionModel(model: string): boolean {
     return model.includes("gpt-4o") || isO1Full(model) || model.includes("gpt-4-turbo");
+}
+
+function isImageModel(model: string): boolean {
+    return model.includes("dall-e") || model.includes("gpt-image") || model.includes("chatgpt-image");
 }

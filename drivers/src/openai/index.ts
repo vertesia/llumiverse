@@ -14,6 +14,8 @@ import {
     LlumiverseError,
     LlumiverseErrorContext,
     ModelType,
+    OpenAiDalleOptions,
+    OpenAiGptImageOptions,
     Providers,
     ToolDefinition,
     ToolUse,
@@ -89,15 +91,16 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         const tokenInfo = mapUsage(result.usage);
 
         const tools = collectTools(result.output);
-        const data = extractTextFromResponse(result);
+        // Collect all parts in order (text and images)
+        const allResults = extractCompletionResults(result.output);
 
-        if (!data && !tools) {
+        if (allResults.length === 0 && !tools) {
             this.logger.error({ result }, "[OpenAI] Response is not valid");
             throw new Error("Response is not valid: no data");
         }
 
         return {
-            result: textToCompletionResult(data || ''),
+            result: allResults,
             token_usage: tokenInfo,
             finish_reason: responseFinishReason(result, tools),
             tool_use: tools,
@@ -236,6 +239,13 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     }
 
     protected canStream(_options: ExecutionOptions): Promise<boolean> {
+        // Image generation models don't support streaming
+        if (_options.model.includes("dall-e")
+            || _options.model.includes("gpt-image")
+            || _options.model.includes("chatgpt-image")) {
+            return Promise.resolve(false);
+        }
+
         if (_options.model.includes("o1")
             && !(_options.model.includes("mini") || _options.model.includes("preview"))) {
             //o1 full does not support streaming
@@ -359,7 +369,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         //Some of these use the completions API instead of the chat completions API.
         //Others are for non-text input modalities. Therefore common to both.
         const wordBlacklist = ["embed", "whisper", "transcribe", "audio", "moderation", "tts",
-            "realtime", "dall-e", "babbage", "davinci", "codex", "o1-pro", "computer-use", "sora"];
+            "realtime", "babbage", "davinci", "codex", "o1-pro", "computer-use", "sora"];
 
 
         //OpenAI has very little information, filtering based on name.
@@ -374,14 +384,20 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             if (owner == "system") {
                 owner = "openai";
             }
+
+            // Determine model type based on capabilities
+            let modelType = ModelType.Text;
+            if (m.id.includes("dall-e") || m.id.includes("gpt-image")) {
+                modelType = ModelType.Image;
+            }
+
+
             return {
                 id: m.id,
                 name: m.id,
                 provider: this.provider,
                 owner: owner,
-                type: m.object === "model" ? ModelType.Text : ModelType.Unknown,
-                can_stream: true,
-                is_multimodal: m.id.includes("gpt-4"),
+                type: modelType,
                 input_modalities: modelModalitiesToArray(modelCapability.input),
                 output_modalities: modelModalitiesToArray(modelCapability.output),
                 tool_support: modelCapability.tool_support,
@@ -414,6 +430,108 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         }
 
         return { values: embeddings, model } satisfies EmbeddingsResult;
+    }
+
+    imageModels = ["dall-e", "gpt-image", "chatgpt-image"];
+
+    /**
+     * Determine if a model is specifically an image generation model (not conversational image model)
+     */
+    isImageModel(model: string): boolean {
+        // DALL-E models are standalone image generation
+        // gpt-image models can generate images in conversations, not standalone
+        return this.imageModels.some(imageModel => model.includes(imageModel));
+    }
+
+    /**
+     * Request image generation from standalone Images API
+     * Supports: DALL-E 2, DALL-E 3, GPT-image models (for edit/variation)
+     */
+    async requestImageGeneration(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<Completion> {
+        this.logger.debug(`[${this.provider}] Generating image with model ${options.model}`);
+
+        const model_options = options.model_options as OpenAiDalleOptions | OpenAiGptImageOptions | undefined;
+
+        // Extract prompt text from ResponseInputItem[]
+        let promptText = "";
+        for (const item of prompt) {
+            if ('content' in item && typeof item.content === 'string') {
+                promptText += item.content + "\\n";
+            } else if ('content' in item && Array.isArray(item.content)) {
+                // Extract text from content array
+                for (const part of item.content) {
+                    if ('type' in part && part.type === 'input_text' && 'text' in part) {
+                        promptText += part.text + "\\n";
+                    }
+                }
+            }
+        }
+        promptText = promptText.trim();
+
+        try {
+            const generateParams: OpenAI.Images.ImageGenerateParamsNonStreaming = {
+                model: options.model,
+                prompt: promptText,
+                size: model_options?.size || "1024x1024",
+            };
+
+            // Add DALL-E specific options
+            if (options.model.includes("dall-e") || model_options?._option_id === "openai-dalle") {
+                const dalleOptions = model_options as OpenAiDalleOptions | undefined;
+                generateParams.n = dalleOptions?.n || 1;
+                generateParams.response_format = dalleOptions?.response_format || "b64_json";
+
+                if (options.model.includes("dall-e-3")) {
+                    generateParams.quality = dalleOptions?.image_quality || "standard";
+                    if (dalleOptions?.style) {
+                        generateParams.style = dalleOptions.style;
+                    }
+                }
+            } else {
+                // Default for other models
+                generateParams.n = 1;
+            }
+
+            const response = await this.service.images.generate(generateParams);
+
+            // Convert response to CompletionResults
+            const results: CompletionResult[] = [];
+
+            if (response.data) {
+                for (const image of response.data) {
+                    let imageValue: string;
+
+                    if (image.b64_json) {
+                        // Base64 format
+                        imageValue = `data:image/png;base64,${image.b64_json}`;
+                    } else if (image.url) {
+                        // URL format
+                        imageValue = image.url;
+                    } else {
+                        continue;
+                    }
+
+                    results.push({
+                        type: "image",
+                        value: imageValue
+                    });
+                }
+            }
+
+            return {
+                result: results
+            };
+
+        } catch (error: any) {
+            this.logger.error({ error }, `[${this.provider}] Image generation failed`);
+            return {
+                result: [],
+                error: {
+                    message: error.message,
+                    code: error.code || 'GENERATION_FAILED'
+                }
+            };
+        }
     }
 
     /**
@@ -888,6 +1006,43 @@ export function collectTools(output?: OpenAI.Responses.ResponseOutputItem[]): To
     return tools.length > 0 ? tools : undefined;
 }
 
+/**
+ * Collect all parts (text and images) from response output in order.
+ * This preserves the original ordering of text and image parts.
+ */
+function extractCompletionResults(output?: OpenAI.Responses.ResponseOutputItem[]): CompletionResult[] {
+    if (!output) {
+        return [];
+    }
+
+    const results: CompletionResult[] = [];
+    for (const item of output) {
+        if (item.type === 'message') {
+            // Extract text from message content
+            for (const part of item.content) {
+                if (part.type === 'output_text' && part.text) {
+                    results.push({
+                        type: "text",
+                        value: part.text
+                    });
+                }
+            }
+        } else if (item.type === 'image_generation_call' && 'result' in item && item.result) {
+            // GPT-image models return base64 encoded images in result field
+            const base64Data = item.result;
+            // Format as data URL for consistency with other image outputs
+            const imageUrl = base64Data.startsWith('data:')
+                ? base64Data
+                : `data:image/png;base64,${base64Data}`;
+            results.push({
+                type: "image",
+                value: imageUrl
+            });
+        }
+    }
+    return results;
+}
+
 //For strict mode false
 function limitedSchemaFormat(schema: JSONSchema): JSONSchema {
     const formattedSchema = { ...schema };
@@ -976,26 +1131,6 @@ function openAISchemaFormat(schema: JSONSchema, nesting: number = 0): JSONSchema
     }
 
     return formattedSchema
-}
-
-function extractTextFromResponse(response: OpenAI.Responses.Response): string {
-    if (response.output_text) {
-        return response.output_text;
-    }
-
-    const collected: string[] = [];
-    for (const item of response.output ?? []) {
-        if (item.type === 'message') {
-            const text = item.content
-                .map(part => part.type === 'output_text' ? part.text : '')
-                .join('');
-            if (text) {
-                collected.push(text);
-            }
-        }
-    }
-
-    return collected.join("\n");
 }
 
 function responseFinishReason(response: OpenAI.Responses.Response, tools?: ToolUse[] | undefined): string | undefined {
