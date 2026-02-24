@@ -113,7 +113,8 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         }
 
         // Include conversation history (same as non-streaming)
-        const conversation = updateConversation(options.conversation, prompt);
+        // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
+        const conversation = fixOrphanedToolUse(updateConversation(options.conversation, prompt));
 
         const toolDefs = getToolDefinitions(options.tools);
         const useTools: boolean = toolDefs ? supportsToolUse(options.model, this.provider, true) : false;
@@ -174,7 +175,8 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         const toolDefs = getToolDefinitions(options.tools);
         const useTools: boolean = toolDefs ? supportsToolUse(options.model, this.provider) : false;
 
-        let conversation = updateConversation(options.conversation, prompt);
+        // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
+        let conversation = fixOrphanedToolUse(updateConversation(options.conversation, prompt));
 
         let parsedSchema: JSONSchema | undefined = undefined;
         let strictMode = false;
@@ -1147,6 +1149,71 @@ function responseFinishReason(response: OpenAI.Responses.Response, tools?: ToolU
         return response.status;
     }
     return 'stop';
+}
+
+/**
+ * Fix orphaned function_call items in the OpenAI Responses API conversation.
+ *
+ * When an agent is stopped mid-tool-execution, the conversation may contain
+ * function_call items without matching function_call_output items. The OpenAI
+ * Responses API requires every function_call to have a matching function_call_output.
+ *
+ * This function detects such cases and injects synthetic function_call_output items
+ * indicating the tools were interrupted, allowing the conversation to continue.
+ */
+export function fixOrphanedToolUse(items: ResponseInputItem[]): ResponseInputItem[] {
+    if (items.length < 2) return items;
+
+    // First pass: collect all function_call_output call_ids
+    const outputCallIds = new Set<string>();
+    for (const item of items) {
+        if ('type' in item && item.type === 'function_call_output') {
+            outputCallIds.add((item as OpenAI.Responses.ResponseInputItem.FunctionCallOutput).call_id);
+        }
+    }
+
+    // Second pass: build result, injecting synthetic outputs for orphaned function_calls
+    const result: ResponseInputItem[] = [];
+    const pendingCalls = new Map<string, string>(); // call_id -> tool name
+
+    for (const item of items) {
+        if ('type' in item && item.type === 'function_call') {
+            const fc = item as OpenAI.Responses.ResponseFunctionToolCall;
+            // Only track if there's no matching output anywhere in the conversation
+            if (!outputCallIds.has(fc.call_id)) {
+                pendingCalls.set(fc.call_id, fc.name ?? 'unknown');
+            }
+            result.push(item);
+        } else if ('type' in item && item.type === 'function_call_output') {
+            result.push(item);
+        } else {
+            // Before any non-function item, flush pending orphaned calls
+            if (pendingCalls.size > 0) {
+                for (const [callId, toolName] of pendingCalls) {
+                    result.push({
+                        type: 'function_call_output',
+                        call_id: callId,
+                        output: `[Tool interrupted: The user stopped the operation before "${toolName}" could execute.]`,
+                    });
+                }
+                pendingCalls.clear();
+            }
+            result.push(item);
+        }
+    }
+
+    // Handle trailing orphans at the end of the conversation
+    if (pendingCalls.size > 0) {
+        for (const [callId, toolName] of pendingCalls) {
+            result.push({
+                type: 'function_call_output',
+                call_id: callId,
+                output: `[Tool interrupted: The user stopped the operation before "${toolName}" could execute.]`,
+            });
+        }
+    }
+
+    return result;
 }
 
 function safeJsonParse(value: unknown): any {
