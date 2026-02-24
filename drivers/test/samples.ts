@@ -7,7 +7,10 @@ import { basename, dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const LOCAL_FALLBACK_IMAGE = resolve(__dirname, "hello_world.jpg");
+
+// Local test fixture images (512x512 JPEGs, within Bedrock's [320, 4096] range)
+const TEST_IMAGE_1 = resolve(__dirname, "test_image_1.jpg");
+const TEST_IMAGE_2 = resolve(__dirname, "test_image_2.jpg");
 
 export const testPrompt_color: PromptSegment[] = [
     {
@@ -44,43 +47,11 @@ class ImageSource implements DataSource {
     }
 }
 
-class ImageUrlSource implements DataSource {
-    constructor(public url: string, public mime_type: string = "image/jpeg") {
-    }
-    get name() {
-        return basename(this.url);
-    }
-    async getURL(): Promise<string> {
-        return this.url;
-    }
-    async getStream(): Promise<ReadableStream<string | Uint8Array>> {
-        return fetchWithFallback(this.url);
-    }
-}
-
-/** Fetch with timeout and fallback to a local test image */
-async function fetchWithFallback(url: string): Promise<ReadableStream<Uint8Array>> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10_000);
-    try {
-        const res = await fetch(url, { signal: controller.signal });
-        clearTimeout(timeout);
-        if (!res.ok || !res.body) {
-            throw new Error(`HTTP ${res.status}`);
-        }
-        return res.body;
-    } catch (err) {
-        clearTimeout(timeout);
-        console.warn(`Failed to fetch ${url} (${err}), falling back to local test image`);
-        return createReadableStreamFromReadable(createReadStream(LOCAL_FALLBACK_IMAGE));
-    }
-}
-
 export const testPrompt_describeImage: PromptSegment[] = [
     {
         content: "You are a lab assistant analysing images of animals, then tag the images with accurate description of the animal shown in the picture.",
         role: PromptRole.user,
-        files: [new ImageUrlSource("https://upload.wikimedia.org/wikipedia/commons/b/b2/WhiteCat.jpg")]
+        files: [new ImageSource(TEST_IMAGE_1)]
     }
 ]
 
@@ -106,9 +77,6 @@ export const testSchema_animalDescription: JSONSchema =
     }
 }
 
-const imgSource = new ImageUrlSource("https://upload.wikimedia.org/wikipedia/commons/b/b2/WhiteCat.jpg")
-
-
 export const testPrompt_textToImage: NovaMessagesPrompt =
 {
     messages: [{
@@ -129,7 +97,7 @@ export const testPrompt_textToImageGuidance: NovaMessagesPrompt =
         {
             image: {
                 format: "jpeg",
-                source: { bytes: await getImageAsBase64(new ImageUrlSource("https://upload.wikimedia.org/wikipedia/commons/b/b2/WhiteCat.jpg")) }
+                source: { bytes: await getImageAsBase64(new ImageSource(TEST_IMAGE_1)) }
             }
         }
         ]
@@ -146,13 +114,13 @@ export const testPrompt_imageVariations: NovaMessagesPrompt =
         {
             image: {
                 format: "jpeg",
-                source: { bytes: await getImageAsBase64(new ImageUrlSource("https://upload.wikimedia.org/wikipedia/commons/b/b2/WhiteCat.jpg")), }
+                source: { bytes: await getImageAsBase64(new ImageSource(TEST_IMAGE_1)), }
             }
         },
         {
             image: {
                 format: "jpeg",
-                source: { bytes: await getImageAsBase64(new ImageUrlSource("https://upload.wikimedia.org/wikipedia/commons/b/b5/Mariacki.jpg")), }
+                source: { bytes: await getImageAsBase64(new ImageSource(TEST_IMAGE_2)), }
             }
         }
         ]
