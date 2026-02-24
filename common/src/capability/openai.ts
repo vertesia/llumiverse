@@ -11,23 +11,25 @@ const RECORD_MODEL_CAPABILITIES: Record<string, OpenAIModelCapability> = {
 // Populate RECORD_FAMILY_CAPABILITIES as a const record (lowest common denominator for each family)
 // For OpenAI, tool_support_streaming matches tool_support since the API supports tools while streaming
 const RECORD_FAMILY_CAPABILITIES: Record<string, OpenAIModelCapability> = {
-    "gpt":              { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "gpt-3.5":          { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: false },
-    "gpt-4":            { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "gpt-4-turbo":      { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "gpt-4o":           { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "gpt-4.1":          { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "gpt-4.5":          { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "gpt-image":        { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
-    "gpt-oss":          { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: false },
-    "o":                { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
-    "o1-mini":          { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: false },
-    "o1-preview":       { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: false },
-    "omni-moderation":  { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: false },
-    "sora":             { input: { text: true, image: true, video: true, audio: false, embed: false }, output: { text: false, image: false, video: true, audio: true, embed: false }, tool_support: false },
-    "text-embedding":   { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: false, image: false, video: false, audio: false, embed: true }, tool_support: false },
-    "text-moderation":  { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: false },
-    "whisper":          { input: { text: false, image: false, video: false, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: false }
+    "gpt": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
+    "gpt-3.5": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: false },
+    "gpt-4": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
+    "gpt-4-turbo": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
+    "gpt-4o": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
+    "gpt-4.1": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
+    "gpt-4.5": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
+    "gpt-image": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
+    "chatgpt-image": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
+    "dall-e": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
+    "gpt-oss": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: false },
+    "o": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
+    "o1-mini": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: false },
+    "o1-preview": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: false },
+    "omni-moderation": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: false },
+    "sora": { input: { text: true, image: true, video: true, audio: false, embed: false }, output: { text: false, image: false, video: true, audio: true, embed: false }, tool_support: false },
+    "text-embedding": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: false, image: false, video: false, audio: false, embed: true }, tool_support: false },
+    "text-moderation": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: false },
+    "whisper": { input: { text: false, image: false, video: false, audio: true, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: false }
 };
 
 // Fallback pattern lists for inferring modalities and tool support

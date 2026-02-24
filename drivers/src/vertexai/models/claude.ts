@@ -1,14 +1,36 @@
-import { ContentBlock, ContentBlockParam, DocumentBlockParam, ImageBlockParam, Message, MessageParam, TextBlockParam, ToolResultBlockParam } from "@anthropic-ai/sdk/resources/index.js";
 import {
-    AIModel, Completion, CompletionChunkObject, ExecutionOptions, getMaxTokensLimitVertexAi, JSONObject, ModelType,
-    PromptRole, PromptSegment, readStreamAsBase64, readStreamAsString, StatelessExecutionOptions, ToolUse, VertexAIClaudeOptions,
-    getConversationMeta, incrementConversationTurn, stripBase64ImagesFromConversation, truncateLargeTextInConversation
+    APIConnectionError,
+    APIConnectionTimeoutError,
+    APIError,
+    AuthenticationError,
+    BadRequestError,
+    ConflictError,
+    InternalServerError,
+    NotFoundError,
+    PermissionDeniedError,
+    RateLimitError,
+    UnprocessableEntityError,
+} from '@anthropic-ai/sdk/error';
+import { ContentBlock, ContentBlockParam, DocumentBlockParam, ImageBlockParam, Message, MessageParam, TextBlockParam, ToolResultBlockParam } from "@anthropic-ai/sdk/resources/index.js";
+import { MessageStreamParams } from "@anthropic-ai/sdk/resources/index.mjs";
+import { MessageCreateParamsBase, MessageCreateParamsNonStreaming, RawMessageStreamEvent } from "@anthropic-ai/sdk/resources/messages.js";
+import {
+    AIModel, Completion, CompletionChunkObject, ExecutionOptions,
+    getConversationMeta,
+    getMaxTokensLimitVertexAi,
+    incrementConversationTurn,
+    JSONObject,
+    LlumiverseError, LlumiverseErrorContext,
+    ModelType,
+    PromptRole, PromptSegment, readStreamAsBase64, readStreamAsString, StatelessExecutionOptions,
+    stripBase64ImagesFromConversation,
+    ToolUse,
+    truncateLargeTextInConversation,
+    VertexAIClaudeOptions
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { VertexAIDriver } from "../index.js";
 import { ModelDefinition } from "../models.js";
-import { MessageCreateParamsBase, MessageCreateParamsNonStreaming, RawMessageStreamEvent } from "@anthropic-ai/sdk/resources/messages.js";
-import { MessageStreamParams } from "@anthropic-ai/sdk/resources/index.mjs";
 
 export const ANTHROPIC_REGIONS: Record<string, string> = {
     us: "us-east5",
@@ -443,6 +465,170 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         });
 
         return stream;
+    }
+
+    /**
+     * Format Anthropic API errors into LlumiverseError with proper status codes and retryability.
+     * 
+     * Anthropic API errors have a specific structure:
+     * - APIError.status: HTTP status code (400, 401, 403, 404, 409, 422, 429, 500+)
+     * - APIError.error: Nested error object with type and message
+     * - APIError.requestID: Request ID for support (can be null)
+     * 
+     * Common error types:
+     * - BadRequestError (400): Invalid request parameters
+     * - AuthenticationError (401): Authentication required
+     * - PermissionDeniedError (403): Insufficient permissions
+     * - NotFoundError (404): Resource not found
+     * - ConflictError (409): Resource conflict
+     * - UnprocessableEntityError (422): Validation error
+     * - RateLimitError (429): Rate limit exceeded
+     * - InternalServerError (500+): Server-side errors
+     * - APIConnectionError: Connection issues (no status code)
+     * - APIConnectionTimeoutError: Request timeout (no status code)
+     * 
+     * @see https://docs.anthropic.com/en/api/errors
+     */
+    formatLlumiverseError(
+        _driver: VertexAIDriver,
+        error: unknown,
+        context: LlumiverseErrorContext
+    ): LlumiverseError {
+        // Check if it's an Anthropic API error
+        const isAnthropicError = this.isAnthropicApiError(error);
+
+        if (!isAnthropicError) {
+            // Not an Anthropic API error, use default handling
+            throw error;
+        }
+
+        const apiError = error as APIError;
+        const httpStatusCode = apiError.status;
+
+        // Extract error message and nested error details
+        let message = apiError.message || String(error);
+
+        // Extract error type from nested error object if available
+        let errorType: string | undefined;
+        if (apiError.error && typeof apiError.error === 'object') {
+            const nestedError = apiError.error as any;
+            if (nestedError.error && typeof nestedError.error === 'object') {
+                errorType = nestedError.error.type;
+                // Use the nested error message if it's more specific
+                if (nestedError.error.message) {
+                    message = nestedError.error.message;
+                }
+            }
+        }
+
+        // Build user-facing message with status code
+        let userMessage = message;
+
+        // Include status code in message (for end-user visibility)
+        if (httpStatusCode) {
+            userMessage = `[${httpStatusCode}] ${userMessage}`;
+        }
+
+        // Include error type if available
+        if (errorType && errorType !== 'error') {
+            userMessage = `${errorType}: ${userMessage}`;
+        }
+
+        // Add request ID if available (useful for Anthropic support)
+        if (apiError.requestID) {
+            userMessage += ` (Request ID: ${apiError.requestID})`;
+        }
+
+        // Determine retryability based on Anthropic error types
+        const retryable = this.isClaudeErrorRetryable(error, httpStatusCode, errorType);
+
+        // Use the error constructor name as the error name
+        const errorName = error.constructor?.name || 'AnthropicError';
+
+        return new LlumiverseError(
+            `[${context.provider}] ${userMessage}`,
+            retryable,
+            context,
+            error,
+            httpStatusCode,
+            errorName
+        );
+    }
+
+    /**
+     * Type guard to check if error is an Anthropic API error.
+     */
+    private isAnthropicApiError(error: unknown): error is APIError {
+        return (
+            error !== null &&
+            typeof error === 'object' &&
+            error instanceof APIError
+        );
+    }
+
+    /**
+     * Determine if an Anthropic API error is retryable.
+     * 
+     * Retryable errors:
+     * - RateLimitError (429): Rate limit exceeded, retry with backoff
+     * - InternalServerError (500+): Server-side errors
+     * - APIConnectionTimeoutError: Request timeout
+     * - 408 (Request Timeout): Request timeout
+     * - 529 (Overloaded): Service overloaded
+     * 
+     * Non-retryable errors:
+     * - BadRequestError (400): Invalid request parameters
+     * - AuthenticationError (401): Authentication failure
+     * - PermissionDeniedError (403): Insufficient permissions
+     * - NotFoundError (404): Resource not found
+     * - ConflictError (409): Resource conflict
+     * - UnprocessableEntityError (422): Validation error
+     * - Other 4xx client errors
+     * - invalid_request_error: Invalid request structure
+     * 
+     * @param error - The error object
+     * @param httpStatusCode - The HTTP status code if available
+     * @param errorType - The nested error type if available
+     * @returns True if retryable, false if not retryable, undefined if unknown
+     */
+    private isClaudeErrorRetryable(
+        error: unknown,
+        httpStatusCode: number | undefined,
+        errorType: string | undefined
+    ): boolean | undefined {
+        // Check specific Anthropic error types by class
+        if (error instanceof RateLimitError) return true;
+        if (error instanceof InternalServerError) return true;
+        if (error instanceof APIConnectionTimeoutError) return true;
+
+        // Non-retryable by error type
+        if (error instanceof BadRequestError) return false;
+        if (error instanceof AuthenticationError) return false;
+        if (error instanceof PermissionDeniedError) return false;
+        if (error instanceof NotFoundError) return false;
+        if (error instanceof ConflictError) return false;
+        if (error instanceof UnprocessableEntityError) return false;
+
+        // Check nested error type
+        if (errorType === 'invalid_request_error') return false;
+
+        // Use HTTP status code
+        if (httpStatusCode !== undefined) {
+            if (httpStatusCode === 429) return true; // Rate limit
+            if (httpStatusCode === 408) return true; // Request timeout
+            if (httpStatusCode === 529) return true; // Overloaded
+            if (httpStatusCode >= 500 && httpStatusCode < 600) return true; // Server errors
+            if (httpStatusCode >= 400 && httpStatusCode < 500) return false; // Client errors
+        }
+
+        // Connection errors without status codes
+        if (error instanceof APIConnectionError && !(error instanceof APIConnectionTimeoutError)) {
+            // Generic connection errors might be retryable (network issues)
+            return true;
+        }
+
+        // Unknown error type - let consumer decide retry strategy
+        return undefined;
     }
 }
 

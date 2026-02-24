@@ -4,8 +4,6 @@
  * (eg: OpenAI, HuggingFace, etc.)
  */
 
-import { DefaultCompletionStream, FallbackCompletionStream } from "./CompletionStream.js";
-import { formatTextPrompt } from "./formatters/index.js";
 import {
     AIModel,
     Completion,
@@ -17,15 +15,19 @@ import {
     EmbeddingsResult,
     ExecutionOptions,
     ExecutionResponse,
+    LlumiverseErrorContext,
     Logger,
-    Modalities,
     ModelSearchPayload,
     PromptOptions,
     PromptSegment,
+    Providers,
     TrainingJob,
     TrainingOptions,
-    TrainingPromptOptions
+    TrainingPromptOptions,
+    LlumiverseError
 } from "@llumiverse/common";
+import { DefaultCompletionStream, FallbackCompletionStream } from "./CompletionStream.js";
+import { formatTextPrompt } from "./formatters/index.js";
 import { validateResult } from "./validation.js";
 
 // Helper to create logger methods that support both message-only and object-first signatures
@@ -119,7 +121,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     options: OptionsT;
     logger: Logger;
 
-    abstract provider: string; // the provider name
+    abstract provider: Providers | string; // the provider name
 
     constructor(opts: OptionsT) {
         this.options = opts;
@@ -165,8 +167,15 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     async execute(segments: PromptSegment[], options: ExecutionOptions): Promise<ExecutionResponse<PromptT>> {
         const prompt = await this.createPrompt(segments, options);
         return this._execute(prompt, options).catch((error: any) => {
-            (error as any).prompt = prompt;
-            throw error;
+            // Don't wrap if already a LlumiverseError
+            if (LlumiverseError.isLlumiverseError(error)) {
+                throw error;
+            }
+            throw this.formatLlumiverseError(error, {
+                provider: this.provider,
+                model: options.model,
+                operation: 'execute',
+            });
         });
     }
 
@@ -189,8 +198,17 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
             const execution_time = Date.now() - start;
             return { ...result, prompt, execution_time };
         } catch (error) {
-            (error as any).prompt = prompt;
-            throw error;
+            // Don't wrap if already a LlumiverseError
+            if (LlumiverseError.isLlumiverseError(error)) {
+                throw error;
+            }
+            // Log the original error for debugging
+            this.logger.error({ err: error, data: { provider: this.provider, model: options.model, operation: 'execute', prompt } }, `Error during execution in provider ${this.provider}:`);
+            throw this.formatLlumiverseError(error, {
+                provider: this.provider,
+                model: options.model,
+                operation: 'execute',
+            });
         }
     }
 
@@ -200,9 +218,10 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     // by default no stream is supported. we block and we return all at once
     async stream(segments: PromptSegment[], options: ExecutionOptions): Promise<CompletionStream<PromptT>> {
+        this.logger.info(options, `Executing prompt with provider ${this.provider} with options: ${JSON.stringify(options)}`);
         const prompt = await this.createPrompt(segments, options);
         const canStream = await this.canStream(options);
-        if (options.output_modality === Modalities.text && canStream) {
+        if (canStream) {
             return new DefaultCompletionStream(this, prompt, options);
         } else if (this.isImageModel(options.model)) {
             return new FallbackCompletionStream(this, prompt, options);
@@ -264,6 +283,98 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         _options: ExecutionOptions
     ): unknown | undefined {
         // Default implementation returns undefined - drivers can override
+        return undefined;
+    }
+
+    /**
+     * Format an error into LlumiverseError. Override in driver implementations
+     * to provide provider-specific error parsing.
+     * 
+     * The default implementation uses common patterns:
+     * - Status 429, 408: retryable (rate limit, timeout)
+     * - Status 529: retryable (overloaded)
+     * - Status 5xx: retryable (server errors)
+     * - Status 4xx (except above): not retryable (client errors)
+     * - Error messages containing "rate limit", "timeout", etc.: retryable
+     * 
+     * @param error - The error to format
+     * @param context - Context about where the error occurred
+     * @returns A standardized LlumiverseError
+     */
+    public formatLlumiverseError(
+        error: unknown,
+        context: LlumiverseErrorContext
+    ): LlumiverseError {
+        // Extract status code from common locations (only if numeric)
+        let code: number | undefined;
+        const rawCode = (error as any)?.status
+            || (error as any)?.statusCode
+            || (error as any)?.code;
+
+        if (typeof rawCode === 'number') {
+            code = rawCode;
+        }
+
+        // Extract error name if available
+        const errorName = (error as any)?.name;
+
+        // Extract message
+        const message = error instanceof Error
+            ? error.message
+            : String(error);
+
+        // Determine retryability
+        const retryable = this.isRetryableError(code, message);
+
+        return new LlumiverseError(
+            `[${this.provider}] ${message}`,
+            retryable,
+            context,
+            error,
+            code,
+            errorName
+        );
+    }
+
+    /**
+     * Determine if an error is retryable based on status code and message.
+     * Can be overridden by drivers for provider-specific logic.
+     * 
+     * @param statusCode - The HTTP status code (if available)
+     * @param message - The error message
+     * @returns True if retryable, false if not retryable, undefined if unknown
+     */
+    protected isRetryableError(statusCode: number | undefined, message: string): boolean | undefined {
+        // Numeric status codes
+        if (statusCode !== undefined) {
+            if (statusCode === 429 || statusCode === 408) return true; // Rate limit, timeout
+            if (statusCode === 529) return true; // Overloaded
+            if (statusCode >= 500 && statusCode < 600) return true; // Server errors
+            return false; // 4xx client errors not retryable
+        }
+
+        // Message-based detection for non-HTTP errors
+        const lowerMessage = message.toLowerCase();
+
+        // Rate limit variations
+        if (lowerMessage.includes('rate') && lowerMessage.includes('limit')) return true;
+
+        // Timeout variations (timeout, timed out, time out)
+        if (lowerMessage.includes('timeout')) return true;
+        if (lowerMessage.includes('timed') && lowerMessage.includes('out')) return true;
+        if (lowerMessage.includes('time') && lowerMessage.includes('out')) return true;
+
+        // Resource exhausted variations
+        if (lowerMessage.includes('resource') && lowerMessage.includes('exhaust')) return true;
+
+        // Other retryable patterns
+        if (lowerMessage.includes('retry')) return true;
+        if (lowerMessage.includes('overload')) return true;
+        if (lowerMessage.includes('throttl')) return true;
+        if (lowerMessage.includes('429')) return true;
+        if (lowerMessage.includes('529')) return true;
+
+        // Unknown errors - let consumer decide retry strategy
         return undefined;
     }
 

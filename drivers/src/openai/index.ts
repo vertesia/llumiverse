@@ -11,7 +11,11 @@ import {
     ExecutionOptions,
     ExecutionTokenUsage,
     JSONSchema,
+    LlumiverseError,
+    LlumiverseErrorContext,
     ModelType,
+    OpenAiDalleOptions,
+    OpenAiGptImageOptions,
     Providers,
     ToolDefinition,
     ToolUse,
@@ -29,6 +33,22 @@ import {
     unwrapConversationArray,
 } from "@llumiverse/core";
 import OpenAI, { AzureOpenAI } from "openai";
+import {
+    APIConnectionError,
+    APIConnectionTimeoutError,
+    APIError,
+    AuthenticationError,
+    BadRequestError,
+    ConflictError,
+    ContentFilterFinishReasonError,
+    InternalServerError,
+    LengthFinishReasonError,
+    NotFoundError,
+    OpenAIError,
+    PermissionDeniedError,
+    RateLimitError,
+    UnprocessableEntityError,
+} from 'openai/error';
 import { formatOpenAILikeMultimodalPrompt } from "./openai_format.js";
 
 // Response API types
@@ -71,15 +91,16 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         const tokenInfo = mapUsage(result.usage);
 
         const tools = collectTools(result.output);
-        const data = extractTextFromResponse(result);
+        // Collect all parts in order (text and images)
+        const allResults = extractCompletionResults(result.output);
 
-        if (!data && !tools) {
+        if (allResults.length === 0 && !tools) {
             this.logger.error({ result }, "[OpenAI] Response is not valid");
             throw new Error("Response is not valid: no data");
         }
 
         return {
-            result: textToCompletionResult(data || ''),
+            result: allResults,
             token_usage: tokenInfo,
             finish_reason: responseFinishReason(result, tools),
             tool_use: tools,
@@ -218,6 +239,13 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     }
 
     protected canStream(_options: ExecutionOptions): Promise<boolean> {
+        // Image generation models don't support streaming
+        if (_options.model.includes("dall-e")
+            || _options.model.includes("gpt-image")
+            || _options.model.includes("chatgpt-image")) {
+            return Promise.resolve(false);
+        }
+
         if (_options.model.includes("o1")
             && !(_options.model.includes("mini") || _options.model.includes("preview"))) {
             //o1 full does not support streaming
@@ -341,7 +369,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         //Some of these use the completions API instead of the chat completions API.
         //Others are for non-text input modalities. Therefore common to both.
         const wordBlacklist = ["embed", "whisper", "transcribe", "audio", "moderation", "tts",
-            "realtime", "dall-e", "babbage", "davinci", "codex", "o1-pro", "computer-use", "sora"];
+            "realtime", "babbage", "davinci", "codex", "o1-pro", "computer-use", "sora"];
 
 
         //OpenAI has very little information, filtering based on name.
@@ -356,14 +384,20 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             if (owner == "system") {
                 owner = "openai";
             }
+
+            // Determine model type based on capabilities
+            let modelType = ModelType.Text;
+            if (m.id.includes("dall-e") || m.id.includes("gpt-image")) {
+                modelType = ModelType.Image;
+            }
+
+
             return {
                 id: m.id,
                 name: m.id,
                 provider: this.provider,
                 owner: owner,
-                type: m.object === "model" ? ModelType.Text : ModelType.Unknown,
-                can_stream: true,
-                is_multimodal: m.id.includes("gpt-4"),
+                type: modelType,
                 input_modalities: modelModalitiesToArray(modelCapability.input),
                 output_modalities: modelModalitiesToArray(modelCapability.output),
                 tool_support: modelCapability.tool_support,
@@ -396,6 +430,307 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         }
 
         return { values: embeddings, model } satisfies EmbeddingsResult;
+    }
+
+    imageModels = ["dall-e", "gpt-image", "chatgpt-image"];
+
+    /**
+     * Determine if a model is specifically an image generation model (not conversational image model)
+     */
+    isImageModel(model: string): boolean {
+        // DALL-E models are standalone image generation
+        // gpt-image models can generate images in conversations, not standalone
+        return this.imageModels.some(imageModel => model.includes(imageModel));
+    }
+
+    /**
+     * Request image generation from standalone Images API
+     * Supports: DALL-E 2, DALL-E 3, GPT-image models (for edit/variation)
+     */
+    async requestImageGeneration(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<Completion> {
+        this.logger.debug(`[${this.provider}] Generating image with model ${options.model}`);
+
+        const model_options = options.model_options as OpenAiDalleOptions | OpenAiGptImageOptions | undefined;
+
+        // Extract prompt text from ResponseInputItem[]
+        let promptText = "";
+        for (const item of prompt) {
+            if ('content' in item && typeof item.content === 'string') {
+                promptText += item.content + "\\n";
+            } else if ('content' in item && Array.isArray(item.content)) {
+                // Extract text from content array
+                for (const part of item.content) {
+                    if ('type' in part && part.type === 'input_text' && 'text' in part) {
+                        promptText += part.text + "\\n";
+                    }
+                }
+            }
+        }
+        promptText = promptText.trim();
+
+        try {
+            const generateParams: OpenAI.Images.ImageGenerateParamsNonStreaming = {
+                model: options.model,
+                prompt: promptText,
+                size: model_options?.size || "1024x1024",
+            };
+
+            // Add DALL-E specific options
+            if (options.model.includes("dall-e") || model_options?._option_id === "openai-dalle") {
+                const dalleOptions = model_options as OpenAiDalleOptions | undefined;
+                generateParams.n = dalleOptions?.n || 1;
+                generateParams.response_format = dalleOptions?.response_format || "b64_json";
+
+                if (options.model.includes("dall-e-3")) {
+                    generateParams.quality = dalleOptions?.image_quality || "standard";
+                    if (dalleOptions?.style) {
+                        generateParams.style = dalleOptions.style;
+                    }
+                }
+            } else {
+                // Default for other models
+                generateParams.n = 1;
+            }
+
+            const response = await this.service.images.generate(generateParams);
+
+            // Convert response to CompletionResults
+            const results: CompletionResult[] = [];
+
+            if (response.data) {
+                for (const image of response.data) {
+                    let imageValue: string;
+
+                    if (image.b64_json) {
+                        // Base64 format
+                        imageValue = `data:image/png;base64,${image.b64_json}`;
+                    } else if (image.url) {
+                        // URL format
+                        imageValue = image.url;
+                    } else {
+                        continue;
+                    }
+
+                    results.push({
+                        type: "image",
+                        value: imageValue
+                    });
+                }
+            }
+
+            return {
+                result: results
+            };
+
+        } catch (error: any) {
+            this.logger.error({ error }, `[${this.provider}] Image generation failed`);
+            return {
+                result: [],
+                error: {
+                    message: error.message,
+                    code: error.code || 'GENERATION_FAILED'
+                }
+            };
+        }
+    }
+
+    /**
+     * Format OpenAI API errors into LlumiverseError with proper status codes and retryability.
+     * 
+     * OpenAI API errors have a specific structure:
+     * - APIError.status: HTTP status code (400, 401, 403, 404, 409, 422, 429, 500+)
+     * - APIError.error: Error object with type, message, param, code
+     * - APIError.requestID: Request ID for support
+     * - APIError.code: Error code (e.g., 'invalid_api_key', 'rate_limit_exceeded')
+     * - APIError.param: Parameter that caused the error (optional)
+     * - APIError.type: Error type (optional)
+     * 
+     * Common error types:
+     * - BadRequestError (400): Invalid request parameters
+     * - AuthenticationError (401): Invalid API key
+     * - PermissionDeniedError (403): Insufficient permissions
+     * - NotFoundError (404): Resource not found
+     * - ConflictError (409): Resource conflict
+     * - UnprocessableEntityError (422): Validation error
+     * - RateLimitError (429): Rate limit exceeded
+     * - InternalServerError (500+): Server-side errors
+     * - APIConnectionError: Connection issues (no status code)
+     * - APIConnectionTimeoutError: Request timeout (no status code)
+     * - LengthFinishReasonError: Response truncated due to length
+     * - ContentFilterFinishReasonError: Content filtered
+     * 
+     * This implementation works for:
+     * - OpenAI API
+     * - Azure OpenAI
+     * - xAI (uses OpenAI-compatible API)
+     * - Azure Foundry (OpenAI-compatible)
+     * - Other OpenAI-compatible APIs
+     * 
+     * @see https://platform.openai.com/docs/guides/error-codes
+     */
+    public formatLlumiverseError(
+        error: unknown,
+        context: LlumiverseErrorContext
+    ): LlumiverseError {
+        // Check if it's an OpenAI API error
+        const isOpenAIError = this.isOpenAIApiError(error);
+
+        if (!isOpenAIError) {
+            // Not an OpenAI API error, use default handling
+            throw error;
+        }
+
+        const apiError = error as APIError;
+        const httpStatusCode = apiError.status;
+
+        // Extract error message
+        let message = apiError.message || String(error);
+
+        // Extract additional error details (only available on APIError)
+        const errorCode = apiError.code;
+        const errorParam = apiError.param;
+        const errorType = apiError.type;
+
+        // Build user-facing message with status code
+        let userMessage = message;
+
+        // Include status code in message (for end-user visibility)
+        if (httpStatusCode) {
+            userMessage = `[${httpStatusCode}] ${userMessage}`;
+        }
+
+        // Add error code if available and not already in message
+        if (errorCode && !userMessage.includes(errorCode)) {
+            userMessage += ` (code: ${errorCode})`;
+        }
+
+        // Add parameter info if available and helpful
+        if (errorParam && !userMessage.toLowerCase().includes(errorParam.toLowerCase())) {
+            userMessage += ` [param: ${errorParam}]`;
+        }
+
+        // Add request ID if available (useful for OpenAI support)
+        if (apiError.requestID) {
+            userMessage += ` (Request ID: ${apiError.requestID})`;
+        }
+
+        // Determine retryability based on OpenAI error types
+        const retryable = this.isOpenAIErrorRetryable(error, httpStatusCode, errorCode, errorType);
+
+        // Use the error constructor name as the error name
+        const errorName = error.constructor?.name || 'OpenAIError';
+
+        return new LlumiverseError(
+            `[${context.provider}] ${userMessage}`,
+            retryable,
+            context,
+            error,
+            httpStatusCode,
+            errorName
+        );
+    }
+
+    /**
+     * Type guard to check if error is an OpenAI API error or OpenAI-specific error.
+     */
+    private isOpenAIApiError(error: unknown): error is APIError | OpenAIError {
+        return (
+            error !== null &&
+            typeof error === 'object' &&
+            (error instanceof APIError || error instanceof OpenAIError)
+        );
+    }
+
+    /**
+     * Determine if an OpenAI API error is retryable.
+     * 
+     * Retryable errors:
+     * - RateLimitError (429): Rate limit exceeded, retry with backoff
+     * - InternalServerError (500+): Server-side errors
+     * - APIConnectionTimeoutError: Request timeout
+     * - Error codes: 'timeout', 'server_error', 'service_unavailable'
+     * - Status codes: 408, 429, 502, 503, 504, 529, 5xx
+     * 
+     * Non-retryable errors:
+     * - BadRequestError (400): Invalid request parameters
+     * - AuthenticationError (401): Invalid API key
+     * - PermissionDeniedError (403): Insufficient permissions
+     * - NotFoundError (404): Resource not found
+     * - ConflictError (409): Resource conflict
+     * - UnprocessableEntityError (422): Validation error
+     * - LengthFinishReasonError: Length limit reached
+     * - ContentFilterFinishReasonError: Content filtered
+     * - Error codes: 'invalid_api_key', 'invalid_request_error', 'model_not_found'
+     * - Other 4xx client errors
+     * 
+     * @param error - The error object
+     * @param httpStatusCode - The HTTP status code if available
+     * @param errorCode - The error code if available
+     * @param errorType - The error type if available
+     * @returns True if retryable, false if not retryable, undefined if unknown
+     */
+    private isOpenAIErrorRetryable(
+        error: unknown,
+        httpStatusCode: number | undefined,
+        errorCode: string | null | undefined,
+        errorType: string | undefined
+    ): boolean | undefined {
+        // Check specific OpenAI error types by class
+        if (error instanceof RateLimitError) return true;
+        if (error instanceof InternalServerError) return true;
+        if (error instanceof APIConnectionTimeoutError) return true;
+
+        // Non-retryable by error type
+        if (error instanceof BadRequestError) return false;
+        if (error instanceof AuthenticationError) return false;
+        if (error instanceof PermissionDeniedError) return false;
+        if (error instanceof NotFoundError) return false;
+        if (error instanceof ConflictError) return false;
+        if (error instanceof UnprocessableEntityError) return false;
+        if (error instanceof LengthFinishReasonError) return false;
+        if (error instanceof ContentFilterFinishReasonError) return false;
+
+        // Check error codes (OpenAI specific)
+        if (errorCode) {
+            // Retryable error codes
+            if (errorCode === 'timeout') return true;
+            if (errorCode === 'server_error') return true;
+            if (errorCode === 'service_unavailable') return true;
+            if (errorCode === 'rate_limit_exceeded') return true;
+
+            // Non-retryable error codes
+            if (errorCode === 'invalid_api_key') return false;
+            if (errorCode === 'invalid_request_error') return false;
+            if (errorCode === 'model_not_found') return false;
+            if (errorCode === 'insufficient_quota') return false;
+            if (errorCode === 'invalid_model') return false;
+            if (errorCode.includes('invalid_')) return false;
+        }
+
+        // Check error type
+        if (errorType === 'invalid_request_error') return false;
+        if (errorType === 'authentication_error') return false;
+
+        // Use HTTP status code
+        if (httpStatusCode !== undefined) {
+            if (httpStatusCode === 429) return true; // Rate limit
+            if (httpStatusCode === 408) return true; // Request timeout
+            if (httpStatusCode === 502) return true; // Bad gateway
+            if (httpStatusCode === 503) return true; // Service unavailable
+            if (httpStatusCode === 504) return true; // Gateway timeout
+            if (httpStatusCode === 529) return true; // Overloaded
+            if (httpStatusCode >= 500 && httpStatusCode < 600) return true; // Server errors
+            if (httpStatusCode >= 400 && httpStatusCode < 500) return false; // Client errors
+        }
+
+        // Connection errors without status codes
+        if (error instanceof APIConnectionError && !(error instanceof APIConnectionTimeoutError)) {
+            // Generic connection errors might be retryable (network issues)
+            return true;
+        }
+
+        // Unknown error type - let consumer decide retry strategy
+        return undefined;
     }
 
 }
@@ -671,6 +1006,43 @@ export function collectTools(output?: OpenAI.Responses.ResponseOutputItem[]): To
     return tools.length > 0 ? tools : undefined;
 }
 
+/**
+ * Collect all parts (text and images) from response output in order.
+ * This preserves the original ordering of text and image parts.
+ */
+function extractCompletionResults(output?: OpenAI.Responses.ResponseOutputItem[]): CompletionResult[] {
+    if (!output) {
+        return [];
+    }
+
+    const results: CompletionResult[] = [];
+    for (const item of output) {
+        if (item.type === 'message') {
+            // Extract text from message content
+            for (const part of item.content) {
+                if (part.type === 'output_text' && part.text) {
+                    results.push({
+                        type: "text",
+                        value: part.text
+                    });
+                }
+            }
+        } else if (item.type === 'image_generation_call' && 'result' in item && item.result) {
+            // GPT-image models return base64 encoded images in result field
+            const base64Data = item.result;
+            // Format as data URL for consistency with other image outputs
+            const imageUrl = base64Data.startsWith('data:')
+                ? base64Data
+                : `data:image/png;base64,${base64Data}`;
+            results.push({
+                type: "image",
+                value: imageUrl
+            });
+        }
+    }
+    return results;
+}
+
 //For strict mode false
 function limitedSchemaFormat(schema: JSONSchema): JSONSchema {
     const formattedSchema = { ...schema };
@@ -759,26 +1131,6 @@ function openAISchemaFormat(schema: JSONSchema, nesting: number = 0): JSONSchema
     }
 
     return formattedSchema
-}
-
-function extractTextFromResponse(response: OpenAI.Responses.Response): string {
-    if (response.output_text) {
-        return response.output_text;
-    }
-
-    const collected: string[] = [];
-    for (const item of response.output ?? []) {
-        if (item.type === 'message') {
-            const text = item.content
-                .map(part => part.type === 'output_text' ? part.text : '')
-                .join('');
-            if (text) {
-                collected.push(text);
-            }
-        }
-    }
-
-    return collected.join("\n");
 }
 
 function responseFinishReason(response: OpenAI.Responses.Response, tools?: ToolUse[] | undefined): string | undefined {
