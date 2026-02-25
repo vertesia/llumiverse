@@ -9,14 +9,15 @@ export default defineConfig([
       '@typescript-eslint/no-empty-object-type': 'warn',
       '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/no-this-alias': 'warn',
-      '@typescript-eslint/no-unused-expressions': 'warn',
+      '@typescript-eslint/no-unused-expressions': ['warn', {
+        allowShortCircuit: true,
+        allowTernary: true,
+      }],
       '@typescript-eslint/no-unused-vars': [
         'warn',
         {
           argsIgnorePattern: '^_',
           varsIgnorePattern: '^_',
-          "allowShortCircuit": true,
-          "allowTernary": true
         },
       ],
       '@typescript-eslint/no-wrapper-object-types': 'warn',
