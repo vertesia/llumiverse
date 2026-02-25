@@ -38,7 +38,7 @@ jobs:
           node-version: 22.x
           cache: "pnpm"
       - run: pnpm install
-      - run: pnpm eslint
+      - run: pnpm lint
       - run: pnpm build
 
       - name: Authenticate with Google Cloud
