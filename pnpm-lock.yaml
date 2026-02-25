@@ -101,11 +101,11 @@ importers:
   drivers:
     dependencies:
       '@anthropic-ai/sdk':
-        specifier: ^0.76.0
-        version: 0.76.0(zod@3.25.63)
+        specifier: ^0.78.0
+        version: 0.78.0(zod@3.25.63)
       '@anthropic-ai/vertex-sdk':
-        specifier: ^0.14.3
-        version: 0.14.3(zod@3.25.63)
+        specifier: ^0.14.4
+        version: 0.14.4(zod@3.25.63)
       '@aws-sdk/client-bedrock':
         specifier: ^3.985.0
         version: 3.985.0
@@ -146,8 +146,8 @@ importers:
         specifier: ^6.4.0
         version: 6.4.0
       '@google/genai':
-        specifier: ^1.40.0
-        version: 1.40.0
+        specifier: ^1.42.0
+        version: 1.42.0
       '@huggingface/inference':
         specifier: 4.13.11
         version: 4.13.11
@@ -219,8 +219,8 @@ importers:
 
 packages:
 
-  '@anthropic-ai/sdk@0.76.0':
-    resolution: {integrity: sha512-Nycgyfk6EwUnkozG321qNE7Vya46YPm2E0IB0+MmEBNEboOgXblvMmnDb5qNmsxAo9feJzDTFDgxioWwyoIy2g==}
+  '@anthropic-ai/sdk@0.78.0':
+    resolution: {integrity: sha512-PzQhR715td/m1UaaN5hHXjYB8Gl2lF9UVhrrGrZeysiF6Rb74Wc9GCB8hzLdzmQtBd1qe89F9OptgB9Za1Ib5w==}
     hasBin: true
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
@@ -228,8 +228,8 @@ packages:
       zod:
         optional: true
 
-  '@anthropic-ai/vertex-sdk@0.14.3':
-    resolution: {integrity: sha512-GJZTkkvN66gM3Epqm9laKEjC3orQqzmQt8JAgTN9+zlb+I+1/oEd3Z7rj2tkEKCTeOUVScdhcXPudN8GdpuGqA==}
+  '@anthropic-ai/vertex-sdk@0.14.4':
+    resolution: {integrity: sha512-BZUPRWghZxfSFtAxU563wH+jfWBPoedAwsVxG35FhmNsjeV8tyfN+lFriWhCpcZApxA4NdT6Soov+PzfnxxD5g==}
 
   '@aws-crypto/crc32@5.2.0':
     resolution: {integrity: sha512-nLbCWqQNgUiwwtFsen1AdzAtvuLRsQS8rYgMuxCrdKf9kOssamGLuPwyTY9wyYblNr9+1XM8v6zoDTPPSIeANg==}
@@ -742,8 +742,8 @@ packages:
     resolution: {integrity: sha512-lNcYOnHfzedewgjTRxQs2/mLk+TYcq4qhdDx+0jG/h0dgQvXCQvnxofOUhpoyTunk2SawlwRZqQOxHHVVENhCA==}
     engines: {node: '>=18'}
 
-  '@google/genai@1.40.0':
-    resolution: {integrity: sha512-fhIww8smT0QYRX78qWOiz/nIQhHMF5wXOrlXvj33HBrz3vKDBb+wibLcEmTA+L9dmPD4KmfNr7UF3LDQVTXNjA==}
+  '@google/genai@1.42.0':
+    resolution: {integrity: sha512-+3nlMTcrQufbQ8IumGkOphxD5Pd5kKyJOzLcnY0/1IuE8upJk5aLmoexZ2BJhBp1zAjRJMEB4a2CJwKI9e2EYw==}
     engines: {node: '>=20.0.0'}
     peerDependencies:
       '@modelcontextprotocol/sdk': ^1.25.2
@@ -912,6 +912,7 @@ packages:
     resolution: {integrity: sha512-xpObYIf+8gprgWaPP32xiN5RVTi/s5FCR+XMXSKmhfoJjrpRAjCuuqQXyxUa/eJTdAE6eJ+KDKaoEqjZQxh3Gw==}
     cpu: [loong64]
     os: [linux]
+    libc: [musl]
 
   '@rollup/rollup-linux-ppc64-gnu@4.57.1':
     resolution: {integrity: sha512-4BrCgrpZo4hvzMDKRqEaW1zeecScDCR+2nZ86ATLhAoJ5FQ+lbHVD3ttKe74/c7tNT9c6F2viwB3ufwp01Oh2w==}
@@ -923,6 +924,7 @@ packages:
     resolution: {integrity: sha512-NOlUuzesGauESAyEYFSe3QTUguL+lvrN1HtwEEsU2rOwdUDeTMJdO5dUYl/2hKf9jWydJrO9OL/XSSf65R5+Xw==}
     cpu: [ppc64]
     os: [linux]
+    libc: [musl]
 
   '@rollup/rollup-linux-riscv64-gnu@4.57.1':
     resolution: {integrity: sha512-ptA88htVp0AwUUqhVghwDIKlvJMD/fmL/wrQj99PRHFRAG6Z5nbWoWG4o81Nt9FT+IuqUQi+L31ZKAFeJ5Is+A==}
@@ -1227,6 +1229,9 @@ packages:
 
   '@types/node@22.19.7':
     resolution: {integrity: sha512-MciR4AKGHWl7xwxkBa6xUGxQJ4VBOmPTF7sL+iGzuahOFaO0jHCsuEfS80pan1ef4gWId1oWOweIhrDEYLuaOw==}
+
+  '@types/retry@0.12.0':
+    resolution: {integrity: sha512-wWKOClTTiizcZhXnPY4wikVAwmdYHp8q6DmC+EJUzAMsycb7HB32Kh9RN4+0gExjmPmZSAQjgURXIGATPegAvA==}
 
   '@typescript-eslint/eslint-plugin@8.54.0':
     resolution: {integrity: sha512-hAAP5io/7csFStuOmR782YmTthKBJ9ND3WVL60hcOjvtGFb+HJxH4O5huAcmcZ9v9G8P+JETiZ/G1B8MALnWZQ==}
@@ -2065,6 +2070,10 @@ packages:
     resolution: {integrity: sha512-LaNjtRWUBY++zB5nE/NwcaoMylSPk+S+ZHNB1TzdbMJMny6dynpAGt7X/tl/QYq3TIeE6nxHppbo2LGymrG5Pw==}
     engines: {node: '>=10'}
 
+  p-retry@4.6.2:
+    resolution: {integrity: sha512-312Id396EbJdvRONlngUx0NydfrIQ5lsYu0znKVUzVvArzEIt08V1qhtyESbGVd1FGX7UKtiFp5uwKZdM8wIuQ==}
+    engines: {node: '>=8'}
+
   package-json-from-dist@1.0.1:
     resolution: {integrity: sha512-UEZIS3/by4OC8vL3P2dTXRETpebLI2NiI5vIrjaD/5UtrkFX/tNbwjTSRAGC/+7CAo2pIcBaRgWmcBBHcsaCIw==}
 
@@ -2149,6 +2158,10 @@ packages:
   retry-request@8.0.2:
     resolution: {integrity: sha512-JzFPAfklk1kjR1w76f0QOIhoDkNkSqW8wYKT08n9yysTmZfB+RQ2QoXoTAeOi1HD9ZipTyTAZg3c4pM/jeqgSw==}
     engines: {node: '>=18'}
+
+  retry@0.13.1:
+    resolution: {integrity: sha512-XQBQ3I8W1Cge0Seh+6gjj03LbmRFWuoszgK9ooCpwYIrhhoO80pfq4cUkU5DkknwfOfFteRwlZ56PYOGYyFWdg==}
+    engines: {node: '>= 4'}
 
   rimraf@6.1.2:
     resolution: {integrity: sha512-cFCkPslJv7BAXJsYlK1dZsbP8/ZNLkCAQ0bi1hf5EKX2QHegmDFEFA6QhuYJlk7UDdc+02JjO80YSOrWPpw06g==}
@@ -2455,15 +2468,15 @@ packages:
 
 snapshots:
 
-  '@anthropic-ai/sdk@0.76.0(zod@3.25.63)':
+  '@anthropic-ai/sdk@0.78.0(zod@3.25.63)':
     dependencies:
       json-schema-to-ts: 3.1.1
     optionalDependencies:
       zod: 3.25.63
 
-  '@anthropic-ai/vertex-sdk@0.14.3(zod@3.25.63)':
+  '@anthropic-ai/vertex-sdk@0.14.4(zod@3.25.63)':
     dependencies:
-      '@anthropic-ai/sdk': 0.76.0(zod@3.25.63)
+      '@anthropic-ai/sdk': 0.78.0(zod@3.25.63)
       google-auth-library: 10.5.0
     transitivePeerDependencies:
       - supports-color
@@ -3570,9 +3583,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@google/genai@1.40.0':
+  '@google/genai@1.42.0':
     dependencies:
       google-auth-library: 10.5.0
+      p-retry: 4.6.2
       protobufjs: 7.5.4
       ws: 8.18.2
     transitivePeerDependencies:
@@ -4105,6 +4119,8 @@ snapshots:
   '@types/node@22.19.7':
     dependencies:
       undici-types: 6.21.0
+
+  '@types/retry@0.12.0': {}
 
   '@typescript-eslint/eslint-plugin@8.54.0(@typescript-eslint/parser@8.54.0(eslint@9.39.2)(typescript@5.9.3))(eslint@9.39.2)(typescript@5.9.3)':
     dependencies:
@@ -5039,6 +5055,11 @@ snapshots:
     dependencies:
       p-limit: 3.1.0
 
+  p-retry@4.6.2:
+    dependencies:
+      '@types/retry': 0.12.0
+      retry: 0.13.1
+
   package-json-from-dist@1.0.1: {}
 
   parent-module@1.0.1:
@@ -5128,6 +5149,8 @@ snapshots:
       teeny-request: 10.1.0
     transitivePeerDependencies:
       - supports-color
+
+  retry@0.13.1: {}
 
   rimraf@6.1.2:
     dependencies:
