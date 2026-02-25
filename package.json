@@ -15,7 +15,7 @@
         "npm-ws-tools": "^0.3.0",
         "rollup": "^4.57.1",
         "typescript": "^5.9.3",
-        "typescript-eslint": "^8.54.0",
+        "typescript-eslint": "^8.56.1",
         "vitest": "^4.0.18"
     },
     "packageManager": "pnpm@10.30.1",
