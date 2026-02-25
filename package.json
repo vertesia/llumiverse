@@ -4,7 +4,7 @@
     "private": true,
     "scripts": {
         "bump": "pnpm exec wst bump minor",
-        "eslint": "eslint '**/src/**/*.ts'",
+        "lint": "eslint '**/src/**/*.ts'",
         "release": "pnpm -r publish --access public",
         "prepare": "cp ./README.md ./core/ && cp ./README.md ./drivers/",
         "build": "pnpm -r build"
