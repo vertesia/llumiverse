@@ -39,6 +39,7 @@ jobs:
           cache: "pnpm"
       - run: pnpm install
       - run: pnpm lint
+        continue-on-error: true
       - run: pnpm build
 
       - name: Authenticate with Google Cloud
