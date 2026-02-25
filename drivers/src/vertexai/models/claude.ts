@@ -24,6 +24,7 @@ import {
     ModelType,
     PromptRole, PromptSegment, readStreamAsBase64, readStreamAsString, StatelessExecutionOptions,
     stripBase64ImagesFromConversation,
+    stripHeartbeatsFromConversation,
     ToolUse,
     truncateLargeTextInConversation,
     VertexAIClaudeOptions
@@ -323,6 +324,10 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         };
         let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions);
         processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
+            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+            currentTurn,
+        });
 
         return {
             result: text ? [{ type: "text", value: text }] : [{ type: "text", value: '' }],

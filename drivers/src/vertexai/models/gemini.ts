@@ -13,6 +13,7 @@ import {
     JSONObject, JSONSchema, LlumiverseError, LlumiverseErrorContext, ModelType, PromptOptions, PromptRole,
     PromptSegment, readStreamAsBase64, StatelessExecutionOptions,
     stripBase64ImagesFromConversation,
+    stripHeartbeatsFromConversation,
     ToolDefinition, ToolUse,
     truncateLargeTextInConversation,
     unwrapConversationArray,
@@ -842,6 +843,12 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         // Truncate large text content if configured
         processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+
+        // Strip old heartbeat status messages
+        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
+            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+            currentTurn,
+        });
 
         return {
             result: result && result.length > 0 ? result : [{ type: "text" as const, value: '' }],

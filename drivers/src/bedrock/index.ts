@@ -27,6 +27,7 @@ import {
     PromptSegment,
     StatelessExecutionOptions,
     stripBinaryFromConversation,
+    stripHeartbeatsFromConversation,
     TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions,
     truncateLargeTextInConversation
 } from "@llumiverse/core";
@@ -621,6 +622,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         };
         let processedConversation = stripBinaryFromConversation(conversation, stripOptions);
         processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
+            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+            currentTurn,
+        });
 
         return processedConversation as ConverseRequest;
     }
@@ -688,6 +693,12 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         // Truncate large text content if configured
         processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+
+        // Strip old heartbeat status messages
+        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
+            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+            currentTurn,
+        });
 
         const completion = {
             ...this.getExtractedExecution(res, conversePrompt, options),

@@ -28,6 +28,7 @@ import {
     incrementConversationTurn,
     modelModalitiesToArray,
     stripBase64ImagesFromConversation,
+    stripHeartbeatsFromConversation,
     supportsToolUse,
     truncateLargeTextInConversation,
     unwrapConversationArray,
@@ -235,6 +236,12 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         // Truncate large text content if configured
         processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
 
+        // Strip old heartbeat status messages
+        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
+            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+            currentTurn,
+        });
+
         completion.conversation = processedConversation;
 
         return completion;
@@ -307,6 +314,10 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         };
         let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions);
         processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
+            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+            currentTurn,
+        });
 
         return processedConversation as ResponseInputItem[];
     }
