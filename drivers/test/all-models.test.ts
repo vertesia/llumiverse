@@ -62,7 +62,8 @@ if (process.env.TOGETHER_API_KEY) {
             apiKey: process.env.TOGETHER_API_KEY as string
         }),
         models: [
-            "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
+            //"meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo", // No longer serverless on TogetherAI
+            "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
             //"mistralai/Mixtral-8x7B-Instruct-v0.1" //too slow in tests for now
         ]
     }
