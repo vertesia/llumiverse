@@ -9,11 +9,25 @@ permissions:
   contents: read
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@main
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+      - uses: actions/setup-node@main
+        with:
+          node-version: 22.x
+          cache: "pnpm"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+
   build:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [22.x]    
+        node-version: [22.x]
     steps:
       - uses: actions/checkout@main
       - uses: pnpm/action-setup@v4
@@ -38,7 +52,6 @@ jobs:
           node-version: 22.x
           cache: "pnpm"
       - run: pnpm install
-      - run: pnpm eslint
       - run: pnpm build
 
       - name: Authenticate with Google Cloud
