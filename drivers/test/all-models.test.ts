@@ -2,7 +2,7 @@ import { AIModel, AbstractDriver, ExecutionOptions, getMaxOutputTokens, getMaxTo
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from "vitest";
-import { AzureOpenAIDriver, BedrockDriver, GroqDriver, MistralAIDriver, OpenAIDriver, TogetherAIDriver, VertexAIDriver, WatsonxDriver, xAIDriver } from '../src';
+import { AzureOpenAIDriver, BedrockDriver, GroqDriver, MistralAIDriver, OpenAICompatibleDriver, OpenAIDriver, TogetherAIDriver, VertexAIDriver, WatsonxDriver, xAIDriver } from '../src';
 import { assertCompletionOk, assertStreamingCompletionOk } from './assertions';
 import { testPrompt_color, testPrompt_describeImage, testSchema_animalDescription, testSchema_color } from './samples';
 
@@ -79,7 +79,7 @@ if (process.env.OPENAI_API_KEY) {
             apiKey: process.env.OPENAI_API_KEY as string
         }),
         models: [
-            "o3-mini",
+            "gpt-5.2",
             "gpt-4o-mini",
         ]
     }
@@ -166,6 +166,25 @@ if (process.env.WATSONX_API_KEY) {
     console.warn("Watsonx tests are skipped: WATSONX_API_KEY environment variable is not set");
 }
 
+if (process.env.OPENROUTER_API_KEY) {
+    drivers.push({
+        name: "openrouter",
+        driver: new OpenAICompatibleDriver({
+            apiKey: process.env.OPENROUTER_API_KEY,
+            endpoint: "https://openrouter.ai/api/v1",
+        }),
+        models: [
+            "moonshotai/kimi-k2.5",
+            "qwen/qwen3.5-35b-a3b",
+            "minimax/minimax-m2.5",
+            "deepseek/deepseek-chat",
+            "google/gemini-3-flash-preview",
+        ]
+    });
+} else {
+    console.warn("OpenRouter tests are skipped: OPENROUTER_API_KEY environment variable is not set");
+}
+
 if (process.env.XAI_API_KEY) {
     drivers.push({
         name: "xai",
@@ -197,7 +216,7 @@ function getTestOptions(model: string): ExecutionOptions {
         model: model,
         model_options: {
             _option_id: "text-fallback",
-            max_tokens: 128,
+            max_tokens: 512,
             temperature: 0.3,
             top_k: 40,
             top_p: 0.7,             //Some models do not support top_p = 1.0, set to 0.99 or lower.
