@@ -1443,7 +1443,7 @@ function getToolDefinition(tool: ToolDefinition): Tool.ToolSpecMember {
 /**
  * Checks whether any message contains toolUse or toolResult content blocks.
  */
-function messagesContainToolBlocks(messages: Message[]): boolean {
+export function messagesContainToolBlocks(messages: Message[]): boolean {
     for (const msg of messages) {
         if (!msg.content) continue;
         for (const block of msg.content) {
@@ -1464,7 +1464,7 @@ function messagesContainToolBlocks(messages: Message[]): boolean {
  * Used when no tools are provided (e.g. checkpoint summary calls) but the
  * conversation history contains tool interactions from prior turns.
  */
-function convertToolBlocksToText(messages: Message[]): Message[] {
+export function convertToolBlocksToText(messages: Message[]): Message[] {
     return messages.map(msg => {
         if (!msg.content) return msg;
         let hasToolBlocks = false;

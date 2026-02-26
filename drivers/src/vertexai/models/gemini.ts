@@ -1089,7 +1089,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
  * Preserves tool call information while removing structured parts that require
  * tools/toolConfig to be defined in the API request.
  */
-function convertGeminiFunctionPartsToText(contents: Content[]): Content[] {
+export function convertGeminiFunctionPartsToText(contents: Content[]): Content[] {
     return contents.map(content => {
         if (!content.parts) return content;
         const hasFunctionParts = content.parts.some(p => p.functionCall || p.functionResponse);

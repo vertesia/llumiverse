@@ -1,299 +1,367 @@
 /**
- * Unit tests for the tool-block-to-text conversion in all drivers.
+ * Unit tests for the tool-block-to-text conversion across all drivers.
  *
  * When no tools are provided but conversation contains tool call/result blocks
  * (e.g. checkpoint summary calls), each driver converts those blocks to text
  * representations to avoid API errors while preserving tool call data.
  *
- * Tests the Bedrock driver's preparePayload directly (the only driver where
- * the conversion is testable at the payload level without making API calls).
- * VertexAI and OpenAI conversion functions are tested indirectly via the live
- * integration tests in checkpoint-tool-conversion.test.ts.
+ * Covers: Bedrock, VertexAI Claude, VertexAI Gemini, OpenAI
  */
 
 import { describe, expect, test } from 'vitest';
-import { BedrockDriver } from '../src/bedrock/index.js';
+
+// Bedrock
+import { BedrockDriver, convertToolBlocksToText, messagesContainToolBlocks } from '../src/bedrock/index.js';
 import type { Message, ConverseRequest } from '@aws-sdk/client-bedrock-runtime';
 import type { ExecutionOptions } from '@llumiverse/core';
 
-function createDriver() {
-    return new BedrockDriver({ region: 'us-east-1' });
-}
+// VertexAI Claude
+import { claudeMessagesContainToolBlocks, convertClaudeToolBlocksToText } from '../src/vertexai/models/claude.js';
+import type { MessageParam } from '@anthropic-ai/sdk/resources/index.js';
 
-function makePrompt(messages: Message[], system?: ConverseRequest['system']): ConverseRequest {
-    return { modelId: 'anthropic.claude-sonnet-4-20250514', messages, system };
-}
+// VertexAI Gemini
+import { convertGeminiFunctionPartsToText } from '../src/vertexai/models/gemini.js';
+import type { Content } from '@google/genai';
 
-function makeOptions(overrides: Partial<ExecutionOptions> = {}): ExecutionOptions {
-    return {
-        model: 'anthropic.claude-sonnet-4-20250514',
-        ...overrides,
-    };
-}
+// OpenAI
+import { convertOpenAIFunctionItemsToText } from '../src/openai/index.js';
+import type OpenAI from 'openai';
+type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 
-describe('Bedrock preparePayload - tool blocks in conversation with empty tools', () => {
+// ─── Bedrock ──────────────────────────────────────────────────────────────────
 
-    test('converts toolUse/toolResult blocks to text when tools=[]', () => {
-        const driver = createDriver();
+describe('Bedrock - convertToolBlocksToText', () => {
 
-        const messages: Message[] = [
-            { role: 'user', content: [{ text: 'Search for documents' }] },
-            {
-                role: 'assistant',
-                content: [
-                    { text: 'Searching...' },
-                    { toolUse: { toolUseId: 'tool_1', name: 'search_docs', input: { query: 'test' } } },
-                ],
-            },
-            {
-                role: 'user',
-                content: [
-                    { toolResult: { toolUseId: 'tool_1', content: [{ text: 'Found 3 documents' }] } },
-                ],
-            },
-            {
-                role: 'assistant',
-                content: [{ text: 'I found 3 documents.' }],
-            },
-            {
-                role: 'user',
-                content: [{ text: 'Create a checkpoint summary' }],
-            },
+    test('detects tool blocks in messages', () => {
+        const withTools: Message[] = [
+            { role: 'user', content: [{ text: 'hi' }] },
+            { role: 'assistant', content: [{ toolUse: { toolUseId: 't1', name: 'think', input: {} } }] },
         ];
-
-        const prompt = makePrompt(messages);
-        const options = makeOptions({ tools: [] });
-
-        const request = driver.preparePayload(prompt, options);
-
-        // No toolConfig should be set (tool blocks were converted to text)
-        expect(request.toolConfig).toBeUndefined();
-
-        // Messages should still exist
-        expect(request.messages).toBeDefined();
-        expect(request.messages!.length).toBe(5);
-
-        // Assistant message: toolUse block should be converted to text
-        const assistantMsg = request.messages![1];
-        expect(assistantMsg.content!.length).toBe(2);
-        expect((assistantMsg.content![0] as any).text).toBe('Searching...');
-        expect((assistantMsg.content![1] as any).text).toContain('[Tool call: search_docs');
-        expect((assistantMsg.content![1] as any).text).toContain('query');
-        expect((assistantMsg.content![1] as any).toolUse).toBeUndefined();
-
-        // User message: toolResult block should be converted to text
-        const toolResultMsg = request.messages![2];
-        expect(toolResultMsg.content!.length).toBe(1);
-        expect((toolResultMsg.content![0] as any).text).toContain('[Tool result:');
-        expect((toolResultMsg.content![0] as any).text).toContain('Found 3 documents');
-        expect((toolResultMsg.content![0] as any).toolResult).toBeUndefined();
-
-        // Plain text messages should be unchanged
-        expect((request.messages![0].content![0] as any).text).toBe('Search for documents');
-        expect((request.messages![3].content![0] as any).text).toBe('I found 3 documents.');
-        expect((request.messages![4].content![0] as any).text).toBe('Create a checkpoint summary');
+        const withoutTools: Message[] = [
+            { role: 'user', content: [{ text: 'hi' }] },
+            { role: 'assistant', content: [{ text: 'hello' }] },
+        ];
+        expect(messagesContainToolBlocks(withTools)).toBe(true);
+        expect(messagesContainToolBlocks(withoutTools)).toBe(false);
+        expect(messagesContainToolBlocks([])).toBe(false);
     });
 
-    test('preserves multiple tool names and deduplicates in conversion', () => {
-        const driver = createDriver();
-
-        const messages: Message[] = [
-            { role: 'user', content: [{ text: 'Do stuff' }] },
-            {
-                role: 'assistant',
-                content: [
-                    { toolUse: { toolUseId: 'tool_1', name: 'think', input: { thought: 'hmm' } } },
-                ],
-            },
-            {
-                role: 'user',
-                content: [{ toolResult: { toolUseId: 'tool_1', content: [{ text: 'ok' }] } }],
-            },
-            {
-                role: 'assistant',
-                content: [
-                    { toolUse: { toolUseId: 'tool_2', name: 'fetch_document', input: { id: '123' } } },
-                ],
-            },
-            {
-                role: 'user',
-                content: [{ toolResult: { toolUseId: 'tool_2', content: [{ text: 'doc content here' }] } }],
-            },
-            {
-                role: 'user',
-                content: [{ text: 'Summarize' }],
-            },
-        ];
-
-        const prompt = makePrompt(messages);
-        const options = makeOptions({ tools: [] });
-
-        const request = driver.preparePayload(prompt, options);
-
-        expect(request.toolConfig).toBeUndefined();
-
-        // Check think tool was converted
-        expect((request.messages![1].content![0] as any).text).toContain('[Tool call: think');
-        expect((request.messages![2].content![0] as any).text).toContain('[Tool result:');
-        expect((request.messages![2].content![0] as any).text).toContain('ok');
-
-        // Check fetch_document tool was converted
-        expect((request.messages![3].content![0] as any).text).toContain('[Tool call: fetch_document');
-        expect((request.messages![4].content![0] as any).text).toContain('[Tool result:');
-        expect((request.messages![4].content![0] as any).text).toContain('doc content here');
-    });
-
-    test('does NOT convert when tools=[] and conversation has no tool blocks', () => {
-        const driver = createDriver();
-
-        const messages: Message[] = [
-            { role: 'user', content: [{ text: 'Hello' }] },
-            { role: 'assistant', content: [{ text: 'Hi there!' }] },
-            { role: 'user', content: [{ text: 'Summarize' }] },
-        ];
-
-        const prompt = makePrompt(messages);
-        const options = makeOptions({ tools: [] });
-
-        const request = driver.preparePayload(prompt, options);
-
-        expect(request.toolConfig).toBeUndefined();
-        // Messages unchanged
-        expect((request.messages![0].content![0] as any).text).toBe('Hello');
-        expect((request.messages![1].content![0] as any).text).toBe('Hi there!');
-        expect((request.messages![2].content![0] as any).text).toBe('Summarize');
-    });
-
-    test('uses provided tools when tools array is non-empty (no conversion)', () => {
-        const driver = createDriver();
-
+    test('converts toolUse to text and preserves plain blocks', () => {
         const messages: Message[] = [
             { role: 'user', content: [{ text: 'Search' }] },
             {
                 role: 'assistant',
                 content: [
-                    { toolUse: { toolUseId: 'tool_1', name: 'old_tool', input: {} } },
+                    { text: 'Searching...' },
+                    { toolUse: { toolUseId: 't1', name: 'search_docs', input: { query: 'test' } } },
                 ],
             },
             {
                 role: 'user',
-                content: [{ toolResult: { toolUseId: 'tool_1', content: [{ text: 'result' }] } }],
+                content: [
+                    { toolResult: { toolUseId: 't1', content: [{ text: 'Found 3 docs' }] } },
+                ],
             },
         ];
 
-        const prompt = makePrompt(messages);
-        const options = makeOptions({
-            tools: [
-                { name: 'new_tool', description: 'A new tool', input_schema: { type: 'object' } },
-            ],
-        });
+        const result = convertToolBlocksToText(messages);
 
-        const request = driver.preparePayload(prompt, options);
-
-        // Should use the explicitly provided tools
-        expect(request.toolConfig).toBeDefined();
-        const toolNames = request.toolConfig!.tools!.map((t: any) => t.toolSpec?.name);
-        expect(toolNames).toEqual(['new_tool']);
-
-        // Tool blocks in conversation should be preserved (not converted)
-        expect((request.messages![1].content![0] as any).toolUse).toBeDefined();
-        expect((request.messages![2].content![0] as any).toolResult).toBeDefined();
+        // Plain message unchanged
+        expect((result[0].content![0] as any).text).toBe('Search');
+        // Text block preserved, toolUse converted
+        expect((result[1].content![0] as any).text).toBe('Searching...');
+        expect((result[1].content![1] as any).text).toContain('[Tool call: search_docs');
+        expect((result[1].content![1] as any).text).toContain('query');
+        expect((result[1].content![1] as any).toolUse).toBeUndefined();
+        // toolResult converted
+        expect((result[2].content![0] as any).text).toContain('[Tool result:');
+        expect((result[2].content![0] as any).text).toContain('Found 3 docs');
+        expect((result[2].content![0] as any).toolResult).toBeUndefined();
     });
 
-    test('truncates large tool inputs and results in conversion', () => {
-        const driver = createDriver();
+    test('truncates large inputs and results', () => {
+        const messages: Message[] = [
+            { role: 'assistant', content: [{ toolUse: { toolUseId: 't1', name: 'big', input: { data: 'x'.repeat(1000) } } }] },
+            { role: 'user', content: [{ toolResult: { toolUseId: 't1', content: [{ text: 'y'.repeat(1000) }] } }] },
+        ];
+        const result = convertToolBlocksToText(messages);
+        expect((result[0].content![0] as any).text.length).toBeLessThan(700);
+        expect((result[0].content![0] as any).text).toContain('...');
+        expect((result[1].content![0] as any).text.length).toBeLessThan(700);
+        expect((result[1].content![0] as any).text).toContain('...');
+    });
 
-        const largeInput = { data: 'x'.repeat(1000) };
-        const largeResult = 'y'.repeat(1000);
-
+    test('preparePayload converts when tools=[] but preserves when tools provided', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
         const messages: Message[] = [
             { role: 'user', content: [{ text: 'Go' }] },
-            {
-                role: 'assistant',
-                content: [
-                    { toolUse: { toolUseId: 'tool_1', name: 'big_tool', input: largeInput } },
-                ],
-            },
-            {
-                role: 'user',
-                content: [{ toolResult: { toolUseId: 'tool_1', content: [{ text: largeResult }] } }],
-            },
+            { role: 'assistant', content: [{ toolUse: { toolUseId: 't1', name: 'think', input: {} } }] },
+            { role: 'user', content: [{ toolResult: { toolUseId: 't1', content: [{ text: 'ok' }] } }] },
+            { role: 'user', content: [{ text: 'Summarize' }] },
         ];
+        const prompt: ConverseRequest = { modelId: 'anthropic.claude-sonnet-4-20250514', messages };
 
-        const prompt = makePrompt(messages);
-        const options = makeOptions({ tools: [] });
+        // tools=[] → conversion, no toolConfig
+        const emptyTools = driver.preparePayload(prompt, { model: 'anthropic.claude-sonnet-4-20250514', tools: [] } as ExecutionOptions);
+        expect(emptyTools.toolConfig).toBeUndefined();
+        expect((emptyTools.messages![1].content![0] as any).toolUse).toBeUndefined();
+        expect((emptyTools.messages![1].content![0] as any).text).toContain('[Tool call: think');
 
-        const request = driver.preparePayload(prompt, options);
-
-        // Tool call text should be truncated
-        const toolCallText = (request.messages![1].content![0] as any).text as string;
-        expect(toolCallText).toContain('[Tool call: big_tool');
-        expect(toolCallText).toContain('...');
-        expect(toolCallText.length).toBeLessThan(700);
-
-        // Tool result text should be truncated
-        const toolResultText = (request.messages![2].content![0] as any).text as string;
-        expect(toolResultText).toContain('[Tool result:');
-        expect(toolResultText).toContain('...');
-        expect(toolResultText.length).toBeLessThan(700);
+        // tools provided → no conversion, toolConfig set
+        const withTools = driver.preparePayload(
+            { modelId: 'anthropic.claude-sonnet-4-20250514', messages: [...messages] },
+            { model: 'anthropic.claude-sonnet-4-20250514', tools: [{ name: 'x', description: 'x', input_schema: { type: 'object' } }] } as ExecutionOptions,
+        );
+        expect(withTools.toolConfig).toBeDefined();
+        expect((withTools.messages![1].content![0] as any).toolUse).toBeDefined();
     });
 
-    test('checkpoint scenario: many tool turns with tools=[]', () => {
-        const driver = createDriver();
-
+    test('no conversion when conversation has no tool blocks', () => {
         const messages: Message[] = [
-            { role: 'user', content: [{ text: 'Analyze the project' }] },
+            { role: 'user', content: [{ text: 'Hello' }] },
+            { role: 'assistant', content: [{ text: 'Hi' }] },
         ];
+        const result = convertToolBlocksToText(messages);
+        expect(result).toEqual(messages);
+    });
+});
 
-        const toolNames = ['think', 'plan', 'fetch_document', 'launch_workstream', 'list_workstreams'];
-        let toolCounter = 0;
+// ─── VertexAI Claude ──────────────────────────────────────────────────────────
 
-        for (let i = 0; i < 20; i++) {
-            const name = toolNames[i % toolNames.length];
-            const toolUseId = `tooluse_${++toolCounter}`;
+describe('VertexAI Claude - convertClaudeToolBlocksToText', () => {
 
-            messages.push({
+    test('detects tool blocks in messages', () => {
+        const withTools: MessageParam[] = [
+            { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+            { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'think', input: {} }] },
+        ];
+        const withoutTools: MessageParam[] = [
+            { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+            { role: 'assistant', content: [{ type: 'text', text: 'hello' }] },
+        ];
+        expect(claudeMessagesContainToolBlocks(withTools)).toBe(true);
+        expect(claudeMessagesContainToolBlocks(withoutTools)).toBe(false);
+        expect(claudeMessagesContainToolBlocks([])).toBe(false);
+    });
+
+    test('converts tool_use and tool_result to text', () => {
+        const messages: MessageParam[] = [
+            { role: 'user', content: [{ type: 'text', text: 'Search' }] },
+            {
                 role: 'assistant',
                 content: [
-                    { toolUse: { toolUseId, name, input: { data: `call ${i}` } } },
+                    { type: 'text', text: 'Searching...' },
+                    { type: 'tool_use', id: 't1', name: 'search_docs', input: { query: 'test' } },
                 ],
-            });
-            messages.push({
+            },
+            {
                 role: 'user',
                 content: [
-                    { toolResult: { toolUseId, content: [{ text: `Result for ${name} call ${i}` }] } },
+                    { type: 'tool_result', tool_use_id: 't1', content: 'Found 3 docs' },
                 ],
-            });
-        }
+            },
+        ];
 
-        messages.push({ role: 'assistant', content: [{ text: 'Analysis complete.' }] });
-        messages.push({ role: 'user', content: [{ text: 'Create a checkpoint summary...' }] });
+        const result = convertClaudeToolBlocksToText(messages);
 
-        const prompt = makePrompt(messages);
-        const options = makeOptions({ tools: [] });
+        // Plain text unchanged
+        const userContent = result[0].content as Array<{ type: string; text: string }>;
+        expect(userContent[0].text).toBe('Search');
 
-        const request = driver.preparePayload(prompt, options);
+        // tool_use converted to text
+        const assistantContent = result[1].content as Array<{ type: string; text?: string }>;
+        expect(assistantContent[0].text).toBe('Searching...');
+        expect(assistantContent[1].type).toBe('text');
+        expect(assistantContent[1].text).toContain('[Tool call: search_docs');
+        expect(assistantContent[1].text).toContain('query');
 
-        // No toolConfig — tool blocks were converted to text
-        expect(request.toolConfig).toBeUndefined();
+        // tool_result converted to text
+        const resultContent = result[2].content as Array<{ type: string; text?: string }>;
+        expect(resultContent[0].type).toBe('text');
+        expect(resultContent[0].text).toContain('[Tool result:');
+        expect(resultContent[0].text).toContain('Found 3 docs');
+    });
 
-        // No remaining toolUse/toolResult blocks in messages
-        for (const msg of request.messages!) {
-            for (const block of msg.content!) {
-                expect((block as any).toolUse).toBeUndefined();
-                expect((block as any).toolResult).toBeUndefined();
-            }
-        }
+    test('handles tool_result with array content', () => {
+        const messages: MessageParam[] = [
+            { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'fetch', input: {} }] },
+            {
+                role: 'user',
+                content: [
+                    {
+                        type: 'tool_result',
+                        tool_use_id: 't1',
+                        content: [{ type: 'text', text: 'line 1' }, { type: 'text', text: 'line 2' }],
+                    },
+                ],
+            },
+        ];
+        const result = convertClaudeToolBlocksToText(messages);
+        const resultContent = result[1].content as Array<{ type: string; text?: string }>;
+        expect(resultContent[0].text).toContain('line 1');
+        expect(resultContent[0].text).toContain('line 2');
+    });
 
-        // All tool calls preserved as text
-        const allText = request.messages!.flatMap(m =>
-            m.content!.map(b => (b as any).text || '')
-        ).join('\n');
+    test('truncates large inputs and results', () => {
+        const messages: MessageParam[] = [
+            { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'big', input: { data: 'x'.repeat(1000) } }] },
+            { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'y'.repeat(1000) }] },
+        ];
+        const result = convertClaudeToolBlocksToText(messages);
+        const callText = (result[0].content as Array<{ text: string }>)[0].text;
+        const resultText = (result[1].content as Array<{ text: string }>)[0].text;
+        expect(callText.length).toBeLessThan(700);
+        expect(callText).toContain('...');
+        expect(resultText.length).toBeLessThan(700);
+        expect(resultText).toContain('...');
+    });
 
-        expect(allText).toContain('[Tool call: think');
-        expect(allText).toContain('[Tool call: plan');
-        expect(allText).toContain('[Tool call: fetch_document');
-        expect(allText).toContain('[Tool result:');
-        expect(allText).toContain('Result for think call 0');
+    test('no conversion when no tool blocks', () => {
+        const messages: MessageParam[] = [
+            { role: 'user', content: [{ type: 'text', text: 'Hello' }] },
+            { role: 'assistant', content: [{ type: 'text', text: 'Hi' }] },
+        ];
+        const result = convertClaudeToolBlocksToText(messages);
+        expect(result).toEqual(messages);
+    });
+});
+
+// ─── VertexAI Gemini ──────────────────────────────────────────────────────────
+
+describe('VertexAI Gemini - convertGeminiFunctionPartsToText', () => {
+
+    test('converts functionCall and functionResponse to text parts', () => {
+        const contents: Content[] = [
+            { role: 'user', parts: [{ text: 'What is the weather?' }] },
+            {
+                role: 'model',
+                parts: [
+                    { text: 'Let me check.' },
+                    { functionCall: { name: 'get_weather', args: { location: 'Paris' } } },
+                ],
+            },
+            {
+                role: 'user',
+                parts: [
+                    { functionResponse: { name: 'get_weather', response: { temperature: 15 } } },
+                ],
+            },
+        ];
+
+        const result = convertGeminiFunctionPartsToText(contents);
+
+        // Plain text unchanged
+        expect(result[0].parts![0].text).toBe('What is the weather?');
+
+        // functionCall converted, text preserved
+        expect(result[1].parts![0].text).toBe('Let me check.');
+        expect(result[1].parts![1].text).toContain('[Tool call: get_weather');
+        expect(result[1].parts![1].text).toContain('Paris');
+        expect(result[1].parts![1].functionCall).toBeUndefined();
+
+        // functionResponse converted
+        expect(result[2].parts![0].text).toContain('[Tool result for get_weather:');
+        expect(result[2].parts![0].text).toContain('temperature');
+        expect(result[2].parts![0].functionResponse).toBeUndefined();
+    });
+
+    test('truncates large args and responses', () => {
+        const contents: Content[] = [
+            {
+                role: 'model',
+                parts: [{ functionCall: { name: 'big', args: { data: 'x'.repeat(1000) } } }],
+            },
+            {
+                role: 'user',
+                parts: [{ functionResponse: { name: 'big', response: { data: 'y'.repeat(1000) } } }],
+            },
+        ];
+        const result = convertGeminiFunctionPartsToText(contents);
+        expect(result[0].parts![0].text!.length).toBeLessThan(700);
+        expect(result[0].parts![0].text).toContain('...');
+        expect(result[1].parts![0].text!.length).toBeLessThan(700);
+        expect(result[1].parts![0].text).toContain('...');
+    });
+
+    test('no conversion when no function parts', () => {
+        const contents: Content[] = [
+            { role: 'user', parts: [{ text: 'Hello' }] },
+            { role: 'model', parts: [{ text: 'Hi' }] },
+        ];
+        const result = convertGeminiFunctionPartsToText(contents);
+        expect(result).toEqual(contents);
+    });
+});
+
+// ─── OpenAI ───────────────────────────────────────────────────────────────────
+
+describe('OpenAI - convertOpenAIFunctionItemsToText', () => {
+
+    test('converts function_call and function_call_output to text messages', () => {
+        const items: ResponseInputItem[] = [
+            { role: 'user', content: 'What is the weather?' },
+            { role: 'assistant', content: 'Let me check.' },
+            { type: 'function_call', call_id: 'fc1', name: 'get_weather', arguments: '{"location":"Paris"}' } as ResponseInputItem,
+            { type: 'function_call_output', call_id: 'fc1', output: '15 degrees' } as ResponseInputItem,
+            { role: 'assistant', content: 'It is 15 degrees.' },
+        ];
+
+        const result = convertOpenAIFunctionItemsToText(items);
+
+        // Plain messages unchanged
+        expect(result[0]).toEqual(items[0]);
+        expect(result[1]).toEqual(items[1]);
+        expect(result[4]).toEqual(items[4]);
+
+        // function_call converted to assistant text
+        const callItem = result[2] as any;
+        expect(callItem.role).toBe('assistant');
+        expect(callItem.content).toContain('[Tool call: get_weather');
+        expect(callItem.content).toContain('Paris');
+        expect(callItem.type).toBeUndefined();
+
+        // function_call_output converted to user text
+        const outputItem = result[3] as any;
+        expect(outputItem.role).toBe('user');
+        expect(outputItem.content).toContain('[Tool result:');
+        expect(outputItem.content).toContain('15 degrees');
+        expect(outputItem.type).toBeUndefined();
+    });
+
+    test('truncates large arguments and outputs', () => {
+        const items: ResponseInputItem[] = [
+            { type: 'function_call', call_id: 'fc1', name: 'big', arguments: 'x'.repeat(1000) } as ResponseInputItem,
+            { type: 'function_call_output', call_id: 'fc1', output: 'y'.repeat(1000) } as ResponseInputItem,
+        ];
+        const result = convertOpenAIFunctionItemsToText(items);
+        expect((result[0] as any).content.length).toBeLessThan(700);
+        expect((result[0] as any).content).toContain('...');
+        expect((result[1] as any).content.length).toBeLessThan(700);
+        expect((result[1] as any).content).toContain('...');
+    });
+
+    test('no conversion when no function items', () => {
+        const items: ResponseInputItem[] = [
+            { role: 'user', content: 'Hello' },
+            { role: 'assistant', content: 'Hi' },
+        ];
+        const result = convertOpenAIFunctionItemsToText(items);
+        expect(result).toEqual(items);
+    });
+
+    test('handles multiple function_call items', () => {
+        const items: ResponseInputItem[] = [
+            { type: 'function_call', call_id: 'fc1', name: 'search', arguments: '{}' } as ResponseInputItem,
+            { type: 'function_call', call_id: 'fc2', name: 'fetch', arguments: '{}' } as ResponseInputItem,
+            { type: 'function_call_output', call_id: 'fc1', output: 'results' } as ResponseInputItem,
+            { type: 'function_call_output', call_id: 'fc2', output: 'data' } as ResponseInputItem,
+            { role: 'user', content: 'Summarize' },
+        ];
+        const result = convertOpenAIFunctionItemsToText(items);
+        expect((result[0] as any).content).toContain('[Tool call: search');
+        expect((result[1] as any).content).toContain('[Tool call: fetch');
+        expect((result[2] as any).content).toContain('[Tool result:');
+        expect((result[3] as any).content).toContain('[Tool result:');
+        expect(result[4]).toEqual(items[4]); // user message unchanged
     });
 });

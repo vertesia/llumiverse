@@ -971,7 +971,7 @@ function supportsSchema(model: string): boolean {
  * Preserves tool call information while removing structured items that require
  * tools to be defined in the API request.
  */
-function convertOpenAIFunctionItemsToText(items: ResponseInputItem[]): ResponseInputItem[] {
+export function convertOpenAIFunctionItemsToText(items: ResponseInputItem[]): ResponseInputItem[] {
     const hasFunctionItems = items.some(item => {
         const type = (item as any).type;
         return type === 'function_call' || type === 'function_call_output';

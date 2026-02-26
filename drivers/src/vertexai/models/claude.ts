@@ -913,7 +913,7 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
 /**
  * Checks whether any Claude message contains tool_use or tool_result content blocks.
  */
-function claudeMessagesContainToolBlocks(messages: MessageParam[]): boolean {
+export function claudeMessagesContainToolBlocks(messages: MessageParam[]): boolean {
     for (const msg of messages) {
         if (!Array.isArray(msg.content)) continue;
         for (const block of msg.content) {
@@ -930,7 +930,7 @@ function claudeMessagesContainToolBlocks(messages: MessageParam[]): boolean {
  * Preserves tool call information while removing structured blocks that
  * require tools to be defined in the API request.
  */
-function convertClaudeToolBlocksToText(messages: MessageParam[]): MessageParam[] {
+export function convertClaudeToolBlocksToText(messages: MessageParam[]): MessageParam[] {
     return messages.map(msg => {
         if (!Array.isArray(msg.content)) return msg;
         let hasToolBlocks = false;
