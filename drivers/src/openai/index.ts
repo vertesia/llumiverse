@@ -115,10 +115,16 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
         // Include conversation history (same as non-streaming)
         // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
-        const conversation = fixOrphanedToolUse(updateConversation(options.conversation, prompt));
+        let conversation = fixOrphanedToolUse(updateConversation(options.conversation, prompt));
 
         const toolDefs = getToolDefinitions(options.tools);
         const useTools: boolean = toolDefs ? supportsToolUse(options.model, this.provider, true) : false;
+
+        // When no tools are provided but conversation contains function_call/function_call_output
+        // items (e.g. checkpoint summary calls), convert them to text to avoid API errors
+        if (!useTools) {
+            conversation = convertOpenAIFunctionItemsToText(conversation);
+        }
 
         convertRoles(prompt, options.model);
 
@@ -178,6 +184,12 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
         // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
         let conversation = fixOrphanedToolUse(updateConversation(options.conversation, prompt));
+
+        // When no tools are provided but conversation contains function_call/function_call_output
+        // items (e.g. checkpoint summary calls), convert them to text to avoid API errors
+        if (!useTools) {
+            conversation = convertOpenAIFunctionItemsToText(conversation);
+        }
 
         let parsedSchema: JSONSchema | undefined = undefined;
         let strictMode = false;
@@ -952,6 +964,40 @@ function supportsSchema(model: string): boolean {
         return false;
     }
     return supportsToolUse(model, "openai");
+}
+
+/**
+ * Converts function_call and function_call_output items to text messages in OpenAI conversation.
+ * Preserves tool call information while removing structured items that require
+ * tools to be defined in the API request.
+ */
+function convertOpenAIFunctionItemsToText(items: ResponseInputItem[]): ResponseInputItem[] {
+    const hasFunctionItems = items.some(item => {
+        const type = (item as any).type;
+        return type === 'function_call' || type === 'function_call_output';
+    });
+    if (!hasFunctionItems) return items;
+
+    return items.map(item => {
+        const typed = item as any;
+        if (typed.type === 'function_call') {
+            const argsStr = typed.arguments || '';
+            const truncated = argsStr.length > 500 ? argsStr.substring(0, 500) + '...' : argsStr;
+            return {
+                role: 'assistant' as const,
+                content: `[Tool call: ${typed.name}(${truncated})]`,
+            };
+        }
+        if (typed.type === 'function_call_output') {
+            const output = typed.output || 'No output';
+            const truncated = output.length > 500 ? output.substring(0, 500) + '...' : output;
+            return {
+                role: 'user' as const,
+                content: `[Tool result: ${truncated}]`,
+            };
+        }
+        return item;
+    });
 }
 
 function getToolDefinitions(tools: ToolDefinition[] | undefined | null): OpenAI.Responses.Tool[] | undefined {
