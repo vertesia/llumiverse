@@ -7,7 +7,8 @@ import { basename, dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const LOCAL_FALLBACK_IMAGE = resolve(__dirname, "hello_world.jpg");
+// 512x512 JPEG fallback — within Bedrock's [320, 4096] range
+const LOCAL_FALLBACK_IMAGE = resolve(__dirname, "test_image_1.jpg");
 
 export const testPrompt_color: PromptSegment[] = [
     {
@@ -36,7 +37,7 @@ class ImageSource implements DataSource {
         return basename(this.file);
     }
     async getURL(): Promise<string> {
-        throw new Error("Method not implemented.");
+        return `file://${this.file}`;
     }
     async getStream(): Promise<ReadableStream<string | Uint8Array>> {
         const stream = createReadStream(this.file);
@@ -106,9 +107,6 @@ export const testSchema_animalDescription: JSONSchema =
     }
 }
 
-const imgSource = new ImageUrlSource("https://upload.wikimedia.org/wikipedia/commons/b/b2/WhiteCat.jpg")
-
-
 export const testPrompt_textToImage: NovaMessagesPrompt =
 {
     messages: [{
@@ -152,7 +150,7 @@ export const testPrompt_imageVariations: NovaMessagesPrompt =
         {
             image: {
                 format: "jpeg",
-                source: { bytes: await getImageAsBase64(new ImageUrlSource("https://upload.wikimedia.org/wikipedia/commons/b/b5/Mariacki.jpg")), }
+                source: { bytes: await getImageAsBase64(new ImageUrlSource("https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg/640px-Cat03.jpg")), }
             }
         }
         ]

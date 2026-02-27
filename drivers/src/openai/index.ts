@@ -28,6 +28,7 @@ import {
     incrementConversationTurn,
     modelModalitiesToArray,
     stripBase64ImagesFromConversation,
+    stripHeartbeatsFromConversation,
     supportsToolUse,
     truncateLargeTextInConversation,
     unwrapConversationArray,
@@ -113,10 +114,17 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         }
 
         // Include conversation history (same as non-streaming)
-        const conversation = updateConversation(options.conversation, prompt);
+        // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
+        let conversation = fixOrphanedToolUse(updateConversation(options.conversation, prompt));
 
         const toolDefs = getToolDefinitions(options.tools);
         const useTools: boolean = toolDefs ? supportsToolUse(options.model, this.provider, true) : false;
+
+        // When no tools are provided but conversation contains function_call/function_call_output
+        // items (e.g. checkpoint summary calls), convert them to text to avoid API errors
+        if (!useTools) {
+            conversation = convertOpenAIFunctionItemsToText(conversation);
+        }
 
         convertRoles(prompt, options.model);
 
@@ -174,7 +182,14 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         const toolDefs = getToolDefinitions(options.tools);
         const useTools: boolean = toolDefs ? supportsToolUse(options.model, this.provider) : false;
 
-        let conversation = updateConversation(options.conversation, prompt);
+        // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
+        let conversation = fixOrphanedToolUse(updateConversation(options.conversation, prompt));
+
+        // When no tools are provided but conversation contains function_call/function_call_output
+        // items (e.g. checkpoint summary calls), convert them to text to avoid API errors
+        if (!useTools) {
+            conversation = convertOpenAIFunctionItemsToText(conversation);
+        }
 
         let parsedSchema: JSONSchema | undefined = undefined;
         let strictMode = false;
@@ -232,6 +247,12 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
         // Truncate large text content if configured
         processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+
+        // Strip old heartbeat status messages
+        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
+            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+            currentTurn,
+        });
 
         completion.conversation = processedConversation;
 
@@ -305,6 +326,10 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         };
         let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions);
         processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
+            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+            currentTurn,
+        });
 
         return processedConversation as ResponseInputItem[];
     }
@@ -941,6 +966,40 @@ function supportsSchema(model: string): boolean {
     return supportsToolUse(model, "openai");
 }
 
+/**
+ * Converts function_call and function_call_output items to text messages in OpenAI conversation.
+ * Preserves tool call information while removing structured items that require
+ * tools to be defined in the API request.
+ */
+export function convertOpenAIFunctionItemsToText(items: ResponseInputItem[]): ResponseInputItem[] {
+    const hasFunctionItems = items.some(item => {
+        const type = (item as any).type;
+        return type === 'function_call' || type === 'function_call_output';
+    });
+    if (!hasFunctionItems) return items;
+
+    return items.map(item => {
+        const typed = item as any;
+        if (typed.type === 'function_call') {
+            const argsStr = typed.arguments || '';
+            const truncated = argsStr.length > 500 ? argsStr.substring(0, 500) + '...' : argsStr;
+            return {
+                role: 'assistant' as const,
+                content: `[Tool call: ${typed.name}(${truncated})]`,
+            };
+        }
+        if (typed.type === 'function_call_output') {
+            const output = typed.output || 'No output';
+            const truncated = output.length > 500 ? output.substring(0, 500) + '...' : output;
+            return {
+                role: 'user' as const,
+                content: `[Tool result: ${truncated}]`,
+            };
+        }
+        return item;
+    });
+}
+
 function getToolDefinitions(tools: ToolDefinition[] | undefined | null): OpenAI.Responses.Tool[] | undefined {
     return tools ? tools.map(getToolDefinition) : undefined;
 }
@@ -1147,6 +1206,71 @@ function responseFinishReason(response: OpenAI.Responses.Response, tools?: ToolU
         return response.status;
     }
     return 'stop';
+}
+
+/**
+ * Fix orphaned function_call items in the OpenAI Responses API conversation.
+ *
+ * When an agent is stopped mid-tool-execution, the conversation may contain
+ * function_call items without matching function_call_output items. The OpenAI
+ * Responses API requires every function_call to have a matching function_call_output.
+ *
+ * This function detects such cases and injects synthetic function_call_output items
+ * indicating the tools were interrupted, allowing the conversation to continue.
+ */
+export function fixOrphanedToolUse(items: ResponseInputItem[]): ResponseInputItem[] {
+    if (items.length < 2) return items;
+
+    // First pass: collect all function_call_output call_ids
+    const outputCallIds = new Set<string>();
+    for (const item of items) {
+        if ('type' in item && item.type === 'function_call_output') {
+            outputCallIds.add((item as OpenAI.Responses.ResponseInputItem.FunctionCallOutput).call_id);
+        }
+    }
+
+    // Second pass: build result, injecting synthetic outputs for orphaned function_calls
+    const result: ResponseInputItem[] = [];
+    const pendingCalls = new Map<string, string>(); // call_id -> tool name
+
+    for (const item of items) {
+        if ('type' in item && item.type === 'function_call') {
+            const fc = item as OpenAI.Responses.ResponseFunctionToolCall;
+            // Only track if there's no matching output anywhere in the conversation
+            if (!outputCallIds.has(fc.call_id)) {
+                pendingCalls.set(fc.call_id, fc.name ?? 'unknown');
+            }
+            result.push(item);
+        } else if ('type' in item && item.type === 'function_call_output') {
+            result.push(item);
+        } else {
+            // Before any non-function item, flush pending orphaned calls
+            if (pendingCalls.size > 0) {
+                for (const [callId, toolName] of pendingCalls) {
+                    result.push({
+                        type: 'function_call_output',
+                        call_id: callId,
+                        output: `[Tool interrupted: The user stopped the operation before "${toolName}" could execute.]`,
+                    });
+                }
+                pendingCalls.clear();
+            }
+            result.push(item);
+        }
+    }
+
+    // Handle trailing orphans at the end of the conversation
+    if (pendingCalls.size > 0) {
+        for (const [callId, toolName] of pendingCalls) {
+            result.push({
+                type: 'function_call_output',
+                call_id: callId,
+                output: `[Tool interrupted: The user stopped the operation before "${toolName}" could execute.]`,
+            });
+        }
+    }
+
+    return result;
 }
 
 function safeJsonParse(value: unknown): any {

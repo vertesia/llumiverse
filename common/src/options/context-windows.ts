@@ -55,8 +55,9 @@ export function getMaxInputTokens(model: string): number {
  * Returns the context window size (input + output) for a given model.
  */
 export function getContextWindowSize(model: string): number {
-    // Claude models — all Claude 3+ have 200K context windows
+    // Claude models
     if (model.includes('claude')) {
+        if (model.includes('opus-4-6') || model.includes('sonnet-4-6')) return 1_000_000;
         return 200_000;
     }
     // Gemini models
