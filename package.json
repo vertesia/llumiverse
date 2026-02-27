@@ -13,7 +13,7 @@
         "cross-spawn": "^7.0.6",
         "eslint": "^9.39.2",
         "npm-ws-tools": "^0.3.0",
-        "rollup": "^4.57.1",
+        "rollup": "^4.59.0",
         "typescript": "^5.9.3",
         "typescript-eslint": "^8.54.0",
         "vitest": "^4.0.18"
