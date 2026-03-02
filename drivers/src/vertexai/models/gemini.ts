@@ -1,6 +1,6 @@
 import {
     Content, FinishReason, FunctionCallingConfigMode, FunctionDeclaration, GenerateContentConfig, GenerateContentParameters,
-    GenerateContentResponseUsageMetadata,
+    GenerateContentResponseUsageMetadata, ProminentPeople,
     HarmBlockThreshold, HarmCategory, Modality, Part, SafetySetting, Schema, ThinkingConfig, Tool, Type
 } from "@google/genai";
 import {
@@ -53,6 +53,20 @@ const geminiSafetySettings: SafetySetting[] = [
     }
 ];
 
+// We do the mapping here rather than in common to avoid bringing the SDK into the common package.
+function getProminentPeopleOption(prominentPeople?: "PROMINENT_PEOPLE_UNSPECIFIED" | "ALLOW_PROMINENT_PEOPLE" | "BLOCK_PROMINENT_PEOPLE") {
+    switch (prominentPeople) {
+        case "ALLOW_PROMINENT_PEOPLE":
+            return ProminentPeople.ALLOW_PROMINENT_PEOPLE;
+        case "BLOCK_PROMINENT_PEOPLE":
+            return ProminentPeople.BLOCK_PROMINENT_PEOPLE;
+        case "PROMINENT_PEOPLE_UNSPECIFIED":
+            return ProminentPeople.PROMINENT_PEOPLE_UNSPECIFIED;
+        default:
+            return undefined;
+    }
+}
+
 function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentPrompt): GenerateContentParameters {
     const model_options = options.model_options as VertexAIGeminiOptions | undefined;
     const tools = getToolDefinitions(options.tools);
@@ -74,7 +88,12 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
         maxOutputTokens: geminiMaxTokens(options),
         stopSequences: model_options?.stop_sequence,
         imageConfig: {
+            imageSize: model_options?.image_size,
             aspectRatio: model_options?.image_aspect_ratio,
+            personGeneration: model_options?.person_generation,
+            prominentPeople: getProminentPeopleOption(model_options?.prominent_people),
+            outputMimeType: model_options?.output_mime_type,
+            outputCompressionQuality: model_options?.output_compression_quality,
         }
     }
 

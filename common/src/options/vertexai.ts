@@ -1,4 +1,4 @@
-import { ModelOptionsInfo, ModelOptionInfoItem, OptionType, SharedOptions, ModelOptions } from "../types.js";
+import { ModelOptionInfoItem, ModelOptions, ModelOptionsInfo, OptionType, SharedOptions } from "../types.js";
 import { getMaxOutputTokens } from "./context-windows.js";
 import { textOptionsFallback } from "./fallback.js";
 
@@ -83,7 +83,13 @@ export interface VertexAIGeminiOptions {
     include_thoughts?: boolean;
     thinking_budget_tokens?: number;
     thinking_level?: ThinkingLevel;
+    // ImageConfig properties
     image_aspect_ratio?: "1:1" | "2:3" | "3:2" | "3:4" | "4:3" | "9:16" | "16:9" | "21:9";
+    image_size?: "1K" | "2K" | "4K";
+    person_generation?: "ALLOW_ALL" | "ALLOW_ADULT" | "ALLOW_NONE";
+    prominent_people?: "PROMINENT_PEOPLE_UNSPECIFIED" | "ALLOW_PROMINENT_PEOPLE" | "BLOCK_PROMINENT_PEOPLE";
+    output_mime_type?: "image/png" | "image/jpeg" | "image/webp" | "image/heic" | "image/heif";
+    output_compression_quality?: number;
 }
 
 export function getVertexAiOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
@@ -253,7 +259,7 @@ function getImagenOptions(model: string, option?: ModelOptions): ModelOptionsInf
     return textOptionsFallback;
 }
 
-function getGeminiOptions(model: string, _option?: ModelOptions): ModelOptionsInfo {
+function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
     // Special handling for gemini-2.5-flash-image
     if (model.includes("gemini-2.5-flash-image")) {
         const options: ModelOptionInfoItem[] = [
@@ -298,8 +304,8 @@ function getGeminiOptions(model: string, _option?: ModelOptions): ModelOptionsIn
             options
         };
     }
-    // Special handling for gemini-2.5-flash-image and gemini-3-pro-image
-    if (model.includes("gemini-2.5-flash-image") || model.includes("gemini-3-pro-image")) {
+    // Special handling for gemini-2.5-flash-image and gemini-3-pro-image (nano banana and nano banana pro)
+    if (model.includes("flash-image") || model.includes("pro-image")) {
         const max_tokens_limit = 32768;
         const excludeOptions = ["max_tokens", "presence_penalty", "frequency_penalty", "seed", "top_k"];
         let commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
@@ -328,28 +334,90 @@ function getGeminiOptions(model: string, _option?: ModelOptions): ModelOptionsIn
             description: "Maximum output tokens"
         }];
 
-        const imageAspectRatio: ModelOptionInfoItem[] = [{
-            name: "image_aspect_ratio",
-            type: OptionType.enum,
-            enum: {
-                "1:1": "1:1",
-                "2:3": "2:3",
-                "3:2": "3:2",
-                "3:4": "3:4",
-                "4:3": "4:3",
-                "9:16": "9:16",
-                "16:9": "16:9",
-                "21:9": "21:9"
+        const imageOptions: ModelOptionInfoItem[] = [
+            {
+                name: "image_aspect_ratio",
+                type: OptionType.enum,
+                enum: {
+                    "1:1": "1:1",
+                    "2:3": "2:3",
+                    "3:2": "3:2",
+                    "3:4": "3:4",
+                    "4:3": "4:3",
+                    "9:16": "9:16",
+                    "16:9": "16:9",
+                    "21:9": "21:9"
+                },
+                default: "1:1",
+                description: "Aspect ratio of the generated images"
             },
-            description: "Aspect ratio of the generated images"
-        }];
+            {
+                name: "image_size",
+                type: OptionType.enum,
+                enum: {
+                    "1K": "1K",
+                    "2K": "2K",
+                    "4K": "4K"
+                },
+                default: "1K",
+                description: "Size of generated images"
+            },
+            {
+                name: "person_generation",
+                type: OptionType.enum,
+                enum: {
+                    "Allow all people": "ALLOW_ALL",
+                    "Allow adults only": "ALLOW_ADULT",
+                    "Do not generate people": "ALLOW_NONE"
+                },
+                default: "ALLOW_ALL",
+                description: "Controls the generation of people in images"
+            },
+            {
+                name: "prominent_people",
+                type: OptionType.enum,
+                enum: {
+                    "Allow prominent people": "ALLOW_PROMINENT_PEOPLE",
+                    "Block prominent people": "BLOCK_PROMINENT_PEOPLE"
+                },
+                description: "Controls whether prominent people (celebrities) can be generated"
+            },
+            {
+                name: "output_mime_type",
+                type: OptionType.enum,
+                enum: {
+                    "PNG": "image/png",
+                    "JPEG": "image/jpeg",
+                    "WebP": "image/webp",
+                    "HEIC": "image/heic",
+                    "HEIF": "image/heif"
+                },
+                default: "image/png",
+                description: "MIME type of the generated image",
+                refresh: true,
+            },
+        ];
+
+        const compressionQuality: ModelOptionInfoItem = {
+            name: "output_compression_quality",
+            type: OptionType.numeric,
+            min: 0,
+            max: 100,
+            default: 90,
+            integer: true,
+            description: "Compression quality for JPEG images (0-100)"
+        };
+
+        if ((option as VertexAIGeminiOptions)?.output_mime_type === "image/jpeg") {
+            imageOptions.push(compressionQuality);
+        }
 
         return {
             _option_id: "vertexai-gemini",
             options: [
                 ...max_tokens,
                 ...commonOptions,
-                ...imageAspectRatio,
+                ...imageOptions,
             ]
         };
     }
