@@ -235,6 +235,10 @@ export async function formatConversePrompt(segments: PromptSegment[], options: E
             for (const file of segment.files ?? []) {
                 toolContentBlocks.push(await processFileToToolContentBlock(file));
             }
+            // Bedrock requires at least one content block in toolResult
+            if (toolContentBlocks.length === 0) {
+                toolContentBlocks.push({ text: '[No output]' });
+            }
             messages.push({
                 content: [{
                     toolResult: {
