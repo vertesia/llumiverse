@@ -57,7 +57,7 @@ export function getMaxInputTokens(model: string): number {
 export function getContextWindowSize(model: string): number {
     // Claude models
     if (model.includes('claude')) {
-        if (model.includes('opus-4-6') || model.includes('sonnet-4-6')) return 1_000_000;
+        // All Claude models use 200K (1M requires beta header, handled separately later)
         return 200_000;
     }
     // Gemini models
