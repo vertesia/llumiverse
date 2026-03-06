@@ -1,21 +1,26 @@
 /**
- * Unit tests for the fixOrphanedToolUse functions in Claude and Bedrock drivers.
+ * Unit tests for the fixOrphanedToolUse functions in Claude, Bedrock, and OpenAI drivers.
  *
  * These functions handle the case where an agent is stopped mid-tool-execution,
- * leaving tool_use blocks without corresponding tool_result blocks.
- * The Anthropic/AWS APIs require every tool_use to have a matching tool_result.
+ * leaving tool_use/function_call blocks without corresponding tool_result/function_call_output blocks.
+ * The LLM APIs require every tool call to have a matching result.
  *
  * Bug context: When user stops an agent while tools are being executed,
- * the conversation has orphaned tool_use blocks. Sending a new message
+ * the conversation has orphaned tool calls. Sending a new message
  * without fixing this causes API errors like:
- * "tool_use ids were found without tool_result blocks immediately after"
+ * - Anthropic: "tool_use ids were found without tool_result blocks immediately after"
+ * - OpenAI: "No tool output found for function call <id>"
  */
 
 import { describe, expect, test } from 'vitest';
 import { fixOrphanedToolUse as fixOrphanedToolUseClaude } from '../src/vertexai/models/claude.js';
 import { fixOrphanedToolUse as fixOrphanedToolUseBedrock } from '../src/bedrock/index.js';
+import { fixOrphanedToolUse as fixOrphanedToolUseOpenAI } from '../src/openai/index.js';
 import { MessageParam } from '@anthropic-ai/sdk/resources/index.js';
 import { Message } from '@aws-sdk/client-bedrock-runtime';
+import type OpenAI from 'openai';
+
+type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 
 describe('fixOrphanedToolUse - Claude', () => {
 
@@ -353,5 +358,171 @@ describe('fixOrphanedToolUse - Bedrock', () => {
         expect(lastUserContent[1].toolResult?.content![0].text).toContain('user stopped');
 
         expect(lastUserContent[2].text).toBe('Never mind, do something else instead');
+    });
+});
+
+describe('fixOrphanedToolUse - OpenAI', () => {
+
+    test('returns empty array for empty input', () => {
+        const result = fixOrphanedToolUseOpenAI([]);
+        expect(result).toEqual([]);
+    });
+
+    test('returns single item unchanged', () => {
+        const items: ResponseInputItem[] = [
+            { role: 'user', content: 'Hello' },
+        ];
+        const result = fixOrphanedToolUseOpenAI(items);
+        expect(result).toEqual(items);
+    });
+
+    test('returns unchanged array when no orphaned function_call', () => {
+        const items: ResponseInputItem[] = [
+            { role: 'user', content: 'Search for something' },
+            { role: 'assistant', content: 'I will search.' },
+            { type: 'function_call', call_id: 'fc_1', name: 'search', arguments: '{"query":"test"}' } as ResponseInputItem,
+            { type: 'function_call_output', call_id: 'fc_1', output: 'Search result' } as ResponseInputItem,
+            { role: 'assistant', content: 'Here are the results.' },
+        ];
+
+        const result = fixOrphanedToolUseOpenAI(items);
+        expect(result).toEqual(items);
+    });
+
+    test('injects synthetic function_call_output for orphaned function_call followed by user message', () => {
+        const items: ResponseInputItem[] = [
+            { role: 'assistant', content: 'Using a tool...' },
+            { type: 'function_call', call_id: 'fc_1', name: 'ask_user', arguments: '{"question":"What?"}' } as ResponseInputItem,
+            { role: 'user', content: 'Actually, stop that' },
+        ];
+
+        const result = fixOrphanedToolUseOpenAI(items);
+
+        expect(result).toHaveLength(4);
+        expect(result[0]).toEqual({ role: 'assistant', content: 'Using a tool...' });
+        expect(result[1]).toEqual({ type: 'function_call', call_id: 'fc_1', name: 'ask_user', arguments: '{"question":"What?"}' });
+
+        // Synthetic function_call_output should be injected before user message
+        const synthetic = result[2] as OpenAI.Responses.ResponseInputItem.FunctionCallOutput;
+        expect(synthetic.type).toBe('function_call_output');
+        expect(synthetic.call_id).toBe('fc_1');
+        expect(synthetic.output).toContain('Tool interrupted');
+        expect(synthetic.output).toContain('ask_user');
+
+        expect(result[3]).toEqual({ role: 'user', content: 'Actually, stop that' });
+    });
+
+    test('handles multiple orphaned function_calls', () => {
+        const items: ResponseInputItem[] = [
+            { type: 'function_call', call_id: 'fc_1', name: 'search', arguments: '{}' } as ResponseInputItem,
+            { type: 'function_call', call_id: 'fc_2', name: 'fetch', arguments: '{}' } as ResponseInputItem,
+            { type: 'function_call', call_id: 'fc_3', name: 'process', arguments: '{}' } as ResponseInputItem,
+            { role: 'user', content: 'Stop!' },
+        ];
+
+        const result = fixOrphanedToolUseOpenAI(items);
+
+        // 3 function_calls + 3 synthetic outputs + 1 user message
+        expect(result).toHaveLength(7);
+
+        expect((result[0] as any).type).toBe('function_call');
+        expect((result[1] as any).type).toBe('function_call');
+        expect((result[2] as any).type).toBe('function_call');
+
+        // 3 synthetic outputs
+        expect((result[3] as any).type).toBe('function_call_output');
+        expect((result[3] as any).call_id).toBe('fc_1');
+        expect((result[4] as any).type).toBe('function_call_output');
+        expect((result[4] as any).call_id).toBe('fc_2');
+        expect((result[5] as any).type).toBe('function_call_output');
+        expect((result[5] as any).call_id).toBe('fc_3');
+
+        expect((result[6] as any).role).toBe('user');
+    });
+
+    test('handles partial outputs - only injects for missing ones', () => {
+        const items: ResponseInputItem[] = [
+            { type: 'function_call', call_id: 'fc_1', name: 'search', arguments: '{}' } as ResponseInputItem,
+            { type: 'function_call', call_id: 'fc_2', name: 'fetch', arguments: '{}' } as ResponseInputItem,
+            { type: 'function_call_output', call_id: 'fc_1', output: 'Search completed' } as ResponseInputItem,
+            { role: 'user', content: 'Continue' },
+        ];
+
+        const result = fixOrphanedToolUseOpenAI(items);
+
+        // fc_1 has output, fc_2 is orphaned
+        expect(result).toHaveLength(5);
+
+        expect((result[0] as any).type).toBe('function_call');
+        expect((result[1] as any).type).toBe('function_call');
+        expect((result[2] as any).type).toBe('function_call_output');
+        expect((result[2] as any).call_id).toBe('fc_1');
+
+        // Synthetic output for fc_2 injected before user message
+        expect((result[3] as any).type).toBe('function_call_output');
+        expect((result[3] as any).call_id).toBe('fc_2');
+        expect((result[3] as any).output).toContain('Tool interrupted');
+
+        expect((result[4] as any).role).toBe('user');
+    });
+
+    test('handles trailing orphan at end of conversation', () => {
+        const items: ResponseInputItem[] = [
+            { role: 'user', content: 'Do something' },
+            { role: 'assistant', content: 'I will use a tool.' },
+            { type: 'function_call', call_id: 'fc_1', name: 'ask_user', arguments: '{"question":"What?"}' } as ResponseInputItem,
+        ];
+
+        const result = fixOrphanedToolUseOpenAI(items);
+
+        // Trailing orphan should get a synthetic output appended
+        expect(result).toHaveLength(4);
+        expect((result[2] as any).type).toBe('function_call');
+        expect((result[3] as any).type).toBe('function_call_output');
+        expect((result[3] as any).call_id).toBe('fc_1');
+    });
+
+    test('real-world scenario: user stops agent mid-execution (ask_user)', () => {
+        const items: ResponseInputItem[] = [
+            // Initial conversation
+            { role: 'user', content: [{ type: 'input_text', text: 'hey GPT, test workstreams' }] },
+            { role: 'assistant', content: 'Workstream test successful.' },
+            // User sends new message
+            { role: 'user', content: [{ type: 'input_text', text: 'go berserk' }] },
+            // Model calls ask_user to clarify
+            { type: 'function_call', call_id: 'fc_ask_user', name: 'ask_user', arguments: '{"questions":["What do you mean?"]}' } as ResponseInputItem,
+            // User sends another message (agent was stopped, no function_call_output)
+            { role: 'user', content: [{ type: 'input_text', text: 'launch 10 workstreams' }] },
+        ];
+
+        const result = fixOrphanedToolUseOpenAI(items);
+
+        expect(result).toHaveLength(6); // original 5 + 1 synthetic output
+
+        // Synthetic function_call_output should appear before the last user message
+        const synthetic = result[4] as OpenAI.Responses.ResponseInputItem.FunctionCallOutput;
+        expect(synthetic.type).toBe('function_call_output');
+        expect(synthetic.call_id).toBe('fc_ask_user');
+        expect(synthetic.output).toContain('Tool interrupted');
+        expect(synthetic.output).toContain('ask_user');
+
+        // Last user message is preserved
+        expect((result[5] as any).role).toBe('user');
+    });
+
+    test('does not inject when function_call_output exists later in the array', () => {
+        const items: ResponseInputItem[] = [
+            { role: 'user', content: 'Search for something' },
+            { type: 'function_call', call_id: 'fc_1', name: 'search', arguments: '{}' } as ResponseInputItem,
+            { type: 'function_call_output', call_id: 'fc_1', output: 'Results found' } as ResponseInputItem,
+            { role: 'assistant', content: 'Found results.' },
+            { type: 'function_call', call_id: 'fc_2', name: 'analyze', arguments: '{}' } as ResponseInputItem,
+            { type: 'function_call_output', call_id: 'fc_2', output: 'Analysis complete' } as ResponseInputItem,
+        ];
+
+        const result = fixOrphanedToolUseOpenAI(items);
+
+        // No changes - all function_calls have matching outputs
+        expect(result).toEqual(items);
     });
 });

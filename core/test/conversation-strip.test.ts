@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
     stripBinaryFromConversation,
     stripBase64ImagesFromConversation,
+    stripHeartbeatsFromConversation,
     truncateLargeTextInConversation,
     getConversationMeta,
     setConversationMeta,
@@ -746,5 +747,216 @@ describe('conversation serialization safety', () => {
 
         // Metadata should be preserved
         expect(getConversationMeta(restored).turnNumber).toBe(2);
+    });
+});
+
+const HEARTBEAT_PLACEHOLDER = '[Heartbeat removed from conversation history]';
+const HEARTBEAT_MSG = '<heartbeat>[System] Workstream status heartbeat:\n- search_engine: running (web_search) — 45s elapsed, 255s remaining\n\nYou may steer, cancel, or launch additional workstreams. If no action needed, simply acknowledge.</heartbeat>';
+
+describe('stripHeartbeatsFromConversation', () => {
+    const FORCE_STRIP_HB = { keepForTurns: 0, currentTurn: 0 };
+
+    test('should strip heartbeat-tagged strings when force stripping', () => {
+        const input = {
+            messages: [{
+                role: 'user',
+                content: [{ type: 'text', text: HEARTBEAT_MSG }]
+            }]
+        };
+
+        const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as any;
+        expect(result.messages[0].content[0].text).toBe(HEARTBEAT_PLACEHOLDER);
+    });
+
+    test('should preserve heartbeats within keepForTurns threshold', () => {
+        const input = {
+            messages: [{
+                role: 'user',
+                content: [{ type: 'text', text: HEARTBEAT_MSG }]
+            }]
+        };
+
+        // Keep for 3 turns, current turn is 1 - should preserve
+        const result = stripHeartbeatsFromConversation(input, {
+            keepForTurns: 3,
+            currentTurn: 1,
+        }) as any;
+
+        expect(result.messages[0].content[0].text).toBe(HEARTBEAT_MSG);
+    });
+
+    test('should strip when currentTurn >= keepForTurns', () => {
+        const input = {
+            messages: [{
+                role: 'user',
+                content: [{ type: 'text', text: HEARTBEAT_MSG }]
+            }]
+        };
+
+        const result = stripHeartbeatsFromConversation(input, {
+            keepForTurns: 1,
+            currentTurn: 2,
+        }) as any;
+
+        expect(result.messages[0].content[0].text).toBe(HEARTBEAT_PLACEHOLDER);
+    });
+
+    test('should strip with default keepForTurns (1) when currentTurn >= 1', () => {
+        const input = {
+            content: [{ text: HEARTBEAT_MSG }]
+        };
+
+        // Default keepForTurns is 1, currentTurn 1 means strip
+        const result = stripHeartbeatsFromConversation(input, { currentTurn: 1 }) as any;
+        expect(result.content[0].text).toBe(HEARTBEAT_PLACEHOLDER);
+    });
+
+    test('should not strip with default keepForTurns (1) when currentTurn is 0', () => {
+        const input = {
+            content: [{ text: HEARTBEAT_MSG }]
+        };
+
+        // Default keepForTurns is 1, currentTurn 0 means keep
+        const result = stripHeartbeatsFromConversation(input, { currentTurn: 0 }) as any;
+        expect(result.content[0].text).toBe(HEARTBEAT_MSG);
+    });
+
+    test('should never strip when keepForTurns is Infinity', () => {
+        const input = {
+            content: [{ text: HEARTBEAT_MSG }]
+        };
+
+        const result = stripHeartbeatsFromConversation(input, {
+            keepForTurns: Infinity,
+            currentTurn: 100,
+        }) as any;
+
+        expect(result.content[0].text).toBe(HEARTBEAT_MSG);
+    });
+
+    test('should preserve non-heartbeat strings', () => {
+        const input = {
+            messages: [
+                { role: 'user', content: [{ type: 'text', text: 'Hello, how are you?' }] },
+                { role: 'user', content: [{ type: 'text', text: '[System] Some other system message' }] },
+                { role: 'assistant', content: [{ type: 'text', text: 'I am doing well.' }] },
+            ]
+        };
+
+        const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as any;
+
+        expect(result.messages[0].content[0].text).toBe('Hello, how are you?');
+        expect(result.messages[1].content[0].text).toBe('[System] Some other system message');
+        expect(result.messages[2].content[0].text).toBe('I am doing well.');
+    });
+
+    test('should handle OpenAI conversation format', () => {
+        const input = [
+            { role: 'user', content: [{ type: 'text', text: HEARTBEAT_MSG }] },
+            { role: 'assistant', content: [{ type: 'text', text: 'Acknowledged.' }] },
+        ];
+
+        const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as any[];
+
+        expect(result[0].content[0].text).toBe(HEARTBEAT_PLACEHOLDER);
+        expect(result[1].content[0].text).toBe('Acknowledged.');
+    });
+
+    test('should handle Bedrock conversation format', () => {
+        const input = {
+            messages: [
+                { role: 'user', content: [{ text: HEARTBEAT_MSG }] },
+                { role: 'assistant', content: [{ text: 'Acknowledged.' }] },
+            ]
+        };
+
+        const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as any;
+
+        expect(result.messages[0].content[0].text).toBe(HEARTBEAT_PLACEHOLDER);
+        expect(result.messages[1].content[0].text).toBe('Acknowledged.');
+    });
+
+    test('should handle Gemini conversation format', () => {
+        const input = [
+            { role: 'user', parts: [{ text: HEARTBEAT_MSG }] },
+            { role: 'model', parts: [{ text: 'Acknowledged.' }] },
+        ];
+
+        const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as any[];
+
+        expect(result[0].parts[0].text).toBe(HEARTBEAT_PLACEHOLDER);
+        expect(result[1].parts[0].text).toBe('Acknowledged.');
+    });
+
+    test('should handle null and undefined', () => {
+        expect(stripHeartbeatsFromConversation(null, FORCE_STRIP_HB)).toBeNull();
+        expect(stripHeartbeatsFromConversation(undefined, FORCE_STRIP_HB)).toBeUndefined();
+    });
+
+    test('should preserve _llumiverse_meta metadata', () => {
+        const input = {
+            messages: [{ role: 'user', content: [{ text: HEARTBEAT_MSG }] }],
+            _llumiverse_meta: { turnNumber: 5 },
+        };
+
+        const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as any;
+
+        expect(result._llumiverse_meta).toEqual({ turnNumber: 5 });
+        expect(result.messages[0].content[0].text).toBe(HEARTBEAT_PLACEHOLDER);
+    });
+
+    test('should strip multiple heartbeats while preserving regular messages', () => {
+        const input = {
+            messages: [
+                { role: 'user', content: [{ type: 'text', text: 'Analyze this data' }] },
+                { role: 'user', content: [{ type: 'text', text: HEARTBEAT_MSG }] },
+                { role: 'assistant', content: [{ type: 'text', text: 'Acknowledged.' }] },
+                { role: 'user', content: [{ type: 'text', text: '<heartbeat>[System] Workstream status heartbeat:\n- analyzer: running — 90s elapsed\n\nAcknowledge.</heartbeat>' }] },
+                { role: 'assistant', content: [{ type: 'text', text: 'Still waiting.' }] },
+                { role: 'assistant', content: [{ type: 'text', text: 'Analysis complete: found 15 results.' }] },
+            ]
+        };
+
+        const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as any;
+
+        expect(result.messages[0].content[0].text).toBe('Analyze this data');
+        expect(result.messages[1].content[0].text).toBe(HEARTBEAT_PLACEHOLDER);
+        expect(result.messages[2].content[0].text).toBe('Acknowledged.');
+        expect(result.messages[3].content[0].text).toBe(HEARTBEAT_PLACEHOLDER);
+        expect(result.messages[4].content[0].text).toBe('Still waiting.');
+        expect(result.messages[5].content[0].text).toBe('Analysis complete: found 15 results.');
+    });
+
+    test('should use turn number from metadata when currentTurn not provided', () => {
+        let conversation: any = {
+            content: [{ text: HEARTBEAT_MSG }]
+        };
+
+        // Set turn number to 2 in metadata
+        conversation = setConversationMeta(conversation, { turnNumber: 2 });
+
+        // keepForTurns 1, turn 2 from metadata → should strip
+        const result = stripHeartbeatsFromConversation(conversation, {
+            keepForTurns: 1,
+        }) as any;
+
+        expect(result.content[0].text).toBe(HEARTBEAT_PLACEHOLDER);
+    });
+
+    test('should only match strings that both start and end with heartbeat tags', () => {
+        const input = {
+            content: [
+                { text: '<heartbeat>partial tag without close' },
+                { text: 'no tags at all' },
+                { text: 'some text</heartbeat>' },
+            ]
+        };
+
+        const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as any;
+
+        // None of these should be stripped - they don't have both opening and closing tags
+        expect(result.content[0].text).toBe('<heartbeat>partial tag without close');
+        expect(result.content[1].text).toBe('no tags at all');
+        expect(result.content[2].text).toBe('some text</heartbeat>');
     });
 });
