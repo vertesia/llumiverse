@@ -37,7 +37,6 @@ export default defineConfig([
           ]
         }
       ],
-      'prefer-const': 'warn',
     },
   },
 ]);
