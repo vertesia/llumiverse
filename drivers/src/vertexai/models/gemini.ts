@@ -178,7 +178,7 @@ function convertSchema(jsSchema?: JSONSchema, depth: number = 0, requiredAll = f
     if (!jsSchema) return {};
 
     // Create new schema object rather than mutating
-    const result: Schema = {};
+    let result: Schema = {};
 
     // Handle types
     result.type = convertSchemaType(jsSchema);
