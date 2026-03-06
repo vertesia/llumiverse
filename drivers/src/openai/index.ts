@@ -609,7 +609,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         const httpStatusCode = apiError.status;
 
         // Extract error message
-        let message = apiError.message || String(error);
+        const message = apiError.message || String(error);
 
         // Extract additional error details (only available on APIError)
         const errorCode = apiError.code;

@@ -151,5 +151,5 @@ export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[]
 export interface OpenAIPromptFormatterOptions {
     multimodal?: boolean
     useToolForFormatting?: boolean
-    schema?: Object
+    schema?: object
 }
