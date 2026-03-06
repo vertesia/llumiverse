@@ -1350,7 +1350,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const executor = this.getExecutor();
 
         // Prepare the request payload for TwelveLabs Marengo
-        let invokeBody: TwelvelabsMarengoRequest = {
+        const invokeBody: TwelvelabsMarengoRequest = {
             inputType: "text"
         };
 

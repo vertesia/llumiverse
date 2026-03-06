@@ -673,7 +673,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 // File content handling
                 if (msg.files) {
                     for (const f of msg.files) {
-                        let fileUrl = await f.getURL();
+                        const fileUrl = await f.getURL();
                         const isGsUrl = fileUrl.startsWith('gs://') || fileUrl.startsWith('https://storage.googleapis.com/');
 
                         if (isGsUrl) {
@@ -981,7 +981,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const httpStatusCode = apiError.status;
 
         // Extract error message
-        let message = apiError.message || String(error);
+        const message = apiError.message || String(error);
 
         // Build user-facing message with status code
         let userMessage = message;
