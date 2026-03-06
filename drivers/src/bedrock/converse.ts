@@ -34,6 +34,28 @@ function mimeToVideoType(mime: string): "mov" | "mkv" | "mp4" | "webm" | "flv" |
     return "mp4";
 }
 
+/**
+ * Cleans a filename to conform to Bedrock's restrictions:
+ * - Alphanumeric characters, whitespace, hyphens, parentheses, square brackets.
+ * - No more than one consecutive whitespace character.
+ * - Decodes URI components (e.g., %20 -> space).
+ */
+function cleanBedrockFilename(name: string | undefined): string | undefined {
+    if (!name) return name;
+
+    try {
+        // Decode URI components like %20
+        name = decodeURIComponent(name);
+    } catch {
+        // Ignore decoding errors
+    }
+
+    return name
+        .replace(/[^\w\s\-()[\]]/g, " ") // Replace invalid characters with space
+        .replace(/\s+/g, " ") // Collapse consecutive whitespaces
+        .trim();
+}
+
 type FileProcessingMode = 'content' | 'tool';
 
 async function processFile<T extends FileProcessingMode>(
@@ -78,7 +100,7 @@ async function processFile<T extends FileProcessingMode>(
             const documentBlock = {
                 document: {
                     format: mimeToDocType(f.mime_type),
-                    name: f.name,
+                    name: cleanBedrockFilename(f.name),
                     source: { bytes: await readStreamAsUint8Array(source) },
                 },
             };
@@ -234,6 +256,10 @@ export async function formatConversePrompt(segments: PromptSegment[], options: E
             //Handle attached files
             for (const file of segment.files ?? []) {
                 toolContentBlocks.push(await processFileToToolContentBlock(file));
+            }
+            // Bedrock requires at least one content block in toolResult
+            if (toolContentBlocks.length === 0) {
+                toolContentBlocks.push({ text: '[No output]' });
             }
             messages.push({
                 content: [{

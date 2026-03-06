@@ -21,6 +21,7 @@ import {
     incrementConversationTurn,
     modelModalitiesToArray,
     stripBase64ImagesFromConversation,
+    stripHeartbeatsFromConversation,
     truncateLargeTextInConversation,
 } from "@llumiverse/core";
 import { FetchClient } from "@vertesia/api-fetch-client";
@@ -349,6 +350,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         };
         let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions);
         processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
+            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+            currentTurn,
+        });
 
         return processedConversation as Content[];
     }
@@ -442,6 +447,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         };
         let processedConversation = stripBase64ImagesFromConversation(withTurn, stripOptions);
         processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
+            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+            currentTurn,
+        });
 
         return processedConversation;
     }

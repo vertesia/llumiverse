@@ -101,6 +101,7 @@ Tests require API keys for the various LLM providers stored as environment varia
 - GROQ_API_KEY
 - WATSONX_API_KEY
 - XAI_API_KEY
+- OPENROUTER_API_KEY
 
 Tests can be found in:
 - `drivers/test/all-models.test.ts` - Tests for all models across providers

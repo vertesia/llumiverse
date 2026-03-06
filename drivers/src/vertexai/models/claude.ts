@@ -24,6 +24,7 @@ import {
     ModelType,
     PromptRole, PromptSegment, readStreamAsBase64, readStreamAsString, StatelessExecutionOptions,
     stripBase64ImagesFromConversation,
+    stripHeartbeatsFromConversation,
     ToolUse,
     truncateLargeTextInConversation,
     VertexAIClaudeOptions
@@ -323,6 +324,10 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         };
         let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions);
         processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
+            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+            currentTurn,
+        });
 
         return {
             result: text ? [{ type: "text", value: text }] : [{ type: "text", value: '' }],
@@ -865,7 +870,7 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
     // Fix orphaned tool_use blocks (can occur when agent is stopped mid-tool-execution)
     const fixedMessages = fixOrphanedToolUse(prompt.messages);
     // Sanitize messages to remove empty text blocks (can occur from interrupted streaming)
-    const sanitizedMessages = sanitizeMessages(fixedMessages);
+    let sanitizedMessages = sanitizeMessages(fixedMessages);
 
     // Validate tools have input_schema.type set to 'object' as required by the Anthropic SDK
     if (options.tools) {
@@ -876,10 +881,17 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
         }
     }
 
+    // When no tools are provided but conversation contains tool_use/tool_result blocks
+    // (e.g. checkpoint summary calls), convert tool blocks to text to avoid API errors
+    const hasTools = options.tools && options.tools.length > 0;
+    if (!hasTools && claudeMessagesContainToolBlocks(sanitizedMessages)) {
+        sanitizedMessages = convertClaudeToolBlocksToText(sanitizedMessages);
+    }
+
     const payload = {
         messages: sanitizedMessages,
         system: prompt.system,
-        tools: options.tools as MessageCreateParamsBase['tools'],
+        tools: hasTools ? options.tools as MessageCreateParamsBase['tools'] : undefined,
         temperature: model_options?.temperature,
         model: modelName,
         max_tokens: maxToken(options),
@@ -896,4 +908,72 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
     };
 
     return { payload, requestOptions };
+}
+
+/**
+ * Checks whether any Claude message contains tool_use or tool_result content blocks.
+ */
+export function claudeMessagesContainToolBlocks(messages: MessageParam[]): boolean {
+    for (const msg of messages) {
+        if (!Array.isArray(msg.content)) continue;
+        for (const block of msg.content) {
+            if (typeof block === 'object' && block !== null && 'type' in block) {
+                if (block.type === 'tool_use' || block.type === 'tool_result') return true;
+            }
+        }
+    }
+    return false;
+}
+
+/**
+ * Converts tool_use and tool_result blocks to text in Claude messages.
+ * Preserves tool call information while removing structured blocks that
+ * require tools to be defined in the API request.
+ */
+export function convertClaudeToolBlocksToText(messages: MessageParam[]): MessageParam[] {
+    return messages.map(msg => {
+        if (!Array.isArray(msg.content)) return msg;
+        let hasToolBlocks = false;
+        for (const block of msg.content) {
+            if (typeof block === 'object' && block !== null && 'type' in block &&
+                (block.type === 'tool_use' || block.type === 'tool_result')) {
+                hasToolBlocks = true;
+                break;
+            }
+        }
+        if (!hasToolBlocks) return msg;
+
+        const newContent: MessageParam['content'] = [];
+        for (const block of msg.content) {
+            if (typeof block === 'string') {
+                newContent.push(block);
+                continue;
+            }
+            if (block.type === 'tool_use') {
+                const inputStr = block.input ? JSON.stringify(block.input) : '';
+                const truncated = inputStr.length > 500 ? inputStr.substring(0, 500) + '...' : inputStr;
+                (newContent as Array<{ type: 'text'; text: string }>).push({
+                    type: 'text',
+                    text: `[Tool call: ${block.name}(${truncated})]`,
+                });
+            } else if (block.type === 'tool_result') {
+                let resultStr = 'No content';
+                if (typeof block.content === 'string') {
+                    resultStr = block.content.length > 500 ? block.content.substring(0, 500) + '...' : block.content;
+                } else if (Array.isArray(block.content)) {
+                    const texts = block.content
+                        .filter((c): c is { type: 'text'; text: string } => c.type === 'text')
+                        .map(c => c.text.length > 500 ? c.text.substring(0, 500) + '...' : c.text);
+                    resultStr = texts.join('\n') || 'No text content';
+                }
+                (newContent as Array<{ type: 'text'; text: string }>).push({
+                    type: 'text',
+                    text: `[Tool result: ${resultStr}]`,
+                });
+            } else {
+                newContent.push(block as any);
+            }
+        }
+        return { ...msg, content: newContent };
+    });
 }

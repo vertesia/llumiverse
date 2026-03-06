@@ -27,6 +27,7 @@ import {
     PromptSegment,
     StatelessExecutionOptions,
     stripBinaryFromConversation,
+    stripHeartbeatsFromConversation,
     TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions,
     truncateLargeTextInConversation
 } from "@llumiverse/core";
@@ -621,6 +622,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         };
         let processedConversation = stripBinaryFromConversation(conversation, stripOptions);
         processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
+            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+            currentTurn,
+        });
 
         return processedConversation as ConverseRequest;
     }
@@ -688,6 +693,12 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         // Truncate large text content if configured
         processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+
+        // Strip old heartbeat status messages
+        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
+            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+            currentTurn,
+        });
 
         const completion = {
             ...this.getExtractedExecution(res, conversePrompt, options),
@@ -990,6 +1001,12 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             request.toolConfig = {
                 tools: tool_defs,
             }
+        } else if (request.messages && messagesContainToolBlocks(request.messages)) {
+            // Bedrock requires toolConfig when conversation contains toolUse/toolResult blocks.
+            // When no tools are provided (e.g. checkpoint summary calls), convert tool blocks
+            // to text representations so the conversation data is preserved while satisfying
+            // Bedrock's API requirements without making tools callable.
+            request.messages = convertToolBlocksToText(request.messages);
         }
 
         return request;
@@ -1421,6 +1438,75 @@ function getToolDefinition(tool: ToolDefinition): Tool.ToolSpecMember {
             }
         }
     }
+}
+
+/**
+ * Checks whether any message contains toolUse or toolResult content blocks.
+ */
+export function messagesContainToolBlocks(messages: Message[]): boolean {
+    for (const msg of messages) {
+        if (!msg.content) continue;
+        for (const block of msg.content) {
+            if ((block as ContentBlock.ToolUseMember).toolUse ||
+                (block as ContentBlock.ToolResultMember).toolResult) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/**
+ * Converts toolUse and toolResult content blocks to text representations.
+ * This preserves the tool call information in the conversation while removing
+ * the structured tool blocks that require Bedrock's toolConfig to be set.
+ *
+ * Used when no tools are provided (e.g. checkpoint summary calls) but the
+ * conversation history contains tool interactions from prior turns.
+ */
+export function convertToolBlocksToText(messages: Message[]): Message[] {
+    return messages.map(msg => {
+        if (!msg.content) return msg;
+        let hasToolBlocks = false;
+        for (const block of msg.content) {
+            if ((block as ContentBlock.ToolUseMember).toolUse ||
+                (block as ContentBlock.ToolResultMember).toolResult) {
+                hasToolBlocks = true;
+                break;
+            }
+        }
+        if (!hasToolBlocks) return msg;
+
+        const newContent: ContentBlock[] = [];
+        for (const block of msg.content) {
+            const toolUse = (block as ContentBlock.ToolUseMember).toolUse;
+            const toolResult = (block as ContentBlock.ToolResultMember).toolResult;
+            if (toolUse) {
+                const inputStr = toolUse.input ? JSON.stringify(toolUse.input) : '';
+                const truncatedInput = inputStr.length > 500 ? inputStr.substring(0, 500) + '...' : inputStr;
+                newContent.push({
+                    text: `[Tool call: ${toolUse.name}(${truncatedInput})]`,
+                } as ContentBlock.TextMember);
+            } else if (toolResult) {
+                const resultTexts: string[] = [];
+                if (toolResult.content) {
+                    for (const c of toolResult.content) {
+                        if ((c as any).text) {
+                            const text = (c as any).text as string;
+                            resultTexts.push(text.length > 500 ? text.substring(0, 500) + '...' : text);
+                        }
+                    }
+                }
+                const resultStr = resultTexts.length > 0 ? resultTexts.join('\n') : 'No text content';
+                newContent.push({
+                    text: `[Tool result: ${resultStr}]`,
+                } as ContentBlock.TextMember);
+            } else {
+                newContent.push(block);
+            }
+        }
+        return { ...msg, content: newContent };
+    });
 }
 
 /**

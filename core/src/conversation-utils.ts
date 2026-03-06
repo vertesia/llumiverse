@@ -529,3 +529,69 @@ function truncateLargeTextInternal(obj: unknown, maxChars: number): unknown {
 
     return obj;
 }
+
+const HEARTBEAT_OPEN_TAG = '<heartbeat>';
+const HEARTBEAT_CLOSE_TAG = '</heartbeat>';
+const HEARTBEAT_PLACEHOLDER = '[Heartbeat removed from conversation history]';
+
+/**
+ * Strip heartbeat status messages from conversation to reduce context bloat.
+ *
+ * Heartbeat messages are periodic workstream status updates injected by the
+ * workstream management system. They are wrapped with `<heartbeat>...</heartbeat>`
+ * tags at the point of injection.
+ *
+ * This function recursively walks the conversation and replaces any string
+ * wrapped in heartbeat tags with a short placeholder.
+ *
+ * @param obj The conversation object to strip heartbeats from
+ * @param options Optional settings for turn-based stripping (default keepForTurns: 1)
+ * @returns A new object with old heartbeat messages replaced
+ */
+export function stripHeartbeatsFromConversation(obj: unknown, options?: StripOptions): unknown {
+    const { keepForTurns = 1 } = options ?? {};
+    const currentTurn = options?.currentTurn ?? getConversationMeta(obj).turnNumber;
+
+    // If keepForTurns is Infinity, never strip
+    if (keepForTurns === Infinity) {
+        return obj;
+    }
+
+    // Keep heartbeats if we haven't exceeded the turn threshold
+    if (keepForTurns > 0 && currentTurn < keepForTurns) {
+        return obj;
+    }
+
+    return stripHeartbeatsInternal(obj);
+}
+
+function stripHeartbeatsInternal(obj: unknown): unknown {
+    if (obj === null || obj === undefined) return obj;
+
+    // Replace heartbeat-tagged strings with placeholder
+    if (typeof obj === 'string') {
+        if (obj.startsWith(HEARTBEAT_OPEN_TAG) && obj.endsWith(HEARTBEAT_CLOSE_TAG)) {
+            return HEARTBEAT_PLACEHOLDER;
+        }
+        return obj;
+    }
+
+    if (Array.isArray(obj)) {
+        return obj.map(item => stripHeartbeatsInternal(item));
+    }
+
+    if (typeof obj === 'object') {
+        const result: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(obj)) {
+            // Preserve metadata
+            if (key === META_KEY) {
+                result[key] = value;
+            } else {
+                result[key] = stripHeartbeatsInternal(value);
+            }
+        }
+        return result;
+    }
+
+    return obj;
+}

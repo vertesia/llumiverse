@@ -28,13 +28,19 @@ function _getModelCapabilities(model: string, provider?: string | Providers): Mo
         case Providers.vertexai:
             return getModelCapabilitiesVertexAI(model);
         case Providers.openai:
-        case Providers.openai_compatible:
             return getModelCapabilitiesOpenAI(model);
+        case Providers.openai_compatible:
+            return getModelCapabilitiesOpenAICompatible(model);
         case Providers.bedrock:
             return getModelCapabilitiesBedrock(model);
         case Providers.azure_foundry:
             // Azure Foundry uses OpenAI capabilities
             return getModelCapabilitiesAzureFoundry(model);
+        case Providers.groq:
+        case Providers.togetherai:
+        case Providers.mistralai:
+            // These providers host text models that generally support tool use
+            return getModelCapabilitiesOpenAICompatible(model);
         case Providers.xai:
             // xAI (Grok) models support tool use and are text-based
             return {
@@ -63,6 +69,29 @@ function _getModelCapabilities(model: string, provider?: string | Providers): Mo
             // Fallback to a generic model with no capabilities
             return { input: {}, output: {} } satisfies ModelCapabilities;
     }
+}
+
+// Patterns for models known NOT to support tool use on OpenAI-compatible endpoints
+const NO_TOOL_SUPPORT_PATTERNS = ['image', 'embed', 'moderation', 'whisper', 'sora', 'dall-e', 'tts'];
+
+/**
+ * For OpenAI-compatible endpoints (e.g., OpenRouter), try OpenAI capability lookup first.
+ * If no explicit match is found, default to tool_support: true since most models
+ * on these platforms support tool use. Blacklist known non-tool-supporting patterns.
+ */
+function getModelCapabilitiesOpenAICompatible(model: string): ModelCapabilities {
+    const caps = getModelCapabilitiesOpenAI(model);
+    if (caps.tool_support !== undefined) {
+        return caps;
+    }
+    const normalized = model.toLowerCase();
+    const isNonToolModel = NO_TOOL_SUPPORT_PATTERNS.some(p => normalized.includes(p));
+    return {
+        input: { text: true },
+        output: { text: true },
+        tool_support: !isNonToolModel,
+        tool_support_streaming: !isNonToolModel,
+    };
 }
 
 export function supportsToolUse(model: string, provider?: string | Providers, streaming: boolean = false): boolean {

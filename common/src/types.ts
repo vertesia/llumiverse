@@ -533,6 +533,14 @@ export interface ExecutionOptions extends StatelessExecutionOptions {
      * - N > 0: Truncate text to approximately N tokens (using ~4 chars/token estimate)
      */
     stripTextMaxTokens?: number;
+
+    /**
+     * Number of turns to keep heartbeat messages before stripping.
+     * - 0: Strip immediately
+     * - 1 (default): Keep for 1 turn then strip
+     * - undefined: Same as 1, strip after 1 turn
+     */
+    stripHeartbeatsAfterTurns?: number;
 }
 
 //Common names to share between different models

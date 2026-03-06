@@ -13,6 +13,7 @@ import {
     JSONObject, JSONSchema, LlumiverseError, LlumiverseErrorContext, ModelType, PromptOptions, PromptRole,
     PromptSegment, readStreamAsBase64, StatelessExecutionOptions,
     stripBase64ImagesFromConversation,
+    stripHeartbeatsFromConversation,
     ToolDefinition, ToolUse,
     truncateLargeTextInConversation,
     unwrapConversationArray,
@@ -57,6 +58,17 @@ const geminiSafetySettings: SafetySetting[] = [
 function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentPrompt): GenerateContentParameters {
     const model_options = options.model_options as VertexAIGeminiOptions | undefined;
     const tools = getToolDefinitions(options.tools);
+
+    // When no tools are provided but conversation contains functionCall/functionResponse parts
+    // (e.g. checkpoint summary calls), convert them to text to avoid API errors
+    if (!tools && prompt.contents) {
+        const hasToolParts = prompt.contents.some(c =>
+            c.parts?.some(p => p.functionCall || p.functionResponse)
+        );
+        if (hasToolParts) {
+            prompt.contents = convertGeminiFunctionPartsToText(prompt.contents);
+        }
+    }
 
     const useStructuredOutput = supportsStructuredOutput(options) && !tools;
 
@@ -843,6 +855,12 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         // Truncate large text content if configured
         processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
 
+        // Strip old heartbeat status messages
+        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
+            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+            currentTurn,
+        });
+
         return {
             result: result && result.length > 0 ? result : [{ type: "text" as const, value: '' }],
             token_usage: token_usage,
@@ -1065,6 +1083,35 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
 }
 
+
+/**
+ * Converts functionCall and functionResponse parts to text parts in Gemini Content[].
+ * Preserves tool call information while removing structured parts that require
+ * tools/toolConfig to be defined in the API request.
+ */
+export function convertGeminiFunctionPartsToText(contents: Content[]): Content[] {
+    return contents.map(content => {
+        if (!content.parts) return content;
+        const hasFunctionParts = content.parts.some(p => p.functionCall || p.functionResponse);
+        if (!hasFunctionParts) return content;
+
+        const newParts = content.parts.map(part => {
+            if (part.functionCall) {
+                const argsStr = part.functionCall.args ? JSON.stringify(part.functionCall.args) : '';
+                const truncated = argsStr.length > 500 ? argsStr.substring(0, 500) + '...' : argsStr;
+                return { text: `[Tool call: ${part.functionCall.name}(${truncated})]` };
+            }
+            if (part.functionResponse) {
+                const respStr = part.functionResponse.response
+                    ? JSON.stringify(part.functionResponse.response) : 'No response';
+                const truncated = respStr.length > 500 ? respStr.substring(0, 500) + '...' : respStr;
+                return { text: `[Tool result for ${part.functionResponse.name}: ${truncated}]` };
+            }
+            return part;
+        });
+        return { ...content, parts: newParts };
+    });
+}
 
 function getToolDefinitions(tools: ToolDefinition[] | undefined | null): Tool | undefined {
     if (!tools || tools.length === 0) {

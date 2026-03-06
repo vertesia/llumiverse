@@ -18,6 +18,7 @@ const RECORD_FAMILY_CAPABILITIES: Record<string, OpenAIModelCapability> = {
     "gpt-4o": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
     "gpt-4.1": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
     "gpt-4.5": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
+    "gpt-5": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: true, image: false, video: false, audio: false, embed: false }, tool_support: true },
     "gpt-image": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
     "chatgpt-image": { input: { text: true, image: true, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
     "dall-e": { input: { text: true, image: false, video: false, audio: false, embed: false }, output: { text: false, image: true, video: false, audio: false, embed: false }, tool_support: false },
@@ -42,7 +43,7 @@ const VIDEO_OUTPUT_MODELS = ["video"];
 const AUDIO_OUTPUT_MODELS = ["audio"];
 const TEXT_OUTPUT_MODELS = ["text"];
 const EMBEDDING_OUTPUT_MODELS = ["embed"];
-const TOOL_SUPPORT_MODELS = ["tool", "gpt", "o1", "o3", "o4"];
+const TOOL_SUPPORT_MODELS = ["tool", "gpt", "gpt-5", "o1", "o3", "o4"];
 
 function modelMatches(modelName: string, patterns: string[]): boolean {
     return patterns.some(pattern => modelName.includes(pattern));
