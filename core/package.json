@@ -76,7 +76,7 @@
     },
     "dependencies": {
         "@llumiverse/common": "workspace:*",
-        "@types/node": "^22.19.7",
+        "@types/node": "^25.3.5",
         "ajv": "^8.18.0",
         "ajv-formats": "^3.0.1",
         "jsonrepair": "^3.13.2"
