@@ -299,12 +299,17 @@ function convertResponseItemsToGroqMessages(items: ResponseInputItem[]): ChatCom
                         } else if (part.type === 'input_image') {
                             const imgPart = part as OpenAI.Responses.ResponseInputImage;
                             if (imgPart.image_url) {
+                                const image_url: { url: string; detail?: 'auto' | 'low' | 'high' } = {
+                                    url: imgPart.image_url
+                                };
+
+                                if (imgPart.detail) {
+                                    image_url.detail = imgPart.detail as 'auto' | 'low' | 'high';
+                                }
+
                                 parts.push({
                                     type: 'image_url',
-                                    image_url: {
-                                        url: imgPart.image_url,
-                                        ...(imgPart.detail && { detail: imgPart.detail })
-                                    }
+                                    image_url
                                 });
                             }
                         }
