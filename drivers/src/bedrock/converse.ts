@@ -1,35 +1,84 @@
-import { DataSource, ExecutionOptions, readStreamAsString, readStreamAsUint8Array } from "@llumiverse/core";
-import { PromptSegment, PromptRole } from "@llumiverse/core";
 import {
+    ContentBlock,
     ConversationRole,
     ConverseRequest,
     Message,
     SystemContentBlock,
-    ContentBlock,
     ToolResultContentBlock,
 } from "@aws-sdk/client-bedrock-runtime";
+import { DataSource, ExecutionOptions, PromptRole, PromptSegment, readStreamAsString, readStreamAsUint8Array } from "@llumiverse/core";
 import { parseS3UrlToUri } from "./s3.js";
 
 function roleConversion(role: PromptRole): ConversationRole {
     return role === PromptRole.assistant ? ConversationRole.ASSISTANT : ConversationRole.USER;
 }
 
-function mimeToImageType(mime: string): "png" | "jpeg" | "gif" | "webp" {
+type BedrockImageFormat = "png" | "jpeg" | "gif" | "webp";
+const BEDROCK_IMAGE_FORMATS = new Set<string>(["png", "jpeg", "gif", "webp"]);
+const mimeToImageMap: Record<string, BedrockImageFormat> = {
+    "image/png": "png",
+    "image/jpeg": "jpeg",
+    "image/gif": "gif",
+    "image/webp": "webp",
+};
+function mimeToImageType(mime: string): BedrockImageFormat {
+    const mapped = mimeToImageMap[mime];
+    if (mapped) return mapped;
     if (mime.startsWith("image/")) {
-        return mime.split("/")[1] as "png" | "jpeg" | "gif" | "webp";
+        const subtype = mime.split("/")[1];
+        if (subtype && BEDROCK_IMAGE_FORMATS.has(subtype)) {
+            return subtype as BedrockImageFormat;
+        }
     }
     return "png";
 }
 
-function mimeToDocType(mime: string): "pdf" | "csv" | "doc" | "docx" | "xls" | "xlsx" | "html" | "txt" | "md" {
+type BedrockDocFormat = "pdf" | "csv" | "doc" | "docx" | "xls" | "xlsx" | "html" | "txt" | "md";
+const BEDROCK_DOC_FORMATS = new Set<string>(["pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"]);
+const mimeToDocMap: Record<string, BedrockDocFormat> = {
+    "application/pdf": "pdf",
+    "text/csv": "csv",
+    "application/msword": "doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/vnd.ms-excel": "xls",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+    "text/html": "html",
+    "text/plain": "txt",
+    "text/markdown": "md",
+};
+function mimeToDocType(mime: string): BedrockDocFormat {
+    // 1. Exact map lookup (handles complex MIME types like vnd.openxmlformats-*)
+    const mapped = mimeToDocMap[mime];
+    if (mapped) return mapped;
+    // 2. Fallback: extract subtype for simple application/ or text/ MIME types
     if (mime.startsWith("application/") || mime.startsWith("text/")) {
-        return mime.split("/")[1] as "pdf" | "csv" | "doc" | "docx" | "xls" | "xlsx" | "html" | "txt" | "md";
+        const subtype = mime.split("/")[1];
+        if (subtype && BEDROCK_DOC_FORMATS.has(subtype)) {
+            return subtype as BedrockDocFormat;
+        }
     }
     return "txt";
 }
-function mimeToVideoType(mime: string): "mov" | "mkv" | "mp4" | "webm" | "flv" | "mpeg" | "mpg" | "wmv" | "three_gp" {
+type BedrockVideoFormat = "mov" | "mkv" | "mp4" | "webm" | "flv" | "mpeg" | "mpg" | "wmv" | "three_gp";
+const BEDROCK_VIDEO_FORMATS = new Set<string>(["mov", "mkv", "mp4", "webm", "flv", "mpeg", "mpg", "wmv", "three_gp"]);
+const mimeToVideoMap: Record<string, BedrockVideoFormat> = {
+    "video/quicktime": "mov",
+    "video/x-matroska": "mkv",
+    "video/mp4": "mp4",
+    "video/webm": "webm",
+    "video/x-flv": "flv",
+    "video/mpeg": "mpeg",
+    "video/x-ms-wmv": "wmv",
+    "video/3gpp": "three_gp",
+};
+function mimeToVideoType(mime: string): BedrockVideoFormat {
+    const mapped = mimeToVideoMap[mime];
+    if (mapped) return mapped;
     if (mime.startsWith("video/")) {
-        return mime.split("/")[1] as "mov" | "mkv" | "mp4" | "webm" | "flv" | "mpeg" | "mpg" | "wmv" | "three_gp";
+        const subtype = mime.split("/")[1];
+        if (subtype && BEDROCK_VIDEO_FORMATS.has(subtype)) {
+            return subtype as BedrockVideoFormat;
+        }
     }
     return "mp4";
 }
