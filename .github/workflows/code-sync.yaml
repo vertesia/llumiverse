@@ -33,7 +33,7 @@ jobs:
       sync_ref: ${{ steps.sync.outputs.SYNC_REF }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Fetch all because we need to access info from different branches
           fetch-tags: false
@@ -145,7 +145,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Fetch all because we need to access info from different branches
           fetch-tags: false
@@ -222,7 +222,7 @@ jobs:
     if: ${{ always() && needs.sync.outputs.should_cleanup != 'false' }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Fetch all because we need to access info from different branches
           fetch-tags: false
