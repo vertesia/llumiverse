@@ -1,7 +1,7 @@
-import { AIModel, Completion, PromptSegment, ExecutionOptions, CompletionChunkObject } from "@llumiverse/core";
+import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, LlumiverseError, LlumiverseErrorContext, PromptSegment } from "@llumiverse/core";
 import { VertexAIDriver, trimModelName } from "./index.js";
-import { GeminiModelDefinition } from "./models/gemini.js";
 import { ClaudeModelDefinition } from "./models/claude.js";
+import { GeminiModelDefinition } from "./models/gemini.js";
 import { LLamaModelDefinition } from "./models/llama.js";
 
 export interface ModelDefinition<PromptT = any> {
@@ -11,6 +11,11 @@ export interface ModelDefinition<PromptT = any> {
     requestTextCompletion: (driver: VertexAIDriver, prompt: PromptT, options: ExecutionOptions) => Promise<Completion>;
     requestTextCompletionStream: (driver: VertexAIDriver, prompt: PromptT, options: ExecutionOptions) => Promise<AsyncIterable<CompletionChunkObject>>;
     preValidationProcessing?(result: Completion, options: ExecutionOptions): { result: Completion, options: ExecutionOptions };
+    /**
+     * Format provider-specific errors into standardized LlumiverseError.
+     * Optional - if not provided, VertexAIDriver will use default error handling.
+     */
+    formatLlumiverseError?(driver: VertexAIDriver, error: unknown, context: LlumiverseErrorContext): LlumiverseError;
 }
 
 export function getModelDefinition(model: string): ModelDefinition {

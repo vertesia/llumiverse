@@ -26,7 +26,7 @@ The main abstractions are:
 - **Build drivers package**: `cd drivers && pnpm build`
 - **Run all tests**: `pnpm -r test`
 - **Run specific tests**: `cd drivers && pnpm test -- -t "pattern"`
-- **Run linting**: `pnpm eslint`
+- **Run linting**: `pnpm lint`
 
 ## Code Style
 

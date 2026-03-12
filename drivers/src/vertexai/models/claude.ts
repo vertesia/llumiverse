@@ -1,14 +1,37 @@
-import { ContentBlock, ContentBlockParam, DocumentBlockParam, ImageBlockParam, Message, MessageParam, TextBlockParam, ToolResultBlockParam } from "@anthropic-ai/sdk/resources/index.js";
 import {
-    AIModel, Completion, CompletionChunkObject, ExecutionOptions, getMaxTokensLimitVertexAi, JSONObject, ModelType,
-    PromptRole, PromptSegment, readStreamAsBase64, readStreamAsString, StatelessExecutionOptions, ToolUse, VertexAIClaudeOptions,
-    getConversationMeta, incrementConversationTurn, stripBase64ImagesFromConversation, truncateLargeTextInConversation
+    APIConnectionError,
+    APIConnectionTimeoutError,
+    APIError,
+    AuthenticationError,
+    BadRequestError,
+    ConflictError,
+    InternalServerError,
+    NotFoundError,
+    PermissionDeniedError,
+    RateLimitError,
+    UnprocessableEntityError,
+} from '@anthropic-ai/sdk/error';
+import { ContentBlock, ContentBlockParam, DocumentBlockParam, ImageBlockParam, Message, MessageParam, TextBlockParam, ToolResultBlockParam } from "@anthropic-ai/sdk/resources/index.js";
+import { MessageStreamParams } from "@anthropic-ai/sdk/resources/index.mjs";
+import { MessageCreateParamsBase, MessageCreateParamsNonStreaming, RawMessageStreamEvent } from "@anthropic-ai/sdk/resources/messages.js";
+import {
+    AIModel, Completion, CompletionChunkObject, ExecutionOptions,
+    getConversationMeta,
+    getMaxTokensLimitVertexAi,
+    incrementConversationTurn,
+    JSONObject,
+    LlumiverseError, LlumiverseErrorContext,
+    ModelType,
+    PromptRole, PromptSegment, readStreamAsBase64, readStreamAsString, StatelessExecutionOptions,
+    stripBase64ImagesFromConversation,
+    stripHeartbeatsFromConversation,
+    ToolUse,
+    truncateLargeTextInConversation,
+    VertexAIClaudeOptions
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { VertexAIDriver } from "../index.js";
 import { ModelDefinition } from "../models.js";
-import { MessageCreateParamsBase, MessageCreateParamsNonStreaming, RawMessageStreamEvent } from "@anthropic-ai/sdk/resources/messages.js";
-import { MessageStreamParams } from "@anthropic-ai/sdk/resources/index.mjs";
 
 export const ANTHROPIC_REGIONS: Record<string, string> = {
     us: "us-east5",
@@ -301,6 +324,10 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         };
         let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions);
         processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
+            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+            currentTurn,
+        });
 
         return {
             result: text ? [{ type: "text", value: text }] : [{ type: "text", value: '' }],
@@ -443,6 +470,170 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         });
 
         return stream;
+    }
+
+    /**
+     * Format Anthropic API errors into LlumiverseError with proper status codes and retryability.
+     * 
+     * Anthropic API errors have a specific structure:
+     * - APIError.status: HTTP status code (400, 401, 403, 404, 409, 422, 429, 500+)
+     * - APIError.error: Nested error object with type and message
+     * - APIError.requestID: Request ID for support (can be null)
+     * 
+     * Common error types:
+     * - BadRequestError (400): Invalid request parameters
+     * - AuthenticationError (401): Authentication required
+     * - PermissionDeniedError (403): Insufficient permissions
+     * - NotFoundError (404): Resource not found
+     * - ConflictError (409): Resource conflict
+     * - UnprocessableEntityError (422): Validation error
+     * - RateLimitError (429): Rate limit exceeded
+     * - InternalServerError (500+): Server-side errors
+     * - APIConnectionError: Connection issues (no status code)
+     * - APIConnectionTimeoutError: Request timeout (no status code)
+     * 
+     * @see https://docs.anthropic.com/en/api/errors
+     */
+    formatLlumiverseError(
+        _driver: VertexAIDriver,
+        error: unknown,
+        context: LlumiverseErrorContext
+    ): LlumiverseError {
+        // Check if it's an Anthropic API error
+        const isAnthropicError = this.isAnthropicApiError(error);
+
+        if (!isAnthropicError) {
+            // Not an Anthropic API error, use default handling
+            throw error;
+        }
+
+        const apiError = error as APIError;
+        const httpStatusCode = apiError.status;
+
+        // Extract error message and nested error details
+        let message = apiError.message || String(error);
+
+        // Extract error type from nested error object if available
+        let errorType: string | undefined;
+        if (apiError.error && typeof apiError.error === 'object') {
+            const nestedError = apiError.error as any;
+            if (nestedError.error && typeof nestedError.error === 'object') {
+                errorType = nestedError.error.type;
+                // Use the nested error message if it's more specific
+                if (nestedError.error.message) {
+                    message = nestedError.error.message;
+                }
+            }
+        }
+
+        // Build user-facing message with status code
+        let userMessage = message;
+
+        // Include status code in message (for end-user visibility)
+        if (httpStatusCode) {
+            userMessage = `[${httpStatusCode}] ${userMessage}`;
+        }
+
+        // Include error type if available
+        if (errorType && errorType !== 'error') {
+            userMessage = `${errorType}: ${userMessage}`;
+        }
+
+        // Add request ID if available (useful for Anthropic support)
+        if (apiError.requestID) {
+            userMessage += ` (Request ID: ${apiError.requestID})`;
+        }
+
+        // Determine retryability based on Anthropic error types
+        const retryable = this.isClaudeErrorRetryable(error, httpStatusCode, errorType);
+
+        // Use the error constructor name as the error name
+        const errorName = error.constructor?.name || 'AnthropicError';
+
+        return new LlumiverseError(
+            `[${context.provider}] ${userMessage}`,
+            retryable,
+            context,
+            error,
+            httpStatusCode,
+            errorName
+        );
+    }
+
+    /**
+     * Type guard to check if error is an Anthropic API error.
+     */
+    private isAnthropicApiError(error: unknown): error is APIError {
+        return (
+            error !== null &&
+            typeof error === 'object' &&
+            error instanceof APIError
+        );
+    }
+
+    /**
+     * Determine if an Anthropic API error is retryable.
+     * 
+     * Retryable errors:
+     * - RateLimitError (429): Rate limit exceeded, retry with backoff
+     * - InternalServerError (500+): Server-side errors
+     * - APIConnectionTimeoutError: Request timeout
+     * - 408 (Request Timeout): Request timeout
+     * - 529 (Overloaded): Service overloaded
+     * 
+     * Non-retryable errors:
+     * - BadRequestError (400): Invalid request parameters
+     * - AuthenticationError (401): Authentication failure
+     * - PermissionDeniedError (403): Insufficient permissions
+     * - NotFoundError (404): Resource not found
+     * - ConflictError (409): Resource conflict
+     * - UnprocessableEntityError (422): Validation error
+     * - Other 4xx client errors
+     * - invalid_request_error: Invalid request structure
+     * 
+     * @param error - The error object
+     * @param httpStatusCode - The HTTP status code if available
+     * @param errorType - The nested error type if available
+     * @returns True if retryable, false if not retryable, undefined if unknown
+     */
+    private isClaudeErrorRetryable(
+        error: unknown,
+        httpStatusCode: number | undefined,
+        errorType: string | undefined
+    ): boolean | undefined {
+        // Check specific Anthropic error types by class
+        if (error instanceof RateLimitError) return true;
+        if (error instanceof InternalServerError) return true;
+        if (error instanceof APIConnectionTimeoutError) return true;
+
+        // Non-retryable by error type
+        if (error instanceof BadRequestError) return false;
+        if (error instanceof AuthenticationError) return false;
+        if (error instanceof PermissionDeniedError) return false;
+        if (error instanceof NotFoundError) return false;
+        if (error instanceof ConflictError) return false;
+        if (error instanceof UnprocessableEntityError) return false;
+
+        // Check nested error type
+        if (errorType === 'invalid_request_error') return false;
+
+        // Use HTTP status code
+        if (httpStatusCode !== undefined) {
+            if (httpStatusCode === 429) return true; // Rate limit
+            if (httpStatusCode === 408) return true; // Request timeout
+            if (httpStatusCode === 529) return true; // Overloaded
+            if (httpStatusCode >= 500 && httpStatusCode < 600) return true; // Server errors
+            if (httpStatusCode >= 400 && httpStatusCode < 500) return false; // Client errors
+        }
+
+        // Connection errors without status codes
+        if (error instanceof APIConnectionError && !(error instanceof APIConnectionTimeoutError)) {
+            // Generic connection errors might be retryable (network issues)
+            return true;
+        }
+
+        // Unknown error type - let consumer decide retry strategy
+        return undefined;
     }
 }
 
@@ -679,7 +870,7 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
     // Fix orphaned tool_use blocks (can occur when agent is stopped mid-tool-execution)
     const fixedMessages = fixOrphanedToolUse(prompt.messages);
     // Sanitize messages to remove empty text blocks (can occur from interrupted streaming)
-    const sanitizedMessages = sanitizeMessages(fixedMessages);
+    let sanitizedMessages = sanitizeMessages(fixedMessages);
 
     // Validate tools have input_schema.type set to 'object' as required by the Anthropic SDK
     if (options.tools) {
@@ -690,10 +881,17 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
         }
     }
 
+    // When no tools are provided but conversation contains tool_use/tool_result blocks
+    // (e.g. checkpoint summary calls), convert tool blocks to text to avoid API errors
+    const hasTools = options.tools && options.tools.length > 0;
+    if (!hasTools && claudeMessagesContainToolBlocks(sanitizedMessages)) {
+        sanitizedMessages = convertClaudeToolBlocksToText(sanitizedMessages);
+    }
+
     const payload = {
         messages: sanitizedMessages,
         system: prompt.system,
-        tools: options.tools as MessageCreateParamsBase['tools'],
+        tools: hasTools ? options.tools as MessageCreateParamsBase['tools'] : undefined,
         temperature: model_options?.temperature,
         model: modelName,
         max_tokens: maxToken(options),
@@ -710,4 +908,72 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
     };
 
     return { payload, requestOptions };
+}
+
+/**
+ * Checks whether any Claude message contains tool_use or tool_result content blocks.
+ */
+export function claudeMessagesContainToolBlocks(messages: MessageParam[]): boolean {
+    for (const msg of messages) {
+        if (!Array.isArray(msg.content)) continue;
+        for (const block of msg.content) {
+            if (typeof block === 'object' && block !== null && 'type' in block) {
+                if (block.type === 'tool_use' || block.type === 'tool_result') return true;
+            }
+        }
+    }
+    return false;
+}
+
+/**
+ * Converts tool_use and tool_result blocks to text in Claude messages.
+ * Preserves tool call information while removing structured blocks that
+ * require tools to be defined in the API request.
+ */
+export function convertClaudeToolBlocksToText(messages: MessageParam[]): MessageParam[] {
+    return messages.map(msg => {
+        if (!Array.isArray(msg.content)) return msg;
+        let hasToolBlocks = false;
+        for (const block of msg.content) {
+            if (typeof block === 'object' && block !== null && 'type' in block &&
+                (block.type === 'tool_use' || block.type === 'tool_result')) {
+                hasToolBlocks = true;
+                break;
+            }
+        }
+        if (!hasToolBlocks) return msg;
+
+        const newContent: MessageParam['content'] = [];
+        for (const block of msg.content) {
+            if (typeof block === 'string') {
+                newContent.push(block);
+                continue;
+            }
+            if (block.type === 'tool_use') {
+                const inputStr = block.input ? JSON.stringify(block.input) : '';
+                const truncated = inputStr.length > 500 ? inputStr.substring(0, 500) + '...' : inputStr;
+                (newContent as Array<{ type: 'text'; text: string }>).push({
+                    type: 'text',
+                    text: `[Tool call: ${block.name}(${truncated})]`,
+                });
+            } else if (block.type === 'tool_result') {
+                let resultStr = 'No content';
+                if (typeof block.content === 'string') {
+                    resultStr = block.content.length > 500 ? block.content.substring(0, 500) + '...' : block.content;
+                } else if (Array.isArray(block.content)) {
+                    const texts = block.content
+                        .filter((c): c is { type: 'text'; text: string } => c.type === 'text')
+                        .map(c => c.text.length > 500 ? c.text.substring(0, 500) + '...' : c.text);
+                    resultStr = texts.join('\n') || 'No text content';
+                }
+                (newContent as Array<{ type: 'text'; text: string }>).push({
+                    type: 'text',
+                    text: `[Tool result: ${resultStr}]`,
+                });
+            } else {
+                newContent.push(block as any);
+            }
+        }
+        return { ...msg, content: newContent };
+    });
 }

@@ -26,7 +26,7 @@ The main abstractions are:
 - **Build drivers package**: `cd drivers && pnpm build`
 - **Run all tests**: `pnpm -r test`
 - **Run specific tests**: `cd drivers && pnpm test -- -t "pattern"`
-- **Run linting**: `pnpm eslint`
+- **Run linting**: `pnpm lint`
 
 ## Code Style
 
@@ -101,6 +101,7 @@ Tests require API keys for the various LLM providers stored as environment varia
 - GROQ_API_KEY
 - WATSONX_API_KEY
 - XAI_API_KEY
+- OPENROUTER_API_KEY
 
 Tests can be found in:
 - `drivers/test/all-models.test.ts` - Tests for all models across providers

@@ -20,12 +20,14 @@ import {
     getMaxTokensLimitBedrock,
     getModelCapabilities,
     incrementConversationTurn,
+    LlumiverseError, LlumiverseErrorContext,
     modelModalitiesToArray,
     ModelOptions,
     NovaCanvasOptions,
     PromptSegment,
     StatelessExecutionOptions,
     stripBinaryFromConversation,
+    stripHeartbeatsFromConversation,
     TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions,
     truncateLargeTextInConversation
 } from "@llumiverse/core";
@@ -188,6 +190,143 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             return await formatTwelvelabsPegasusPrompt(segments, opts);
         }
         return await formatConversePrompt(segments, opts);
+    }
+
+    /**
+     * Format AWS Bedrock errors into LlumiverseError with proper status codes and retryability.
+     * 
+     * AWS SDK errors provide:
+     * - error.name: The exception type (e.g., "ThrottlingException")
+     * - error.$metadata.httpStatusCode: The HTTP status code
+     * - error.$metadata.requestId: The AWS request ID for tracking
+     * - error.$fault: "client" or "server" indicating error category
+     * 
+     * @param error - The AWS SDK error
+     * @param context - Context about where the error occurred
+     * @returns A standardized LlumiverseError
+     */
+    public formatLlumiverseError(
+        error: unknown,
+        context: LlumiverseErrorContext
+    ): LlumiverseError {
+        // Check if it's an AWS SDK error with $metadata
+        const awsError = error as any;
+        const hasMetadata = awsError?.$metadata !== undefined;
+
+        if (!hasMetadata) {
+            // Not an AWS SDK error, use default handling
+            return super.formatLlumiverseError(error, context);
+        }
+
+        // Extract AWS-specific fields
+        const errorName = awsError.name || 'UnknownError';
+        const httpStatusCode = awsError.$metadata?.httpStatusCode;
+        const requestId = awsError.$metadata?.requestId;
+        const fault = awsError.$fault; // "client" or "server"
+
+        // Extract error message - handle both Error instances and plain objects
+        let message: string;
+        if (error instanceof Error) {
+            message = error.message;
+        } else if (typeof awsError.message === 'string') {
+            message = awsError.message;
+        } else {
+            message = String(error);
+        }
+
+        // Build user-facing message with error name and status code
+        let userMessage = message;
+
+        // Include status code in message if available (for end-user visibility)
+        if (httpStatusCode) {
+            userMessage = `[${httpStatusCode}] ${userMessage}`;
+        }
+
+        // Prefix with error name if it's meaningful (not just "Error")
+        if (errorName && errorName !== 'Error' && errorName !== 'UnknownError') {
+            userMessage = `${errorName}: ${userMessage}`;
+        }
+
+        // Add request ID if available (useful for AWS support)
+        if (requestId) {
+            userMessage += ` (Request ID: ${requestId})`;
+        }
+
+        // Determine retryability based on AWS error types
+        const retryable = this.isBedrockErrorRetryable(errorName, httpStatusCode, fault);
+
+        return new LlumiverseError(
+            `[${this.provider}] ${userMessage}`,
+            retryable,
+            context,
+            error,
+            httpStatusCode, // Only set code if we have numeric status code
+            errorName       // Preserve AWS error name
+        );
+    }
+
+    /**
+     * Determine if a Bedrock error is retryable based on error type and status.
+     * 
+     * Retryable errors:
+     * - ThrottlingException: Rate limit exceeded, retry with backoff
+     * - ServiceUnavailableException: Service temporarily down
+     * - InternalServerException: Server-side error
+     * - ServiceQuotaExceededException: Quota exhausted, may recover
+     * - 5xx status codes: Server errors
+     * - 429, 408 status codes: Rate limit, timeout
+     * 
+     * Non-retryable errors:
+     * - ValidationException: Invalid request parameters
+     * - AccessDeniedException: Authentication/authorization failure
+     * - ResourceNotFoundException: Resource doesn't exist
+     * - ConflictException: Resource state conflict
+     * - ResourceInUseException: Resource locked by another operation
+     * - 4xx status codes (except 429, 408): Client errors
+     * 
+     * @param errorName - The AWS error name (e.g., "ThrottlingException")
+     * @param httpStatusCode - The HTTP status code if available
+     * @param fault - The fault type ("client" or "server")
+     * @returns True if retryable, false if not retryable, undefined if unknown
+     */
+    private isBedrockErrorRetryable(
+        errorName: string,
+        httpStatusCode: number | undefined,
+        fault: string | undefined
+    ): boolean | undefined {
+        // Check specific AWS error types first
+        switch (errorName) {
+            // Retryable errors
+            case 'ThrottlingException':
+            case 'ServiceUnavailableException':
+            case 'InternalServerException':
+            case 'ServiceQuotaExceededException':
+                return true;
+
+            // Non-retryable errors
+            case 'ValidationException':
+            case 'AccessDeniedException':
+            case 'ResourceNotFoundException':
+            case 'ConflictException':
+            case 'ResourceInUseException':
+            case 'TooManyTagsException':
+                return false;
+        }
+
+        // If we have HTTP status code, use it
+        if (httpStatusCode !== undefined) {
+            if (httpStatusCode === 429 || httpStatusCode === 408) return true; // Rate limit, timeout
+            if (httpStatusCode === 529) return true; // Overloaded
+            if (httpStatusCode >= 500 && httpStatusCode < 600) return true; // Server errors
+            if (httpStatusCode >= 400 && httpStatusCode < 500) return false; // Client errors
+        }
+
+        // Fall back to fault type
+        if (fault === 'server') return true;
+        if (fault === 'client') return false;
+
+        // Unknown error type - let consumer decide retry strategy
+        return undefined;
     }
 
     getExtractedExecution(result: ConverseResponse, _prompt?: BedrockPrompt, options?: ExecutionOptions): CompletionChunkObject {
@@ -483,6 +622,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         };
         let processedConversation = stripBinaryFromConversation(conversation, stripOptions);
         processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
+            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+            currentTurn,
+        });
 
         return processedConversation as ConverseRequest;
     }
@@ -550,6 +693,12 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         // Truncate large text content if configured
         processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
+
+        // Strip old heartbeat status messages
+        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
+            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+            currentTurn,
+        });
 
         const completion = {
             ...this.getExtractedExecution(res, conversePrompt, options),
@@ -852,6 +1001,12 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             request.toolConfig = {
                 tools: tool_defs,
             }
+        } else if (request.messages && messagesContainToolBlocks(request.messages)) {
+            // Bedrock requires toolConfig when conversation contains toolUse/toolResult blocks.
+            // When no tools are provided (e.g. checkpoint summary calls), convert tool blocks
+            // to text representations so the conversation data is preserved while satisfying
+            // Bedrock's API requirements without making tools callable.
+            request.messages = convertToolBlocksToText(request.messages);
         }
 
         return request;
@@ -1195,7 +1350,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const executor = this.getExecutor();
 
         // Prepare the request payload for TwelveLabs Marengo
-        let invokeBody: TwelvelabsMarengoRequest = {
+        const invokeBody: TwelvelabsMarengoRequest = {
             inputType: "text"
         };
 
@@ -1283,6 +1438,75 @@ function getToolDefinition(tool: ToolDefinition): Tool.ToolSpecMember {
             }
         }
     }
+}
+
+/**
+ * Checks whether any message contains toolUse or toolResult content blocks.
+ */
+export function messagesContainToolBlocks(messages: Message[]): boolean {
+    for (const msg of messages) {
+        if (!msg.content) continue;
+        for (const block of msg.content) {
+            if ((block as ContentBlock.ToolUseMember).toolUse ||
+                (block as ContentBlock.ToolResultMember).toolResult) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/**
+ * Converts toolUse and toolResult content blocks to text representations.
+ * This preserves the tool call information in the conversation while removing
+ * the structured tool blocks that require Bedrock's toolConfig to be set.
+ *
+ * Used when no tools are provided (e.g. checkpoint summary calls) but the
+ * conversation history contains tool interactions from prior turns.
+ */
+export function convertToolBlocksToText(messages: Message[]): Message[] {
+    return messages.map(msg => {
+        if (!msg.content) return msg;
+        let hasToolBlocks = false;
+        for (const block of msg.content) {
+            if ((block as ContentBlock.ToolUseMember).toolUse ||
+                (block as ContentBlock.ToolResultMember).toolResult) {
+                hasToolBlocks = true;
+                break;
+            }
+        }
+        if (!hasToolBlocks) return msg;
+
+        const newContent: ContentBlock[] = [];
+        for (const block of msg.content) {
+            const toolUse = (block as ContentBlock.ToolUseMember).toolUse;
+            const toolResult = (block as ContentBlock.ToolResultMember).toolResult;
+            if (toolUse) {
+                const inputStr = toolUse.input ? JSON.stringify(toolUse.input) : '';
+                const truncatedInput = inputStr.length > 500 ? inputStr.substring(0, 500) + '...' : inputStr;
+                newContent.push({
+                    text: `[Tool call: ${toolUse.name}(${truncatedInput})]`,
+                } as ContentBlock.TextMember);
+            } else if (toolResult) {
+                const resultTexts: string[] = [];
+                if (toolResult.content) {
+                    for (const c of toolResult.content) {
+                        if ((c as any).text) {
+                            const text = (c as any).text as string;
+                            resultTexts.push(text.length > 500 ? text.substring(0, 500) + '...' : text);
+                        }
+                    }
+                }
+                const resultStr = resultTexts.length > 0 ? resultTexts.join('\n') : 'No text content';
+                newContent.push({
+                    text: `[Tool result: ${resultStr}]`,
+                } as ContentBlock.TextMember);
+            } else {
+                newContent.push(block);
+            }
+        }
+        return { ...msg, content: newContent };
+    });
 }
 
 /**

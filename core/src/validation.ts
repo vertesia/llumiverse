@@ -47,7 +47,7 @@ function parseCompletionAsJson(data: CompletionResult[]) {
 }
 
 
-export function validateResult(data: CompletionResult[], schema: Object): CompletionResult[] {
+export function validateResult(data: CompletionResult[], schema: object): CompletionResult[] {
     let json;
     if (Array.isArray(data)) {
         const jsonResults = data.filter(r => r.type === "json");
@@ -68,7 +68,7 @@ export function validateResult(data: CompletionResult[], schema: Object): Comple
     const valid = validate(json);
 
     if (!valid && validate.errors) {
-        let errors = [];
+        const errors = [];
 
         for (const e of validate.errors) {
             const path = e.instancePath.split("/").slice(1);
