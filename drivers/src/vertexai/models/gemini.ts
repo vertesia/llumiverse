@@ -2,7 +2,8 @@ import type { ApiError } from "@google/genai";
 import {
     Content, FinishReason, FunctionCallingConfigMode, FunctionDeclaration, GenerateContentConfig, GenerateContentParameters,
     GenerateContentResponseUsageMetadata, ProminentPeople,
-    HarmBlockThreshold, HarmCategory, Modality, Part, SafetySetting, Schema, ThinkingConfig, Tool, Type
+    HarmBlockThreshold, HarmCategory, Modality, Part, SafetySetting, Schema, ThinkingConfig, Tool, Type,
+    ThinkingLevel
 } from "@google/genai";
 import {
     AIModel, Completion, CompletionChunkObject, CompletionResult, ExecutionOptions,
@@ -55,6 +56,53 @@ const geminiSafetySettings: SafetySetting[] = [
     }
 ];
 
+/**
+ * Extract Gemini version from a model ID.
+ *
+ * Examples:
+ * - locations/global/publishers/google/models/gemini-2.5-flash -> 2.5
+ * - publishers/google/models/gemini-3-pro-image-preview -> 3
+ */
+export function getGeminiModelVersion(modelId: string): string | undefined {
+    const modelName = modelId.split('/').pop() ?? modelId;
+    const match = modelName.match(/^gemini-(\d+(?:\.\d+)?)/i);
+    return match?.[1];
+}
+
+function parseVersion(version: string): { major: number; minor: number } | undefined {
+    const match = version.match(/^(\d+)(?:\.(\d+))?$/);
+    if (!match) {
+        return undefined;
+    }
+
+    return {
+        major: Number(match[1]),
+        minor: Number(match[2] ?? '0'),
+    };
+}
+
+export function isGeminiModelVersionGte(modelId: string, minVersion: string): boolean {
+    const modelVersion = getGeminiModelVersion(modelId);
+    if (!modelVersion) {
+        return false;
+    }
+
+    const current = parseVersion(modelVersion);
+    const target = parseVersion(minVersion);
+    if (!current || !target) {
+        return false;
+    }
+
+    if (current.major > target.major) {
+        return true;
+    }
+    if (current.major < target.major) {
+        return false;
+    }
+
+    return current.minor >= target.minor;
+}
+
 // We do the mapping here rather than in common to avoid bringing the SDK into the common package.
 function getProminentPeopleOption(prominentPeople?: "PROMINENT_PEOPLE_UNSPECIFIED" | "ALLOW_PROMINENT_PEOPLE" | "BLOCK_PROMINENT_PEOPLE") {
     switch (prominentPeople) {
@@ -85,10 +133,6 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
     }
 
     const useStructuredOutput = supportsStructuredOutput(options) && !tools;
-
-    const thinkingConfigNeeded = model_options?.include_thoughts
-        || model_options?.thinking_budget_tokens
-        || options.model.includes("gemini-2.5");
 
     const configNanoBanana: GenerateContentConfig = {
         systemInstruction: prompt.system,
@@ -132,7 +176,7 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
         presencePenalty: model_options?.presence_penalty,
         frequencyPenalty: model_options?.frequency_penalty,
         seed: model_options?.seed,
-        thinkingConfig: thinkingConfigNeeded ? geminiThinkingConfig(options) : undefined,
+        thinkingConfig: geminiThinkingConfig(options),
     }
 
     return {
@@ -560,23 +604,30 @@ const recoverableToolCallReasons = [
 
 function geminiMaxTokens(option: StatelessExecutionOptions) {
     const model_options = option.model_options as VertexAIGeminiOptions | undefined;
+
+    // If max_tokens is explicitly set in model options, use it directly
     if (model_options?.max_tokens) {
         return model_options.max_tokens;
     }
-    if (option.model.includes("gemini-2.5")) {
+
+    // If max_tokens is not set, but thinking budget is set.
+    // Use the maximum max_tokens.
+    if (model_options?.thinking_budget_tokens) {
         return getMaxTokensLimitVertexAi(option.model);
     }
+
     return undefined;
 }
 
 function geminiThinkingBudget(option: StatelessExecutionOptions) {
     const model_options = option.model_options as VertexAIGeminiOptions | undefined;
+    // If thinking_budget_tokens is explicitly set in model options, use it directly
     if (model_options?.thinking_budget_tokens) {
         return model_options.thinking_budget_tokens;
     }
     // Set minimum thinking level by default.
     // Docs: https://ai.google.dev/gemini-api/docs/thinking#set-budget
-    if (option.model.includes("gemini-2.5")) {
+    if (getGeminiModelVersion(option.model) == '2.5') {
         if (option.model.includes("pro")) {
             return 128;
         }
@@ -587,16 +638,32 @@ function geminiThinkingBudget(option: StatelessExecutionOptions) {
 
 function geminiThinkingConfig(option: StatelessExecutionOptions): ThinkingConfig | undefined {
     const model_options = option.model_options as VertexAIGeminiOptions | undefined;
+
+    // If thinking options are explicitly set in model options, use them directly
     const include_thoughts = model_options?.include_thoughts ?? false;
-    if (model_options?.thinking_budget_tokens) {
-        return { includeThoughts: include_thoughts, thinkingBudget: model_options.thinking_budget_tokens };
+    if (model_options?.thinking_budget_tokens || model_options?.thinking_level) {
+        return {
+            includeThoughts: include_thoughts,
+            thinkingBudget: model_options.thinking_budget_tokens,
+            thinkingLevel: model_options.thinking_level,
+        };
     }
 
-    // Set minimum thinking level by default.
+    // Set a low thinking level by default.
     // Docs: https://ai.google.dev/gemini-api/docs/thinking#set-budget
-    if (option.model.includes("gemini-2.5") || option.model.includes("gemini-3")) {
+    // https://docs.cloud.google.com/vertex-ai/generative-ai/docs/thinking
+    if (isGeminiModelVersionGte(option.model, '3.0')) {
+        return {
+            includeThoughts: include_thoughts,
+            thinkingLevel: ThinkingLevel.LOW
+        };
+    }
+    if (isGeminiModelVersionGte(option.model, '2.5')) {
         const thinking_budget_tokens = geminiThinkingBudget(option) ?? 0;
-        return { includeThoughts: include_thoughts, thinkingBudget: thinking_budget_tokens };
+        return {
+            includeThoughts: include_thoughts,
+            thinkingBudget: thinking_budget_tokens
+        };
     }
 }
 
