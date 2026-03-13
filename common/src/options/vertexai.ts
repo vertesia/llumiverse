@@ -281,15 +281,6 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
                 description: "Nucleus sampling probability"
             },
             {
-                name: "candidate_count",
-                type: OptionType.numeric,
-                min: 1,
-                max: 8,
-                default: 1,
-                integer: true,
-                description: "Number of candidates to generate"
-            },
-            {
                 name: SharedOptions.max_tokens,
                 type: OptionType.numeric,
                 min: 1,
