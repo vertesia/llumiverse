@@ -26,7 +26,9 @@ export enum ImagenMaskMode {
 
 export enum ThinkingLevel {
     HIGH = "HIGH",
+    MEDIUM = "MEDIUM",
     LOW = "LOW",
+    MINIMAL = "MINIMAL",
     THINKING_LEVEL_UNSPECIFIED = "THINKING_LEVEL_UNSPECIFIED"
 }
 
@@ -150,6 +152,95 @@ export function isGeminiModelVersionGte(modelId: string, minVersion: string): bo
     }
 
     return current.minor >= target.minor;
+}
+
+function getGeminiThinkingLevels(model: string): {
+    levels: Record<string, ThinkingLevel>;
+    defaultLevel: ThinkingLevel;
+} {
+    const normalized = model.toLowerCase();
+    const isGemini3OrLater = isGeminiModelVersionGte(model, "3.0");
+    const isGemini31OrLater = isGeminiModelVersionGte(model, "3.1");
+    const isFlashLite = normalized.includes("flash-lite");
+    const isFlash = normalized.includes("flash") && !isFlashLite;
+    const isPro = normalized.includes("pro");
+
+    // Gemini 3 / 3.1 thinking_level support summary:
+    // - MINIMAL: Gemini 3 Flash and Gemini 3.1 Flash-Lite only.
+    //   Gemini 3.1 Flash-Lite defaults to MINIMAL.
+    // - LOW: Supported by Gemini 3+ models.
+    // - MEDIUM: Gemini 3 Flash, Gemini 3.1 Pro, Gemini 3.1 Flash-Lite.
+    // - HIGH: Supported by Gemini 3+ models.
+    // - Thinking cannot be turned off for Gemini 3 Pro and Gemini 3.1 Pro.
+    if (isFlashLite && isGemini31OrLater) {
+        return {
+            levels: {
+                "Minimal": ThinkingLevel.MINIMAL,
+                "Low": ThinkingLevel.LOW,
+                "Medium": ThinkingLevel.MEDIUM,
+                "High": ThinkingLevel.HIGH,
+            },
+            defaultLevel: ThinkingLevel.MINIMAL,
+        };
+    }
+
+    // Gemini 3+ Flash supports MINIMAL and MEDIUM in addition to LOW/HIGH.
+    if (isFlash) {
+        return {
+            levels: {
+                "Minimal": ThinkingLevel.MINIMAL,
+                "Low": ThinkingLevel.LOW,
+                "Medium": ThinkingLevel.MEDIUM,
+                "High": ThinkingLevel.HIGH,
+            },
+            defaultLevel: ThinkingLevel.MINIMAL,
+        };
+    }
+
+    // Gemini 3.1 Pro adds MEDIUM, but does not support turning thinking off.
+    if (isPro && isGemini31OrLater) {
+        return {
+            levels: {
+                "Low": ThinkingLevel.LOW,
+                "Medium": ThinkingLevel.MEDIUM,
+                "High": ThinkingLevel.HIGH,
+            },
+            defaultLevel: ThinkingLevel.LOW,
+        };
+    }
+
+    // Gemini 3 Pro supports LOW/HIGH. Thinking cannot be turned off.
+    if (isPro) {
+        return {
+            levels: {
+                "Low": ThinkingLevel.LOW,
+                "High": ThinkingLevel.HIGH,
+            },
+            defaultLevel: ThinkingLevel.LOW,
+        };
+    }
+
+    // Fallback for unknown Gemini 3+/4+ families:
+    // prefer future-safe propagation by enabling the guaranteed baseline levels.
+    if (isGemini3OrLater) {
+        return {
+            levels: {
+                "Low": ThinkingLevel.LOW,
+                "Medium": ThinkingLevel.MEDIUM,
+                "High": ThinkingLevel.HIGH,
+            },
+            defaultLevel: ThinkingLevel.LOW,
+        };
+    }
+
+    // Non-3.x models should not reach this helper in normal flow.
+    return {
+        levels: {
+            "Low": ThinkingLevel.LOW,
+            "High": ThinkingLevel.HIGH,
+        },
+        defaultLevel: ThinkingLevel.LOW,
+    };
 }
 
 function getImagenOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
@@ -342,8 +433,8 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
             options
         };
     }
-    // Special handling for gemini-2.5-flash-image and gemini-3-pro-image (nano banana and nano banana pro)
-    if (model.includes("flash-image") || model.includes("pro-image")) {
+    // Special handling for gemini image / nano banana models
+    if (model.includes("image")) {
         const max_tokens_limit = 32768;
         const excludeOptions = ["max_tokens", "presence_penalty", "frequency_penalty", "seed", "top_k"];
         let commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
@@ -472,13 +563,21 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
         name: SharedOptions.seed, type: OptionType.numeric, integer: true, description: "The seed for the generation, useful for reproducibility"
     };
 
-    if (model.includes("-3-")) {
+    if (isGeminiModelVersionGte(model, "3.0")) {
+        const thinkingLevelConfig = getGeminiThinkingLevels(model);
         const geminiThinkingOptions: ModelOptionInfoItem[] = [
             {
                 name: "include_thoughts",
                 type: OptionType.boolean,
                 default: false,
                 description: "Include the model's reasoning process in the response"
+            },
+            {
+                name: "thinking_level",
+                type: OptionType.enum,
+                enum: thinkingLevelConfig.levels,
+                default: thinkingLevelConfig.defaultLevel,
+                description: "Higher thinking levels may improve quality, but increase response times and token costs"
             }
         ];
 
@@ -651,10 +750,10 @@ function getLlamaOptions(model: string): ModelOptionsInfo {
 }
 
 function getGeminiMaxTokensLimit(model: string): number {
-    if (model.includes("gemini-2.5-flash-image") || model.includes("gemini-3-pro-image")) {
+    if (model.includes("image")) {
         return 32768;
     }
-    if (model.includes("thinking") || model.includes("-2.5-") || model.includes("-3-")) {
+    if (model.includes("thinking") || isGeminiModelVersionGte(model, "2.5")) {
         return 65535; // API upper bound is exclusive
     }
     if (model.includes("ultra") || model.includes("vision")) {
