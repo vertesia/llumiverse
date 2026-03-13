@@ -105,6 +105,53 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
     return textOptionsFallback;
 }
 
+/**
+ * Extract Gemini version from a model ID.
+ *
+ * Examples:
+ * - locations/global/publishers/google/models/gemini-2.5-flash -> 2.5
+ * - publishers/google/models/gemini-3-pro-image-preview -> 3
+ */
+export function getGeminiModelVersion(modelId: string): string | undefined {
+    const modelName = modelId.split('/').pop() ?? modelId;
+    const match = modelName.match(/^gemini-(\d+(?:\.\d+)?)/i);
+    return match?.[1];
+}
+
+function parseVersion(version: string): { major: number; minor: number } | undefined {
+    const match = version.match(/^(\d+)(?:\.(\d+))?$/);
+    if (!match) {
+        return undefined;
+    }
+
+    return {
+        major: Number(match[1]),
+        minor: Number(match[2] ?? '0'),
+    };
+}
+
+export function isGeminiModelVersionGte(modelId: string, minVersion: string): boolean {
+    const modelVersion = getGeminiModelVersion(modelId);
+    if (!modelVersion) {
+        return false;
+    }
+
+    const current = parseVersion(modelVersion);
+    const target = parseVersion(minVersion);
+    if (!current || !target) {
+        return false;
+    }
+
+    if (current.major > target.major) {
+        return true;
+    }
+    if (current.major < target.major) {
+        return false;
+    }
+
+    return current.minor >= target.minor;
+}
+
 function getImagenOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
     const commonOptions: ModelOptionInfoItem[] = [
         {
