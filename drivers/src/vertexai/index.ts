@@ -355,7 +355,17 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             currentTurn,
         });
 
-        return processedConversation as Content[];
+        // Preserve system instruction in conversation for Gemini multi-turn support.
+        // The Gemini API takes system as a separate parameter (not in contents),
+        // so we must store it in the conversation wrapper to survive serialization.
+        const geminiPrompt = prompt as GenerateContentPrompt;
+        if (geminiPrompt.system) {
+            if (typeof processedConversation === 'object' && processedConversation !== null) {
+                processedConversation = { ...processedConversation as object, _llumiverse_system: geminiPrompt.system };
+            }
+        }
+
+        return processedConversation;
     }
 
     /**
