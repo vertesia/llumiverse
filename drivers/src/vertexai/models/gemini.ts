@@ -782,6 +782,15 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
 
+        // Restore system instruction from stored conversation if prompt doesn't have one
+        // (happens on resume when executeUserInput creates only a user segment)
+        if (!prompt.system || prompt.system.parts?.length === 0) {
+            const existingSystem = extractSystemFromConversation(options.conversation);
+            if (existingSystem) {
+                prompt.system = existingSystem;
+            }
+        }
+
         let conversation = updateConversation(options.conversation, prompt.contents);
         prompt.contents = conversation;
 
@@ -861,12 +870,15 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             currentTurn,
         });
 
+        // Preserve system instruction in conversation for multi-turn support
+        const finalConversation = storeSystemInConversation(processedConversation, prompt.system);
+
         return {
             result: result && result.length > 0 ? result : [{ type: "text" as const, value: '' }],
             token_usage: token_usage,
             finish_reason: finish_reason,
             original_response: options.include_original_response ? response : undefined,
-            conversation: processedConversation,
+            conversation: finalConversation,
             tool_use
         } satisfies Completion;
     }
@@ -879,6 +891,15 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         }
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
+
+        // Restore system instruction from stored conversation if prompt doesn't have one
+        // (happens on resume when executeUserInput creates only a user segment)
+        if (!prompt.system || prompt.system.parts?.length === 0) {
+            const existingSystem = extractSystemFromConversation(options.conversation);
+            if (existingSystem) {
+                prompt.system = existingSystem;
+            }
+        }
 
         // Include conversation history in prompt contents (same as non-streaming)
         const conversation = updateConversation(options.conversation, prompt.contents);
@@ -1154,6 +1175,36 @@ function updateConversation(conversation: unknown, prompt: Content[]): Content[]
     const unwrapped = unwrapConversationArray<Content>(conversation);
     const convArray = unwrapped ?? (conversation as Content[] || []);
     return convArray.concat(prompt);
+}
+
+const SYSTEM_KEY = '_llumiverse_system';
+
+/**
+ * Extract the stored system instruction from a Gemini conversation object.
+ * Returns undefined if no system was stored.
+ */
+function extractSystemFromConversation(conversation: unknown): Content | undefined {
+    if (typeof conversation === 'object' && conversation !== null) {
+        const c = conversation as Record<string, unknown>;
+        if (c[SYSTEM_KEY] && typeof c[SYSTEM_KEY] === 'object') {
+            return c[SYSTEM_KEY] as Content;
+        }
+    }
+    return undefined;
+}
+
+/**
+ * Store the system instruction in the Gemini conversation wrapper object.
+ * The conversation is already wrapped by incrementConversationTurn into
+ * { _arrayConversation: Content[], _llumiverse_meta: {...} }.
+ * We add _llumiverse_system alongside these fields.
+ */
+function storeSystemInConversation(conversation: unknown, system: Content | undefined): unknown {
+    if (!system) return conversation;
+    if (typeof conversation === 'object' && conversation !== null) {
+        return { ...conversation as object, [SYSTEM_KEY]: system };
+    }
+    return conversation;
 }
 
 /**
