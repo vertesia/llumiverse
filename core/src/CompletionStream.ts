@@ -163,9 +163,9 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
             });
         }
 
-        // Return undefined for the ExecutionTokenUsage object if there is nothing to fill it with.
-        // Allows for checking for truthy-ness on token_usage, rather than it's internals. For testing and downstream usage.
-        const tokens: ExecutionTokenUsage | undefined = resultTokens ?
+        // Return undefined only if we never received any token data from the provider.
+        // Use !== undefined (not truthiness) because resultTokens === 0 is valid (e.g. empty output with stop).
+        const tokens: ExecutionTokenUsage | undefined = resultTokens !== undefined ?
             { prompt: promptTokens, result: resultTokens, total: resultTokens + promptTokens, } : undefined
 
         // Convert accumulated tool_use Map to array
