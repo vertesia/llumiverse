@@ -782,13 +782,13 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
 
-        // Restore system instruction from stored conversation if prompt doesn't have one
-        // (happens on resume when executeUserInput creates only a user segment)
-        if (!prompt.system || prompt.system.parts?.length === 0) {
-            const existingSystem = extractSystemFromConversation(options.conversation);
-            if (existingSystem) {
-                prompt.system = existingSystem;
-            }
+        // Restore system instruction from stored conversation on resume.
+        // The stored _llumiverse_system contains the complete system (interaction prompt + schema)
+        // from the initial call. Always prefer it over the prompt's system, which on resume only
+        // contains the schema instruction (no interaction system segments are present on resume).
+        const existingSystem = extractSystemFromConversation(options.conversation);
+        if (existingSystem) {
+            prompt.system = existingSystem;
         }
 
         let conversation = updateConversation(options.conversation, prompt.contents);
@@ -892,13 +892,13 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
 
-        // Restore system instruction from stored conversation if prompt doesn't have one
-        // (happens on resume when executeUserInput creates only a user segment)
-        if (!prompt.system || prompt.system.parts?.length === 0) {
-            const existingSystem = extractSystemFromConversation(options.conversation);
-            if (existingSystem) {
-                prompt.system = existingSystem;
-            }
+        // Restore system instruction from stored conversation on resume.
+        // The stored _llumiverse_system contains the complete system (interaction prompt + schema)
+        // from the initial call. Always prefer it over the prompt's system, which on resume only
+        // contains the schema instruction (no interaction system segments are present on resume).
+        const existingSystem = extractSystemFromConversation(options.conversation);
+        if (existingSystem) {
+            prompt.system = existingSystem;
         }
 
         // Include conversation history in prompt contents (same as non-streaming)
