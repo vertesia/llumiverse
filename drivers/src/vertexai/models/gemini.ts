@@ -1,16 +1,20 @@
 import type { ApiError } from "@google/genai";
 import {
     Content, FinishReason, FunctionCallingConfigMode, FunctionDeclaration, GenerateContentConfig, GenerateContentParameters,
-    GenerateContentResponseUsageMetadata, ProminentPeople,
-    HarmBlockThreshold, HarmCategory, Modality, Part, SafetySetting, Schema, ThinkingConfig, Tool, Type,
-    ThinkingLevel
+    GenerateContentResponseUsageMetadata,
+    HarmBlockThreshold, HarmCategory, Modality, Part,
+    ProminentPeople,
+    SafetySetting, Schema, ThinkingConfig,
+    ThinkingLevel,
+    Tool, Type
 } from "@google/genai";
 import {
     AIModel, Completion, CompletionChunkObject, CompletionResult, ExecutionOptions,
     ExecutionTokenUsage,
     getConversationMeta,
-    getMaxTokensLimitVertexAi,
+    getGeminiModelVersion,
     incrementConversationTurn,
+    isGeminiModelVersionGte,
     JSONObject, JSONSchema, LlumiverseError, LlumiverseErrorContext, ModelType, PromptOptions, PromptRole,
     PromptSegment, readStreamAsBase64, StatelessExecutionOptions,
     stripBase64ImagesFromConversation,
@@ -18,9 +22,7 @@ import {
     ToolDefinition, ToolUse,
     truncateLargeTextInConversation,
     unwrapConversationArray,
-    VertexAIGeminiOptions,
-    getGeminiModelVersion,
-    isGeminiModelVersionGte
+    VertexAIGeminiOptions
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import { GenerateContentPrompt, VertexAIDriver } from "../index.js";
@@ -97,8 +99,9 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
         //Model options
         temperature: model_options?.temperature,
         topP: model_options?.top_p,
-        maxOutputTokens: geminiMaxTokens(options),
+        maxOutputTokens: model_options?.max_tokens,
         stopSequences: model_options?.stop_sequence,
+        thinkingConfig: geminiThinkingConfig(options),
         imageConfig: {
             imageSize: model_options?.image_size,
             aspectRatio: model_options?.image_aspect_ratio,
@@ -126,7 +129,7 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
         temperature: model_options?.temperature,
         topP: model_options?.top_p,
         topK: model_options?.top_k,
-        maxOutputTokens: geminiMaxTokens(options),
+        maxOutputTokens: model_options?.max_tokens,
         stopSequences: model_options?.stop_sequence,
         presencePenalty: model_options?.presence_penalty,
         frequencyPenalty: model_options?.frequency_penalty,
@@ -557,22 +560,6 @@ const recoverableToolCallReasons = [
     'UNEXPECTED_TOOL_CALL', // Model called an undeclared tool
 ]
 
-function geminiMaxTokens(option: StatelessExecutionOptions) {
-    const model_options = option.model_options as VertexAIGeminiOptions | undefined;
-
-    // If max_tokens is explicitly set in model options, use it directly
-    if (model_options?.max_tokens) {
-        return model_options.max_tokens;
-    }
-
-    // If max_tokens is not set, but thinking budget is set.
-    // Use the maximum max_tokens.
-    if (model_options?.thinking_budget_tokens) {
-        return getMaxTokensLimitVertexAi(option.model);
-    }
-
-    return undefined;
-}
 
 function geminiThinkingBudget(option: StatelessExecutionOptions) {
     const model_options = option.model_options as VertexAIGeminiOptions | undefined;
@@ -1091,7 +1078,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         if (httpStatusCode === 503) return true; // Service unavailable
         if (httpStatusCode === 504) return true; // Gateway timeout
         if (httpStatusCode >= 500 && httpStatusCode < 600) return true; // Other 5xx server errors
-        
+
         // Non-retryable 4xx client errors
         if (httpStatusCode >= 400 && httpStatusCode < 500) return false;
 
