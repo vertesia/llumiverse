@@ -13,6 +13,12 @@ export interface OpenAICompatibleDriverOptions extends DriverOptions {
      * Example: https://api.example.com/v1
      */
     endpoint: string;
+
+    /**
+     * Custom headers to include in every request.
+     * Useful for Apigee proxies or custom auth schemes.
+     */
+    default_headers?: Record<string, string>;
 }
 
 /**
@@ -38,6 +44,7 @@ export class OpenAICompatibleDriver extends BaseOpenAIDriver {
         this.service = new OpenAI({
             apiKey: opts.apiKey,
             baseURL: opts.endpoint,
+            defaultHeaders: opts.default_headers,
         });
     }
 
