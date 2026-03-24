@@ -2,14 +2,19 @@ import type { ApiError } from "@google/genai";
 import {
     Content, FinishReason, FunctionCallingConfigMode, FunctionDeclaration, GenerateContentConfig, GenerateContentParameters,
     GenerateContentResponseUsageMetadata,
-    HarmBlockThreshold, HarmCategory, Modality, Part, SafetySetting, Schema, ThinkingConfig, Tool, Type
+    HarmBlockThreshold, HarmCategory, Modality, Part,
+    ProminentPeople,
+    SafetySetting, Schema, ThinkingConfig,
+    ThinkingLevel,
+    Tool, Type
 } from "@google/genai";
 import {
     AIModel, Completion, CompletionChunkObject, CompletionResult, ExecutionOptions,
     ExecutionTokenUsage,
     getConversationMeta,
-    getMaxTokensLimitVertexAi,
+    getGeminiModelVersion,
     incrementConversationTurn,
+    isGeminiModelVersionGte,
     JSONObject, JSONSchema, LlumiverseError, LlumiverseErrorContext, ModelType, PromptOptions, PromptRole,
     PromptSegment, readStreamAsBase64, StatelessExecutionOptions,
     stripBase64ImagesFromConversation,
@@ -55,6 +60,20 @@ const geminiSafetySettings: SafetySetting[] = [
     }
 ];
 
+// We do the mapping here rather than in common to avoid bringing the SDK into the common package.
+function getProminentPeopleOption(prominentPeople?: "PROMINENT_PEOPLE_UNSPECIFIED" | "ALLOW_PROMINENT_PEOPLE" | "BLOCK_PROMINENT_PEOPLE") {
+    switch (prominentPeople) {
+        case "ALLOW_PROMINENT_PEOPLE":
+            return ProminentPeople.ALLOW_PROMINENT_PEOPLE;
+        case "BLOCK_PROMINENT_PEOPLE":
+            return ProminentPeople.BLOCK_PROMINENT_PEOPLE;
+        case "PROMINENT_PEOPLE_UNSPECIFIED":
+            return ProminentPeople.PROMINENT_PEOPLE_UNSPECIFIED;
+        default:
+            return undefined;
+    }
+}
+
 function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentPrompt): GenerateContentParameters {
     const model_options = options.model_options as VertexAIGeminiOptions | undefined;
     const tools = getToolDefinitions(options.tools);
@@ -72,10 +91,6 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
 
     const useStructuredOutput = supportsStructuredOutput(options) && !tools;
 
-    const thinkingConfigNeeded = model_options?.include_thoughts
-        || model_options?.thinking_budget_tokens
-        || options.model.includes("gemini-2.5");
-
     const configNanoBanana: GenerateContentConfig = {
         systemInstruction: prompt.system,
         safetySettings: geminiSafetySettings,
@@ -84,10 +99,16 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
         //Model options
         temperature: model_options?.temperature,
         topP: model_options?.top_p,
-        maxOutputTokens: geminiMaxTokens(options),
+        maxOutputTokens: model_options?.max_tokens,
         stopSequences: model_options?.stop_sequence,
+        thinkingConfig: geminiThinkingConfig(options),
         imageConfig: {
+            imageSize: model_options?.image_size,
             aspectRatio: model_options?.image_aspect_ratio,
+            personGeneration: model_options?.person_generation,
+            prominentPeople: getProminentPeopleOption(model_options?.prominent_people),
+            outputMimeType: model_options?.output_mime_type,
+            outputCompressionQuality: model_options?.output_compression_quality,
         }
     }
 
@@ -108,12 +129,12 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
         temperature: model_options?.temperature,
         topP: model_options?.top_p,
         topK: model_options?.top_k,
-        maxOutputTokens: geminiMaxTokens(options),
+        maxOutputTokens: model_options?.max_tokens,
         stopSequences: model_options?.stop_sequence,
         presencePenalty: model_options?.presence_penalty,
         frequencyPenalty: model_options?.frequency_penalty,
         seed: model_options?.seed,
-        thinkingConfig: thinkingConfigNeeded ? geminiThinkingConfig(options) : undefined,
+        thinkingConfig: geminiThinkingConfig(options),
     }
 
     return {
@@ -539,25 +560,16 @@ const recoverableToolCallReasons = [
     'UNEXPECTED_TOOL_CALL', // Model called an undeclared tool
 ]
 
-function geminiMaxTokens(option: StatelessExecutionOptions) {
-    const model_options = option.model_options as VertexAIGeminiOptions | undefined;
-    if (model_options?.max_tokens) {
-        return model_options.max_tokens;
-    }
-    if (option.model.includes("gemini-2.5")) {
-        return getMaxTokensLimitVertexAi(option.model);
-    }
-    return undefined;
-}
 
 function geminiThinkingBudget(option: StatelessExecutionOptions) {
     const model_options = option.model_options as VertexAIGeminiOptions | undefined;
+    // If thinking_budget_tokens is explicitly set in model options, use it directly
     if (model_options?.thinking_budget_tokens) {
         return model_options.thinking_budget_tokens;
     }
     // Set minimum thinking level by default.
     // Docs: https://ai.google.dev/gemini-api/docs/thinking#set-budget
-    if (option.model.includes("gemini-2.5")) {
+    if (getGeminiModelVersion(option.model) == '2.5') {
         if (option.model.includes("pro")) {
             return 128;
         }
@@ -568,16 +580,32 @@ function geminiThinkingBudget(option: StatelessExecutionOptions) {
 
 function geminiThinkingConfig(option: StatelessExecutionOptions): ThinkingConfig | undefined {
     const model_options = option.model_options as VertexAIGeminiOptions | undefined;
+
+    // If thinking options are explicitly set in model options, use them directly
     const include_thoughts = model_options?.include_thoughts ?? false;
-    if (model_options?.thinking_budget_tokens) {
-        return { includeThoughts: include_thoughts, thinkingBudget: model_options.thinking_budget_tokens };
+    if (model_options?.thinking_budget_tokens || model_options?.thinking_level) {
+        return {
+            includeThoughts: include_thoughts,
+            thinkingBudget: model_options.thinking_budget_tokens,
+            thinkingLevel: model_options.thinking_level,
+        };
     }
 
-    // Set minimum thinking level by default.
+    // Set a low thinking level by default.
     // Docs: https://ai.google.dev/gemini-api/docs/thinking#set-budget
-    if (option.model.includes("gemini-2.5") || option.model.includes("gemini-3")) {
+    // https://docs.cloud.google.com/vertex-ai/generative-ai/docs/thinking
+    if (isGeminiModelVersionGte(option.model, '3.0')) {
+        return {
+            includeThoughts: include_thoughts,
+            thinkingLevel: ThinkingLevel.LOW
+        };
+    }
+    if (isGeminiModelVersionGte(option.model, '2.5')) {
         const thinking_budget_tokens = geminiThinkingBudget(option) ?? 0;
-        return { includeThoughts: include_thoughts, thinkingBudget: thinking_budget_tokens };
+        return {
+            includeThoughts: include_thoughts,
+            thinkingBudget: thinking_budget_tokens
+        };
     }
 }
 
@@ -782,6 +810,15 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
 
+        // Restore system instruction from stored conversation on resume.
+        // The stored _llumiverse_system contains the complete system (interaction prompt + schema)
+        // from the initial call. Always prefer it over the prompt's system, which on resume only
+        // contains the schema instruction (no interaction system segments are present on resume).
+        const existingSystem = extractSystemFromConversation(options.conversation);
+        if (existingSystem) {
+            prompt.system = existingSystem;
+        }
+
         let conversation = updateConversation(options.conversation, prompt.contents);
         prompt.contents = conversation;
 
@@ -861,12 +898,15 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             currentTurn,
         });
 
+        // Preserve system instruction in conversation for multi-turn support
+        const finalConversation = storeSystemInConversation(processedConversation, prompt.system);
+
         return {
             result: result && result.length > 0 ? result : [{ type: "text" as const, value: '' }],
             token_usage: token_usage,
             finish_reason: finish_reason,
             original_response: options.include_original_response ? response : undefined,
-            conversation: processedConversation,
+            conversation: finalConversation,
             tool_use
         } satisfies Completion;
     }
@@ -879,6 +919,15 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         }
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
+
+        // Restore system instruction from stored conversation on resume.
+        // The stored _llumiverse_system contains the complete system (interaction prompt + schema)
+        // from the initial call. Always prefer it over the prompt's system, which on resume only
+        // contains the schema instruction (no interaction system segments are present on resume).
+        const existingSystem = extractSystemFromConversation(options.conversation);
+        if (existingSystem) {
+            prompt.system = existingSystem;
+        }
 
         // Include conversation history in prompt contents (same as non-streaming)
         const conversation = updateConversation(options.conversation, prompt.contents);
@@ -1050,7 +1099,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         if (httpStatusCode === 503) return true; // Service unavailable
         if (httpStatusCode === 504) return true; // Gateway timeout
         if (httpStatusCode >= 500 && httpStatusCode < 600) return true; // Other 5xx server errors
-        
+
         // Non-retryable 4xx client errors
         if (httpStatusCode >= 400 && httpStatusCode < 500) return false;
 
@@ -1154,6 +1203,36 @@ function updateConversation(conversation: unknown, prompt: Content[]): Content[]
     const unwrapped = unwrapConversationArray<Content>(conversation);
     const convArray = unwrapped ?? (conversation as Content[] || []);
     return convArray.concat(prompt);
+}
+
+const SYSTEM_KEY = '_llumiverse_system';
+
+/**
+ * Extract the stored system instruction from a Gemini conversation object.
+ * Returns undefined if no system was stored.
+ */
+function extractSystemFromConversation(conversation: unknown): Content | undefined {
+    if (typeof conversation === 'object' && conversation !== null) {
+        const c = conversation as Record<string, unknown>;
+        if (c[SYSTEM_KEY] && typeof c[SYSTEM_KEY] === 'object') {
+            return c[SYSTEM_KEY] as Content;
+        }
+    }
+    return undefined;
+}
+
+/**
+ * Store the system instruction in the Gemini conversation wrapper object.
+ * The conversation is already wrapped by incrementConversationTurn into
+ * { _arrayConversation: Content[], _llumiverse_meta: {...} }.
+ * We add _llumiverse_system alongside these fields.
+ */
+function storeSystemInConversation(conversation: unknown, system: Content | undefined): unknown {
+    if (!system) return conversation;
+    if (typeof conversation === 'object' && conversation !== null) {
+        return { ...conversation as object, [SYSTEM_KEY]: system };
+    }
+    return conversation;
 }
 
 /**
