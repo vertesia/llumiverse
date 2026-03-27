@@ -86,9 +86,10 @@ export interface BedrockDriverOptions extends DriverOptions {
     training_role_arn?: string;
 
     /**
-     * The credentials to use to access AWS
+     * The credentials to use to access AWS (IAM access key + secret)
      */
     credentials?: AwsCredentialIdentity | Provider<AwsCredentialIdentity>;
+
 }
 
 //Used to get a max_token value when not specified in the model options. Claude requires it to be set.
