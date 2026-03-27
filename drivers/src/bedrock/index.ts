@@ -4,7 +4,7 @@ import {
 } from "@aws-sdk/client-bedrock";
 import { BedrockRuntime, ContentBlock, ConverseRequest, ConverseResponse, ConverseStreamOutput, InferenceConfiguration, Message, Tool } from "@aws-sdk/client-bedrock-runtime";
 import { S3Client } from "@aws-sdk/client-s3";
-import { AwsCredentialIdentity, Provider } from "@aws-sdk/types";
+import { AwsCredentialIdentity, Provider, TokenIdentity } from "@aws-sdk/types";
 import {
     AbstractDriver, AIModel,
     BedrockClaudeOptions,
@@ -86,9 +86,15 @@ export interface BedrockDriverOptions extends DriverOptions {
     training_role_arn?: string;
 
     /**
-     * The credentials to use to access AWS
+     * The credentials to use to access AWS (IAM access key + secret)
      */
     credentials?: AwsCredentialIdentity | Provider<AwsCredentialIdentity>;
+
+    /**
+     * Bearer token for Bedrock API key authentication.
+     * When provided, uses bearer token auth instead of SigV4.
+     */
+    token?: TokenIdentity;
 }
 
 //Used to get a max_token value when not specified in the model options. Claude requires it to be set.
@@ -166,6 +172,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             this._executor = new BedrockRuntime({
                 region: this.options.region,
                 credentials: this.options.credentials,
+                token: this.options.token,
             });
         }
         return this._executor;
@@ -176,6 +183,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             this._service = new Bedrock({
                 region: region,
                 credentials: this.options.credentials,
+                token: this.options.token,
             });
             this._service_region = region;
         }
