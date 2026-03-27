@@ -1,6 +1,6 @@
 {
     "name": "@llumiverse/common",
-    "version": "1.0.0-dev.20260224.234313Z",
+    "version": "1.0.0",
     "type": "module",
     "description": "Public types, enums and options used by Llumiverse API.",
     "files": [
