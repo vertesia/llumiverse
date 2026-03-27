@@ -20,11 +20,11 @@
     "license": "MIT",
     "devDependencies": {
         "rimraf": "^6.1.2",
-        "typescript": "^5.9.3"
+        "typescript": "^6.0.2"
     },
     "dependencies": {
         "@llumiverse/core": "workspace:*",
         "@llumiverse/drivers": "workspace:*",
-        "dotenv": "^16.6.1"
+        "dotenv": "^17.3.1"
     }
 }

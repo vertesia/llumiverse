@@ -46,10 +46,10 @@
         "togetherai"
     ],
     "devDependencies": {
-        "dotenv": "^16.6.1",
+        "dotenv": "^17.3.1",
         "rimraf": "^6.1.2",
         "ts-dual-module": "^0.6.3",
-        "typescript": "^5.9.3",
+        "typescript": "^6.0.2",
         "vitest": "^4.0.18"
     },
     "dependencies": {
