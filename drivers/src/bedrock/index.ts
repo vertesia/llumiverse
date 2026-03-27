@@ -4,7 +4,7 @@ import {
 } from "@aws-sdk/client-bedrock";
 import { BedrockRuntime, ContentBlock, ConverseRequest, ConverseResponse, ConverseStreamOutput, InferenceConfiguration, Message, Tool } from "@aws-sdk/client-bedrock-runtime";
 import { S3Client } from "@aws-sdk/client-s3";
-import { AwsCredentialIdentity, Provider, TokenIdentity } from "@aws-sdk/types";
+import { AwsCredentialIdentity, Provider } from "@aws-sdk/types";
 import {
     AbstractDriver, AIModel,
     BedrockClaudeOptions,
