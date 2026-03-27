@@ -90,11 +90,6 @@ export interface BedrockDriverOptions extends DriverOptions {
      */
     credentials?: AwsCredentialIdentity | Provider<AwsCredentialIdentity>;
 
-    /**
-     * Bearer token for Bedrock API key authentication.
-     * When provided, uses bearer token auth instead of SigV4.
-     */
-    token?: TokenIdentity;
 }
 
 //Used to get a max_token value when not specified in the model options. Claude requires it to be set.
@@ -172,7 +167,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             this._executor = new BedrockRuntime({
                 region: this.options.region,
                 credentials: this.options.credentials,
-                token: this.options.token,
             });
         }
         return this._executor;
@@ -183,7 +177,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             this._service = new Bedrock({
                 region: region,
                 credentials: this.options.credentials,
-                token: this.options.token,
             });
             this._service_region = region;
         }
