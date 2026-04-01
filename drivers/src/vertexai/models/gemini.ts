@@ -102,6 +102,7 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
         maxOutputTokens: model_options?.max_tokens,
         stopSequences: model_options?.stop_sequence,
         thinkingConfig: geminiThinkingConfig(options),
+        labels: options.labels,
         imageConfig: {
             imageSize: model_options?.image_size,
             aspectRatio: model_options?.image_aspect_ratio,
@@ -135,6 +136,7 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
         frequencyPenalty: model_options?.frequency_penalty,
         seed: model_options?.seed,
         thinkingConfig: geminiThinkingConfig(options),
+        labels: options.labels,
     }
 
     return {
