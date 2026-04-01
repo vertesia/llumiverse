@@ -516,6 +516,12 @@ export interface ExecutionOptions extends StatelessExecutionOptions {
      */
     conversation?: unknown | null;
     /**
+     * Labels for billing attribution and cost tracking.
+     * Passed through to provider APIs that support request-level labels (e.g. Vertex AI).
+     * Keys and values must be lowercase, max 64 characters, containing only letters, numbers, underscores, and dashes.
+     */
+    labels?: Record<string, string>;
+    /**
      * Number of turns to keep images in conversation history before stripping them.
      * - 0 (default): Strip images immediately after each turn
      * - 1: Keep images for current turn only, strip in next turn
