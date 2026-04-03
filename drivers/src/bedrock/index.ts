@@ -383,20 +383,29 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return completionResult;
     };
 
-    getExtractedStream(result: ConverseStreamOutput, _prompt?: BedrockPrompt, options?: ExecutionOptions): CompletionChunkObject {
+    getExtractedStream(result: ConverseStreamOutput, _prompt?: BedrockPrompt, options?: ExecutionOptions, streamingToolBlocks?: Map<number, { id: string; name: string }>): CompletionChunkObject {
         let output: string = "";
         let reasoning: string = "";
         let stop_reason = "";
         let token_usage: ExecutionTokenUsage | undefined;
+        let tool_use: ToolUse[] | undefined;
 
         // Check if we should include thoughts (always true for reasoning-only models like DeepSeek R1)
         const isReasoningModel = options?.model?.includes('deepseek') && options?.model?.includes('r1');
         const shouldIncludeThoughts = isReasoningModel || (options && (options.model_options as BedrockClaudeOptions)?.include_thoughts);
 
-        // Handle content block start events (for reasoning blocks)
+        // Handle content block start events (for reasoning blocks and tool use)
         if (result.contentBlockStart) {
-            // Handle redacted content at block start
-            if (result.contentBlockStart.start && 'reasoningContent' in result.contentBlockStart.start && shouldIncludeThoughts) {
+            if (result.contentBlockStart.start && 'toolUse' in result.contentBlockStart.start && result.contentBlockStart.start.toolUse) {
+                // Register new tool call block and emit an initial chunk so the accumulator can track it by id
+                const toolUseStart = result.contentBlockStart.start.toolUse;
+                const blockIndex = result.contentBlockStart.contentBlockIndex ?? -1;
+                const id = toolUseStart.toolUseId ?? '';
+                const name = toolUseStart.name ?? '';
+                streamingToolBlocks?.set(blockIndex, { id, name });
+                tool_use = [{ id, tool_name: name, tool_input: '' as any }];
+            } else if (result.contentBlockStart.start && 'reasoningContent' in result.contentBlockStart.start && shouldIncludeThoughts) {
+                // Handle redacted content at block start
                 const reasoningStart = result.contentBlockStart.start as any;
                 if (reasoningStart.reasoningContent?.redactedContent) {
                     const redactedData = new TextDecoder().decode(reasoningStart.reasoningContent.redactedContent);
@@ -405,10 +414,17 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
         }
 
-        // Handle content block deltas (text and reasoning)
+        // Handle content block deltas (text, reasoning, and tool use)
         if (result.contentBlockDelta) {
             const delta = result.contentBlockDelta.delta;
-            if (delta?.text) {
+            if (delta?.toolUse) {
+                // Emit tool input chunk; the accumulator in DefaultCompletionStream concatenates these strings
+                const blockIndex = result.contentBlockDelta.contentBlockIndex ?? -1;
+                const toolBlock = streamingToolBlocks?.get(blockIndex);
+                if (toolBlock && delta.toolUse.input !== undefined) {
+                    tool_use = [{ id: toolBlock.id, tool_name: '', tool_input: delta.toolUse.input as any }];
+                }
+            } else if (delta?.text) {
                 output = delta.text;
             } else if (delta?.reasoningContent && shouldIncludeThoughts) {
                 if (delta.reasoningContent.text) {
@@ -433,7 +449,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         // Handle content block stop events
         if (result.contentBlockStop) {
-            // Content block ended - could be end of reasoning or text block
+            // Clean up tool block tracking entry
+            const blockIndex = result.contentBlockStop.contentBlockIndex ?? -1;
+            streamingToolBlocks?.delete(blockIndex);
             // Add minimal spacing for reasoning blocks if not already present
             if (reasoning && !reasoning.endsWith('\n\n') && shouldIncludeThoughts) {
                 reasoning += '\n\n';
@@ -456,6 +474,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             result: reasoning + output ? [{ type: "text", value: reasoning + output }] : [],
             token_usage: token_usage,
             finish_reason: converseFinishReason(stop_reason),
+            tool_use,
         };
 
         return completionResult;
@@ -825,8 +844,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 throw new Error("[Bedrock] Stream not found in response");
             }
 
+            const streamingToolBlocks = new Map<number, { id: string; name: string }>();
             return transformAsyncIterator(stream, (streamSegment: ConverseStreamOutput) => {
-                return this.getExtractedStream(streamSegment, conversePrompt, options);
+                return this.getExtractedStream(streamSegment, conversePrompt, options, streamingToolBlocks);
             });
 
         }).catch((err) => {
