@@ -369,6 +369,9 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
 
         // Track current tool use being built from streaming
         let currentToolUse: { id: string; name: string; inputJson: string } | null = null;
+        // Deferred spacing after a thinking block — emitted only when real text follows,
+        // so it doesn't leak into the output when a tool call comes after thinking.
+        let pendingSpacing = false;
 
         const stream = asyncMap(response_stream, async (streamEvent: RawMessageStreamEvent) => {
             switch (streamEvent.type) {
@@ -415,10 +418,13 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                 case "content_block_delta":
                     // Handle different delta types
                     switch (streamEvent.delta.type) {
-                        case "text_delta":
+                        case "text_delta": {
+                            const prefix = pendingSpacing ? '\n\n' : '';
+                            pendingSpacing = false;
                             return {
-                                result: streamEvent.delta.text ? [{ type: "text", value: streamEvent.delta.text }] : []
+                                result: streamEvent.delta.text ? [{ type: "text", value: prefix + streamEvent.delta.text }] : []
                             } satisfies CompletionChunkObject;
+                        }
                         case "input_json_delta":
                             // Accumulate tool input JSON
                             if (currentToolUse && streamEvent.delta.partial_json) {
@@ -440,25 +446,20 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                             }
                             break;
                         case "signature_delta":
-                            // Signature deltas, signify the end of the thoughts.
+                            // End of thinking block — defer spacing until real text follows,
+                            // so it doesn't leak when a tool call comes next.
                             if (model_options?.include_thoughts) {
-                                return {
-                                    result: [{ type: "text", value: '\n\n' }], // Double newline for more spacing
-                                } satisfies CompletionChunkObject;
+                                pendingSpacing = true;
                             }
                             break;
                     }
                     break;
                 case "content_block_stop":
-                    // Reset current tool use tracking when block ends
+                    // Reset tool use tracking; spacing is handled via pendingSpacing
                     if (currentToolUse) {
                         currentToolUse = null;
-                    }
-                    // Handle the end of content blocks, for redacted thinking blocks
-                    if (model_options?.include_thoughts) {
-                        return {
-                            result: [{ type: "text", value: '\n\n' }] // Add double newline for spacing
-                        } satisfies CompletionChunkObject;
+                        // Tool call followed thinking — discard any pending spacing so it doesn't leak
+                        pendingSpacing = false;
                     }
                     break;
             }
