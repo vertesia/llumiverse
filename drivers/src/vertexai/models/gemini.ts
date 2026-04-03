@@ -79,13 +79,15 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
     const tools = getToolDefinitions(options.tools);
 
     // When no tools are provided but conversation contains functionCall/functionResponse parts
-    // (e.g. checkpoint summary calls), convert them to text to avoid API errors
-    if (!tools && prompt.contents) {
-        const hasToolParts = prompt.contents.some(c =>
+    // (e.g. checkpoint summary calls), convert them to text to avoid API errors.
+    // Use a local variable to avoid mutating the caller's conversation object.
+    let payloadContents = prompt.contents;
+    if (!tools && payloadContents) {
+        const hasToolParts = payloadContents.some(c =>
             c.parts?.some(p => p.functionCall || p.functionResponse)
         );
         if (hasToolParts) {
-            prompt.contents = convertGeminiFunctionPartsToText(prompt.contents);
+            payloadContents = convertGeminiFunctionPartsToText(payloadContents);
         }
     }
 
@@ -141,7 +143,7 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
 
     return {
         model: options.model,
-        contents: prompt.contents,
+        contents: payloadContents,
         config: options.model.toLowerCase().includes("image") ? configNanoBanana : config,
     };
 }
