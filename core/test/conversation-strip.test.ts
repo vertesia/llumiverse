@@ -671,6 +671,94 @@ describe('truncateLargeTextInConversation', () => {
         expect(truncateLargeTextInConversation(null, { textMaxTokens: 100 })).toBeNull();
         expect(truncateLargeTextInConversation(undefined, { textMaxTokens: 100 })).toBeUndefined();
     });
+
+    test('should preserve Anthropic base64 image blocks in tool results', () => {
+        const largeBase64 = 'a'.repeat(200000); // well over any token limit
+        const input = {
+            messages: [{
+                role: 'user',
+                content: [{
+                    type: 'tool_result',
+                    tool_use_id: 'abc123',
+                    content: [
+                        { type: 'text', text: 'x'.repeat(50000) },
+                        {
+                            type: 'image',
+                            source: {
+                                type: 'base64',
+                                data: largeBase64,
+                                media_type: 'image/jpeg'
+                            }
+                        }
+                    ]
+                }]
+            }]
+        };
+
+        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as any;
+
+        const toolResult = result.messages[0].content[0];
+        // Text should be truncated
+        expect(toolResult.content[0].text.length).toBeLessThan(50000);
+        // Base64 image block should be completely untouched
+        expect(toolResult.content[1].source.data).toBe(largeBase64);
+        expect(toolResult.content[1].source.data.length).toBe(200000);
+    });
+
+    test('should preserve Anthropic base64 document blocks', () => {
+        const largeBase64 = 'b'.repeat(200000);
+        const input = {
+            messages: [{
+                role: 'user',
+                content: [{
+                    type: 'document',
+                    source: {
+                        type: 'base64',
+                        data: largeBase64,
+                        media_type: 'application/pdf'
+                    }
+                }]
+            }]
+        };
+
+        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as any;
+
+        expect(result.messages[0].content[0].source.data).toBe(largeBase64);
+    });
+
+    test('should preserve OpenAI base64 image blocks', () => {
+        const largeBase64 = 'data:image/png;base64,' + 'c'.repeat(200000);
+        const input = {
+            messages: [{
+                content: [{
+                    type: 'image_url',
+                    image_url: { url: largeBase64 }
+                }]
+            }]
+        };
+
+        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as any;
+
+        expect(result.messages[0].content[0].image_url.url).toBe(largeBase64);
+    });
+
+    test('should preserve Bedrock serialized image blocks', () => {
+        const largeBase64 = 'd'.repeat(200000);
+        const input = {
+            messages: [{
+                content: [{
+                    image: {
+                        format: 'png',
+                        source: { bytes: { _base64: largeBase64 } }
+                    }
+                }]
+            }]
+        };
+
+        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as any;
+
+        expect(result.messages[0].content[0].image.source.bytes._base64).toBe(largeBase64);
+    });
 });
 
 describe('conversation serialization safety', () => {
