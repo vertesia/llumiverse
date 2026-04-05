@@ -4,8 +4,6 @@ import {
 } from "@llumiverse/core";
 import { VertexAIDriver } from "../index.js";
 
-// Import the helper module for converting arbitrary protobuf.Value objects
-import { protos, helpers } from '@google-cloud/aiplatform';
 
 interface ImagenBaseReference {
     referenceType: "REFERENCE_TYPE_RAW" | "REFERENCE_TYPE_MASK" | "REFERENCE_TYPE_SUBJECT" |
@@ -338,12 +336,6 @@ export class ImagenModelDefinition {
         // TODO: make location configurable, fixed to us-central1 for now
         const endpoint = `projects/${driver.options.project}/locations/us-central1/publishers/google/models/${modelName}`;
 
-        const instanceValue = helpers.toValue(prompt);
-        if (!instanceValue) {
-            throw new Error('No instance value found');
-        }
-        const instances = [instanceValue];
-
         let parameter: any = getImagenParameters(taskType, options.model_options ?? { _option_id: "vertexai-imagen" });
         parameter.negativePrompt = prompt.negativePrompt ?? undefined;
 
@@ -354,27 +346,17 @@ export class ImagenModelDefinition {
             Object.entries(parameter).filter(([_, v]) => v !== undefined)
         ) as any;
 
-        const parameters = helpers.toValue(parameter);
-
-        const request: protos.google.cloud.aiplatform.v1.IPredictRequest = {
-            endpoint,
-            instances,
-            parameters,
-        };
-
-        const client = await driver.getImagenClient();
-
-        // Predict request
-        const [response] = await client.predict(request, { timeout: 120000 * numberOfImages }); //Extended timeout for image generation
+        // Use REST API instead of gRPC PredictionServiceClient
+        const response = await driver.predict(endpoint, [prompt], parameter, 120000 * numberOfImages);
         const predictions = response.predictions;
 
         if (!predictions) {
             throw new Error('No predictions found');
         }
 
-        // Extract base64 encoded images from predictions
-        const images: string[] = predictions.map(prediction =>
-            prediction.structValue?.fields?.bytesBase64Encoded?.stringValue ?? ''
+        // Extract base64 encoded images from predictions (REST returns plain JSON, not protobuf)
+        const images: string[] = predictions.map((prediction: any) =>
+            prediction.bytesBase64Encoded ?? ''
         );
 
         return {
