@@ -499,11 +499,39 @@ export function truncateLargeTextInConversation(obj: unknown, options?: StripOpt
     return truncateLargeTextInternal(obj, maxChars);
 }
 
+function shouldPreserveMediaPayload(obj: unknown): boolean {
+    if (typeof obj !== 'object' || obj === null) return false;
+
+    const o = obj as Record<string, unknown>;
+
+    // Preserved Bedrock binary blocks and their serialized storage wrapper.
+    if (isBedrockImageBlock(obj) || isSerializedBedrockImageBlock(obj) ||
+        isBedrockDocumentBlock(obj) || isSerializedBedrockDocumentBlock(obj) ||
+        isBedrockVideoBlock(obj) || isSerializedBedrockVideoBlock(obj)) {
+        return true;
+    }
+
+    if (typeof o._base64 === 'string' && Object.keys(o).length === 1) {
+        return true;
+    }
+
+    // Preserved base64 media payloads for OpenAI, Gemini, and Anthropic/Claude.
+    if (isOpenAIBase64ImageBlock(obj) || isGeminiInlineDataBlock(obj) ||
+        isAnthropicBase64ImageBlock(obj) || isAnthropicBase64DocumentBlock(obj)) {
+        return true;
+    }
+
+    return false;
+}
+
 function truncateLargeTextInternal(obj: unknown, maxChars: number): unknown {
     if (obj === null || obj === undefined) return obj;
 
     // Truncate large strings
     if (typeof obj === 'string') {
+        if (obj.startsWith('data:image/') && obj.includes(';base64,')) {
+            return obj;
+        }
         if (obj.length > maxChars) {
             return obj.substring(0, maxChars) + TEXT_TRUNCATED_MARKER;
         }
@@ -515,6 +543,9 @@ function truncateLargeTextInternal(obj: unknown, maxChars: number): unknown {
     }
 
     if (typeof obj === 'object') {
+        if (shouldPreserveMediaPayload(obj)) {
+            return obj;
+        }
         const result: Record<string, unknown> = {};
         for (const [key, value] of Object.entries(obj)) {
             // Preserve metadata without truncation
