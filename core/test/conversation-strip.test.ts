@@ -759,6 +759,84 @@ describe('truncateLargeTextInConversation', () => {
 
         expect(result.messages[0].content[0].image.source.bytes._base64).toBe(largeBase64);
     });
+
+    test('should not truncate retained OpenAI base64 image payloads before image stripping threshold', () => {
+        const originalUrl = `data:image/png;base64,${'a'.repeat(50000)}`;
+        let conversation: any = {
+            messages: [{
+                role: 'user',
+                content: [{
+                    type: 'image_url',
+                    image_url: { url: originalUrl }
+                }]
+            }]
+        };
+
+        conversation = incrementConversationTurn(conversation);
+        const currentTurn = getConversationMeta(conversation).turnNumber;
+        const retainedConversation = stripBase64ImagesFromConversation(conversation, {
+            keepForTurns: 3,
+            currentTurn,
+        }) as any;
+
+        const result = truncateLargeTextInConversation(retainedConversation, { textMaxTokens: 5000 }) as any;
+
+        expect(result.messages[0].content[0].image_url.url).toBe(originalUrl);
+    });
+
+    test('should not truncate retained Gemini inlineData image payloads before image stripping threshold', () => {
+        const originalData = 'b'.repeat(50000);
+        let conversation: any = {
+            contents: [{
+                role: 'user',
+                parts: [{
+                    inlineData: {
+                        mimeType: 'image/png',
+                        data: originalData
+                    }
+                }]
+            }]
+        };
+
+        conversation = incrementConversationTurn(conversation);
+        const currentTurn = getConversationMeta(conversation).turnNumber;
+        const retainedConversation = stripBase64ImagesFromConversation(conversation, {
+            keepForTurns: 3,
+            currentTurn,
+        }) as any;
+
+        const result = truncateLargeTextInConversation(retainedConversation, { textMaxTokens: 5000 }) as any;
+
+        expect(result.contents[0].parts[0].inlineData.data).toBe(originalData);
+    });
+
+    test('should not truncate retained Claude base64 image payloads before image stripping threshold', () => {
+        const originalData = 'c'.repeat(50000);
+        let conversation: any = {
+            messages: [{
+                role: 'user',
+                content: [{
+                    type: 'image',
+                    source: {
+                        type: 'base64',
+                        media_type: 'image/png',
+                        data: originalData
+                    }
+                }]
+            }]
+        };
+
+        conversation = incrementConversationTurn(conversation);
+        const currentTurn = getConversationMeta(conversation).turnNumber;
+        const retainedConversation = stripBase64ImagesFromConversation(conversation, {
+            keepForTurns: 3,
+            currentTurn,
+        }) as any;
+
+        const result = truncateLargeTextInConversation(retainedConversation, { textMaxTokens: 5000 }) as any;
+
+        expect(result.messages[0].content[0].source.data).toBe(originalData);
+    });
 });
 
 describe('conversation serialization safety', () => {

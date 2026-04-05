@@ -499,22 +499,29 @@ export function truncateLargeTextInConversation(obj: unknown, options?: StripOpt
     return truncateLargeTextInternal(obj, maxChars);
 }
 
-/**
- * Check if an item is any known binary/base64 content block that should
- * NOT be truncated. These blocks are handled separately by the image/binary
- * stripping functions once their turn threshold is reached.
- */
-function isBinaryOrBase64Block(item: unknown): boolean {
-    return isAnthropicBase64ImageBlock(item)
-        || isAnthropicBase64DocumentBlock(item)
-        || isOpenAIBase64ImageBlock(item)
-        || isGeminiInlineDataBlock(item)
-        || isBedrockImageBlock(item)
-        || isSerializedBedrockImageBlock(item)
-        || isBedrockDocumentBlock(item)
-        || isSerializedBedrockDocumentBlock(item)
-        || isBedrockVideoBlock(item)
-        || isSerializedBedrockVideoBlock(item);
+function shouldPreserveMediaPayload(obj: unknown): boolean {
+    if (typeof obj !== 'object' || obj === null) return false;
+
+    const o = obj as Record<string, unknown>;
+
+    // Preserved Bedrock binary blocks and their serialized storage wrapper.
+    if (isBedrockImageBlock(obj) || isSerializedBedrockImageBlock(obj) ||
+        isBedrockDocumentBlock(obj) || isSerializedBedrockDocumentBlock(obj) ||
+        isBedrockVideoBlock(obj) || isSerializedBedrockVideoBlock(obj)) {
+        return true;
+    }
+
+    if (typeof o._base64 === 'string' && Object.keys(o).length === 1) {
+        return true;
+    }
+
+    // Preserved base64 media payloads for OpenAI, Gemini, and Anthropic/Claude.
+    if (isOpenAIBase64ImageBlock(obj) || isGeminiInlineDataBlock(obj) ||
+        isAnthropicBase64ImageBlock(obj) || isAnthropicBase64DocumentBlock(obj)) {
+        return true;
+    }
+
+    return false;
 }
 
 function truncateLargeTextInternal(obj: unknown, maxChars: number): unknown {
@@ -522,6 +529,9 @@ function truncateLargeTextInternal(obj: unknown, maxChars: number): unknown {
 
     // Truncate large strings
     if (typeof obj === 'string') {
+        if (obj.startsWith('data:image/') && obj.includes(';base64,')) {
+            return obj;
+        }
         if (obj.length > maxChars) {
             return obj.substring(0, maxChars) + TEXT_TRUNCATED_MARKER;
         }
@@ -529,17 +539,13 @@ function truncateLargeTextInternal(obj: unknown, maxChars: number): unknown {
     }
 
     if (Array.isArray(obj)) {
-        return obj.map(item => {
-            // Skip binary/base64 content blocks — these are managed by
-            // stripBase64ImagesFromConversation / stripBinaryFromConversation
-            if (isBinaryOrBase64Block(item)) {
-                return item;
-            }
-            return truncateLargeTextInternal(item, maxChars);
-        });
+        return obj.map(item => truncateLargeTextInternal(item, maxChars));
     }
 
     if (typeof obj === 'object') {
+        if (shouldPreserveMediaPayload(obj)) {
+            return obj;
+        }
         const result: Record<string, unknown> = {};
         for (const [key, value] of Object.entries(obj)) {
             // Preserve metadata without truncation
