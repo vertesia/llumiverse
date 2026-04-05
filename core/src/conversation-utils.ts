@@ -13,7 +13,7 @@
 const IMAGE_PLACEHOLDER = '[Image removed from conversation history]';
 const DOCUMENT_PLACEHOLDER = '[Document removed from conversation history]';
 const VIDEO_PLACEHOLDER = '[Video removed from conversation history]';
-const TEXT_TRUNCATED_MARKER = '\n\n[Content truncated - exceeded token limit]';
+// const TEXT_TRUNCATED_MARKER = '\n\n[Content truncated - exceeded token limit]';
 
 /** Metadata key used to store turn information in conversations */
 const META_KEY = '_llumiverse_meta';
@@ -499,34 +499,11 @@ export function truncateLargeTextInConversation(obj: unknown, options?: StripOpt
     return truncateLargeTextInternal(obj, maxChars);
 }
 
-function truncateLargeTextInternal(obj: unknown, maxChars: number): unknown {
-    if (obj === null || obj === undefined) return obj;
-
-    // Truncate large strings
-    if (typeof obj === 'string') {
-        if (obj.length > maxChars) {
-            return obj.substring(0, maxChars) + TEXT_TRUNCATED_MARKER;
-        }
-        return obj;
-    }
-
-    if (Array.isArray(obj)) {
-        return obj.map(item => truncateLargeTextInternal(item, maxChars));
-    }
-
-    if (typeof obj === 'object') {
-        const result: Record<string, unknown> = {};
-        for (const [key, value] of Object.entries(obj)) {
-            // Preserve metadata without truncation
-            if (key === META_KEY) {
-                result[key] = value;
-            } else {
-                result[key] = truncateLargeTextInternal(value, maxChars);
-            }
-        }
-        return result;
-    }
-
+function truncateLargeTextInternal(obj: unknown, _maxChars: number): unknown {
+    // TODO: Temporarily disabled to diagnose base64 image corruption.
+    // This function truncates ALL strings (including base64 image data in
+    // Anthropic image blocks) which corrupts them and causes
+    // "invalid base64 data" errors on conversation replay.
     return obj;
 }
 
