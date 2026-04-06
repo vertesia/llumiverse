@@ -1,6 +1,5 @@
 import type { ClientOptions as AnthropicVertexClientOptions } from "@anthropic-ai/vertex-sdk";
 import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
-import { PredictionServiceClient, v1beta1 } from "@google-cloud/aiplatform";
 import { Content, GoogleGenAI, Model } from "@google/genai";
 import {
     AIModel,
@@ -55,13 +54,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     static PROVIDER = "vertexai";
     provider = VertexAIDriver.PROVIDER;
 
-    aiplatform: v1beta1.ModelServiceClient | undefined;
     anthropicClient: AnthropicVertex | undefined;
     fetchClient: FetchClient | undefined;
     googleGenAI: GoogleGenAI | undefined;
     llamaClient: FetchClient & { region?: string } | undefined;
-    modelGarden: v1beta1.ModelGardenServiceClient | undefined;
-    imagenClient: PredictionServiceClient | undefined;
 
     googleAuth: GoogleAuth<any>;
     private authClientPromise: Promise<AuthClient> | undefined;
@@ -69,13 +65,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     constructor(options: VertexAIDriverOptions) {
         super(options);
 
-        this.aiplatform = undefined;
         this.anthropicClient = undefined;
         this.fetchClient = undefined
         this.googleGenAI = undefined;
-        this.modelGarden = undefined;
         this.llamaClient = undefined;
-        this.imagenClient = undefined;
 
         this.googleAuth = new GoogleAuth(options.googleAuthOptions) as GoogleAuth<any>;
         this.authClientPromise = undefined;
@@ -179,44 +172,77 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return this.anthropicClient;
     }
 
-    public async getAIPlatformClient(): Promise<v1beta1.ModelServiceClient> {
-        //Lazy initialization
-        if (!this.aiplatform) {
-            const authClient = await this.getAuthClient();
-            this.aiplatform = new v1beta1.ModelServiceClient({
-                projectId: this.options.project,
-                apiEndpoint: `${this.options.region}-${API_BASE_PATH}`,
-                authClient,
-            });
-        }
-        return this.aiplatform;
+    /**
+     * List models from the AI Platform (project-specific models).
+     * Uses REST API instead of gRPC to avoid the heavy @google-cloud/aiplatform package (108MB).
+     */
+    public async listAIPlatformModels(): Promise<{ name?: string; displayName?: string }[]> {
+        const client = this.getRestClient(this.options.region);
+        const response = await client.get(`/models`) as { models?: { name?: string; displayName?: string }[] };
+        return response.models ?? [];
     }
 
-    public async getModelGardenClient(): Promise<v1beta1.ModelGardenServiceClient> {
-        //Lazy initialization
-        if (!this.modelGarden) {
-            const authClient = await this.getAuthClient();
-            this.modelGarden = new v1beta1.ModelGardenServiceClient({
-                projectId: this.options.project,
-                apiEndpoint: `${this.options.region}-${API_BASE_PATH}`,
-                authClient,
-            });
+    /**
+     * List publisher models from the Model Garden.
+     * Uses REST API (v1beta1) instead of gRPC.
+     */
+    public async listPublisherModels(publisher: string): Promise<{ name?: string }[]> {
+        const token = await this.googleAuth.getAccessToken();
+        const url = `https://${this.options.region}-${API_BASE_PATH}/v1beta1/publishers/${publisher}/models?orderBy=name&view=PUBLISHER_MODEL_VIEW_BASIC`;
+        const response = await fetch(url, {
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+            },
+        });
+        if (!response.ok) {
+            throw new Error(`Failed to list publisher models for ${publisher}: ${response.status} ${response.statusText}`);
         }
-        return this.modelGarden;
+        const data = await response.json() as { publisherModels?: { name?: string }[] };
+        return data.publisherModels ?? [];
     }
 
-    public async getImagenClient(): Promise<PredictionServiceClient> {
-        //Lazy initialization
-        if (!this.imagenClient) {
-            // TODO: make location configurable, fixed to us-central1 for now
-            const authClient = await this.getAuthClient();
-            this.imagenClient = new PredictionServiceClient({
-                projectId: this.options.project,
-                apiEndpoint: `us-central1-${API_BASE_PATH}`,
-                authClient,
+    /**
+     * Send a predict request (used for Imagen image generation).
+     * Uses REST API instead of gRPC PredictionServiceClient.
+     */
+    public async predict(endpoint: string, instances: unknown[], parameters: unknown, timeoutMs?: number): Promise<{ predictions?: unknown[] }> {
+        const location = 'us-central1'; // TODO: make configurable
+        const token = await this.googleAuth.getAccessToken();
+        const url = `https://${location}-${API_BASE_PATH}/v1/${endpoint}:predict`;
+        const controller = new AbortController();
+        const timeout = timeoutMs ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ instances, parameters }),
+                signal: controller.signal,
             });
+            if (!response.ok) {
+                const body = await response.text();
+                throw new Error(`Predict request failed: ${response.status} ${response.statusText}: ${body}`);
+            }
+            return await response.json() as { predictions?: unknown[] };
+        } finally {
+            if (timeout) clearTimeout(timeout);
         }
-        return this.imagenClient;
+    }
+
+    /**
+     * Get a REST client for a specific region (reuses getFetchClient pattern).
+     */
+    private getRestClient(region: string): FetchClient {
+        return createFetchClient({
+            region,
+            project: this.options.project,
+        }).withAuthCallback(async () => {
+            const token = await this.googleAuth.getAccessToken();
+            return `Bearer ${token}`;
+        });
     }
 
     validateResult(result: Completion, options: ExecutionOptions) {
@@ -484,9 +510,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     async listModels(_params?: ModelSearchPayload): Promise<AIModel<string>[]> {
-        // Get clients
-        const modelGarden = await this.getModelGardenClient();
-        const aiplatform = await this.getAIPlatformClient();
         const globalGenAiClient = this.getGoogleGenAIClient("global");
 
         let models: AIModel<string>[] = [];
@@ -521,16 +544,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             meta: [],
         };
 
-        // Start all network requests in parallel
-        const aiplatformPromise = aiplatform.listModels({
-            parent: `projects/${this.options.project}/locations/${this.options.region}`,
-        });
+        // Start all network requests in parallel using REST APIs
+        const aiplatformPromise = this.listAIPlatformModels();
         const publisherPromises = publishers.map(async (publisher) => {
-            const [response] = await modelGarden.listPublisherModels({
-                parent: `publishers/${publisher}`,
-                orderBy: "name",
-                listAllVersions: true,
-            });
+            const response = await this.listPublisherModels(publisher);
             return { publisher, response };
         });
 
@@ -543,9 +560,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         ]);
 
         // Process aiplatform models, project specific models
-        const [response] = aiplatformResult;
         models = models.concat(
-            response.map((model) => ({
+            aiplatformResult.map((model) => ({
                 id: model.name?.split("/").pop() ?? "",
                 name: model.displayName ?? "",
                 provider: "vertexai"
@@ -713,11 +729,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
     /**
      * Cleanup Google Cloud clients when the driver is evicted from the cache.
+     * REST-based clients don't need explicit cleanup.
      */
     destroy(): void {
-        this.aiplatform?.close();
-        this.modelGarden?.close();
-        this.imagenClient?.close();
+        // No gRPC clients to close — all API calls use REST/fetch
     }
 
     /**
