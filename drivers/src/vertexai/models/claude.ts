@@ -708,12 +708,18 @@ export function mergeConsecutiveUserMessages(messages: MessageParam[]): MessageP
  * @param response
  * @returns
  */
-function updateConversation(conversation: ClaudePrompt | undefined | null, prompt: ClaudePrompt): ClaudePrompt {
+export function updateConversation(conversation: ClaudePrompt | undefined | null, prompt: ClaudePrompt): ClaudePrompt {
     const baseSystemMessages = conversation?.system || [];
     const baseMessages = conversation?.messages || [];
     const system = baseSystemMessages.concat(prompt.system || []);
-    // Merge consecutive user messages to ensure tool_result blocks are properly grouped
-    const mergedMessages = mergeConsecutiveUserMessages(baseMessages.concat(prompt.messages || []));
+    // Sanitize first, then merge. Order matters: an empty assistant message (e.g. from interrupted
+    // streaming) between two tool-result user messages acts as a false separator. If merge runs
+    // first, those messages look non-consecutive and fixOrphanedToolUse injects a synthetic result
+    // into the first one; when sanitize later removes the empty assistant, the second user message
+    // ends up with an orphaned tool_result that Vertex AI rejects:
+    // "unexpected tool_use_id found in tool_result blocks".
+    const combined = sanitizeMessages(baseMessages.concat(prompt.messages || []));
+    const mergedMessages = mergeConsecutiveUserMessages(combined);
     return {
         messages: mergedMessages,
         system: system.length > 0 ? system : undefined // If system is empty, set to undefined
@@ -728,7 +734,7 @@ function updateConversation(conversation: ClaudePrompt | undefined | null, promp
  * - Filters out empty text blocks from each message's content
  * - Removes messages entirely if they have no content after filtering
  */
-function sanitizeMessages(messages: MessageParam[]): MessageParam[] {
+export function sanitizeMessages(messages: MessageParam[]): MessageParam[] {
     const result: MessageParam[] = [];
 
     for (const message of messages) {

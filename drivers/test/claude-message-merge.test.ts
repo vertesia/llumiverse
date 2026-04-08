@@ -12,7 +12,12 @@
  */
 
 import { describe, expect, test } from 'vitest';
-import { mergeConsecutiveUserMessages } from '../src/vertexai/models/claude.js';
+import {
+    fixOrphanedToolUse,
+    mergeConsecutiveUserMessages,
+    sanitizeMessages,
+    updateConversation,
+} from '../src/vertexai/models/claude.js';
 import { MessageParam } from '@anthropic-ai/sdk/resources/index.js';
 
 describe('mergeConsecutiveUserMessages', () => {
@@ -291,5 +296,52 @@ describe('mergeConsecutiveUserMessages', () => {
         const toolResults2 = result[6].content as Array<{ type: string; tool_use_id?: string }>;
         expect(toolResults2).toHaveLength(2);
         expect(toolResults2.map(c => c.tool_use_id)).toEqual(['toolu_doc', 'toolu_artifact']);
+    });
+
+    test('updateConversation sanitizes before merging split tool-results across an empty assistant separator', () => {
+        const baseMessages: MessageParam[] = [
+                {
+                    role: 'assistant',
+                    content: [
+                        { type: 'tool_use', id: 'tool_A', name: 'search', input: {} },
+                        { type: 'tool_use', id: 'tool_B', name: 'fetch', input: {} },
+                    ]
+                },
+                {
+                    role: 'user',
+                    content: [{ type: 'tool_result', tool_use_id: 'tool_A', content: 'Result A' }]
+                },
+                {
+                    role: 'assistant',
+                    content: [{ type: 'text', text: '' }]
+                },
+            ];
+
+        const baseConversation = {
+            messages: baseMessages,
+            system: undefined,
+        };
+
+        const promptMessages: MessageParam[] = [
+                {
+                    role: 'user',
+                    content: [{ type: 'tool_result', tool_use_id: 'tool_B', content: 'Result B' }]
+                },
+            ];
+
+        const prompt = {
+            messages: promptMessages,
+            system: undefined,
+        };
+
+        const updated = updateConversation(baseConversation, prompt);
+        const fixed = fixOrphanedToolUse(updated.messages);
+
+        expect(updated.messages).toHaveLength(2);
+        expect(updated.messages[0].role).toBe('assistant');
+        expect(updated.messages[1].role).toBe('user');
+
+        const userContent = fixed[1].content as Array<{ type: string; tool_use_id?: string }>;
+        expect(userContent.map(block => block.tool_use_id)).toEqual(['tool_A', 'tool_B']);
     });
 });
