@@ -334,11 +334,11 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
             tool_use,
             token_usage: {
                 prompt_new: result.usage.input_tokens,
-                prompt: (result.usage.cache_read_input_tokens ?? 0) + result.usage.input_tokens,
+                prompt: result.usage.input_tokens + (result.usage.cache_read_input_tokens ?? 0) + (result.usage.cache_creation_input_tokens ?? 0),
                 result: result.usage.output_tokens,
                 prompt_cached: result.usage.cache_read_input_tokens ?? undefined,
                 prompt_cache_write: result.usage.cache_creation_input_tokens ?? undefined,
-                total: result.usage.input_tokens + result.usage.output_tokens + (result.usage.cache_read_input_tokens ?? 0),
+                total: result.usage.input_tokens + result.usage.output_tokens + (result.usage.cache_read_input_tokens ?? 0) + (result.usage.cache_creation_input_tokens ?? 0),
             },
             // make sure we set finish_reason to the correct value (claude is normally setting this by itself)
             finish_reason: tool_use ? "tool_use" : claudeFinishReason(result?.stop_reason ?? ''),
