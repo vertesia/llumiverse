@@ -1038,6 +1038,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         // reuse cached input tokens instead of reprocessing the entire conversation.
         // Only for Claude models which support the cachePoint content block.
         if (options.model.includes('claude') && request.messages && request.messages.length >= 4) {
+            request.messages = stripClaudeCachePoints(request.messages);
             const pivotMsg = request.messages[request.messages.length - 2];
             if (pivotMsg.content && Array.isArray(pivotMsg.content) && pivotMsg.content.length > 0) {
                 pivotMsg.content = [...pivotMsg.content, { cachePoint: { type: 'default' } }];
@@ -1589,6 +1590,13 @@ function updateConversation(conversation: ConverseRequest, prompt: ConverseReque
         messages: fixedMessages.length > 0 ? fixedMessages : [],
         system: combinedSystem && combinedSystem.length > 0 ? combinedSystem : undefined,
     };
+}
+
+function stripClaudeCachePoints(messages: Message[]): Message[] {
+    return messages.map(message => ({
+        ...message,
+        content: message.content?.filter(block => !('cachePoint' in block)),
+    }));
 }
 
 /**

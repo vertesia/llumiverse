@@ -98,6 +98,8 @@ if (process.env.XAI_API_KEY) {
     console.warn("xAI tests are skipped: XAI_API_KEY environment variable is not set");
 }
 
+const hasClaudeDrivers = drivers.some(driver => driver.name.includes("claude"));
+
 /**
  * DataSource implementation that fetches image from URL and provides it as a stream.
  * This simulates how Studio sends images - fetched and converted to base64/bytes.
@@ -203,6 +205,11 @@ function getTextOptions(model: string): ExecutionOptions {
     };
 }
 
+function buildCacheableContext(): string {
+    const repeatedSection = "Prompt caching verification context. Preserve this exact context across turns and do not summarize it unless explicitly asked. ";
+    return `You are participating in a prompt caching verification test.\n\n${repeatedSection.repeat(180)}`;
+}
+
 /**
  * Verify that a conversation object can survive JSON serialization.
  * This catches Uint8Array corruption issues where bytes become { "0": 137, "1": 80, ... }
@@ -246,6 +253,13 @@ const hasDrivers = drivers.length > 0;
 describe.skipIf(hasDrivers)("Multi-turn Conversations (no drivers configured)", () => {
     test("skipped - no API keys configured", () => {
         console.warn("All conversation tests skipped: No API keys configured for any driver");
+        expect(true).toBe(true);
+    });
+});
+
+describe.skipIf(hasClaudeDrivers)("Claude prompt caching (no Claude drivers configured)", () => {
+    test("skipped - no Claude drivers configured", () => {
+        console.warn("Claude prompt caching tests skipped: No Claude drivers configured");
         expect(true).toBe(true);
     });
 });
@@ -302,6 +316,63 @@ describe.concurrent.skipIf(!hasDrivers).each(drivers)("Driver $name - Multi-turn
 
         // Final verification
         verifyConversationSerializable(result3.conversation, name);
+    });
+
+    test.skipIf(!name.includes('claude'))(`${name}: multi-turn prompt caching reports token usage`, { timeout: TIMEOUT, retry: 1 }, async () => {
+        const options = getTextOptions(textModel);
+        const basePrompt = buildCacheableContext();
+
+        const turn1 = await driver.execute([
+            {
+                role: PromptRole.system,
+                content: "Respond briefly. Preserve conversation context across turns."
+            },
+            {
+                role: PromptRole.user,
+                content: `${basePrompt}\n\nAcknowledge with exactly: TURN-1-OK`
+            }
+        ], options);
+        expect(turn1.conversation).toBeDefined();
+        expect(turn1.token_usage).toBeDefined();
+        verifyConversationSerializable(turn1.conversation, name);
+
+        const storedConversation1 = JSON.parse(JSON.stringify(turn1.conversation));
+
+        const turn2 = await driver.execute([
+            {
+                role: PromptRole.user,
+                content: "Reply with exactly: TURN-2-OK"
+            }
+        ], { ...options, conversation: storedConversation1 });
+        expect(turn2.conversation).toBeDefined();
+        expect(turn2.token_usage).toBeDefined();
+        verifyConversationSerializable(turn2.conversation, name);
+
+        const storedConversation2 = JSON.parse(JSON.stringify(turn2.conversation));
+
+        const turn3 = await driver.execute([
+            {
+                role: PromptRole.user,
+                content: "Reply with exactly: TURN-3-OK"
+            }
+        ], { ...options, conversation: storedConversation2 });
+        expect(turn3.conversation).toBeDefined();
+        expect(turn3.token_usage).toBeDefined();
+        verifyConversationSerializable(turn3.conversation, name);
+        expect(turn3.token_usage?.prompt_cache_write ?? 0).toBeGreaterThan(0);
+
+        const storedConversation3 = JSON.parse(JSON.stringify(turn3.conversation));
+
+        const turn4 = await driver.execute([
+            {
+                role: PromptRole.user,
+                content: "Reply with exactly: TURN-4-OK"
+            }
+        ], { ...options, conversation: storedConversation3 });
+        expect(turn4.conversation).toBeDefined();
+        expect(turn4.token_usage).toBeDefined();
+        verifyConversationSerializable(turn4.conversation, name);
+        expect(turn4.token_usage?.prompt_cached ?? 0).toBeGreaterThan(0);
     });
 
     test.skipIf(!visionModel)(`${name}: multi-turn conversation with image`, { timeout: TIMEOUT }, async () => {

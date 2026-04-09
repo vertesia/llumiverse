@@ -863,6 +863,32 @@ interface RequestOptions {
     headers?: Record<string, string>;
 }
 
+function stripClaudeCacheControlFromMessages(messages: MessageParam[]): MessageParam[] {
+    return messages.map(message => {
+        if (typeof message.content === 'string') {
+            return message;
+        }
+
+        return {
+            ...message,
+            content: message.content.map(block => {
+                if (typeof block !== 'object' || block === null) {
+                    return block;
+                }
+                const { cache_control: _cacheControl, ...rest } = block as Record<string, unknown>;
+                return rest as typeof block;
+            }),
+        };
+    });
+}
+
+function stripClaudeCacheControlFromSystem(system?: TextBlockParam[]): TextBlockParam[] | undefined {
+    return system?.map(block => {
+        const { cache_control: _cacheControl, ...rest } = block as TextBlockParam & { cache_control?: unknown };
+        return rest as TextBlockParam;
+    });
+}
+
 function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { payload: MessageCreateParamsBase, requestOptions: RequestOptions | undefined } {
     const modelName = options.model; // Model name is already extracted in the calling methods
     const model_options = options.model_options as VertexAIClaudeOptions;
@@ -899,6 +925,9 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
         sanitizedMessages = convertClaudeToolBlocksToText(sanitizedMessages);
     }
 
+    sanitizedMessages = stripClaudeCacheControlFromMessages(sanitizedMessages);
+    const sanitizedSystem = stripClaudeCacheControlFromSystem(prompt.system);
+
     // Prompt caching: mark the conversation history prefix so subsequent calls
     // reuse cached input tokens instead of reprocessing the entire conversation.
     if (sanitizedMessages.length >= 4) {
@@ -916,7 +945,7 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
 
     const payload = {
         messages: sanitizedMessages,
-        system: prompt.system,
+        system: sanitizedSystem,
         tools: hasTools ? options.tools as MessageCreateParamsBase['tools'] : undefined,
         temperature: model_options?.temperature,
         model: modelName,
