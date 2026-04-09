@@ -374,6 +374,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             result: reasoning + resultText ? [{ type: "text", value: reasoning + resultText }] : [],
             token_usage: {
                 prompt: result.usage?.inputTokens,
+                prompt_new: result.usage ? ((result.usage.inputTokens ?? 0) - (result.usage.cacheReadInputTokens ?? 0)) : undefined,
                 result: result.usage?.outputTokens,
                 total: result.usage?.totalTokens,
                 prompt_cached: result.usage?.cacheReadInputTokens ?? undefined,
