@@ -376,6 +376,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 prompt: result.usage?.inputTokens,
                 result: result.usage?.outputTokens,
                 total: result.usage?.totalTokens,
+                prompt_cached: result.usage?.cacheReadInputTokens ?? undefined,
+                prompt_cache_write: result.usage?.cacheWriteInputTokens ?? undefined,
             },
             finish_reason: converseFinishReason(result.stopReason),
         };
@@ -467,6 +469,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 prompt: result.metadata.usage?.inputTokens,
                 result: result.metadata.usage?.outputTokens,
                 total: result.metadata.usage?.totalTokens,
+                prompt_cached: result.metadata.usage?.cacheReadInputTokens ?? undefined,
+                prompt_cache_write: result.metadata.usage?.cacheWriteInputTokens ?? undefined,
             }
         }
 
@@ -1028,6 +1032,16 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             // to text representations so the conversation data is preserved while satisfying
             // Bedrock's API requirements without making tools callable.
             request.messages = convertToolBlocksToText(request.messages);
+        }
+
+        // Prompt caching: mark the conversation history prefix so subsequent calls
+        // reuse cached input tokens instead of reprocessing the entire conversation.
+        // Only for Claude models which support the cachePoint content block.
+        if (options.model.includes('claude') && request.messages && request.messages.length >= 4) {
+            const pivotMsg = request.messages[request.messages.length - 2];
+            if (pivotMsg.content && Array.isArray(pivotMsg.content) && pivotMsg.content.length > 0) {
+                pivotMsg.content = [...pivotMsg.content, { cachePoint: { type: 'default' } }];
+            }
         }
 
         return request;

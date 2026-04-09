@@ -335,7 +335,9 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
             token_usage: {
                 prompt: result.usage.input_tokens,
                 result: result.usage.output_tokens,
-                total: result.usage.input_tokens + result.usage.output_tokens
+                total: result.usage.input_tokens + result.usage.output_tokens,
+                prompt_cached: result.usage.cache_read_input_tokens ?? undefined,
+                prompt_cache_write: result.usage.cache_creation_input_tokens ?? undefined,
             },
             // make sure we set finish_reason to the correct value (claude is normally setting this by itself)
             finish_reason: tool_use ? "tool_use" : claudeFinishReason(result?.stop_reason ?? ''),
@@ -380,7 +382,9 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                         result: [{ type: "text", value: '' }],
                         token_usage: {
                             prompt: streamEvent.message.usage.input_tokens,
-                            result: streamEvent.message.usage.output_tokens
+                            result: streamEvent.message.usage.output_tokens,
+                            prompt_cached: (streamEvent.message.usage as any).cache_read_input_tokens ?? undefined,
+                            prompt_cache_write: (streamEvent.message.usage as any).cache_creation_input_tokens ?? undefined,
                         }
                     } satisfies CompletionChunkObject;
                 case "message_delta":
@@ -893,6 +897,21 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
     const hasTools = options.tools && options.tools.length > 0;
     if (!hasTools && claudeMessagesContainToolBlocks(sanitizedMessages)) {
         sanitizedMessages = convertClaudeToolBlocksToText(sanitizedMessages);
+    }
+
+    // Prompt caching: mark the conversation history prefix so subsequent calls
+    // reuse cached input tokens instead of reprocessing the entire conversation.
+    if (sanitizedMessages.length >= 4) {
+        const pivotMsg = sanitizedMessages[sanitizedMessages.length - 2];
+        if (Array.isArray(pivotMsg.content) && pivotMsg.content.length > 0) {
+            const lastBlock = pivotMsg.content[pivotMsg.content.length - 1];
+            // cache_control is supported on text, tool_use, tool_result, image, document blocks
+            // but not on thinking/redacted_thinking blocks
+            if (typeof lastBlock === 'object' && lastBlock !== null &&
+                'type' in lastBlock && lastBlock.type !== 'thinking' && lastBlock.type !== 'redacted_thinking') {
+                (lastBlock as TextBlockParam).cache_control = { type: 'ephemeral' };
+            }
+        }
     }
 
     const payload = {

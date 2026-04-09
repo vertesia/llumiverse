@@ -793,6 +793,7 @@ function mapUsage(usage?: OpenAI.Responses.ResponseUsage | null): ExecutionToken
         prompt: usage.input_tokens,
         result: usage.output_tokens,
         total: usage.total_tokens,
+        prompt_cached: usage.input_tokens_details?.cached_tokens ?? undefined,
     };
 }
 

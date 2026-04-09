@@ -109,8 +109,8 @@ importers:
   drivers:
     dependencies:
       '@anthropic-ai/sdk':
-        specifier: ^0.78.0
-        version: 0.78.0(zod@3.25.63)
+        specifier: ^0.85.0
+        version: 0.85.0(zod@3.25.63)
       '@anthropic-ai/vertex-sdk':
         specifier: ^0.14.4
         version: 0.14.4(zod@3.25.63)
@@ -184,8 +184,8 @@ importers:
         specifier: ^0.2.1
         version: 0.2.1
       openai:
-        specifier: ^6.22.0
-        version: 6.22.0(ws@8.18.2)(zod@3.25.63)
+        specifier: ^6.33.0
+        version: 6.33.0(ws@8.18.2)(zod@3.25.63)
       replicate:
         specifier: ^1.4.0
         version: 1.4.0
@@ -227,8 +227,8 @@ importers:
 
 packages:
 
-  '@anthropic-ai/sdk@0.78.0':
-    resolution: {integrity: sha512-PzQhR715td/m1UaaN5hHXjYB8Gl2lF9UVhrrGrZeysiF6Rb74Wc9GCB8hzLdzmQtBd1qe89F9OptgB9Za1Ib5w==}
+  '@anthropic-ai/sdk@0.85.0':
+    resolution: {integrity: sha512-nmwwB1zYSOwDSKtw+HXUzx+SKfBekTknt92R63tGZAZkppwyHw+cMHugjCvWZ9G92I965tz0062VKeUnzVJZlA==}
     hasBin: true
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
@@ -2014,8 +2014,8 @@ packages:
       zod:
         optional: true
 
-  openai@6.22.0:
-    resolution: {integrity: sha512-7Yvy17F33Bi9RutWbsaYt5hJEEJ/krRPOrwan+f9aCPuMat1WVsb2VNSII5W1EksKT6fF69TG/xj4XzodK3JZw==}
+  openai@6.33.0:
+    resolution: {integrity: sha512-xAYN1W3YsDXJWA5F277135YfkEk6H7D3D6vWwRhJ3OEkzRgcyK8z/P5P9Gyi/wB4N8kK9kM5ZjprfvyHagKmpw==}
     hasBin: true
     peerDependencies:
       ws: ^8.18.0
@@ -2424,7 +2424,7 @@ packages:
 
 snapshots:
 
-  '@anthropic-ai/sdk@0.78.0(zod@3.25.63)':
+  '@anthropic-ai/sdk@0.85.0(zod@3.25.63)':
     dependencies:
       json-schema-to-ts: 3.1.1
     optionalDependencies:
@@ -2432,7 +2432,7 @@ snapshots:
 
   '@anthropic-ai/vertex-sdk@0.14.4(zod@3.25.63)':
     dependencies:
-      '@anthropic-ai/sdk': 0.78.0(zod@3.25.63)
+      '@anthropic-ai/sdk': 0.85.0(zod@3.25.63)
       google-auth-library: 10.5.0
     transitivePeerDependencies:
       - supports-color
@@ -4944,7 +4944,7 @@ snapshots:
     transitivePeerDependencies:
       - encoding
 
-  openai@6.22.0(ws@8.18.2)(zod@3.25.63):
+  openai@6.33.0(ws@8.18.2)(zod@3.25.63):
     optionalDependencies:
       ws: 8.18.2
       zod: 3.25.63
