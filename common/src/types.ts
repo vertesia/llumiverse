@@ -656,6 +656,14 @@ export interface ExecutionTokenUsage {
     prompt?: number;
     result?: number;
     total?: number;
+    /**
+     * Number of input tokens read from prompt cache (discounted rate).
+     */
+    prompt_cached?: number;
+    /**
+     * Number of input tokens written to prompt cache.
+     */
+    prompt_cache_write?: number;
 }
 
 /**
