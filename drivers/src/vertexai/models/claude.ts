@@ -871,15 +871,15 @@ function stripClaudeCacheControlFromMessages(messages: MessageParam[]): MessageP
 
         return {
             ...message,
-            content: message.content.map(block => {
-                if (typeof block !== 'object' || block === null) {
-                    return block;
-                }
-                const { cache_control: _cacheControl, ...rest } = block as Record<string, unknown>;
-                return rest as typeof block;
-            }),
+            content: message.content.map(block => stripClaudeCacheControlFromBlock(block)),
         };
     });
+}
+
+function stripClaudeCacheControlFromBlock<T extends ContentBlockParam>(block: T): T {
+    const cloned = { ...block } as T & { cache_control?: unknown };
+    delete cloned.cache_control;
+    return cloned as T;
 }
 
 function stripClaudeCacheControlFromSystem(system?: TextBlockParam[]): TextBlockParam[] | undefined {
