@@ -864,6 +864,8 @@ interface RequestOptions {
     headers?: Record<string, string>;
 }
 
+type ClaudeTool = NonNullable<MessageCreateParamsBase['tools']>[number];
+
 function stripClaudeCacheControlFromMessages(messages: MessageParam[]): MessageParam[] {
     return messages.map(message => {
         if (typeof message.content === 'string') {
@@ -887,6 +889,14 @@ function stripClaudeCacheControlFromSystem(system?: TextBlockParam[]): TextBlock
     return system?.map(block => {
         const { cache_control: _cacheControl, ...rest } = block as TextBlockParam & { cache_control?: unknown };
         return rest as TextBlockParam;
+    });
+}
+
+function stripClaudeCacheControlFromTools(tools?: MessageCreateParamsBase['tools']): MessageCreateParamsBase['tools'] | undefined {
+    return tools?.map(tool => {
+        const cloned = { ...tool } as ClaudeTool & { cache_control?: unknown };
+        delete cloned.cache_control;
+        return cloned as ClaudeTool;
     });
 }
 
@@ -928,15 +938,26 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
 
     sanitizedMessages = stripClaudeCacheControlFromMessages(sanitizedMessages);
     const sanitizedSystem = stripClaudeCacheControlFromSystem(prompt.system);
+    const sanitizedTools = hasTools
+        ? stripClaudeCacheControlFromTools(options.tools as MessageCreateParamsBase['tools'])
+        : undefined;
 
-    // Prompt caching: mark the conversation history prefix so subsequent calls
-    // reuse cached input tokens instead of reprocessing the entire conversation.
+    // Prompt caching: use three breakpoints so stable system prompt, tool definitions,
+    // and the conversation history prefix can all be reused across calls.
+    if (sanitizedSystem && sanitizedSystem.length > 0) {
+        const lastSystemBlock = sanitizedSystem[sanitizedSystem.length - 1] as TextBlockParam & { cache_control?: unknown };
+        lastSystemBlock.cache_control = { type: 'ephemeral' };
+    }
+
+    if (sanitizedTools && sanitizedTools.length > 0) {
+        const lastTool = sanitizedTools[sanitizedTools.length - 1] as ClaudeTool & { cache_control?: unknown };
+        lastTool.cache_control = { type: 'ephemeral' };
+    }
+
     if (sanitizedMessages.length >= 4) {
         const pivotMsg = sanitizedMessages[sanitizedMessages.length - 2];
         if (Array.isArray(pivotMsg.content) && pivotMsg.content.length > 0) {
             const lastBlock = pivotMsg.content[pivotMsg.content.length - 1];
-            // cache_control is supported on text, tool_use, tool_result, image, document blocks
-            // but not on thinking/redacted_thinking blocks
             if (typeof lastBlock === 'object' && lastBlock !== null &&
                 'type' in lastBlock && lastBlock.type !== 'thinking' && lastBlock.type !== 'redacted_thinking') {
                 (lastBlock as TextBlockParam).cache_control = { type: 'ephemeral' };
@@ -947,7 +968,7 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
     const payload = {
         messages: sanitizedMessages,
         system: sanitizedSystem,
-        tools: hasTools ? options.tools as MessageCreateParamsBase['tools'] : undefined,
+        tools: sanitizedTools,
         temperature: model_options?.temperature,
         model: modelName,
         max_tokens: maxToken(options),
