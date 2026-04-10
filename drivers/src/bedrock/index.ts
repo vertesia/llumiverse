@@ -145,6 +145,9 @@ function isClaudeVersionGTE(modelString: string, targetMajor: number, targetMino
 
 export type BedrockPrompt = NovaMessagesPrompt | ConverseRequest | TwelvelabsPegasusRequest;
 
+type BedrockSystemBlock = NonNullable<ConverseRequest['system']>[number];
+type BedrockToolEntry = NonNullable<NonNullable<ConverseRequest['toolConfig']>['tools']>[number];
+
 export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockPrompt> {
 
     static PROVIDER = "bedrock";
@@ -374,8 +377,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             result: reasoning + resultText ? [{ type: "text", value: reasoning + resultText }] : [],
             token_usage: {
                 prompt: result.usage?.inputTokens,
+                prompt_new: result.usage ? ((result.usage.inputTokens ?? 0) - (result.usage.cacheReadInputTokens ?? 0)) : undefined,
                 result: result.usage?.outputTokens,
                 total: result.usage?.totalTokens,
+                prompt_cached: result.usage?.cacheReadInputTokens ?? undefined,
+                prompt_cache_write: result.usage?.cacheWriteInputTokens ?? undefined,
             },
             finish_reason: converseFinishReason(result.stopReason),
         };
@@ -467,6 +473,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 prompt: result.metadata.usage?.inputTokens,
                 result: result.metadata.usage?.outputTokens,
                 total: result.metadata.usage?.totalTokens,
+                prompt_cached: result.metadata.usage?.cacheReadInputTokens ?? undefined,
+                prompt_cache_write: result.metadata.usage?.cacheWriteInputTokens ?? undefined,
             }
         }
 
@@ -1030,6 +1038,39 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             request.messages = convertToolBlocksToText(request.messages);
         }
 
+        // Prompt caching: use three breakpoints so stable system blocks, tool definitions,
+        // and the conversation history prefix can all be reused across Claude turns.
+        if (options.model.includes('claude')) {
+            if (request.messages) {
+                request.messages = stripClaudeCachePoints(request.messages);
+            }
+            request.system = stripClaudeCachePointsFromSystem(request.system);
+            if (request.toolConfig?.tools) {
+                request.toolConfig = {
+                    ...request.toolConfig,
+                    tools: stripClaudeCachePointsFromTools(request.toolConfig.tools),
+                };
+            }
+
+            if (request.system && request.system.length > 0) {
+                request.system = [...request.system, { cachePoint: { type: 'default' } } as BedrockSystemBlock];
+            }
+
+            if (request.toolConfig?.tools && request.toolConfig.tools.length > 0) {
+                request.toolConfig.tools = [
+                    ...request.toolConfig.tools,
+                    { cachePoint: { type: 'default' } } as BedrockToolEntry,
+                ];
+            }
+
+            if (request.messages && request.messages.length >= 4) {
+                const pivotMsg = request.messages[request.messages.length - 2];
+                if (pivotMsg.content && Array.isArray(pivotMsg.content) && pivotMsg.content.length > 0) {
+                    pivotMsg.content = [...pivotMsg.content, { cachePoint: { type: 'default' } }];
+                }
+            }
+        }
+
         return request;
     }
 
@@ -1575,6 +1616,23 @@ function updateConversation(conversation: ConverseRequest, prompt: ConverseReque
         messages: fixedMessages.length > 0 ? fixedMessages : [],
         system: combinedSystem && combinedSystem.length > 0 ? combinedSystem : undefined,
     };
+}
+
+function stripClaudeCachePoints(messages: Message[]): Message[] {
+    return messages.map(message => ({
+        ...message,
+        content: message.content?.filter(block => !('cachePoint' in block)),
+    }));
+}
+
+function stripClaudeCachePointsFromSystem(system?: ConverseRequest['system']): ConverseRequest['system'] | undefined {
+    return (system?.filter(block => !('cachePoint' in (block as object))) ?? undefined) as ConverseRequest['system'] | undefined;
+}
+
+function stripClaudeCachePointsFromTools(
+    tools?: NonNullable<NonNullable<ConverseRequest['toolConfig']>['tools']>
+): NonNullable<NonNullable<ConverseRequest['toolConfig']>['tools']> | undefined {
+    return (tools?.filter(tool => !('cachePoint' in (tool as object))) ?? undefined) as NonNullable<NonNullable<ConverseRequest['toolConfig']>['tools']> | undefined;
 }
 
 /**
