@@ -333,9 +333,12 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
             result: text ? [{ type: "text", value: text }] : [{ type: "text", value: '' }],
             tool_use,
             token_usage: {
-                prompt: result.usage.input_tokens,
+                prompt_new: result.usage.input_tokens,
+                prompt: result.usage.input_tokens + (result.usage.cache_read_input_tokens ?? 0) + (result.usage.cache_creation_input_tokens ?? 0),
                 result: result.usage.output_tokens,
-                total: result.usage.input_tokens + result.usage.output_tokens
+                prompt_cached: result.usage.cache_read_input_tokens ?? undefined,
+                prompt_cache_write: result.usage.cache_creation_input_tokens ?? undefined,
+                total: result.usage.input_tokens + result.usage.output_tokens + (result.usage.cache_read_input_tokens ?? 0) + (result.usage.cache_creation_input_tokens ?? 0),
             },
             // make sure we set finish_reason to the correct value (claude is normally setting this by itself)
             finish_reason: tool_use ? "tool_use" : claudeFinishReason(result?.stop_reason ?? ''),
@@ -380,7 +383,9 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                         result: [{ type: "text", value: '' }],
                         token_usage: {
                             prompt: streamEvent.message.usage.input_tokens,
-                            result: streamEvent.message.usage.output_tokens
+                            result: streamEvent.message.usage.output_tokens,
+                            prompt_cached: (streamEvent.message.usage as any).cache_read_input_tokens ?? undefined,
+                            prompt_cache_write: (streamEvent.message.usage as any).cache_creation_input_tokens ?? undefined,
                         }
                     } satisfies CompletionChunkObject;
                 case "message_delta":
@@ -859,6 +864,42 @@ interface RequestOptions {
     headers?: Record<string, string>;
 }
 
+type ClaudeTool = NonNullable<MessageCreateParamsBase['tools']>[number];
+
+function stripClaudeCacheControlFromMessages(messages: MessageParam[]): MessageParam[] {
+    return messages.map(message => {
+        if (typeof message.content === 'string') {
+            return message;
+        }
+
+        return {
+            ...message,
+            content: message.content.map(block => stripClaudeCacheControlFromBlock(block)),
+        };
+    });
+}
+
+function stripClaudeCacheControlFromBlock<T extends ContentBlockParam>(block: T): T {
+    const cloned = { ...block } as T & { cache_control?: unknown };
+    delete cloned.cache_control;
+    return cloned as T;
+}
+
+function stripClaudeCacheControlFromSystem(system?: TextBlockParam[]): TextBlockParam[] | undefined {
+    return system?.map(block => {
+        const { cache_control: _cacheControl, ...rest } = block as TextBlockParam & { cache_control?: unknown };
+        return rest as TextBlockParam;
+    });
+}
+
+function stripClaudeCacheControlFromTools(tools?: MessageCreateParamsBase['tools']): MessageCreateParamsBase['tools'] | undefined {
+    return tools?.map(tool => {
+        const cloned = { ...tool } as ClaudeTool & { cache_control?: unknown };
+        delete cloned.cache_control;
+        return cloned as ClaudeTool;
+    });
+}
+
 function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { payload: MessageCreateParamsBase, requestOptions: RequestOptions | undefined } {
     const modelName = options.model; // Model name is already extracted in the calling methods
     const model_options = options.model_options as VertexAIClaudeOptions;
@@ -895,10 +936,39 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
         sanitizedMessages = convertClaudeToolBlocksToText(sanitizedMessages);
     }
 
+    sanitizedMessages = stripClaudeCacheControlFromMessages(sanitizedMessages);
+    const sanitizedSystem = stripClaudeCacheControlFromSystem(prompt.system);
+    const sanitizedTools = hasTools
+        ? stripClaudeCacheControlFromTools(options.tools as MessageCreateParamsBase['tools'])
+        : undefined;
+
+    // Prompt caching: use three breakpoints so stable system prompt, tool definitions,
+    // and the conversation history prefix can all be reused across calls.
+    if (sanitizedSystem && sanitizedSystem.length > 0) {
+        const lastSystemBlock = sanitizedSystem[sanitizedSystem.length - 1] as TextBlockParam & { cache_control?: unknown };
+        lastSystemBlock.cache_control = { type: 'ephemeral' };
+    }
+
+    if (sanitizedTools && sanitizedTools.length > 0) {
+        const lastTool = sanitizedTools[sanitizedTools.length - 1] as ClaudeTool & { cache_control?: unknown };
+        lastTool.cache_control = { type: 'ephemeral' };
+    }
+
+    if (sanitizedMessages.length >= 4) {
+        const pivotMsg = sanitizedMessages[sanitizedMessages.length - 2];
+        if (Array.isArray(pivotMsg.content) && pivotMsg.content.length > 0) {
+            const lastBlock = pivotMsg.content[pivotMsg.content.length - 1];
+            if (typeof lastBlock === 'object' && lastBlock !== null &&
+                'type' in lastBlock && lastBlock.type !== 'thinking' && lastBlock.type !== 'redacted_thinking') {
+                (lastBlock as TextBlockParam).cache_control = { type: 'ephemeral' };
+            }
+        }
+    }
+
     const payload = {
         messages: sanitizedMessages,
-        system: prompt.system,
-        tools: hasTools ? options.tools as MessageCreateParamsBase['tools'] : undefined,
+        system: sanitizedSystem,
+        tools: sanitizedTools,
         temperature: model_options?.temperature,
         model: modelName,
         max_tokens: maxToken(options),
