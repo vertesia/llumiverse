@@ -656,6 +656,17 @@ export interface ExecutionTokenUsage {
     prompt?: number;
     result?: number;
     total?: number;
+    /**
+     * Number of input tokens read from prompt cache (discounted rate).
+     */
+    prompt_cached?: number;
+    /**
+     * Number of input tokens written to prompt cache.
+     */
+    prompt_cache_write?: number;
+
+    /* Number of new input tokens not from cache. This is useful for providers with prompt caching to understand how many tokens were actually newly processed in the prompt, separate from any cached tokens. Calculated as prompt - prompt_cached. */
+    prompt_new?: number; // Number of new input tokens not from cache (calculated as prompt - prompt_cached)
 }
 
 /**

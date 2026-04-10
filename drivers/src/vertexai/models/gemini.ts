@@ -783,7 +783,12 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         if (!usageMetadata || !usageMetadata.totalTokenCount) {
             return {};
         }
-        const tokenUsage: ExecutionTokenUsage = { total: usageMetadata.totalTokenCount, prompt: usageMetadata.promptTokenCount };
+        const tokenUsage: ExecutionTokenUsage = {
+            total: usageMetadata.totalTokenCount,
+            prompt: usageMetadata.promptTokenCount,
+            prompt_cached: usageMetadata.cachedContentTokenCount ?? undefined,
+            prompt_new: (usageMetadata.promptTokenCount ?? 0) - (usageMetadata.cachedContentTokenCount ?? 0),
+        };
 
         //Output/Response side
         tokenUsage.result = (usageMetadata.candidatesTokenCount ?? 0)
