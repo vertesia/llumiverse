@@ -68,13 +68,12 @@
         "url": "git+ssh://git@github.com/vertesia/llumiverse.git"
     },
     "devDependencies": {
+        "@types/node": "^22.19.7",
         "rimraf": "^6.1.2",
         "ts-dual-module": "^0.6.3",
-        "typescript": "^5.9.3",
-        "vitest": "^4.0.18",
-        "@types/node": "^22.19.7"
+        "typescript": "^6.0.2",
+        "vitest": "^4.0.18"
     },
-    "dependencies": {},
     "ts_dual_module": {
         "outDir": "lib"
     }

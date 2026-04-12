@@ -1,12 +1,22 @@
 
+function uint8ArrayToBase64(uint8Array: Uint8Array): string {
+    let binary = '';
+
+    for (const byte of uint8Array) {
+        binary += String.fromCharCode(byte);
+    }
+
+    return btoa(binary);
+}
+
 export async function readStreamAsBase64(stream: ReadableStream): Promise<string> {
     const uint8Array = await readStreamAsUint8Array(stream);
-    return Buffer.from(uint8Array).toString('base64');
+    return uint8ArrayToBase64(uint8Array);
 }
 
 export async function readStreamAsString(stream: ReadableStream): Promise<string> {
     const uint8Array = await readStreamAsUint8Array(stream);
-    return Buffer.from(uint8Array).toString();
+    return new TextDecoder().decode(uint8Array);
 }
 
 export async function readStreamAsUint8Array(stream: ReadableStream): Promise<Uint8Array> {
