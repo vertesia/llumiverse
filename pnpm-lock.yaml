@@ -30,7 +30,7 @@ overrides:
 
 patchedDependencies:
   ts-dual-module@0.6.3:
-    hash: 4458f3e987e2022de7c44b2c77fedd280325fd337e66b0438802bac7cee6d2a3
+    hash: a00c700490b88a278467dbe8eadf06b750f9f4a8ec2bcad2e5e268902c545c51
     path: patches/ts-dual-module@0.6.3.patch
 
 importers:
@@ -69,7 +69,7 @@ importers:
         version: 6.1.2
       ts-dual-module:
         specifier: ^0.6.3
-        version: 0.6.3(patch_hash=4458f3e987e2022de7c44b2c77fedd280325fd337e66b0438802bac7cee6d2a3)
+        version: 0.6.3(patch_hash=a00c700490b88a278467dbe8eadf06b750f9f4a8ec2bcad2e5e268902c545c51)
       typescript:
         specifier: ^6.0.2
         version: 6.0.2
@@ -103,7 +103,7 @@ importers:
         version: 6.1.2
       ts-dual-module:
         specifier: ^0.6.3
-        version: 0.6.3(patch_hash=4458f3e987e2022de7c44b2c77fedd280325fd337e66b0438802bac7cee6d2a3)
+        version: 0.6.3(patch_hash=a00c700490b88a278467dbe8eadf06b750f9f4a8ec2bcad2e5e268902c545c51)
       typescript:
         specifier: ^6.0.2
         version: 6.0.2
@@ -203,7 +203,7 @@ importers:
         version: 6.1.2
       ts-dual-module:
         specifier: ^0.6.3
-        version: 0.6.3(patch_hash=4458f3e987e2022de7c44b2c77fedd280325fd337e66b0438802bac7cee6d2a3)
+        version: 0.6.3(patch_hash=a00c700490b88a278467dbe8eadf06b750f9f4a8ec2bcad2e5e268902c545c51)
       typescript:
         specifier: ^6.0.2
         version: 6.0.2
@@ -5194,7 +5194,7 @@ snapshots:
     dependencies:
       typescript: 5.9.3
 
-  ts-dual-module@0.6.3(patch_hash=4458f3e987e2022de7c44b2c77fedd280325fd337e66b0438802bac7cee6d2a3):
+  ts-dual-module@0.6.3(patch_hash=a00c700490b88a278467dbe8eadf06b750f9f4a8ec2bcad2e5e268902c545c51):
     dependencies:
       enquirer: 2.4.1
 
