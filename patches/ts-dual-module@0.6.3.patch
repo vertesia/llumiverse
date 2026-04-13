@@ -11,12 +11,13 @@ diff --git a/lib/build.js b/lib/build.js
  //--noEmit
  //--composite false
  //--declaration, -d
-@@ -70,7 +72,7 @@ function cjs_buildParams(outDir, genTypes, params) {
+@@ -70,7 +72,8 @@ function cjs_buildParams(outDir, genTypes, params) {
      }
      params['--outDir'] = `${outDir}/cjs`;
      params['--module'] = 'commonjs';
 -    params['--moduleResolution'] = 'node10';
-+    params['--moduleResolution'] = 'bundler';
++    params['--moduleResolution'] = 'node10';
++    params['--ignoreDeprecations'] = '6.0';
      return params;
  }
  export async function build(pkg, args) {
