@@ -1,0 +1,38 @@
+diff --git a/lib/build.js b/lib/build.js
+--- a/lib/build.js
++++ b/lib/build.js
+@@ -1,7 +1,9 @@
+ import { spawnSync } from 'child_process';
++import { createRequire } from 'module';
+ import path from 'path';
+ import fs from 'fs';
+ import { initConfig } from './init.js';
++const require = createRequire(import.meta.url);
+ //--noEmit
+ //--composite false
+ //--declaration, -d
+@@ -70,7 +72,7 @@ function cjs_buildParams(outDir, genTypes, params) {
+     }
+     params['--outDir'] = `${outDir}/cjs`;
+     params['--module'] = 'commonjs';
+-    params['--moduleResolution'] = 'node10';
++    params['--moduleResolution'] = 'bundler';
+     return params;
+ }
+ export async function build(pkg, args) {
+@@ -105,13 +107,13 @@ export async function build(pkg, args) {
+     }
+ }
+ function _build(params) {
+-    const args = ['npx', 'tsc'];
++    const args = [require.resolve('typescript/bin/tsc')];
+     for (const key of Object.keys(params)) {
+         const val = params[key];
+         args.push(key);
+         val && args.push(val);
+     }
+-    const r = spawnSync('npx', args, {
++    const r = spawnSync(process.execPath, args, {
+         stdio: ['inherit', 'inherit', 'inherit'],
+     });
+     if (r.status) {

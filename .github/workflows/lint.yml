@@ -12,11 +12,11 @@ jobs:
     name: Lint codebase
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@main
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
         with:
           run_install: false
-      - uses: actions/setup-node@main
+      - uses: actions/setup-node@v6
         with:
           node-version: 22.x
           cache: pnpm
