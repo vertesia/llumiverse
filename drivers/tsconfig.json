@@ -5,10 +5,7 @@
       "ES2024",
       "DOM"
     ],
-    "rootDirs": [
-      "./src",
-      "./test"
-    ],
+    "rootDir": "./src",
     "declarationDir": "./lib/types", // must be specified otherwise vscode generate files in src
     "outDir": "./lib/esm",
     "sourceMap": true,

@@ -25,6 +25,7 @@
     //"noEmit": false,
     "skipLibCheck": true,
     "resolveJsonModule": true,
+    "types": ["node"],
     "isolatedModules": true,
     /* Linting */
     "strict": true,

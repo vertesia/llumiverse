@@ -9,45 +9,31 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  build-and-test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
         node-version: [22.x]
     steps:
-      - uses: actions/checkout@main
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
         with:
           run_install: false
-      - uses: actions/setup-node@main
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node-version }}
           cache: "pnpm"
       - run: pnpm install
       - run: pnpm build
 
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@main
-      - uses: pnpm/action-setup@v4
-        with:
-          run_install: false
-      - uses: actions/setup-node@main
-        with:
-          node-version: 22.x
-          cache: "pnpm"
-      - run: pnpm install
-      - run: pnpm build
-
       - name: Authenticate with Google Cloud
-        uses: "google-github-actions/auth@v2"
+        uses: "google-github-actions/auth@v3"
         id: gauth
         with:
           project_id: "dengenlabs"
           workload_identity_provider: "projects/265888598630/locations/global/workloadIdentityPools/composable-cloud/providers/github"
 
-      - uses: "aws-actions/configure-aws-credentials@v4.2.1"
+      - uses: "aws-actions/configure-aws-credentials@v6.1.0"
         with:
           audience: sts.amazonaws.com
           role-to-assume: arn:aws:iam::716085231028:role/ComposablePromptExecutor
@@ -68,7 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/preview' || startsWith(github.ref, 'refs/heads/repo-dispatch')
     needs:
-      - build
+      - build-and-test
     steps:
       - name: Notify repository vertesia/composableai
         run: |
