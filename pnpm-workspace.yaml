@@ -5,5 +5,7 @@ packages:
   - ./examples
 minimumReleaseAge: 1440 # 1 day in minutes, minimumReleaseAge protects against supply chain attacks.
 minimumReleaseAgeExclude:
-- '@vertesia/*'
-- '@llumiverse/*'
+  - '@vertesia/*'
+  - '@llumiverse/*'
+  # Renovate security update: vite@>=6.0.0 <6.2.6@6.4.2
+  - vite@>=6.0.0 <6.2.6@6.4.2
