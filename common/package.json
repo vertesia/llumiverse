@@ -1,80 +1,80 @@
 {
-    "name": "@llumiverse/common",
-    "version": "1.1.0-dev.20260327.124951Z",
-    "type": "module",
-    "description": "Public types, enums and options used by Llumiverse API.",
-    "files": [
-        "lib",
-        "src"
-    ],
-    "keywords": [
-        "llm",
-        "ai",
-        "prompt",
-        "prompt engineering",
-        "ml",
-        "machine learning",
-        "embeddings",
-        "training",
-        "model",
-        "universal",
-        "api",
-        "chatgpt",
-        "openai",
-        "vertexai",
-        "bedrock",
-        "replicate",
-        "huggingface",
-        "togetherai"
-    ],
-    "types": "./lib/types/index.d.ts",
-    "typesVersions": {
-        "*": {
-            "async": [
-                "./lib/types/async.d.ts"
-            ],
-            "formatters": [
-                "./lib/types/formatters/index.d.ts"
-            ]
-        }
-    },
-    "exports": {
-        ".": {
-            "types": "./lib/types/index.d.ts",
-            "import": "./lib/esm/index.js",
-            "require": "./lib/cjs/index.js"
-        },
-        "./async": {
-            "types": "./lib/types/async.d.ts",
-            "import": "./lib/esm/async.js",
-            "require": "./lib/cjs/async.js"
-        },
-        "./formatters": {
-            "types": "./lib/types/formatters/index.d.ts",
-            "import": "./lib/esm/formatters/index.js",
-            "require": "./lib/cjs/formatters/index.js"
-        }
-    },
-    "scripts": {
-        "test": "vitest run",
-        "build": "pnpm exec tsmod build",
-        "clean": "rimraf ./lib tsconfig.tsbuildinfo"
-    },
-    "author": "Llumiverse",
-    "license": "Apache-2.0",
-    "homepage": "https://github.com/vertesia/llumiverse",
-    "repository": {
-        "type": "git",
-        "url": "git+ssh://git@github.com/vertesia/llumiverse.git"
-    },
-    "devDependencies": {
-        "@types/node": "^22.19.7",
-        "rimraf": "^6.1.2",
-        "ts-dual-module": "^0.6.3",
-        "typescript": "^6.0.2",
-        "vitest": "^4.0.18"
-    },
-    "ts_dual_module": {
-        "outDir": "lib"
+  "name": "@llumiverse/common",
+  "version": "1.1.0-dev.20260327.124951Z",
+  "type": "module",
+  "description": "Public types, enums and options used by Llumiverse API.",
+  "files": [
+    "lib",
+    "src"
+  ],
+  "keywords": [
+    "llm",
+    "ai",
+    "prompt",
+    "prompt engineering",
+    "ml",
+    "machine learning",
+    "embeddings",
+    "training",
+    "model",
+    "universal",
+    "api",
+    "chatgpt",
+    "openai",
+    "vertexai",
+    "bedrock",
+    "replicate",
+    "huggingface",
+    "togetherai"
+  ],
+  "types": "./lib/types/index.d.ts",
+  "typesVersions": {
+    "*": {
+      "async": [
+        "./lib/types/async.d.ts"
+      ],
+      "formatters": [
+        "./lib/types/formatters/index.d.ts"
+      ]
     }
+  },
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "import": "./lib/esm/index.js",
+      "require": "./lib/cjs/index.js"
+    },
+    "./async": {
+      "types": "./lib/types/async.d.ts",
+      "import": "./lib/esm/async.js",
+      "require": "./lib/cjs/async.js"
+    },
+    "./formatters": {
+      "types": "./lib/types/formatters/index.d.ts",
+      "import": "./lib/esm/formatters/index.js",
+      "require": "./lib/cjs/formatters/index.js"
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "build": "pnpm exec tsmod build",
+    "clean": "rimraf ./lib tsconfig.tsbuildinfo"
+  },
+  "author": "Llumiverse",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/vertesia/llumiverse",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/vertesia/llumiverse.git"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "rimraf": "^6.1.2",
+    "ts-dual-module": "^0.6.3",
+    "typescript": "^6.0.2",
+    "vitest": "^4.0.18"
+  },
+  "ts_dual_module": {
+    "outDir": "lib"
+  }
 }
