@@ -35,6 +35,9 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
         let finish_reason: string | undefined = undefined;
         let promptTokens: number = 0;
         let resultTokens: number | undefined = undefined;
+        let promptCachedTokens: number | undefined = undefined;
+        let promptCacheWriteTokens: number | undefined = undefined;
+        let promptNewTokens: number | undefined = undefined;
 
         try {
             const stream = await this.driver.requestTextCompletionStream(this.prompt, this.options);
@@ -53,6 +56,9 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
                             //Math.max used as some models report final token count at beginning of stream
                             promptTokens = Math.max(promptTokens, chunk.token_usage.prompt ?? 0);
                             resultTokens = Math.max(resultTokens ?? 0, chunk.token_usage.result ?? 0);
+                            if (chunk.token_usage.prompt_cached != null) promptCachedTokens = chunk.token_usage.prompt_cached;
+                            if (chunk.token_usage.prompt_cache_write != null) promptCacheWriteTokens = chunk.token_usage.prompt_cache_write;
+                            if (chunk.token_usage.prompt_new != null) promptNewTokens = chunk.token_usage.prompt_new;
                         }
                         // Accumulate tool_use from chunks
                         // Note: During streaming, tool_input comes as string chunks that need concatenation
@@ -165,8 +171,14 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
 
         // Return undefined only if we never received any token data from the provider.
         // Use !== undefined (not truthiness) because resultTokens === 0 is valid (e.g. empty output with stop).
-        const tokens: ExecutionTokenUsage | undefined = resultTokens !== undefined ?
-            { prompt: promptTokens, result: resultTokens, total: resultTokens + promptTokens, } : undefined
+        const tokens: ExecutionTokenUsage | undefined = resultTokens !== undefined ? {
+            prompt: promptTokens,
+            result: resultTokens,
+            total: resultTokens + promptTokens,
+            ...(promptCachedTokens != null && { prompt_cached: promptCachedTokens }),
+            ...(promptCacheWriteTokens != null && { prompt_cache_write: promptCacheWriteTokens }),
+            ...(promptNewTokens != null && { prompt_new: promptNewTokens }),
+        } : undefined
 
         // Convert accumulated tool_use Map to array
         let toolUseArray = accumulatedToolUse.size > 0 ? Array.from(accumulatedToolUse.values()) : undefined;

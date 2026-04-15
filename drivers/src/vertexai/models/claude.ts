@@ -15,7 +15,7 @@ import { ContentBlock, ContentBlockParam, DocumentBlockParam, ImageBlockParam, M
 import { MessageStreamParams } from "@anthropic-ai/sdk/resources/index.mjs";
 import { MessageCreateParamsBase, MessageCreateParamsNonStreaming, RawMessageStreamEvent } from "@anthropic-ai/sdk/resources/messages.js";
 import {
-    AIModel, Completion, CompletionChunkObject, ExecutionOptions,
+    AIModel, Completion, CompletionChunkObject, ExecutionOptions, ExecutionTokenUsage,
     getConversationMeta,
     getMaxTokensLimitVertexAi,
     incrementConversationTurn,
@@ -47,6 +47,26 @@ export const NON_GLOBAL_ANTHROPIC_MODELS = [
 interface ClaudePrompt {
     messages: MessageParam[];
     system?: TextBlockParam[];
+}
+
+interface AnthropicUsageLike {
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_input_tokens?: number | null;
+    cache_creation_input_tokens?: number | null;
+}
+
+function anthropicUsageToTokenUsage(usage: AnthropicUsageLike): ExecutionTokenUsage {
+    const cacheRead = usage.cache_read_input_tokens ?? 0;
+    const cacheWrite = usage.cache_creation_input_tokens ?? 0;
+    return {
+        prompt_new: usage.input_tokens,
+        prompt: usage.input_tokens + cacheRead + cacheWrite,
+        result: usage.output_tokens,
+        total: usage.input_tokens + usage.output_tokens + cacheRead + cacheWrite,
+        prompt_cached: usage.cache_read_input_tokens ?? undefined,
+        prompt_cache_write: usage.cache_creation_input_tokens ?? undefined,
+    };
 }
 
 function claudeFinishReason(reason: string | undefined) {
@@ -332,14 +352,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         return {
             result: text ? [{ type: "text", value: text }] : [{ type: "text", value: '' }],
             tool_use,
-            token_usage: {
-                prompt_new: result.usage.input_tokens,
-                prompt: result.usage.input_tokens + (result.usage.cache_read_input_tokens ?? 0) + (result.usage.cache_creation_input_tokens ?? 0),
-                result: result.usage.output_tokens,
-                prompt_cached: result.usage.cache_read_input_tokens ?? undefined,
-                prompt_cache_write: result.usage.cache_creation_input_tokens ?? undefined,
-                total: result.usage.input_tokens + result.usage.output_tokens + (result.usage.cache_read_input_tokens ?? 0) + (result.usage.cache_creation_input_tokens ?? 0),
-            },
+            token_usage: anthropicUsageToTokenUsage(result.usage),
             // make sure we set finish_reason to the correct value (claude is normally setting this by itself)
             finish_reason: tool_use ? "tool_use" : claudeFinishReason(result?.stop_reason ?? ''),
             conversation: processedConversation
@@ -381,12 +394,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
                 case "message_start":
                     return {
                         result: [{ type: "text", value: '' }],
-                        token_usage: {
-                            prompt: streamEvent.message.usage.input_tokens,
-                            result: streamEvent.message.usage.output_tokens,
-                            prompt_cached: (streamEvent.message.usage as any).cache_read_input_tokens ?? undefined,
-                            prompt_cache_write: (streamEvent.message.usage as any).cache_creation_input_tokens ?? undefined,
-                        }
+                        token_usage: anthropicUsageToTokenUsage(streamEvent.message.usage as AnthropicUsageLike),
                     } satisfies CompletionChunkObject;
                 case "message_delta":
                     return {
@@ -946,12 +954,12 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
     // and the conversation history prefix can all be reused across calls.
     if (sanitizedSystem && sanitizedSystem.length > 0) {
         const lastSystemBlock = sanitizedSystem[sanitizedSystem.length - 1] as TextBlockParam & { cache_control?: unknown };
-        lastSystemBlock.cache_control = { type: 'ephemeral' };
+        lastSystemBlock.cache_control = { type: 'ephemeral', ttl: "1h" };
     }
 
     if (sanitizedTools && sanitizedTools.length > 0) {
         const lastTool = sanitizedTools[sanitizedTools.length - 1] as ClaudeTool & { cache_control?: unknown };
-        lastTool.cache_control = { type: 'ephemeral' };
+        lastTool.cache_control = { type: 'ephemeral', ttl: "1h" };
     }
 
     if (sanitizedMessages.length >= 4) {
@@ -960,7 +968,7 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
             const lastBlock = pivotMsg.content[pivotMsg.content.length - 1];
             if (typeof lastBlock === 'object' && lastBlock !== null &&
                 'type' in lastBlock && lastBlock.type !== 'thinking' && lastBlock.type !== 'redacted_thinking') {
-                (lastBlock as TextBlockParam).cache_control = { type: 'ephemeral' };
+                (lastBlock as TextBlockParam).cache_control = { type: 'ephemeral', ttl: "1h" };
             }
         }
     }
