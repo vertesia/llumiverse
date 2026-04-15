@@ -205,6 +205,20 @@ function getTextOptions(model: string): ExecutionOptions {
     };
 }
 
+/** Returns execution options for a Claude model with prompt caching enabled. */
+function getClaudeOptionsWithCache(model: string, driverName: string): ExecutionOptions {
+    const optionId = driverName.includes('vertexai') ? 'vertexai-claude' : 'bedrock-claude';
+    return {
+        model,
+        model_options: {
+            _option_id: optionId,
+            max_tokens: 256,
+            cache_enabled: true,
+        } as any,
+        output_modality: Modalities.text,
+    };
+}
+
 function buildCacheableContext(): string {
     const repeatedSection = "Prompt caching verification context. Preserve this exact context across turns and do not summarize it unless explicitly asked. ";
     return `You are participating in a prompt caching verification test.\n\n${repeatedSection.repeat(180)}`;
@@ -319,7 +333,7 @@ describe.concurrent.skipIf(!hasDrivers).each(drivers)("Driver $name - Multi-turn
     });
 
     test.skipIf(!name.includes('claude'))(`${name}: multi-turn prompt caching reports token usage`, { timeout: TIMEOUT, retry: 1 }, async () => {
-        const options = getTextOptions(textModel);
+        const options = getClaudeOptionsWithCache(textModel, name);
         const basePrompt = buildCacheableContext();
 
         const turn1 = await driver.execute([
