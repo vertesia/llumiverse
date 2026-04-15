@@ -954,12 +954,12 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
     // and the conversation history prefix can all be reused across calls.
     if (sanitizedSystem && sanitizedSystem.length > 0) {
         const lastSystemBlock = sanitizedSystem[sanitizedSystem.length - 1] as TextBlockParam & { cache_control?: unknown };
-        lastSystemBlock.cache_control = { type: 'ephemeral' };
+        lastSystemBlock.cache_control = { type: 'ephemeral', ttl: "1h" };
     }
 
     if (sanitizedTools && sanitizedTools.length > 0) {
         const lastTool = sanitizedTools[sanitizedTools.length - 1] as ClaudeTool & { cache_control?: unknown };
-        lastTool.cache_control = { type: 'ephemeral' };
+        lastTool.cache_control = { type: 'ephemeral', ttl: "1h" };
     }
 
     if (sanitizedMessages.length >= 4) {
@@ -968,7 +968,7 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
             const lastBlock = pivotMsg.content[pivotMsg.content.length - 1];
             if (typeof lastBlock === 'object' && lastBlock !== null &&
                 'type' in lastBlock && lastBlock.type !== 'thinking' && lastBlock.type !== 'redacted_thinking') {
-                (lastBlock as TextBlockParam).cache_control = { type: 'ephemeral' };
+                (lastBlock as TextBlockParam).cache_control = { type: 'ephemeral', ttl: "1h" };
             }
         }
     }
