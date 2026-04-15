@@ -70,6 +70,8 @@ export interface VertexAIClaudeOptions {
     thinking_mode?: boolean;
     thinking_budget_tokens?: number;
     include_thoughts?: boolean;
+    cache_enabled?: boolean;
+    cache_ttl?: '5m' | '1h';
 }
 
 export interface VertexAIGeminiOptions {
@@ -651,6 +653,24 @@ function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInf
         integer: true, step: 200, description: "The maximum number of tokens to generate"
     }];
 
+    const claudeCacheOptions: ModelOptionInfoItem[] = [
+        {
+            name: "cache_enabled",
+            type: OptionType.boolean,
+            default: false,
+            description: "Enable prompt caching. Injects cache breakpoints at the system prompt, tools, and conversation pivot.",
+        },
+    ];
+    const claudeCacheTtlOptions: ModelOptionInfoItem[] = (option as VertexAIClaudeOptions)?.cache_enabled ? [
+        {
+            name: "cache_ttl",
+            type: OptionType.enum,
+            enum: { "5 minutes (default)": "5m", "1 hour": "1h" },
+            default: "5m",
+            description: "TTL for cache breakpoints. '1h' requires extended caching to be enabled on your account.",
+        }
+    ] : [];
+
     if (model.includes("-3-7") || model.includes("-4")) {
         const claudeModeOptions: ModelOptionInfoItem[] = [
             {
@@ -685,6 +705,8 @@ function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInf
                 ...commonOptions,
                 ...claudeModeOptions,
                 ...claudeThinkingOptions,
+                ...claudeCacheOptions,
+                ...claudeCacheTtlOptions,
             ]
         };
     }
@@ -693,6 +715,8 @@ function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInf
         options: [
             ...max_tokens,
             ...commonOptions,
+            ...claudeCacheOptions,
+            ...claudeCacheTtlOptions,
         ]
     };
 }
