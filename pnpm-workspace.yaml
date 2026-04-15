@@ -3,9 +3,8 @@ packages:
   - ./core
   - ./drivers
   - ./examples
-minimumReleaseAge: 1440 # 1 day in minutes, minimumReleaseAge protects against supply chain attacks.
+minimumReleaseAge: 4320 # 3 days in minutes, minimumReleaseAge protects against supply chain attacks.
+# minimumReleaseAgeStrict: true, will be needed to maintain pnpm 10 behavior when pnpm 11 is adopted.
 minimumReleaseAgeExclude:
   - '@vertesia/*'
   - '@llumiverse/*'
-  # Renovate security update: vite@>=6.0.0 <6.2.6@6.4.2
-  - vite@>=6.0.0 <6.2.6@6.4.2
