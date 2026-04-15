@@ -3,7 +3,8 @@ packages:
   - ./core
   - ./drivers
   - ./examples
-minimumReleaseAge: 1440 # 1 day in minutes, minimumReleaseAge protects against supply chain attacks.
+minimumReleaseAge: 4320 # 3 days in minutes, minimumReleaseAge protects against supply chain attacks.
+# minimumReleaseAgeStrict: true, will be needed to maintain pnpm 10 behavior when pnpm 11 is adopted.
 minimumReleaseAgeExclude:
-- '@vertesia/*'
-- '@llumiverse/*'
+  - '@vertesia/*'
+  - '@llumiverse/*'
