@@ -1058,20 +1058,20 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
 
             if (request.system && request.system.length > 0) {
-                request.system = [...request.system, { cachePoint: { type: 'default' } } as BedrockSystemBlock];
+                request.system = [...request.system, { cachePoint: { type: 'default', ttl: "1h" } } satisfies BedrockSystemBlock];
             }
 
             if (request.toolConfig?.tools && request.toolConfig.tools.length > 0) {
                 request.toolConfig.tools = [
                     ...request.toolConfig.tools,
-                    { cachePoint: { type: 'default' } } as BedrockToolEntry,
+                    { cachePoint: { type: 'default', ttl: "1h" } } satisfies BedrockToolEntry,
                 ];
             }
 
             if (request.messages && request.messages.length >= 4) {
                 const pivotMsg = request.messages[request.messages.length - 2];
                 if (pivotMsg.content && Array.isArray(pivotMsg.content) && pivotMsg.content.length > 0) {
-                    pivotMsg.content = [...pivotMsg.content, { cachePoint: { type: 'default' } }];
+                    pivotMsg.content = [...pivotMsg.content, { cachePoint: { type: 'default', ttl: "1h" } }];
                 }
             }
         }
