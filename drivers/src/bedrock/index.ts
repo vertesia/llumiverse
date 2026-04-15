@@ -376,8 +376,12 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const completionResult: CompletionChunkObject = {
             result: reasoning + resultText ? [{ type: "text", value: reasoning + resultText }] : [],
             token_usage: {
-                prompt: result.usage?.inputTokens,
-                prompt_new: result.usage ? ((result.usage.inputTokens ?? 0) - (result.usage.cacheReadInputTokens ?? 0)) : undefined,
+                // Bedrock's inputTokens already excludes cache-read tokens,
+                // so prompt_new is inputTokens directly (no subtraction needed).
+                // prompt is the total including cached + cache_write for consistency
+                // with the Vertex Claude driver.
+                prompt_new: result.usage?.inputTokens,
+                prompt: result.usage ? (result.usage.inputTokens ?? 0) + (result.usage.cacheReadInputTokens ?? 0) + (result.usage.cacheWriteInputTokens ?? 0) : undefined,
                 result: result.usage?.outputTokens,
                 total: result.usage?.totalTokens,
                 prompt_cached: result.usage?.cacheReadInputTokens ?? undefined,
@@ -470,7 +474,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         if (result.metadata) {
             token_usage = {
-                prompt: result.metadata.usage?.inputTokens,
+                prompt_new: result.metadata.usage?.inputTokens,
+                prompt: result.metadata.usage ? (result.metadata.usage.inputTokens ?? 0) + (result.metadata.usage.cacheReadInputTokens ?? 0) + (result.metadata.usage.cacheWriteInputTokens ?? 0) : undefined,
                 result: result.metadata.usage?.outputTokens,
                 total: result.metadata.usage?.totalTokens,
                 prompt_cached: result.metadata.usage?.cacheReadInputTokens ?? undefined,
