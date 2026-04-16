@@ -13,7 +13,7 @@ overrides:
   form-data@<2.5.4: ^2.5.4
   form-data@>=4.0.0 <4.0.4: ^4.0.5
   glob@>=10.2.0 <10.5.0: ^10.5.0
-  google-auth-library: ^10.5.0
+  google-auth-library: 10.6.2
   js-yaml@>=4.0.0 <4.1.1: ^4.1.1
   jws@>=3.0.0 <3.2.3: ^3.2.3
   jws@>=4.0.0 <4.0.1: ^4.0.1
@@ -159,8 +159,8 @@ importers:
         specifier: ^6.5.0
         version: 6.5.0
       '@google/genai':
-        specifier: ^1.46.0
-        version: 1.46.0
+        specifier: ^1.49.0
+        version: 1.49.0
       '@huggingface/inference':
         specifier: 4.13.11
         version: 4.13.11
@@ -177,8 +177,8 @@ importers:
         specifier: ^4.1.0
         version: 4.1.0
       google-auth-library:
-        specifier: ^10.5.0
-        version: 10.5.0
+        specifier: 10.6.2
+        version: 10.6.2
       groq-sdk:
         specifier: ^0.37.0
         version: 0.37.0
@@ -747,8 +747,8 @@ packages:
     resolution: {integrity: sha512-UZaeXg4Xt+/2LQLWw2nZ7ipbFdUIm9Xo3edAu2xpP/GMmHQIFk3nJmCI7Y3bFUrcr7kK4mw1gPJ374LQKpOO3w==}
     engines: {node: '>=18'}
 
-  '@google/genai@1.46.0':
-    resolution: {integrity: sha512-ewPMN5JkKfgU5/kdco9ZhXBHDPhVqZpMQqIFQhwsHLf8kyZfx1cNpw1pHo1eV6PGEW7EhIBFi3aYZraFndAXqg==}
+  '@google/genai@1.49.0':
+    resolution: {integrity: sha512-hO69Zl0H3x+L0KL4stl1pLYgnqnwHoLqtKy6MRlNnW8TAxjqMdOUVafomKd4z1BePkzoxJWbYILny9a2Zk43VQ==}
     engines: {node: '>=20.0.0'}
     peerDependencies:
       '@modelcontextprotocol/sdk': ^1.25.2
@@ -1702,12 +1702,12 @@ packages:
   function-bind@1.1.2:
     resolution: {integrity: sha512-7XHNxH7qX9xG5mIwxkhumTox/MIRNcOgDrxWsMt2pAr23WHp6MrRlN7FBSFpCpr+oVO0F744iUgR82nJMfG2SA==}
 
-  gaxios@7.1.2:
-    resolution: {integrity: sha512-/Szrn8nr+2TsQT1Gp8iIe/BEytJmbyfrbFh419DfGQSkEgNEhbPi7JRJuughjkTzPWgU9gBQf5AVu3DbHt0OXA==}
+  gaxios@7.1.4:
+    resolution: {integrity: sha512-bTIgTsM2bWn3XklZISBTQX7ZSddGW+IO3bMdGaemHZ3tbqExMENHLx6kKZ/KlejgrMtj8q7wBItt51yegqalrA==}
     engines: {node: '>=18'}
 
-  gcp-metadata@8.1.1:
-    resolution: {integrity: sha512-dTCcAe9fRQf06ELwel6lWWFrEbstwjUBYEhr5VRGoC+iPDZQucHppCowaIp8b8v92tU1G4X4H3b/Y6zXZxkMsQ==}
+  gcp-metadata@8.1.2:
+    resolution: {integrity: sha512-zV/5HKTfCeKWnxG0Dmrw51hEWFGfcF2xiXqcA3+J90WDuP0SvoiSO5ORvcBsifmx/FoIjgQN3oNOGaQ5PhLFkg==}
     engines: {node: '>=18'}
 
   get-caller-file@2.0.5:
@@ -1735,16 +1735,16 @@ packages:
     resolution: {integrity: sha512-tvZgpqk6fz4BaNZ66ZsRaZnbHvP/jG3uKJvAZOwEVUL4RTA5nJeeLYfyN9/VA8NX/V3IBG+hkeuGpKjvELkVhA==}
     engines: {node: 20 || >=22}
 
-  google-auth-library@10.5.0:
-    resolution: {integrity: sha512-7ABviyMOlX5hIVD60YOfHw4/CxOfBhyduaYB+wbFWCWoni4N7SLcV46hrVRktuBbZjFC9ONyqamZITN7q3n32w==}
+  google-auth-library@10.6.2:
+    resolution: {integrity: sha512-e27Z6EThmVNNvtYASwQxose/G57rkRuaRbQyxM2bvYLLX/GqWZ5chWq2EBoUchJbCc57eC9ArzO5wMsEmWftCw==}
     engines: {node: '>=18'}
 
   google-gax@5.0.4:
     resolution: {integrity: sha512-HmQ6zIYBs2EikTk+kjeHmtHprNTEpsnVaKONw9cwZZwUNCkUb+D5RYrJpCxyjdvIDvJp3wLbVReolJLRZRms1g==}
     engines: {node: '>=18'}
 
-  google-logging-utils@1.1.1:
-    resolution: {integrity: sha512-rcX58I7nqpu4mbKztFeOAObbomBbHU2oIb/d3tJfF3dizGSApqtSwYJigGCooHdnMyQBIw8BrWyK96w3YXgr6A==}
+  google-logging-utils@1.1.3:
+    resolution: {integrity: sha512-eAmLkjDjAFCVXg7A1unxHsLf961m6y17QFqXqAXGj/gVkKFrEICfStRfwUlGNfeCEjNRa32JEWOUTlYXPyyKvA==}
     engines: {node: '>=14'}
 
   gopd@1.2.0:
@@ -1753,10 +1753,6 @@ packages:
 
   groq-sdk@0.37.0:
     resolution: {integrity: sha512-lT72pcT8b/X5XrzdKf+rWVzUGW1OQSKESmL8fFN5cTbsf02gq6oFam4SVeNtzELt9cYE2Pt3pdGgSImuTbHFDg==}
-
-  gtoken@8.0.0:
-    resolution: {integrity: sha512-+CqsMbHPiSTdtSO14O51eMNlrp9N79gmeqmXeouJOhfucAedHw9noVe/n5uJk3tbKE6a+6ZCQg3RPhVhHByAIw==}
-    engines: {node: '>=18'}
 
   has-symbols@1.1.0:
     resolution: {integrity: sha512-1cDNdwJ2Jaohmb3sg4OmKaMBwuC48sYni5HUw2DvsC8LjGTLK9h+eb1X6RyuOHe4hT0ULCW68iomhjUoKUqlPQ==}
@@ -2448,7 +2444,7 @@ snapshots:
   '@anthropic-ai/vertex-sdk@0.14.4(zod@3.25.63)':
     dependencies:
       '@anthropic-ai/sdk': 0.85.0(zod@3.25.63)
-      google-auth-library: 10.5.0
+      google-auth-library: 10.6.2
     transitivePeerDependencies:
       - supports-color
       - zod
@@ -3538,9 +3534,9 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@google/genai@1.46.0':
+  '@google/genai@1.49.0':
     dependencies:
-      google-auth-library: 10.5.0
+      google-auth-library: 10.6.2
       p-retry: 4.6.2
       protobufjs: 7.5.4
       ws: 8.18.2
@@ -4602,7 +4598,7 @@ snapshots:
 
   function-bind@1.1.2: {}
 
-  gaxios@7.1.2:
+  gaxios@7.1.4:
     dependencies:
       extend: 3.0.2
       https-proxy-agent: 7.0.6
@@ -4610,10 +4606,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  gcp-metadata@8.1.1:
+  gcp-metadata@8.1.2:
     dependencies:
-      gaxios: 7.1.2
-      google-logging-utils: 1.1.1
+      gaxios: 7.1.4
+      google-logging-utils: 1.1.3
       json-bigint: 1.0.0
     transitivePeerDependencies:
       - supports-color
@@ -4657,14 +4653,13 @@ snapshots:
       minipass: 7.1.2
       path-scurry: 2.0.0
 
-  google-auth-library@10.5.0:
+  google-auth-library@10.6.2:
     dependencies:
       base64-js: 1.5.1
       ecdsa-sig-formatter: 1.0.11
-      gaxios: 7.1.2
-      gcp-metadata: 8.1.1
-      google-logging-utils: 1.1.1
-      gtoken: 8.0.0
+      gaxios: 7.1.4
+      gcp-metadata: 8.1.2
+      google-logging-utils: 1.1.3
       jws: 4.0.1
     transitivePeerDependencies:
       - supports-color
@@ -4674,8 +4669,8 @@ snapshots:
       '@grpc/grpc-js': 1.13.2
       '@grpc/proto-loader': 0.8.0
       duplexify: 4.1.3
-      google-auth-library: 10.5.0
-      google-logging-utils: 1.1.1
+      google-auth-library: 10.6.2
+      google-logging-utils: 1.1.3
       node-fetch: 3.3.2
       object-hash: 3.0.0
       proto3-json-serializer: 3.0.3
@@ -4684,7 +4679,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  google-logging-utils@1.1.1: {}
+  google-logging-utils@1.1.3: {}
 
   gopd@1.2.0: {}
 
@@ -4699,13 +4694,6 @@ snapshots:
       node-fetch: 2.7.0
     transitivePeerDependencies:
       - encoding
-
-  gtoken@8.0.0:
-    dependencies:
-      gaxios: 7.1.2
-      jws: 4.0.1
-    transitivePeerDependencies:
-      - supports-color
 
   has-symbols@1.1.0: {}
 
