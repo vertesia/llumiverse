@@ -599,6 +599,13 @@ function geminiThinkingConfig(option: StatelessExecutionOptions): ThinkingConfig
     // Docs: https://ai.google.dev/gemini-api/docs/thinking#set-budget
     // https://docs.cloud.google.com/vertex-ai/generative-ai/docs/thinking
     if (isGeminiModelVersionGte(option.model, '3.0')) {
+        if (option.model.includes("gemini-3-pro-image")) {
+            // Does not support thinking level.
+            return {
+                includeThoughts: include_thoughts,
+                thinkingBudget: -1
+            };
+        }
         return {
             includeThoughts: include_thoughts,
             thinkingLevel: ThinkingLevel.LOW
