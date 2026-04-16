@@ -1,32 +1,32 @@
 import type { ApiError } from "@google/genai";
 import {
-    Content, FinishReason, FunctionCallingConfigMode, FunctionDeclaration, GenerateContentConfig, GenerateContentParameters,
-    GenerateContentResponseUsageMetadata,
-    HarmBlockThreshold, HarmCategory, Modality, Part,
+    type Content, FinishReason, FunctionCallingConfigMode, type FunctionDeclaration, type GenerateContentConfig, type GenerateContentParameters,
+    type GenerateContentResponseUsageMetadata,
+    HarmBlockThreshold, HarmCategory, Modality, type Part,
     ProminentPeople,
-    SafetySetting, Schema, ThinkingConfig,
+    type SafetySetting, type ThinkingConfig,
     ThinkingLevel,
-    Tool, Type
+    type Tool
 } from "@google/genai";
 import {
-    AIModel, Completion, CompletionChunkObject, CompletionResult, ExecutionOptions,
-    ExecutionTokenUsage,
+    type AIModel, type Completion, type CompletionChunkObject, type CompletionResult, type ExecutionOptions,
+    type ExecutionTokenUsage,
     getConversationMeta,
     getGeminiModelVersion,
     incrementConversationTurn,
     isGeminiModelVersionGte,
-    JSONObject, JSONSchema, LlumiverseError, LlumiverseErrorContext, ModelType, PromptOptions, PromptRole,
-    PromptSegment, readStreamAsBase64, StatelessExecutionOptions,
+    type JSONObject, LlumiverseError, type LlumiverseErrorContext, ModelType, type PromptOptions, PromptRole,
+    type PromptSegment, readStreamAsBase64, type StatelessExecutionOptions,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
-    ToolDefinition, ToolUse,
+    type ToolDefinition, type ToolUse,
     truncateLargeTextInConversation,
     unwrapConversationArray,
-    VertexAIGeminiOptions
+    type VertexAIGeminiOptions
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
-import { GenerateContentPrompt, VertexAIDriver } from "../index.js";
-import { ModelDefinition } from "../models.js";
+import type { GenerateContentPrompt, VertexAIDriver } from "../index.js";
+import type { ModelDefinition } from "../models.js";
 
 function supportsStructuredOutput(options: PromptOptions): boolean {
     // Gemini 1.0 Ultra does not support JSON output, 1.0 Pro does.
@@ -127,7 +127,7 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
         candidateCount: 1,
         //JSON/Structured output
         responseMimeType: useStructuredOutput ? "application/json" : undefined,
-        responseSchema: useStructuredOutput ? parseJSONtoSchema(options.result_schema, true) : undefined,
+        responseJsonSchema: useStructuredOutput ? options.result_schema : undefined,
         //Model options
         temperature: model_options?.temperature,
         topP: model_options?.top_p,
@@ -146,331 +146,6 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
         contents: payloadContents,
         config: options.model.toLowerCase().includes("image") ? configNanoBanana : config,
     };
-}
-
-/**
- * Convert JSONSchema to Gemini Schema,
- * Make all properties required by default
- * Properties previously marked as optional will be marked as nullable.
- */
-function parseJSONtoSchema(schema?: JSONSchema, requiredAll = false): Schema {
-    if (!schema) {
-        return {};
-    }
-
-    return convertSchema(schema, 0, requiredAll);
-}
-
-/**
- * Convert JSONSchema type to Gemini Schema Type
- */
-function convertType(type?: string | string[]): Type | undefined {
-    if (!type) return undefined;
-
-    // Handle single type
-    if (typeof type === 'string') {
-        switch (type) {
-            case 'string': return Type.STRING;
-            case 'number': return Type.NUMBER;
-            case 'integer': return Type.INTEGER;
-            case 'boolean': return Type.BOOLEAN;
-            case 'object': return Type.OBJECT;
-            case 'array': return Type.ARRAY;
-            default: return type as Type; // For unsupported types, return as is
-        }
-    }
-
-    // For array of types, take the first valid one as the primary type
-    // The full set of types will be handled with anyOf
-    for (const t of type) {
-        const converted = convertType(t);
-        if (converted) return converted;
-    }
-
-    return undefined;
-}
-
-/**
- * Deep clone and convert the schema from JSONSchema to Gemini Schema
- * @throws {Error} If circular references are detected (max depth exceeded)
- */
-function convertSchema(jsSchema?: JSONSchema, depth: number = 0, requiredAll = false): Schema {
-    // Prevent circular references
-    if (depth > 20) {
-        throw new Error("Maximum schema depth (20) exceeded. Possible circular reference detected.");
-    }
-
-    if (!jsSchema) return {};
-
-    // Create new schema object rather than mutating
-    const result: Schema = {};
-
-    // Handle types
-    result.type = convertSchemaType(jsSchema);
-
-    // Handle description
-    if (jsSchema.description) {
-        result.description = jsSchema.description;
-    }
-
-    // Handle properties and required fields
-    if (jsSchema.properties) {
-        const propertyResult = convertSchemaProperties(jsSchema, depth + 1, requiredAll);
-        Object.assign(result, propertyResult);
-    }
-
-    // Handle items for arrays
-    if (jsSchema.items) {
-        result.items = convertSchema(jsSchema.items, depth + 1);
-    }
-
-    // Handle enum values
-    if (jsSchema.enum) {
-        result.enum = [...jsSchema.enum]; // Create a copy instead of reference
-    }
-
-    // Copy constraints
-    Object.assign(result, extractConstraints(jsSchema));
-
-    return result;
-}
-
-/**
- * Convert schema type information, handling anyOf for multiple types
- */
-function convertSchemaType(jsSchema: JSONSchema): Type | undefined {
-    // Handle multiple types using anyOf
-    if (jsSchema.type && Array.isArray(jsSchema.type) && jsSchema.type.length > 1) {
-        // Since anyOf is an advanced type, we'll return the first valid type
-        // and handle the multi-type case separately in the schema
-        return convertType(jsSchema.type[0]);
-    }
-    // Handle single type
-    else if (jsSchema.type) {
-        return convertType(jsSchema.type);
-    }
-
-    return undefined;
-}
-
-/**
- * Handle properties conversion and required fields 
- */
-function convertSchemaProperties(jsSchema: JSONSchema, depth: number, requiredAll: boolean): Partial<Schema> {
-    const result: Partial<Schema> = { properties: {} };
-    if (jsSchema.required) {
-        result.required = [...jsSchema.required]; // Create a copy
-    }
-
-    // Extract property ordering from the object keys
-    const propertyNames = Object.keys(jsSchema.properties || {});
-
-    // Set property ordering based on the existing order in the schema
-    if (propertyNames.length > 0) {
-        result.propertyOrdering = propertyNames;
-
-        if (requiredAll) {
-            // Mark all properties as required by default
-            // This ensures the model fills all fields
-            result.required = propertyNames;
-
-            // Get the original required properties
-            const originalRequired = jsSchema.required || [];
-
-            // Make previously optional properties nullable since we're marking them as required
-            for (const key of propertyNames) {
-                const propSchema = jsSchema.properties?.[key];
-                if (propSchema && !originalRequired.includes(key)) {
-                    // Initialize the property if needed
-                    if (!result.properties![key]) {
-                        result.properties![key] = {};
-                    }
-
-                    // Mark as nullable
-                    result.properties![key].nullable = true;
-                }
-            }
-        }
-    }
-
-    // Convert each property schema
-    for (const [key, value] of Object.entries(jsSchema.properties || {})) {
-        if (!result.properties![key]) {
-            result.properties![key] = {};
-        }
-
-        // Merge with converted schema
-        result.properties![key] = {
-            ...result.properties![key],
-            ...convertSchema(value, depth)
-        };
-    }
-
-    // Override with explicit propertyOrdering if present
-    if (jsSchema.propertyOrdering) {
-        result.propertyOrdering = [...jsSchema.propertyOrdering]; // Create a copy
-    }
-
-    return result;
-}
-
-/**
- * Extract schema constraints (min/max values, formats, etc.)
- */
-function extractConstraints(jsSchema: JSONSchema): Partial<Schema> {
-    const constraints: Partial<Schema> = {};
-
-    if (jsSchema.minimum !== undefined) constraints.minimum = jsSchema.minimum;
-    if (jsSchema.maximum !== undefined) constraints.maximum = jsSchema.maximum;
-    if (jsSchema.minLength !== undefined) constraints.minLength = jsSchema.minLength;
-    if (jsSchema.maxLength !== undefined) constraints.maxLength = jsSchema.maxLength;
-    if (jsSchema.minItems !== undefined) constraints.minItems = jsSchema.minItems;
-    if (jsSchema.maxItems !== undefined) constraints.maxItems = jsSchema.maxItems;
-    if (jsSchema.nullable !== undefined) constraints.nullable = jsSchema.nullable;
-    if (jsSchema.pattern) constraints.pattern = jsSchema.pattern;
-    if (jsSchema.format) constraints.format = jsSchema.format;
-    if (jsSchema.default !== undefined) constraints.default = jsSchema.default;
-    if (jsSchema.example !== undefined) constraints.example = jsSchema.example;
-
-    return constraints;
-}
-
-/**
- * Check if a value is empty (null, undefined, empty string, empty array, empty object)
- * @param value The value to check
- * @returns True if the value is considered empty
- */
-function isEmpty(value: any): boolean {
-    if (value === null || value === undefined) {
-        return true;
-    }
-
-    if (typeof value === 'string' && value.trim() === '') {
-        return true;
-    }
-
-    if (Array.isArray(value) && value.length === 0) {
-        return true;
-    }
-
-    // Check for empty object (no own enumerable properties)
-    if (typeof value === 'object' && Object.keys(value).length === 0) {
-        return true;
-    }
-
-    // Check for array of empty objects
-    if (Array.isArray(value) && value.every(item => isEmpty(item))) {
-        return true;
-    }
-
-    return false;
-}
-
-// No array cleaning function needed as we're only working with JSONObjects
-
-/**
- * Clean up the JSON result by removing empty values for optional fields
- * Uses immutable patterns to create a new Content object rather than modifying the original
- * @param content The original content from Gemini
- * @param result_schema The JSON schema to use for cleaning
- * @returns A new Content object with cleaned JSON text
- */
-function cleanEmptyFieldsContent(content: Content, result_schema?: JSONSchema): Content {
-    // If no schema provided, return original content
-    if (!result_schema) {
-        return content;
-    }
-
-    // Create a new content object (shallow copy)
-    const cleanedContent: Content = { ...content };
-
-    // Create a new parts array if it exists
-    if (cleanedContent.parts) {
-        cleanedContent.parts = cleanedContent.parts.map(part => {
-            // Only process parts with text
-            if (!part.text) {
-                return part; // Return unchanged if no text
-            }
-
-            // Create a new part object
-            const newPart = { ...part };
-
-            try {
-                // Parse JSON, clean it based on schema, then stringify
-                const jsonText = JSON.parse(part.text);
-                // Skip cleaning if not an object
-                if (typeof jsonText === 'object' && jsonText !== null && !Array.isArray(jsonText)) {
-                    const cleanedJson = removeEmptyFields(jsonText, result_schema);
-                    newPart.text = JSON.stringify(cleanedJson);
-                } else {
-                    // Keep original if not an object (string, number, array, etc.)
-                    newPart.text = part.text;
-                }
-            } catch (e) {
-                // On error, keep the original text
-                console.warn("Error parsing Gemini output to JSON in part:", e);
-            }
-
-            return newPart;
-        });
-    }
-
-    return cleanedContent;
-}
-
-/**
- * Removes empty optional fields from the JSON result based on the provided schema
- * @param object The object to clean
- * @param schema The JSON schema to use for cleaning
- * @returns A new object with empty optional fields removed
- */
-function removeEmptyFields(object: JSONObject | any[], schema: JSONSchema): JSONObject | any[] {
-    if (!object) {
-        return object
-    }
-
-    if (Array.isArray(object)) {
-        return removeEmptyJSONArray(object, schema);
-    }
-    if (typeof object == 'object' || object === null) {
-        return removeEmptyJSONObject(object, schema);
-    }
-
-    return object;
-}
-
-function removeEmptyJSONObject(object: JSONObject, schema: JSONSchema): JSONObject {
-    // Get the original required properties from schema
-    const requiredProps = schema.required || [];
-    const cleanedResult: JSONObject = { ...object };
-
-    // Process each property
-    for (const [key, value] of Object.entries(object)) {
-        const isRequired = requiredProps.includes(key);
-        const propSchema = schema.properties?.[key];
-
-        // Recursively clean nested objects based on their schema
-        cleanedResult[key] = removeEmptyFields(value as JSONObject, propSchema ?? {});
-
-        if (isEmpty(value)) {
-            if (isRequired) {
-                continue; // Keep required fields even if empty
-            } else {
-                delete cleanedResult[key]; // Remove empty optional fields
-            }
-        }
-    }
-
-    return cleanedResult;
-}
-
-function removeEmptyJSONArray(array: any[], schema: JSONSchema): any[] {
-    const cleanedArray = array.map(item => {
-        return removeEmptyFields(item, schema);
-    });
-
-    // Filter out empty objects from the array
-    return cleanedArray.filter(item => !isEmpty(item));
 }
 
 /**
@@ -573,7 +248,7 @@ function geminiThinkingBudget(option: StatelessExecutionOptions) {
     }
     // Set minimum thinking level by default.
     // Docs: https://ai.google.dev/gemini-api/docs/thinking#set-budget
-    if (getGeminiModelVersion(option.model) == '2.5') {
+    if (getGeminiModelVersion(option.model) === '2.5') {
         if (option.model.includes("pro")) {
             return 128;
         }
@@ -632,31 +307,6 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             type: ModelType.Text,
             can_stream: true
         } satisfies AIModel;
-    }
-
-    preValidationProcessing(result: Completion, options: ExecutionOptions): { result: Completion, options: ExecutionOptions } {
-        // Guard clause, if no result_schema, error, or tool use, skip processing
-        if (!options.result_schema || !result.result || result.tool_use || result.error) {
-            return { result, options };
-        }
-        try {
-            // Extract text content for JSON processing - only process first text result
-            const textResult = result.result.find(r => r.type === 'text')?.value;
-            if (textResult) {
-                const jsonResult = JSON.parse(textResult);
-                const cleanedJson = JSON.stringify(removeEmptyFields(jsonResult, options.result_schema));
-                // Replace the text result with cleaned version
-                result.result = result.result.map(r =>
-                    r.type === 'text' ? { ...r, value: cleanedJson } : r
-                );
-            }
-            return { result, options };
-        } catch (error) {
-            // Log error during processing but don't fail the completion
-            console.warn('Error during Gemini JSON pre-validation: ', error);
-            // Return original result if cleanup fails
-            return { result, options };
-        }
     }
 
     async createPrompt(_driver: VertexAIDriver, segments: PromptSegment[], options: ExecutionOptions): Promise<GenerateContentPrompt> {
@@ -802,7 +452,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             + (usageMetadata.thoughtsTokenCount ?? 0)
             + (usageMetadata.toolUsePromptTokenCount ?? 0);
 
-        if ((tokenUsage.total ?? 0) != (tokenUsage.prompt ?? 0) + tokenUsage.result) {
+        if ((tokenUsage.total ?? 0) !== (tokenUsage.prompt ?? 0) + tokenUsage.result) {
             console.warn("[VertexAI] Gemini token usage mismatch: total does not equal prompt + result", {
                 total: tokenUsage.total,
                 prompt: tokenUsage.prompt,
@@ -879,11 +529,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                         `Model tried to call undeclared tool(s): ${tool_use.map(t => t.tool_name).join(', ')}`);
                 }
 
-                // We clean the content before validation, so we can update the conversation.
-                const cleanedContent = cleanEmptyFieldsContent(content, options.result_schema);
-                // Collect all parts in order (text and images)
-                result = extractCompletionResults(cleanedContent);
-                conversation = updateConversation(conversation, [cleanedContent]);
+                result = extractCompletionResults(content);
+                conversation = updateConversation(conversation, [content]);
             }
         }
 
@@ -1190,21 +837,13 @@ function getToolDefinitions(tools: ToolDefinition[] | undefined | null): Tool | 
 }
 
 function getToolFunction(tool: ToolDefinition): FunctionDeclaration {
-    // If input_schema is a string, parse it; if it's already an object, use it directly
-    let toolSchema: Schema | undefined;
-
-    // Using a try-catch for safety, as the input_schema might not be a valid JSONSchema
-    try {
-        toolSchema = parseJSONtoSchema(tool.input_schema as JSONSchema, false);
-    }
-    catch (e) {
-        toolSchema = { ...tool.input_schema, type: Type.OBJECT } as unknown as Schema;
-    }
-
     return {
         name: tool.name,
         description: tool.description,
-        parameters: toolSchema,
+        // Pass the input_schema directly as a JSON Schema object.
+        // parametersJsonSchema accepts standard JSON Schema and is mutually exclusive
+        // with the legacy parameters field (which required a proprietary Gemini Schema type).
+        parametersJsonSchema: tool.input_schema,
     };
 }
 
