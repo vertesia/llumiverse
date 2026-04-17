@@ -59,6 +59,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     anthropicClient: AnthropicVertex | undefined;
     fetchClient: FetchClient | undefined;
     googleGenAI: GoogleGenAI | undefined;
+    googleGenAIRegion: string | undefined;
+    googleGenAIFlex: boolean | undefined;
     llamaClient: FetchClient & { region?: string } | undefined;
     modelGarden: v1beta1.ModelGardenServiceClient | undefined;
     imagenClient: PredictionServiceClient | undefined;
@@ -73,6 +75,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         this.anthropicClient = undefined;
         this.fetchClient = undefined
         this.googleGenAI = undefined;
+        this.googleGenAIRegion = undefined;
+        this.googleGenAIFlex = undefined;
         this.modelGarden = undefined;
         this.llamaClient = undefined;
         this.imagenClient = undefined;
@@ -88,30 +92,36 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return this.authClientPromise;
     }
 
-    public getGoogleGenAIClient(region: string = this.options.region): GoogleGenAI {
-        //Lazy initialization
-        if (region !== this.options.region) {
-            //Get one off client for different region
-            return new GoogleGenAI({
-                project: this.options.project,
-                location: region,
-                vertexai: true,
-                googleAuthOptions: this.options.googleAuthOptions || {
-                    scopes: ["https://www.googleapis.com/auth/cloud-platform"],
-                }
-            });
+    public getGoogleGenAIClient(region: string = this.options.region, flex: boolean = false): GoogleGenAI {
+        if (this.googleGenAI && 
+            this.googleGenAIRegion === region && 
+            this.googleGenAIFlex === flex) {
+            // Return existing client if region and flex settings match
+            return this.googleGenAI;
         }
-        if (!this.googleGenAI) {
-            this.googleGenAI = new GoogleGenAI({
-                project: this.options.project,
-                location: region,
-                vertexai: true,
-                googleAuthOptions: this.options.googleAuthOptions || {
-                    scopes: ["https://www.googleapis.com/auth/cloud-platform"],
-                }
-            });
-        }
+        this.googleGenAI = this.buildGoogleGenAIClient(region, flex);
+        this.googleGenAIRegion = region;
+        this.googleGenAIFlex = flex;
         return this.googleGenAI;
+    }
+
+    private buildGoogleGenAIClient(region: string, flex: boolean): GoogleGenAI {
+        return new GoogleGenAI({
+            project: this.options.project,
+            location: region,
+            vertexai: true,
+            googleAuthOptions: this.options.googleAuthOptions || {
+                scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+            },
+            ...(flex ? {
+                httpOptions: {
+                    headers: {
+                        "X-Vertex-AI-LLM-Request-Type": "shared",
+                        "X-Vertex-AI-LLM-Shared-Request-Type": "flex",
+                    }
+                }
+            } : {}),
+        });
     }
 
     public getFetchClient(): FetchClient {

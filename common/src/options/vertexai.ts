@@ -87,6 +87,7 @@ export interface VertexAIGeminiOptions {
     include_thoughts?: boolean;
     thinking_budget_tokens?: number;
     thinking_level?: ThinkingLevel;
+    flex?: boolean;
     // ImageConfig properties
     image_aspect_ratio?: "1:1" | "2:3" | "3:2" | "3:4" | "4:3" | "9:16" | "16:9" | "21:9";
     image_size?: "1K" | "2K" | "4K";
@@ -94,6 +95,20 @@ export interface VertexAIGeminiOptions {
     prominent_people?: "PROMINENT_PEOPLE_UNSPECIFIED" | "ALLOW_PROMINENT_PEOPLE" | "BLOCK_PROMINENT_PEOPLE";
     output_mime_type?: "image/png" | "image/jpeg";
     output_compression_quality?: number;
+}
+
+/** Models that support Flex processing (shared, cost-efficient tier). */
+const FLEX_SUPPORTED_GEMINI_MODELS = [
+    "gemini-3.1-flash-lite-preview",
+    "gemini-3.1-flash-image-preview",
+    "gemini-3.1-pro-preview",
+    "gemini-3-flash-preview",
+    "gemini-3-pro-image-preview",
+] as const;
+
+export function isFlexSupportedGeminiModel(model: string): boolean {
+    const modelName = model.split('/').pop() ?? model;
+    return FLEX_SUPPORTED_GEMINI_MODELS.some(m => modelName.includes(m));
 }
 
 export function getVertexAiOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
@@ -563,6 +578,12 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
     };
 
     if (isGeminiModelVersionGte(model, "3.0")) {
+        const flexOptions: ModelOptionInfoItem[] = isFlexSupportedGeminiModel(model) ? [{
+            name: "flex",
+            type: OptionType.boolean,
+            default: false,
+            description: "Use Flex processing tier for cost-efficient, batch-style execution with relaxed latency.",
+        }] : [];
         return {
             _option_id: "vertexai-gemini",
             options: [
@@ -570,6 +591,7 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
                 ...commonOptions,
                 seedOption,
                 ...getGeminiThinkingOptionItems(model),
+                ...flexOptions,
             ]
         };
     }
