@@ -952,23 +952,29 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
 
     // Prompt caching: use three breakpoints so stable system prompt, tool definitions,
     // and the conversation history prefix can all be reused across calls.
-    if (sanitizedSystem && sanitizedSystem.length > 0) {
-        const lastSystemBlock = sanitizedSystem[sanitizedSystem.length - 1] as TextBlockParam & { cache_control?: unknown };
-        lastSystemBlock.cache_control = { type: 'ephemeral', ttl: "1h" };
-    }
+    const cacheEnabled = model_options?.cache_enabled === true;
+    if (cacheEnabled) {
+        const cacheTtl = model_options?.cache_ttl;
+        const cacheControl = { type: 'ephemeral' as const, ...(cacheTtl && { ttl: cacheTtl }) };
 
-    if (sanitizedTools && sanitizedTools.length > 0) {
-        const lastTool = sanitizedTools[sanitizedTools.length - 1] as ClaudeTool & { cache_control?: unknown };
-        lastTool.cache_control = { type: 'ephemeral', ttl: "1h" };
-    }
+        if (sanitizedSystem && sanitizedSystem.length > 0) {
+            const lastSystemBlock = sanitizedSystem[sanitizedSystem.length - 1] as TextBlockParam & { cache_control?: unknown };
+            lastSystemBlock.cache_control = cacheControl;
+        }
 
-    if (sanitizedMessages.length >= 4) {
-        const pivotMsg = sanitizedMessages[sanitizedMessages.length - 2];
-        if (Array.isArray(pivotMsg.content) && pivotMsg.content.length > 0) {
-            const lastBlock = pivotMsg.content[pivotMsg.content.length - 1];
-            if (typeof lastBlock === 'object' && lastBlock !== null &&
-                'type' in lastBlock && lastBlock.type !== 'thinking' && lastBlock.type !== 'redacted_thinking') {
-                (lastBlock as TextBlockParam).cache_control = { type: 'ephemeral', ttl: "1h" };
+        if (sanitizedTools && sanitizedTools.length > 0) {
+            const lastTool = sanitizedTools[sanitizedTools.length - 1] as ClaudeTool & { cache_control?: unknown };
+            lastTool.cache_control = cacheControl;
+        }
+
+        if (sanitizedMessages.length >= 4) {
+            const pivotMsg = sanitizedMessages[sanitizedMessages.length - 2];
+            if (Array.isArray(pivotMsg.content) && pivotMsg.content.length > 0) {
+                const lastBlock = pivotMsg.content[pivotMsg.content.length - 1];
+                if (typeof lastBlock === 'object' && lastBlock !== null &&
+                    'type' in lastBlock && lastBlock.type !== 'thinking' && lastBlock.type !== 'redacted_thinking') {
+                    (lastBlock as TextBlockParam).cache_control = cacheControl;
+                }
             }
         }
     }

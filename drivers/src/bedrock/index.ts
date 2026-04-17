@@ -1046,6 +1046,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         // Prompt caching: use three breakpoints so stable system blocks, tool definitions,
         // and the conversation history prefix can all be reused across Claude turns.
         if (options.model.includes('claude')) {
+            // Always strip stale markers from prior turns
             if (request.messages) {
                 request.messages = stripClaudeCachePoints(request.messages);
             }
@@ -1057,21 +1058,28 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 };
             }
 
-            if (request.system && request.system.length > 0) {
-                request.system = [...request.system, { cachePoint: { type: 'default', ttl: "1h" } } satisfies BedrockSystemBlock];
-            }
+            const claudeOptions = model_options as unknown as BedrockClaudeOptions;
+            const cacheEnabled = claudeOptions?.cache_enabled === true;
+            if (cacheEnabled) {
+                const cacheTtl = claudeOptions?.cache_ttl;
+                const cachePointBlock = { type: 'default' as const, ...(cacheTtl && { ttl: cacheTtl }) };
 
-            if (request.toolConfig?.tools && request.toolConfig.tools.length > 0) {
-                request.toolConfig.tools = [
-                    ...request.toolConfig.tools,
-                    { cachePoint: { type: 'default', ttl: "1h" } } satisfies BedrockToolEntry,
-                ];
-            }
+                if (request.system && request.system.length > 0) {
+                    request.system = [...request.system, { cachePoint: cachePointBlock } satisfies BedrockSystemBlock];
+                }
 
-            if (request.messages && request.messages.length >= 4) {
-                const pivotMsg = request.messages[request.messages.length - 2];
-                if (pivotMsg.content && Array.isArray(pivotMsg.content) && pivotMsg.content.length > 0) {
-                    pivotMsg.content = [...pivotMsg.content, { cachePoint: { type: 'default', ttl: "1h" } }];
+                if (request.toolConfig?.tools && request.toolConfig.tools.length > 0) {
+                    request.toolConfig.tools = [
+                        ...request.toolConfig.tools,
+                        { cachePoint: cachePointBlock } satisfies BedrockToolEntry,
+                    ];
+                }
+
+                if (request.messages && request.messages.length >= 4) {
+                    const pivotMsg = request.messages[request.messages.length - 2];
+                    if (pivotMsg.content && Array.isArray(pivotMsg.content) && pivotMsg.content.length > 0) {
+                        pivotMsg.content = [...pivotMsg.content, { cachePoint: cachePointBlock }];
+                    }
                 }
             }
         }

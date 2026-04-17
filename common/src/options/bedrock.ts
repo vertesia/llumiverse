@@ -35,6 +35,8 @@ export interface BedrockClaudeOptions extends BaseConverseOptions {
     thinking_mode?: boolean;
     thinking_budget_tokens?: number;
     include_thoughts?: boolean;
+    cache_enabled?: boolean;
+    cache_ttl?: '5m' | '1h';
 }
 
 export interface BedrockPalmyraOptions extends BaseConverseOptions {
@@ -271,6 +273,23 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                     description: "Limits token sampling to the top k tokens"
                 },
             ];
+            const claudeCacheOptions: ModelOptionInfoItem[] = [
+                {
+                    name: "cache_enabled",
+                    type: OptionType.boolean,
+                    default: false,
+                    description: "Enable prompt caching. Injects cache breakpoints at the system prompt, tools, and conversation pivot.",
+                },
+            ];
+            const claudeCacheTtlOptions: ModelOptionInfoItem[] = (option as BedrockClaudeOptions)?.cache_enabled ? [
+                {
+                    name: "cache_ttl",
+                    type: OptionType.enum,
+                    enum: { "5 minutes (default)": "5m", "1 hour": "1h" },
+                    default: "5m",
+                    description: "TTL for cache breakpoints. '1h' requires extended caching to be enabled on your account.",
+                }
+            ] : [];
             if (model.includes("-3-7-") || model.includes("-4-")) {
                 const claudeModeOptions: ModelOptionInfoItem[] = [
                     {
@@ -304,12 +323,15 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                         ...baseConverseOptions,
                         ...claudeConverseOptions,
                         ...claudeModeOptions,
-                        ...claudeThinkingOptions]
+                        ...claudeThinkingOptions,
+                        ...claudeCacheOptions,
+                        ...claudeCacheTtlOptions,
+                    ]
                 }
             }
             return {
                 _option_id: "bedrock-claude",
-                options: [...baseConverseOptions, ...claudeConverseOptions]
+                options: [...baseConverseOptions, ...claudeConverseOptions, ...claudeCacheOptions, ...claudeCacheTtlOptions]
             }
         }
         else if (model.includes("amazon")) {
