@@ -1,6 +1,11 @@
-import { ModelOptionsInfo, ModelOptions, OptionType, ModelOptionInfoItem } from "../types.js";
+import { type ModelOptionsInfo, type ModelOptions, OptionType, type ModelOptionInfoItem } from "../types.js";
 import { getMaxOutputTokens } from "./context-windows.js";
 import { textOptionsFallback } from "./fallback.js";
+import {
+    hasSamplingParameterRestriction,
+    hasSamplingParameterRemoval,
+    supportsAdaptiveThinking,
+} from "./version-parsing.js";
 
 // Union type of all Bedrock options
 export type BedrockOptions = NovaCanvasOptions | BaseConverseOptions | BedrockClaudeOptions | BedrockPalmyraOptions | BedrockGptOssOptions | TwelvelabsPegasusOptions;
@@ -229,6 +234,9 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
     } else {
         const max_tokens_limit = getMaxTokensLimitBedrock(model);
         //Not canvas, i.e normal AWS bedrock converse
+        // Opus 4.7+ models no longer support temperature, top_p, top_k (returns 400 error)
+        // Opus 4.6 and Sonnet 4.6 still support these parameters
+        const hasSamplingRestriction = hasSamplingParameterRestriction(model);
         const baseConverseOptions: ModelOptionInfoItem[] = [
             {
                 name: "max_tokens",
@@ -239,31 +247,38 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                 step: 200,
                 description: "The maximum number of tokens to generate",
             },
-            {
+        ];
+
+        // Opus 4.7+ models don't support temperature, top_p
+        if (!hasSamplingRestriction) {
+            baseConverseOptions.push({
                 name: "temperature",
                 type: OptionType.numeric,
                 min: 0.0,
                 default: 0.7,
                 step: 0.1,
                 description: "A higher temperature biases toward less likely tokens, making the model more creative"
-            },
-            {
+            });
+            baseConverseOptions.push({
                 name: "top_p",
                 type: OptionType.numeric,
                 min: 0,
                 max: 1,
                 step: 0.1,
                 description: "Limits token sampling to the cumulative probability of the top p tokens"
-            },
-            {
-                name: "stop_sequence",
-                type: OptionType.string_list,
-                value: [],
-                description: "The generation will halt if one of the stop sequences is output"
-            }];
+            });
+        }
+
+        baseConverseOptions.push({
+            name: "stop_sequence",
+            type: OptionType.string_list,
+            value: [],
+            description: "The generation will halt if one of the stop sequences is output"
+        });
 
         if (model.includes("claude")) {
-            const claudeConverseOptions: ModelOptionInfoItem[] = [
+            // Opus 4.7+ models don't support top_k
+            const claudeConverseOptions: ModelOptionInfoItem[] = hasSamplingRestriction ? [] : [
                 {
                     name: "top_k",
                     type: OptionType.numeric,
@@ -290,13 +305,26 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                     description: "TTL for cache breakpoints. '1h' requires extended caching to be enabled on your account.",
                 }
             ] : [];
-            if (model.includes("-3-7-") || model.includes("-4-")) {
+
+            // Check if this model supports adaptive thinking (Opus 4.6+, Sonnet 4.6+)
+            const supportsAdaptive = supportsAdaptiveThinking(model);
+            // Check if this is Opus 4.7+ where extended thinking returns 400 error
+            const adaptiveThinkingRequired = hasSamplingParameterRemoval(model);
+
+            if (model.includes("-3-7-") || supportsAdaptive) {
+                // Models with adaptive thinking support use adaptive mode with display
+                // Older models (3.7) use extended thinking (enabled/disabled)
+                const useAdaptiveThinking = supportsAdaptive;
                 const claudeModeOptions: ModelOptionInfoItem[] = [
                     {
                         name: "thinking_mode",
                         type: OptionType.boolean,
                         default: false,
-                        description: "If true, use the extended reasoning mode"
+                        description: useAdaptiveThinking
+                            ? (adaptiveThinkingRequired
+                                ? "Enable adaptive thinking (required on this model; extended thinking is not supported)"
+                                : "Enable adaptive thinking (recommended; extended thinking is deprecated)")
+                            : "If true, use the extended reasoning mode"
                     },
                 ];
                 const claudeThinkingOptions: ModelOptionInfoItem[] = (option as BedrockClaudeOptions)?.thinking_mode ? [
@@ -307,13 +335,21 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                         default: 1024,
                         integer: true,
                         step: 100,
-                        description: "The target number of tokens to use for reasoning, not a hard limit."
+                        description: useAdaptiveThinking
+                            ? (adaptiveThinkingRequired
+                                ? "Thinking budget for adaptive mode. Extended thinking is not supported on this model."
+                                : "Thinking budget for adaptive mode. Extended thinking is deprecated; consider using effort-based adaptive thinking instead.")
+                            : "The target number of tokens to use for reasoning, not a hard limit."
                     },
                     {
                         name: "include_thoughts",
                         type: OptionType.boolean,
                         default: false,
-                        description: "If true, include the reasoning in the response"
+                        description: useAdaptiveThinking
+                            ? (adaptiveThinkingRequired
+                                ? "Show the summarized thinking content in the response"
+                                : "Show the summarized thinking content in the response (default on this model)")
+                            : "If true, include the reasoning in the response"
                     },
                 ] : [];
 
