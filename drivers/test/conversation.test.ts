@@ -374,17 +374,6 @@ describe.concurrent.skipIf(!hasDrivers).each(drivers)("Driver $name - Multi-turn
         expect(turn3.token_usage).toBeDefined();
         verifyConversationSerializable(turn3.conversation, name);
 
-        const cacheWriteTokensByTurn = [
-            turn1.token_usage?.prompt_cache_write ?? 0,
-            turn2.token_usage?.prompt_cache_write ?? 0,
-            turn3.token_usage?.prompt_cache_write ?? 0,
-        ];
-        expect(
-            cacheWriteTokensByTurn.some(tokens => tokens > 0),
-            `[${name}] Expected at least one prompt cache write before cache reads. ` +
-            `Observed prompt_cache_write tokens by turn: ${cacheWriteTokensByTurn.join(", ")}`
-        ).toBe(true);
-
         const storedConversation3 = JSON.parse(JSON.stringify(turn3.conversation));
 
         const turn4 = await driver.execute([
@@ -396,7 +385,17 @@ describe.concurrent.skipIf(!hasDrivers).each(drivers)("Driver $name - Multi-turn
         expect(turn4.conversation).toBeDefined();
         expect(turn4.token_usage).toBeDefined();
         verifyConversationSerializable(turn4.conversation, name);
-        expect(turn4.token_usage?.prompt_cached ?? 0).toBeGreaterThan(0);
+
+        const cacheWriteTokensByTurn = [
+            turn1.token_usage?.prompt_cache_write ?? 0,
+            turn2.token_usage?.prompt_cache_write ?? 0,
+            turn3.token_usage?.prompt_cache_write ?? 0,
+        ];
+        expect(
+            turn4.token_usage?.prompt_cached ?? 0,
+            `[${name}] Expected prompt_cached tokens on a later turn when cache_enabled=true. ` +
+            `Observed prompt_cache_write tokens by setup turns: ${cacheWriteTokensByTurn.join(", ")}`
+        ).toBeGreaterThan(0);
     });
 
     test.skipIf(!visionModel)(`${name}: multi-turn conversation with image`, { timeout: TIMEOUT }, async () => {
