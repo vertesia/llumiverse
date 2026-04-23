@@ -130,9 +130,6 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
     return textOptionsFallback;
 }
 
-// Re-export Gemini version helpers from version-parsing.ts for backward compatibility
-export { getGeminiModelVersion, isGeminiModelVersionGte } from "./version-parsing.js";
-
 function getGeminiThinkingLevels(model: string): {
     levels: Record<string, ThinkingLevel>;
     defaultLevel: ThinkingLevel;
