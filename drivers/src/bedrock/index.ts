@@ -676,7 +676,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             return tools;
         }, []);
         //If no tools were used, set to undefined
-        if (tool_use && tool_use.length == 0) {
+        if (tool_use && tool_use.length === 0) {
             tool_use = undefined;
         }
 
@@ -1740,9 +1740,9 @@ function formatAmazonModalities(modalities: ModelModality[]): string[] {
             standardizedModalities.push("image");
         } else if (modality === ModelModality.EMBEDDING) {
             standardizedModalities.push("embedding");
-        } else if (modality == "SPEECH") {
+        } else if (modality === "SPEECH") {
             standardizedModalities.push("audio");
-        } else if (modality == "VIDEO") {
+        } else if (modality === "VIDEO") {
             standardizedModalities.push("video");
         } else {
             // Handle other modalities as needed
