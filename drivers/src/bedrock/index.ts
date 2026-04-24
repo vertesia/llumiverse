@@ -9,6 +9,7 @@ import {
     AbstractDriver, type AIModel,
     type BedrockClaudeOptions,
     isClaudeVersionGTE,
+    supportsAdaptiveThinking,
     type BedrockGptOssOptions,
     type BedrockPalmyraOptions,
     type Completion, type CompletionChunkObject,
@@ -839,9 +840,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         let additionalField = {};
         let supportsJSONPrefill = false;
 
-        // Opus 4.x models (4.6, 4.7) use adaptive thinking with display, not enabled/disabled
+        // Opus 4.6+ and Sonnet 4.6+ use adaptive thinking with display, not enabled/disabled
         // They also no longer support temperature, top_p, top_k
-        const isOpus4x = (options.model.includes("-4-") || options.model.includes("-4")) && !options.model.includes("-3-7");
+        const supportsAdaptive = supportsAdaptiveThinking(options.model);
 
         if (options.model.includes("amazon")) {
             supportsJSONPrefill = true;
@@ -855,8 +856,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             supportsJSONPrefill = !thinking
 
             if (options.model.includes("claude-3-7") || options.model.includes("-4-")) {
-                if (isOpus4x) {
-                    // Opus 4.x uses adaptive thinking with summarized display
+                if (supportsAdaptive) {
+                    // Opus 4.6+ and Sonnet 4.6+ use adaptive thinking with summarized display
                     additionalField = {
                         ...additionalField,
                         reasoning_config: {
@@ -890,8 +891,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             if (!model_options.max_tokens) {
                 model_options.max_tokens = maxTokenFallbackClaude(options);
             }
-            // Opus 4.x doesn't support top_k
-            if (!isOpus4x) {
+            // Models with adaptive thinking don't support top_k
+            if (!supportsAdaptive) {
                 additionalField = { ...additionalField, top_k: model_options.top_k };
             }
         } else if (options.model.includes("meta")) {
@@ -986,10 +987,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         // Clean undefined values from additionalField since AWS Bedrock requires valid JSON
         // and will throw an exception for unrecognized parameters
         const cleanedAdditionalFields = removeUndefinedValues(additionalField);
-        // Opus 4.x models don't support temperature/top_p - exclude them from inference config
+        // Models with adaptive thinking don't support temperature/top_p - exclude them from inference config
         const cleanedModelOptions = removeUndefinedValues({
             maxTokens: model_options.max_tokens,
-            ...(isOpus4x ? {} : {
+            ...(supportsAdaptive ? {} : {
                 temperature: model_options.temperature,
                 topP: model_options.temperature != null ? undefined : model_options.top_p,
             }),
