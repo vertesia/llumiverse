@@ -141,7 +141,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     getService(region: string = this.options.region) {
-        if (!this._service || this._service_region != region) {
+        if (!this._service || this._service_region !== region) {
             this._service = new Bedrock({
                 region: region,
                 credentials: this.options.credentials,
@@ -478,7 +478,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         let canStream: boolean = false;
         let error: any = null;
         const region = this.extractRegion(model, this.options.region);
-        if (type == BedrockModelType.FoundationModel || type == BedrockModelType.Unknown) {
+        if (type === BedrockModelType.FoundationModel || type === BedrockModelType.Unknown) {
             try {
                 const response = await this.getService(region).getFoundationModel({
                     modelIdentifier: model
@@ -489,7 +489,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 error = e;
             }
         }
-        if (type == BedrockModelType.InferenceProfile || type == BedrockModelType.Unknown) {
+        if (type === BedrockModelType.InferenceProfile || type === BedrockModelType.Unknown) {
             try {
                 const response = await this.getService(region).getInferenceProfile({
                     inferenceProfileIdentifier: model
@@ -500,7 +500,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 error = e;
             }
         }
-        if (type == BedrockModelType.CustomModel || type == BedrockModelType.Unknown) {
+        if (type === BedrockModelType.CustomModel || type === BedrockModelType.Unknown) {
             try {
                 const response = await this.getService(region).getCustomModel({
                     modelIdentifier: model
@@ -901,7 +901,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             if (options.model.includes("7b")) {
                 additionalField = { top_k: model_options.top_k };
                 //Does not support system messages
-                if (prompt.system && prompt.system?.length != 0) {
+                if (prompt.system && prompt.system?.length !== 0) {
                     prompt.messages?.push(converseSystemToMessages(prompt.system));
                     prompt.system = undefined;
                     prompt.messages = converseConcatMessages(prompt.messages);
@@ -919,7 +919,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     frequencyPenalty: { scale: model_options.frequency_penalty },
                 };
                 //Does not support system messages
-                if (prompt.system && prompt.system?.length != 0) {
+                if (prompt.system && prompt.system?.length !== 0) {
                     prompt.messages?.push(converseSystemToMessages(prompt.system));
                     prompt.system = undefined;
                     prompt.messages = converseConcatMessages(prompt.messages);
@@ -938,7 +938,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 // Command non-R
                 additionalField = { k: model_options.top_k };
                 //Does not support system messages
-                if (prompt.system && prompt.system?.length != 0) {
+                if (prompt.system && prompt.system?.length !== 0) {
                     prompt.messages?.push(converseSystemToMessages(prompt.system));
                     prompt.system = undefined;
                     prompt.messages = converseConcatMessages(prompt.messages);
