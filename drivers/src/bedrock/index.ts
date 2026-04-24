@@ -1,47 +1,49 @@
 import {
-    Bedrock, CreateModelCustomizationJobCommand, FoundationModelSummary, GetModelCustomizationJobCommand,
-    GetModelCustomizationJobCommandOutput, ModelCustomizationJobStatus, ModelModality, StopModelCustomizationJobCommand
+    Bedrock, CreateModelCustomizationJobCommand, type FoundationModelSummary, GetModelCustomizationJobCommand,
+    type GetModelCustomizationJobCommandOutput, ModelCustomizationJobStatus, ModelModality, StopModelCustomizationJobCommand
 } from "@aws-sdk/client-bedrock";
-import { BedrockRuntime, ContentBlock, ConverseRequest, ConverseResponse, ConverseStreamOutput, InferenceConfiguration, Message, Tool } from "@aws-sdk/client-bedrock-runtime";
+import { BedrockRuntime, type ContentBlock, type ConverseRequest, type ConverseResponse, type ConverseStreamOutput, type InferenceConfiguration, type Message, type Tool } from "@aws-sdk/client-bedrock-runtime";
 import { S3Client } from "@aws-sdk/client-s3";
-import { AwsCredentialIdentity, Provider } from "@aws-sdk/types";
+import type { AwsCredentialIdentity, Provider } from "@aws-sdk/types";
 import {
-    AbstractDriver, AIModel,
-    BedrockClaudeOptions,
-    BedrockGptOssOptions,
-    BedrockPalmyraOptions,
-    Completion, CompletionChunkObject,
-    CompletionResult,
-    DataSource,
+    AbstractDriver, type AIModel,
+    type BedrockClaudeOptions,
+    isClaudeVersionGTE,
+    supportsAdaptiveThinking,
+    type BedrockGptOssOptions,
+    type BedrockPalmyraOptions,
+    type Completion, type CompletionChunkObject,
+    type CompletionResult,
+    type DataSource,
     deserializeBinaryFromStorage,
-    DriverOptions, EmbeddingsOptions, EmbeddingsResult,
-    ExecutionOptions, ExecutionTokenUsage,
+    type DriverOptions, type EmbeddingsOptions, type EmbeddingsResult,
+    type ExecutionOptions, type ExecutionTokenUsage,
     getConversationMeta,
     getMaxTokensLimitBedrock,
     getModelCapabilities,
     incrementConversationTurn,
-    LlumiverseError, LlumiverseErrorContext,
+    LlumiverseError, type LlumiverseErrorContext,
     modelModalitiesToArray,
-    ModelOptions,
-    NovaCanvasOptions,
-    PromptSegment,
-    StatelessExecutionOptions,
+    type ModelOptions,
+    type NovaCanvasOptions,
+    type PromptSegment,
+    type StatelessExecutionOptions,
     stripBinaryFromConversation,
     stripHeartbeatsFromConversation,
-    TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions,
+    type TextFallbackOptions, type ToolDefinition, type ToolUse, type TrainingJob, TrainingJobStatus, type TrainingOptions,
     truncateLargeTextInConversation
 } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
-import { formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
+import { formatNovaPrompt, type NovaMessagesPrompt } from "@llumiverse/core/formatters";
 import { LRUCache } from "mnemonist";
 import { converseConcatMessages, converseJSONprefill, converseSystemToMessages, formatConversePrompt } from "./converse.js";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
 import { forceUploadFile } from "./s3.js";
 import {
     formatTwelvelabsPegasusPrompt,
-    TwelvelabsMarengoRequest,
-    TwelvelabsMarengoResponse,
-    TwelvelabsPegasusRequest
+    type TwelvelabsMarengoRequest,
+    type TwelvelabsMarengoResponse,
+    type TwelvelabsPegasusRequest
 } from "./twelvelabs.js";
 
 const supportStreamingCache = new LRUCache<string, boolean>(4096);
@@ -107,42 +109,6 @@ function maxTokenFallbackClaude(option: StatelessExecutionOptions): number {
     }
 }
 
-/**
- * Parse Claude model version from model string.
- * @param modelString - The model identifier string
- * @returns An object with major and minor version numbers, or null if not parseable
- */
-function parseClaudeVersion(modelString: string): { major: number; minor: number } | null {
-    // Match pattern: claude-[optional variant]-{major}-[optional 1-2 digit minor]
-    // The minor version is limited to 1-2 digits to avoid matching dates (YYYYMMDD format)
-    const match = modelString.match(/claude-(?:[a-z]+-)?(\d+)(?:-(\d{1,2}))?(?:-|\b)/);
-    if (match) {
-        return {
-            major: parseInt(match[1], 10),
-            minor: match[2] ? parseInt(match[2], 10) : 0
-        };
-    }
-    return null;
-}
-
-/**
- * Check if a Claude model version is greater than or equal to a target version.
- * @returns true if the model version is >= target version, false otherwise
- */
-function isClaudeVersionGTE(modelString: string, targetMajor: number, targetMinor: number): boolean {
-    const version = parseClaudeVersion(modelString);
-    if (!version) {
-        return false;
-    }
-    if (version.major > targetMajor) {
-        return true;
-    }
-    if (version.major === targetMajor && version.minor >= targetMinor) {
-        return true;
-    }
-    return false;
-}
-
 export type BedrockPrompt = NovaMessagesPrompt | ConverseRequest | TwelvelabsPegasusRequest;
 
 type BedrockSystemBlock = NonNullable<ConverseRequest['system']>[number];
@@ -176,7 +142,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     getService(region: string = this.options.region) {
-        if (!this._service || this._service_region != region) {
+        if (!this._service || this._service_region !== region) {
             this._service = new Bedrock({
                 region: region,
                 credentials: this.options.credentials,
@@ -513,7 +479,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         let canStream: boolean = false;
         let error: any = null;
         const region = this.extractRegion(model, this.options.region);
-        if (type == BedrockModelType.FoundationModel || type == BedrockModelType.Unknown) {
+        if (type === BedrockModelType.FoundationModel || type === BedrockModelType.Unknown) {
             try {
                 const response = await this.getService(region).getFoundationModel({
                     modelIdentifier: model
@@ -524,7 +490,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 error = e;
             }
         }
-        if (type == BedrockModelType.InferenceProfile || type == BedrockModelType.Unknown) {
+        if (type === BedrockModelType.InferenceProfile || type === BedrockModelType.Unknown) {
             try {
                 const response = await this.getService(region).getInferenceProfile({
                     inferenceProfileIdentifier: model
@@ -535,7 +501,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 error = e;
             }
         }
-        if (type == BedrockModelType.CustomModel || type == BedrockModelType.Unknown) {
+        if (type === BedrockModelType.CustomModel || type === BedrockModelType.Unknown) {
             try {
                 const response = await this.getService(region).getCustomModel({
                     modelIdentifier: model
@@ -711,7 +677,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             return tools;
         }, []);
         //If no tools were used, set to undefined
-        if (tool_use && tool_use.length == 0) {
+        if (tool_use && tool_use.length === 0) {
             tool_use = undefined;
         }
 
@@ -874,6 +840,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         let additionalField = {};
         let supportsJSONPrefill = false;
 
+        // Opus 4.6+ and Sonnet 4.6+ use adaptive thinking with display, not enabled/disabled
+        // They also no longer support temperature, top_p, top_k
+        const supportsAdaptive = supportsAdaptiveThinking(options.model);
+
         if (options.model.includes("amazon")) {
             supportsJSONPrefill = true;
             //Titan models also exists but does not support any additional options
@@ -886,30 +856,45 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             supportsJSONPrefill = !thinking
 
             if (options.model.includes("claude-3-7") || options.model.includes("-4-")) {
-                additionalField = {
-                    ...additionalField,
-                    reasoning_config: {
-                        type: thinking ? "enabled" : "disabled",
-                        budget_tokens: thinking ? (claude_options.thinking_budget_tokens ?? 1024) : undefined,
-                    }
-                };
-                if (thinking && options.model.includes("claude-3-7-sonnet") &&
-                    ((claude_options.max_tokens ?? 0) > 64000 || (claude_options.thinking_budget_tokens ?? 0) > 64000)) {
+                if (supportsAdaptive) {
+                    // Opus 4.6+ and Sonnet 4.6+ use adaptive thinking with summarized display
                     additionalField = {
                         ...additionalField,
-                        anthropic_beta: ["output-128k-2025-02-19"]
+                        reasoning_config: {
+                            type: "adaptive",
+                            display: "summarized"
+                        }
                     };
+                } else {
+                    // Claude 3.7 uses enabled/disabled reasoning
+                    additionalField = {
+                        ...additionalField,
+                        reasoning_config: {
+                            type: thinking ? "enabled" : "disabled",
+                            budget_tokens: thinking ? (claude_options.thinking_budget_tokens ?? 1024) : undefined,
+                        }
+                    };
+                    if (thinking && options.model.includes("claude-3-7-sonnet") &&
+                        ((claude_options.max_tokens ?? 0) > 64000 || (claude_options.thinking_budget_tokens ?? 0) > 64000)) {
+                        additionalField = {
+                            ...additionalField,
+                            anthropic_beta: ["output-128k-2025-02-19"]
+                        };
+                    }
                 }
             }
             // Claude 4.6 and later versions don't support JSON prefill
             if (isClaudeVersionGTE(options.model, 4, 6)) {
                 supportsJSONPrefill = false;
             }
-            //Needs max_tokens to be set
+            // Needs max_tokens to be set
             if (!model_options.max_tokens) {
                 model_options.max_tokens = maxTokenFallbackClaude(options);
             }
-            additionalField = { ...additionalField, top_k: model_options.top_k };
+            // Models with adaptive thinking don't support top_k
+            if (!supportsAdaptive) {
+                additionalField = { ...additionalField, top_k: model_options.top_k };
+            }
         } else if (options.model.includes("meta")) {
             //LLaMA models support no additional options
         } else if (options.model.includes("mistral")) {
@@ -917,7 +902,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             if (options.model.includes("7b")) {
                 additionalField = { top_k: model_options.top_k };
                 //Does not support system messages
-                if (prompt.system && prompt.system?.length != 0) {
+                if (prompt.system && prompt.system?.length !== 0) {
                     prompt.messages?.push(converseSystemToMessages(prompt.system));
                     prompt.system = undefined;
                     prompt.messages = converseConcatMessages(prompt.messages);
@@ -935,7 +920,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     frequencyPenalty: { scale: model_options.frequency_penalty },
                 };
                 //Does not support system messages
-                if (prompt.system && prompt.system?.length != 0) {
+                if (prompt.system && prompt.system?.length !== 0) {
                     prompt.messages?.push(converseSystemToMessages(prompt.system));
                     prompt.system = undefined;
                     prompt.messages = converseConcatMessages(prompt.messages);
@@ -954,7 +939,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 // Command non-R
                 additionalField = { k: model_options.top_k };
                 //Does not support system messages
-                if (prompt.system && prompt.system?.length != 0) {
+                if (prompt.system && prompt.system?.length !== 0) {
                     prompt.messages?.push(converseSystemToMessages(prompt.system));
                     prompt.system = undefined;
                     prompt.messages = converseConcatMessages(prompt.messages);
@@ -1002,10 +987,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         // Clean undefined values from additionalField since AWS Bedrock requires valid JSON
         // and will throw an exception for unrecognized parameters
         const cleanedAdditionalFields = removeUndefinedValues(additionalField);
+        // Models with adaptive thinking don't support temperature/top_p - exclude them from inference config
         const cleanedModelOptions = removeUndefinedValues({
             maxTokens: model_options.max_tokens,
-            temperature: model_options.temperature,
-            topP: model_options.temperature != null ? undefined : model_options.top_p,
+            ...(supportsAdaptive ? {} : {
+                temperature: model_options.temperature,
+                topP: model_options.temperature != null ? undefined : model_options.top_p,
+            }),
             stopSequences: model_options.stop_sequence,
         } satisfies InferenceConfiguration);
 
@@ -1753,9 +1741,9 @@ function formatAmazonModalities(modalities: ModelModality[]): string[] {
             standardizedModalities.push("image");
         } else if (modality === ModelModality.EMBEDDING) {
             standardizedModalities.push("embedding");
-        } else if (modality == "SPEECH") {
+        } else if (modality === "SPEECH") {
             standardizedModalities.push("audio");
-        } else if (modality == "VIDEO") {
+        } else if (modality === "VIDEO") {
             standardizedModalities.push("video");
         } else {
             // Handle other modalities as needed

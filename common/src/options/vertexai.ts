@@ -1,6 +1,12 @@
-import { ModelOptionInfoItem, ModelOptions, ModelOptionsInfo, OptionType, SharedOptions } from "../types.js";
+import { type ModelOptionInfoItem, type ModelOptions, type ModelOptionsInfo, OptionType, SharedOptions } from "../types.js";
 import { getMaxOutputTokens } from "./context-windows.js";
 import { textOptionsFallback } from "./fallback.js";
+import {
+    hasSamplingParameterRestriction,
+    isGeminiModelVersionGte,
+    hasSamplingParameterRemoval,
+    supportsAdaptiveThinking,
+} from "./version-parsing.js";
 
 // Union type of all VertexAI options
 export type VertexAIOptions = ImagenOptions | VertexAIClaudeOptions | VertexAIGeminiOptions;
@@ -122,53 +128,6 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
         return getLlamaOptions(model);
     }
     return textOptionsFallback;
-}
-
-/**
- * Extract Gemini version from a model ID.
- *
- * Examples:
- * - locations/global/publishers/google/models/gemini-2.5-flash -> 2.5
- * - publishers/google/models/gemini-3-pro-image-preview -> 3
- */
-export function getGeminiModelVersion(modelId: string): string | undefined {
-    const modelName = modelId.split('/').pop() ?? modelId;
-    const match = modelName.match(/^gemini-(\d+(?:\.\d+)?)/i);
-    return match?.[1];
-}
-
-function parseVersion(version: string): { major: number; minor: number } | undefined {
-    const match = version.match(/^(\d+)(?:\.(\d+))?$/);
-    if (!match) {
-        return undefined;
-    }
-
-    return {
-        major: Number(match[1]),
-        minor: Number(match[2] ?? '0'),
-    };
-}
-
-export function isGeminiModelVersionGte(modelId: string, minVersion: string): boolean {
-    const modelVersion = getGeminiModelVersion(modelId);
-    if (!modelVersion) {
-        return false;
-    }
-
-    const current = parseVersion(modelVersion);
-    const target = parseVersion(minVersion);
-    if (!current || !target) {
-        return false;
-    }
-
-    if (current.major > target.major) {
-        return true;
-    }
-    if (current.major < target.major) {
-        return false;
-    }
-
-    return current.minor >= target.minor;
 }
 
 function getGeminiThinkingLevels(model: string): {
@@ -669,7 +628,19 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
 function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
     const max_tokens_limit = getClaudeMaxTokensLimit(model);
     const excludeOptions = ["max_tokens", "presence_penalty", "frequency_penalty"];
-    const commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
+    let commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
+
+    // Opus 4.7+ models no longer support temperature, top_p, top_k (returns 400 error)
+    // Opus 4.6 and Sonnet 4.6 still support these parameters
+    const hasSamplingRestriction = hasSamplingParameterRestriction(model);
+    if (hasSamplingRestriction) {
+        commonOptions = commonOptions.filter((option) =>
+            option.name !== SharedOptions.temperature &&
+            option.name !== SharedOptions.top_p &&
+            option.name !== "top_k"
+        );
+    }
+
     const max_tokens: ModelOptionInfoItem[] = [{
         name: SharedOptions.max_tokens, type: OptionType.numeric, min: 1, max: max_tokens_limit,
         integer: true, step: 200, description: "The maximum number of tokens to generate"
@@ -693,13 +664,28 @@ function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInf
         }
     ] : [];
 
-    if (model.includes("-3-7") || model.includes("-4")) {
+    // Check if this model supports adaptive thinking (Opus 4.6+, Sonnet 4.6+)
+    const supportsAdaptive = supportsAdaptiveThinking(model);
+    // Check if extended thinking is deprecated (Opus 4.6+, Sonnet 4.6+)
+    //unused
+    //const isExtendedThinkingDeprecatedFlag = isExtendedThinkingDeprecated(model);
+    // Check if this is Opus 4.7+ where extended thinking returns 400 error
+    const adaptiveThinkingRequired = hasSamplingParameterRemoval(model);
+
+    if (model.includes("-3-7") || supportsAdaptive) {
+        // Models with adaptive thinking support use adaptive mode with display
+        // Older models (3.7) use extended thinking (enabled/disabled)
+        const useAdaptiveThinking = supportsAdaptive;
         const claudeModeOptions: ModelOptionInfoItem[] = [
             {
                 name: "thinking_mode",
                 type: OptionType.boolean,
                 default: false,
-                description: "If true, use the extended reasoning mode"
+                description: useAdaptiveThinking
+                    ? (adaptiveThinkingRequired
+                        ? "Enable adaptive thinking (required on this model; extended thinking is not supported)"
+                        : "Enable adaptive thinking (recommended; extended thinking is deprecated)")
+                    : "If true, use the extended reasoning mode"
             },
         ];
         const claudeThinkingOptions: ModelOptionInfoItem[] = (option as VertexAIClaudeOptions)?.thinking_mode ? [
@@ -710,13 +696,21 @@ function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInf
                 default: 1024,
                 integer: true,
                 step: 100,
-                description: "The target number of tokens to use for reasoning, not a hard limit."
+                description: useAdaptiveThinking
+                    ? (adaptiveThinkingRequired
+                        ? "Thinking budget for adaptive mode. Extended thinking is not supported on this model."
+                        : "Thinking budget for adaptive mode. Extended thinking is deprecated; consider using effort-based adaptive thinking instead.")
+                    : "The target number of tokens to use for reasoning, not a hard limit."
             },
             {
                 name: "include_thoughts",
                 type: OptionType.boolean,
                 default: false,
-                description: "Include the model's reasoning process in the response"
+                description: useAdaptiveThinking
+                    ? (adaptiveThinkingRequired
+                        ? "Show the summarized thinking content in the response"
+                        : "Show the summarized thinking content in the response (default on this model)")
+                    : "Include the model's reasoning process in the response"
             }
         ] : [];
 

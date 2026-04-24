@@ -11,27 +11,28 @@ import {
     RateLimitError,
     UnprocessableEntityError,
 } from '@anthropic-ai/sdk/error';
-import { ContentBlock, ContentBlockParam, DocumentBlockParam, ImageBlockParam, Message, MessageParam, TextBlockParam, ToolResultBlockParam } from "@anthropic-ai/sdk/resources/index.js";
-import { MessageStreamParams } from "@anthropic-ai/sdk/resources/index.mjs";
-import { MessageCreateParamsBase, MessageCreateParamsNonStreaming, RawMessageStreamEvent } from "@anthropic-ai/sdk/resources/messages.js";
+import type { ContentBlock, ContentBlockParam, DocumentBlockParam, ImageBlockParam, Message, MessageParam, TextBlockParam, ToolResultBlockParam } from "@anthropic-ai/sdk/resources/index.js";
+import type { MessageStreamParams } from "@anthropic-ai/sdk/resources/index.mjs";
+import type { MessageCreateParamsBase, MessageCreateParamsNonStreaming, RawMessageStreamEvent } from "@anthropic-ai/sdk/resources/messages.js";
 import {
-    AIModel, Completion, CompletionChunkObject, ExecutionOptions, ExecutionTokenUsage,
+    type AIModel, type Completion, type CompletionChunkObject, type ExecutionOptions, type ExecutionTokenUsage,
     getConversationMeta,
     getMaxTokensLimitVertexAi,
     incrementConversationTurn,
-    JSONObject,
-    LlumiverseError, LlumiverseErrorContext,
+    type JSONObject,
+    LlumiverseError, type LlumiverseErrorContext,
     ModelType,
-    PromptRole, PromptSegment, readStreamAsBase64, readStreamAsString, StatelessExecutionOptions,
+    PromptRole, type PromptSegment, readStreamAsBase64, readStreamAsString, type StatelessExecutionOptions,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
-    ToolUse,
+    type ToolUse,
     truncateLargeTextInConversation,
-    VertexAIClaudeOptions
+    type VertexAIClaudeOptions,
+    supportsAdaptiveThinking
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
-import { VertexAIDriver } from "../index.js";
-import { ModelDefinition } from "../models.js";
+import type { VertexAIDriver } from "../index.js";
+import type { ModelDefinition } from "../models.js";
 
 export const ANTHROPIC_REGIONS: Record<string, string> = {
     us: "us-east5",
@@ -979,23 +980,33 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
         }
     }
 
+    // Opus 4.6+ and Sonnet 4.6+ use adaptive thinking with display, not enabled/disabled
+    // They also no longer support temperature, top_p, top_k
+    const supportsAdaptive = supportsAdaptiveThinking(modelName);
+
     const payload = {
         messages: sanitizedMessages,
         system: sanitizedSystem,
         tools: sanitizedTools,
-        temperature: model_options?.temperature,
+        temperature: supportsAdaptive ? undefined : model_options?.temperature,
         model: modelName,
         max_tokens: maxToken(options),
-        top_p: model_options?.temperature != null ? undefined : model_options?.top_p,
-        top_k: model_options?.top_k,
+        top_p: supportsAdaptive ? undefined : (model_options?.temperature != null ? undefined : model_options?.top_p),
+        top_k: supportsAdaptive ? undefined : model_options?.top_k,
         stop_sequences: model_options?.stop_sequence,
-        thinking: model_options?.thinking_mode ?
-            {
-                budget_tokens: model_options?.thinking_budget_tokens ?? 1024,
-                type: "enabled" as const
-            } : {
-                type: "disabled" as const
+        thinking: supportsAdaptive
+            ? {
+                type: "adaptive" as const,
+                display: "summarized" as const
             }
+            : model_options?.thinking_mode
+                ? {
+                    budget_tokens: model_options?.thinking_budget_tokens ?? 1024,
+                    type: "enabled" as const
+                }
+                : {
+                    type: "disabled" as const
+                }
     };
 
     return { payload, requestOptions };
