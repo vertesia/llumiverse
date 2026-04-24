@@ -8,4 +8,4 @@ minimumReleaseAge: 4320 # 3 days in minutes, minimumReleaseAge protects against 
 minimumReleaseAgeExclude:
   - '@vertesia/*'
   - '@llumiverse/*'
-  - 'protobufjs@7.5.5'
+  - '@anthropic-ai/sdk@0.91.0'
