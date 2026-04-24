@@ -27,7 +27,8 @@ import {
     stripHeartbeatsFromConversation,
     type ToolUse,
     truncateLargeTextInConversation,
-    type VertexAIClaudeOptions
+    type VertexAIClaudeOptions,
+    supportsAdaptiveThinking
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
 import type { VertexAIDriver } from "../index.js";
@@ -979,21 +980,21 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
         }
     }
 
-    // Opus 4.x models (4.6, 4.7) use adaptive thinking with display, not enabled/disabled
+    // Opus 4.6+ and Sonnet 4.6+ use adaptive thinking with display, not enabled/disabled
     // They also no longer support temperature, top_p, top_k
-    const isOpus4x = (modelName.includes("-4-") || modelName.includes("-4")) && !modelName.includes("-3-7");
+    const supportsAdaptive = supportsAdaptiveThinking(modelName);
 
     const payload = {
         messages: sanitizedMessages,
         system: sanitizedSystem,
         tools: sanitizedTools,
-        temperature: isOpus4x ? undefined : model_options?.temperature,
+        temperature: supportsAdaptive ? undefined : model_options?.temperature,
         model: modelName,
         max_tokens: maxToken(options),
-        top_p: isOpus4x ? undefined : (model_options?.temperature != null ? undefined : model_options?.top_p),
-        top_k: isOpus4x ? undefined : model_options?.top_k,
+        top_p: supportsAdaptive ? undefined : (model_options?.temperature != null ? undefined : model_options?.top_p),
+        top_k: supportsAdaptive ? undefined : model_options?.top_k,
         stop_sequences: model_options?.stop_sequence,
-        thinking: isOpus4x
+        thinking: supportsAdaptive
             ? {
                 type: "adaptive" as const,
                 display: "summarized" as const
