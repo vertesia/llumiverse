@@ -8,7 +8,6 @@ import type { AwsCredentialIdentity, Provider } from "@aws-sdk/types";
 import {
     AbstractDriver, type AIModel,
     type BedrockClaudeOptions,
-    isClaudeVersionGTE,
     type BedrockGptOssOptions,
     type BedrockPalmyraOptions,
     type Completion, type CompletionChunkObject,
@@ -21,6 +20,7 @@ import {
     getMaxTokensLimitBedrock,
     getModelCapabilities,
     incrementConversationTurn,
+    isClaudeVersionGTE,
     LlumiverseError, type LlumiverseErrorContext,
     modelModalitiesToArray,
     type ModelOptions,
@@ -35,10 +35,10 @@ import {
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatNovaPrompt, type NovaMessagesPrompt } from "@llumiverse/core/formatters";
 import { LRUCache } from "mnemonist";
+import { resolveClaudeThinking } from "../shared/claude-thinking.js";
 import { converseConcatMessages, converseJSONprefill, converseSystemToMessages, formatConversePrompt } from "./converse.js";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
 import { forceUploadFile } from "./s3.js";
-import { resolveClaudeThinking } from "../shared/claude-thinking.js";
 import {
     formatTwelvelabsPegasusPrompt,
     type TwelvelabsMarengoRequest,

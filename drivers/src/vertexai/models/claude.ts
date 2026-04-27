@@ -29,8 +29,8 @@ import {
     truncateLargeTextInConversation,
     type VertexAIClaudeOptions,
 } from "@llumiverse/core";
-import { resolveClaudeThinking } from "../../shared/claude-thinking.js";
 import { asyncMap } from "@llumiverse/core/async";
+import { resolveClaudeThinking } from "../../shared/claude-thinking.js";
 import type { VertexAIDriver } from "../index.js";
 import type { ModelDefinition } from "../models.js";
 

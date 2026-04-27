@@ -1,4 +1,4 @@
-import { type ModelOptionsInfo, type ModelOptions, OptionType, type ModelOptionInfoItem } from "../types.js";
+import { type ModelOptionInfoItem, type ModelOptions, type ModelOptionsInfo, OptionType } from "../types.js";
 import { getMaxOutputTokens } from "./context-windows.js";
 import {
     getAvailableEffortLevels,
@@ -577,7 +577,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                     _option_id: "bedrock-twelvelabs-pegasus",
                     options: pegasusOptions
                 };
-            } 
+            }
         }
 
         //Fallback to converse standard.
