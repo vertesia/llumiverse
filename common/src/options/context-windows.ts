@@ -6,6 +6,7 @@
 export function getMaxOutputTokens(model: string): number {
     // Claude models
     if (model.includes('claude')) {
+        if (model.includes('opus-4-7')) return 128_000;
         if (model.includes('opus-4-6')) return 128_000;
         if (model.includes('opus-4-5')) return 64_000;
         if (model.includes('opus-')) return 32_768; // Opus 4.0, 4.1

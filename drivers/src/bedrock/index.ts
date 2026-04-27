@@ -9,7 +9,6 @@ import {
     AbstractDriver, type AIModel,
     type BedrockClaudeOptions,
     isClaudeVersionGTE,
-    supportsAdaptiveThinking,
     type BedrockGptOssOptions,
     type BedrockPalmyraOptions,
     type Completion, type CompletionChunkObject,
@@ -39,6 +38,7 @@ import { LRUCache } from "mnemonist";
 import { converseConcatMessages, converseJSONprefill, converseSystemToMessages, formatConversePrompt } from "./converse.js";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
 import { forceUploadFile } from "./s3.js";
+import { resolveClaudeThinking } from "../shared/claude-thinking.js";
 import {
     formatTwelvelabsPegasusPrompt,
     type TwelvelabsMarengoRequest,
@@ -840,9 +840,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         let additionalField = {};
         let supportsJSONPrefill = false;
 
-        // Opus 4.6+ and Sonnet 4.6+ use adaptive thinking with display, not enabled/disabled
-        // They also no longer support temperature, top_p, top_k
-        const supportsAdaptive = supportsAdaptiveThinking(options.model);
+        // Resolve thinking, effort, and sampling restrictions using shared Claude helper
+        const claudeThinking = resolveClaudeThinking(options.model, options.model_options as BedrockClaudeOptions | undefined);
+        const hasSamplingRestriction = claudeThinking.hasSamplingRestriction;
 
         if (options.model.includes("amazon")) {
             supportsJSONPrefill = true;
@@ -855,33 +855,30 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             const thinking = claude_options.thinking_mode ?? false;
             supportsJSONPrefill = !thinking
 
-            if (options.model.includes("claude-3-7") || options.model.includes("-4-")) {
-                if (supportsAdaptive) {
-                    // Opus 4.6+ and Sonnet 4.6+ use adaptive thinking with summarized display
+            // Claude 3.7+ supports thinking — use shared helper for reasoning_config
+            if (claudeThinking.supportsThinking) {
+                if (claudeThinking.thinking) {
                     additionalField = {
                         ...additionalField,
-                        reasoning_config: {
-                            type: "adaptive",
-                            display: "summarized"
-                        }
+                        reasoning_config: claudeThinking.thinking,
                     };
-                } else {
-                    // Claude 3.7 uses enabled/disabled reasoning
-                    additionalField = {
-                        ...additionalField,
-                        reasoning_config: {
-                            type: thinking ? "enabled" : "disabled",
-                            budget_tokens: thinking ? (claude_options.thinking_budget_tokens ?? 1024) : undefined,
-                        }
-                    };
-                    if (thinking && options.model.includes("claude-3-7-sonnet") &&
-                        ((claude_options.max_tokens ?? 0) > 64000 || (claude_options.thinking_budget_tokens ?? 0) > 64000)) {
-                        additionalField = {
-                            ...additionalField,
-                            anthropic_beta: ["output-128k-2025-02-19"]
-                        };
-                    }
                 }
+                // For Claude 3.7 with extended thinking + high output, add beta header
+                if (claudeThinking.thinking?.type === "enabled" &&
+                    options.model.includes("claude-3-7-sonnet") &&
+                    ((claude_options.max_tokens ?? 0) > 64000 || (claude_options.thinking_budget_tokens ?? 0) > 64000)) {
+                    additionalField = {
+                        ...additionalField,
+                        anthropic_beta: ["output-128k-2025-02-19"]
+                    };
+                }
+            }
+            // Add effort parameter via output_config (Opus 4.5+, Sonnet 4.6+, all 4.7+)
+            if (claudeThinking.outputConfig) {
+                additionalField = {
+                    ...additionalField,
+                    output_config: claudeThinking.outputConfig
+                };
             }
             // Claude 4.6 and later versions don't support JSON prefill
             if (isClaudeVersionGTE(options.model, 4, 6)) {
@@ -891,8 +888,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             if (!model_options.max_tokens) {
                 model_options.max_tokens = maxTokenFallbackClaude(options);
             }
-            // Models with adaptive thinking don't support top_k
-            if (!supportsAdaptive) {
+            // Only models without sampling restrictions support top_k
+            if (!hasSamplingRestriction) {
                 additionalField = { ...additionalField, top_k: model_options.top_k };
             }
         } else if (options.model.includes("meta")) {
@@ -987,10 +984,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         // Clean undefined values from additionalField since AWS Bedrock requires valid JSON
         // and will throw an exception for unrecognized parameters
         const cleanedAdditionalFields = removeUndefinedValues(additionalField);
-        // Models with adaptive thinking don't support temperature/top_p - exclude them from inference config
+        // Models with sampling parameter restrictions don't support temperature/top_p - exclude them from inference config
         const cleanedModelOptions = removeUndefinedValues({
             maxTokens: model_options.max_tokens,
-            ...(supportsAdaptive ? {} : {
+            ...(hasSamplingRestriction ? {} : {
                 temperature: model_options.temperature,
                 topP: model_options.temperature != null ? undefined : model_options.top_p,
             }),

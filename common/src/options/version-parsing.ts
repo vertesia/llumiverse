@@ -170,12 +170,13 @@ export function isExtendedThinkingDeprecated(modelString: string): boolean {
  * Check if a model requires adaptive thinking ONLY (extended thinking removed).
  *
  * On Opus 4.7+, extended thinking returns a 400 error. Only adaptive thinking is supported.
+ * Future models (Sonnet 4.7+, Haiku 4.7+, any 5.0+) follow the same pattern.
  *
  * @param modelString - The model identifier string
  * @returns true if extended thinking is removed (returns 400 error)
  */
 export function requiresAdaptiveThinkingOnly(modelString: string): boolean {
-    return hasSamplingParameterRemoval(modelString);
+    return hasSamplingParameterRestriction(modelString);
 }
 
 /**
@@ -207,6 +208,87 @@ export function hasSamplingParameterRestriction(modelString: string): boolean {
     }
 
     return false;
+}
+
+// ============================================================================
+// Claude Effort Parameter Support
+// ============================================================================
+
+/** Available effort levels for Claude models. */
+export type ClaudeEffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+/**
+ * Check if a model supports the effort parameter.
+ *
+ * Effort is supported on:
+ * - Claude Opus 4.5+
+ * - Claude Opus 4.6+
+ * - Claude Sonnet 4.6+
+ * - All variants at 4.7+ (Opus, Sonnet, Haiku)
+ * - All variants at 5.0+
+ *
+ * @param modelString - The model identifier string
+ * @returns true if the model supports the effort parameter
+ */
+export function supportsEffort(modelString: string): boolean {
+    // All 4.7+ variants support effort (covers future Sonnet 4.7, Haiku 4.7, etc.)
+    if (hasSamplingParameterRestriction(modelString)) {
+        return true;
+    }
+    // Opus 4.5+ supports effort
+    if (isClaudeVariantVersionGTE(modelString, "opus", 4, 5)) {
+        return true;
+    }
+    // Sonnet 4.6+ supports effort
+    if (isClaudeVariantVersionGTE(modelString, "sonnet", 4, 6)) {
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Check if a model supports the xhigh effort level.
+ *
+ * xhigh is only available on Opus 4.7+.
+ *
+ * @param modelString - The model identifier string
+ * @returns true if the model supports xhigh effort
+ */
+export function supportsXHighEffort(modelString: string): boolean {
+    return isClaudeVariantVersionGTE(modelString, "opus", 4, 7);
+}
+
+/**
+ * Get the available effort levels for a given Claude model.
+ *
+ * - Opus 4.7+: low, medium, high, xhigh, max
+ * - Opus 4.5+, Opus 4.6+, Sonnet 4.6+: low, medium, high, max
+ * - Other models: empty (effort not supported)
+ *
+ * @param modelString - The model identifier string
+ * @returns Record of display label to effort level value, or null if not supported
+ */
+export function getAvailableEffortLevels(modelString: string): Record<string, ClaudeEffortLevel> | null {
+    if (!supportsEffort(modelString)) {
+        return null;
+    }
+    const levels: Record<string, ClaudeEffortLevel> = {
+        "Low": "low",
+        "Medium": "medium",
+        "High (default)": "high",
+        "Max": "max",
+    };
+    if (supportsXHighEffort(modelString)) {
+        // Insert xhigh between high and max
+        return {
+            "Low": "low",
+            "Medium": "medium",
+            "High (default)": "high",
+            "Extra High": "xhigh",
+            "Max": "max",
+        };
+    }
+    return levels;
 }
 
 // ============================================================================

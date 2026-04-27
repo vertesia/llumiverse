@@ -1,9 +1,9 @@
 import { type ModelOptionsInfo, type ModelOptions, OptionType, type ModelOptionInfoItem } from "../types.js";
 import { getMaxOutputTokens } from "./context-windows.js";
-import { textOptionsFallback } from "./fallback.js";
 import {
+    getAvailableEffortLevels,
     hasSamplingParameterRestriction,
-    hasSamplingParameterRemoval,
+    requiresAdaptiveThinkingOnly,
     supportsAdaptiveThinking,
 } from "./version-parsing.js";
 
@@ -40,6 +40,7 @@ export interface BedrockClaudeOptions extends BaseConverseOptions {
     thinking_mode?: boolean;
     thinking_budget_tokens?: number;
     include_thoughts?: boolean;
+    effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
     cache_enabled?: boolean;
     cache_ttl?: '5m' | '1h';
 }
@@ -309,7 +310,19 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
             // Check if this model supports adaptive thinking (Opus 4.6+, Sonnet 4.6+)
             const supportsAdaptive = supportsAdaptiveThinking(model);
             // Check if this is Opus 4.7+ where extended thinking returns 400 error
-            const adaptiveThinkingRequired = hasSamplingParameterRemoval(model);
+            const adaptiveOnly = requiresAdaptiveThinkingOnly(model);
+
+            // Effort option — shown for all models that support it (Opus 4.5+, Sonnet 4.6+, all 4.7+)
+            const effortLevels = getAvailableEffortLevels(model);
+            const claudeEffortOptions: ModelOptionInfoItem[] = effortLevels ? [
+                {
+                    name: "effort",
+                    type: OptionType.enum,
+                    enum: effortLevels,
+                    default: "high",
+                    description: "Controls how many tokens Claude uses when responding. Lower effort trades thoroughness for speed and cost savings.",
+                },
+            ] : [];
 
             if (model.includes("-3-7-") || supportsAdaptive) {
                 // Models with adaptive thinking support use adaptive mode with display
@@ -321,7 +334,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                         type: OptionType.boolean,
                         default: false,
                         description: useAdaptiveThinking
-                            ? (adaptiveThinkingRequired
+                            ? (adaptiveOnly
                                 ? "Enable adaptive thinking (required on this model; extended thinking is not supported)"
                                 : "Enable adaptive thinking (recommended; extended thinking is deprecated)")
                             : "If true, use the extended reasoning mode"
@@ -336,7 +349,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                         integer: true,
                         step: 100,
                         description: useAdaptiveThinking
-                            ? (adaptiveThinkingRequired
+                            ? (adaptiveOnly
                                 ? "Thinking budget for adaptive mode. Extended thinking is not supported on this model."
                                 : "Thinking budget for adaptive mode. Extended thinking is deprecated; consider using effort-based adaptive thinking instead.")
                             : "The target number of tokens to use for reasoning, not a hard limit."
@@ -346,7 +359,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                         type: OptionType.boolean,
                         default: false,
                         description: useAdaptiveThinking
-                            ? (adaptiveThinkingRequired
+                            ? (adaptiveOnly
                                 ? "Show the summarized thinking content in the response"
                                 : "Show the summarized thinking content in the response (default on this model)")
                             : "If true, include the reasoning in the response"
@@ -358,6 +371,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                     options: [
                         ...baseConverseOptions,
                         ...claudeConverseOptions,
+                        ...claudeEffortOptions,
                         ...claudeModeOptions,
                         ...claudeThinkingOptions,
                         ...claudeCacheOptions,
@@ -367,7 +381,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
             }
             return {
                 _option_id: "bedrock-claude",
-                options: [...baseConverseOptions, ...claudeConverseOptions, ...claudeCacheOptions, ...claudeCacheTtlOptions]
+                options: [...baseConverseOptions, ...claudeConverseOptions, ...claudeEffortOptions, ...claudeCacheOptions, ...claudeCacheTtlOptions]
             }
         }
         else if (model.includes("amazon")) {
@@ -572,5 +586,4 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
             options: baseConverseOptions
         };
     }
-    return textOptionsFallback;
 }

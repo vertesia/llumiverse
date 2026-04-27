@@ -2,9 +2,10 @@ import { type ModelOptionInfoItem, type ModelOptions, type ModelOptionsInfo, Opt
 import { getMaxOutputTokens } from "./context-windows.js";
 import { textOptionsFallback } from "./fallback.js";
 import {
+    getAvailableEffortLevels,
     hasSamplingParameterRestriction,
     isGeminiModelVersionGte,
-    hasSamplingParameterRemoval,
+    requiresAdaptiveThinkingOnly,
     supportsAdaptiveThinking,
 } from "./version-parsing.js";
 
@@ -76,6 +77,7 @@ export interface VertexAIClaudeOptions {
     thinking_mode?: boolean;
     thinking_budget_tokens?: number;
     include_thoughts?: boolean;
+    effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
     cache_enabled?: boolean;
     cache_ttl?: '5m' | '1h';
 }
@@ -666,11 +668,20 @@ function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInf
 
     // Check if this model supports adaptive thinking (Opus 4.6+, Sonnet 4.6+)
     const supportsAdaptive = supportsAdaptiveThinking(model);
-    // Check if extended thinking is deprecated (Opus 4.6+, Sonnet 4.6+)
-    //unused
-    //const isExtendedThinkingDeprecatedFlag = isExtendedThinkingDeprecated(model);
     // Check if this is Opus 4.7+ where extended thinking returns 400 error
-    const adaptiveThinkingRequired = hasSamplingParameterRemoval(model);
+    const adaptiveOnly = requiresAdaptiveThinkingOnly(model);
+
+    // Effort option — shown for all models that support it (Opus 4.5+, Sonnet 4.6+, all 4.7+)
+    const effortLevels = getAvailableEffortLevels(model);
+    const claudeEffortOptions: ModelOptionInfoItem[] = effortLevels ? [
+        {
+            name: "effort",
+            type: OptionType.enum,
+            enum: effortLevels,
+            default: "high",
+            description: "Controls how many tokens Claude uses when responding. Lower effort trades thoroughness for speed and cost savings.",
+        },
+    ] : [];
 
     if (model.includes("-3-7") || supportsAdaptive) {
         // Models with adaptive thinking support use adaptive mode with display
@@ -682,7 +693,7 @@ function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInf
                 type: OptionType.boolean,
                 default: false,
                 description: useAdaptiveThinking
-                    ? (adaptiveThinkingRequired
+                    ? (adaptiveOnly
                         ? "Enable adaptive thinking (required on this model; extended thinking is not supported)"
                         : "Enable adaptive thinking (recommended; extended thinking is deprecated)")
                     : "If true, use the extended reasoning mode"
@@ -697,7 +708,7 @@ function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInf
                 integer: true,
                 step: 100,
                 description: useAdaptiveThinking
-                    ? (adaptiveThinkingRequired
+                    ? (adaptiveOnly
                         ? "Thinking budget for adaptive mode. Extended thinking is not supported on this model."
                         : "Thinking budget for adaptive mode. Extended thinking is deprecated; consider using effort-based adaptive thinking instead.")
                     : "The target number of tokens to use for reasoning, not a hard limit."
@@ -707,7 +718,7 @@ function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInf
                 type: OptionType.boolean,
                 default: false,
                 description: useAdaptiveThinking
-                    ? (adaptiveThinkingRequired
+                    ? (adaptiveOnly
                         ? "Show the summarized thinking content in the response"
                         : "Show the summarized thinking content in the response (default on this model)")
                     : "Include the model's reasoning process in the response"
@@ -719,6 +730,7 @@ function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInf
             options: [
                 ...max_tokens,
                 ...commonOptions,
+                ...claudeEffortOptions,
                 ...claudeModeOptions,
                 ...claudeThinkingOptions,
                 ...claudeCacheOptions,
@@ -731,6 +743,7 @@ function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInf
         options: [
             ...max_tokens,
             ...commonOptions,
+            ...claudeEffortOptions,
             ...claudeCacheOptions,
             ...claudeCacheTtlOptions,
         ]
@@ -783,9 +796,10 @@ function getGeminiMaxTokensLimit(model: string): number {
 }
 
 // Delegate to provider-agnostic limits,
-// override only where VertexAI supports extended output (128K for 3.7)
+// override only where VertexAI supports extended output (128K for 3.7 and Opus 4.7+)
 function getClaudeMaxTokensLimit(model: string): number {
     if (model.includes('-3-7')) return 128000;
+    if (model.includes('opus-4-7')) return 128000;
     return getMaxOutputTokens(model);
 }
 

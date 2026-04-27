@@ -28,8 +28,8 @@ import {
     type ToolUse,
     truncateLargeTextInConversation,
     type VertexAIClaudeOptions,
-    supportsAdaptiveThinking
 } from "@llumiverse/core";
+import { resolveClaudeThinking } from "../../shared/claude-thinking.js";
 import { asyncMap } from "@llumiverse/core/async";
 import type { VertexAIDriver } from "../index.js";
 import type { ModelDefinition } from "../models.js";
@@ -980,33 +980,21 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
         }
     }
 
-    // Opus 4.6+ and Sonnet 4.6+ use adaptive thinking with display, not enabled/disabled
-    // They also no longer support temperature, top_p, top_k
-    const supportsAdaptive = supportsAdaptiveThinking(modelName);
+    // Resolve thinking, effort, and sampling restriction using shared Claude helper
+    const { thinking, outputConfig, hasSamplingRestriction } = resolveClaudeThinking(modelName, model_options);
 
     const payload = {
         messages: sanitizedMessages,
         system: sanitizedSystem,
         tools: sanitizedTools,
-        temperature: supportsAdaptive ? undefined : model_options?.temperature,
+        temperature: hasSamplingRestriction ? undefined : model_options?.temperature,
         model: modelName,
         max_tokens: maxToken(options),
-        top_p: supportsAdaptive ? undefined : (model_options?.temperature != null ? undefined : model_options?.top_p),
-        top_k: supportsAdaptive ? undefined : model_options?.top_k,
+        top_p: hasSamplingRestriction ? undefined : (model_options?.temperature != null ? undefined : model_options?.top_p),
+        top_k: hasSamplingRestriction ? undefined : model_options?.top_k,
         stop_sequences: model_options?.stop_sequence,
-        thinking: supportsAdaptive
-            ? {
-                type: "adaptive" as const,
-                display: "summarized" as const
-            }
-            : model_options?.thinking_mode
-                ? {
-                    budget_tokens: model_options?.thinking_budget_tokens ?? 1024,
-                    type: "enabled" as const
-                }
-                : {
-                    type: "disabled" as const
-                }
+        thinking,
+        ...(outputConfig && { output_config: outputConfig }),
     };
 
     return { payload, requestOptions };
