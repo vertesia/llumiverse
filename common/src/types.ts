@@ -82,7 +82,7 @@ export const ProviderList: Record<Providers, ProviderParams> = {
     },
     vertexai: {
         id: Providers.vertexai,
-        name: "Gemini Enterprise Agent Platform (Vertex AI)",
+        name: "Google Agent Platform (Vertex AI)",
         requiresApiKey: false,
         requiresEndpointUrl: false,
         supportSearch: false,
