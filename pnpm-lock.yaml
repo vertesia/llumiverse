@@ -115,8 +115,8 @@ importers:
   drivers:
     dependencies:
       '@anthropic-ai/sdk':
-        specifier: ^0.91.0
-        version: 0.91.0(zod@3.25.63)
+        specifier: ^0.91.1
+        version: 0.91.1(zod@3.25.63)
       '@anthropic-ai/vertex-sdk':
         specifier: ^0.16.0
         version: 0.16.0(zod@3.25.63)
@@ -233,8 +233,8 @@ importers:
 
 packages:
 
-  '@anthropic-ai/sdk@0.91.0':
-    resolution: {integrity: sha512-hybd/DOI3ujG4gZyqqcWnSekYxkdjr1JbZYqP2Lb4AmcsU6HCTHSrTOgqedPSsQAruBVucHNAoD1vTQnpPzedw==}
+  '@anthropic-ai/sdk@0.91.1':
+    resolution: {integrity: sha512-LAmu761tSN9r66ixvmciswUj/ZC+1Q4iAfpedTfSVLeswRwnY3n2Nb6Tsk+cLPP28aLOPWeMgIuTuCcMC6W/iw==}
     hasBin: true
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
@@ -2269,6 +2269,7 @@ packages:
 
   uuid@8.3.2:
     resolution: {integrity: sha512-+NYs2QeMWy+GWFOEm9xnn6HCDp0l7QBD7ml8zLUmJ+93Q5NF0NocErnwkTkXVFNiX3/fpC6afS8Dhb/gz7R7eg==}
+    deprecated: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
     hasBin: true
 
   vite@6.4.2:
@@ -2424,7 +2425,7 @@ packages:
 
 snapshots:
 
-  '@anthropic-ai/sdk@0.91.0(zod@3.25.63)':
+  '@anthropic-ai/sdk@0.91.1(zod@3.25.63)':
     dependencies:
       json-schema-to-ts: 3.1.1
     optionalDependencies:
@@ -2432,7 +2433,7 @@ snapshots:
 
   '@anthropic-ai/vertex-sdk@0.16.0(zod@3.25.63)':
     dependencies:
-      '@anthropic-ai/sdk': 0.91.0(zod@3.25.63)
+      '@anthropic-ai/sdk': 0.91.1(zod@3.25.63)
       google-auth-library: 10.6.2
     transitivePeerDependencies:
       - supports-color
