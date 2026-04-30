@@ -1,6 +1,5 @@
 import { type ModelOptionInfoItem, type ModelOptions, type ModelOptionsInfo, OptionType } from "../types.js";
 import { getMaxOutputTokens } from "./context-windows.js";
-import { textOptionsFallback } from "./fallback.js";
 import {
     getAvailableEffortLevels,
     hasSamplingParameterRestriction,
