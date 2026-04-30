@@ -1,4 +1,4 @@
-import { ModelOptionsInfo, ModelOptions, OptionType, ModelOptionInfoItem } from "../types.js";
+import { ModelOptionsInfo, ModelOptions, OptionType, ModelOptionInfoItem, ReasoningEffort, SharedOptions } from "../types.js";
 import { getMaxOutputTokens } from "./context-windows.js";
 import { textOptionsFallback } from "./fallback.js";
 
@@ -32,6 +32,7 @@ export interface BaseConverseOptions {
 export interface BedrockClaudeOptions extends BaseConverseOptions {
     _option_id: "bedrock-claude";
     top_k?: number;
+    effort?: ReasoningEffort;
     thinking_mode?: boolean;
     thinking_budget_tokens?: number;
     include_thoughts?: boolean;
@@ -293,29 +294,20 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
             if (model.includes("-3-7-") || model.includes("-4-")) {
                 const claudeModeOptions: ModelOptionInfoItem[] = [
                     {
-                        name: "thinking_mode",
-                        type: OptionType.boolean,
-                        default: false,
-                        description: "If true, use the extended reasoning mode"
+                        name: SharedOptions.effort,
+                        type: OptionType.enum,
+                        enum: { "Low": "low", "Medium": "medium", "High": "high" },
+                        description: "Controls Claude extended thinking effort. Clear this to leave extended thinking disabled."
                     },
                 ];
-                const claudeThinkingOptions: ModelOptionInfoItem[] = (option as BedrockClaudeOptions)?.thinking_mode ? [
-                    {
-                        name: "thinking_budget_tokens",
-                        type: OptionType.numeric,
-                        min: 1024,
-                        default: 1024,
-                        integer: true,
-                        step: 100,
-                        description: "The target number of tokens to use for reasoning, not a hard limit."
-                    },
+                const claudeThinkingOptions: ModelOptionInfoItem[] = [
                     {
                         name: "include_thoughts",
                         type: OptionType.boolean,
                         default: false,
                         description: "If true, include the reasoning in the response"
                     },
-                ] : [];
+                ];
 
                 return {
                     _option_id: "bedrock-claude",

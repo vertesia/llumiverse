@@ -559,6 +559,7 @@ export enum SharedOptions {
     presence_penalty = "presence_penalty",
     frequency_penalty = "frequency_penalty",
     stop_sequence = "stop_sequence",
+    effort = "effort",
 
     //Image
     seed = "seed",
@@ -571,6 +572,8 @@ export enum OptionType {
     boolean = "boolean",
     string_list = "string_list"
 }
+
+export type ReasoningEffort = "low" | "medium" | "high";
 
 // ============== Model Options ===============
 

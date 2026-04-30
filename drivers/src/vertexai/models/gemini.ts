@@ -243,8 +243,11 @@ const recoverableToolCallReasons = [
 function geminiThinkingBudget(option: StatelessExecutionOptions) {
     const model_options = option.model_options as VertexAIGeminiOptions | undefined;
     // If thinking_budget_tokens is explicitly set in model options, use it directly
-    if (model_options?.thinking_budget_tokens) {
+    if (model_options?.thinking_budget_tokens !== undefined) {
         return model_options.thinking_budget_tokens;
+    }
+    if (model_options?.effort) {
+        return geminiBudgetForEffort(option.model, model_options.effort);
     }
     // Set minimum thinking level by default.
     // Docs: https://ai.google.dev/gemini-api/docs/thinking#set-budget
@@ -257,16 +260,66 @@ function geminiThinkingBudget(option: StatelessExecutionOptions) {
     return undefined;
 }
 
+function geminiThinkingLevelForEffort(model: string, effort: VertexAIGeminiOptions["effort"]): ThinkingLevel | undefined {
+    if (model.includes("gemini-3-pro-image")) {
+        return ThinkingLevel.HIGH;
+    }
+    if (model.includes("gemini-3.1-flash-image")) {
+        return effort === "low" ? ThinkingLevel.MINIMAL : ThinkingLevel.HIGH;
+    }
+    switch (effort) {
+        case "low":
+            return ThinkingLevel.LOW;
+        case "medium":
+            return ThinkingLevel.MEDIUM;
+        case "high":
+            return ThinkingLevel.HIGH;
+        default:
+            return undefined;
+    }
+}
+
+function geminiBudgetForEffort(model: string, effort: NonNullable<VertexAIGeminiOptions["effort"]>): number {
+    const isFlashLite = model.includes("flash-lite");
+    const isFlash = model.includes("flash") && !isFlashLite;
+    const isPro = model.includes("pro");
+
+    if (effort === "low") {
+        if (isPro) return 128;
+        if (isFlashLite) return 512;
+        if (isFlash) return 1;
+        return 1024;
+    }
+    if (effort === "medium") {
+        return 8192;
+    }
+    if (isPro) return 32768;
+    if (isFlash || isFlashLite) return 24576;
+    return 8192;
+}
+
 function geminiThinkingConfig(option: StatelessExecutionOptions): ThinkingConfig | undefined {
     const model_options = option.model_options as VertexAIGeminiOptions | undefined;
 
     // If thinking options are explicitly set in model options, use them directly
     const include_thoughts = model_options?.include_thoughts ?? false;
-    if (model_options?.thinking_budget_tokens || model_options?.thinking_level) {
+    if (model_options?.thinking_budget_tokens !== undefined || model_options?.thinking_level) {
         return {
             includeThoughts: include_thoughts,
             thinkingBudget: model_options.thinking_budget_tokens,
             thinkingLevel: model_options.thinking_level,
+        };
+    }
+    if (model_options?.effort) {
+        if (isGeminiModelVersionGte(option.model, '3.0')) {
+            return {
+                includeThoughts: include_thoughts,
+                thinkingLevel: geminiThinkingLevelForEffort(option.model, model_options.effort),
+            };
+        }
+        return {
+            includeThoughts: include_thoughts,
+            thinkingBudget: geminiBudgetForEffort(option.model, model_options.effort),
         };
     }
 
@@ -274,16 +327,9 @@ function geminiThinkingConfig(option: StatelessExecutionOptions): ThinkingConfig
     // Docs: https://ai.google.dev/gemini-api/docs/thinking#set-budget
     // https://docs.cloud.google.com/vertex-ai/generative-ai/docs/thinking
     if (isGeminiModelVersionGte(option.model, '3.0')) {
-        if (option.model.includes("gemini-3-pro-image")) {
-            // Does not support thinking level.
-            return {
-                includeThoughts: include_thoughts,
-                thinkingBudget: -1
-            };
-        }
         return {
             includeThoughts: include_thoughts,
-            thinkingLevel: ThinkingLevel.LOW
+            thinkingLevel: option.model.includes("gemini-3-pro-image") ? ThinkingLevel.HIGH : ThinkingLevel.LOW
         };
     }
     if (isGeminiModelVersionGte(option.model, '2.5')) {
