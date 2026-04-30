@@ -107,6 +107,19 @@ function maxTokenFallbackClaude(option: StatelessExecutionOptions): number {
     }
 }
 
+function claudeThinkingBudgetForEffort(effort: BedrockClaudeOptions["effort"]): number | undefined {
+    switch (effort) {
+        case "low":
+            return 1024;
+        case "medium":
+            return 8192;
+        case "high":
+            return 32000;
+        default:
+            return undefined;
+    }
+}
+
 /**
  * Parse Claude model version from model string.
  * @param modelString - The model identifier string
@@ -882,7 +895,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
         } else if (options.model.includes("claude")) {
             const claude_options = model_options as ModelOptions as BedrockClaudeOptions;
-            const thinking = claude_options.thinking_mode ?? false;
+            const effortBudget = claudeThinkingBudgetForEffort(claude_options.effort);
+            const thinking = claude_options.thinking_mode === true || effortBudget !== undefined;
+            const thinkingBudget = claude_options.thinking_budget_tokens ?? effortBudget ?? 1024;
             supportsJSONPrefill = !thinking
 
             if (options.model.includes("claude-3-7") || options.model.includes("-4-")) {
@@ -890,11 +905,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     ...additionalField,
                     reasoning_config: {
                         type: thinking ? "enabled" : "disabled",
-                        budget_tokens: thinking ? (claude_options.thinking_budget_tokens ?? 1024) : undefined,
+                        budget_tokens: thinking ? thinkingBudget : undefined,
                     }
                 };
                 if (thinking && options.model.includes("claude-3-7-sonnet") &&
-                    ((claude_options.max_tokens ?? 0) > 64000 || (claude_options.thinking_budget_tokens ?? 0) > 64000)) {
+                    ((claude_options.max_tokens ?? 0) > 64000 || thinkingBudget > 64000)) {
                     additionalField = {
                         ...additionalField,
                         anthropic_beta: ["output-128k-2025-02-19"]

@@ -136,6 +136,19 @@ function maxToken(option: StatelessExecutionOptions): number {
     }
 }
 
+function claudeThinkingBudgetForEffort(effort: VertexAIClaudeOptions["effort"]): number | undefined {
+    switch (effort) {
+        case "low":
+            return 1024;
+        case "medium":
+            return 8192;
+        case "high":
+            return 32000;
+        default:
+            return undefined;
+    }
+}
+
 // Type-safe overloads for collectFileBlocks
 async function collectFileBlocks(segment: PromptSegment, restrictedTypes: true): Promise<Array<TextBlockParam | ImageBlockParam>>;
 async function collectFileBlocks(segment: PromptSegment, restrictedTypes?: false): Promise<ContentBlockParam[]>;
@@ -979,6 +992,10 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
         }
     }
 
+    const effortBudget = claudeThinkingBudgetForEffort(model_options?.effort);
+    const thinkingEnabled = model_options?.thinking_mode === true || effortBudget !== undefined;
+    const thinkingBudget = model_options?.thinking_budget_tokens ?? effortBudget ?? 1024;
+
     const payload = {
         messages: sanitizedMessages,
         system: sanitizedSystem,
@@ -989,9 +1006,9 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
         top_p: model_options?.temperature != null ? undefined : model_options?.top_p,
         top_k: model_options?.top_k,
         stop_sequences: model_options?.stop_sequence,
-        thinking: model_options?.thinking_mode ?
+        thinking: thinkingEnabled ?
             {
-                budget_tokens: model_options?.thinking_budget_tokens ?? 1024,
+                budget_tokens: thinkingBudget,
                 type: "enabled" as const
             } : {
                 type: "disabled" as const

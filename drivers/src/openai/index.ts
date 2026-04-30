@@ -61,6 +61,29 @@ function textToCompletionResult(text: string): CompletionResult[] {
     return text ? [{ type: "text", value: text }] : [];
 }
 
+function isOpenAIReasoningModel(model: string): boolean {
+    const normalized = model.toLowerCase();
+    return normalized.includes("o1")
+        || normalized.includes("o3")
+        || normalized.includes("o4")
+        || normalized.includes("gpt-5");
+}
+
+function isGpt5ProModel(model: string): boolean {
+    const modelName = model.toLowerCase().split('/').pop() ?? model.toLowerCase();
+    return /^gpt-5(?:\.\d+)?-pro/.test(modelName);
+}
+
+function openAIReasoningEffort(model: string, effort: string | undefined): "low" | "medium" | "high" | undefined {
+    if (!effort || !isOpenAIReasoningModel(model)) {
+        return undefined;
+    }
+    if (isGpt5ProModel(model)) {
+        return "high";
+    }
+    return effort === "low" || effort === "medium" || effort === "high" ? effort : undefined;
+}
+
 //TODO: Do we need a list?, replace with if statements and modernize?
 const supportFineTunning = new Set([
     "gpt-3.5-turbo-1106",
@@ -144,8 +167,9 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             }
         }
 
-        const reasoning = model_options?.reasoning_effort ? { effort: model_options.reasoning_effort } : undefined;
-        const isReasoningModel = /\b(o1|o3|o4)\b/.test(options.model);
+        const isReasoningModel = isOpenAIReasoningModel(options.model);
+        const effort = openAIReasoningEffort(options.model, model_options?.effort ?? model_options?.reasoning_effort);
+        const reasoning = effort ? { effort } : undefined;
 
         const stream = await this.service.responses.create({
             stream: true,
@@ -204,8 +228,9 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             }
         }
 
-        const reasoning = model_options?.reasoning_effort ? { effort: model_options.reasoning_effort } : undefined;
-        const isReasoningModel = /\b(o1|o3|o4)\b/.test(options.model);
+        const isReasoningModel = isOpenAIReasoningModel(options.model);
+        const effort = openAIReasoningEffort(options.model, model_options?.effort ?? model_options?.reasoning_effort);
+        const reasoning = effort ? { effort } : undefined;
 
         const res = await this.service.responses.create({
             stream: false,
