@@ -74,10 +74,10 @@ export interface VertexAIClaudeOptions {
     top_p?: number;
     top_k?: number;
     stop_sequence?: string[];
+    effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
     thinking_mode?: boolean;
     thinking_budget_tokens?: number;
     include_thoughts?: boolean;
-    effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
     cache_enabled?: boolean;
     cache_ttl?: '5m' | '1h';
 }
@@ -92,6 +92,7 @@ export interface VertexAIGeminiOptions {
     presence_penalty?: number;
     frequency_penalty?: number;
     seed?: number;
+    effort?: 'low' | 'medium' | 'high';
     include_thoughts?: boolean;
     thinking_budget_tokens?: number;
     thinking_level?: ThinkingLevel;
@@ -130,95 +131,6 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
         return getLlamaOptions(model);
     }
     return textOptionsFallback;
-}
-
-function getGeminiThinkingLevels(model: string): {
-    levels: Record<string, ThinkingLevel>;
-    defaultLevel: ThinkingLevel;
-} {
-    const normalized = model.toLowerCase();
-    const isGemini3OrLater = isGeminiModelVersionGte(model, "3.0");
-    const isGemini31OrLater = isGeminiModelVersionGte(model, "3.1");
-    const isFlashLite = normalized.includes("flash-lite");
-    const isFlash = normalized.includes("flash") && !isFlashLite;
-    const isPro = normalized.includes("pro");
-
-    // Gemini 3 / 3.1 thinking_level support summary:
-    // - MINIMAL: Gemini 3 Flash and Gemini 3.1 Flash-Lite only.
-    //   Gemini 3.1 Flash-Lite defaults to MINIMAL.
-    // - LOW: Supported by Gemini 3+ models.
-    // - MEDIUM: Gemini 3 Flash, Gemini 3.1 Pro, Gemini 3.1 Flash-Lite.
-    // - HIGH: Supported by Gemini 3+ models.
-    // - Thinking cannot be turned off for Gemini 3 Pro and Gemini 3.1 Pro.
-    if (isFlashLite && isGemini31OrLater) {
-        return {
-            levels: {
-                "Minimal": ThinkingLevel.MINIMAL,
-                "Low": ThinkingLevel.LOW,
-                "Medium": ThinkingLevel.MEDIUM,
-                "High": ThinkingLevel.HIGH,
-            },
-            defaultLevel: ThinkingLevel.MINIMAL,
-        };
-    }
-
-    // Gemini 3+ Flash supports MINIMAL and MEDIUM in addition to LOW/HIGH.
-    if (isFlash) {
-        return {
-            levels: {
-                "Minimal": ThinkingLevel.MINIMAL,
-                "Low": ThinkingLevel.LOW,
-                "Medium": ThinkingLevel.MEDIUM,
-                "High": ThinkingLevel.HIGH,
-            },
-            defaultLevel: ThinkingLevel.MINIMAL,
-        };
-    }
-
-    // Gemini 3.1 Pro adds MEDIUM, but does not support turning thinking off.
-    if (isPro && isGemini31OrLater) {
-        return {
-            levels: {
-                "Low": ThinkingLevel.LOW,
-                "Medium": ThinkingLevel.MEDIUM,
-                "High": ThinkingLevel.HIGH,
-            },
-            defaultLevel: ThinkingLevel.LOW,
-        };
-    }
-
-    // Gemini 3 Pro supports LOW/HIGH. Thinking cannot be turned off.
-    if (isPro) {
-        return {
-            levels: {
-                "Low": ThinkingLevel.LOW,
-                "High": ThinkingLevel.HIGH,
-            },
-            defaultLevel: ThinkingLevel.LOW,
-        };
-    }
-
-    // Fallback for unknown Gemini 3+/4+ families:
-    // prefer future-safe propagation by enabling the guaranteed baseline levels.
-    if (isGemini3OrLater) {
-        return {
-            levels: {
-                "Low": ThinkingLevel.LOW,
-                "Medium": ThinkingLevel.MEDIUM,
-                "High": ThinkingLevel.HIGH,
-            },
-            defaultLevel: ThinkingLevel.LOW,
-        };
-    }
-
-    // Non-3.x models should not reach this helper in normal flow.
-    return {
-        levels: {
-            "Low": ThinkingLevel.LOW,
-            "High": ThinkingLevel.HIGH,
-        },
-        defaultLevel: ThinkingLevel.LOW,
-    };
 }
 
 function getImagenOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
@@ -375,8 +287,17 @@ function getImagenOptions(model: string, option?: ModelOptions): ModelOptionsInf
     return textOptionsFallback;
 }
 
+function getGeminiEffortOptions(model: string): Record<string, string> {
+    if (model.includes("gemini-3-pro-image")) {
+        return { "High": "high" };
+    }
+    if (model.includes("gemini-3.1-flash-image")) {
+        return { "Low": "low", "High": "high" };
+    }
+    return { "Low": "low", "Medium": "medium", "High": "high" };
+}
+
 function getGeminiThinkingOptionItems(model: string): ModelOptionInfoItem[] {
-    const thinkingLevelConfig = getGeminiThinkingLevels(model);
     return [
         {
             name: "include_thoughts",
@@ -385,10 +306,9 @@ function getGeminiThinkingOptionItems(model: string): ModelOptionInfoItem[] {
             description: "Include the model's reasoning process in the response"
         },
         {
-            name: "thinking_level",
+            name: SharedOptions.effort,
             type: OptionType.enum,
-            enum: thinkingLevelConfig.levels,
-            default: thinkingLevelConfig.defaultLevel,
+            enum: getGeminiEffortOptions(model),
             description: "Higher thinking levels may improve quality, but increase response times and token costs"
         }
     ];
@@ -687,32 +607,9 @@ function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInf
         // Models with adaptive thinking support use adaptive mode with display
         // Older models (3.7) use extended thinking (enabled/disabled)
         const useAdaptiveThinking = supportsAdaptive;
-        const claudeModeOptions: ModelOptionInfoItem[] = [
-            {
-                name: "thinking_mode",
-                type: OptionType.boolean,
-                default: false,
-                description: useAdaptiveThinking
-                    ? (adaptiveOnly
-                        ? "Enable adaptive thinking (required on this model; extended thinking is not supported)"
-                        : "Enable adaptive thinking (recommended; extended thinking is deprecated)")
-                    : "If true, use the extended reasoning mode"
-            },
-        ];
-        const claudeThinkingOptions: ModelOptionInfoItem[] = (option as VertexAIClaudeOptions)?.thinking_mode ? [
-            {
-                name: "thinking_budget_tokens",
-                type: OptionType.numeric,
-                min: 1024,
-                default: 1024,
-                integer: true,
-                step: 100,
-                description: useAdaptiveThinking
-                    ? (adaptiveOnly
-                        ? "Thinking budget for adaptive mode. Extended thinking is not supported on this model."
-                        : "Thinking budget for adaptive mode. Extended thinking is deprecated; consider using effort-based adaptive thinking instead.")
-                    : "The target number of tokens to use for reasoning, not a hard limit."
-            },
+        // Effort is already shown via claudeEffortOptions (with xhigh/max for Opus 4.7+)
+        const claudeModeOptions: ModelOptionInfoItem[] = [];
+        const claudeThinkingOptions: ModelOptionInfoItem[] = [
             {
                 name: "include_thoughts",
                 type: OptionType.boolean,
@@ -723,7 +620,7 @@ function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInf
                         : "Show the summarized thinking content in the response (default on this model)")
                     : "Include the model's reasoning process in the response"
             }
-        ] : [];
+        ];
 
         return {
             _option_id: "vertexai-claude",

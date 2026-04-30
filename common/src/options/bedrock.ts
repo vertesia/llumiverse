@@ -1,5 +1,6 @@
 import { type ModelOptionInfoItem, type ModelOptions, type ModelOptionsInfo, OptionType } from "../types.js";
 import { getMaxOutputTokens } from "./context-windows.js";
+import { textOptionsFallback } from "./fallback.js";
 import {
     getAvailableEffortLevels,
     hasSamplingParameterRestriction,
@@ -328,32 +329,9 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                 // Models with adaptive thinking support use adaptive mode with display
                 // Older models (3.7) use extended thinking (enabled/disabled)
                 const useAdaptiveThinking = supportsAdaptive;
-                const claudeModeOptions: ModelOptionInfoItem[] = [
-                    {
-                        name: "thinking_mode",
-                        type: OptionType.boolean,
-                        default: false,
-                        description: useAdaptiveThinking
-                            ? (adaptiveOnly
-                                ? "Enable adaptive thinking (required on this model; extended thinking is not supported)"
-                                : "Enable adaptive thinking (recommended; extended thinking is deprecated)")
-                            : "If true, use the extended reasoning mode"
-                    },
-                ];
-                const claudeThinkingOptions: ModelOptionInfoItem[] = (option as BedrockClaudeOptions)?.thinking_mode ? [
-                    {
-                        name: "thinking_budget_tokens",
-                        type: OptionType.numeric,
-                        min: 1024,
-                        default: 1024,
-                        integer: true,
-                        step: 100,
-                        description: useAdaptiveThinking
-                            ? (adaptiveOnly
-                                ? "Thinking budget for adaptive mode. Extended thinking is not supported on this model."
-                                : "Thinking budget for adaptive mode. Extended thinking is deprecated; consider using effort-based adaptive thinking instead.")
-                            : "The target number of tokens to use for reasoning, not a hard limit."
-                    },
+                // Effort is already shown via claudeEffortOptions (with xhigh/max for Opus 4.7+)
+                const claudeModeOptions: ModelOptionInfoItem[] = [];
+                const claudeThinkingOptions: ModelOptionInfoItem[] = [
                     {
                         name: "include_thoughts",
                         type: OptionType.boolean,
@@ -364,7 +342,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                                 : "Show the summarized thinking content in the response (default on this model)")
                             : "If true, include the reasoning in the response"
                     },
-                ] : [];
+                ];
 
                 return {
                     _option_id: "bedrock-claude",

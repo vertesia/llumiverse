@@ -1,4 +1,4 @@
-import { ModelOptionInfoItem, ModelOptions, ModelOptionsInfo, OptionType, SharedOptions } from "../types.js";
+import { ModelOptionInfoItem, ModelOptions, ModelOptionsInfo, OptionType, ReasoningEffort, SharedOptions } from "../types.js";
 import { textOptionsFallback } from "./fallback.js";
 
 // Union type of all OpenAI options
@@ -8,7 +8,8 @@ export interface OpenAiThinkingOptions {
     _option_id: "openai-thinking",
     max_tokens?: number,
     stop_sequence?: string[],
-    reasoning_effort?: "low" | "medium" | "high",
+    effort?: ReasoningEffort,
+    reasoning_effort?: ReasoningEffort,
     image_detail?: "low" | "high" | "auto",
 }
 
@@ -150,7 +151,7 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
         };
     }
 
-    if (model.includes("o1") || model.includes("o3")) {
+    if (isReasoningModel(model)) {
         //Is thinking text model
         let max_tokens_limit = 4096;
         if (model.includes("o1")) {
@@ -167,6 +168,9 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
         else if (model.includes("o3")) {
             max_tokens_limit = 100000;
         }
+        else if (model.includes("o4") || model.includes("gpt-5")) {
+            max_tokens_limit = 128000;
+        }
 
         const commonOptions: ModelOptionInfoItem[] = [
             {
@@ -179,9 +183,14 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
             },
         ];
 
-        const reasoningOptions: ModelOptionInfoItem[] = model.includes("o3") || isO1Full(model) ? [
+        const reasoningOptions: ModelOptionInfoItem[] = isGpt5ProModel(model) ? [
             {
-                name: "reasoning_effort", type: OptionType.enum, enum: { "Low": "low", "Medium": "medium", "High": "high" },
+                name: SharedOptions.effort, type: OptionType.enum, enum: { "High": "high" },
+                default: "high", description: "GPT-5 Pro only supports high reasoning effort."
+            },
+        ] : model.includes("o3") || model.includes("o4") || model.includes("gpt-5") || isO1Full(model) ? [
+            {
+                name: SharedOptions.effort, type: OptionType.enum, enum: { "Low": "low", "Medium": "medium", "High": "high" },
                 default: "medium", description: "How much effort the model should put into reasoning, lower values result in faster responses and less tokens used."
             },
         ] : [];
@@ -263,6 +272,19 @@ function isO1Full(model: string): boolean {
         return true;
     }
     return false;
+}
+
+function isReasoningModel(model: string): boolean {
+    const normalized = model.toLowerCase();
+    return normalized.includes("o1")
+        || normalized.includes("o3")
+        || normalized.includes("o4")
+        || normalized.includes("gpt-5");
+}
+
+function isGpt5ProModel(model: string): boolean {
+    const modelName = model.toLowerCase().split('/').pop() ?? model.toLowerCase();
+    return /^gpt-5(?:\.\d+)?-pro/.test(modelName);
 }
 
 function isVisionModel(model: string): boolean {
