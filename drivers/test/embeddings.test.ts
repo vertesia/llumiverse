@@ -63,11 +63,11 @@ if (process.env.WATSONX_API_KEY) {
 }
 
 if (vertex) {
-    describe('VertexAI: embeddings generation', function () {
+    describe('VertexAI: embeddings generation', () => {
         test('embeddings for text', async () => {
             const r = await vertex.generateEmbeddings({ text: TEXT });
             expect(r.values.length).toBeGreaterThan(0);
-            expect(r.model).toBe("gemini-embedding-001");
+            expect(r.model).toBe("gemini-embedding-2");
             expect(r.token_count).toBe(1);
         }, TIMEOUT);
         test('embeddings for text with multimodal', async () => {
@@ -79,8 +79,8 @@ if (vertex) {
         test('embeddings for image', async () => {
             const r = await vertex.generateEmbeddings({ image: IMAGE });
             expect(r.values.length).toBeGreaterThan(0);
-            expect(r.model).toBe("multimodalembedding@001");
-            expect(r.token_count).toBeUndefined()   //not reported by multimodal
+            expect(r.model).toBe("gemini-embedding-2");
+            expect(r.token_count).toBeGreaterThan(0);
         }, TIMEOUT);
     })
 }

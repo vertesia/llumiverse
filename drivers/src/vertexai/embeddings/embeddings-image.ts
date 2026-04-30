@@ -37,7 +37,7 @@ export async function getEmbeddingsForImages(driver: VertexAIDriver, options: Em
         }]
     } as EmbeddingsForImagePrompt;
 
-    const model = options.model || "multimodalembedding@001";
+    const model = options.model || "gemini-embedding-2";
 
     const client = driver.getFetchClient();
 
