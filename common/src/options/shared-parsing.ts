@@ -10,7 +10,7 @@ import { type ModelOptionInfoItem, OptionType } from "../types.js";
 import { getMaxOutputTokens } from "./context-windows.js";
 import {
     getAvailableEffortLevels,
-    requiresAdaptiveThinkingOnly,
+    isClaudeVersionGTE,
     supportsAdaptiveThinking,
 } from "./version-parsing.js";
 
@@ -90,27 +90,55 @@ export function buildClaudeEffortOptions(model: string): ModelOptionInfoItem[] {
 // ============================================================================
 
 /**
- * include_thoughts toggle — shown for Claude 3.7 and models with adaptive thinking
- * (Opus 4.6+, Sonnet 4.6+, all 4.7+).
+ * Thinking budget option — shown for non-adaptive Claude thinking models (3.7, 4.5).
+ * Setting this enables extended thinking with the given token budget.
  *
- * Returns an empty array for models that have no thinking support, so callers can
- * always spread the result without an explicit `if` guard.
+ * Returns an empty array for models that don't support extended thinking or that
+ * use adaptive thinking instead (where effort is the control knob).
  */
-export function buildClaudeThinkingOptions(model: string): ModelOptionInfoItem[] {
-    const supportsAdaptive = supportsAdaptiveThinking(model);
-    if (!model.includes("-3-7") && !supportsAdaptive) return [];
+export function buildClaudeThinkingBudgetOption(model: string): ModelOptionInfoItem[] {
+    // Adaptive-only models (Opus 4.7+) don't accept budget_tokens at all.
+    // Adaptive models (Opus/Sonnet 4.6) still accept budget_tokens but it's deprecated;
+    // those models should use effort instead. Show budget only for non-adaptive thinking models.
+    if (!isClaudeVersionGTE(model, 3, 7) || supportsAdaptiveThinking(model)) return [];
+    return [
+        {
+            name: "thinking_budget_tokens",
+            type: OptionType.numeric,
+            min: 1024,
+            integer: true,
+            step: 1024,
+            description: "Token budget for extended thinking. Enables thinking when set.",
+        },
+    ];
+}
 
-    const adaptiveOnly = requiresAdaptiveThinkingOnly(model);
+/**
+ * include_thoughts display toggle — shown for all Claude thinking-capable models.
+ * Controls whether thinking content is returned in the response.
+ * This does not enable thinking; set thinking_budget_tokens (extended) or effort (adaptive).
+ *
+ * Returns an empty array for models with no thinking support.
+ */
+export function buildClaudeIncludeThoughtsOption(model: string): ModelOptionInfoItem[] {
+    if (!isClaudeVersionGTE(model, 3, 7)) return [];
     return [
         {
             name: "include_thoughts",
             type: OptionType.boolean,
             default: false,
-            description: supportsAdaptive
-                ? (adaptiveOnly
-                    ? "Show the summarized thinking content in the response"
-                    : "Show the summarized thinking content in the response (default on this model)")
-                : "Include the model's reasoning process in the response",
+            description: "Include the model's thinking content in the response.",
         },
+    ];
+}
+
+/**
+ * @deprecated Use buildClaudeThinkingBudgetOption and buildClaudeIncludeThoughtsOption separately.
+ * Kept for backwards compatibility — delegates to the two new helpers.
+ */
+export function buildClaudeThinkingOptions(model: string): ModelOptionInfoItem[] {
+    return [
+        ...buildClaudeThinkingBudgetOption(model),
+        ...buildClaudeIncludeThoughtsOption(model),
     ];
 }

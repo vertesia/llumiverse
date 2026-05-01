@@ -3,7 +3,8 @@ import {
     buildClaudeCacheOptions,
     buildClaudeCacheTtlOptions,
     buildClaudeEffortOptions,
-    buildClaudeThinkingOptions,
+    buildClaudeIncludeThoughtsOption,
+    buildClaudeThinkingBudgetOption,
     getClaudeMaxTokensLimit,
 } from "./shared-parsing.js";
 import { hasSamplingParameterRestriction } from "./version-parsing.js";
@@ -38,7 +39,6 @@ export interface BaseConverseOptions {
 export interface BedrockClaudeOptions extends BaseConverseOptions {
     _option_id: "bedrock-claude";
     top_k?: number;
-    thinking_mode?: boolean;
     thinking_budget_tokens?: number;
     include_thoughts?: boolean;
     effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -294,7 +294,8 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                     ...baseConverseOptions,
                     ...claudeConverseOptions,
                     ...buildClaudeEffortOptions(model),
-                    ...buildClaudeThinkingOptions(model),
+                    ...buildClaudeThinkingBudgetOption(model),
+                    ...buildClaudeIncludeThoughtsOption(model),
                     ...buildClaudeCacheOptions(),
                     ...buildClaudeCacheTtlOptions((option as BedrockClaudeOptions)?.cache_enabled),
                 ],

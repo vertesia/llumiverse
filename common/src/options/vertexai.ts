@@ -4,7 +4,8 @@ import {
     buildClaudeCacheOptions,
     buildClaudeCacheTtlOptions,
     buildClaudeEffortOptions,
-    buildClaudeThinkingOptions,
+    buildClaudeIncludeThoughtsOption,
+    buildClaudeThinkingBudgetOption,
     getClaudeMaxTokensLimit,
 } from "./shared-parsing.js";
 import {
@@ -78,7 +79,6 @@ export interface VertexAIClaudeOptions {
     top_k?: number;
     stop_sequence?: string[];
     effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-    thinking_mode?: boolean;
     thinking_budget_tokens?: number;
     include_thoughts?: boolean;
     cache_enabled?: boolean;
@@ -577,7 +577,8 @@ function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInf
             ...max_tokens,
             ...commonOptions,
             ...buildClaudeEffortOptions(model),
-            ...buildClaudeThinkingOptions(model),
+            ...buildClaudeThinkingBudgetOption(model),
+            ...buildClaudeIncludeThoughtsOption(model),
             ...buildClaudeCacheOptions(),
             ...buildClaudeCacheTtlOptions((option as VertexAIClaudeOptions)?.cache_enabled),
         ],

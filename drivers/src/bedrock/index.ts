@@ -853,8 +853,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
         } else if (options.model.includes("claude")) {
             const claude_options = model_options as ModelOptions as BedrockClaudeOptions;
-            const thinking = claude_options.thinking_mode ?? false;
-            supportsJSONPrefill = !thinking
+            // Thinking is active when extended (budget set) or adaptive (effort set) thinking is enabled.
+            // JSON prefill is incompatible with active thinking.
+            const thinkingActive = claudeThinking.thinking != null && claudeThinking.thinking.type !== "disabled";
+            supportsJSONPrefill = !thinkingActive
 
             // Claude 3.7+ supports thinking — use shared helper for reasoning_config
             if (claudeThinking.supportsThinking) {
