@@ -38,7 +38,7 @@
             "jws@>=3.0.0 <3.2.3": "^3.2.3",
             "jws@>=4.0.0 <4.0.1": "^4.0.1",
             "@isaacs/brace-expansion@>=5.0.0 <6.0.0": "^5.0.1",
-            "fast-xml-parser@<5.5.7": "^5.5.7",
+            "fast-xml-parser@<5.5.7": "^5.7.2",
             "minimatch@>=3.0.0 <4.0.0": "legacy-v3",
             "minimatch@>=9.0.0 <10.0.0": "legacy-v9",
             "minimatch@>=10.0.0 <11.0.0": "^10.2.4",
