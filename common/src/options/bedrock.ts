@@ -1,11 +1,12 @@
 import { type ModelOptionInfoItem, type ModelOptions, type ModelOptionsInfo, OptionType } from "../types.js";
-import { getMaxOutputTokens } from "./context-windows.js";
 import {
-    getAvailableEffortLevels,
-    hasSamplingParameterRestriction,
-    requiresAdaptiveThinkingOnly,
-    supportsAdaptiveThinking,
-} from "./version-parsing.js";
+    buildClaudeCacheOptions,
+    buildClaudeCacheTtlOptions,
+    buildClaudeEffortOptions,
+    buildClaudeThinkingOptions,
+    getClaudeMaxTokensLimit,
+} from "./shared-parsing.js";
+import { hasSamplingParameterRestriction } from "./version-parsing.js";
 
 // Union type of all Bedrock options
 export type BedrockOptions = NovaCanvasOptions | BaseConverseOptions | BedrockClaudeOptions | BedrockPalmyraOptions | BedrockGptOssOptions | TwelvelabsPegasusOptions;
@@ -67,11 +68,9 @@ export interface TwelvelabsPegasusOptions {
 }
 
 export function getMaxTokensLimitBedrock(model: string): number | undefined {
-    // Claude models — delegate to provider-agnostic limits,
-    // override only where Bedrock supports extended output (128K for 3.7)
+    // Claude models — delegate to shared limit logic (128K for 3.7 and Opus 4.7+)
     if (model.includes("claude")) {
-        if (model.includes("-3-7-")) return 128000;
-        return getMaxOutputTokens(model);
+        return getClaudeMaxTokensLimit(model);
     }
     // Amazon models
     else if (model.includes("amazon")) {
@@ -289,77 +288,17 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                     description: "Limits token sampling to the top k tokens"
                 },
             ];
-            const claudeCacheOptions: ModelOptionInfoItem[] = [
-                {
-                    name: "cache_enabled",
-                    type: OptionType.boolean,
-                    default: false,
-                    description: "Enable prompt caching. Injects cache breakpoints at the system prompt, tools, and conversation pivot.",
-                },
-            ];
-            const claudeCacheTtlOptions: ModelOptionInfoItem[] = (option as BedrockClaudeOptions)?.cache_enabled ? [
-                {
-                    name: "cache_ttl",
-                    type: OptionType.enum,
-                    enum: { "5 minutes (default)": "5m", "1 hour": "1h" },
-                    default: "5m",
-                    description: "TTL for cache breakpoints. '1h' requires extended caching to be enabled on your account.",
-                }
-            ] : [];
-
-            // Check if this model supports adaptive thinking (Opus 4.6+, Sonnet 4.6+)
-            const supportsAdaptive = supportsAdaptiveThinking(model);
-            // Check if this is Opus 4.7+ where extended thinking returns 400 error
-            const adaptiveOnly = requiresAdaptiveThinkingOnly(model);
-
-            // Effort option — shown for all models that support it (Opus 4.5+, Sonnet 4.6+, all 4.7+)
-            const effortLevels = getAvailableEffortLevels(model);
-            const claudeEffortOptions: ModelOptionInfoItem[] = effortLevels ? [
-                {
-                    name: "effort",
-                    type: OptionType.enum,
-                    enum: effortLevels,
-                    default: "high",
-                    description: "Controls how many tokens Claude uses when responding. Lower effort trades thoroughness for speed and cost savings.",
-                },
-            ] : [];
-
-            if (model.includes("-3-7-") || supportsAdaptive) {
-                // Models with adaptive thinking support use adaptive mode with display
-                // Older models (3.7) use extended thinking (enabled/disabled)
-                const useAdaptiveThinking = supportsAdaptive;
-                // Effort is already shown via claudeEffortOptions (with xhigh/max for Opus 4.7+)
-                const claudeModeOptions: ModelOptionInfoItem[] = [];
-                const claudeThinkingOptions: ModelOptionInfoItem[] = [
-                    {
-                        name: "include_thoughts",
-                        type: OptionType.boolean,
-                        default: false,
-                        description: useAdaptiveThinking
-                            ? (adaptiveOnly
-                                ? "Show the summarized thinking content in the response"
-                                : "Show the summarized thinking content in the response (default on this model)")
-                            : "If true, include the reasoning in the response"
-                    },
-                ];
-
-                return {
-                    _option_id: "bedrock-claude",
-                    options: [
-                        ...baseConverseOptions,
-                        ...claudeConverseOptions,
-                        ...claudeEffortOptions,
-                        ...claudeModeOptions,
-                        ...claudeThinkingOptions,
-                        ...claudeCacheOptions,
-                        ...claudeCacheTtlOptions,
-                    ]
-                }
-            }
             return {
                 _option_id: "bedrock-claude",
-                options: [...baseConverseOptions, ...claudeConverseOptions, ...claudeEffortOptions, ...claudeCacheOptions, ...claudeCacheTtlOptions]
-            }
+                options: [
+                    ...baseConverseOptions,
+                    ...claudeConverseOptions,
+                    ...buildClaudeEffortOptions(model),
+                    ...buildClaudeThinkingOptions(model),
+                    ...buildClaudeCacheOptions(),
+                    ...buildClaudeCacheTtlOptions((option as BedrockClaudeOptions)?.cache_enabled),
+                ],
+            };
         }
         else if (model.includes("amazon")) {
             //Titan models also exists but does not support any additional options
