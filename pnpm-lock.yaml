@@ -157,11 +157,11 @@ importers:
         specifier: 2.0.0
         version: 2.0.0
       '@google-cloud/aiplatform':
-        specifier: ^6.5.0
-        version: 6.5.0
+        specifier: ^6.6.0
+        version: 6.6.0
       '@google/genai':
-        specifier: ^1.49.0
-        version: 1.49.0
+        specifier: ^1.50.1
+        version: 1.50.1
       '@huggingface/inference':
         specifier: 4.13.11
         version: 4.13.11
@@ -732,12 +732,12 @@ packages:
     resolution: {integrity: sha512-bIZEUzOI1jkhviX2cp5vNyXQc6olzb2ohewQubuYlMXZ2Q/XjBO0x0XhGPvc9fjSIiUN0vw+0hq53BJ4eQSJKQ==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24}
 
-  '@google-cloud/aiplatform@6.5.0':
-    resolution: {integrity: sha512-UZaeXg4Xt+/2LQLWw2nZ7ipbFdUIm9Xo3edAu2xpP/GMmHQIFk3nJmCI7Y3bFUrcr7kK4mw1gPJ374LQKpOO3w==}
+  '@google-cloud/aiplatform@6.6.0':
+    resolution: {integrity: sha512-CVPo83uZGTrH0gids2kMfckjryktU7VhmYm+QncJcTVC7FBjEuZTqz5vhHqoJ5t2IHcmwGoi2sDmM3yl0ZMQaA==}
     engines: {node: '>=18'}
 
-  '@google/genai@1.49.0':
-    resolution: {integrity: sha512-hO69Zl0H3x+L0KL4stl1pLYgnqnwHoLqtKy6MRlNnW8TAxjqMdOUVafomKd4z1BePkzoxJWbYILny9a2Zk43VQ==}
+  '@google/genai@1.50.1':
+    resolution: {integrity: sha512-YbkX7H9+1Pt8wOt7DDREy8XSoiL6fRDzZQRyaVBarFf8MR3zHGqVdvM4cLbDXqPhxqvegZShgfxb8kw9C7YhAQ==}
     engines: {node: '>=20.0.0'}
     peerDependencies:
       '@modelcontextprotocol/sdk': ^1.25.2
@@ -3427,13 +3427,13 @@ snapshots:
       '@eslint/core': 1.1.0
       levn: 0.4.1
 
-  '@google-cloud/aiplatform@6.5.0':
+  '@google-cloud/aiplatform@6.6.0':
     dependencies:
       google-gax: 5.0.4
     transitivePeerDependencies:
       - supports-color
 
-  '@google/genai@1.49.0':
+  '@google/genai@1.50.1':
     dependencies:
       google-auth-library: 10.6.2
       p-retry: 4.6.2
