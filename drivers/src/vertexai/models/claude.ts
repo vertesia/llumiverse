@@ -60,11 +60,12 @@ interface AnthropicUsageLike {
 function anthropicUsageToTokenUsage(usage: AnthropicUsageLike): ExecutionTokenUsage {
     const cacheRead = usage.cache_read_input_tokens ?? 0;
     const cacheWrite = usage.cache_creation_input_tokens ?? 0;
+    const prompt = usage.input_tokens + cacheRead + cacheWrite;
     return {
-        prompt_new: usage.input_tokens,
-        prompt: usage.input_tokens + cacheRead + cacheWrite,
+        prompt_new: prompt - cacheRead,
+        prompt,
         result: usage.output_tokens,
-        total: usage.input_tokens + usage.output_tokens + cacheRead + cacheWrite,
+        total: prompt + usage.output_tokens,
         prompt_cached: usage.cache_read_input_tokens ?? undefined,
         prompt_cache_write: usage.cache_creation_input_tokens ?? undefined,
     };
