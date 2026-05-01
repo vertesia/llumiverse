@@ -11,27 +11,28 @@ import {
     RateLimitError,
     UnprocessableEntityError,
 } from '@anthropic-ai/sdk/error';
-import { ContentBlock, ContentBlockParam, DocumentBlockParam, ImageBlockParam, Message, MessageParam, TextBlockParam, ToolResultBlockParam } from "@anthropic-ai/sdk/resources/index.js";
-import { MessageStreamParams } from "@anthropic-ai/sdk/resources/index.mjs";
-import { MessageCreateParamsBase, MessageCreateParamsNonStreaming, RawMessageStreamEvent } from "@anthropic-ai/sdk/resources/messages.js";
+import type { ContentBlock, ContentBlockParam, DocumentBlockParam, ImageBlockParam, Message, MessageParam, TextBlockParam, ToolResultBlockParam } from "@anthropic-ai/sdk/resources/index.js";
+import type { MessageStreamParams } from "@anthropic-ai/sdk/resources/index.mjs";
+import type { MessageCreateParamsBase, MessageCreateParamsNonStreaming, RawMessageStreamEvent } from "@anthropic-ai/sdk/resources/messages.js";
 import {
-    AIModel, Completion, CompletionChunkObject, ExecutionOptions, ExecutionTokenUsage,
+    type AIModel, type Completion, type CompletionChunkObject, type ExecutionOptions, type ExecutionTokenUsage,
     getConversationMeta,
     getMaxTokensLimitVertexAi,
     incrementConversationTurn,
-    JSONObject,
-    LlumiverseError, LlumiverseErrorContext,
+    type JSONObject,
+    LlumiverseError, type LlumiverseErrorContext,
     ModelType,
-    PromptRole, PromptSegment, readStreamAsBase64, readStreamAsString, StatelessExecutionOptions,
+    PromptRole, type PromptSegment, readStreamAsBase64, readStreamAsString, type StatelessExecutionOptions,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
-    ToolUse,
+    type ToolUse,
     truncateLargeTextInConversation,
-    VertexAIClaudeOptions
+    type VertexAIClaudeOptions,
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
-import { VertexAIDriver } from "../index.js";
-import { ModelDefinition } from "../models.js";
+import { resolveClaudeThinking } from "../../shared/claude-thinking.js";
+import type { VertexAIDriver } from "../index.js";
+import type { ModelDefinition } from "../models.js";
 
 export const ANTHROPIC_REGIONS: Record<string, string> = {
     us: "us-east5",
@@ -133,19 +134,6 @@ function maxToken(option: StatelessExecutionOptions): number {
             maxSupportedTokens = 64000; // Claude 3.7 can go up to 128k with a beta header, but when no max tokens is specified, we default to 64k.
         }
         return maxSupportedTokens;
-    }
-}
-
-function claudeThinkingBudgetForEffort(effort: VertexAIClaudeOptions["effort"]): number | undefined {
-    switch (effort) {
-        case "low":
-            return 1024;
-        case "medium":
-            return 8192;
-        case "high":
-            return 32000;
-        default:
-            return undefined;
     }
 }
 
@@ -992,27 +980,21 @@ function getClaudePayload(options: ExecutionOptions, prompt: ClaudePrompt): { pa
         }
     }
 
-    const effortBudget = claudeThinkingBudgetForEffort(model_options?.effort);
-    const thinkingEnabled = model_options?.thinking_mode === true || effortBudget !== undefined;
-    const thinkingBudget = model_options?.thinking_budget_tokens ?? effortBudget ?? 1024;
+    // Resolve thinking, effort, and sampling restriction using shared Claude helper
+    const { thinking, outputConfig, hasSamplingRestriction } = resolveClaudeThinking(modelName, model_options);
 
     const payload = {
         messages: sanitizedMessages,
         system: sanitizedSystem,
         tools: sanitizedTools,
-        temperature: model_options?.temperature,
+        temperature: hasSamplingRestriction ? undefined : model_options?.temperature,
         model: modelName,
         max_tokens: maxToken(options),
-        top_p: model_options?.temperature != null ? undefined : model_options?.top_p,
-        top_k: model_options?.top_k,
+        top_p: hasSamplingRestriction ? undefined : (model_options?.temperature != null ? undefined : model_options?.top_p),
+        top_k: hasSamplingRestriction ? undefined : model_options?.top_k,
         stop_sequences: model_options?.stop_sequence,
-        thinking: thinkingEnabled ?
-            {
-                budget_tokens: thinkingBudget,
-                type: "enabled" as const
-            } : {
-                type: "disabled" as const
-            }
+        thinking,
+        ...(outputConfig && { output_config: outputConfig }),
     };
 
     return { payload, requestOptions };

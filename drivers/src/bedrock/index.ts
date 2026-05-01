@@ -1,47 +1,50 @@
 import {
-    Bedrock, CreateModelCustomizationJobCommand, FoundationModelSummary, GetModelCustomizationJobCommand,
-    GetModelCustomizationJobCommandOutput, ModelCustomizationJobStatus, ModelModality, StopModelCustomizationJobCommand
+    Bedrock, CreateModelCustomizationJobCommand, type FoundationModelSummary, GetModelCustomizationJobCommand,
+    type GetModelCustomizationJobCommandOutput, ModelCustomizationJobStatus, ModelModality, StopModelCustomizationJobCommand
 } from "@aws-sdk/client-bedrock";
-import { BedrockRuntime, ContentBlock, ConverseRequest, ConverseResponse, ConverseStreamOutput, InferenceConfiguration, Message, Tool } from "@aws-sdk/client-bedrock-runtime";
+import { BedrockRuntime, type ContentBlock, type ConverseRequest, type ConverseResponse, type ConverseStreamOutput, type InferenceConfiguration, type Message, type Tool } from "@aws-sdk/client-bedrock-runtime";
 import { S3Client } from "@aws-sdk/client-s3";
-import { AwsCredentialIdentity, Provider } from "@aws-sdk/types";
+import type { AwsCredentialIdentity, Provider } from "@aws-sdk/types";
 import {
-    AbstractDriver, AIModel,
-    BedrockClaudeOptions,
-    BedrockGptOssOptions,
-    BedrockPalmyraOptions,
-    Completion, CompletionChunkObject,
-    CompletionResult,
-    DataSource,
+    AbstractDriver, type AIModel,
+    type BedrockClaudeOptions,
+    type BedrockGptOssOptions,
+    type BedrockPalmyraOptions,
+    type Completion, type CompletionChunkObject,
+    type CompletionResult,
+    type DataSource,
     deserializeBinaryFromStorage,
-    DriverOptions, EmbeddingsOptions, EmbeddingsResult,
-    ExecutionOptions, ExecutionTokenUsage,
+    type DriverOptions,
+    type EmbeddingsOptions, type EmbeddingsResult,
+    type ExecutionOptions, type ExecutionTokenUsage,
     getConversationMeta,
     getMaxTokensLimitBedrock,
     getModelCapabilities,
     incrementConversationTurn,
-    LlumiverseError, LlumiverseErrorContext,
+    isClaudeVersionGTE,
+    LlumiverseError, type LlumiverseErrorContext,
     modelModalitiesToArray,
-    ModelOptions,
-    NovaCanvasOptions,
-    PromptSegment,
-    StatelessExecutionOptions,
+    type ModelOptions,
+    type NovaCanvasOptions,
+    type PromptSegment,
+    type StatelessExecutionOptions,
     stripBinaryFromConversation,
     stripHeartbeatsFromConversation,
-    TextFallbackOptions, ToolDefinition, ToolUse, TrainingJob, TrainingJobStatus, TrainingOptions,
+    type TextFallbackOptions, type ToolDefinition, type ToolUse, type TrainingJob, TrainingJobStatus, type TrainingOptions,
     truncateLargeTextInConversation
 } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
-import { formatNovaPrompt, NovaMessagesPrompt } from "@llumiverse/core/formatters";
+import { formatNovaPrompt, type NovaMessagesPrompt } from "@llumiverse/core/formatters";
 import { LRUCache } from "mnemonist";
+import { resolveClaudeThinking } from "../shared/claude-thinking.js";
 import { converseConcatMessages, converseJSONprefill, converseSystemToMessages, formatConversePrompt } from "./converse.js";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
 import { forceUploadFile } from "./s3.js";
 import {
     formatTwelvelabsPegasusPrompt,
-    TwelvelabsMarengoRequest,
-    TwelvelabsMarengoResponse,
-    TwelvelabsPegasusRequest
+    type TwelvelabsMarengoRequest,
+    type TwelvelabsMarengoResponse,
+    type TwelvelabsPegasusRequest
 } from "./twelvelabs.js";
 
 const supportStreamingCache = new LRUCache<string, boolean>(4096);
@@ -107,55 +110,6 @@ function maxTokenFallbackClaude(option: StatelessExecutionOptions): number {
     }
 }
 
-function claudeThinkingBudgetForEffort(effort: BedrockClaudeOptions["effort"]): number | undefined {
-    switch (effort) {
-        case "low":
-            return 1024;
-        case "medium":
-            return 8192;
-        case "high":
-            return 32000;
-        default:
-            return undefined;
-    }
-}
-
-/**
- * Parse Claude model version from model string.
- * @param modelString - The model identifier string
- * @returns An object with major and minor version numbers, or null if not parseable
- */
-function parseClaudeVersion(modelString: string): { major: number; minor: number } | null {
-    // Match pattern: claude-[optional variant]-{major}-[optional 1-2 digit minor]
-    // The minor version is limited to 1-2 digits to avoid matching dates (YYYYMMDD format)
-    const match = modelString.match(/claude-(?:[a-z]+-)?(\d+)(?:-(\d{1,2}))?(?:-|\b)/);
-    if (match) {
-        return {
-            major: parseInt(match[1], 10),
-            minor: match[2] ? parseInt(match[2], 10) : 0
-        };
-    }
-    return null;
-}
-
-/**
- * Check if a Claude model version is greater than or equal to a target version.
- * @returns true if the model version is >= target version, false otherwise
- */
-function isClaudeVersionGTE(modelString: string, targetMajor: number, targetMinor: number): boolean {
-    const version = parseClaudeVersion(modelString);
-    if (!version) {
-        return false;
-    }
-    if (version.major > targetMajor) {
-        return true;
-    }
-    if (version.major === targetMajor && version.minor >= targetMinor) {
-        return true;
-    }
-    return false;
-}
-
 export type BedrockPrompt = NovaMessagesPrompt | ConverseRequest | TwelvelabsPegasusRequest;
 
 type BedrockSystemBlock = NonNullable<ConverseRequest['system']>[number];
@@ -189,7 +143,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     getService(region: string = this.options.region) {
-        if (!this._service || this._service_region != region) {
+        if (!this._service || this._service_region !== region) {
             this._service = new Bedrock({
                 region: region,
                 credentials: this.options.credentials,
@@ -526,7 +480,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         let canStream: boolean = false;
         let error: any = null;
         const region = this.extractRegion(model, this.options.region);
-        if (type == BedrockModelType.FoundationModel || type == BedrockModelType.Unknown) {
+        if (type === BedrockModelType.FoundationModel || type === BedrockModelType.Unknown) {
             try {
                 const response = await this.getService(region).getFoundationModel({
                     modelIdentifier: model
@@ -537,7 +491,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 error = e;
             }
         }
-        if (type == BedrockModelType.InferenceProfile || type == BedrockModelType.Unknown) {
+        if (type === BedrockModelType.InferenceProfile || type === BedrockModelType.Unknown) {
             try {
                 const response = await this.getService(region).getInferenceProfile({
                     inferenceProfileIdentifier: model
@@ -548,7 +502,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 error = e;
             }
         }
-        if (type == BedrockModelType.CustomModel || type == BedrockModelType.Unknown) {
+        if (type === BedrockModelType.CustomModel || type === BedrockModelType.Unknown) {
             try {
                 const response = await this.getService(region).getCustomModel({
                     modelIdentifier: model
@@ -724,7 +678,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             return tools;
         }, []);
         //If no tools were used, set to undefined
-        if (tool_use && tool_use.length == 0) {
+        if (tool_use && tool_use.length === 0) {
             tool_use = undefined;
         }
 
@@ -887,6 +841,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         let additionalField = {};
         let supportsJSONPrefill = false;
 
+        // Resolve thinking, effort, and sampling restrictions using shared Claude helper
+        const claudeThinking = resolveClaudeThinking(options.model, options.model_options as BedrockClaudeOptions | undefined);
+        const hasSamplingRestriction = claudeThinking.hasSamplingRestriction;
+
         if (options.model.includes("amazon")) {
             supportsJSONPrefill = true;
             //Titan models also exists but does not support any additional options
@@ -895,36 +853,48 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
         } else if (options.model.includes("claude")) {
             const claude_options = model_options as ModelOptions as BedrockClaudeOptions;
-            const effortBudget = claudeThinkingBudgetForEffort(claude_options.effort);
-            const thinking = claude_options.thinking_mode === true || effortBudget !== undefined;
-            const thinkingBudget = claude_options.thinking_budget_tokens ?? effortBudget ?? 1024;
-            supportsJSONPrefill = !thinking
+            // Thinking is active when extended (budget set) or adaptive (effort set) thinking is enabled.
+            // JSON prefill is incompatible with active thinking.
+            const thinkingActive = claudeThinking.thinking != null && claudeThinking.thinking.type !== "disabled";
+            supportsJSONPrefill = !thinkingActive
 
-            if (options.model.includes("claude-3-7") || options.model.includes("-4-")) {
-                additionalField = {
-                    ...additionalField,
-                    reasoning_config: {
-                        type: thinking ? "enabled" : "disabled",
-                        budget_tokens: thinking ? thinkingBudget : undefined,
-                    }
-                };
-                if (thinking && options.model.includes("claude-3-7-sonnet") &&
-                    ((claude_options.max_tokens ?? 0) > 64000 || thinkingBudget > 64000)) {
+            // Claude 3.7+ supports thinking — use shared helper for reasoning_config
+            if (claudeThinking.supportsThinking) {
+                if (claudeThinking.thinking) {
+                    additionalField = {
+                        ...additionalField,
+                        reasoning_config: claudeThinking.thinking,
+                    };
+                }
+                // For Claude 3.7 with extended thinking + high output, add beta header
+                if (claudeThinking.thinking?.type === "enabled" &&
+                    options.model.includes("claude-3-7-sonnet") &&
+                    ((claude_options.max_tokens ?? 0) > 64000 || (claude_options.thinking_budget_tokens ?? 0) > 64000)) {
                     additionalField = {
                         ...additionalField,
                         anthropic_beta: ["output-128k-2025-02-19"]
                     };
                 }
             }
+            // Add effort parameter via output_config (Opus 4.5+, Sonnet 4.6+, all 4.7+)
+            if (claudeThinking.outputConfig) {
+                additionalField = {
+                    ...additionalField,
+                    output_config: claudeThinking.outputConfig
+                };
+            }
             // Claude 4.6 and later versions don't support JSON prefill
             if (isClaudeVersionGTE(options.model, 4, 6)) {
                 supportsJSONPrefill = false;
             }
-            //Needs max_tokens to be set
+            // Needs max_tokens to be set
             if (!model_options.max_tokens) {
                 model_options.max_tokens = maxTokenFallbackClaude(options);
             }
-            additionalField = { ...additionalField, top_k: model_options.top_k };
+            // Only models without sampling restrictions support top_k
+            if (!hasSamplingRestriction) {
+                additionalField = { ...additionalField, top_k: model_options.top_k };
+            }
         } else if (options.model.includes("meta")) {
             //LLaMA models support no additional options
         } else if (options.model.includes("mistral")) {
@@ -932,7 +902,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             if (options.model.includes("7b")) {
                 additionalField = { top_k: model_options.top_k };
                 //Does not support system messages
-                if (prompt.system && prompt.system?.length != 0) {
+                if (prompt.system && prompt.system?.length !== 0) {
                     prompt.messages?.push(converseSystemToMessages(prompt.system));
                     prompt.system = undefined;
                     prompt.messages = converseConcatMessages(prompt.messages);
@@ -950,7 +920,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     frequencyPenalty: { scale: model_options.frequency_penalty },
                 };
                 //Does not support system messages
-                if (prompt.system && prompt.system?.length != 0) {
+                if (prompt.system && prompt.system?.length !== 0) {
                     prompt.messages?.push(converseSystemToMessages(prompt.system));
                     prompt.system = undefined;
                     prompt.messages = converseConcatMessages(prompt.messages);
@@ -969,7 +939,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 // Command non-R
                 additionalField = { k: model_options.top_k };
                 //Does not support system messages
-                if (prompt.system && prompt.system?.length != 0) {
+                if (prompt.system && prompt.system?.length !== 0) {
                     prompt.messages?.push(converseSystemToMessages(prompt.system));
                     prompt.system = undefined;
                     prompt.messages = converseConcatMessages(prompt.messages);
@@ -1017,10 +987,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         // Clean undefined values from additionalField since AWS Bedrock requires valid JSON
         // and will throw an exception for unrecognized parameters
         const cleanedAdditionalFields = removeUndefinedValues(additionalField);
+        // Models with sampling parameter restrictions don't support temperature/top_p - exclude them from inference config
         const cleanedModelOptions = removeUndefinedValues({
             maxTokens: model_options.max_tokens,
-            temperature: model_options.temperature,
-            topP: model_options.temperature != null ? undefined : model_options.top_p,
+            ...(hasSamplingRestriction ? {} : {
+                temperature: model_options.temperature,
+                topP: model_options.temperature != null ? undefined : model_options.top_p,
+            }),
             stopSequences: model_options.stop_sequence,
         } satisfies InferenceConfiguration);
 
@@ -1768,9 +1741,9 @@ function formatAmazonModalities(modalities: ModelModality[]): string[] {
             standardizedModalities.push("image");
         } else if (modality === ModelModality.EMBEDDING) {
             standardizedModalities.push("embedding");
-        } else if (modality == "SPEECH") {
+        } else if (modality === "SPEECH") {
             standardizedModalities.push("audio");
-        } else if (modality == "VIDEO") {
+        } else if (modality === "VIDEO") {
             standardizedModalities.push("video");
         } else {
             // Handle other modalities as needed
