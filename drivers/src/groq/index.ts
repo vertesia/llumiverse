@@ -106,7 +106,9 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
     }
 
     async requestTextCompletion(messages: ChatCompletionMessageParam[], options: ExecutionOptions): Promise<Completion> {
-        if (options.model_options?._option_id !== "text-fallback" && options.model_options?._option_id !== "groq-deepseek-thinking") {
+        if (options.model_options?._option_id !== undefined &&
+            options.model_options?._option_id !== "text-fallback" &&
+            options.model_options?._option_id !== "groq-deepseek-thinking") {
             this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
         options.model_options = options.model_options as TextFallbackOptions;
@@ -162,7 +164,7 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
     }
 
     async requestTextCompletionStream(messages: ChatCompletionMessageParam[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
-        if (options.model_options?._option_id !== "text-fallback") {
+        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "text-fallback") {
             this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
         options.model_options = options.model_options as TextFallbackOptions;

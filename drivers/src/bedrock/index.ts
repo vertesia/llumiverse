@@ -1081,7 +1081,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     async requestImageGeneration(prompt: NovaMessagesPrompt, options: ExecutionOptions): Promise<Completion> {
-        if (options.model_options?._option_id !== "bedrock-nova-canvas") {
+        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "bedrock-nova-canvas") {
             this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
         const model_options = options.model_options as NovaCanvasOptions;

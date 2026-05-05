@@ -132,8 +132,9 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     }
 
     async requestTextCompletionStream(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
-        if (options.model_options?._option_id !== "openai-text" && 
-            options.model_options?._option_id !== "openai-thinking" && 
+        if (options.model_options?._option_id !== undefined &&
+            options.model_options?._option_id !== "openai-text" &&
+            options.model_options?._option_id !== "openai-thinking" &&
             options.model_options?._option_id !== "text-fallback") {
             this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
@@ -196,7 +197,9 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     }
 
     async requestTextCompletion(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<Completion> {
-        if (options.model_options?._option_id !== "openai-text" && options.model_options?._option_id !== "openai-thinking") {
+        if (options.model_options?._option_id !== undefined &&
+            options.model_options?._option_id !== "openai-text" &&
+            options.model_options?._option_id !== "openai-thinking") {
             this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
 

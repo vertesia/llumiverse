@@ -314,10 +314,11 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         options = { ...options, model: modelName };
 
         const client = await driver.getAnthropicClient(region);
-        options.model_options = options.model_options as VertexAIClaudeOptions;
+        const model_options = options.model_options as VertexAIClaudeOptions | undefined;
 
-        if (options.model_options?._option_id !== "vertexai-claude" &&
-            options.model_options?._option_id !== "text-fallback"
+        if (model_options?._option_id !== undefined &&
+            model_options?._option_id !== "vertexai-claude" &&
+            model_options?._option_id !== "text-fallback"
         ) {
             driver.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
@@ -331,7 +332,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         const result = await client.messages.create(nonStreamingPayload, requestOptions) satisfies Message;
 
         // Use the new function to collect text content, including thinking if enabled
-        const includeThoughts = options.model_options?.include_thoughts ?? false;
+        const includeThoughts = model_options?.include_thoughts ?? false;
         const text = collectAllTextContent(result.content, includeThoughts);
         const tool_use = collectTools(result.content);
 
@@ -374,8 +375,9 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         const client = await driver.getAnthropicClient(region);
         const model_options = options.model_options as VertexAIClaudeOptions | undefined;
 
-        if (model_options?._option_id !== "vertexai-claude" &&
-            model_options?._option_id !== "text-fallback"
+        if ((model_options?._option_id !== undefined &&
+            model_options?._option_id !== "vertexai-claude" &&
+            model_options?._option_id !== "text-fallback")
         ) {
             driver.logger.debug({ options: options.model_options }, "Unexpected option id");
         }

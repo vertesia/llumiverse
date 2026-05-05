@@ -30,7 +30,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
     }
 
     async requestTextCompletion(prompt: string, options: ExecutionOptions): Promise<Completion> {
-        if (options.model_options?._option_id !== "text-fallback") {
+        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "text-fallback") {
             this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
         options.model_options = options.model_options as TextFallbackOptions | undefined;
@@ -65,7 +65,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
     }
 
     async requestTextCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
-        if (options.model_options?._option_id !== "text-fallback") {
+        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "text-fallback") {
             this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
         options.model_options = options.model_options as TextFallbackOptions | undefined;
