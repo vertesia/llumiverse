@@ -1,20 +1,37 @@
 import {
-    AIModel, Completion, CompletionChunkObject, ExecutionOptions, ModelType,
-    PromptOptions, PromptRole, PromptSegment,
+    type AIModel, type Completion, type CompletionChunkObject, type ExecutionOptions, ModelType,
+    type PromptOptions, PromptRole, type PromptSegment,
     readStreamAsBase64,
-    TextFallbackOptions,
-    ToolUse
+    type TextFallbackOptions,
+    type ToolDefinition,
+    type ToolUse
 } from "@llumiverse/core";
 import { transformSSEStream } from "@llumiverse/core/async";
-import { VertexAIDriver } from "../index.js";
-import { ModelDefinition } from "../models.js";
+import type { VertexAIDriver } from "../index.js";
+import type { ModelDefinition } from "../models.js";
 
 /**
  * Message format for OpenAI-compatible chat completions API.
  */
 interface OpenAIMessage {
     role: string;
-    content: string | Array<TextPart | ImageUrlPart>;
+    content?: string | null | Array<TextPart | ImageUrlPart>;
+    /**
+     * Required for tool role messages - references the tool_call.id from the assistant's message.
+     * Per OpenAI API spec: https://platform.openai.com/docs/api-reference/chat/messages#message-role
+     */
+    tool_call_id?: string;
+    /**
+     * Tool calls from assistant messages - stored and sent back with tool results.
+     */
+    tool_calls?: Array<{
+        id: string;
+        type: string;
+        function: {
+            name: string;
+            arguments: string;
+        };
+    }>;
 }
 
 interface TextPart {
@@ -32,6 +49,8 @@ interface ImageUrlPart {
  */
 export interface OpenAIPrompt {
     messages: OpenAIMessage[];
+    /** Discriminator used by VertexAIDriver.buildStreamingConversation to distinguish from ClaudePrompt */
+    _is_openai_compat?: true;
 }
 
 /**
@@ -139,6 +158,7 @@ function updateConversation(
 ): OpenAIPrompt {
     const baseMessages = conversation ? conversation.messages : [];
     return {
+        _is_openai_compat: true,
         messages: [...baseMessages, ...(prompt.messages || [])],
     };
 }
@@ -170,20 +190,62 @@ function safeJsonParse(value: string | undefined): any {
     }
 }
 
+/**
+ * Convert tool definitions from ExecutionOptions to OpenAI tools format.
+ */
+function convertToolsToOpenAIFormat(tools: ToolDefinition[] | undefined): Array<{
+    type: string;
+    function: {
+        name: string;
+        description?: string;
+        parameters: Record<string, any>;
+    };
+}> | undefined {
+    if (!tools || tools.length === 0) {
+        return undefined;
+    }
+
+    return tools.map(tool => ({
+        type: 'function',
+        function: {
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.input_schema ?? {},
+        },
+    }));
+}
 
 /**
  * Convert messages to OpenAI chat completions format.
  * Handles content arrays with text and image parts.
+ * Preserves tool_call_id for tool role messages.
  */
 function convertToOpenAIMessages(
     messages: OpenAIMessage[]
-): Array<{ role: string; content?: string | any[] }> {
+): Array<{ role: string; content?: string | null | any[]; tool_call_id?: string; tool_calls?: Array<{id: string; type: string; function: {name: string; arguments: string}}> }> {
     return messages.map(msg => {
+        // Preserve tool_call_id for tool role messages - this is required by OpenAI API
+        const result: { role: string; content?: string | null | any[]; tool_call_id?: string; tool_calls?: Array<{id: string; type: string; function: {name: string; arguments: string}}> } = {
+            role: msg.role
+        };
+
+        // Handle tool_calls for assistant messages
+        if (msg.tool_calls && msg.tool_calls.length > 0) {
+            result.tool_calls = msg.tool_calls;
+        }
+
         if (typeof msg.content === 'string') {
-            return {
-                role: msg.role,
-                content: msg.content
-            };
+            if (msg.content) {
+                result.content = msg.content;
+            } else if (!(msg.tool_calls?.length)) {
+                // Empty content with no tool_calls: use null rather than ''
+                // (Grok and OpenAI reject empty string content)
+                result.content = null;
+            }
+            // If tool_calls present and content is empty, omit content (per OpenAI spec)
+        } else if (msg.content === undefined && !(msg.tool_calls?.length)) {
+            // No content and no tool_calls: use null
+            result.content = null;
         }
 
         // Handle content arrays with text and image parts - convert to OpenAI format
@@ -209,19 +271,19 @@ function convertToOpenAIMessages(
 
             // Return simplified format if only text, otherwise return array
             if (content.length === 1 && content[0].type === 'text') {
-                return {
-                    role: msg.role,
-                    content: content[0].text
-                };
+                result.content = content[0].text;
+            } else if (content.length > 0) {
+                result.content = content;
             }
-
-            return {
-                role: msg.role,
-                content
-            };
+            // If content array is empty, don't set result.content (tool messages may have tool_calls instead)
         }
 
-        return { role: msg.role, content: '' };
+        // Preserve tool_call_id for tool role messages
+        if (msg.tool_call_id) {
+            result.tool_call_id = msg.tool_call_id;
+        }
+
+        return result;
     });
 }
 
@@ -274,10 +336,7 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
 
         // Add system message as a system role message
         if (systemContent.trim()) {
-            messages.push({
-                role: 'system',
-                content: systemContent.trim()
-            });
+            messages.push({ role: 'system', content: systemContent.trim() });
         }
 
         // Process remaining segments
@@ -286,12 +345,19 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
                 continue; // Already handled above
             }
 
-            if (segment.role === PromptRole.tool && segment.content) {
-                // Tool results are sent as tool role messages
-                const content: string | Array<TextPart> = [];
+            if (segment.role === PromptRole.tool) {
+                // Validate that tool_use_id is present - this is required by OpenAI API
+                if (!segment.tool_use_id) {
+                    throw new Error("Tool prompt segment must have a tool_use_id to reference the original tool call");
+                }
+
+                // Build content array for tool response
+                const content: Array<TextPart | ImageUrlPart> = [];
                 
                 if (segment.content) {
                     content.push({ type: 'text', text: segment.content });
+                } else {
+                    content.push({ type: 'text', text: '' });
                 }
 
                 // Handle file attachments in tool responses
@@ -306,7 +372,7 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
                                     url: `data:${file.mime_type};base64,${data}`,
                                     detail: 'auto'
                                 }
-                            } as any);
+                            } as ImageUrlPart);
                         } else if (file.mime_type?.startsWith('text/')) {
                             const fileStream = await file.getStream();
                             const fileContent = await streamToString(fileStream);
@@ -315,10 +381,15 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
                     }
                 }
 
-                messages.push({
+                // Build the tool message with tool_call_id (required by OpenAI API)
+                const toolMessage: OpenAIMessage = {
                     role: 'tool',
-                    content: content.length === 1 && typeof content === 'string' ? content : (content as any)
-                } as any);
+                    tool_call_id: segment.tool_use_id,
+                    content: content.length === 1 && content[0]?.type === 'text'
+                        ? content[0].text
+                        : (content as Array<TextPart | ImageUrlPart>)
+                };
+                messages.push(toolMessage);
             } else {
                 // Build content for user/assistant/safety segments
                 let content: string | Array<TextPart | ImageUrlPart> = segment.content || '';
@@ -373,6 +444,7 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
         }
 
         return {
+            _is_openai_compat: true,
             messages,
         };
     }
@@ -394,6 +466,12 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
             stream: false,
         };
 
+        // Vertex AI OpenAI-compatible endpoint requires tools to be included in the request body
+        const toolsPayload = convertToolsToOpenAIFormat(options.tools);
+        if (toolsPayload && toolsPayload.length > 0) {
+            payload.tools = toolsPayload;
+        }
+
         // Make POST request to the OpenAI-compatible endpoint via Vertex AI
         // Use region override if specified (e.g., "global" for xAI models)
         const effectiveRegion = this.options.region || undefined;
@@ -412,11 +490,26 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
         const tool_use = parseToolCalls(message?.tool_calls);
 
         // Update conversation with the response
+        // Format assistant message with tool calls for conversation history
+        const assistantMessage: OpenAIMessage = {
+            role: 'assistant',
+            content: text || null,
+        };
+
+        // If there are tool calls, store them in the assistant message with proper OpenAI format
+        if (tool_use && tool_use.length > 0 && message?.tool_calls) {
+            assistantMessage.tool_calls = message.tool_calls.map(tc => ({
+                id: tc.id,
+                type: tc.type,
+                function: {
+                    name: tc.function.name,
+                    arguments: tc.function.arguments
+                }
+            }));
+        }
+
         conversation = updateConversation(conversation, {
-            messages: [{
-                role: message?.role || 'assistant',
-                content: text
-            }]
+            messages: [assistantMessage]
         });
 
         return {
@@ -449,6 +542,12 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
             stream: true,
         };
 
+        // Vertex AI OpenAI-compatible endpoint requires tools to be included in the request body
+        const toolsPayload = convertToolsToOpenAIFormat(options.tools);
+        if (toolsPayload && toolsPayload.length > 0) {
+            payload.tools = toolsPayload;
+        }
+
         // Make POST request to the OpenAI-compatible endpoint via Vertex AI
         // Use region override if specified (e.g., "global" for xAI models)
         const effectiveRegion = this.options.region || undefined;
@@ -466,15 +565,27 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
             const choice = json.choices?.[0];
             const delta = choice?.delta;
 
-            // Handle tool calls in streaming mode
+            // Handle tool calls in streaming mode with proper accumulation
             if (delta?.tool_calls && delta.tool_calls.length > 0) {
                 const tc = delta.tool_calls[0];
+
+                // In streaming mode, tool call arguments come as incremental JSON fragments
+                // The id may only be present in the first chunk, so we use a fallback
+                const toolCallIndex = (tc as any).index ?? 0;
+                const toolCallId = tc.id ?? `tool_${toolCallIndex}`;
+                const toolName = tc.function?.name ?? '';
+                const toolArgs = tc.function?.arguments ?? '';
+
+                // Pass raw string arguments — CompletionStream accumulates string chunks and
+                // parses them at the end. Parsing here would break accumulation.
+
                 return {
                     result: [],
                     tool_use: [{
-                        id: tc.id ?? `tool_${tc.index ?? 0}`,
-                        tool_name: tc.function?.name ?? '',
-                        tool_input: (tc.function?.arguments as any) ?? ''
+                        id: toolCallId,
+                        tool_name: toolName,
+                // Pass raw string — CompletionStream will accumulate and parse
+                        tool_input: (typeof toolArgs === 'string' && toolArgs.length > 0 ? toolArgs : {}) as any,
                     }]
                 } satisfies CompletionChunkObject;
             }

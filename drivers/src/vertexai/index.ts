@@ -1,21 +1,22 @@
 import type { ClientOptions as AnthropicVertexClientOptions } from "@anthropic-ai/vertex-sdk";
 import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { PredictionServiceClient, v1beta1 } from "@google-cloud/aiplatform";
-import { Content, GoogleGenAI, Model } from "@google/genai";
+import { type Content, GoogleGenAI, type Model } from "@google/genai";
 import {
-    AIModel,
+    type AIModel,
     AbstractDriver,
-    Completion,
-    CompletionChunkObject,
-    CompletionResult,
-    DriverOptions,
-    EmbeddingsOptions,
-    EmbeddingsResult,
-    ExecutionOptions,
-    LlumiverseError,
-    LlumiverseErrorContext,
-    ModelSearchPayload,
-    PromptSegment,
+    type Completion,
+    type CompletionChunkObject,
+    type CompletionResult,
+    type DriverOptions,
+    type EmbeddingsOptions,
+    type EmbeddingsResult,
+    type ExecutionOptions,
+    type LlumiverseError,
+    type LlumiverseErrorContext,
+    type ModelSearchPayload,
+    type PromptSegment,
+    type ToolUse,
     getConversationMeta,
     getModelCapabilities,
     incrementConversationTurn,
@@ -25,12 +26,13 @@ import {
     truncateLargeTextInConversation,
 } from "@llumiverse/core";
 import { FetchClient } from "@vertesia/api-fetch-client";
-import { AuthClient, GoogleAuth, GoogleAuthOptions } from "google-auth-library";
+import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from "google-auth-library";
 import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
-import { TextEmbeddingsOptions, getEmbeddingsForText } from "./embeddings/embeddings-text.js";
+import { type TextEmbeddingsOptions, getEmbeddingsForText } from "./embeddings/embeddings-text.js";
 import { getModelDefinition } from "./models.js";
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from "./models/claude.js";
 import { ImagenModelDefinition, ImagenPrompt } from "./models/imagen.js";
+import type { OpenAIPrompt } from "./models/openai_compatible.js";
 
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
@@ -301,6 +303,12 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         toolUse: unknown[] | undefined,
         options: ExecutionOptions
     ): Content[] | unknown | undefined {
+        // Handle OpenAI-compatible prompts (xAI Grok, Meta Llama via Vertex AI MaaS)
+        // IMPORTANT: check this BEFORE the Claude check — both have a `messages` array
+        if ('_is_openai_compat' in prompt && (prompt as any)._is_openai_compat) {
+            return this.buildOpenAICompatStreamingConversation(prompt as unknown as OpenAIPrompt, result, toolUse, options);
+        }
+
         // Handle Claude-style prompts (has 'messages' array)
         if ('messages' in prompt && Array.isArray((prompt as any).messages)) {
             return this.buildClaudeStreamingConversation(prompt as any, result, toolUse, options);
@@ -397,6 +405,63 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         }
 
         return processedConversation;
+    }
+
+    /**
+     * Build conversation for OpenAI-compatible streaming (e.g. xAI Grok, Meta Llama on Vertex AI).
+     * Reconstructs the assistant message with OpenAI-format `tool_calls` from the accumulated
+     * ToolUse[], ready for the next API call.
+     */
+    private buildOpenAICompatStreamingConversation(
+        prompt: OpenAIPrompt,
+        result: unknown[],
+        toolUse: unknown[] | undefined,
+        options: ExecutionOptions
+    ): OpenAIPrompt {
+        const completionResults = result as CompletionResult[];
+        const textContent = completionResults
+            .map(r => {
+                const r_ = r as CompletionResult;
+                switch (r_.type) {
+                    case 'text': return r_.value;
+                    case 'json': return typeof r_.value === 'string' ? r_.value : JSON.stringify(r_.value);
+                    default: return '';
+                }
+            })
+            .join('');
+
+        // Build OpenAI-format assistant message.
+        // Per OpenAI spec, content must be null (not '') when tool_calls are present.
+        const assistantMessage: Record<string, unknown> = { role: 'assistant' };
+        if (textContent) {
+            assistantMessage.content = textContent;
+        } else if (toolUse && toolUse.length > 0) {
+            assistantMessage.content = null;
+        } else {
+            assistantMessage.content = '';
+        }
+
+        if (toolUse && toolUse.length > 0) {
+            assistantMessage.tool_calls = (toolUse as ToolUse[]).map(t => ({
+                id: t.id,
+                type: 'function',
+                function: {
+                    name: t.tool_name,
+                    arguments: typeof t.tool_input === 'string'
+                        ? t.tool_input
+                        : JSON.stringify(t.tool_input ?? {}),
+                },
+            }));
+        }
+
+        // Reconstruct full conversation: prior history + current-turn messages + assistant reply.
+        // NOTE: prompt.messages only contains the current-turn messages; options.conversation
+        // holds the accumulated prior history (same pattern as buildClaudeStreamingConversation).
+        const existingMessages = (options.conversation as any)?.messages ?? [];
+        return {
+            _is_openai_compat: true,
+            messages: [...existingMessages, ...prompt.messages, assistantMessage],
+        };
     }
 
     /**
