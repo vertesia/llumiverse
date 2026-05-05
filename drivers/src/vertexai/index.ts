@@ -96,8 +96,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     public getGoogleGenAIClient(region: string = this.options.region, flex: boolean = false): GoogleGenAI {
-        if (this.googleGenAI && 
-            this.googleGenAIRegion === region && 
+        if (this.googleGenAI &&
+            this.googleGenAIRegion === region &&
             this.googleGenAIFlex === flex) {
             // Return existing client if region and flex settings match
             return this.googleGenAI;

@@ -222,10 +222,10 @@ function convertToolsToOpenAIFormat(tools: ToolDefinition[] | undefined): Array<
  */
 function convertToOpenAIMessages(
     messages: OpenAIMessage[]
-): Array<{ role: string; content?: string | null | any[]; tool_call_id?: string; tool_calls?: Array<{id: string; type: string; function: {name: string; arguments: string}}> }> {
+): Array<{ role: string; content?: string | null | any[]; tool_call_id?: string; tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }> }> {
     return messages.map(msg => {
         // Preserve tool_call_id for tool role messages - this is required by OpenAI API
-        const result: { role: string; content?: string | null | any[]; tool_call_id?: string; tool_calls?: Array<{id: string; type: string; function: {name: string; arguments: string}}> } = {
+        const result: { role: string; content?: string | null | any[]; tool_call_id?: string; tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }> } = {
             role: msg.role
         };
 
@@ -353,7 +353,7 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
 
                 // Build content array for tool response
                 const content: Array<TextPart | ImageUrlPart> = [];
-                
+
                 if (segment.content) {
                     content.push({ type: 'text', text: segment.content });
                 } else {
@@ -584,7 +584,7 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
                     tool_use: [{
                         id: toolCallId,
                         tool_name: toolName,
-                // Pass raw string — CompletionStream will accumulate and parse
+                        // Pass raw string — CompletionStream will accumulate and parse
                         tool_input: (typeof toolArgs === 'string' && toolArgs.length > 0 ? toolArgs : {}) as any,
                     }]
                 } satisfies CompletionChunkObject;
