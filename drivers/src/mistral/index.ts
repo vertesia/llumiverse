@@ -1,8 +1,8 @@
-import { AIModel, AbstractDriver, Completion, CompletionChunkObject, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, PromptSegment, TextFallbackOptions } from "@llumiverse/core";
+import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, PromptSegment, TextFallbackOptions } from "@llumiverse/core";
 import { transformSSEStream } from "@llumiverse/core/async";
 import { getJSONSafetyNotice } from "@llumiverse/core/formatters";
-import { formatOpenAILikeTextPrompt, OpenAITextMessage } from "../openai/openai_format.js";
 import { FetchClient } from "@vertesia/api-fetch-client";
+import { formatOpenAILikeTextPrompt, OpenAITextMessage } from "../openai/openai_format.js";
 import { ChatCompletionResponse, CompletionRequestParams, ListModelsResponse, ResponseFormat } from "./types.js";
 
 //TODO retry on 429
@@ -63,8 +63,8 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
     }
 
     async requestTextCompletion(messages: OpenAITextMessage[], options: ExecutionOptions): Promise<Completion> {
-        if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn({ options: options.model_options }, "Invalid model options");
+        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "text-fallback") {
+            this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
@@ -97,8 +97,8 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
     }
 
     async requestTextCompletionStream(messages: OpenAITextMessage[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
-        if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn({ options: options.model_options }, "Invalid model options");
+        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "text-fallback") {
+            this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
