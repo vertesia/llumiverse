@@ -316,8 +316,10 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         const client = await driver.getAnthropicClient(region);
         options.model_options = options.model_options as VertexAIClaudeOptions;
 
-        if (options.model_options?._option_id !== "vertexai-claude") {
-            driver.logger.warn({ options: options.model_options }, "Invalid model options");
+        if (options.model_options?._option_id !== "vertexai-claude" &&
+            options.model_options?._option_id !== "text-fallback"
+        ) {
+            driver.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
 
         let conversation = updateConversation(options.conversation as ClaudePrompt, prompt);
@@ -372,8 +374,10 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         const client = await driver.getAnthropicClient(region);
         const model_options = options.model_options as VertexAIClaudeOptions | undefined;
 
-        if (model_options?._option_id !== "vertexai-claude") {
-            driver.logger.warn({ options: options.model_options }, "Invalid model options");
+        if (model_options?._option_id !== "vertexai-claude" &&
+            model_options?._option_id !== "text-fallback"
+        ) {
+            driver.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
 
         // Include conversation history (same as non-streaming)

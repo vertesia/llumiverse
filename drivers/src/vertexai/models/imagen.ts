@@ -324,7 +324,7 @@ export class ImagenModelDefinition {
 
     async requestImageGeneration(driver: VertexAIDriver, prompt: ImagenPrompt, options: ExecutionOptions): Promise<Completion> {
         if (options.model_options?._option_id !== "vertexai-imagen") {
-            driver.logger.warn({ options: options.model_options }, "Invalid model options");
+            driver.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
         options.model_options = options.model_options as ImagenOptions | undefined;
 

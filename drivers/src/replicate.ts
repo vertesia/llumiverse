@@ -1,6 +1,6 @@
 import {
-    AIModel,
     AbstractDriver,
+    AIModel,
     Completion,
     CompletionChunkObject,
     DataSource,
@@ -66,7 +66,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
 
     async requestTextCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn({ options: options.model_options }, "Invalid model options");
+            this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
@@ -111,7 +111,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
 
     async requestTextCompletion(prompt: string, options: ExecutionOptions) {
         if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn({ options: options.model_options }, "Invalid model options");
+            this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
         options.model_options = options.model_options as TextFallbackOptions;
         const model = ReplicateDriver.parseModelId(options.model);

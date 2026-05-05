@@ -1,11 +1,10 @@
-import { AIModel, AbstractDriver, Completion, CompletionChunkObject, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, PromptSegment, TextFallbackOptions, ToolDefinition, ToolUse } from "@llumiverse/core";
+import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, PromptSegment, TextFallbackOptions, ToolDefinition, ToolUse } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
-import { formatOpenAILikeMultimodalPrompt } from "../openai/openai_format.js";
-
 import Groq from "groq-sdk";
-import type OpenAI from "openai";
 import type { ChatCompletionMessageParam, ChatCompletionTool } from "groq-sdk/resources/chat/completions";
 import type { FunctionParameters } from "groq-sdk/resources/shared";
+import type OpenAI from "openai";
+import { formatOpenAILikeMultimodalPrompt } from "../openai/openai_format.js";
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
@@ -108,7 +107,7 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
 
     async requestTextCompletion(messages: ChatCompletionMessageParam[], options: ExecutionOptions): Promise<Completion> {
         if (options.model_options?._option_id !== "text-fallback" && options.model_options?._option_id !== "groq-deepseek-thinking") {
-            this.logger.warn({ options: options.model_options }, "Invalid model options");
+            this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
@@ -164,7 +163,7 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
 
     async requestTextCompletionStream(messages: ChatCompletionMessageParam[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn({ options: options.model_options }, "Invalid model options");
+            this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
