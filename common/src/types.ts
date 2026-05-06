@@ -466,10 +466,14 @@ export interface JSONSchemaObject {
 
 export interface JSONSchemaArray extends Array<JSONSchemaType> { }
 
+export interface JSONSchemaProperties {
+    [key: string]: JSONSchema;
+}
+
 export interface JSONSchema {
     type?: JSONSchemaTypeName | JSONSchemaTypeName[];
     description?: string;
-    properties?: Record<string, JSONSchema>;
+    properties?: JSONSchemaProperties;
     required?: string[];
     [k: string]: any;
 }
