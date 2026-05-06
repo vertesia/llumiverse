@@ -60,7 +60,6 @@ export function buildClaudeCacheTtlOptions(cacheEnabled?: boolean): ModelOptionI
             enum: { "5 minutes (default)": "5m", "1 hour": "1h" },
             default: "5m",
             description: "TTL for cache breakpoints. '1h' requires extended caching to be enabled on your account.",
-            
         },
     ];
 }
