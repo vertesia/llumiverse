@@ -41,7 +41,7 @@ export function buildClaudeCacheOptions(): ModelOptionInfoItem[] {
         {
             name: "cache_enabled",
             type: OptionType.boolean,
-            default: true,
+            default: false,
             description: "Enable prompt caching. Injects cache breakpoints at the system prompt, tools, and conversation pivot.",
         },
     ];
