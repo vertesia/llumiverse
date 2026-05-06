@@ -591,6 +591,7 @@ interface OptionInfoPrototype {
     type: OptionType;
     name: string;
     description?: string;
+    default?: unknown;
 
     //If this is true, whether other options apply is dependent on this option
     //Therefore, if this option is changed, the set of available options should be refreshed.

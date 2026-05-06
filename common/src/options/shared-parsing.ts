@@ -41,7 +41,7 @@ export function buildClaudeCacheOptions(): ModelOptionInfoItem[] {
         {
             name: "cache_enabled",
             type: OptionType.boolean,
-            default: false,
+            default: true,
             description: "Enable prompt caching. Injects cache breakpoints at the system prompt, tools, and conversation pivot.",
         },
     ];
@@ -60,6 +60,7 @@ export function buildClaudeCacheTtlOptions(cacheEnabled?: boolean): ModelOptionI
             enum: { "5 minutes (default)": "5m", "1 hour": "1h" },
             default: "5m",
             description: "TTL for cache breakpoints. '1h' requires extended caching to be enabled on your account.",
+            
         },
     ];
 }
