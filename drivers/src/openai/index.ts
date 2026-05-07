@@ -1,6 +1,6 @@
 import {
-    AIModel,
     AbstractDriver,
+    AIModel,
     Completion,
     CompletionChunkObject,
     CompletionResult,
@@ -10,26 +10,26 @@ import {
     EmbeddingsResult,
     ExecutionOptions,
     ExecutionTokenUsage,
+    getConversationMeta,
+    getModelCapabilities,
+    incrementConversationTurn,
     JSONSchema,
     LlumiverseError,
     LlumiverseErrorContext,
+    modelModalitiesToArray,
     ModelType,
     OpenAiDalleOptions,
     OpenAiGptImageOptions,
     Providers,
+    stripBase64ImagesFromConversation,
+    stripHeartbeatsFromConversation,
+    supportsToolUse,
     ToolDefinition,
     ToolUse,
     TrainingJob,
     TrainingJobStatus,
     TrainingOptions,
     TrainingPromptOptions,
-    getConversationMeta,
-    getModelCapabilities,
-    incrementConversationTurn,
-    modelModalitiesToArray,
-    stripBase64ImagesFromConversation,
-    stripHeartbeatsFromConversation,
-    supportsToolUse,
     truncateLargeTextInConversation,
     unwrapConversationArray,
 } from "@llumiverse/core";
@@ -132,8 +132,11 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     }
 
     async requestTextCompletionStream(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
-        if (options.model_options?._option_id !== "openai-text" && options.model_options?._option_id !== "openai-thinking") {
-            this.logger.warn({ options: options.model_options }, "Invalid model options");
+        if (options.model_options?._option_id !== undefined &&
+            options.model_options?._option_id !== "openai-text" &&
+            options.model_options?._option_id !== "openai-thinking" &&
+            options.model_options?._option_id !== "text-fallback") {
+            this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
 
         // Include conversation history (same as non-streaming)
@@ -194,8 +197,10 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     }
 
     async requestTextCompletion(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<Completion> {
-        if (options.model_options?._option_id !== "openai-text" && options.model_options?._option_id !== "openai-thinking") {
-            this.logger.warn({ options: options.model_options }, "Invalid model options");
+        if (options.model_options?._option_id !== undefined &&
+            options.model_options?._option_id !== "openai-text" &&
+            options.model_options?._option_id !== "openai-thinking") {
+            this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
 
         convertRoles(prompt, options.model);

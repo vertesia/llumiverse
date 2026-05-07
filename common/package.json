@@ -1,6 +1,6 @@
 {
   "name": "@llumiverse/common",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "type": "module",
   "description": "Public types, enums and options used by Llumiverse API.",
   "files": [
@@ -68,7 +68,7 @@
     "url": "git+ssh://git@github.com/vertesia/llumiverse.git"
   },
   "devDependencies": {
-    "@types/node": "^25.6.0",
+    "@types/node": "^24.1.0",
     "rimraf": "^6.1.2",
     "ts-dual-module": "^0.6.3",
     "typescript": "^6.0.2",

@@ -1,4 +1,4 @@
-import { AIModel, AbstractDriver, Completion, CompletionChunkObject, DriverOptions, EmbeddingsResult, ExecutionOptions, TextFallbackOptions } from "@llumiverse/core";
+import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DriverOptions, EmbeddingsResult, ExecutionOptions, TextFallbackOptions } from "@llumiverse/core";
 import { transformSSEStream } from "@llumiverse/core/async";
 import { FetchClient } from "@vertesia/api-fetch-client";
 import { TextCompletion, TogetherModelInfo } from "./interfaces.js";
@@ -30,8 +30,8 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
     }
 
     async requestTextCompletion(prompt: string, options: ExecutionOptions): Promise<Completion> {
-        if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn({ options: options.model_options }, "Invalid model options");
+        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "text-fallback") {
+            this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
@@ -72,8 +72,8 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
     }
 
     async requestTextCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
-        if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn({ options: options.model_options }, "Invalid model options");
+        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "text-fallback") {
+            this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
         options.model_options = options.model_options as TextFallbackOptions;
 

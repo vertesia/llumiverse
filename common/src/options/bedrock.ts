@@ -1,6 +1,13 @@
-import { ModelOptionsInfo, ModelOptions, OptionType, ModelOptionInfoItem, ReasoningEffort, SharedOptions } from "../types.js";
-import { getMaxOutputTokens } from "./context-windows.js";
-import { textOptionsFallback } from "./fallback.js";
+import { type ModelOptionInfoItem, type ModelOptions, type ModelOptionsInfo, OptionType } from "../types.js";
+import {
+    buildClaudeCacheOptions,
+    buildClaudeCacheTtlOptions,
+    buildClaudeEffortOptions,
+    buildClaudeIncludeThoughtsOption,
+    buildClaudeThinkingBudgetOption,
+    getClaudeMaxTokensLimit,
+} from "./shared-parsing.js";
+import { hasSamplingParameterRestriction } from "./version-parsing.js";
 
 // Union type of all Bedrock options
 export type BedrockOptions = NovaCanvasOptions | BaseConverseOptions | BedrockClaudeOptions | BedrockPalmyraOptions | BedrockGptOssOptions | TwelvelabsPegasusOptions;
@@ -32,10 +39,9 @@ export interface BaseConverseOptions {
 export interface BedrockClaudeOptions extends BaseConverseOptions {
     _option_id: "bedrock-claude";
     top_k?: number;
-    effort?: ReasoningEffort;
-    thinking_mode?: boolean;
     thinking_budget_tokens?: number;
     include_thoughts?: boolean;
+    effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
     cache_enabled?: boolean;
     cache_ttl?: '5m' | '1h';
 }
@@ -62,11 +68,9 @@ export interface TwelvelabsPegasusOptions {
 }
 
 export function getMaxTokensLimitBedrock(model: string): number | undefined {
-    // Claude models — delegate to provider-agnostic limits,
-    // override only where Bedrock supports extended output (128K for 3.7)
+    // Claude models — delegate to shared limit logic (128K for 3.7 and Opus 4.7+)
     if (model.includes("claude")) {
-        if (model.includes("-3-7-")) return 128000;
-        return getMaxOutputTokens(model);
+        return getClaudeMaxTokensLimit(model);
     }
     // Amazon models
     else if (model.includes("amazon")) {
@@ -230,6 +234,9 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
     } else {
         const max_tokens_limit = getMaxTokensLimitBedrock(model);
         //Not canvas, i.e normal AWS bedrock converse
+        // Opus 4.7+ models no longer support temperature, top_p, top_k (returns 400 error)
+        // Opus 4.6 and Sonnet 4.6 still support these parameters
+        const hasSamplingRestriction = hasSamplingParameterRestriction(model);
         const baseConverseOptions: ModelOptionInfoItem[] = [
             {
                 name: "max_tokens",
@@ -240,31 +247,38 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                 step: 200,
                 description: "The maximum number of tokens to generate",
             },
-            {
+        ];
+
+        // Opus 4.7+ models don't support temperature, top_p
+        if (!hasSamplingRestriction) {
+            baseConverseOptions.push({
                 name: "temperature",
                 type: OptionType.numeric,
                 min: 0.0,
                 default: 0.7,
                 step: 0.1,
                 description: "A higher temperature biases toward less likely tokens, making the model more creative"
-            },
-            {
+            });
+            baseConverseOptions.push({
                 name: "top_p",
                 type: OptionType.numeric,
                 min: 0,
                 max: 1,
                 step: 0.1,
                 description: "Limits token sampling to the cumulative probability of the top p tokens"
-            },
-            {
-                name: "stop_sequence",
-                type: OptionType.string_list,
-                value: [],
-                description: "The generation will halt if one of the stop sequences is output"
-            }];
+            });
+        }
+
+        baseConverseOptions.push({
+            name: "stop_sequence",
+            type: OptionType.string_list,
+            value: [],
+            description: "The generation will halt if one of the stop sequences is output"
+        });
 
         if (model.includes("claude")) {
-            const claudeConverseOptions: ModelOptionInfoItem[] = [
+            // Opus 4.7+ models don't support top_k
+            const claudeConverseOptions: ModelOptionInfoItem[] = hasSamplingRestriction ? [] : [
                 {
                     name: "top_k",
                     type: OptionType.numeric,
@@ -274,57 +288,18 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                     description: "Limits token sampling to the top k tokens"
                 },
             ];
-            const claudeCacheOptions: ModelOptionInfoItem[] = [
-                {
-                    name: "cache_enabled",
-                    type: OptionType.boolean,
-                    default: false,
-                    description: "Enable prompt caching. Injects cache breakpoints at the system prompt, tools, and conversation pivot.",
-                },
-            ];
-            const claudeCacheTtlOptions: ModelOptionInfoItem[] = (option as BedrockClaudeOptions)?.cache_enabled ? [
-                {
-                    name: "cache_ttl",
-                    type: OptionType.enum,
-                    enum: { "5 minutes (default)": "5m", "1 hour": "1h" },
-                    default: "5m",
-                    description: "TTL for cache breakpoints. '1h' requires extended caching to be enabled on your account.",
-                }
-            ] : [];
-            if (model.includes("-3-7-") || model.includes("-4-")) {
-                const claudeModeOptions: ModelOptionInfoItem[] = [
-                    {
-                        name: SharedOptions.effort,
-                        type: OptionType.enum,
-                        enum: { "Low": "low", "Medium": "medium", "High": "high" },
-                        description: "Controls Claude extended thinking effort. Clear this to leave extended thinking disabled."
-                    },
-                ];
-                const claudeThinkingOptions: ModelOptionInfoItem[] = [
-                    {
-                        name: "include_thoughts",
-                        type: OptionType.boolean,
-                        default: false,
-                        description: "If true, include the reasoning in the response"
-                    },
-                ];
-
-                return {
-                    _option_id: "bedrock-claude",
-                    options: [
-                        ...baseConverseOptions,
-                        ...claudeConverseOptions,
-                        ...claudeModeOptions,
-                        ...claudeThinkingOptions,
-                        ...claudeCacheOptions,
-                        ...claudeCacheTtlOptions,
-                    ]
-                }
-            }
             return {
                 _option_id: "bedrock-claude",
-                options: [...baseConverseOptions, ...claudeConverseOptions, ...claudeCacheOptions, ...claudeCacheTtlOptions]
-            }
+                options: [
+                    ...baseConverseOptions,
+                    ...claudeConverseOptions,
+                    ...buildClaudeEffortOptions(model),
+                    ...buildClaudeThinkingBudgetOption(model),
+                    ...buildClaudeIncludeThoughtsOption(model),
+                    ...buildClaudeCacheOptions(),
+                    ...buildClaudeCacheTtlOptions((option as BedrockClaudeOptions)?.cache_enabled),
+                ],
+            };
         }
         else if (model.includes("amazon")) {
             //Titan models also exists but does not support any additional options
@@ -519,7 +494,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                     _option_id: "bedrock-twelvelabs-pegasus",
                     options: pegasusOptions
                 };
-            } 
+            }
         }
 
         //Fallback to converse standard.
@@ -528,5 +503,4 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
             options: baseConverseOptions
         };
     }
-    return textOptionsFallback;
 }

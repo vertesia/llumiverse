@@ -3,9 +3,9 @@ import {
     TextGenerationStreamOutput,
 } from "@huggingface/inference";
 import {
+    AbstractDriver,
     AIModel,
     AIModelStatus,
-    AbstractDriver,
     CompletionChunkObject,
     DriverOptions,
     EmbeddingsResult,
@@ -68,8 +68,8 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
     }
 
     async requestTextCompletionStream(prompt: string, options: ExecutionOptions) {
-        if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn({ options: options.model_options }, "Invalid model options");
+        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "text-fallback") {
+            this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
@@ -100,8 +100,8 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
     }
 
     async requestTextCompletion(prompt: string, options: ExecutionOptions) {
-        if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn({ options: options.model_options }, "Invalid model options");
+        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "text-fallback") {
+            this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
         options.model_options = options.model_options as TextFallbackOptions;
 

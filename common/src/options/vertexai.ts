@@ -1,6 +1,17 @@
-import { ModelOptionInfoItem, ModelOptions, ModelOptionsInfo, OptionType, ReasoningEffort, SharedOptions } from "../types.js";
-import { getMaxOutputTokens } from "./context-windows.js";
+import { type ModelOptionInfoItem, type ModelOptions, type ModelOptionsInfo, OptionType, SharedOptions } from "../types.js";
 import { textOptionsFallback } from "./fallback.js";
+import {
+    buildClaudeCacheOptions,
+    buildClaudeCacheTtlOptions,
+    buildClaudeEffortOptions,
+    buildClaudeIncludeThoughtsOption,
+    buildClaudeThinkingBudgetOption,
+    getClaudeMaxTokensLimit,
+} from "./shared-parsing.js";
+import {
+    hasSamplingParameterRestriction,
+    isGeminiModelVersionGte,
+} from "./version-parsing.js";
 
 // Union type of all VertexAI options
 export type VertexAIOptions = ImagenOptions | VertexAIClaudeOptions | VertexAIGeminiOptions;
@@ -67,8 +78,7 @@ export interface VertexAIClaudeOptions {
     top_p?: number;
     top_k?: number;
     stop_sequence?: string[];
-    effort?: ReasoningEffort;
-    thinking_mode?: boolean;
+    effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
     thinking_budget_tokens?: number;
     include_thoughts?: boolean;
     cache_enabled?: boolean;
@@ -85,7 +95,7 @@ export interface VertexAIGeminiOptions {
     presence_penalty?: number;
     frequency_penalty?: number;
     seed?: number;
-    effort?: ReasoningEffort;
+    effort?: 'low' | 'medium' | 'high';
     include_thoughts?: boolean;
     thinking_budget_tokens?: number;
     thinking_level?: ThinkingLevel;
@@ -124,53 +134,6 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
         return getLlamaOptions(model);
     }
     return textOptionsFallback;
-}
-
-/**
- * Extract Gemini version from a model ID.
- *
- * Examples:
- * - locations/global/publishers/google/models/gemini-2.5-flash -> 2.5
- * - publishers/google/models/gemini-3-pro-image-preview -> 3
- */
-export function getGeminiModelVersion(modelId: string): string | undefined {
-    const modelName = modelId.split('/').pop() ?? modelId;
-    const match = modelName.match(/^gemini-(\d+(?:\.\d+)?)/i);
-    return match?.[1];
-}
-
-function parseVersion(version: string): { major: number; minor: number } | undefined {
-    const match = version.match(/^(\d+)(?:\.(\d+))?$/);
-    if (!match) {
-        return undefined;
-    }
-
-    return {
-        major: Number(match[1]),
-        minor: Number(match[2] ?? '0'),
-    };
-}
-
-export function isGeminiModelVersionGte(modelId: string, minVersion: string): boolean {
-    const modelVersion = getGeminiModelVersion(modelId);
-    if (!modelVersion) {
-        return false;
-    }
-
-    const current = parseVersion(modelVersion);
-    const target = parseVersion(minVersion);
-    if (!current || !target) {
-        return false;
-    }
-
-    if (current.major > target.major) {
-        return true;
-    }
-    if (current.major < target.major) {
-        return false;
-    }
-
-    return current.minor >= target.minor;
 }
 
 function getImagenOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
@@ -590,68 +553,35 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
 function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
     const max_tokens_limit = getClaudeMaxTokensLimit(model);
     const excludeOptions = ["max_tokens", "presence_penalty", "frequency_penalty"];
-    const commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
+    let commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
+
+    // Opus 4.7+ models no longer support temperature, top_p, top_k (returns 400 error)
+    // Opus 4.6 and Sonnet 4.6 still support these parameters
+    const hasSamplingRestriction = hasSamplingParameterRestriction(model);
+    if (hasSamplingRestriction) {
+        commonOptions = commonOptions.filter((option) =>
+            option.name !== SharedOptions.temperature &&
+            option.name !== SharedOptions.top_p &&
+            option.name !== "top_k"
+        );
+    }
+
     const max_tokens: ModelOptionInfoItem[] = [{
         name: SharedOptions.max_tokens, type: OptionType.numeric, min: 1, max: max_tokens_limit,
         integer: true, step: 200, description: "The maximum number of tokens to generate"
     }];
 
-    const claudeCacheOptions: ModelOptionInfoItem[] = [
-        {
-            name: "cache_enabled",
-            type: OptionType.boolean,
-            default: false,
-            description: "Enable prompt caching. Injects cache breakpoints at the system prompt, tools, and conversation pivot.",
-        },
-    ];
-    const claudeCacheTtlOptions: ModelOptionInfoItem[] = (option as VertexAIClaudeOptions)?.cache_enabled ? [
-        {
-            name: "cache_ttl",
-            type: OptionType.enum,
-            enum: { "5 minutes (default)": "5m", "1 hour": "1h" },
-            default: "5m",
-            description: "TTL for cache breakpoints. '1h' requires extended caching to be enabled on your account.",
-        }
-    ] : [];
-
-    if (model.includes("-3-7") || model.includes("-4")) {
-        const claudeModeOptions: ModelOptionInfoItem[] = [
-            {
-                name: SharedOptions.effort,
-                type: OptionType.enum,
-                enum: { "Low": "low", "Medium": "medium", "High": "high" },
-                description: "Controls Claude extended thinking effort. Clear this to leave extended thinking disabled."
-            },
-        ];
-        const claudeThinkingOptions: ModelOptionInfoItem[] = [
-            {
-                name: "include_thoughts",
-                type: OptionType.boolean,
-                default: false,
-                description: "Include the model's reasoning process in the response"
-            }
-        ];
-
-        return {
-            _option_id: "vertexai-claude",
-            options: [
-                ...max_tokens,
-                ...commonOptions,
-                ...claudeModeOptions,
-                ...claudeThinkingOptions,
-                ...claudeCacheOptions,
-                ...claudeCacheTtlOptions,
-            ]
-        };
-    }
     return {
         _option_id: "vertexai-claude",
         options: [
             ...max_tokens,
             ...commonOptions,
-            ...claudeCacheOptions,
-            ...claudeCacheTtlOptions,
-        ]
+            ...buildClaudeEffortOptions(model),
+            ...buildClaudeThinkingBudgetOption(model),
+            ...buildClaudeIncludeThoughtsOption(model),
+            ...buildClaudeCacheOptions(),
+            ...buildClaudeCacheTtlOptions((option as VertexAIClaudeOptions)?.cache_enabled),
+        ],
     };
 }
 
@@ -698,13 +628,6 @@ function getGeminiMaxTokensLimit(model: string): number {
         return 2048;
     }
     return 8192;
-}
-
-// Delegate to provider-agnostic limits,
-// override only where VertexAI supports extended output (128K for 3.7)
-function getClaudeMaxTokensLimit(model: string): number {
-    if (model.includes('-3-7')) return 128000;
-    return getMaxOutputTokens(model);
 }
 
 function getLlamaMaxTokensLimit(_model: string): number {
