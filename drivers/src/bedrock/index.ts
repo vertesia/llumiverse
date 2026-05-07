@@ -1367,17 +1367,17 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     async generateEmbeddings({ text, image, model }: EmbeddingsOptions): Promise<EmbeddingsResult> {
+        const defaultModel = "amazon.nova-2-multimodal-embeddings-v1:0";
 
-        this.logger.info("[Bedrock] Generating embeddings with model " + model);
+        this.logger.info("[Bedrock] Generating embeddings with model " + (model ?? ("default model: " + defaultModel)));
+
+        // Use default if no model provided.
+        const modelID = model ?? defaultModel;
 
         // Handle TwelveLabs Marengo models
         if (model?.includes("twelvelabs.marengo")) {
             return this.generateTwelvelabsMarengoEmbeddings({ text, image, model });
         }
-
-        // Handle other Bedrock embedding models
-        const defaultModel = image ? "amazon.titan-embed-image-v1" : "amazon.titan-embed-text-v2:0";
-        const modelID = model ?? defaultModel;
 
         const invokeBody = {
             inputText: text,
