@@ -85,6 +85,15 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         this.authClientPromise = undefined;
     }
 
+    /**
+     * Cleanup Google Cloud clients when the driver is evicted from the cache.
+     */
+    destroy(): void {
+        this.aiplatform?.close();
+        this.modelGarden?.close();
+        this.imagenClient?.close();
+    }
+
     private async getAuthClient(): Promise<AuthClient> {
         if (!this.authClientPromise) {
             this.authClientPromise = this.googleAuth.getClient();
@@ -124,11 +133,11 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         });
     }
 
-    public getFetchClient(): FetchClient {
+    public getFetchClient(region: string = this.options.region): FetchClient {
         //Lazy initialization
         if (!this.fetchClient) {
             this.fetchClient = createFetchClient({
-                region: this.options.region,
+                region: region,
                 project: this.options.project,
             }).withAuthCallback(async () => {
                 const token = await this.googleAuth.getAccessToken();
@@ -719,15 +728,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             model: options.model,
         };
         return getEmbeddingsForText(this, text_options);
-    }
-
-    /**
-     * Cleanup Google Cloud clients when the driver is evicted from the cache.
-     */
-    destroy(): void {
-        this.aiplatform?.close();
-        this.modelGarden?.close();
-        this.imagenClient?.close();
     }
 
     /**
