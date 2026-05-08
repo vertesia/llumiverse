@@ -1,5 +1,4 @@
-//import { defaultProvider } from "@aws-sdk/credential-provider-node";
-import { Driver } from '@llumiverse/core';
+import { Base64DataSource, Driver } from '@llumiverse/core';
 import 'dotenv/config';
 import { describe, expect, test } from "vitest";
 import { BedrockDriver, MistralAIDriver, OpenAIDriver, VertexAIDriver, WatsonxDriver } from "../src/index.js";
@@ -13,17 +12,16 @@ const fs = require('fs').promises;
 
 async function convertImageToBase64(path: string) {
     const data = await fs.readFile(path);
-    let base64Image = Buffer.from(data, 'binary').toString('base64');
-    return base64Image;
+    return Buffer.from(data, 'binary').toString('base64');
 }
 
 const IMAGE = await convertImageToBase64(IMAGE_SRC);
 
-// const credentials = defaultProvider({
-//     profile: "default",
-// })
+function imageDataSource(): Base64DataSource {
+    return new Base64DataSource("hello_world.jpg", "image/jpeg", IMAGE);
+}
 
-let vertex: VertexAIDriver | undefined = undefined;
+let vertex: VertexAIDriver | undefined;
 if (process.env.GOOGLE_REGION) {
     vertex = new VertexAIDriver({
         project: process.env.GOOGLE_PROJECT_ID as string,
@@ -31,107 +29,124 @@ if (process.env.GOOGLE_REGION) {
     });
 }
 
-let bedrock: BedrockDriver | undefined = undefined;
+let bedrock: BedrockDriver | undefined;
 if (process.env.BEDROCK_REGION) {
     bedrock = new BedrockDriver({
         region: process.env.BEDROCK_REGION as string,
-        //credentials: credentials
     });
 }
 
-let openai: OpenAIDriver | undefined = undefined;
+let openai: OpenAIDriver | undefined;
 if (process.env.OPENAI_API_KEY) {
     openai = new OpenAIDriver({
-        apiKey: process.env.OPENAI_API_KEY as string
+        apiKey: process.env.OPENAI_API_KEY as string,
     });
 }
 
-let mistral: MistralAIDriver | undefined = undefined;
+let mistral: MistralAIDriver | undefined;
 if (process.env.MISTRAL_API_KEY) {
     mistral = new MistralAIDriver({
-        apiKey: process.env.MISTRAL_API_KEY as string
-    })
-};
+        apiKey: process.env.MISTRAL_API_KEY as string,
+    });
+}
 
-let watsonx: WatsonxDriver | undefined = undefined;
+let watsonx: WatsonxDriver | undefined;
 if (process.env.WATSONX_API_KEY) {
     watsonx = new WatsonxDriver({
         apiKey: process.env.WATSONX_API_KEY as string,
         projectId: process.env.WATSONX_PROJECT_ID as string,
-        endpointUrl: process.env.WATSONX_ENDPOINT_URL as string
+        endpointUrl: process.env.WATSONX_ENDPOINT_URL as string,
     });
+}
+
+function firstValues(d: Driver) {
+    return async (...inputs: Parameters<Driver["generateEmbeddings"]>[0]["inputs"]) => {
+        const r = await d.generateEmbeddings({ inputs });
+        return r;
+    };
 }
 
 if (vertex) {
     describe('VertexAI: embeddings generation', () => {
         test('embeddings for text', async () => {
-            const r = await vertex.generateEmbeddings({ text: TEXT });
-            expect(r.values.length).toBeGreaterThan(0);
+            const r = await firstValues(vertex!)({ type: "text", text: TEXT });
+            expect(r.results).toHaveLength(1);
+            expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
             expect(r.model).toBe("gemini-embedding-2");
-            expect(r.token_count).toBe(1);
         }, TIMEOUT);
-        test('embeddings for text with multimodal', async () => {
-            const r = await vertex.generateEmbeddings({ text: TEXT, model: "multimodalembedding@001" });
-            expect(r.values.length).toBeGreaterThan(0);
-            expect(r.model).toBe("multimodalembedding@001");
-            expect(r.token_count).toBeUndefined();      //not reported by multimodal
+
+        test('embeddings for image (multimodal)', async () => {
+            const r = await firstValues(vertex!)({ type: "image", source: imageDataSource() });
+            expect(r.results).toHaveLength(1);
+            expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
         }, TIMEOUT);
-        test('embeddings for image', async () => {
-            const r = await vertex.generateEmbeddings({ image: IMAGE });
-            expect(r.values.length).toBeGreaterThan(0);
-            expect(r.model).toBe("gemini-embedding-2");
-            expect(r.token_count).toBeGreaterThan(0);
+
+        test('embeddings for batched text inputs', async () => {
+            const r = await vertex!.generateEmbeddings({
+                inputs: [
+                    { type: "text", text: "first" },
+                    { type: "text", text: "second" },
+                ],
+            });
+            expect(r.results).toHaveLength(2);
+            expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
+            expect(r.results[1].outputs[0].values.length).toBeGreaterThan(0);
         }, TIMEOUT);
-    })
+    });
 }
 
 if (bedrock) {
-    describe('Bedrock: embeddings generation', function () {
-        test('embeddings for text', async () => {
-            const r = await bedrock.generateEmbeddings({ text: TEXT });
-            expect(r.values.length).toBeGreaterThan(0);
-            expect(r.model).toBe("amazon.titan-embed-text-v2:0");
-            expect(r.token_count).toBeGreaterThan(0);
+    describe('Bedrock: embeddings generation', () => {
+        test('embeddings for text (Nova default)', async () => {
+            const r = await firstValues(bedrock!)({ type: "text", text: TEXT });
+            expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
         }, TIMEOUT);
 
-        test('embeddings for image and text', async () => {
-            const r = await bedrock.generateEmbeddings({ text: TEXT, image: IMAGE });
-            expect(r.values.length).toBeGreaterThan(0);
-            expect(r.model).toBe("amazon.titan-embed-image-v1");
+        test('embeddings for image (Nova multimodal)', async () => {
+            const r = await firstValues(bedrock!)({ type: "image", source: imageDataSource() });
+            expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
         }, TIMEOUT);
-
-    })
+    });
 }
 
 if (openai) {
-    describe('OpenAI: embeddings generation', function () {
+    describe('OpenAI: embeddings generation', () => {
         test('embeddings for text', async () => {
-            const r = await openai.generateEmbeddings({ text: TEXT });
-            expect(r.values.length).toBeGreaterThan(0);
+            const r = await firstValues(openai!)({ type: "text", text: TEXT });
+            expect(r.results).toHaveLength(1);
+            expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
             expect(r.model).toBe("text-embedding-3-small");
-            expect(r.token_count).toBeUndefined(); // not reported by openai
+            expect(r.usage?.input_tokens).toBeGreaterThan(0);
         }, TIMEOUT);
-    })
+
+        test('embeddings for batched text inputs', async () => {
+            const r = await openai!.generateEmbeddings({
+                inputs: [
+                    { type: "text", text: "alpha" },
+                    { type: "text", text: "beta" },
+                ],
+            });
+            expect(r.results).toHaveLength(2);
+        }, TIMEOUT);
+    });
 }
 
 if (mistral) {
-    describe('MistralAI: embeddings generation', function () {
+    describe('MistralAI: embeddings generation', () => {
         test('embeddings for text', async () => {
-            const r = await mistral.generateEmbeddings({ text: TEXT });
-            expect(r.values.length).toBeGreaterThan(0);
+            const r = await firstValues(mistral!)({ type: "text", text: TEXT });
+            expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
             expect(r.model).toBe("mistral-embed");
-            expect(r.token_count).toBeGreaterThan(0);
         }, TIMEOUT);
-    })
+    });
 }
 
 if (watsonx) {
-    describe('Watsonx: embeddings generation', function () {
+    describe('Watsonx: embeddings generation', () => {
         test('embeddings for text', async () => {
-            const r = await watsonx.generateEmbeddings({ text: TEXT });
-            expect(r.values.length).toBeGreaterThan(0);
+            const r = await firstValues(watsonx!)({ type: "text", text: TEXT });
+            expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
             expect(r.model).toBe("ibm/slate-125m-english-rtrvr");
-            expect(r.token_count).toBeUndefined(); // not reported by watsonx      
         }, TIMEOUT);
-    })
+    });
 }
