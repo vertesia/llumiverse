@@ -31,7 +31,8 @@ import {
     stripBinaryFromConversation,
     stripHeartbeatsFromConversation,
     type TextFallbackOptions, type ToolDefinition, type ToolUse, type TrainingJob, TrainingJobStatus, type TrainingOptions,
-    truncateLargeTextInConversation
+    truncateLargeTextInConversation,
+    normalizeEmbeddingsOptions
 } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatNovaPrompt, type NovaMessagesPrompt } from "@llumiverse/core/formatters";
@@ -39,11 +40,10 @@ import { LRUCache } from "mnemonist";
 import { resolveClaudeThinking } from "../shared/claude-thinking.js";
 import { converseConcatMessages, converseJSONprefill, converseSystemToMessages, formatConversePrompt } from "./converse.js";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
+import { generateBedrockEmbeddings } from "./embeddings.js";
 import { forceUploadFile } from "./s3.js";
 import {
     formatTwelvelabsPegasusPrompt,
-    type TwelvelabsMarengoRequest,
-    type TwelvelabsMarengoResponse,
     type TwelvelabsPegasusRequest
 } from "./twelvelabs.js";
 
@@ -1366,92 +1366,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return aiModels;
     }
 
-    async generateEmbeddings({ text, image, model }: EmbeddingsOptions): Promise<EmbeddingsResult> {
-        const defaultModel = "amazon.nova-2-multimodal-embeddings-v1:0";
-
-        this.logger.info("[Bedrock] Generating embeddings with model " + (model ?? ("default model: " + defaultModel)));
-
-        // Use default if no model provided.
-        const modelID = model ?? defaultModel;
-
-        // Handle TwelveLabs Marengo models
-        if (model?.includes("twelvelabs.marengo")) {
-            return this.generateTwelvelabsMarengoEmbeddings({ text, image, model });
-        }
-
-        const invokeBody = {
-            inputText: text,
-            inputImage: image
-        }
-
-        const executor = this.getExecutor();
-        const res = await executor.invokeModel(
-            {
-                modelId: modelID,
-                contentType: "application/json",
-                body: JSON.stringify(invokeBody),
-            }
-        );
-
-        const decoder = new TextDecoder();
-        const body = decoder.decode(res.body);
-
-        const result = JSON.parse(body);
-
-        if (!result.embedding) {
-            throw new Error("Embeddings not found");
-        }
-
-        return {
-            values: result.embedding,
-            model: modelID,
-            token_count: result.inputTextTokenCount
-        };
-    }
-
-    private async generateTwelvelabsMarengoEmbeddings({ text, image, model }: EmbeddingsOptions): Promise<EmbeddingsResult> {
-        const executor = this.getExecutor();
-
-        // Prepare the request payload for TwelveLabs Marengo
-        const invokeBody: TwelvelabsMarengoRequest = {
-            inputType: "text"
-        };
-
-        if (text) {
-            invokeBody.inputText = text;
-            invokeBody.inputType = "text";
-        }
-
-        if (image) {
-            // For the embeddings interface, image is expected to be base64
-            invokeBody.mediaSource = {
-                base64String: image
-            };
-            invokeBody.inputType = "image";
-        }
-
-        const res = await executor.invokeModel({
-            modelId: model!,
-            contentType: "application/json",
-            accept: "application/json",
-            body: JSON.stringify(invokeBody),
-        });
-
-        const decoder = new TextDecoder();
-        const body = decoder.decode(res.body);
-        const result: TwelvelabsMarengoResponse = JSON.parse(body);
-
-        // TwelveLabs Marengo returns embedding data
-        if (!result.embedding) {
-            throw new Error("Embeddings not found in TwelveLabs Marengo response");
-        }
-
-        return {
-            values: result.embedding,
-            model: model!,
-            // TwelveLabs Marengo doesn't return token count in the same way
-            token_count: undefined
-        };
+    async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
+        const normalized = normalizeEmbeddingsOptions(options);
+        this.logger.info(`[Bedrock] Generating embeddings with model ${normalized.model ?? "(default)"} for ${normalized.inputs.length} input(s)`);
+        return generateBedrockEmbeddings(this, normalized);
     }
 
     /**

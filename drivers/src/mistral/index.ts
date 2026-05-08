@@ -1,4 +1,4 @@
-import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, PromptSegment, TextFallbackOptions } from "@llumiverse/core";
+import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, PromptSegment, TextFallbackOptions, normalizeEmbeddingsOptions } from "@llumiverse/core";
 import { transformSSEStream } from "@llumiverse/core/async";
 import { getJSONSafetyNotice } from "@llumiverse/core/formatters";
 import { FetchClient } from "@vertesia/api-fetch-client";
@@ -155,19 +155,37 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
         throw new Error("Method not implemented.");
     }
 
-    async generateEmbeddings({ text, model = "mistral-embed" }: EmbeddingsOptions): Promise<EmbeddingsResult> {
+    async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
+        const normalized = normalizeEmbeddingsOptions(options);
+        const model = normalized.model ?? "mistral-embed";
+        const texts = normalized.inputs.map((input) => {
+            if (input.type !== "text") {
+                throw new Error(`Provider 'mistralai' does not support '${input.type}' embeddings; only 'text' is supported.`);
+            }
+            return input.text;
+        });
+
         const r = await this.client.post('/v1/embeddings', {
             payload: {
                 model,
-                input: [text],
-                encoding_format: "float"
+                input: texts,
+                encoding_format: "float",
             },
         });
+
+        const ordered: { index: number; embedding: number[] }[] = [...r.data].sort((a, b) => a.index - b.index);
+        const promptTokens: number | undefined = r.usage?.total_tokens
+            ?? (r.usage ? (r.usage.prompt_tokens ?? 0) + (r.usage.completion_tokens ?? 0) : undefined);
+
         return {
-            values: r.data[0].embedding,
             model,
-            token_count: r.usage.total_tokens || r.usage.prompt_tokens + r.usage.completion_tokens,
-        }
+            results: ordered.map((entry) => ({
+                outputs: [{ values: entry.embedding, modality: "text" }],
+            })),
+            ...(typeof promptTokens === "number"
+                ? { usage: { input_tokens: promptTokens, input_text_tokens: promptTokens } }
+                : {}),
+        };
     }
 
 }

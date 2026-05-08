@@ -1,39 +1,42 @@
 import {
     AbstractDriver,
-    AIModel,
-    Completion,
-    CompletionChunkObject,
-    CompletionResult,
-    DataSource,
-    DriverOptions,
-    EmbeddingsOptions,
-    EmbeddingsResult,
-    ExecutionOptions,
-    ExecutionTokenUsage,
+    type AIModel,
+    type Completion,
+    type CompletionChunkObject,
+    type CompletionResult,
+    type DataSource,
+    type DriverOptions,
+    type EmbeddingResultItem,
+    type EmbeddingsOptions,
+    type EmbeddingsResult,
+    normalizeEmbeddingsOptions,
+    type ExecutionOptions,
+    type ExecutionTokenUsage,
     getConversationMeta,
     getModelCapabilities,
     incrementConversationTurn,
-    JSONSchema,
+    type JSONSchema,
     LlumiverseError,
-    LlumiverseErrorContext,
+    type LlumiverseErrorContext,
     modelModalitiesToArray,
     ModelType,
-    OpenAiDalleOptions,
-    OpenAiGptImageOptions,
-    Providers,
+    type OpenAiDalleOptions,
+    type OpenAiGptImageOptions,
+    type Providers,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
     supportsToolUse,
-    ToolDefinition,
-    ToolUse,
-    TrainingJob,
+    type ToolDefinition,
+    type ToolUse,
+    type TrainingJob,
     TrainingJobStatus,
-    TrainingOptions,
-    TrainingPromptOptions,
+    type TrainingOptions,
+    type TrainingPromptOptions,
     truncateLargeTextInConversation,
     unwrapConversationArray,
 } from "@llumiverse/core";
-import OpenAI, { AzureOpenAI } from "openai";
+import type OpenAI from "openai";
+import type { AzureOpenAI } from "openai";
 import {
     APIConnectionError,
     APIConnectionTimeoutError,
@@ -463,28 +466,43 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     }
 
 
-    async generateEmbeddings({ text, image, model = "text-embedding-3-small" }: EmbeddingsOptions): Promise<EmbeddingsResult> {
+    async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
+        const normalized = normalizeEmbeddingsOptions(options);
+        const model = normalized.model ?? "text-embedding-3-small";
 
-        if (image) {
-            throw new Error("Image embeddings not supported by OpenAI");
-        }
+        const texts: string[] = normalized.inputs.map((input) => {
+            if (input.type !== "text") {
+                throw new Error(`Provider 'openai' does not support '${input.type}' embeddings; only 'text' is supported.`);
+            }
+            return input.text;
+        });
 
-        if (!text) {
-            throw new Error("No text provided");
+        if (normalized.output_dtype && normalized.output_dtype !== "float") {
+            throw new Error(`OpenAI embeddings do not support output_dtype '${normalized.output_dtype}'`);
         }
 
         const res = await this.service.embeddings.create({
-            input: text,
-            model: model,
+            input: texts,
+            model,
+            ...(normalized.dimensions ? { dimensions: normalized.dimensions } : {}),
+            encoding_format: "float",
         });
 
-        const embeddings = res.data[0].embedding;
+        // OpenAI does not guarantee data is returned in the same order as the input,
+        // but does return a stable `index` per item. Sort by index to align with inputs.
+        const ordered = [...res.data].sort((a, b) => a.index - b.index);
+        const items = ordered.map((entry): EmbeddingResultItem => {
+            if (!entry.embedding || entry.embedding.length === 0) {
+                throw new Error(`OpenAI embedding empty for input index ${entry.index}`);
+            }
+            return { outputs: [{ values: entry.embedding, modality: "text" }] };
+        });
 
-        if (!embeddings || embeddings.length === 0) {
-            throw new Error("No embedding found");
-        }
+        const usage = res.usage
+            ? { input_tokens: res.usage.prompt_tokens, input_text_tokens: res.usage.prompt_tokens }
+            : undefined;
 
-        return { values: embeddings, model } satisfies EmbeddingsResult;
+        return { model, results: items, usage };
     }
 
     imageModels = ["dall-e", "gpt-image", "chatgpt-image"];
