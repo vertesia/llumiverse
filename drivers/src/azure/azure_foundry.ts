@@ -1,5 +1,5 @@
 import { DefaultAzureCredential, getBearerTokenProvider, TokenCredential } from "@azure/identity";
-import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, getModelCapabilities, modelModalitiesToArray, Providers } from "@llumiverse/core";
+import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DriverOptions, EmbeddingResultItem, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, ImageEmbeddingInput, TextEmbeddingInput, dataSourceToBase64, getModelCapabilities, modelModalitiesToArray, normalizeEmbeddingsOptions, Providers } from "@llumiverse/core";
 import { AIProjectClient, DeploymentUnion, ModelDeployment } from '@azure/ai-projects';
 import { isUnexpected } from "@azure-rest/ai-inference";
 import type OpenAI from "openai";
@@ -304,88 +304,72 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     }
 
     async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
-        if (!options.model) {
+        const normalized = normalizeEmbeddingsOptions(options);
+        if (!normalized.model) {
             throw new Error("Default embedding model selection not supported for Azure Foundry. Please specify a model.");
         }
 
-        if (options.text) {
-            return this.generateTextEmbeddings(options);
-        } else if (options.image) {
-            return this.generateImageEmbeddings(options);
-        } else {
-            throw new Error("No text or images provided for embeddings");
+        const textInputs: { index: number; input: TextEmbeddingInput }[] = [];
+        const imageInputs: { index: number; input: ImageEmbeddingInput }[] = [];
+        normalized.inputs.forEach((input, index) => {
+            if (input.type === "text") textInputs.push({ index, input });
+            else if (input.type === "image") imageInputs.push({ index, input });
+            else {
+                throw new Error(`Provider 'azure_foundry' does not support '${input.type}' embeddings.`);
+            }
+        });
+
+        const items = new Array<EmbeddingResultItem>(normalized.inputs.length);
+
+        if (textInputs.length > 0) {
+            const vectors = await this.callAzureEmbeddings(
+                textInputs.map((t) => t.input.text),
+                normalized.model,
+                "text",
+            );
+            textInputs.forEach((entry, i) => {
+                items[entry.index] = { outputs: [{ values: vectors[i], modality: "text" }] };
+            });
         }
+
+        if (imageInputs.length > 0) {
+            const base64Images = await Promise.all(imageInputs.map((entry) => dataSourceToBase64(entry.input.source)));
+            const vectors = await this.callAzureEmbeddings(base64Images, normalized.model, "image");
+            imageInputs.forEach((entry, i) => {
+                items[entry.index] = { outputs: [{ values: vectors[i], modality: "image" }] };
+            });
+        }
+
+        return { model: normalized.model, results: items };
     }
 
-    async generateTextEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
-        if (!options.text) {
-            throw new Error("No text provided for text embeddings");
-        }
-
-        const { deploymentName } = parseAzureFoundryModelId(options.model || "");
-
+    private async callAzureEmbeddings(input: string[], model: string, kind: "text" | "image"): Promise<number[][]> {
+        const { deploymentName } = parseAzureFoundryModelId(model);
         let response;
         try {
-            // Use the embeddings client from the inference operations
             const embeddingsClient = this.service.inference.embeddings({ apiVersion: this.INFERENCE_API_VERSION });
-            response = await embeddingsClient.post({
-                body: {
-                    input: Array.isArray(options.text) ? options.text : [options.text],
-                    model: deploymentName
-                }
-            });
+            response = await embeddingsClient.post({ body: { input, model: deploymentName } });
         } catch (error) {
-            this.logger.error({ error }, "Azure Foundry text embeddings error:");
+            this.logger.error({ error }, `Azure Foundry ${kind} embeddings error:`);
             throw error;
         }
 
         if (isUnexpected(response)) {
-            throw new Error(`Text embeddings request failed: ${response.status} ${response.body?.error?.message || 'Unknown error'}`);
+            throw new Error(`${kind} embeddings request failed: ${response.status} ${response.body?.error?.message || 'Unknown error'}`);
         }
 
-        const embeddings = response.body.data?.[0]?.embedding;
-        if (!embeddings || !Array.isArray(embeddings) || embeddings.length === 0) {
-            throw new Error("No valid embedding array found in response");
+        const data = response.body.data;
+        if (!Array.isArray(data) || data.length === 0) {
+            throw new Error(`No embeddings found in Azure Foundry ${kind} response`);
         }
-
-        return {
-            values: embeddings,
-            model: options.model ?? ""
-        };
-    }
-
-    async generateImageEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
-        if (!options.image) {
-            throw new Error("No images provided for image embeddings");
-        }
-
-        const { deploymentName } = parseAzureFoundryModelId(options.model || "");
-
-        let response;
-        try {
-            // Use the embeddings client from the inference operations
-            const embeddingsClient = this.service.inference.embeddings({ apiVersion: this.INFERENCE_API_VERSION });
-            response = await embeddingsClient.post({
-                body: {
-                    input: Array.isArray(options.image) ? options.image : [options.image],
-                    model: deploymentName
-                }
-            });
-        } catch (error) {
-            this.logger.error({ error }, "Azure Foundry image embeddings error:");
-            throw error;
-        }
-        if (isUnexpected(response)) {
-            throw new Error(`Image embeddings request failed: ${response.status} ${response.body?.error?.message || 'Unknown error'}`);
-        }
-        const embeddings = response.body.data?.[0]?.embedding;
-        if (!embeddings || !Array.isArray(embeddings) || embeddings.length === 0) {
-            throw new Error("No valid embedding array found in response");
-        }
-        return {
-            values: embeddings,
-            model: options.model ?? ""
-        };
+        const ordered = [...data].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+        return ordered.map((entry) => {
+            const embedding = entry.embedding;
+            if (!Array.isArray(embedding) || embedding.length === 0) {
+                throw new Error(`Empty or non-array embedding in Azure Foundry ${kind} response (got ${typeof embedding})`);
+            }
+            return embedding;
+        });
     }
 
     async listModels(): Promise<AIModel[]> {
