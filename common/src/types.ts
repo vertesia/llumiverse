@@ -324,6 +324,9 @@ export interface ImageResult extends BaseResult {
     value: string; // base64 data url or real url
 }
 
+/**
+ * @discriminator type
+ */
 export type CompletionResult = TextResult | JsonResult | ImageResult;
 
 
@@ -581,6 +584,9 @@ export type ReasoningEffort = "low" | "medium" | "high";
 
 // ============== Model Options ===============
 
+/**
+ * @discriminator _option_id
+ */
 export type ModelOptions = TextFallbackOptions | VertexAIOptions | BedrockOptions | OpenAiOptions | GroqOptions;
 
 // ============== Option Info ===============

@@ -2,6 +2,9 @@ import { ModelOptionInfoItem, ModelOptions, ModelOptionsInfo, OptionType, Reason
 import { textOptionsFallback } from "./fallback.js";
 
 // Union type of all OpenAI options
+/**
+ * @discriminator _option_id
+ */
 export type OpenAiOptions = OpenAiThinkingOptions | OpenAiTextOptions | OpenAiDalleOptions | OpenAiGptImageOptions;
 
 export interface OpenAiThinkingOptions {
