@@ -477,6 +477,7 @@ export interface JSONSchema {
     type?: JSONSchemaTypeName | JSONSchemaTypeName[];
     description?: string;
     properties?: JSONSchemaProperties;
+    additionalProperties?: boolean | JSONSchema;
     required?: string[];
     [k: string]: any;
 }
