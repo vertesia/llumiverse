@@ -7,6 +7,7 @@ import {
     type EmbeddingResultItem,
     type EmbeddingsOptions,
     type EmbeddingsResult,
+    LlumiverseError,
     type VideoEmbeddingInput,
 } from "@llumiverse/core";
 import type { VertexAIDriver } from "../index.js";
@@ -175,19 +176,28 @@ export async function generateLegacyMultimodalEmbeddings(
     const request: protos.google.cloud.aiplatform.v1.IPredictRequest = { endpoint, instances, parameters };
 
     const client = await driver.getPredictionServiceClient();
-    const [response] = await client.predict(request);
+    try {
+        const [response] = await client.predict(request);
+        const predictions = response.predictions ?? [];
+        if (predictions.length !== built.length) {
+            throw new Error(
+                `Vertex predict returned ${predictions.length} predictions for ${built.length} instances (model ${model})`,
+            );
+        }
 
-    const predictions = response.predictions ?? [];
-    if (predictions.length !== built.length) {
-        throw new Error(
-            `Vertex predict returned ${predictions.length} predictions for ${built.length} instances (model ${model})`,
-        );
+        const items: EmbeddingResultItem[] = predictions.map((value, i) => {
+            const decoded = decodePredictionValue(value, i, model);
+            return { outputs: predictionToOutputs(decoded, modalities[i]) };
+        });
+
+        return buildEmbeddingsResult(model, items);
+    } catch (error) {
+        if (LlumiverseError.isLlumiverseError(error)) throw error;
+        if (error instanceof Error && typeof (error as any).status !== 'number' && typeof (error as any).code !== 'number') throw error;
+        throw driver.formatLlumiverseError(error, {
+            provider: 'vertexai',
+            model,
+            operation: 'execute',
+        });
     }
-
-    const items: EmbeddingResultItem[] = predictions.map((value, i) => {
-        const decoded = decodePredictionValue(value, i, model);
-        return { outputs: predictionToOutputs(decoded, modalities[i]) };
-    });
-
-    return buildEmbeddingsResult(model, items);
 }

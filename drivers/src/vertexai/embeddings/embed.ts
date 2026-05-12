@@ -1,4 +1,5 @@
 import type { Content, EmbedContentConfig, Part } from "@google/genai";
+import { VERTEX_DEFAULT_EMBEDDING_MODEL, VERTEX_MULTIMODAL_EMBEDDING_MODEL } from "@llumiverse/common";
 import {
     applyTaskTypePrefix,
     buildEmbeddingsResult,
@@ -9,13 +10,12 @@ import {
     type EmbeddingsResult,
     type EmbeddingsTokenUsage,
     type EmbeddingTaskType,
+    LlumiverseError,
     type TextEmbeddingInput,
 } from "@llumiverse/core";
 import type { VertexAIDriver } from "../index.js";
 import { generateLegacyMultimodalEmbeddings } from "./embed-legacy-multimodal.js";
 import { dataSourceToVertexSourceData } from "./source-utils.js";
-
-const DEFAULT_MODEL = "gemini-embedding-2";
 
 /**
  * Models that do not accept task_type as an API parameter and instead expect
@@ -27,18 +27,24 @@ const TASK_TYPE_PREFIX_MODELS = new Set<string>([
 
 /**
  * Documented prompt prefixes for prefix-only models.
- * See Vertex AI text embeddings docs.
+ * Maps our simplified task types to Vertex AI prefix strings.
  */
 const TASK_TYPE_PREFIX_MAP: Partial<Record<EmbeddingTaskType, string>> = {
-    RETRIEVAL_QUERY: "task: search result | query: ",
-    RETRIEVAL_DOCUMENT: "task: search result | ",
-    SEMANTIC_SIMILARITY: "task: sentence similarity | query: ",
-    CLASSIFICATION: "task: classification | query: ",
-    CLUSTERING: "task: clustering | query: ",
-    QUESTION_ANSWERING: "task: question answering | query: ",
-    FACT_VERIFICATION: "task: fact checking | query: ",
-    CODE_RETRIEVAL_QUERY: "task: code retrieval | query: ",
+    query: "task: search result | query: ",
+    document: "task: search result | ",
 };
+
+/**
+ * Maps our simplified EmbeddingTaskType to Google's API task type enum string.
+ * Used for SDK-based models that accept taskType as a parameter.
+ */
+function toGoogleTaskType(taskType: EmbeddingTaskType | undefined): string | undefined {
+    switch (taskType) {
+        case "query": return "RETRIEVAL_QUERY";
+        case "document": return "RETRIEVAL_DOCUMENT";
+        default: return undefined;
+    }
+}
 
 /**
  * Models only available in the Vertex "global" location.
@@ -68,13 +74,12 @@ async function dataSourceToPart(ds: DataSource): Promise<Part> {
     return { inlineData: { data: source.bytesBase64Encoded, mimeType: ds.mime_type } };
 }
 
-type TextConfig = Pick<EmbedContentConfig, "taskType" | "title" | "autoTruncate">;
+type TextConfig = Pick<EmbedContentConfig, "taskType" | "title">;
 
 function textConfig(input: TextEmbeddingInput, viaPrefix: boolean): TextConfig {
     const config: TextConfig = {};
-    if (!viaPrefix && input.task_type) config.taskType = input.task_type;
+    if (!viaPrefix && input.task_type) config.taskType = toGoogleTaskType(input.task_type);
     if (input.title) config.title = input.title;
-    if (input.truncate !== undefined) config.autoTruncate = input.truncate !== "NONE";
     return config;
 }
 
@@ -115,27 +120,23 @@ function addInputTokenUsage(usage: EmbeddingsTokenUsage, tokenCount: number): vo
  * Models that use the legacy multimodal predict API instead of embedContent.
  */
 const LEGACY_MULTIMODAL_MODELS = new Set<string>([
-    "multimodalembedding@001",
+    VERTEX_MULTIMODAL_EMBEDDING_MODEL,
 ]);
 
 /**
  * Generate Vertex AI embeddings via @google/genai's embedContent API.
- * Unified path for text and multimodal inputs:
- * - Text inputs are sent as Content with a text part. task_type/title/truncate
- *   are applied via the SDK's config (or via prompt prefix for allow-listed
- *   models that don't accept the API parameter).
- * - Image/video/audio inputs are sent as Content with inlineData (base64) or
- *   fileData (gs:// URL) parts.
- *
- * Inputs sharing the same (task_type, title, truncate) signature are batched
- * in a single embedContent call; mismatched configs split into multiple calls.
- * Results are returned in the same order as options.inputs.
+ * Text inputs are sent as Content with a text part; task_type and title
+ * are applied via the SDK config (or via prompt prefix for models that
+ * don't accept them as API parameters).
+ * Image/video/audio inputs are sent as inlineData (base64) or fileData (gs://).
+ * Inputs with the same config signature are batched in a single call;
+ * differing configs produce separate calls. Results preserve input order.
  */
 export async function generateVertexAiEmbeddings(
     driver: VertexAIDriver,
     options: EmbeddingsOptions,
 ): Promise<EmbeddingsResult> {
-    const model = options.model ?? DEFAULT_MODEL;
+    const model = options.model ?? VERTEX_DEFAULT_EMBEDDING_MODEL;
 
     if (LEGACY_MULTIMODAL_MODELS.has(model)) {
         return generateLegacyMultimodalEmbeddings(driver, options);
@@ -164,29 +165,39 @@ export async function generateVertexAiEmbeddings(
         const contents = await Promise.all(group.map((entry) => inputToContent(entry.input, viaPrefix)));
         const config = configForGroup(group[0].input, viaPrefix, options);
 
-        const response = await ai.models.embedContent({ model, contents, config });
-        const embeddings = response.embeddings ?? [];
-        if (embeddings.length !== group.length) {
-            throw new Error(
-                `Vertex AI embedContent returned ${embeddings.length} embeddings for ${group.length} inputs (model ${model})`,
-            );
-        }
+        try {
+            const response = await ai.models.embedContent({ model, contents, config });
+            const embeddings = response.embeddings ?? [];
+            if (embeddings.length !== group.length) {
+                throw new Error(
+                    `Vertex AI embedContent returned ${embeddings.length} embeddings for ${group.length} inputs (model ${model})`,
+                );
+            }
 
-        embeddings.forEach((embedding, i) => {
-            const entry = group[i];
-            const values = embedding.values;
-            if (!values) {
-                throw new Error(`Vertex AI embedContent returned an empty embedding for input ${entry.index} (model ${model})`);
-            }
-            const tokenCount = embedding.statistics?.tokenCount;
-            items[entry.index] = {
-                outputs: [{ values, modality: entry.input.type }],
-                input_tokens: tokenCount,
-            };
-            if (typeof tokenCount === "number") {
-                addInputTokenUsage(usage, tokenCount);
-            }
-        });
+            embeddings.forEach((embedding, i) => {
+                const entry = group[i];
+                const values = embedding.values;
+                if (!values) {
+                    throw new Error(`Vertex AI embedContent returned an empty embedding for input ${entry.index} (model ${model})`);
+                }
+                const tokenCount = embedding.statistics?.tokenCount;
+                items[entry.index] = {
+                    outputs: [{ values, modality: entry.input.type }],
+                    input_tokens: tokenCount,
+                };
+                if (typeof tokenCount === "number") {
+                    addInputTokenUsage(usage, tokenCount);
+                }
+            });
+        } catch (error) {
+            if (LlumiverseError.isLlumiverseError(error)) throw error;
+            if (error instanceof Error && typeof (error as any).status !== 'number') throw error;
+            throw driver.formatLlumiverseError(error, {
+                provider: 'vertexai',
+                model,
+                operation: 'execute',
+            });
+        }
     }
 
     return buildEmbeddingsResult(model, items, Object.keys(usage).length > 0 ? usage : undefined);
