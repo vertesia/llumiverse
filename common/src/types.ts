@@ -135,18 +135,12 @@ export const ProviderList: Record<Providers, ProviderParams> = {
 // ============== Embeddings ===============
 
 /**
- * Task type for embedding models that support task-specific embeddings.
- * Provider-specific support varies — see EMBEDDING_MODEL_CAPABILITIES.
+ * Semantic task type for embedding models. Drivers map these to provider-
+ * specific values (e.g. "RETRIEVAL_QUERY" for Vertex, "search_query" for Cohere).
+ * - "query"    — a search query to find relevant documents
+ * - "document" — a document to be indexed and retrieved
  */
-export type EmbeddingTaskType =
-    | "RETRIEVAL_QUERY"
-    | "RETRIEVAL_DOCUMENT"
-    | "SEMANTIC_SIMILARITY"
-    | "CLASSIFICATION"
-    | "CLUSTERING"
-    | "QUESTION_ANSWERING"
-    | "FACT_VERIFICATION"
-    | "CODE_RETRIEVAL_QUERY";
+export type EmbeddingTaskType = "query" | "document";
 
 /**
  * One input to an embedding model. Discriminated by `type`.
@@ -164,10 +158,8 @@ export interface TextEmbeddingInput {
     text: string;
     /** Overrides EmbeddingsOptions.task_type for this input. */
     task_type?: EmbeddingTaskType;
-    /** Document title — Vertex AI uses this with RETRIEVAL_DOCUMENT. */
+    /** Document title hint — used by Vertex AI for RETRIEVAL_DOCUMENT. */
     title?: string;
-    /** Provider-specific input truncation policy. */
-    truncate?: "NONE" | "START" | "END";
 }
 
 export interface ImageEmbeddingInput {
@@ -207,12 +199,8 @@ export interface EmbeddingsOptions {
 
     /** Default task type applied to text inputs that don't set their own. */
     task_type?: EmbeddingTaskType;
-    /** Output dimension truncation (MRL). Vertex/OpenAI/Cohere where supported. */
+    /** Output dimension truncation (MRL). Vertex/OpenAI where supported. */
     dimensions?: number;
-    /** Output vector dtype. Provider support varies. */
-    output_dtype?: "float" | "binary" | "int8";
-    /** Default truncation policy applied to text inputs that don't set their own. */
-    truncate?: "NONE" | "START" | "END";
 }
 
 export interface EmbeddingsResult {
