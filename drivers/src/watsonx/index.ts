@@ -1,7 +1,7 @@
-import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, TextFallbackOptions, normalizeEmbeddingsOptions } from "@llumiverse/core";
+import { AbstractDriver, type AIModel, type Completion, type CompletionChunkObject, type DriverOptions, type EmbeddingsOptions, type EmbeddingsResult, type ExecutionOptions, LlumiverseError, normalizeEmbeddingsOptions, type TextFallbackOptions, WATSONX_DEFAULT_EMBEDDING_MODEL } from "@llumiverse/core";
 import { transformSSEStream } from "@llumiverse/core/async";
 import { FetchClient } from "@vertesia/api-fetch-client";
-import { GenerateEmbeddingPayload, GenerateEmbeddingResponse, WatsonAuthToken, WatsonxListModelResponse, WatsonxModelSpec, WatsonxTextGenerationPayload, WatsonxTextGenerationResponse } from "./interfaces.js";
+import type { GenerateEmbeddingPayload, GenerateEmbeddingResponse, WatsonAuthToken, WatsonxListModelResponse, WatsonxModelSpec, WatsonxTextGenerationPayload, WatsonxTextGenerationResponse } from "./interfaces.js";
 
 interface WatsonxDriverOptions extends DriverOptions {
     apiKey: string;
@@ -168,18 +168,28 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
 
         const payload: GenerateEmbeddingPayload = {
             inputs: texts,
-            model_id: normalized.model ?? 'ibm/slate-125m-english-rtrvr',
+            model_id: normalized.model ?? WATSONX_DEFAULT_EMBEDDING_MODEL,
             project_id: this.projectId,
         };
 
-        const res = await this.fetchClient.post(`/ml/v1/text/embeddings?version=${API_VERSION}`, { payload }) as GenerateEmbeddingResponse;
-
-        return {
-            model: res.model_id,
-            results: res.results.map((entry) => ({
-                outputs: [{ values: entry.embedding, modality: "text" }],
-            })),
-        };
+        const model = payload.model_id;
+        try {
+            const res = await this.fetchClient.post(`/ml/v1/text/embeddings?version=${API_VERSION}`, { payload }) as GenerateEmbeddingResponse;
+            return {
+                model: res.model_id,
+                results: res.results.map((entry) => ({
+                    outputs: [{ values: entry.embedding, modality: "text" }],
+                })),
+            };
+        } catch (error) {
+            if (LlumiverseError.isLlumiverseError(error)) throw error;
+            if (error instanceof Error && typeof (error as any).status !== 'number') throw error;
+            throw this.formatLlumiverseError(error, {
+                provider: this.provider,
+                model,
+                operation: 'execute',
+            });
+        }
     }
 
 }

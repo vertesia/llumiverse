@@ -9,7 +9,6 @@ import {
     type EmbeddingResultItem,
     type EmbeddingsOptions,
     type EmbeddingsResult,
-    normalizeEmbeddingsOptions,
     type ExecutionOptions,
     type ExecutionTokenUsage,
     getConversationMeta,
@@ -20,6 +19,8 @@ import {
     type LlumiverseErrorContext,
     modelModalitiesToArray,
     ModelType,
+    normalizeEmbeddingsOptions,
+    OPENAI_DEFAULT_EMBEDDING_MODEL,
     type OpenAiDalleOptions,
     type OpenAiGptImageOptions,
     type Providers,
@@ -439,7 +440,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         const aiModels = models.map((m) => {
             const modelCapability = getModelCapabilities(m.id, "openai");
             let owner = m.owned_by;
-            if (owner == "system") {
+            if (owner === "system") {
                 owner = "openai";
             }
 
@@ -468,7 +469,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
     async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
         const normalized = normalizeEmbeddingsOptions(options);
-        const model = normalized.model ?? "text-embedding-3-small";
+        const model = normalized.model ?? OPENAI_DEFAULT_EMBEDDING_MODEL;
 
         const texts: string[] = normalized.inputs.map((input) => {
             if (input.type !== "text") {
@@ -477,32 +478,38 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             return input.text;
         });
 
-        if (normalized.output_dtype && normalized.output_dtype !== "float") {
-            throw new Error(`OpenAI embeddings do not support output_dtype '${normalized.output_dtype}'`);
+        try {
+            const res = await this.service.embeddings.create({
+                input: texts,
+                model,
+                ...(normalized.dimensions ? { dimensions: normalized.dimensions } : {}),
+                encoding_format: "float",
+            });
+
+            // OpenAI does not guarantee data is returned in the same order as the input,
+            // but does return a stable `index` per item. Sort by index to align with inputs.
+            const ordered = [...res.data].sort((a, b) => a.index - b.index);
+            const items = ordered.map((entry): EmbeddingResultItem => {
+                if (!entry.embedding || entry.embedding.length === 0) {
+                    throw new Error(`OpenAI embedding empty for input index ${entry.index}`);
+                }
+                return { outputs: [{ values: entry.embedding, modality: "text" }] };
+            });
+
+            const usage = res.usage
+                ? { input_tokens: res.usage.prompt_tokens, input_text_tokens: res.usage.prompt_tokens }
+                : undefined;
+
+            return { model, results: items, usage };
+        } catch (error) {
+            if (LlumiverseError.isLlumiverseError(error)) throw error;
+            if (error instanceof Error && typeof (error as any).status !== 'number') throw error;
+            throw this.formatLlumiverseError(error, {
+                provider: this.provider,
+                model,
+                operation: 'execute',
+            });
         }
-
-        const res = await this.service.embeddings.create({
-            input: texts,
-            model,
-            ...(normalized.dimensions ? { dimensions: normalized.dimensions } : {}),
-            encoding_format: "float",
-        });
-
-        // OpenAI does not guarantee data is returned in the same order as the input,
-        // but does return a stable `index` per item. Sort by index to align with inputs.
-        const ordered = [...res.data].sort((a, b) => a.index - b.index);
-        const items = ordered.map((entry): EmbeddingResultItem => {
-            if (!entry.embedding || entry.embedding.length === 0) {
-                throw new Error(`OpenAI embedding empty for input index ${entry.index}`);
-            }
-            return { outputs: [{ values: entry.embedding, modality: "text" }] };
-        });
-
-        const usage = res.usage
-            ? { input_tokens: res.usage.prompt_tokens, input_text_tokens: res.usage.prompt_tokens }
-            : undefined;
-
-        return { model, results: items, usage };
     }
 
     imageModels = ["dall-e", "gpt-image", "chatgpt-image"];
@@ -1233,7 +1240,7 @@ function openAISchemaFormat(schema: JSONSchema, nesting: number = 0): JSONSchema
             }
         }
     }
-    if (formattedSchema?.type === 'object' && (!formattedSchema?.properties || Object.keys(formattedSchema?.properties ?? {}).length == 0)) {
+    if (formattedSchema?.type === 'object' && (!formattedSchema?.properties || Object.keys(formattedSchema?.properties ?? {}).length === 0)) {
         //If no properties are defined, then additionalProperties: true was set or the object would be empty.
         //OpenAI does not support this on structured output/ strict mode.
         throw new Error("OpenAI does not support empty objects or objects with additionalProperties set to true");
