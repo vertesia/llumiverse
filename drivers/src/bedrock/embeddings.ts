@@ -1,7 +1,10 @@
+import { BEDROCK_DEFAULT_EMBEDDING_MODEL } from "@llumiverse/common";
 import {
     type AudioEmbeddingInput,
     Base64DataSource,
+    buildEmbeddingsResult,
     type DataSource,
+    dataSourceToBase64,
     type EmbeddingInput,
     type EmbeddingOutput,
     type EmbeddingResultItem,
@@ -9,15 +12,12 @@ import {
     type EmbeddingsResult,
     type EmbeddingTaskType,
     type ImageEmbeddingInput,
+    LlumiverseError,
     type TextEmbeddingInput,
     type VideoEmbeddingInput,
-    buildEmbeddingsResult,
-    dataSourceToBase64,
 } from "@llumiverse/core";
 import type { BedrockDriver } from "./index.js";
 import type { TwelvelabsMarengoRequest, TwelvelabsMarengoResponse } from "./twelvelabs.js";
-
-const DEFAULT_MODEL = "amazon.nova-2-multimodal-embeddings-v1:0";
 
 interface BedrockMediaSource {
     base64String?: string;
@@ -87,7 +87,6 @@ interface NovaEmbeddingRequest {
     inputImage?: { format?: string; source: { bytes: string } };
     inputVideo?: { format?: string; source: { bytes?: string; s3Location?: { uri: string } } };
     inputAudio?: { format?: string; source: { bytes?: string; s3Location?: { uri: string } } };
-    embeddingTypes?: ("float" | "binary")[];
     embeddingOutputDimensions?: number;
     segmentationConfig?: { startOffsetSec?: number; endOffsetSec?: number; intervalSec?: number };
 }
@@ -98,11 +97,6 @@ interface NovaEmbeddingResponse {
     inputTextTokenCount?: number;
 }
 
-function novaEmbeddingTypes(options: EmbeddingsOptions): ("float" | "binary")[] | undefined {
-    if (options.output_dtype === "float") return ["float"];
-    if (options.output_dtype === "binary") return ["binary"];
-    return undefined;
-}
 
 async function novaInputForText(input: TextEmbeddingInput): Promise<NovaEmbeddingRequest> {
     return { inputType: "text", inputText: input.text };
@@ -166,7 +160,6 @@ async function generateNovaEmbeddings(
     options: EmbeddingsOptions,
     modelId: string,
 ): Promise<EmbeddingsResult> {
-    const embeddingTypes = novaEmbeddingTypes(options);
     const items: EmbeddingResultItem[] = [];
     let totalTextTokens: number | undefined;
 
@@ -174,7 +167,6 @@ async function generateNovaEmbeddings(
         const baseRequest = await buildNovaInput(input);
         const request: NovaEmbeddingRequest = {
             ...baseRequest,
-            ...(embeddingTypes ? { embeddingTypes } : {}),
             ...(options.dimensions ? { embeddingOutputDimensions: options.dimensions } : {}),
         };
         const response = await invokeJson<NovaEmbeddingResponse>(driver, modelId, request);
@@ -258,38 +250,18 @@ interface CohereEmbeddingRequest {
     texts?: string[];
     images?: string[];
     input_type?: string;
-    embedding_types?: string[];
-    truncate?: "NONE" | "LEFT" | "RIGHT";
 }
 
 interface CohereEmbeddingResponse {
-    embeddings:
-        | number[][]
-        | { float?: number[][]; int8?: number[][]; uint8?: number[][]; binary?: number[][]; ubinary?: number[][] };
+    embeddings: number[][];
     texts?: string[];
     response_type?: string;
 }
 
 function cohereInputType(taskType: EmbeddingTaskType | undefined): string | undefined {
     switch (taskType) {
-        case "RETRIEVAL_QUERY": return "search_query";
-        case "RETRIEVAL_DOCUMENT": return "search_document";
-        case "CLASSIFICATION": return "classification";
-        case "CLUSTERING": return "clustering";
-        default: return undefined;
-    }
-}
-
-function cohereEmbeddingTypes(dtype: EmbeddingsOptions["output_dtype"]): string[] | undefined {
-    if (!dtype) return undefined;
-    return [dtype];
-}
-
-function cohereTruncate(truncate: EmbeddingsOptions["truncate"]): "NONE" | "LEFT" | "RIGHT" | undefined {
-    switch (truncate) {
-        case "NONE": return "NONE";
-        case "START": return "LEFT";
-        case "END": return "RIGHT";
+        case "query": return "search_query";
+        case "document": return "search_document";
         default: return undefined;
     }
 }
@@ -309,20 +281,15 @@ async function generateCohereEmbeddings(
 
     const items = new Array<EmbeddingResultItem>(options.inputs.length);
     const inputType = cohereInputType(options.task_type);
-    const embeddingTypes = cohereEmbeddingTypes(options.output_dtype);
-    const truncate = cohereTruncate(options.truncate);
 
     if (textInputs.length > 0) {
         const body: CohereEmbeddingRequest = {
             texts: textInputs.map((t) => t.input.text),
             input_type: inputType,
-            embedding_types: embeddingTypes,
-            truncate,
         };
         const res = await invokeJson<CohereEmbeddingResponse>(driver, modelId, body);
-        const vectors = pickCohereVectors(res, options.output_dtype);
         textInputs.forEach((entry, i) => {
-            items[entry.index] = { outputs: [{ values: vectors[i], modality: "text" }] };
+            items[entry.index] = { outputs: [{ values: res.embeddings[i], modality: "text" }] };
         });
     }
 
@@ -331,28 +298,14 @@ async function generateCohereEmbeddings(
         const body: CohereEmbeddingRequest = {
             images: base64Images,
             input_type: inputType ?? "image",
-            embedding_types: embeddingTypes,
         };
         const res = await invokeJson<CohereEmbeddingResponse>(driver, modelId, body);
-        const vectors = pickCohereVectors(res, options.output_dtype);
         imageInputs.forEach((entry, i) => {
-            items[entry.index] = { outputs: [{ values: vectors[i], modality: "image" }] };
+            items[entry.index] = { outputs: [{ values: res.embeddings[i], modality: "image" }] };
         });
     }
 
     return buildEmbeddingsResult(modelId, items);
-}
-
-function pickCohereVectors(
-    response: CohereEmbeddingResponse,
-    dtype: EmbeddingsOptions["output_dtype"],
-): number[][] {
-    if (Array.isArray(response.embeddings)) return response.embeddings;
-    const map = response.embeddings;
-    if (dtype === "binary" && map.binary) return map.binary;
-    if (dtype === "int8" && map.int8) return map.int8;
-    if (dtype === "float" && map.float) return map.float;
-    return map.float ?? map.int8 ?? map.uint8 ?? map.binary ?? map.ubinary ?? [];
 }
 
 // =================== TwelveLabs Marengo ===================
@@ -431,15 +384,24 @@ export async function generateBedrockEmbeddings(
     driver: BedrockDriver,
     options: EmbeddingsOptions,
 ): Promise<EmbeddingsResult> {
-    const modelId = options.model ?? DEFAULT_MODEL;
-    if (modelId.includes("twelvelabs.marengo")) {
-        return generateMarengoEmbeddings(driver, options, modelId);
+    const modelId = options.model ?? BEDROCK_DEFAULT_EMBEDDING_MODEL;
+    try {
+        if (modelId.includes("twelvelabs.marengo")) {
+            return await generateMarengoEmbeddings(driver, options, modelId);
+        }
+        if (modelId.startsWith("cohere.embed")) {
+            return await generateCohereEmbeddings(driver, options, modelId);
+        }
+        if (modelId.includes("titan-embed")) {
+            return await generateTitanEmbeddings(driver, options, modelId);
+        }
+        return await generateNovaEmbeddings(driver, options, modelId);
+    } catch (error) {
+        if (LlumiverseError.isLlumiverseError(error)) throw error;
+        throw driver.formatLlumiverseError(error, {
+            provider: 'bedrock',
+            model: modelId,
+            operation: 'execute',
+        });
     }
-    if (modelId.startsWith("cohere.embed")) {
-        return generateCohereEmbeddings(driver, options, modelId);
-    }
-    if (modelId.includes("titan-embed")) {
-        return generateTitanEmbeddings(driver, options, modelId);
-    }
-    return generateNovaEmbeddings(driver, options, modelId);
 }
