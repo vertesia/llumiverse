@@ -570,10 +570,15 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 tool_use = collectToolUseParts(content);
 
                 // For recoverable tool call issues, log warning but continue processing
-                // The workflow will handle the invalid tool call gracefully
+                // The workflow will handle the invalid tool call gracefully.
+                // Route through the driver's structured logger instead of `console.warn`
+                // so downstream runtimes (e.g. Cloud Run) don't promote stderr writes
+                // to ERROR severity for what is, by definition, a recoverable event.
                 if (isRecoverableToolCall && tool_use && tool_use.length > 0) {
-                    console.warn(`[Gemini] Recoverable tool call issue (${candidate.finishReason}): ` +
-                        `Model tried to call undeclared tool(s): ${tool_use.map(t => t.tool_name).join(', ')}`);
+                    driver.logger.warn(
+                        `[Gemini] Recoverable tool call issue (${candidate.finishReason}): ` +
+                        `Model tried to call undeclared tool(s): ${tool_use.map(t => t.tool_name).join(', ')}`,
+                    );
                 }
 
                 result = extractCompletionResults(content);
@@ -677,10 +682,15 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                         tool_use = collectToolUseParts(candidate.content);
                         if (tool_use) {
                             finish_reason = "tool_use";
-                            // Log warning for recoverable tool call issues
+                            // Log warning for recoverable tool call issues — see the
+                            // matching site in `requestTextCompletion` above for why
+                            // we route through the driver's logger instead of
+                            // `console.warn`.
                             if (isRecoverableToolCall) {
-                                console.warn(`[Gemini] Recoverable tool call issue (${candidate.finishReason}): ` +
-                                    `Model tried to call undeclared tool(s): ${tool_use.map(t => t.tool_name).join(', ')}`);
+                                driver.logger.warn(
+                                    `[Gemini] Recoverable tool call issue (${candidate.finishReason}): ` +
+                                    `Model tried to call undeclared tool(s): ${tool_use.map(t => t.tool_name).join(', ')}`,
+                                );
                             }
                         }
                         return {
