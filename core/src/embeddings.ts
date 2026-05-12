@@ -1,19 +1,15 @@
 import {
-    DataSource,
-    EmbeddingInput,
-    EmbeddingResultItem,
-    EmbeddingsOptions,
-    EmbeddingsResult,
-    EmbeddingTaskType,
-    TextEmbeddingInput,
+    type DataSource,
+    type EmbeddingInput,
+    type EmbeddingResultItem,
+    type EmbeddingsOptions,
+    type EmbeddingsResult,
+    type EmbeddingTaskType,
+    type TextEmbeddingInput,
 } from "@llumiverse/common";
 import { readStreamAsBase64, readStreamAsUint8Array } from "./stream.js";
 
-/**
- * DataSource wrapping an in-memory base64 string. Useful for callers that
- * receive base64 over the wire (e.g. an HTTP API) and need to feed it into
- * a driver that expects a DataSource.
- */
+/** DataSource wrapping an in-memory base64 string. */
 export class Base64DataSource implements DataSource {
     constructor(
         public readonly name: string,
@@ -87,10 +83,7 @@ export async function dataSourceToBytes(ds: DataSource): Promise<Uint8Array> {
     return readStreamAsUint8Array(await ds.getStream());
 }
 
-/**
- * Convenience accessor for the common case where the caller embedded a
- * single text or image input and wants the first vector back.
- */
+/** Returns the first vector from a single-input EmbeddingsResult. */
 export function firstVector(result: EmbeddingsResult): number[] {
     const first = result.results[0]?.outputs[0]?.values;
     if (!first) {
@@ -101,8 +94,7 @@ export function firstVector(result: EmbeddingsResult): number[] {
 
 /**
  * Validate an EmbeddingsOptions object and return a normalized copy where:
- * - request-level task_type and truncate are propagated to text inputs
- *   that don't define their own
+ * - request-level task_type is propagated to text inputs that don't define their own
  * - inputs is guaranteed non-empty
  *
  * Drivers should call this before doing any provider-specific work.
@@ -118,7 +110,6 @@ export function normalizeEmbeddingsOptions(options: EmbeddingsOptions): Embeddin
             return {
                 ...text,
                 task_type: text.task_type ?? options.task_type,
-                truncate: text.truncate ?? options.truncate,
             } satisfies TextEmbeddingInput;
         }
         return input;
