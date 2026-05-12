@@ -1,11 +1,11 @@
-import {
-    type DataSource,
-    type EmbeddingInput,
-    type EmbeddingResultItem,
-    type EmbeddingsOptions,
-    type EmbeddingsResult,
-    type EmbeddingTaskType,
-    type TextEmbeddingInput,
+import type {
+    DataSource,
+    EmbeddingInput,
+    EmbeddingResultItem,
+    EmbeddingsOptions,
+    EmbeddingsResult,
+    EmbeddingTaskType,
+    TextEmbeddingInput,
 } from "@llumiverse/common";
 import { readStreamAsBase64, readStreamAsUint8Array } from "./stream.js";
 
@@ -15,7 +15,7 @@ export class Base64DataSource implements DataSource {
         public readonly name: string,
         public readonly mime_type: string,
         private readonly base64: string,
-    ) {}
+    ) { }
 
     async getStream(): Promise<ReadableStream<Uint8Array>> {
         const bytes = Buffer.from(this.base64, "base64");
@@ -47,7 +47,7 @@ export class URLDataSource implements DataSource {
         public readonly name: string,
         public readonly mime_type: string,
         private readonly url: string,
-    ) {}
+    ) { }
 
     async getStream(): Promise<ReadableStream<Uint8Array>> {
         const response = await fetch(this.url);
