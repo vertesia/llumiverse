@@ -31,8 +31,7 @@ import {
     stripBinaryFromConversation,
     stripHeartbeatsFromConversation,
     type TextFallbackOptions, type ToolDefinition, type ToolUse, type TrainingJob, TrainingJobStatus, type TrainingOptions,
-    truncateLargeTextInConversation,
-    normalizeEmbeddingsOptions
+    truncateLargeTextInConversation
 } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { formatNovaPrompt, type NovaMessagesPrompt } from "@llumiverse/core/formatters";
@@ -1367,9 +1366,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
-        const normalized = normalizeEmbeddingsOptions(options);
-        this.logger.info(`[Bedrock] Generating embeddings with model ${normalized.model ?? "(default)"} for ${normalized.inputs.length} input(s)`);
-        return generateBedrockEmbeddings(this, normalized);
+        return generateBedrockEmbeddings(this, options);
     }
 
     /**

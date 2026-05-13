@@ -12,6 +12,7 @@ import {
     type EmbeddingTaskType,
     type ImageEmbeddingInput,
     LlumiverseError,
+    normalizeEmbeddingsOptions,
     type TextEmbeddingInput,
 } from "@llumiverse/core";
 import type { BedrockDriver } from "./index.js";
@@ -38,12 +39,25 @@ function isS3Url(url: string): boolean {
     }
 }
 
+/**
+ * Converts an S3 HTTPS URL to s3:// URI form. Handles both addressing styles:
+ *   virtual-hosted: https://bucket.s3[.region].amazonaws.com/key
+ *   path-style:     https://s3[.region].amazonaws.com/bucket/key
+ */
 function toS3Uri(url: string): string {
     if (url.startsWith("s3://")) return url;
     const parsed = new URL(url);
-    const bucketMatch = parsed.hostname.match(/^(?:s3\.)?([^.]+)\.s3\./);
-    const bucket = bucketMatch ? bucketMatch[1] : parsed.hostname.split(".")[0];
-    const key = parsed.pathname.replace(/^\/+/, "");
+    // Virtual-hosted style: bucket.s3[.region].amazonaws.com
+    const virtualHostedMatch = parsed.hostname.match(/^([^.]+)\.s3(?:\.[a-z0-9-]+)?\.amazonaws\.com$/);
+    if (virtualHostedMatch) {
+        const bucket = virtualHostedMatch[1];
+        const key = parsed.pathname.replace(/^\/+/, "");
+        return `s3://${bucket}/${key}`;
+    }
+    // Path-style: s3[.region].amazonaws.com/bucket/key
+    const pathParts = parsed.pathname.replace(/^\/+/, "").split("/");
+    const bucket = pathParts[0];
+    const key = pathParts.slice(1).join("/");
     return `s3://${bucket}/${key}`;
 }
 
@@ -56,11 +70,6 @@ async function dataSourceToBedrockMediaSource(ds: DataSource): Promise<BedrockMe
         return { base64String: ds.getBase64() };
     }
     return { base64String: await dataSourceToBase64(ds) };
-}
-
-async function readDataSourceAsBase64(ds: DataSource): Promise<string> {
-    if (ds instanceof Base64DataSource) return ds.getBase64();
-    return dataSourceToBase64(ds);
 }
 
 async function invokeJson<R>(
@@ -241,7 +250,7 @@ async function generateTitanEmbeddings(
         if (isImageModel) {
             const body: TitanImageRequest = {};
             if (input.type === "text") body.inputText = input.text;
-            if (input.type === "image") body.inputImage = await readDataSourceAsBase64(input.source);
+            if (input.type === "image") body.inputImage = await dataSourceToBase64(input.source);
             if (options.dimensions) body.embeddingConfig = { outputEmbeddingLength: options.dimensions };
             const res = await invokeJson<TitanImageResponse>(driver, modelId, body);
             if (res.message) throw new Error(`Titan image embedding error: ${res.message}`);
@@ -255,6 +264,7 @@ async function generateTitanEmbeddings(
             const body: TitanTextRequest = { inputText: input.text };
             if (options.dimensions) body.dimensions = options.dimensions;
             const res = await invokeJson<TitanTextResponse>(driver, modelId, body);
+            if (!res.embedding) throw new Error(`Titan text embedding response missing 'embedding' (model ${modelId})`);
             items.push({ outputs: [{ values: res.embedding, modality: "text" }], input_tokens: res.inputTextTokenCount });
             if (typeof res.inputTextTokenCount === "number") totalTokens = (totalTokens ?? 0) + res.inputTextTokenCount;
         }
@@ -314,6 +324,12 @@ async function generateCohereEmbeddings(
             input_type: groupInputType,
         };
         const res = await invokeJson<CohereEmbeddingResponse>(driver, modelId, body);
+        if (res.embeddings.length !== group.length) {
+            driver.logger.warn(
+                `[Bedrock/Cohere] Embedding count mismatch: expected ${group.length}, got ${res.embeddings.length} (model ${modelId})`,
+            );
+            throw new Error(`Cohere returned ${res.embeddings.length} embeddings for ${group.length} texts (model ${modelId})`);
+        }
         group.forEach((entry, i) => {
             items[entry.index] = { outputs: [{ values: res.embeddings[i], modality: "text" }] };
         });
@@ -321,10 +337,13 @@ async function generateCohereEmbeddings(
 
     // Cohere accepts exactly one image per call; images must be data URIs.
     for (const entry of imageInputs) {
-        const base64 = await readDataSourceAsBase64(entry.input.source);
+        const base64 = await dataSourceToBase64(entry.input.source);
         const dataUri = `data:${entry.input.source.mime_type};base64,${base64}`;
         const body: CohereEmbeddingRequest = { images: [dataUri], input_type: "image" };
         const res = await invokeJson<CohereEmbeddingResponse>(driver, modelId, body);
+        if (!res.embeddings[0]) {
+            throw new Error(`Cohere returned no embedding for image input (model ${modelId})`);
+        }
         items[entry.index] = { outputs: [{ values: res.embeddings[0], modality: "image" }] };
     }
 
@@ -386,8 +405,19 @@ async function buildMarengoRequest(input: EmbeddingInput): Promise<TwelvelabsMar
             if (input.length_sec !== undefined) request.lengthSec = input.length_sec;
             if (input.use_fixed_length_sec !== undefined) request.useFixedLengthSec = input.use_fixed_length_sec;
             if (input.min_clip_sec !== undefined) request.minClipSec = input.min_clip_sec;
-            if (input.embedding_option && input.embedding_option.length === 1) {
-                request.embeddingOption = input.embedding_option[0];
+            // Marengo accepts at most one embedding_option per request.
+            // For multiple views (e.g. visual-text + audio), submit separate inputs — one per option.
+            if (input.embedding_option) {
+                if (input.embedding_option.length > 1) {
+                    throw new Error(
+                        `Marengo accepts only one embedding_option per request; ` +
+                        `received [${input.embedding_option.join(", ")}]. ` +
+                        `Submit separate inputs, one per option.`,
+                    );
+                }
+                if (input.embedding_option.length === 1) {
+                    request.embeddingOption = input.embedding_option[0];
+                }
             }
             return request;
         }
@@ -407,18 +437,20 @@ export async function generateBedrockEmbeddings(
     driver: BedrockDriver,
     options: EmbeddingsOptions,
 ): Promise<EmbeddingsResult> {
-    const modelId = options.model ?? BEDROCK_DEFAULT_EMBEDDING_MODEL;
+    const normalized = normalizeEmbeddingsOptions(options);
+    const modelId = normalized.model ?? BEDROCK_DEFAULT_EMBEDDING_MODEL;
+    driver.logger.info(`[Bedrock] Generating embeddings with model ${modelId} for ${normalized.inputs.length} input(s)`);
     try {
         if (modelId.includes("twelvelabs.marengo")) {
-            return await generateMarengoEmbeddings(driver, options, modelId);
+            return await generateMarengoEmbeddings(driver, normalized, modelId);
         }
         if (modelId.startsWith("cohere.embed")) {
-            return await generateCohereEmbeddings(driver, options, modelId);
+            return await generateCohereEmbeddings(driver, normalized, modelId);
         }
         if (modelId.includes("titan-embed")) {
-            return await generateTitanEmbeddings(driver, options, modelId);
+            return await generateTitanEmbeddings(driver, normalized, modelId);
         }
-        return await generateNovaEmbeddings(driver, options, modelId);
+        return await generateNovaEmbeddings(driver, normalized, modelId);
     } catch (error) {
         if (LlumiverseError.isLlumiverseError(error)) throw error;
         throw driver.formatLlumiverseError(error, {

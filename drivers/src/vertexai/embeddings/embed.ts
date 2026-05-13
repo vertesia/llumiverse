@@ -1,7 +1,6 @@
 import type { Content, EmbedContentConfig, Part } from "@google/genai";
 import { VERTEX_DEFAULT_EMBEDDING_MODEL, VERTEX_MULTIMODAL_EMBEDDING_MODEL } from "@llumiverse/common";
 import {
-    applyTaskTypePrefix,
     buildEmbeddingsResult,
     type DataSource,
     type EmbeddingInput,
@@ -11,6 +10,7 @@ import {
     type EmbeddingsTokenUsage,
     type EmbeddingTaskType,
     LlumiverseError,
+    normalizeEmbeddingsOptions,
     type TextEmbeddingInput,
 } from "@llumiverse/core";
 import type { VertexAIDriver } from "../index.js";
@@ -26,13 +26,21 @@ const TASK_TYPE_PREFIX_MODELS = new Set<string>([
 ]);
 
 /**
- * Documented prompt prefixes for prefix-only models.
- * Maps our simplified task types to Vertex AI prefix strings.
+ * Apply the documented prompt prefix for gemini-embedding-2 (prefix-only model).
+ *
+ * Prefixes per Google docs:
+ *   query    → "task: search result | query: {text}"
+ *   document → "title: {title} | text: {text}"  (uses "none" when title is absent)
  */
-const TASK_TYPE_PREFIX_MAP: Partial<Record<EmbeddingTaskType, string>> = {
-    query: "task: search result | query: ",
-    document: "task: search result | ",
-};
+function buildPrefixText(input: TextEmbeddingInput): string {
+    if (!input.task_type) return input.text;
+    if (input.task_type === "query") {
+        return `task: search result | query: ${input.text}`;
+    }
+    // document
+    const title = input.title ?? "none";
+    return `title: ${title} | text: ${input.text}`;
+}
 
 /**
  * Maps our simplified EmbeddingTaskType to Google's API task type enum string.
@@ -90,9 +98,7 @@ function configSignature(input: EmbeddingInput, viaPrefix: boolean): string {
 
 async function inputToContent(input: EmbeddingInput, viaPrefix: boolean): Promise<Content> {
     if (input.type === "text") {
-        const text = viaPrefix
-            ? applyTaskTypePrefix(input.text, input.task_type, TASK_TYPE_PREFIX_MAP)
-            : input.text;
+        const text = viaPrefix ? buildPrefixText(input) : input.text;
         return { role: "user", parts: [{ text }] };
     }
     return { role: "user", parts: [await dataSourceToPart(input.source)] };
@@ -136,10 +142,11 @@ export async function generateVertexAiEmbeddings(
     driver: VertexAIDriver,
     options: EmbeddingsOptions,
 ): Promise<EmbeddingsResult> {
-    const model = options.model ?? VERTEX_DEFAULT_EMBEDDING_MODEL;
+    const normalized = normalizeEmbeddingsOptions(options);
+    const model = normalized.model ?? VERTEX_DEFAULT_EMBEDDING_MODEL;
 
     if (LEGACY_MULTIMODAL_MODELS.has(model)) {
-        return generateLegacyMultimodalEmbeddings(driver, options);
+        return generateLegacyMultimodalEmbeddings(driver, normalized);
     }
 
     const viaPrefix = TASK_TYPE_PREFIX_MODELS.has(model);
@@ -147,7 +154,7 @@ export async function generateVertexAiEmbeddings(
     const disableGrouping = NON_GROUPING_MODELS.has(model);
 
     const groups = new Map<string, { index: number; input: EmbeddingInput }[]>();
-    options.inputs.forEach((input, index) => {
+    normalized.inputs.forEach((input, index) => {
         const key = disableGrouping ? `single:${index}` : configSignature(input, viaPrefix);
         const group = groups.get(key);
         if (group) {
@@ -158,12 +165,12 @@ export async function generateVertexAiEmbeddings(
     });
 
     const ai = region ? driver.getGoogleGenAIClient(region) : driver.getGoogleGenAIClient();
-    const items = new Array<EmbeddingResultItem>(options.inputs.length);
+    const items = new Array<EmbeddingResultItem>(normalized.inputs.length);
     const usage: EmbeddingsTokenUsage = {};
 
     for (const group of groups.values()) {
         const contents = await Promise.all(group.map((entry) => inputToContent(entry.input, viaPrefix)));
-        const config = configForGroup(group[0].input, viaPrefix, options);
+        const config = configForGroup(group[0].input, viaPrefix, normalized);
 
         try {
             const response = await ai.models.embedContent({ model, contents, config });

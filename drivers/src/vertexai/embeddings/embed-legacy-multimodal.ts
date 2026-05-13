@@ -77,7 +77,9 @@ async function buildLegacyInstance(
         case "video":
             return { instance: { video: await dataSourceToVideoPart(input.source, input) }, modality: "video" };
         case "audio":
-            // multimodalembedding@001 has no dedicated audio modality; route through video
+            // multimodalembedding@001 has no dedicated audio modality; the API treats audio
+            // like video (uses videoEmbeddings in the response). Route through the video path
+            // and preserve the "audio" modality label so callers can identify the outputs.
             return { instance: { video: await dataSourceToVideoPart(input.source, input) }, modality: "audio" };
     }
 }
@@ -193,6 +195,8 @@ export async function generateLegacyMultimodalEmbeddings(
         return buildEmbeddingsResult(model, items);
     } catch (error) {
         if (LlumiverseError.isLlumiverseError(error)) throw error;
+        // @google-cloud/aiplatform uses gRPC, which surfaces errors with a numeric `code`
+        // field rather than `status`. Check both to avoid wrapping plain programming errors.
         if (error instanceof Error && typeof (error as any).status !== 'number' && typeof (error as any).code !== 'number') throw error;
         throw driver.formatLlumiverseError(error, {
             provider: 'vertexai',

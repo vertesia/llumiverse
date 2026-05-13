@@ -173,6 +173,24 @@ describe("generateBedrockEmbeddings — Nova S3 URL passthrough", () => {
         expect(body.singleEmbeddingParams.audio.source.s3Location).toBeDefined();
         expect(body.singleEmbeddingParams.audio.source.bytes).toBeUndefined();
     });
+
+    it("converts path-style HTTPS S3 URL to correct s3:// URI (Nova audio)", async () => {
+        // Regression: path-style https://s3.region.amazonaws.com/bucket/key was previously
+        // mis-converted to s3://s3/bucket/key instead of s3://bucket/key.
+        const { driver, executor } = makeDriver({ embeddings: [{ embeddingType: "AUDIO", embedding: FAKE_VECTOR }] });
+        const ds = new URLDataSource("audio.mp3", "audio/mpeg", "https://s3.us-east-1.amazonaws.com/my-bucket/audio.mp3");
+        await generateBedrockEmbeddings(driver, { inputs: [{ type: "audio", source: ds }] });
+        const body = JSON.parse(executor.invokeModel.mock.calls[0][0].body);
+        expect(body.singleEmbeddingParams.audio.source.s3Location.uri).toBe("s3://my-bucket/audio.mp3");
+    });
+
+    it("converts virtual-hosted HTTPS S3 URL to correct s3:// URI (Nova video)", async () => {
+        const { driver, executor } = makeDriver({ embeddings: [{ embeddingType: "VIDEO", embedding: FAKE_VECTOR }] });
+        const ds = new URLDataSource("vid.mp4", "video/mp4", "https://my-bucket.s3.us-east-1.amazonaws.com/folder/vid.mp4");
+        await generateBedrockEmbeddings(driver, { inputs: [{ type: "video", source: ds }] });
+        const body = JSON.parse(executor.invokeModel.mock.calls[0][0].body);
+        expect(body.singleEmbeddingParams.video.source.s3Location.uri).toBe("s3://my-bucket/folder/vid.mp4");
+    });
 });
 
 // =================== Titan ===================
@@ -218,6 +236,17 @@ describe("generateBedrockEmbeddings — Titan", () => {
                 model: "amazon.titan-embed-text-v2:0",
             }),
         ).rejects.toThrow("do not support 'video' input");
+    });
+
+    it("throws when titan text embedding response has no embedding field", async () => {
+        // Regression: a malformed response (missing 'embedding') should throw, not push undefined.
+        const { driver } = makeDriver({ inputTextTokenCount: 1 }); // no embedding field
+        await expect(
+            generateBedrockEmbeddings(driver, {
+                inputs: [{ type: "text", text: "test" }],
+                model: "amazon.titan-embed-text-v2:0",
+            }),
+        ).rejects.toThrow("missing 'embedding'");
     });
 });
 
@@ -315,6 +344,29 @@ describe("generateBedrockEmbeddings — Cohere task_type mapping", () => {
         const bodies = executor.invokeModel.mock.calls.map((c: { body: string }[]) => JSON.parse(c[0].body));
         const inputTypes = bodies.map((b: { input_type: string }) => b.input_type).sort();
         expect(inputTypes).toEqual(["search_document", "search_query"]);
+    });
+
+    it("throws when Cohere returns fewer embeddings than inputs", async () => {
+        // Cohere returned 0 embeddings for a batch of 1 text — should throw, not silently store undefined.
+        const { driver } = makeDriver({ embeddings: [] });
+        await expect(
+            generateBedrockEmbeddings(driver, {
+                inputs: [{ type: "text", text: "test" }],
+                model: "cohere.embed-english-v3",
+            }),
+        ).rejects.toThrow("Cohere returned 0 embeddings for 1 texts");
+    });
+
+    it("throws when Cohere returns no embedding for image input", async () => {
+        const { driver } = makeDriver({ embeddings: [] });
+        const b64 = Buffer.from("img").toString("base64");
+        const ds = new Base64DataSource("img.jpg", "image/jpeg", b64);
+        await expect(
+            generateBedrockEmbeddings(driver, {
+                inputs: [{ type: "image", source: ds }],
+                model: "cohere.embed-english-v3",
+            }),
+        ).rejects.toThrow("Cohere returned no embedding for image input");
     });
 });
 

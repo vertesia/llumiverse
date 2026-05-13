@@ -91,11 +91,11 @@ describe("generateVertexAiEmbeddings — text embedding (text-embedding-005)", (
 
     it("sets taskType RETRIEVAL_QUERY for task_type 'query'", async () => {
         const { driver, mockEmbedContent } = makeEmbedContentDriver([{ values: FAKE_VECTOR }]);
-        // normalizeEmbeddingsOptions propagates options.task_type to input.task_type before
-        // generateVertexAiEmbeddings is called; mirror that here.
+        // task_type at the options level is now propagated to inputs internally
         await generateVertexAiEmbeddings(driver, {
-            inputs: [{ type: "text", text: "search query", task_type: "query" }],
+            inputs: [{ type: "text", text: "search query" }],
             model: "text-embedding-005",
+            task_type: "query",
         });
 
         const call = mockEmbedContent.mock.calls[0][0];
@@ -140,6 +140,8 @@ describe("generateVertexAiEmbeddings — text embedding (text-embedding-005)", (
         });
 
         expect(mockEmbedContent).toHaveBeenCalledTimes(1);
+        const call = mockEmbedContent.mock.calls[0][0];
+        expect(call.config?.taskType).toBe("RETRIEVAL_DOCUMENT");
         expect(result.results).toHaveLength(2);
         expect(result.results[0].outputs[0].values).toEqual(FAKE_VECTOR);
         expect(result.results[1].outputs[0].values).toEqual([0.4, 0.5]);
@@ -235,7 +237,6 @@ describe("generateVertexAiEmbeddings — gemini-embedding-2 prefix model", () =>
 
     it("prepends task prefix instead of sending taskType config", async () => {
         const { driver, mockEmbedContent } = makeEmbedContentDriver([{ values: FAKE_VECTOR }]);
-        // task_type must be on the input (post-normalization) for prefix-only models
         await generateVertexAiEmbeddings(driver, {
             inputs: [{ type: "text", text: "find something", task_type: "query" }],
             model: "gemini-embedding-2",
@@ -244,23 +245,46 @@ describe("generateVertexAiEmbeddings — gemini-embedding-2 prefix model", () =>
         const call = mockEmbedContent.mock.calls[0][0];
         // Config must NOT contain taskType (prefix-only model)
         expect(call.config?.taskType).toBeUndefined();
-        // Text must be prefixed (prefix map: query → "task: search result | query: ")
+        // Text must be prefixed (query → "task: search result | query: {text}")
         const text: string = call.contents[0].parts[0].text;
-        expect(text).toContain("find something");
-        expect(text).toContain("task:");
+        expect(text).toBe("task: search result | query: find something");
+    });
+
+    it("builds document prefix with title when title is set", async () => {
+        const { driver, mockEmbedContent } = makeEmbedContentDriver([{ values: FAKE_VECTOR }]);
+        await generateVertexAiEmbeddings(driver, {
+            inputs: [{ type: "text", text: "content", task_type: "document", title: "My Doc" }],
+            model: "gemini-embedding-2",
+        });
+
+        const text: string = mockEmbedContent.mock.calls[0][0].contents[0].parts[0].text;
+        expect(text).toBe("title: My Doc | text: content");
+    });
+
+    it("uses 'title: none' when title is absent for document prefix", async () => {
+        const { driver, mockEmbedContent } = makeEmbedContentDriver([{ values: FAKE_VECTOR }]);
+        await generateVertexAiEmbeddings(driver, {
+            inputs: [{ type: "text", text: "content", task_type: "document" }],
+            model: "gemini-embedding-2",
+        });
+
+        const text: string = mockEmbedContent.mock.calls[0][0].contents[0].parts[0].text;
+        expect(text).toBe("title: none | text: content");
     });
 
     it("uses 'global' region client for gemini-embedding-2", async () => {
-        const { driver } = makeEmbedContentDriver([{ values: FAKE_VECTOR }]);
+        const driver = new VertexAIDriver({ project: "test-project", region: "us-central1" });
+        const mockEmbedContent = vi.fn().mockResolvedValue({ embeddings: [{ values: FAKE_VECTOR }] });
+        const getClientSpy = vi.spyOn(driver, "getGoogleGenAIClient").mockReturnValue(
+            { models: { embedContent: mockEmbedContent } } as never,
+        );
+
         await generateVertexAiEmbeddings(driver, {
             inputs: [{ type: "text", text: "x" }],
             model: "gemini-embedding-2",
         });
 
-        const spy = vi.spyOn(driver, "getGoogleGenAIClient");
-        // verify the mock was called — global check is in the implementation;
-        // we trust the unit integration above and just assert the call returned a result
-        expect(driver.getGoogleGenAIClient).toBeDefined();
+        expect(getClientSpy).toHaveBeenCalledWith("global");
     });
 });
 
@@ -357,6 +381,25 @@ describe("generateLegacyMultimodalEmbeddings — multimodalembedding@001", () =>
                 inputs: [{ type: "text", text: "one" }],
             }),
         ).rejects.toThrow(/predictions for .* instances/);
+    });
+});
+
+// =================== Routing from generateVertexAiEmbeddings ===================
+
+describe("generateVertexAiEmbeddings — legacy multimodal routing", () => {
+    beforeEach(() => { vi.restoreAllMocks(); });
+
+    it("routes to legacy predict path when model is multimodalembedding@001", async () => {
+        const { driver, mockPredict } = makeLegacyDriver([{ textEmbedding: FAKE_VECTOR }]);
+        const result = await generateVertexAiEmbeddings(driver, {
+            inputs: [{ type: "text", text: "hello" }],
+            model: "multimodalembedding@001",
+        });
+
+        expect(mockPredict).toHaveBeenCalledTimes(1);
+        expect(result.results).toHaveLength(1);
+        expect(result.results[0].outputs[0].values).toEqual(FAKE_VECTOR);
+        expect(result.results[0].outputs[0].modality).toBe("text");
     });
 });
 

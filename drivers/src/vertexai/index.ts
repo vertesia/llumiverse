@@ -19,7 +19,6 @@ import {
     type LlumiverseErrorContext,
     modelModalitiesToArray,
     type ModelSearchPayload,
-    normalizeEmbeddingsOptions,
     type PromptSegment,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
@@ -733,8 +732,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
-        const normalized = normalizeEmbeddingsOptions(options);
-        return generateVertexAiEmbeddings(this, normalized);
+        return generateVertexAiEmbeddings(this, options);
     }
 
     /**
