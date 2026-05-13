@@ -110,6 +110,14 @@ function requireFormat(map: Record<string, string>, mime: string, label: string)
 /**
  * Synchronous InvokeModel request body for amazon.nova-2-multimodal-embeddings-v1:0.
  * Schema: https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
+ *
+ * Sync limits (InvokeModel): text 8K tokens, image 50 MB S3 / 25 MB inline,
+ * audio/video 30 s / 100 MB S3 / 25 MB inline base64.
+ *
+ * For inputs exceeding these limits, the Bedrock Runtime exposes StartAsyncInvoke:
+ * the caller submits a job and receives an invocationArn, then polls GetAsyncInvoke
+ * until the job completes and reads segmented embeddings from the S3 output bucket.
+ * This is incompatible with a simple await-style interface and is not implemented here.
  */
 
 type NovaEmbeddingPurpose =
@@ -165,6 +173,8 @@ async function buildNovaParams(input: EmbeddingInput): Promise<Omit<NovaSingleEm
             return { audio: { format: requireFormat(MIME_TO_AUDIO_FORMAT, input.source.mime_type, "audio"), source } };
         }
         case "video": {
+            // Sync path supports video up to 30 s / 100 MB via S3 (or 25 MB inline base64).
+            // Longer video requires StartAsyncInvoke with segmentationConfig — not implemented.
             const source = await toNovaSource(input.source);
             return {
                 video: {
