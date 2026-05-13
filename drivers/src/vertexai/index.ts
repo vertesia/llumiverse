@@ -1,36 +1,36 @@
 import type { ClientOptions as AnthropicVertexClientOptions } from "@anthropic-ai/vertex-sdk";
 import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { PredictionServiceClient, v1beta1 } from "@google-cloud/aiplatform";
-import { Content, GoogleGenAI, Model } from "@google/genai";
+import { type Content, GoogleGenAI, type Model } from "@google/genai";
 import {
     AbstractDriver,
-    AIModel,
-    Completion,
-    CompletionChunkObject,
-    CompletionResult,
-    DriverOptions,
-    EmbeddingsOptions,
-    EmbeddingsResult,
-    ExecutionOptions,
+    type AIModel,
+    type Completion,
+    type CompletionChunkObject,
+    type CompletionResult,
+    type DriverOptions,
+    type EmbeddingsOptions,
+    type EmbeddingsResult,
+    type ExecutionOptions,
     getConversationMeta,
     getModelCapabilities,
     incrementConversationTurn,
-    LlumiverseError,
-    LlumiverseErrorContext,
+    type LlumiverseError,
+    type LlumiverseErrorContext,
     modelModalitiesToArray,
-    ModelSearchPayload,
+    type ModelSearchPayload,
     normalizeEmbeddingsOptions,
-    PromptSegment,
+    type PromptSegment,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
     truncateLargeTextInConversation
 } from "@llumiverse/core";
 import { FetchClient } from "@vertesia/api-fetch-client";
-import { AuthClient, GoogleAuth, GoogleAuthOptions } from "google-auth-library";
+import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from "google-auth-library";
 import { generateVertexAiEmbeddings } from "./embeddings/embed.js";
 import { getModelDefinition } from "./models.js";
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from "./models/claude.js";
-import { ImagenModelDefinition, ImagenPrompt } from "./models/imagen.js";
+import { ImagenModelDefinition, type ImagenPrompt } from "./models/imagen.js";
 
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;

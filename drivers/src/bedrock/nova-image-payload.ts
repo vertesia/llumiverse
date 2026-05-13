@@ -1,8 +1,7 @@
-import { ExecutionOptions, NovaCanvasOptions } from "@llumiverse/core";
-import { NovaMessage, NovaMessagesPrompt } from "@llumiverse/core/formatters";
+import type { ExecutionOptions, NovaCanvasOptions } from "@llumiverse/core";
+import type { NovaMessage, NovaMessagesPrompt } from "@llumiverse/core/formatters";
 
 function getFirstImageFromPrompt(prompt: NovaMessage[]) {
-
     const msgImage = prompt.find(m => m.content.find(c => c.image));
     if (!msgImage) {
         return undefined;
@@ -11,9 +10,7 @@ function getFirstImageFromPrompt(prompt: NovaMessage[]) {
     return msgImage.content.find(c => c.image)?.image;
 }
 
-//@ts-ignore
 function getAllImagesFromPrompt(prompt: NovaMessage[]) {
-
     const contentMsg = prompt.filter(m => m.content).map(m => m.content).flat();
     const imgParts = contentMsg.filter(c => c.image);
     if (!imgParts?.length) {
