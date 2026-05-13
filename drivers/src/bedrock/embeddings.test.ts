@@ -1,11 +1,30 @@
 /**
- * Unit tests for Bedrock embedding sub-driver paths.
- * All AWS API calls are mocked — no credentials required.
+ * Bedrock embedding sub-driver tests.
+ *
+ * Default (USE_REAL_API = false): all calls are mocked — no credentials required.
+ * Live mode  (USE_REAL_API = true): a real BedrockDriver is used for the live
+ *   describe block. Requires standard AWS credential resolution in the environment
+ *   (e.g. AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY, an assumed role, or an
+ *   instance / ECS task profile). The models must be enabled in your Bedrock console.
  */
 import { Base64DataSource, URLDataSource } from "@llumiverse/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { generateBedrockEmbeddings } from "./embeddings.js";
 import { BedrockDriver } from "./index.js";
+
+// ── Live-mode toggle ──────────────────────────────────────────────────────────
+/** Set to true to run tests against the real Bedrock API instead of the mock. */
+const USE_REAL_API = false;
+/** AWS region used for live tests. Override with AWS_REGION env var if desired. */
+const LIVE_REGION = process.env.AWS_REGION ?? "us-east-1";
+
+/**
+ * Minimal 8×8 white PNG (base64) used as inline image fixture in live tests.
+ * Small enough to be well inside Bedrock's inline-bytes limits.
+ */
+const TINY_PNG_B64 =
+    "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAADklEQVQI12P4"
+    + "z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg==";
 
 // Minimal fake BedrockRuntime executor
 function makeExecutor(responseBody: unknown) {
@@ -323,4 +342,108 @@ describe("generateBedrockEmbeddings — Nova per-input task_type", () => {
         const body = JSON.parse(executor.invokeModel.mock.calls[0][0].body);
         expect(body.singleEmbeddingParams.embeddingPurpose).toBe("GENERIC_RETRIEVAL");
     });
+});
+
+// =================== Live API tests ===================
+// Skipped unless USE_REAL_API = true.
+// Each test has a 30 s timeout to accommodate cold-start latency.
+
+function makeLiveDriver() {
+    return new BedrockDriver({ region: LIVE_REGION });
+}
+
+function assertVector(values: number[]) {
+    expect(Array.isArray(values)).toBe(true);
+    expect(values.length).toBeGreaterThan(0);
+    expect(values.every((v) => typeof v === "number" && isFinite(v))).toBe(true);
+}
+
+describe.skipIf(!USE_REAL_API)("generateBedrockEmbeddings — live API", () => {
+    it("Nova: text embedding (GENERIC_INDEX)", async () => {
+        const result = await generateBedrockEmbeddings(makeLiveDriver(), {
+            inputs: [{ type: "text", text: "The quick brown fox jumps over the lazy dog" }],
+        });
+        expect(result.results).toHaveLength(1);
+        assertVector(result.results[0].outputs[0].values);
+        expect(result.results[0].outputs[0].modality).toBe("text");
+    }, 30_000);
+
+    it("Nova: text embedding — query purpose (GENERIC_RETRIEVAL)", async () => {
+        const result = await generateBedrockEmbeddings(makeLiveDriver(), {
+            inputs: [{ type: "text", text: "what is the capital of France?" }],
+            task_type: "query",
+        });
+        assertVector(result.results[0].outputs[0].values);
+    }, 30_000);
+
+    it("Nova: image embedding (inline base64)", async () => {
+        const ds = new Base64DataSource("pixel.png", "image/png", TINY_PNG_B64);
+        const result = await generateBedrockEmbeddings(makeLiveDriver(), {
+            inputs: [{ type: "image", source: ds }],
+        });
+        expect(result.results).toHaveLength(1);
+        assertVector(result.results[0].outputs[0].values);
+    }, 30_000);
+
+    it("Nova: dimensions param is respected", async () => {
+        const result = await generateBedrockEmbeddings(makeLiveDriver(), {
+            inputs: [{ type: "text", text: "dimension test" }],
+            dimensions: 256,
+        });
+        assertVector(result.results[0].outputs[0].values);
+        expect(result.results[0].outputs[0].values.length).toBe(256);
+    }, 30_000);
+
+    it("Titan text (titan-embed-text-v2): returns an embedding", async () => {
+        const result = await generateBedrockEmbeddings(makeLiveDriver(), {
+            inputs: [{ type: "text", text: "The quick brown fox" }],
+            model: "amazon.titan-embed-text-v2:0",
+        });
+        expect(result.results).toHaveLength(1);
+        assertVector(result.results[0].outputs[0].values);
+    }, 30_000);
+
+    it("Titan image (titan-embed-image-v1): returns an embedding", async () => {
+        const ds = new Base64DataSource("pixel.png", "image/png", TINY_PNG_B64);
+        const result = await generateBedrockEmbeddings(makeLiveDriver(), {
+            inputs: [{ type: "image", source: ds }],
+            model: "amazon.titan-embed-image-v1",
+        });
+        expect(result.results).toHaveLength(1);
+        assertVector(result.results[0].outputs[0].values);
+    }, 30_000);
+
+    it("Cohere English (cohere.embed-english-v3): returns a text embedding", async () => {
+        const result = await generateBedrockEmbeddings(makeLiveDriver(), {
+            inputs: [{ type: "text", text: "The quick brown fox" }],
+            model: "cohere.embed-english-v3",
+            task_type: "document",
+        });
+        expect(result.results).toHaveLength(1);
+        assertVector(result.results[0].outputs[0].values);
+    }, 30_000);
+
+    it("Cohere English: batches multiple texts in one call", async () => {
+        const result = await generateBedrockEmbeddings(makeLiveDriver(), {
+            inputs: [
+                { type: "text", text: "first document" },
+                { type: "text", text: "second document" },
+            ],
+            model: "cohere.embed-english-v3",
+            task_type: "document",
+        });
+        expect(result.results).toHaveLength(2);
+        assertVector(result.results[0].outputs[0].values);
+        assertVector(result.results[1].outputs[0].values);
+    }, 30_000);
+
+    it("Cohere Multilingual (cohere.embed-multilingual-v3): returns a text embedding", async () => {
+        const result = await generateBedrockEmbeddings(makeLiveDriver(), {
+            inputs: [{ type: "text", text: "Le renard brun rapide" }],
+            model: "cohere.embed-multilingual-v3",
+            task_type: "document",
+        });
+        expect(result.results).toHaveLength(1);
+        assertVector(result.results[0].outputs[0].values);
+    }, 30_000);
 });
