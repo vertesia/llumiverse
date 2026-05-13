@@ -8,6 +8,7 @@
  *   environment (e.g. `gcloud auth application-default login`) and the models
  *   enabled in your Vertex AI project.
  */
+import { helpers } from "@google-cloud/aiplatform";
 import { Base64DataSource, URLDataSource } from "@llumiverse/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { VertexAIDriver } from "../index.js";
@@ -54,7 +55,6 @@ function makeLegacyDriver(predictions: Array<Record<string, unknown>>) {
     const driver = new VertexAIDriver({ project: "test-project", region: "us-central1" });
 
     // Encode predictions as Protobuf Struct values via @google-cloud/aiplatform helpers
-    const { helpers } = require("@google-cloud/aiplatform");
     const encoded = predictions.map((p) => helpers.toValue(p));
 
     const mockPredict = vi.fn().mockResolvedValue([{ predictions: encoded }]);
