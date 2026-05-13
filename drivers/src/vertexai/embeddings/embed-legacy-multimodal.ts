@@ -197,7 +197,9 @@ export async function generateLegacyMultimodalEmbeddings(
         if (LlumiverseError.isLlumiverseError(error)) throw error;
         // @google-cloud/aiplatform uses gRPC, which surfaces errors with a numeric `code`
         // field rather than `status`. Check both to avoid wrapping plain programming errors.
-        if (error instanceof Error && typeof (error as any).status !== 'number' && typeof (error as any).code !== 'number') throw error;
+        if (error instanceof Error
+            && typeof (error as { status?: unknown }).status !== 'number'
+            && typeof (error as { code?: unknown }).code !== 'number') throw error;
         throw driver.formatLlumiverseError(error, {
             provider: 'vertexai',
             model,

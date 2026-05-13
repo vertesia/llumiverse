@@ -42,11 +42,10 @@ function buildPrefixText(input: TextEmbeddingInput): string {
     return `title: ${title} | text: ${input.text}`;
 }
 
-/**
- * Maps our simplified EmbeddingTaskType to Google's API task type enum string.
- * Used for SDK-based models that accept taskType as a parameter.
- */
-function toGoogleTaskType(taskType: EmbeddingTaskType | undefined): string | undefined {
+/** Maps llumiverse task types to Google's embedContent taskType strings. */
+type GoogleEmbedTaskType = "RETRIEVAL_QUERY" | "RETRIEVAL_DOCUMENT";
+
+function toGoogleTaskType(taskType: EmbeddingTaskType | undefined): GoogleEmbedTaskType | undefined {
     switch (taskType) {
         case "query": return "RETRIEVAL_QUERY";
         case "document": return "RETRIEVAL_DOCUMENT";
@@ -198,7 +197,7 @@ export async function generateVertexAiEmbeddings(
             });
         } catch (error) {
             if (LlumiverseError.isLlumiverseError(error)) throw error;
-            if (error instanceof Error && typeof (error as any).status !== 'number') throw error;
+            if (error instanceof Error && typeof (error as { status?: unknown }).status !== 'number') throw error;
             throw driver.formatLlumiverseError(error, {
                 provider: 'vertexai',
                 model,

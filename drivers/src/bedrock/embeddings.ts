@@ -84,8 +84,8 @@ async function invokeJson<R>(
         accept: "application/json",
         body: JSON.stringify(body),
     });
-    const decoder = new TextDecoder();
-    return JSON.parse(decoder.decode(res.body)) as R;
+    if (!res.body) throw new Error(`InvokeModel returned empty response body for model: ${modelId}`);
+    return JSON.parse(new TextDecoder().decode(res.body)) as R;
 }
 
 // ── Shared format lookup maps ───────────────────────────────────────────────
@@ -276,10 +276,12 @@ async function generateTitanEmbeddings(
 
 // =================== Cohere ===================
 
+type CohereInputType = "search_query" | "search_document" | "image";
+
 interface CohereEmbeddingRequest {
     texts?: string[];
     images?: string[];
-    input_type?: string;
+    input_type?: CohereInputType;
 }
 
 interface CohereEmbeddingResponse {
@@ -288,7 +290,7 @@ interface CohereEmbeddingResponse {
     response_type?: string;
 }
 
-function cohereInputType(taskType: EmbeddingTaskType | undefined): string | undefined {
+function cohereInputType(taskType: EmbeddingTaskType | undefined): CohereInputType | undefined {
     switch (taskType) {
         case "query": return "search_query";
         case "document": return "search_document";
@@ -312,7 +314,7 @@ async function generateCohereEmbeddings(
     const items = new Array<EmbeddingResultItem>(options.inputs.length);
 
     // Group texts by their effective input_type so per-input task_type overrides are respected.
-    const textGroups = new Map<string | undefined, { index: number; input: TextEmbeddingInput }[]>();
+    const textGroups = new Map<CohereInputType | undefined, { index: number; input: TextEmbeddingInput }[]>();
     for (const entry of textInputs) {
         const key = cohereInputType(entry.input.task_type ?? options.task_type);
         if (!textGroups.has(key)) textGroups.set(key, []);
@@ -352,6 +354,12 @@ async function generateCohereEmbeddings(
 
 // =================== TwelveLabs Marengo ===================
 
+/** Marengo returns either a bare segment object or an envelope { embeddings: [...] }. */
+type MarengoApiResponse = TwelvelabsMarengoResponse | { embeddings: TwelvelabsMarengoResponse[] };
+function isMarengoEnvelope(r: MarengoApiResponse): r is { embeddings: TwelvelabsMarengoResponse[] } {
+    return Array.isArray((r as { embeddings?: unknown }).embeddings);
+}
+
 async function generateMarengoEmbeddings(
     driver: BedrockDriver,
     options: EmbeddingsOptions,
@@ -361,15 +369,8 @@ async function generateMarengoEmbeddings(
 
     for (const input of options.inputs) {
         const request = await buildMarengoRequest(input);
-        const response = await invokeJson<TwelvelabsMarengoResponse | { embeddings?: TwelvelabsMarengoResponse[] }>(
-            driver,
-            modelId,
-            request,
-        );
-
-        const segments = Array.isArray((response as { embeddings?: TwelvelabsMarengoResponse[] }).embeddings)
-            ? (response as { embeddings: TwelvelabsMarengoResponse[] }).embeddings
-            : [response as TwelvelabsMarengoResponse];
+        const response = await invokeJson<MarengoApiResponse>(driver, modelId, request);
+        const segments = isMarengoEnvelope(response) ? response.embeddings : [response];
 
         const outputs: EmbeddingOutput[] = segments
             .filter((seg) => Array.isArray(seg.embedding))
@@ -453,6 +454,9 @@ export async function generateBedrockEmbeddings(
         return await generateNovaEmbeddings(driver, normalized, modelId);
     } catch (error) {
         if (LlumiverseError.isLlumiverseError(error)) throw error;
+        // Re-throw plain validation errors (thrown before any HTTP call) as-is.
+        if (error instanceof Error && typeof (error as { $metadata?: unknown }).$metadata === 'undefined'
+            && typeof (error as { status?: unknown }).status !== 'number') throw error;
         throw driver.formatLlumiverseError(error, {
             provider: 'bedrock',
             model: modelId,
