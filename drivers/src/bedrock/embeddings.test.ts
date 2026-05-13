@@ -269,4 +269,58 @@ describe("generateBedrockEmbeddings — Cohere task_type mapping", () => {
         expect(body.embedding_types).toBeUndefined();
         expect(body.truncate).toBeUndefined();
     });
+
+    it("per-input task_type overrides the global default for Cohere text", async () => {
+        // One "query" input overrides the global "document" task_type.
+        const { driver, executor } = makeDriver({ embeddings: [FAKE_VECTOR] });
+        await generateBedrockEmbeddings(driver, {
+            inputs: [{ type: "text", text: "find me", task_type: "query" }],
+            model: "cohere.embed-english-v3",
+            task_type: "document",
+        });
+        const body = JSON.parse(executor.invokeModel.mock.calls[0][0].body);
+        expect(body.input_type).toBe("search_query");
+    });
+
+    it("splits texts into separate Cohere batches when task_types differ", async () => {
+        // Two texts with different effective task_types must go in separate invocations.
+        const { driver, executor } = makeDriver({ embeddings: [FAKE_VECTOR] });
+        await generateBedrockEmbeddings(driver, {
+            inputs: [
+                { type: "text", text: "query text", task_type: "query" },
+                { type: "text", text: "doc text", task_type: "document" },
+            ],
+            model: "cohere.embed-english-v3",
+        });
+        expect(executor.invokeModel).toHaveBeenCalledTimes(2);
+        const bodies = executor.invokeModel.mock.calls.map((c: { body: string }[]) => JSON.parse(c[0].body));
+        const inputTypes = bodies.map((b: { input_type: string }) => b.input_type).sort();
+        expect(inputTypes).toEqual(["search_document", "search_query"]);
+    });
+});
+
+// =================== Nova per-input task_type ===================
+
+describe("generateBedrockEmbeddings — Nova per-input task_type", () => {
+    it("per-input task_type overrides the global default for Nova text", async () => {
+        const { driver, executor } = makeDriver({ embeddings: [{ embeddingType: "TEXT", embedding: FAKE_VECTOR }] });
+        await generateBedrockEmbeddings(driver, {
+            inputs: [{ type: "text", text: "find me", task_type: "query" }],
+            task_type: "document",
+        });
+        const body = JSON.parse(executor.invokeModel.mock.calls[0][0].body);
+        expect(body.singleEmbeddingParams.embeddingPurpose).toBe("GENERIC_RETRIEVAL");
+    });
+
+    it("non-text inputs fall back to global task_type for Nova purpose", async () => {
+        const { driver, executor } = makeDriver({ embeddings: [{ embeddingType: "IMAGE", embedding: FAKE_VECTOR }] });
+        const b64 = Buffer.from("img").toString("base64");
+        const ds = new Base64DataSource("img.jpg", "image/jpeg", b64);
+        await generateBedrockEmbeddings(driver, {
+            inputs: [{ type: "image", source: ds }],
+            task_type: "query",
+        });
+        const body = JSON.parse(executor.invokeModel.mock.calls[0][0].body);
+        expect(body.singleEmbeddingParams.embeddingPurpose).toBe("GENERIC_RETRIEVAL");
+    });
 });

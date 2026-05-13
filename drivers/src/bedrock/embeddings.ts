@@ -193,9 +193,10 @@ async function generateNovaEmbeddings(
     modelId: string,
 ): Promise<EmbeddingsResult> {
     const items: EmbeddingResultItem[] = [];
-    const purpose = toNovaEmbeddingPurpose(options.task_type);
 
     for (const input of options.inputs) {
+        const inputTaskType = input.type === "text" ? input.task_type : undefined;
+        const purpose = toNovaEmbeddingPurpose(inputTaskType ?? options.task_type);
         const modalParams = await buildNovaParams(input);
         const request: NovaEmbeddingRequest = {
             taskType: "SINGLE_EMBEDDING",
@@ -299,15 +300,21 @@ async function generateCohereEmbeddings(
     });
 
     const items = new Array<EmbeddingResultItem>(options.inputs.length);
-    const inputType = cohereInputType(options.task_type);
 
-    if (textInputs.length > 0) {
+    // Group texts by their effective input_type so per-input task_type overrides are respected.
+    const textGroups = new Map<string | undefined, { index: number; input: TextEmbeddingInput }[]>();
+    for (const entry of textInputs) {
+        const key = cohereInputType(entry.input.task_type ?? options.task_type);
+        if (!textGroups.has(key)) textGroups.set(key, []);
+        textGroups.get(key)!.push(entry);
+    }
+    for (const [groupInputType, group] of textGroups) {
         const body: CohereEmbeddingRequest = {
-            texts: textInputs.map((t) => t.input.text),
-            input_type: inputType,
+            texts: group.map((t) => t.input.text),
+            input_type: groupInputType,
         };
         const res = await invokeJson<CohereEmbeddingResponse>(driver, modelId, body);
-        textInputs.forEach((entry, i) => {
+        group.forEach((entry, i) => {
             items[entry.index] = { outputs: [{ values: res.embeddings[i], modality: "text" }] };
         });
     }
