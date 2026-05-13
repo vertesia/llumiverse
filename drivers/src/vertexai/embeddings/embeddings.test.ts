@@ -11,8 +11,8 @@
 import { Base64DataSource, URLDataSource } from "@llumiverse/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { VertexAIDriver } from "../index.js";
-import { generateVertexAiEmbeddings } from "./embed.js";
 import { generateLegacyMultimodalEmbeddings } from "./embed-legacy-multimodal.js";
+import { generateVertexAiEmbeddings } from "./embed.js";
 
 // ── Live-mode toggle ──────────────────────────────────────────────────────────
 /** Set to true to run tests against the real Vertex AI API instead of mocks. */
@@ -150,7 +150,7 @@ describe("generateVertexAiEmbeddings — text embedding (text-embedding-005)", (
         await generateVertexAiEmbeddings(driver, {
             inputs: [
                 { type: "text", text: "query text", task_type: "query" },
-                { type: "text", text: "doc text",   task_type: "document" },
+                { type: "text", text: "doc text", task_type: "document" },
             ],
             model: "text-embedding-005",
         });
