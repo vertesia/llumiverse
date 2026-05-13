@@ -38,8 +38,8 @@ import { formatNovaPrompt, type NovaMessagesPrompt } from "@llumiverse/core/form
 import { LRUCache } from "mnemonist";
 import { resolveClaudeThinking } from "../shared/claude-thinking.js";
 import { converseConcatMessages, converseJSONprefill, converseSystemToMessages, formatConversePrompt } from "./converse.js";
-import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
 import { generateBedrockEmbeddings } from "./embeddings.js";
+import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
 import { forceUploadFile } from "./s3.js";
 import {
     formatTwelvelabsPegasusPrompt,
