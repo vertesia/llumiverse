@@ -27,12 +27,14 @@ interface BedrockMediaSource {
     };
 }
 
+/** Matches s3[.region].amazonaws.com or bucket.s3[.region].amazonaws.com — anchored to prevent subdomain spoofing. */
+const S3_HOSTNAME_RE = /^(?:[^.]+\.)?s3(?:\.[a-z0-9-]+)?\.amazonaws\.com$/;
+
 function isS3Url(url: string): boolean {
     if (url.startsWith("s3://")) return true;
     try {
         const parsed = new URL(url);
-        if (!parsed.hostname.endsWith("amazonaws.com")) return false;
-        return parsed.hostname.startsWith("s3.") || parsed.hostname.includes(".s3.");
+        return S3_HOSTNAME_RE.test(parsed.hostname);
     } catch {
         return false;
     }
