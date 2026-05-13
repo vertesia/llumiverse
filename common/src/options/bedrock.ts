@@ -9,8 +9,22 @@ import {
 } from "./shared-parsing.js";
 import { hasSamplingParameterRestriction } from "./version-parsing.js";
 
-// Union type of all Bedrock options
-export type BedrockOptions = NovaCanvasOptions | BaseConverseOptions | BedrockClaudeOptions | BedrockPalmyraOptions | BedrockGptOssOptions | TwelvelabsPegasusOptions;
+/**
+ * Union type of all Bedrock options
+ *
+ * @discriminator _option_id
+ */
+export type BedrockOptions =
+    | NovaCanvasOptions
+    | BedrockConverseOptions
+    | BedrockNovaOptions
+    | BedrockMistralOptions
+    | BedrockAI21Options
+    | BedrockCohereCommandOptions
+    | BedrockClaudeOptions
+    | BedrockPalmyraOptions
+    | BedrockGptOssOptions
+    | TwelvelabsPegasusOptions;
 
 export interface NovaCanvasOptions {
     _option_id: "bedrock-nova-canvas"
@@ -28,16 +42,21 @@ export interface NovaCanvasOptions {
     outPaintingMode?: "DEFAULT" | "PRECISE";
 }
 
-export interface BaseConverseOptions {
-    _option_id: "bedrock-converse" | "bedrock-claude" | "bedrock-nova" | "bedrock-mistral" | "bedrock-ai21" | "bedrock-cohere-command" | "bedrock-palmyra" | "bedrock-gpt-oss";
+export interface BaseConverseOptions<TOptionId extends string = string> {
+    _option_id: TOptionId;
     max_tokens?: number;
     temperature?: number;
     top_p?: number;
     stop_sequence?: string[];
 }
 
-export interface BedrockClaudeOptions extends BaseConverseOptions {
-    _option_id: "bedrock-claude";
+export type BedrockConverseOptions = BaseConverseOptions<"bedrock-converse">;
+export type BedrockNovaOptions = BaseConverseOptions<"bedrock-nova">;
+export type BedrockMistralOptions = BaseConverseOptions<"bedrock-mistral">;
+export type BedrockAI21Options = BaseConverseOptions<"bedrock-ai21">;
+export type BedrockCohereCommandOptions = BaseConverseOptions<"bedrock-cohere-command">;
+
+export interface BedrockClaudeOptions extends BaseConverseOptions<"bedrock-claude"> {
     top_k?: number;
     thinking_budget_tokens?: number;
     include_thoughts?: boolean;
@@ -46,16 +65,14 @@ export interface BedrockClaudeOptions extends BaseConverseOptions {
     cache_ttl?: '5m' | '1h';
 }
 
-export interface BedrockPalmyraOptions extends BaseConverseOptions {
-    _option_id: "bedrock-palmyra";
+export interface BedrockPalmyraOptions extends BaseConverseOptions<"bedrock-palmyra"> {
     min_tokens?: number;
     seed?: number;
     frequency_penalty?: number;
     presence_penalty?: number;
 }
 
-export interface BedrockGptOssOptions extends BaseConverseOptions {
-    _option_id: "bedrock-gpt-oss";
+export interface BedrockGptOssOptions extends BaseConverseOptions<"bedrock-gpt-oss"> {
     reasoning_effort?: "low" | "medium" | "high";
     frequency_penalty?: number;
     presence_penalty?: number;

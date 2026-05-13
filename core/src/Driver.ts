@@ -224,7 +224,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     // by default no stream is supported. we block and we return all at once
     async stream(segments: PromptSegment[], options: ExecutionOptions): Promise<CompletionStream<PromptT>> {
-        this.logger.info(options, `Executing prompt with provider ${this.provider} with options: ${JSON.stringify(options)}`);
+        this.logger.debug(options, `Executing prompt with provider ${this.provider} with options: ${JSON.stringify(options)}`);
         const prompt = await this.createPrompt(segments, options);
         const canStream = await this.canStream(options);
         if (canStream) {
