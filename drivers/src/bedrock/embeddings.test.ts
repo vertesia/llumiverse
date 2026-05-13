@@ -29,11 +29,11 @@ const FAKE_VECTOR = [0.1, 0.2, 0.3];
 
 describe("generateBedrockEmbeddings — routing", () => {
     it("routes to Nova for default (no model)", async () => {
-        const { driver, executor } = makeDriver({ embedding: FAKE_VECTOR });
+        const { driver, executor } = makeDriver({ embeddings: [{ embeddingType: "TEXT", embedding: FAKE_VECTOR }] });
         await generateBedrockEmbeddings(driver, { inputs: [{ type: "text", text: "hi" }] });
         const body = JSON.parse(executor.invokeModel.mock.calls[0][0].body);
         expect(executor.invokeModel.mock.calls[0][0].modelId).toBe("amazon.nova-2-multimodal-embeddings-v1:0");
-        expect(body.inputType).toBe("text");
+        expect(body.taskType).toBe("SINGLE_EMBEDDING");
     });
 
     it("routes to Titan for titan-embed-text model", async () => {
@@ -63,25 +63,34 @@ describe("generateBedrockEmbeddings — routing", () => {
 
 describe("generateBedrockEmbeddings — Nova", () => {
     it("builds correct text request and maps result", async () => {
-        const { driver, executor } = makeDriver({ embedding: FAKE_VECTOR, inputTextTokenCount: 2 });
+        const { driver, executor } = makeDriver({ embeddings: [{ embeddingType: "TEXT", embedding: FAKE_VECTOR }] });
         const result = await generateBedrockEmbeddings(driver, {
             inputs: [{ type: "text", text: "hello" }],
         });
 
         const body = JSON.parse(executor.invokeModel.mock.calls[0][0].body);
-        expect(body.inputType).toBe("text");
-        expect(body.inputText).toBe("hello");
-        expect(body.embeddingTypes).toBeUndefined();
+        expect(body.taskType).toBe("SINGLE_EMBEDDING");
+        expect(body.singleEmbeddingParams.text.value).toBe("hello");
+        expect(body.singleEmbeddingParams.text.truncationMode).toBe("END");
+        expect(body.singleEmbeddingParams.embeddingPurpose).toBe("GENERIC_INDEX");
 
         expect(result.results).toHaveLength(1);
         expect(result.results[0].outputs[0].values).toEqual(FAKE_VECTOR);
         expect(result.results[0].outputs[0].modality).toBe("text");
-        expect(result.results[0].input_tokens).toBe(2);
-        expect(result.usage?.input_tokens).toBe(2);
+    });
+
+    it("sets embeddingPurpose GENERIC_RETRIEVAL for task_type query", async () => {
+        const { driver, executor } = makeDriver({ embeddings: [{ embeddingType: "TEXT", embedding: FAKE_VECTOR }] });
+        await generateBedrockEmbeddings(driver, {
+            inputs: [{ type: "text", text: "find me" }],
+            task_type: "query",
+        });
+        const body = JSON.parse(executor.invokeModel.mock.calls[0][0].body);
+        expect(body.singleEmbeddingParams.embeddingPurpose).toBe("GENERIC_RETRIEVAL");
     });
 
     it("builds correct image request (base64 bytes)", async () => {
-        const { driver, executor } = makeDriver({ embedding: FAKE_VECTOR });
+        const { driver, executor } = makeDriver({ embeddings: [{ embeddingType: "IMAGE", embedding: FAKE_VECTOR }] });
         const b64 = Buffer.from("img-bytes").toString("base64");
         const ds = new Base64DataSource("img.jpg", "image/jpeg", b64);
 
@@ -90,26 +99,26 @@ describe("generateBedrockEmbeddings — Nova", () => {
         });
 
         const body = JSON.parse(executor.invokeModel.mock.calls[0][0].body);
-        expect(body.inputType).toBe("image");
-        expect(body.inputImage.source.bytes).toBe(b64);
-        expect(body.inputImage.format).toBe("jpeg");
+        expect(body.taskType).toBe("SINGLE_EMBEDDING");
+        expect(body.singleEmbeddingParams.image.source.bytes).toBe(b64);
+        expect(body.singleEmbeddingParams.image.format).toBe("jpeg");
     });
 
-    it("passes embeddingOutputDimensions when dimensions is set", async () => {
-        const { driver, executor } = makeDriver({ embedding: FAKE_VECTOR });
+    it("passes embeddingDimension when dimensions is set", async () => {
+        const { driver, executor } = makeDriver({ embeddings: [{ embeddingType: "TEXT", embedding: FAKE_VECTOR }] });
         await generateBedrockEmbeddings(driver, {
             inputs: [{ type: "text", text: "x" }],
             dimensions: 256,
         });
         const body = JSON.parse(executor.invokeModel.mock.calls[0][0].body);
-        expect(body.embeddingOutputDimensions).toBe(256);
+        expect(body.singleEmbeddingParams.embeddingDimension).toBe(256);
     });
 
-    it("throws when response has no embedding field", async () => {
+    it("throws when response has no embeddings array", async () => {
         const { driver } = makeDriver({ someOtherField: [] });
         await expect(
             generateBedrockEmbeddings(driver, { inputs: [{ type: "text", text: "x" }] }),
-        ).rejects.toThrow("Nova embeddings response missing 'embedding'");
+        ).rejects.toThrow("Nova embeddings response missing 'embeddings[0].embedding'");
     });
 });
 
@@ -117,7 +126,7 @@ describe("generateBedrockEmbeddings — Nova", () => {
 
 describe("generateBedrockEmbeddings — Nova S3 URL passthrough", () => {
     it("passes s3Location for s3:// URLs (video)", async () => {
-        const { driver, executor } = makeDriver({ embedding: FAKE_VECTOR });
+        const { driver, executor } = makeDriver({ embeddings: [{ embeddingType: "VIDEO", embedding: FAKE_VECTOR }] });
         const ds = new URLDataSource("video.mp4", "video/mp4", "s3://my-bucket/video.mp4");
 
         await generateBedrockEmbeddings(driver, {
@@ -125,13 +134,14 @@ describe("generateBedrockEmbeddings — Nova S3 URL passthrough", () => {
         });
 
         const body = JSON.parse(executor.invokeModel.mock.calls[0][0].body);
-        expect(body.inputType).toBe("video");
-        expect(body.inputVideo.source.s3Location.uri).toBe("s3://my-bucket/video.mp4");
-        expect(body.inputVideo.source.bytes).toBeUndefined();
+        expect(body.taskType).toBe("SINGLE_EMBEDDING");
+        expect(body.singleEmbeddingParams.video.source.s3Location.uri).toBe("s3://my-bucket/video.mp4");
+        expect(body.singleEmbeddingParams.video.source.bytes).toBeUndefined();
+        expect(body.singleEmbeddingParams.video.embeddingMode).toBe("AUDIO_VIDEO_COMBINED");
     });
 
     it("passes s3Location for amazonaws.com URLs (audio)", async () => {
-        const { driver, executor } = makeDriver({ embedding: FAKE_VECTOR });
+        const { driver, executor } = makeDriver({ embeddings: [{ embeddingType: "AUDIO", embedding: FAKE_VECTOR }] });
         const s3HttpsUrl = "https://s3.us-east-1.amazonaws.com/my-bucket/audio.mp3";
         const ds = new URLDataSource("audio.mp3", "audio/mpeg", s3HttpsUrl);
 
@@ -140,9 +150,9 @@ describe("generateBedrockEmbeddings — Nova S3 URL passthrough", () => {
         });
 
         const body = JSON.parse(executor.invokeModel.mock.calls[0][0].body);
-        expect(body.inputType).toBe("audio");
-        expect(body.inputAudio.source.s3Location).toBeDefined();
-        expect(body.inputAudio.source.bytes).toBeUndefined();
+        expect(body.taskType).toBe("SINGLE_EMBEDDING");
+        expect(body.singleEmbeddingParams.audio.source.s3Location).toBeDefined();
+        expect(body.singleEmbeddingParams.audio.source.bytes).toBeUndefined();
     });
 });
 

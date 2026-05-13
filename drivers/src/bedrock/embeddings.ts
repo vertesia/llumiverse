@@ -1,6 +1,5 @@
 import { BEDROCK_DEFAULT_EMBEDDING_MODEL } from "@llumiverse/common";
 import {
-    type AudioEmbeddingInput,
     Base64DataSource,
     buildEmbeddingsResult,
     type DataSource,
@@ -14,7 +13,6 @@ import {
     type ImageEmbeddingInput,
     LlumiverseError,
     type TextEmbeddingInput,
-    type VideoEmbeddingInput,
 } from "@llumiverse/core";
 import type { BedrockDriver } from "./index.js";
 import type { TwelvelabsMarengoRequest, TwelvelabsMarengoResponse } from "./twelvelabs.js";
@@ -81,80 +79,102 @@ async function invokeJson<R>(
     return JSON.parse(decoder.decode(res.body)) as R;
 }
 
+// ── Shared format lookup maps ───────────────────────────────────────────────
+
+const MIME_TO_IMAGE_FORMAT: Record<string, string> = {
+    "image/jpeg": "jpeg", "image/jpg": "jpeg",
+    "image/png": "png", "image/gif": "gif", "image/webp": "webp",
+};
+
+const MIME_TO_AUDIO_FORMAT: Record<string, string> = {
+    "audio/mpeg": "mp3", "audio/mp3": "mp3",
+    "audio/wav": "wav", "audio/wave": "wav", "audio/x-wav": "wav",
+    "audio/ogg": "ogg",
+};
+
+const MIME_TO_VIDEO_FORMAT: Record<string, string> = {
+    "video/mp4": "mp4", "video/quicktime": "mov",
+    "video/x-matroska": "mkv", "video/webm": "webm",
+    "video/x-flv": "flv", "video/mpeg": "mpeg", "video/mpg": "mpg",
+    "video/x-ms-wmv": "wmv", "video/3gpp": "3gp",
+};
+
+function requireFormat(map: Record<string, string>, mime: string, label: string): string {
+    const fmt = map[mime.toLowerCase()];
+    if (!fmt) throw new Error(`Unsupported ${label} MIME type for Bedrock: '${mime}'`);
+    return fmt;
+}
+
 // =================== Nova multimodal ===================
 
+/**
+ * Synchronous InvokeModel request body for amazon.nova-2-multimodal-embeddings-v1:0.
+ * Schema: https://docs.aws.amazon.com/nova/latest/userguide/embeddings-schema.html
+ */
+
+type NovaEmbeddingPurpose =
+    | "GENERIC_INDEX" | "GENERIC_RETRIEVAL"
+    | "TEXT_RETRIEVAL" | "IMAGE_RETRIEVAL" | "VIDEO_RETRIEVAL"
+    | "DOCUMENT_RETRIEVAL" | "AUDIO_RETRIEVAL"
+    | "CLASSIFICATION" | "CLUSTERING";
+
+type NovaSource = { bytes: string } | { s3Location: { uri: string } };
+
+interface NovaSingleEmbeddingParams {
+    embeddingPurpose: NovaEmbeddingPurpose;
+    embeddingDimension?: number;
+    text?: { truncationMode: "START" | "END" | "NONE"; value: string };
+    image?: { format: string; source: NovaSource; detailLevel?: "STANDARD_IMAGE" | "DOCUMENT_IMAGE" };
+    audio?: { format: string; source: NovaSource };
+    video?: { format: string; source: NovaSource; embeddingMode: "AUDIO_VIDEO_COMBINED" | "AUDIO_VIDEO_SEPARATE" };
+}
+
 interface NovaEmbeddingRequest {
-    inputType: "text" | "image" | "video" | "audio";
-    inputText?: string;
-    inputImage?: { format?: string; source: { bytes: string } };
-    inputVideo?: { format?: string; source: { bytes?: string; s3Location?: { uri: string } } };
-    inputAudio?: { format?: string; source: { bytes?: string; s3Location?: { uri: string } } };
-    embeddingOutputDimensions?: number;
-    segmentationConfig?: { startOffsetSec?: number; endOffsetSec?: number; intervalSec?: number };
+    taskType: "SINGLE_EMBEDDING";
+    singleEmbeddingParams: NovaSingleEmbeddingParams;
 }
 
 interface NovaEmbeddingResponse {
-    embedding?: number[];
-    embeddingsByType?: { float?: number[]; binary?: string };
-    inputTextTokenCount?: number;
+    embeddings: Array<{
+        embeddingType: "TEXT" | "IMAGE" | "VIDEO" | "AUDIO" | "AUDIO_VIDEO_COMBINED";
+        embedding: number[];
+    }>;
 }
 
-
-async function novaInputForText(input: TextEmbeddingInput): Promise<NovaEmbeddingRequest> {
-    return { inputType: "text", inputText: input.text };
+function toNovaEmbeddingPurpose(taskType: EmbeddingTaskType | undefined): NovaEmbeddingPurpose {
+    return taskType === "query" ? "GENERIC_RETRIEVAL" : "GENERIC_INDEX";
 }
 
-async function novaInputForImage(input: ImageEmbeddingInput): Promise<NovaEmbeddingRequest> {
-    const base64 = await readDataSourceAsBase64(input.source);
-    return {
-        inputType: "image",
-        inputImage: { format: mimeToImageFormat(input.source.mime_type), source: { bytes: base64 } },
-    };
+async function toNovaSource(ds: DataSource): Promise<NovaSource> {
+    const url = await ds.getURL().catch(() => undefined);
+    if (url && isS3Url(url)) return { s3Location: { uri: toS3Uri(url) } };
+    const bytes = ds instanceof Base64DataSource ? ds.getBase64() : await dataSourceToBase64(ds);
+    return { bytes };
 }
 
-async function novaInputForVideo(input: VideoEmbeddingInput): Promise<NovaEmbeddingRequest> {
-    const media = await dataSourceToBedrockMediaSource(input.source);
-    const segmentationConfig: NovaEmbeddingRequest["segmentationConfig"] = {};
-    if (input.start_sec !== undefined) segmentationConfig.startOffsetSec = input.start_sec;
-    if (input.start_sec !== undefined && input.length_sec !== undefined) {
-        segmentationConfig.endOffsetSec = input.start_sec + input.length_sec;
+async function buildNovaParams(input: EmbeddingInput): Promise<Omit<NovaSingleEmbeddingParams, "embeddingPurpose" | "embeddingDimension">> {
+    switch (input.type) {
+        case "text":
+            return { text: { truncationMode: "END", value: input.text } };
+        case "image": {
+            const source = await toNovaSource(input.source);
+            return { image: { format: requireFormat(MIME_TO_IMAGE_FORMAT, input.source.mime_type, "image"), source } };
+        }
+        case "audio": {
+            const source = await toNovaSource(input.source);
+            return { audio: { format: requireFormat(MIME_TO_AUDIO_FORMAT, input.source.mime_type, "audio"), source } };
+        }
+        case "video": {
+            const source = await toNovaSource(input.source);
+            return {
+                video: {
+                    format: requireFormat(MIME_TO_VIDEO_FORMAT, input.source.mime_type, "video"),
+                    source,
+                    embeddingMode: "AUDIO_VIDEO_COMBINED",
+                },
+            };
+        }
     }
-    if (input.interval_sec !== undefined) segmentationConfig.intervalSec = input.interval_sec;
-    return {
-        inputType: "video",
-        inputVideo: {
-            format: mimeToVideoFormat(input.source.mime_type),
-            source: media.s3Location ? { s3Location: media.s3Location } : { bytes: media.base64String },
-        },
-        ...(Object.keys(segmentationConfig).length > 0 ? { segmentationConfig } : {}),
-    };
-}
-
-async function novaInputForAudio(input: AudioEmbeddingInput): Promise<NovaEmbeddingRequest> {
-    const media = await dataSourceToBedrockMediaSource(input.source);
-    return {
-        inputType: "audio",
-        inputAudio: {
-            format: mimeToAudioFormat(input.source.mime_type),
-            source: media.s3Location ? { s3Location: media.s3Location } : { bytes: media.base64String },
-        },
-    };
-}
-
-function mimeToImageFormat(mime: string): string | undefined {
-    if (!mime) return undefined;
-    const sub = mime.split("/")[1]?.split("+")[0];
-    return sub === "jpg" ? "jpeg" : sub;
-}
-
-function mimeToVideoFormat(mime: string): string | undefined {
-    if (!mime) return undefined;
-    return mime.split("/")[1]?.split(";")[0];
-}
-
-function mimeToAudioFormat(mime: string): string | undefined {
-    if (!mime) return undefined;
-    return mime.split("/")[1]?.split(";")[0];
 }
 
 async function generateNovaEmbeddings(
@@ -163,41 +183,27 @@ async function generateNovaEmbeddings(
     modelId: string,
 ): Promise<EmbeddingsResult> {
     const items: EmbeddingResultItem[] = [];
-    let totalTextTokens: number | undefined;
+    const purpose = toNovaEmbeddingPurpose(options.task_type);
 
     for (const input of options.inputs) {
-        const baseRequest = await buildNovaInput(input);
+        const modalParams = await buildNovaParams(input);
         const request: NovaEmbeddingRequest = {
-            ...baseRequest,
-            ...(options.dimensions ? { embeddingOutputDimensions: options.dimensions } : {}),
+            taskType: "SINGLE_EMBEDDING",
+            singleEmbeddingParams: {
+                embeddingPurpose: purpose,
+                ...(options.dimensions ? { embeddingDimension: options.dimensions } : {}),
+                ...modalParams,
+            },
         };
         const response = await invokeJson<NovaEmbeddingResponse>(driver, modelId, request);
-        const values = response.embedding;
-        if (!values) {
-            throw new Error(`Nova embeddings response missing 'embedding' for input type '${input.type}'`);
+        const item = response.embeddings?.[0];
+        if (!item?.embedding) {
+            throw new Error(`Nova embeddings response missing 'embeddings[0].embedding' for input type '${input.type}'`);
         }
-        items.push({
-            outputs: [{ values, modality: input.type }],
-            input_tokens: response.inputTextTokenCount,
-        });
-        if (typeof response.inputTextTokenCount === "number") {
-            totalTextTokens = (totalTextTokens ?? 0) + response.inputTextTokenCount;
-        }
+        items.push({ outputs: [{ values: item.embedding, modality: input.type }] });
     }
 
-    const usage = totalTextTokens !== undefined
-        ? { input_text_tokens: totalTextTokens, input_tokens: totalTextTokens }
-        : undefined;
-    return buildEmbeddingsResult(modelId, items, usage);
-}
-
-async function buildNovaInput(input: EmbeddingInput): Promise<NovaEmbeddingRequest> {
-    switch (input.type) {
-        case "text": return novaInputForText(input);
-        case "image": return novaInputForImage(input);
-        case "video": return novaInputForVideo(input);
-        case "audio": return novaInputForAudio(input);
-    }
+    return buildEmbeddingsResult(modelId, items);
 }
 
 // =================== Titan ===================
@@ -227,6 +233,7 @@ async function generateTitanEmbeddings(
             if (input.type === "image") body.inputImage = await readDataSourceAsBase64(input.source);
             if (options.dimensions) body.embeddingConfig = { outputEmbeddingLength: options.dimensions };
             const res = await invokeJson<TitanImageResponse>(driver, modelId, body);
+            if (res.message) throw new Error(`Titan image embedding error: ${res.message}`);
             if (!res.embedding) throw new Error(`Titan image embedding response missing 'embedding'`);
             items.push({ outputs: [{ values: res.embedding, modality: input.type }], input_tokens: res.inputTextTokenCount });
             if (typeof res.inputTextTokenCount === "number") totalTokens = (totalTokens ?? 0) + res.inputTextTokenCount;
@@ -295,16 +302,13 @@ async function generateCohereEmbeddings(
         });
     }
 
-    if (imageInputs.length > 0) {
-        const base64Images = await Promise.all(imageInputs.map((i) => readDataSourceAsBase64(i.input.source)));
-        const body: CohereEmbeddingRequest = {
-            images: base64Images,
-            input_type: inputType ?? "image",
-        };
+    // Cohere accepts exactly one image per call; images must be data URIs.
+    for (const entry of imageInputs) {
+        const base64 = await readDataSourceAsBase64(entry.input.source);
+        const dataUri = `data:${entry.input.source.mime_type};base64,${base64}`;
+        const body: CohereEmbeddingRequest = { images: [dataUri], input_type: "image" };
         const res = await invokeJson<CohereEmbeddingResponse>(driver, modelId, body);
-        imageInputs.forEach((entry, i) => {
-            items[entry.index] = { outputs: [{ values: res.embeddings[i], modality: "image" }] };
-        });
+        items[entry.index] = { outputs: [{ values: res.embeddings[0], modality: "image" }] };
     }
 
     return buildEmbeddingsResult(modelId, items);
