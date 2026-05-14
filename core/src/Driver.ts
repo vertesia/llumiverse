@@ -104,7 +104,13 @@ export interface Driver<PromptT = unknown> {
     //check that it is possible to connect to the environment
     validateConnection(): Promise<boolean>;
 
-    //generate embeddings for a given text or image
+    /**
+     * Generate embeddings for one or more inputs.
+     * Inputs may be text, image, video, or audio depending on the model and
+     * provider. Returns one result item per input, each with one or more
+     * output vectors (single-vector for text/image, multi-vector for
+     * segmented video/audio or joint-multimodal models).
+     */
     generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult>;
 
     /**
@@ -218,7 +224,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     // by default no stream is supported. we block and we return all at once
     async stream(segments: PromptSegment[], options: ExecutionOptions): Promise<CompletionStream<PromptT>> {
-        this.logger.info(options, `Executing prompt with provider ${this.provider} with options: ${JSON.stringify(options)}`);
+        this.logger.debug(options, `Executing prompt with provider ${this.provider} with options: ${JSON.stringify(options)}`);
         const prompt = await this.createPrompt(segments, options);
         const canStream = await this.canStream(options);
         if (canStream) {

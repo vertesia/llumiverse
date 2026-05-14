@@ -1,5 +1,5 @@
-import { DataSource, ExecutionOptions, readStreamAsBase64 } from "@llumiverse/core";
-import { PromptSegment, PromptRole } from "@llumiverse/core";
+import { type DataSource, type ExecutionOptions, readStreamAsBase64 } from "@llumiverse/core";
+import { type PromptSegment, PromptRole } from "@llumiverse/core";
 
 // TwelveLabs Pegasus Request/Response Types
 export interface TwelvelabsPegasusRequest {

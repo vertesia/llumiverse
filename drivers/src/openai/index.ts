@@ -1,39 +1,43 @@
 import {
     AbstractDriver,
-    AIModel,
-    Completion,
-    CompletionChunkObject,
-    CompletionResult,
-    DataSource,
-    DriverOptions,
-    EmbeddingsOptions,
-    EmbeddingsResult,
-    ExecutionOptions,
-    ExecutionTokenUsage,
+    type AIModel,
+    type Completion,
+    type CompletionChunkObject,
+    type CompletionResult,
+    type DataSource,
+    type DriverOptions,
+    type EmbeddingResultItem,
+    type EmbeddingsOptions,
+    type EmbeddingsResult,
+    type ExecutionOptions,
+    type ExecutionTokenUsage,
     getConversationMeta,
     getModelCapabilities,
     incrementConversationTurn,
-    JSONSchema,
+    type JSONSchema,
     LlumiverseError,
-    LlumiverseErrorContext,
+    type LlumiverseErrorContext,
     modelModalitiesToArray,
     ModelType,
-    OpenAiDalleOptions,
-    OpenAiGptImageOptions,
-    Providers,
+    normalizeEmbeddingsOptions,
+    OPENAI_DEFAULT_EMBEDDING_MODEL,
+    type OpenAiDalleOptions,
+    type OpenAiGptImageOptions,
+    type Providers,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
     supportsToolUse,
-    ToolDefinition,
-    ToolUse,
-    TrainingJob,
+    type ToolDefinition,
+    type ToolUse,
+    type TrainingJob,
     TrainingJobStatus,
-    TrainingOptions,
-    TrainingPromptOptions,
+    type TrainingOptions,
+    type TrainingPromptOptions,
     truncateLargeTextInConversation,
     unwrapConversationArray,
 } from "@llumiverse/core";
-import OpenAI, { AzureOpenAI } from "openai";
+import type OpenAI from "openai";
+import type { AzureOpenAI } from "openai";
 import {
     APIConnectionError,
     APIConnectionTimeoutError,
@@ -436,7 +440,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         const aiModels = models.map((m) => {
             const modelCapability = getModelCapabilities(m.id, "openai");
             let owner = m.owned_by;
-            if (owner == "system") {
+            if (owner === "system") {
                 owner = "openai";
             }
 
@@ -463,28 +467,49 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     }
 
 
-    async generateEmbeddings({ text, image, model = "text-embedding-3-small" }: EmbeddingsOptions): Promise<EmbeddingsResult> {
+    async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
+        const normalized = normalizeEmbeddingsOptions(options);
+        const model = normalized.model ?? OPENAI_DEFAULT_EMBEDDING_MODEL;
 
-        if (image) {
-            throw new Error("Image embeddings not supported by OpenAI");
-        }
-
-        if (!text) {
-            throw new Error("No text provided");
-        }
-
-        const res = await this.service.embeddings.create({
-            input: text,
-            model: model,
+        const texts: string[] = normalized.inputs.map((input) => {
+            if (input.type !== "text") {
+                throw new Error(`Provider 'openai' does not support '${input.type}' embeddings; only 'text' is supported.`);
+            }
+            return input.text;
         });
 
-        const embeddings = res.data[0].embedding;
+        try {
+            const res = await this.service.embeddings.create({
+                input: texts,
+                model,
+                ...(normalized.dimensions ? { dimensions: normalized.dimensions } : {}),
+                encoding_format: "float",
+            });
 
-        if (!embeddings || embeddings.length === 0) {
-            throw new Error("No embedding found");
+            // OpenAI does not guarantee data is returned in the same order as the input,
+            // but does return a stable `index` per item. Sort by index to align with inputs.
+            const ordered = [...res.data].sort((a, b) => a.index - b.index);
+            const items = ordered.map((entry): EmbeddingResultItem => {
+                if (!entry.embedding || entry.embedding.length === 0) {
+                    throw new Error(`OpenAI embedding empty for input index ${entry.index}`);
+                }
+                return { outputs: [{ values: entry.embedding, modality: "text" }] };
+            });
+
+            const usage = res.usage
+                ? { input_tokens: res.usage.prompt_tokens, input_text_tokens: res.usage.prompt_tokens }
+                : undefined;
+
+            return { model, results: items, usage };
+        } catch (error) {
+            if (LlumiverseError.isLlumiverseError(error)) throw error;
+            if (error instanceof Error && typeof (error as any).status !== 'number') throw error;
+            throw this.formatLlumiverseError(error, {
+                provider: this.provider,
+                model,
+                operation: 'execute',
+            });
         }
-
-        return { values: embeddings, model } satisfies EmbeddingsResult;
     }
 
     imageModels = ["dall-e", "gpt-image", "chatgpt-image"];
@@ -880,21 +905,25 @@ function createAssistantMessageFromCompletion(completion: Completion): ResponseI
     return result;
 }
 
-function mapResponseStream(stream: AsyncIterable<OpenAI.Responses.ResponseStreamEvent>): AsyncIterable<CompletionChunkObject> {
-    const toolCallMetadata = new Map<string, { syntheticId: string, name?: string }>();
+export function mapResponseStream(stream: AsyncIterable<OpenAI.Responses.ResponseStreamEvent>): AsyncIterable<CompletionChunkObject> {
+    const toolCallMetadata = new Map<string, { syntheticId: string, callId?: string, name?: string }>();
 
     return {
         async *[Symbol.asyncIterator]() {
             for await (const event of stream) {
                 if (event.type === 'response.output_item.added' && event.item.type === 'function_call') {
                     const syntheticId = `tool_${event.output_index}`;
-                    const actualId = event.item.id ?? event.item.call_id;
-                    if (actualId) {
-                        toolCallMetadata.set(actualId, { syntheticId, name: event.item.name });
+                    const callId = event.item.call_id ?? event.item.id;
+                    const metadata = { syntheticId, callId, name: event.item.name };
+                    if (event.item.id) {
+                        toolCallMetadata.set(event.item.id, metadata);
+                    }
+                    if (event.item.call_id) {
+                        toolCallMetadata.set(event.item.call_id, metadata);
                     }
                     const toolUse: ToolUse & { _actual_id?: string } = {
                         id: syntheticId,
-                        _actual_id: actualId,
+                        _actual_id: callId,
                         tool_name: event.item.name,
                         tool_input: '' as any,
                     };
@@ -905,9 +934,10 @@ function mapResponseStream(stream: AsyncIterable<OpenAI.Responses.ResponseStream
                 } else if (event.type === 'response.function_call_arguments.delta') {
                     const metadata = toolCallMetadata.get(event.item_id);
                     const syntheticId = metadata?.syntheticId ?? `tool_${event.output_index}`;
+                    const callId = metadata?.callId ?? event.item_id;
                     const toolUse: ToolUse & { _actual_id?: string } = {
                         id: syntheticId,
-                        _actual_id: event.item_id,
+                        _actual_id: callId,
                         tool_name: metadata?.name ?? '',
                         tool_input: event.delta as any,
                     };
@@ -925,7 +955,7 @@ function mapResponseStream(stream: AsyncIterable<OpenAI.Responses.ResponseStream
                     const syntheticId = metadata?.syntheticId ?? `tool_${event.output_index}`;
                     const tool_name = metadata?.name ?? event.name ?? '';
                     if (event.item_id) {
-                        toolCallMetadata.set(event.item_id, { syntheticId, name: tool_name });
+                        toolCallMetadata.set(event.item_id, { syntheticId, callId: metadata?.callId, name: tool_name });
                     }
                 } else if (event.type === 'response.output_text.delta') {
                     yield {
@@ -1215,7 +1245,7 @@ function openAISchemaFormat(schema: JSONSchema, nesting: number = 0): JSONSchema
             }
         }
     }
-    if (formattedSchema?.type === 'object' && (!formattedSchema?.properties || Object.keys(formattedSchema?.properties ?? {}).length == 0)) {
+    if (formattedSchema?.type === 'object' && (!formattedSchema?.properties || Object.keys(formattedSchema?.properties ?? {}).length === 0)) {
         //If no properties are defined, then additionalProperties: true was set or the object would be empty.
         //OpenAI does not support this on structured output/ strict mode.
         throw new Error("OpenAI does not support empty objects or objects with additionalProperties set to true");
