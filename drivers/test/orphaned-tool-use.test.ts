@@ -13,11 +13,11 @@
  */
 
 import { describe, expect, test } from 'vitest';
-import { fixOrphanedToolUse as fixOrphanedToolUseClaude } from '../src/vertexai/models/claude.js';
+import { fixOrphanedToolUse as fixOrphanedToolUseClaude } from '../src/shared/claude-messages.js';
 import { fixOrphanedToolUse as fixOrphanedToolUseBedrock } from '../src/bedrock/index.js';
 import { fixOrphanedToolUse as fixOrphanedToolUseOpenAI } from '../src/openai/index.js';
-import { MessageParam } from '@anthropic-ai/sdk/resources/index.js';
-import { Message } from '@aws-sdk/client-bedrock-runtime';
+import type { MessageParam } from '@anthropic-ai/sdk/resources/index.js';
+import type { Message } from '@aws-sdk/client-bedrock-runtime';
 import type OpenAI from 'openai';
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;

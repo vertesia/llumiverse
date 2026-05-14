@@ -15,10 +15,9 @@ import { describe, expect, test } from 'vitest';
 import {
     fixOrphanedToolUse,
     mergeConsecutiveUserMessages,
-    sanitizeMessages,
-    updateConversation,
-} from '../src/vertexai/models/claude.js';
-import { MessageParam } from '@anthropic-ai/sdk/resources/index.js';
+    updateClaudeConversation,
+} from '../src/shared/claude-messages.js';
+import type { MessageParam } from '@anthropic-ai/sdk/resources/index.js';
 
 describe('mergeConsecutiveUserMessages', () => {
 
@@ -334,7 +333,7 @@ describe('mergeConsecutiveUserMessages', () => {
             system: undefined,
         };
 
-        const updated = updateConversation(baseConversation, prompt);
+        const updated = updateClaudeConversation(baseConversation, prompt);
         const fixed = fixOrphanedToolUse(updated.messages);
 
         expect(updated.messages).toHaveLength(2);

@@ -16,7 +16,7 @@ import type { Message, ConverseRequest } from '@aws-sdk/client-bedrock-runtime';
 import type { ExecutionOptions } from '@llumiverse/core';
 
 // VertexAI Claude
-import { claudeMessagesContainToolBlocks, convertClaudeToolBlocksToText } from '../src/vertexai/models/claude.js';
+import { claudeMessagesContainToolBlocks, convertClaudeToolBlocksToText } from '../src/shared/claude-messages.js';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/index.js';
 
 // VertexAI Gemini

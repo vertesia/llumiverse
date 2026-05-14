@@ -10,8 +10,11 @@ import {
     executeClaudeCompletion,
     formatAnthropicLlumiverseError,
     formatClaudePrompt,
+    isClaudeErrorRetryable,
     streamClaudeCompletion,
 } from "../../shared/claude-messages.js";
+
+
 import type { VertexAIDriver } from "../index.js";
 import type { ModelDefinition } from "../models.js";
 
@@ -80,6 +83,14 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
             driver.logger.debug({ options: resolvedOptions.model_options }, "Unexpected option id");
         }
         return streamClaudeCompletion(client, prompt, resolvedOptions);
+    }
+
+    isClaudeErrorRetryable(
+        error: unknown,
+        httpStatusCode: number | undefined,
+        errorType: string | undefined
+    ): boolean | undefined {
+        return isClaudeErrorRetryable(error, httpStatusCode, errorType);
     }
 
     formatLlumiverseError(

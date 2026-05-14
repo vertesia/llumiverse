@@ -834,13 +834,13 @@ export function formatAnthropicLlumiverseError(error: unknown, context: Llumiver
     if (errorType && errorType !== 'error') userMessage = `${errorType}: ${userMessage}`;
     if (apiError.requestID) userMessage += ` (Request ID: ${apiError.requestID})`;
 
-    const retryable = _isClaudeErrorRetryable(error, httpStatusCode, errorType);
+    const retryable = isClaudeErrorRetryable(error, httpStatusCode, errorType);
     const errorName = error.constructor?.name || 'AnthropicError';
 
     return new LlumiverseError(`[${context.provider}] ${userMessage}`, retryable, context, error, httpStatusCode, errorName);
 }
 
-function _isClaudeErrorRetryable(
+export function isClaudeErrorRetryable(
     error: unknown,
     httpStatusCode: number | undefined,
     errorType: string | undefined
