@@ -1,14 +1,14 @@
 import {
-    AIModel,
-    Completion,
-    CompletionChunkObject,
-    DriverOptions,
-    EmbeddingsOptions,
-    EmbeddingsResult,
-    ExecutionOptions,
-    ModelSearchPayload,
+    type AIModel,
+    type Completion,
+    type CompletionChunkObject,
+    type DriverOptions,
+    type EmbeddingsOptions,
+    type EmbeddingsResult,
+    type ExecutionOptions,
+    type ModelSearchPayload,
     PromptRole,
-    PromptSegment,
+    type PromptSegment,
 } from '@llumiverse/common';
 import { AbstractDriver } from '@llumiverse/core';
 import { beforeEach, describe, expect, it } from 'vitest';
