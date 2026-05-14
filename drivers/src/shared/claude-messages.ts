@@ -7,7 +7,7 @@
  * (Anthropic vs AnthropicVertex) and how auth is wired up.
  */
 
-import Anthropic from '@anthropic-ai/sdk';
+import type Anthropic from '@anthropic-ai/sdk';
 import {
     APIConnectionError,
     APIConnectionTimeoutError,
@@ -37,6 +37,7 @@ import type {
     MessageCreateParamsNonStreaming,
     RawMessageStreamEvent,
 } from '@anthropic-ai/sdk/resources/messages.js';
+import type AnthropicVertex from '@anthropic-ai/vertex-sdk';
 import { getClaudeMaxTokensLimit } from '@llumiverse/common';
 import {
     type Completion,
@@ -49,7 +50,6 @@ import {
     type JSONObject,
     LlumiverseError,
     type LlumiverseErrorContext,
-    type Logger,
     PromptRole,
     type PromptSegment,
     readStreamAsBase64,
@@ -662,7 +662,7 @@ export function buildClaudeStreamingConversation(
  * Works with any Anthropic-compatible client (Anthropic or AnthropicVertex).
  */
 export async function executeClaudeCompletion(
-    client: Anthropic,
+    client: Anthropic | AnthropicVertex,
     prompt: ClaudePrompt,
     options: ExecutionOptions,
 ): Promise<Completion> {
@@ -708,10 +708,9 @@ export async function executeClaudeCompletion(
  * Works with any Anthropic-compatible client (Anthropic or AnthropicVertex).
  */
 export async function streamClaudeCompletion(
-    client: Anthropic,
+    client: Anthropic | AnthropicVertex,
     prompt: ClaudePrompt,
     options: ExecutionOptions,
-    logger: Logger
 ): Promise<AsyncIterable<CompletionChunkObject>> {
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
     const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
@@ -719,7 +718,6 @@ export async function streamClaudeCompletion(
     const { payload, requestOptions } = getClaudePayload(options, conversation);
     const streamingPayload: MessageStreamParams = { ...payload, stream: true };
 
-    logger.debug(`[claude] Starting stream for model=${options.model}`);
     const response_stream = await client.messages.stream(streamingPayload, requestOptions);
 
     let currentToolUse: { id: string; name: string; inputJson: string } | null = null;

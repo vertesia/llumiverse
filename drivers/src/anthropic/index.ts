@@ -48,7 +48,7 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
         if (model_options?._option_id !== undefined && model_options?._option_id !== "anthropic-claude") {
             this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
-        return executeClaudeCompletion(this.client, prompt, options, this.logger);
+        return executeClaudeCompletion(this.client, prompt, options);
     }
 
     async requestTextCompletionStream(prompt: ClaudePrompt, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
@@ -56,7 +56,7 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
         if (model_options?._option_id !== undefined && model_options?._option_id !== "anthropic-claude") {
             this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
-        return streamClaudeCompletion(this.client, prompt, options, this.logger);
+        return streamClaudeCompletion(this.client, prompt, options);
     }
 
     async listModels(_params?: ModelSearchPayload): Promise<AIModel[]> {

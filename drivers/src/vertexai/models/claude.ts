@@ -79,7 +79,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
             model_options?._option_id !== "text-fallback") {
             driver.logger.debug({ options: resolvedOptions.model_options }, "Unexpected option id");
         }
-        return streamClaudeCompletion(client, prompt, resolvedOptions, driver.logger);
+        return streamClaudeCompletion(client, prompt, resolvedOptions);
     }
 
     formatLlumiverseError(
