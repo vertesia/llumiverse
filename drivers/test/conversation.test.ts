@@ -10,7 +10,7 @@
 import { AbstractDriver, DataSource, ExecutionOptions, Modalities, PromptRole, PromptSegment } from '@llumiverse/core';
 import 'dotenv/config';
 import { describe, expect, test } from "vitest";
-import { BedrockDriver, OpenAIDriver, VertexAIDriver, xAIDriver } from '../src';
+import { AnthropicDriver, BedrockDriver, OpenAIDriver, VertexAIDriver, xAIDriver } from '../src';
 import { completionResultToString } from './utils';
 
 const TIMEOUT = 120 * 1000;
@@ -96,6 +96,19 @@ if (process.env.XAI_API_KEY) {
     });
 } else {
     console.warn("xAI tests are skipped: XAI_API_KEY environment variable is not set");
+}
+
+if (process.env.ANTHROPIC_API_KEY) {
+    drivers.push({
+        name: "anthropic-claude",
+        driver: new AnthropicDriver({
+            apiKey: process.env.ANTHROPIC_API_KEY as string,
+        }),
+        textModel: "claude-3-5-haiku-20241022",
+        visionModel: "claude-3-5-sonnet-20241022",
+    });
+} else {
+    console.warn("Anthropic tests are skipped: ANTHROPIC_API_KEY environment variable is not set");
 }
 
 const hasClaudeDrivers = drivers.some(driver => driver.name.includes("claude"));
