@@ -1,4 +1,4 @@
-import { NovaMessagesPrompt } from "@llumiverse/core/formatters";
+import type { NovaMessagesPrompt } from "@llumiverse/core/formatters";
 
 //Docs at: https://docs.aws.amazon.com/nova/latest/userguide/complete-request-schema.html
 export interface NovaPayload extends NovaMessagesPrompt {
