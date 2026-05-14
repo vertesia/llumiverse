@@ -8,24 +8,21 @@
  * Covers: Bedrock, VertexAI Claude, VertexAI Gemini, OpenAI
  */
 
+import type { MessageParam } from '@anthropic-ai/sdk/resources/index.js';
+import type { ConverseRequest, Message } from '@aws-sdk/client-bedrock-runtime';
+import type { Content } from '@google/genai';
+import type { ExecutionOptions } from '@llumiverse/core';
+import type OpenAI from 'openai';
 import { describe, expect, test } from 'vitest';
-
 // Bedrock
 import { BedrockDriver, convertToolBlocksToText, messagesContainToolBlocks } from '../src/bedrock/index.js';
-import type { Message, ConverseRequest } from '@aws-sdk/client-bedrock-runtime';
-import type { ExecutionOptions } from '@llumiverse/core';
-
-// VertexAI Claude
-import { claudeMessagesContainToolBlocks, convertClaudeToolBlocksToText } from '../src/shared/claude-messages.js';
-import type { MessageParam } from '@anthropic-ai/sdk/resources/index.js';
-
-// VertexAI Gemini
-import { convertGeminiFunctionPartsToText } from '../src/vertexai/models/gemini.js';
-import type { Content } from '@google/genai';
-
 // OpenAI
 import { convertOpenAIFunctionItemsToText } from '../src/openai/index.js';
-import type OpenAI from 'openai';
+// VertexAI Claude
+import { claudeMessagesContainToolBlocks, convertClaudeToolBlocksToText } from '../src/shared/claude-messages.js';
+// VertexAI Gemini
+import { convertGeminiFunctionPartsToText } from '../src/vertexai/models/gemini.js';
+
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 
 // ─── Bedrock ──────────────────────────────────────────────────────────────────
