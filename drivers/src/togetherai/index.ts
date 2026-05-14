@@ -1,7 +1,7 @@
-import { AbstractDriver, type AIModel, type Completion, type CompletionChunkObject, type DriverOptions, type EmbeddingsOptions, type EmbeddingsResult, type ExecutionOptions, type TextFallbackOptions } from "@llumiverse/core";
+import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DriverOptions, EmbeddingsResult, ExecutionOptions, TextFallbackOptions } from "@llumiverse/core";
 import { transformSSEStream } from "@llumiverse/core/async";
 import { FetchClient } from "@vertesia/api-fetch-client";
-import type { TextCompletion, TogetherModelInfo } from "./interfaces.js";
+import { TextCompletion, TogetherModelInfo } from "./interfaces.js";
 
 interface TogetherAIDriverOptions extends DriverOptions {
     apiKey: string;
@@ -135,7 +135,7 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
     validateConnection(): Promise<boolean> {
         throw new Error("Method not implemented.");
     }
-    generateEmbeddings(_options: EmbeddingsOptions): Promise<EmbeddingsResult> {
+    generateEmbeddings(): Promise<EmbeddingsResult> {
         throw new Error("Method not implemented.");
     }
 

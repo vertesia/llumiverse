@@ -1,6 +1,6 @@
-import type { ExecutionOptions } from '@llumiverse/core';
+import { ExecutionOptions } from '@llumiverse/core';
 import { describe, expect, it } from 'vitest';
-import type { VertexAIDriver } from '../index.js';
+import { VertexAIDriver } from '../index.js';
 import { ClaudeModelDefinition } from './claude.js';
 
 function createAsyncStream(events: any[]): AsyncIterable<any> {

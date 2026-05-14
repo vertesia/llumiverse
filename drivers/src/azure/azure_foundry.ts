@@ -1,15 +1,15 @@
+import { DefaultAzureCredential, getBearerTokenProvider, TokenCredential } from "@azure/identity";
+import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, getModelCapabilities, modelModalitiesToArray, Providers } from "@llumiverse/core";
+import { AIProjectClient, DeploymentUnion, ModelDeployment } from '@azure/ai-projects';
+import { isUnexpected } from "@azure-rest/ai-inference";
+import type OpenAI from "openai";
 import type {
     ChatCompletionsOutput,
     ChatCompletionsToolCall,
     ChatRequestMessage,
 } from "@azure-rest/ai-inference";
-import { isUnexpected } from "@azure-rest/ai-inference";
-import { AIProjectClient, type DeploymentUnion, type ModelDeployment } from '@azure/ai-projects';
-import { createSseStream, type NodeJSReadableStream } from "@azure/core-sse";
-import { DefaultAzureCredential, getBearerTokenProvider, type TokenCredential } from "@azure/identity";
-import { AbstractDriver, type AIModel, type Completion, type CompletionChunkObject, dataSourceToBase64, type DriverOptions, type EmbeddingResultItem, type EmbeddingsOptions, type EmbeddingsResult, type ExecutionOptions, getModelCapabilities, type ImageEmbeddingInput, LlumiverseError, modelModalitiesToArray, normalizeEmbeddingsOptions, Providers, type TextEmbeddingInput } from "@llumiverse/core";
-import type OpenAI from "openai";
 import { AzureOpenAIDriver } from "../openai/azure_openai.js";
+import { createSseStream, NodeJSReadableStream } from "@azure/core-sse";
 import { formatOpenAILikeMultimodalPrompt } from "../openai/openai_format.js";
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
@@ -95,7 +95,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             this.logger.error({ deploymentError }, `[Azure Foundry] Deployment ${deploymentName} not found:`);
         }
 
-        return (deployment as ModelDeployment).modelPublisher === "OpenAI";
+        return (deployment as ModelDeployment).modelPublisher == "OpenAI";
     }
 
     protected canStream(_options: ExecutionOptions): Promise<boolean> {
@@ -107,20 +107,22 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         const model_options = options.model_options as any;
         const isOpenAI = await this.isOpenAIDeployment(options.model);
 
+        let response;
         if (isOpenAI) {
             // Use the Azure OpenAI client for OpenAI models
             const azureOpenAI = await this.service.inference.azureOpenAI({ apiVersion: this.OPENAI_API_VERSION });
             const subDriver = new AzureOpenAIDriver(azureOpenAI);
             // Use deployment name for API calls
             const modifiedOptions = { ...options, model: deploymentName };
-            return subDriver.requestTextCompletion(prompt, modifiedOptions);
+            const response = await subDriver.requestTextCompletion(prompt, modifiedOptions);
+            return response;
 
         } else {
             // Use the chat completions client from the inference operations
             // Convert ResponseInputItem[] to ChatRequestMessage[] for non-OpenAI inference
             const messages = convertToInferenceMessages(prompt);
             const chatClient = this.service.inference.chatCompletions({ apiVersion: this.INFERENCE_API_VERSION });
-            const response = await chatClient.post({
+            response = await chatClient.post({
                 body: {
                     messages,
                     max_tokens: model_options?.max_tokens,
@@ -302,76 +304,88 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     }
 
     async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
-        const normalized = normalizeEmbeddingsOptions(options);
-        if (!normalized.model) {
+        if (!options.model) {
             throw new Error("Default embedding model selection not supported for Azure Foundry. Please specify a model.");
         }
 
-        const textInputs: { index: number; input: TextEmbeddingInput }[] = [];
-        const imageInputs: { index: number; input: ImageEmbeddingInput }[] = [];
-        normalized.inputs.forEach((input, index) => {
-            if (input.type === "text") textInputs.push({ index, input });
-            else if (input.type === "image") imageInputs.push({ index, input });
-            else {
-                throw new Error(`Provider 'azure_foundry' does not support '${input.type}' embeddings.`);
-            }
-        });
-
-        const items = new Array<EmbeddingResultItem>(normalized.inputs.length);
-
-        if (textInputs.length > 0) {
-            const vectors = await this.callAzureEmbeddings(
-                textInputs.map((t) => t.input.text),
-                normalized.model,
-                "text",
-            );
-            textInputs.forEach((entry, i) => {
-                items[entry.index] = { outputs: [{ values: vectors[i], modality: "text" }] };
-            });
+        if (options.text) {
+            return this.generateTextEmbeddings(options);
+        } else if (options.image) {
+            return this.generateImageEmbeddings(options);
+        } else {
+            throw new Error("No text or images provided for embeddings");
         }
-
-        if (imageInputs.length > 0) {
-            const base64Images = await Promise.all(imageInputs.map((entry) => dataSourceToBase64(entry.input.source)));
-            const vectors = await this.callAzureEmbeddings(base64Images, normalized.model, "image");
-            imageInputs.forEach((entry, i) => {
-                items[entry.index] = { outputs: [{ values: vectors[i], modality: "image" }] };
-            });
-        }
-
-        return { model: normalized.model, results: items };
     }
 
-    private async callAzureEmbeddings(input: string[], model: string, kind: "text" | "image"): Promise<number[][]> {
-        const { deploymentName } = parseAzureFoundryModelId(model);
-        try {
-            const embeddingsClient = this.service.inference.embeddings({ apiVersion: this.INFERENCE_API_VERSION });
-            const response = await embeddingsClient.post({ body: { input, model: deploymentName } });
-            if (isUnexpected(response)) {
-                throw new Error(`${kind} embeddings request failed: ${response.status} ${response.body?.error?.message || 'Unknown error'}`);
-            }
+    async generateTextEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
+        if (!options.text) {
+            throw new Error("No text provided for text embeddings");
+        }
 
-            const data = response.body.data;
-            if (!Array.isArray(data) || data.length === 0) {
-                throw new Error(`No embeddings found in Azure Foundry ${kind} response`);
-            }
-            const ordered = [...data].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
-            return ordered.map((entry) => {
-                const embedding = entry.embedding;
-                if (!Array.isArray(embedding) || embedding.length === 0) {
-                    throw new Error(`Empty or non-array embedding in Azure Foundry ${kind} response (got ${typeof embedding})`);
+        const { deploymentName } = parseAzureFoundryModelId(options.model || "");
+
+        let response;
+        try {
+            // Use the embeddings client from the inference operations
+            const embeddingsClient = this.service.inference.embeddings({ apiVersion: this.INFERENCE_API_VERSION });
+            response = await embeddingsClient.post({
+                body: {
+                    input: Array.isArray(options.text) ? options.text : [options.text],
+                    model: deploymentName
                 }
-                return embedding;
             });
         } catch (error) {
-            if (LlumiverseError.isLlumiverseError(error)) throw error;
-            if (error instanceof Error && typeof (error as any).status !== 'number') throw error;
-            this.logger.error({ error }, `Azure Foundry ${kind} embeddings error:`);
-            throw this.formatLlumiverseError(error, {
-                provider: this.provider,
-                model,
-                operation: 'execute',
-            });
+            this.logger.error({ error }, "Azure Foundry text embeddings error:");
+            throw error;
         }
+
+        if (isUnexpected(response)) {
+            throw new Error(`Text embeddings request failed: ${response.status} ${response.body?.error?.message || 'Unknown error'}`);
+        }
+
+        const embeddings = response.body.data?.[0]?.embedding;
+        if (!embeddings || !Array.isArray(embeddings) || embeddings.length === 0) {
+            throw new Error("No valid embedding array found in response");
+        }
+
+        return {
+            values: embeddings,
+            model: options.model ?? ""
+        };
+    }
+
+    async generateImageEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
+        if (!options.image) {
+            throw new Error("No images provided for image embeddings");
+        }
+
+        const { deploymentName } = parseAzureFoundryModelId(options.model || "");
+
+        let response;
+        try {
+            // Use the embeddings client from the inference operations
+            const embeddingsClient = this.service.inference.embeddings({ apiVersion: this.INFERENCE_API_VERSION });
+            response = await embeddingsClient.post({
+                body: {
+                    input: Array.isArray(options.image) ? options.image : [options.image],
+                    model: deploymentName
+                }
+            });
+        } catch (error) {
+            this.logger.error({ error }, "Azure Foundry image embeddings error:");
+            throw error;
+        }
+        if (isUnexpected(response)) {
+            throw new Error(`Image embeddings request failed: ${response.status} ${response.body?.error?.message || 'Unknown error'}`);
+        }
+        const embeddings = response.body.data?.[0]?.embedding;
+        if (!embeddings || !Array.isArray(embeddings) || embeddings.length === 0) {
+            throw new Error("No valid embedding array found in response");
+        }
+        return {
+            values: embeddings,
+            model: options.model ?? ""
+        };
     }
 
     async listModels(): Promise<AIModel[]> {

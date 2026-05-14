@@ -1,5 +1,5 @@
-import type { AIModel, Completion, CompletionChunkObject, ExecutionOptions, LlumiverseError, LlumiverseErrorContext, PromptSegment } from "@llumiverse/core";
-import { type VertexAIDriver, trimModelName } from "./index.js";
+import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, LlumiverseError, LlumiverseErrorContext, PromptSegment } from "@llumiverse/core";
+import { VertexAIDriver, trimModelName } from "./index.js";
 import { ClaudeModelDefinition } from "./models/claude.js";
 import { GeminiModelDefinition } from "./models/gemini.js";
 import { LLamaModelDefinition } from "./models/llama.js";

@@ -1,5 +1,5 @@
-import { CreateBucketCommand, HeadBucketCommand, type S3Client } from "@aws-sdk/client-s3";
-import { type Progress, Upload } from "@aws-sdk/lib-storage";
+import { CreateBucketCommand, HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
+import { Progress, Upload } from "@aws-sdk/lib-storage";
 
 export async function doesBucketExist(s3: S3Client, bucketName: string): Promise<boolean> {
     try {

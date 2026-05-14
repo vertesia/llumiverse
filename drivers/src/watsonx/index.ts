@@ -1,7 +1,7 @@
-import { AbstractDriver, type AIModel, type Completion, type CompletionChunkObject, type DriverOptions, type EmbeddingsOptions, type EmbeddingsResult, type ExecutionOptions, LlumiverseError, normalizeEmbeddingsOptions, type TextFallbackOptions, WATSONX_DEFAULT_EMBEDDING_MODEL } from "@llumiverse/core";
+import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, TextFallbackOptions } from "@llumiverse/core";
 import { transformSSEStream } from "@llumiverse/core/async";
 import { FetchClient } from "@vertesia/api-fetch-client";
-import type { GenerateEmbeddingPayload, GenerateEmbeddingResponse, WatsonAuthToken, WatsonxListModelResponse, WatsonxModelSpec, WatsonxTextGenerationPayload, WatsonxTextGenerationResponse } from "./interfaces.js";
+import { GenerateEmbeddingPayload, GenerateEmbeddingResponse, WatsonAuthToken, WatsonxListModelResponse, WatsonxModelSpec, WatsonxTextGenerationPayload, WatsonxTextGenerationResponse } from "./interfaces.js";
 
 interface WatsonxDriverOptions extends DriverOptions {
     apiKey: string;
@@ -158,38 +158,27 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
     }
 
     async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
-        const normalized = normalizeEmbeddingsOptions(options);
-        const texts = normalized.inputs.map((input) => {
-            if (input.type !== "text") {
-                throw new Error(`Provider 'watsonx' does not support '${input.type}' embeddings; only 'text' is supported.`);
-            }
-            return input.text;
-        });
+        if (options.image) {
+            throw new Error("Image embeddings not supported by Watsonx");
+        }
+
+        if (!options.text) {
+            throw new Error("No text provided");
+        }
 
         const payload: GenerateEmbeddingPayload = {
-            inputs: texts,
-            model_id: normalized.model ?? WATSONX_DEFAULT_EMBEDDING_MODEL,
-            project_id: this.projectId,
-        };
-
-        const model = payload.model_id;
-        try {
-            const res = await this.fetchClient.post(`/ml/v1/text/embeddings?version=${API_VERSION}`, { payload }) as GenerateEmbeddingResponse;
-            return {
-                model: res.model_id,
-                results: res.results.map((entry) => ({
-                    outputs: [{ values: entry.embedding, modality: "text" }],
-                })),
-            };
-        } catch (error) {
-            if (LlumiverseError.isLlumiverseError(error)) throw error;
-            if (error instanceof Error && typeof (error as any).status !== 'number') throw error;
-            throw this.formatLlumiverseError(error, {
-                provider: this.provider,
-                model,
-                operation: 'execute',
-            });
+            inputs: [options.text],
+            model_id: options.model ?? 'ibm/slate-125m-english-rtrvr',
+            project_id: this.projectId
         }
+
+        const res = await this.fetchClient.post(`/ml/v1/text/embeddings?version=${API_VERSION}`, { payload }) as GenerateEmbeddingResponse;
+
+        return {
+            values: res.results[0].embedding,
+            model: res.model_id
+        }
+
     }
 
 }
