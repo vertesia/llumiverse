@@ -27,6 +27,7 @@ import {
 
 export interface AnthropicDriverOptions extends DriverOptions {
     apiKey?: string;
+    baseURL?: string;
 }
 
 export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, ClaudePrompt> {
@@ -36,7 +37,7 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
 
     constructor(opts: AnthropicDriverOptions) {
         super(opts);
-        this.client = new Anthropic({ apiKey: opts.apiKey });
+        this.client = new Anthropic({ apiKey: opts.apiKey, ...(opts.baseURL ? { baseURL: opts.baseURL } : {}) });
     }
 
     protected formatPrompt(segments: PromptSegment[], opts: ExecutionOptions): Promise<ClaudePrompt> {
