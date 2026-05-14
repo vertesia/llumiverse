@@ -134,6 +134,7 @@ dist
 .yarn/install-state.gz
 .pnp.*
 .turbo
+.pnpm-store/
 
 
 #bun
