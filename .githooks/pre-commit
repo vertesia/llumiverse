@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Pre-commit hook:
+# - Runs the repository lint command
+
+set -euo pipefail
+
+echo "Running lint..."
+pnpm run lint --diagnostic-level=error
