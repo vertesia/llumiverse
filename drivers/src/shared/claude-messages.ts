@@ -9,9 +9,11 @@
 
 import type Anthropic from '@anthropic-ai/sdk';
 import {
+    AnthropicError,
     APIConnectionError,
     APIConnectionTimeoutError,
     APIError,
+    APIUserAbortError,
     AuthenticationError,
     BadRequestError,
     ConflictError,
@@ -808,8 +810,14 @@ export async function streamClaudeCompletion(
 // ============================================================================
 
 export function formatAnthropicLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
+    if (error instanceof AnthropicError && !(error instanceof APIError)) {
+        // Client-side SDK error (e.g. "Streaming is required for operations that may take longer than 10 minutes").
+        // These are structural/configuration errors — retrying will never succeed.
+        const errorName = error.constructor?.name || 'AnthropicError';
+        return new LlumiverseError(`[${context.provider}] ${error.message}`, false, context, error, undefined, errorName);
+    }
     if (!(error instanceof APIError)) {
-        // Not an Anthropic API error — rethrow for default handling
+        // Not an Anthropic error — rethrow for default handling
         throw error;
     }
 
@@ -834,7 +842,7 @@ export function formatAnthropicLlumiverseError(error: unknown, context: Llumiver
     if (errorType && errorType !== 'error') userMessage = `${errorType}: ${userMessage}`;
     if (apiError.requestID) userMessage += ` (Request ID: ${apiError.requestID})`;
 
-    const retryable = isClaudeErrorRetryable(error, httpStatusCode, errorType);
+    const retryable = isClaudeErrorRetryable(error, httpStatusCode, errorType, apiError.headers ?? undefined);
     const errorName = error.constructor?.name || 'AnthropicError';
 
     return new LlumiverseError(`[${context.provider}] ${userMessage}`, retryable, context, error, httpStatusCode, errorName);
@@ -843,8 +851,15 @@ export function formatAnthropicLlumiverseError(error: unknown, context: Llumiver
 export function isClaudeErrorRetryable(
     error: unknown,
     httpStatusCode: number | undefined,
-    errorType: string | undefined
+    errorType: string | undefined,
+    headers?: Headers | undefined,
 ): boolean | undefined {
+    // Honour the server's explicit retry directive first (mirrors SDK shouldRetry logic).
+    const shouldRetryHeader = headers?.get('x-should-retry');
+    if (shouldRetryHeader === 'true') return true;
+    if (shouldRetryHeader === 'false') return false;
+
+    if (error instanceof APIUserAbortError) return false;
     if (error instanceof RateLimitError) return true;
     if (error instanceof InternalServerError) return true;
     if (error instanceof APIConnectionTimeoutError) return true;
@@ -852,7 +867,7 @@ export function isClaudeErrorRetryable(
     if (error instanceof AuthenticationError) return false;
     if (error instanceof PermissionDeniedError) return false;
     if (error instanceof NotFoundError) return false;
-    if (error instanceof ConflictError) return false;
+    if (error instanceof ConflictError) return true;  // SDK retries 409 (lock timeouts)
     if (error instanceof UnprocessableEntityError) return false;
     if (errorType === 'invalid_request_error') return false;
     if (httpStatusCode !== undefined) {
