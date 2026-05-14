@@ -161,7 +161,7 @@ importers:
         specifier: ^6.5.0
         version: 6.5.0
       '@google/genai':
-        specifier: ^2.1.0
+        specifier: 2.1.0
         version: 2.1.0
       '@huggingface/inference':
         specifier: 4.13.11
