@@ -1,35 +1,36 @@
 import type { ClientOptions as AnthropicVertexClientOptions } from "@anthropic-ai/vertex-sdk";
 import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { PredictionServiceClient, v1beta1 } from "@google-cloud/aiplatform";
-import { type Content, GoogleGenAI, type Model } from "@google/genai";
+import { Content, GoogleGenAI, Model } from "@google/genai";
 import {
+    AIModel,
     AbstractDriver,
-    type AIModel,
-    type Completion,
-    type CompletionChunkObject,
-    type CompletionResult,
-    type DriverOptions,
-    type EmbeddingsOptions,
-    type EmbeddingsResult,
-    type ExecutionOptions,
+    Completion,
+    CompletionChunkObject,
+    CompletionResult,
+    DriverOptions,
+    EmbeddingsOptions,
+    EmbeddingsResult,
+    ExecutionOptions,
+    LlumiverseError,
+    LlumiverseErrorContext,
+    ModelSearchPayload,
+    PromptSegment,
     getConversationMeta,
     getModelCapabilities,
     incrementConversationTurn,
-    type LlumiverseError,
-    type LlumiverseErrorContext,
     modelModalitiesToArray,
-    type ModelSearchPayload,
-    type PromptSegment,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
-    truncateLargeTextInConversation
+    truncateLargeTextInConversation,
 } from "@llumiverse/core";
 import { FetchClient } from "@vertesia/api-fetch-client";
-import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from "google-auth-library";
-import { generateVertexAiEmbeddings } from "./embeddings/embed.js";
+import { AuthClient, GoogleAuth, GoogleAuthOptions } from "google-auth-library";
+import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
+import { TextEmbeddingsOptions, getEmbeddingsForText } from "./embeddings/embeddings-text.js";
 import { getModelDefinition } from "./models.js";
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from "./models/claude.js";
-import { ImagenModelDefinition, type ImagenPrompt } from "./models/imagen.js";
+import { ImagenModelDefinition, ImagenPrompt } from "./models/imagen.js";
 
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
@@ -63,7 +64,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     llamaClient: FetchClient & { region?: string } | undefined;
     modelGarden: v1beta1.ModelGardenServiceClient | undefined;
     imagenClient: PredictionServiceClient | undefined;
-    predictionClient: PredictionServiceClient | undefined;
 
     googleAuth: GoogleAuth<any>;
     private authClientPromise: Promise<AuthClient> | undefined;
@@ -80,20 +80,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         this.modelGarden = undefined;
         this.llamaClient = undefined;
         this.imagenClient = undefined;
-        this.predictionClient = undefined;
 
         this.googleAuth = new GoogleAuth(options.googleAuthOptions) as GoogleAuth<any>;
         this.authClientPromise = undefined;
-    }
-
-    /**
-     * Cleanup Google Cloud clients when the driver is evicted from the cache.
-     */
-    destroy(): void {
-        this.aiplatform?.close();
-        this.modelGarden?.close();
-        this.imagenClient?.close();
-        this.predictionClient?.close();
     }
 
     private async getAuthClient(): Promise<AuthClient> {
@@ -104,8 +93,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     public getGoogleGenAIClient(region: string = this.options.region, flex: boolean = false): GoogleGenAI {
-        if (this.googleGenAI &&
-            this.googleGenAIRegion === region &&
+        if (this.googleGenAI && 
+            this.googleGenAIRegion === region && 
             this.googleGenAIFlex === flex) {
             // Return existing client if region and flex settings match
             return this.googleGenAI;
@@ -135,11 +124,11 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         });
     }
 
-    public getFetchClient(region: string = this.options.region): FetchClient {
+    public getFetchClient(): FetchClient {
         //Lazy initialization
         if (!this.fetchClient) {
             this.fetchClient = createFetchClient({
-                region: region,
+                region: this.options.region,
                 project: this.options.project,
             }).withAuthCallback(async () => {
                 const token = await this.googleAuth.getAccessToken();
@@ -238,19 +227,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             });
         }
         return this.imagenClient;
-    }
-
-    public async getPredictionServiceClient(): Promise<PredictionServiceClient> {
-        //Lazy initialization using the driver's configured region
-        if (!this.predictionClient) {
-            const authClient = await this.getAuthClient();
-            this.predictionClient = new PredictionServiceClient({
-                projectId: this.options.project,
-                apiEndpoint: `${this.options.region}-${API_BASE_PATH}`,
-                authClient,
-            });
-        }
-        return this.predictionClient;
     }
 
     validateResult(result: Completion, options: ExecutionOptions) {
@@ -732,7 +708,26 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
-        return generateVertexAiEmbeddings(this, options);
+        if (options.image || options.model?.includes("multimodal")) {
+            if (options.text && options.image) {
+                throw new Error("Text and Image simultaneous embedding not implemented. Submit separately");
+            }
+            return getEmbeddingsForImages(this, options);
+        }
+        const text_options: TextEmbeddingsOptions = {
+            content: options.text ?? "",
+            model: options.model,
+        };
+        return getEmbeddingsForText(this, text_options);
+    }
+
+    /**
+     * Cleanup Google Cloud clients when the driver is evicted from the cache.
+     */
+    destroy(): void {
+        this.aiplatform?.close();
+        this.modelGarden?.close();
+        this.imagenClient?.close();
     }
 
     /**

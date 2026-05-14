@@ -134,111 +134,36 @@ export const ProviderList: Record<Providers, ProviderParams> = {
 
 // ============== Embeddings ===============
 
-/**
- * Semantic task type for embedding models. Drivers map these to provider-
- * specific values (e.g. "RETRIEVAL_QUERY" for Vertex, "search_query" for Cohere).
- * - "query"    — a search query to find relevant documents
- * - "document" — a document to be indexed and retrieved
- */
-export type EmbeddingTaskType = "query" | "document";
-
-/**
- * One input to an embedding model. Discriminated by `type`.
- * Drivers consume binary content via DataSource and may pass a provider-native
- * URL (gs://, s3://, https://) when one is available.
- */
-export type EmbeddingInput =
-    | TextEmbeddingInput
-    | ImageEmbeddingInput
-    | VideoEmbeddingInput
-    | AudioEmbeddingInput;
-
-export interface TextEmbeddingInput {
-    type: "text";
-    text: string;
-    /** Overrides EmbeddingsOptions.task_type for this input. */
-    task_type?: EmbeddingTaskType;
-    /** Document title hint — used by Vertex AI for RETRIEVAL_DOCUMENT. */
-    title?: string;
-}
-
-export interface ImageEmbeddingInput {
-    type: "image";
-    source: DataSource;
-}
-
-export interface VideoEmbeddingInput {
-    type: "video";
-    source: DataSource;
-    start_sec?: number;
-    length_sec?: number;
-    /** Vertex multimodal segment length. */
-    interval_sec?: number;
-    /** TwelveLabs Marengo. */
-    use_fixed_length_sec?: boolean;
-    /** TwelveLabs Marengo. */
-    min_clip_sec?: number;
-    /** TwelveLabs Marengo: which views to extract per segment. */
-    embedding_option?: ("visual-text" | "visual-image" | "audio")[];
-}
-
-export interface AudioEmbeddingInput {
-    type: "audio";
-    source: DataSource;
-    start_sec?: number;
-    length_sec?: number;
-}
-
 export interface EmbeddingsOptions {
-    inputs: EmbeddingInput[];
     /**
-     * Provider model id. When omitted the driver picks a sensible default
-     * for the modalities present in `inputs`.
+     * The text to generate the embeddings for. One of text or image is required.
+     */
+    text?: string;
+    /**
+     * The image to generate embeddings for
+     */
+    image?: string
+    /**
+     * The model to use to generate the embeddings. Optional.
      */
     model?: string;
 
-    /** Default task type applied to text inputs that don't set their own. */
-    task_type?: EmbeddingTaskType;
-    /** Output dimension truncation (MRL). Vertex/OpenAI where supported. */
-    dimensions?: number;
 }
 
 export interface EmbeddingsResult {
-    /** One result item per input, in the same order as EmbeddingsOptions.inputs. */
-    results: EmbeddingResultItem[];
-    /** The provider model id that produced the result. */
-    model: string;
-    /** Aggregate token usage when reported by the provider. */
-    usage?: EmbeddingsTokenUsage;
-}
-
-export interface EmbeddingResultItem {
     /**
-     * One or more vectors produced for this input.
-     * Single vector for text/image; multiple for segmented video/audio or
-     * joint-multimodal models that return per-modality vectors.
+     * The embedding vectors corresponding to the words in the input text.
      */
-    outputs: EmbeddingOutput[];
-    /** Token count attributed to this input, when reported by the provider. */
-    input_tokens?: number;
-}
-
-export interface EmbeddingOutput {
     values: number[];
-    /** Which modality this vector represents (useful for joint-multimodal results). */
-    modality?: "text" | "image" | "video" | "audio";
-    /** Segment start time for video/audio. */
-    start_sec?: number;
-    /** Segment end time for video/audio. */
-    end_sec?: number;
-    /** TwelveLabs Marengo: which view of the segment this vector represents. */
-    embedding_option?: string;
-}
+    /**
+     * The model used to generate the embeddings.
+     */
+    model: string;
+    /**
+     * Number of tokens of the input text.
+     */
+    token_count?: number;
 
-export interface EmbeddingsTokenUsage {
-    input_tokens?: number;
-    input_text_tokens?: number;
-    input_image_tokens?: number;
 }
 
 export interface ResultValidationError {

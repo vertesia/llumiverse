@@ -1,12 +1,12 @@
 import {
-    type ContentBlock,
+    ContentBlock,
     ConversationRole,
-    type ConverseRequest,
-    type Message,
-    type SystemContentBlock,
-    type ToolResultContentBlock,
+    ConverseRequest,
+    Message,
+    SystemContentBlock,
+    ToolResultContentBlock,
 } from "@aws-sdk/client-bedrock-runtime";
-import { type DataSource, type ExecutionOptions, PromptRole, type PromptSegment, readStreamAsString, readStreamAsUint8Array } from "@llumiverse/core";
+import { DataSource, ExecutionOptions, PromptRole, PromptSegment, readStreamAsString, readStreamAsUint8Array } from "@llumiverse/core";
 import { parseS3UrlToUri } from "./s3.js";
 
 function roleConversion(role: PromptRole): ConversationRole {

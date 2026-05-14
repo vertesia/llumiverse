@@ -1,11 +1,11 @@
 import {
-    type AIModel, type Completion, type ExecutionOptions,
-    ModelType, PromptRole, type PromptSegment, readStreamAsBase64, type ImagenOptions
+    AIModel, Completion, ExecutionOptions,
+    ModelType, PromptRole, PromptSegment, readStreamAsBase64, ImagenOptions
 } from "@llumiverse/core";
-import type { VertexAIDriver } from "../index.js";
+import { VertexAIDriver } from "../index.js";
 
 // Import the helper module for converting arbitrary protobuf.Value objects
-import { type protos, helpers } from '@google-cloud/aiplatform';
+import { protos, helpers } from '@google-cloud/aiplatform';
 
 interface ImagenBaseReference {
     referenceType: "REFERENCE_TYPE_RAW" | "REFERENCE_TYPE_MASK" | "REFERENCE_TYPE_SUBJECT" |
@@ -227,7 +227,7 @@ export class ImagenModelDefinition {
                             }
                             else if ((options.model_options as ImagenOptions)?.edit_mode === ImagenTaskType.CUSTOMIZATION_SUBJECT) {
                                 //First image is always the control image
-                                if (refId === 1) {
+                                if (refId == 1) {
                                     //Customization subject mode requires a control image
                                     prompt.referenceImages.push({
                                         referenceType: "REFERENCE_TYPE_CONTROL",
