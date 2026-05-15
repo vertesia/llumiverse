@@ -880,21 +880,25 @@ function createAssistantMessageFromCompletion(completion: Completion): ResponseI
     return result;
 }
 
-function mapResponseStream(stream: AsyncIterable<OpenAI.Responses.ResponseStreamEvent>): AsyncIterable<CompletionChunkObject> {
-    const toolCallMetadata = new Map<string, { syntheticId: string, name?: string }>();
+export function mapResponseStream(stream: AsyncIterable<OpenAI.Responses.ResponseStreamEvent>): AsyncIterable<CompletionChunkObject> {
+    const toolCallMetadata = new Map<string, { syntheticId: string, callId?: string, name?: string }>();
 
     return {
         async *[Symbol.asyncIterator]() {
             for await (const event of stream) {
                 if (event.type === 'response.output_item.added' && event.item.type === 'function_call') {
                     const syntheticId = `tool_${event.output_index}`;
-                    const actualId = event.item.id ?? event.item.call_id;
-                    if (actualId) {
-                        toolCallMetadata.set(actualId, { syntheticId, name: event.item.name });
+                    const callId = event.item.call_id ?? event.item.id;
+                    const metadata = { syntheticId, callId, name: event.item.name };
+                    if (event.item.id) {
+                        toolCallMetadata.set(event.item.id, metadata);
+                    }
+                    if (event.item.call_id) {
+                        toolCallMetadata.set(event.item.call_id, metadata);
                     }
                     const toolUse: ToolUse & { _actual_id?: string } = {
                         id: syntheticId,
-                        _actual_id: actualId,
+                        _actual_id: callId,
                         tool_name: event.item.name,
                         tool_input: '' as any,
                     };
@@ -905,9 +909,10 @@ function mapResponseStream(stream: AsyncIterable<OpenAI.Responses.ResponseStream
                 } else if (event.type === 'response.function_call_arguments.delta') {
                     const metadata = toolCallMetadata.get(event.item_id);
                     const syntheticId = metadata?.syntheticId ?? `tool_${event.output_index}`;
+                    const callId = metadata?.callId ?? event.item_id;
                     const toolUse: ToolUse & { _actual_id?: string } = {
                         id: syntheticId,
-                        _actual_id: event.item_id,
+                        _actual_id: callId,
                         tool_name: metadata?.name ?? '',
                         tool_input: event.delta as any,
                     };
@@ -925,7 +930,7 @@ function mapResponseStream(stream: AsyncIterable<OpenAI.Responses.ResponseStream
                     const syntheticId = metadata?.syntheticId ?? `tool_${event.output_index}`;
                     const tool_name = metadata?.name ?? event.name ?? '';
                     if (event.item_id) {
-                        toolCallMetadata.set(event.item_id, { syntheticId, name: tool_name });
+                        toolCallMetadata.set(event.item_id, { syntheticId, callId: metadata?.callId, name: tool_name });
                     }
                 } else if (event.type === 'response.output_text.delta') {
                     yield {
