@@ -482,7 +482,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         return { contents, system };
     }
 
-    usageMetadataToTokenUsage(usageMetadata: GenerateContentResponseUsageMetadata | undefined): ExecutionTokenUsage {
+    usageMetadataToTokenUsage(driver: VertexAIDriver, usageMetadata: GenerateContentResponseUsageMetadata | undefined): ExecutionTokenUsage {
         if (!usageMetadata || !usageMetadata.totalTokenCount) {
             return {};
         }
@@ -499,11 +499,14 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             + (usageMetadata.toolUsePromptTokenCount ?? 0);
 
         if ((tokenUsage.total ?? 0) !== (tokenUsage.prompt ?? 0) + tokenUsage.result) {
-            console.warn("[VertexAI] Gemini token usage mismatch: total does not equal prompt + result", {
-                total: tokenUsage.total,
-                prompt: tokenUsage.prompt,
-                result: tokenUsage.result
-            });
+            // Token-accounting mismatch: warn-level diagnostic (the call still
+            // returns the best-effort tokenUsage). Use the driver's structured
+            // logger so we don't promote stderr writes to ERROR in serverless
+            // log aggregators — see the recoverable-tool-call sites below.
+            driver.logger.warn(
+                { total: tokenUsage.total, prompt: tokenUsage.prompt, result: tokenUsage.result },
+                "[VertexAI] Gemini token usage mismatch: total does not equal prompt + result",
+            );
         }
 
         if (!tokenUsage.result) {
@@ -545,7 +548,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const payload = getGeminiPayload(options, prompt);
         const response = await client.models.generateContent(payload);
 
-        const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(response.usageMetadata);
+        const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(driver, response.usageMetadata);
 
         let tool_use: ToolUse[] | undefined;
         let finish_reason: string | undefined, result: any;
@@ -570,10 +573,15 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 tool_use = collectToolUseParts(content);
 
                 // For recoverable tool call issues, log warning but continue processing
-                // The workflow will handle the invalid tool call gracefully
+                // The workflow will handle the invalid tool call gracefully.
+                // Route through the driver's structured logger instead of `console.warn`
+                // so downstream runtimes (e.g. Cloud Run) don't promote stderr writes
+                // to ERROR severity for what is, by definition, a recoverable event.
                 if (isRecoverableToolCall && tool_use && tool_use.length > 0) {
-                    console.warn(`[Gemini] Recoverable tool call issue (${candidate.finishReason}): ` +
-                        `Model tried to call undeclared tool(s): ${tool_use.map(t => t.tool_name).join(', ')}`);
+                    driver.logger.warn(
+                        `[Gemini] Recoverable tool call issue (${candidate.finishReason}): ` +
+                        `Model tried to call undeclared tool(s): ${tool_use.map(t => t.tool_name).join(', ')}`,
+                    );
                 }
 
                 result = extractCompletionResults(content);
@@ -654,7 +662,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const response = await client.models.generateContentStream(payload);
 
         const stream = asyncMap(response, async (item) => {
-            const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(item.usageMetadata);
+            const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(driver, item.usageMetadata);
             if (item.candidates && item.candidates.length > 0) {
                 for (const candidate of item.candidates) {
                     let tool_use: ToolUse[] | undefined;
@@ -677,10 +685,15 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                         tool_use = collectToolUseParts(candidate.content);
                         if (tool_use) {
                             finish_reason = "tool_use";
-                            // Log warning for recoverable tool call issues
+                            // Log warning for recoverable tool call issues — see the
+                            // matching site in `requestTextCompletion` above for why
+                            // we route through the driver's logger instead of
+                            // `console.warn`.
                             if (isRecoverableToolCall) {
-                                console.warn(`[Gemini] Recoverable tool call issue (${candidate.finishReason}): ` +
-                                    `Model tried to call undeclared tool(s): ${tool_use.map(t => t.tool_name).join(', ')}`);
+                                driver.logger.warn(
+                                    `[Gemini] Recoverable tool call issue (${candidate.finishReason}): ` +
+                                    `Model tried to call undeclared tool(s): ${tool_use.map(t => t.tool_name).join(', ')}`,
+                                );
                             }
                         }
                         return {

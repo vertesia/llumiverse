@@ -14,6 +14,9 @@ import {
 } from "./version-parsing.js";
 
 // Union type of all VertexAI options
+/**
+ * @discriminator _option_id
+ */
 export type VertexAIOptions = ImagenOptions | VertexAIClaudeOptions | VertexAIGeminiOptions;
 
 export enum ImagenTaskType {

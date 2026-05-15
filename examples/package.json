@@ -13,6 +13,7 @@
         ".": "./lib/index.js"
     },
     "scripts": {
+        "lint": "biome lint src",
         "test": "echo \"No tests specified\"",
         "build": "echo \"No build specified\"",
         "clean": "rm -rf ./lib tsconfig.tsbuildinfo"

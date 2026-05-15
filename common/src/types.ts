@@ -332,6 +332,9 @@ export interface ImageResult extends BaseResult {
     value: string; // base64 data url or real url
 }
 
+/**
+ * @discriminator type
+ */
 export type CompletionResult = TextResult | JsonResult | ImageResult;
 
 
@@ -474,10 +477,15 @@ export interface JSONSchemaObject {
 
 export interface JSONSchemaArray extends Array<JSONSchemaType> { }
 
+export interface JSONSchemaProperties {
+    [key: string]: JSONSchema;
+}
+
 export interface JSONSchema {
     type?: JSONSchemaTypeName | JSONSchemaTypeName[];
     description?: string;
-    properties?: Record<string, JSONSchema>;
+    properties?: JSONSchemaProperties;
+    additionalProperties?: boolean | JSONSchema;
     required?: string[];
     [k: string]: any;
 }
@@ -585,6 +593,9 @@ export type ReasoningEffort = "low" | "medium" | "high";
 
 // ============== Model Options ===============
 
+/**
+ * @discriminator _option_id
+ */
 export type ModelOptions = TextFallbackOptions | VertexAIOptions | BedrockOptions | OpenAiOptions | GroqOptions;
 
 // ============== Option Info ===============
