@@ -36,7 +36,6 @@ import type {
 import type { MessageStreamParams } from '@anthropic-ai/sdk/resources/index.mjs';
 import type {
     MessageCreateParamsBase,
-    MessageCreateParamsNonStreaming,
     RawMessageStreamEvent,
 } from '@anthropic-ai/sdk/resources/messages.js';
 import type AnthropicVertex from '@anthropic-ai/vertex-sdk';
@@ -599,6 +598,7 @@ export function getClaudePayload(
         top_k: hasSamplingRestriction ? undefined : model_options?.top_k,
         stop_sequences: model_options?.stop_sequence,
         thinking,
+        stream: true,
         ...(outputConfig && { output_config: outputConfig }),
     };
 
@@ -673,9 +673,8 @@ export async function executeClaudeCompletion(
     let conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
 
     const { payload, requestOptions } = getClaudePayload(options, conversation);
-    const nonStreamingPayload: MessageCreateParamsNonStreaming = { ...payload, stream: false };
 
-    const result = await client.messages.create(nonStreamingPayload, requestOptions) satisfies Message;
+    const result: Message = await client.messages.stream(payload, requestOptions).finalMessage();
 
     const includeThoughts = model_options?.include_thoughts ?? false;
     const text = collectAllTextContent(result.content, includeThoughts);
