@@ -1,21 +1,20 @@
-import type { ClientOptions as AnthropicVertexClientOptions } from "@anthropic-ai/vertex-sdk";
 import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { PredictionServiceClient, v1beta1 } from "@google-cloud/aiplatform";
-import { Content, GoogleGenAI, Model } from "@google/genai";
+import { type Content, GoogleGenAI, type Model } from "@google/genai";
 import {
-    AIModel,
+    type AIModel,
     AbstractDriver,
-    Completion,
-    CompletionChunkObject,
-    CompletionResult,
-    DriverOptions,
-    EmbeddingsOptions,
-    EmbeddingsResult,
-    ExecutionOptions,
-    LlumiverseError,
-    LlumiverseErrorContext,
-    ModelSearchPayload,
-    PromptSegment,
+    type Completion,
+    type CompletionChunkObject,
+    type CompletionResult,
+    type DriverOptions,
+    type EmbeddingsOptions,
+    type EmbeddingsResult,
+    type ExecutionOptions,
+    type LlumiverseError,
+    type LlumiverseErrorContext,
+    type ModelSearchPayload,
+    type PromptSegment,
     getConversationMeta,
     getModelCapabilities,
     incrementConversationTurn,
@@ -25,12 +24,12 @@ import {
     truncateLargeTextInConversation,
 } from "@llumiverse/core";
 import { FetchClient } from "@vertesia/api-fetch-client";
-import { AuthClient, GoogleAuth, GoogleAuthOptions } from "google-auth-library";
+import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from "google-auth-library";
 import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
-import { TextEmbeddingsOptions, getEmbeddingsForText } from "./embeddings/embeddings-text.js";
+import { type TextEmbeddingsOptions, getEmbeddingsForText } from "./embeddings/embeddings-text.js";
 import { getModelDefinition } from "./models.js";
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from "./models/claude.js";
-import { ImagenModelDefinition, ImagenPrompt } from "./models/imagen.js";
+import { ImagenModelDefinition, type ImagenPrompt } from "./models/imagen.js";
 
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
@@ -173,7 +172,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 timeout: 20 * 60 * 10000, // Set to 20 minutes, 10 minute default, setting this disables long request error: https://github.com/anthropics/anthropic-sdk-typescript?#long-requests
                 region: mappedRegion,
                 projectId: this.options.project,
-                authClient: authClient as unknown as AnthropicVertexClientOptions["authClient"],
+                authClient: authClient,
             });
         }
 
@@ -183,7 +182,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 timeout: 20 * 60 * 10000, // Set to 20 minutes, 10 minute default, setting this disables long request error: https://github.com/anthropics/anthropic-sdk-typescript?#long-requests
                 region: mappedRegion,
                 projectId: this.options.project,
-                authClient: authClient as unknown as AnthropicVertexClientOptions["authClient"],
+                authClient: authClient,
             });
         }
         return this.anthropicClient;
