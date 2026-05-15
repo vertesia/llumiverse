@@ -1,8 +1,9 @@
+import { getModelCapabilitiesAnthropic } from "./capability/anthropic.js";
 import { getModelCapabilitiesAzureFoundry } from "./capability/azure_foundry.js";
 import { getModelCapabilitiesBedrock } from "./capability/bedrock.js";
 import { getModelCapabilitiesOpenAI } from "./capability/openai.js";
 import { getModelCapabilitiesVertexAI } from "./capability/vertexai.js";
-import { ModelCapabilities, ModelModalities, Providers } from "./types.js";
+import { type ModelCapabilities, type ModelModalities, Providers } from "./types.js";
 
 export function getModelCapabilities(model: string, provider?: string | Providers): ModelCapabilities {
     //Check for locations/<location>/ prefix and remove it
@@ -25,6 +26,8 @@ export function getModelCapabilities(model: string, provider?: string | Provider
 
 function _getModelCapabilities(model: string, provider?: string | Providers): ModelCapabilities {
     switch (provider?.toLowerCase()) {
+        case Providers.anthropic:
+            return getModelCapabilitiesAnthropic(model);
         case Providers.vertexai:
             return getModelCapabilitiesVertexAI(model);
         case Providers.openai:
@@ -53,6 +56,8 @@ function _getModelCapabilities(model: string, provider?: string | Providers): Mo
             // Guess the provider based on the model name
             if (model.startsWith("gpt")) {
                 return getModelCapabilitiesOpenAI(model);
+            } else if (model.startsWith("claude")) {
+                return getModelCapabilitiesAnthropic(model);
             } else if (model.startsWith("grok")) {
                 // xAI Grok models
                 return {
