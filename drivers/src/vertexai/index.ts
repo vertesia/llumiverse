@@ -28,6 +28,7 @@ import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from "google-auth
 import { getModelDefinition } from "./models.js";
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from "./models/claude.js";
 import { ImagenModelDefinition, type ImagenPrompt } from "./models/imagen.js";
+import { generateVertexAiEmbeddings } from "./embeddings/embed.js";
 
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
