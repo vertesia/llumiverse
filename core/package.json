@@ -56,6 +56,7 @@
     }
   },
   "scripts": {
+    "lint": "biome lint src",
     "test": "vitest run",
     "build": "pnpm exec tsmod build",
     "clean": "rimraf ./lib tsconfig.tsbuildinfo"
@@ -68,7 +69,7 @@
     "url": "git+ssh://git@github.com/vertesia/llumiverse.git"
   },
   "devDependencies": {
-    "@vertesia/api-fetch-client": "^0.82.4",
+    "@vertesia/api-fetch-client": "^1.2.0",
     "rimraf": "^6.1.2",
     "ts-dual-module": "^0.6.3",
     "typescript": "^6.0.2",

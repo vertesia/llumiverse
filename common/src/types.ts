@@ -1,8 +1,8 @@
-import { BedrockOptions } from './options/bedrock.js';
-import { TextFallbackOptions } from './options/fallback.js';
-import { GroqOptions } from './options/groq.js';
-import { OpenAiOptions } from './options/openai.js';
-import { VertexAIOptions } from './options/vertexai.js';
+import type { BedrockOptions } from './options/bedrock.js';
+import type { TextFallbackOptions } from './options/fallback.js';
+import type { GroqOptions } from './options/groq.js';
+import type { OpenAiOptions } from './options/openai.js';
+import type { VertexAIOptions } from './options/vertexai.js';
 
 // ============== Provider details ===============
 
@@ -19,7 +19,8 @@ export enum Providers {
     mistralai = 'mistralai',
     groq = 'groq',
     watsonx = 'watsonx',
-    xai = 'xai'
+    xai = 'xai',
+    anthropic = 'anthropic'
 }
 
 export interface ProviderParams {
@@ -129,6 +130,13 @@ export const ProviderList: Record<Providers, ProviderParams> = {
         requiresEndpointUrl: true,
         endpointPlaceholder: "https://api.example.com/v1",
         supportSearch: false
+    },
+    anthropic: {
+        id: Providers.anthropic,
+        name: "Anthropic",
+        requiresApiKey: true,
+        requiresEndpointUrl: false,
+        supportSearch: false,
     },
 }
 

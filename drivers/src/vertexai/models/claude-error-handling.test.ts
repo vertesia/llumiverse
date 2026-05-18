@@ -157,7 +157,7 @@ describe('ClaudeModelDefinition Error Handling', () => {
             expect(error.name).toBe('NotFoundError');
         });
 
-        it('should handle ConflictError as not retryable', () => {
+        it('should handle ConflictError as retryable (lock timeout)', () => {
             const anthropicError = new ConflictError(
                 409,
                 { type: 'error', error: { type: 'conflict_error', message: 'Resource conflict' } },
@@ -172,7 +172,7 @@ describe('ClaudeModelDefinition Error Handling', () => {
             });
 
             expect(error.code).toBe(409);
-            expect(error.retryable).toBe(false);
+            expect(error.retryable).toBe(true);
             expect(error.name).toBe('ConflictError');
         });
 
@@ -303,6 +303,7 @@ describe('ClaudeModelDefinition Error Handling', () => {
                 new RateLimitError(429, {}, 'Rate limit', new Headers()),
                 new InternalServerError(500, {}, 'Server error', new Headers()),
                 new APIConnectionTimeoutError({ message: 'Timeout' }),
+                new ConflictError(409, {}, 'Conflict / lock timeout', new Headers()),
             ];
 
             for (const error of retryableErrors) {
@@ -317,7 +318,6 @@ describe('ClaudeModelDefinition Error Handling', () => {
                 new AuthenticationError(401, {}, 'Auth error', new Headers()),
                 new PermissionDeniedError(403, {}, 'Permission denied', new Headers()),
                 new NotFoundError(404, {}, 'Not found', new Headers()),
-                new ConflictError(409, {}, 'Conflict', new Headers()),
                 new UnprocessableEntityError(422, {}, 'Validation error', new Headers()),
             ];
 

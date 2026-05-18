@@ -11,14 +11,13 @@
  * to be in one user message.
  */
 
+import type { MessageParam } from '@anthropic-ai/sdk/resources/index.js';
 import { describe, expect, test } from 'vitest';
 import {
     fixOrphanedToolUse,
     mergeConsecutiveUserMessages,
-    sanitizeMessages,
-    updateConversation,
-} from '../src/vertexai/models/claude.js';
-import { MessageParam } from '@anthropic-ai/sdk/resources/index.js';
+    updateClaudeConversation,
+} from '../src/shared/claude-messages.js';
 
 describe('mergeConsecutiveUserMessages', () => {
 
@@ -300,22 +299,22 @@ describe('mergeConsecutiveUserMessages', () => {
 
     test('updateConversation sanitizes before merging split tool-results across an empty assistant separator', () => {
         const baseMessages: MessageParam[] = [
-                {
-                    role: 'assistant',
-                    content: [
-                        { type: 'tool_use', id: 'tool_A', name: 'search', input: {} },
-                        { type: 'tool_use', id: 'tool_B', name: 'fetch', input: {} },
-                    ]
-                },
-                {
-                    role: 'user',
-                    content: [{ type: 'tool_result', tool_use_id: 'tool_A', content: 'Result A' }]
-                },
-                {
-                    role: 'assistant',
-                    content: [{ type: 'text', text: '' }]
-                },
-            ];
+            {
+                role: 'assistant',
+                content: [
+                    { type: 'tool_use', id: 'tool_A', name: 'search', input: {} },
+                    { type: 'tool_use', id: 'tool_B', name: 'fetch', input: {} },
+                ]
+            },
+            {
+                role: 'user',
+                content: [{ type: 'tool_result', tool_use_id: 'tool_A', content: 'Result A' }]
+            },
+            {
+                role: 'assistant',
+                content: [{ type: 'text', text: '' }]
+            },
+        ];
 
         const baseConversation = {
             messages: baseMessages,
@@ -323,18 +322,18 @@ describe('mergeConsecutiveUserMessages', () => {
         };
 
         const promptMessages: MessageParam[] = [
-                {
-                    role: 'user',
-                    content: [{ type: 'tool_result', tool_use_id: 'tool_B', content: 'Result B' }]
-                },
-            ];
+            {
+                role: 'user',
+                content: [{ type: 'tool_result', tool_use_id: 'tool_B', content: 'Result B' }]
+            },
+        ];
 
         const prompt = {
             messages: promptMessages,
             system: undefined,
         };
 
-        const updated = updateConversation(baseConversation, prompt);
+        const updated = updateClaudeConversation(baseConversation, prompt);
         const fixed = fixOrphanedToolUse(updated.messages);
 
         expect(updated.messages).toHaveLength(2);
