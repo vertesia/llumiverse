@@ -13,7 +13,7 @@ import {
 } from '@anthropic-ai/sdk/error';
 import { LlumiverseError } from '@llumiverse/core';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { VertexAIDriver } from '../index.js';
+import type { VertexAIDriver } from '../index.js';
 import { ClaudeModelDefinition } from './claude.js';
 
 describe('ClaudeModelDefinition Error Handling', () => {

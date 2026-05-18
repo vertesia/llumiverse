@@ -3,6 +3,7 @@ export * from "./options.js";
 export * from "./options/anthropic.js";
 export * from "./options/bedrock.js";
 export * from "./options/context-windows.js";
+export * from "./options/embedding.js";
 export * from "./options/fallback.js";
 export * from "./options/groq.js";
 export * from "./options/openai.js";
