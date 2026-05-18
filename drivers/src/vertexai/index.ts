@@ -11,7 +11,6 @@ import {
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
-    type LlumiverseError,
     type LlumiverseErrorContext,
     type ModelSearchPayload,
     type PromptSegment,
@@ -19,18 +18,13 @@ import {
     getModelCapabilities,
     incrementConversationTurn,
     type LlumiverseError,
-    type LlumiverseErrorContext,
     modelModalitiesToArray,
-    type ModelSearchPayload,
-    type PromptSegment,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
     truncateLargeTextInConversation
 } from "@llumiverse/core";
 import { FetchClient } from "@vertesia/api-fetch-client";
 import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from "google-auth-library";
-import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
-import { type TextEmbeddingsOptions, getEmbeddingsForText } from "./embeddings/embeddings-text.js";
 import { getModelDefinition } from "./models.js";
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from "./models/claude.js";
 import { ImagenModelDefinition, type ImagenPrompt } from "./models/imagen.js";
