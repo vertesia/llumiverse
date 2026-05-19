@@ -1,8 +1,8 @@
 /**
  * Get the property named by "name" of the given object
- * If an array is idnexed using a string key then a map is done and an array with the content of the properties with that name are returned
+ * If an array is indexed using a string key then a map is done and an array with the content of the properties with that name are returned
  * Ex: docs.text => will return an array of text properties of the docs array
- * @param object the obejct
+ * @param object the object
  * @param name the name of the property.
  * @returns the property value
  */

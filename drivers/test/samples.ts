@@ -3,7 +3,12 @@ import { NovaMessagesPrompt } from "@llumiverse/core/formatters";
 import { createReadStream } from "fs";
 import { JSONSchema } from "@llumiverse/core";
 import { createReadableStreamFromReadable } from "node-web-stream-adapters";
-import { basename, resolve } from "path";
+import { basename, dirname, resolve } from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+// 512x512 JPEG fallback — within Bedrock's [320, 4096] range
+const LOCAL_FALLBACK_IMAGE = resolve(__dirname, "test_image_1.jpg");
 
 export const testPrompt_color: PromptSegment[] = [
     {
@@ -24,7 +29,7 @@ export const testSchema_color: JSONSchema = {
 
 class ImageSource implements DataSource {
     file: string;
-    mime_type: "image/jpeg";
+    mime_type: "image/jpeg" = "image/jpeg";
     constructor(file: string) {
         this.file = resolve(file);
     }
@@ -32,7 +37,7 @@ class ImageSource implements DataSource {
         return basename(this.file);
     }
     async getURL(): Promise<string> {
-        throw new Error("Method not implemented.");
+        return `file://${this.file}`;
     }
     async getStream(): Promise<ReadableStream<string | Uint8Array>> {
         const stream = createReadStream(this.file);
@@ -50,17 +55,25 @@ class ImageUrlSource implements DataSource {
         return this.url;
     }
     async getStream(): Promise<ReadableStream<string | Uint8Array>> {
-        const stream = await fetch(this.url).then(r => {
-            if (!r.ok) {
-                throw new Error("Failed to fetch image from url: " + this.url);
-            }
-            return r.body;
-        })
-        if (!stream) {
-            throw new Error("No content from url: " + this.url);
-        } else {
-            return stream;
+        return fetchWithFallback(this.url);
+    }
+}
+
+/** Fetch with timeout and fallback to a local test image */
+async function fetchWithFallback(url: string): Promise<ReadableStream<Uint8Array>> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    try {
+        const res = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeout);
+        if (!res.ok || !res.body) {
+            throw new Error(`HTTP ${res.status}`);
         }
+        return res.body;
+    } catch (err) {
+        clearTimeout(timeout);
+        console.warn(`Failed to fetch ${url} (${err}), falling back to local test image`);
+        return createReadableStreamFromReadable(createReadStream(LOCAL_FALLBACK_IMAGE));
     }
 }
 
@@ -82,7 +95,7 @@ export const testSchema_animalDescription: JSONSchema =
         type: {
             type: "string"
         },
-        specy: {
+        species: {
             type: "string"
         },
         characteristics: {
@@ -94,15 +107,12 @@ export const testSchema_animalDescription: JSONSchema =
     }
 }
 
-const imgSource = new ImageUrlSource("https://upload.wikimedia.org/wikipedia/commons/b/b2/WhiteCat.jpg")
-
-
 export const testPrompt_textToImage: NovaMessagesPrompt =
 {
     messages: [{
         role: PromptRole.user,
         content: [{
-            text: "A blue sky with a purple unicorn flying, cosplaying flash"
+            text: "A blue sky with a purple unicorn flying"
         }]
     }]
 }
@@ -112,7 +122,7 @@ export const testPrompt_textToImageGuidance: NovaMessagesPrompt =
     messages: [{
         role: PromptRole.user,
         content: [{
-            text: "A blue sky with a purple unicorn flying, cosplaying flash"
+            text: "A blue sky with a purple unicorn flying"
         },
         {
             image: {
@@ -140,7 +150,7 @@ export const testPrompt_imageVariations: NovaMessagesPrompt =
         {
             image: {
                 format: "jpeg",
-                source: { bytes: await getImageAsBase64(new ImageUrlSource("https://upload.wikimedia.org/wikipedia/commons/thumb/b/bf/Krakow_-_Kosciol_Mariacki.jpg/1000px-Krakow_-_Kosciol_Mariacki.jpg")), }
+                source: { bytes: await getImageAsBase64(new ImageUrlSource("https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg/640px-Cat03.jpg")), }
             }
         }
         ]

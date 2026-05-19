@@ -16,7 +16,7 @@ interface Pricing {
 }
 
 interface Instance {
-    avzone: string;
+    av_zone: string;
     cluster: string;
 }
 
@@ -30,14 +30,14 @@ interface Gpu {
 
 interface Price {
     base: number;
-    finetune: number;
+    fine_tune: number;
     hourly: number;
     input: number;
     output: number;
 }
 
 interface Stat {
-    avzone: string;
+    av_zone: string;
     cluster: string;
     capacity: number;
     qps: number;

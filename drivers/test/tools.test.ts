@@ -1,10 +1,9 @@
-import { AIModel, AbstractDriver, ExecutionOptions, Modalities, PromptRole, PromptSegment } from '@llumiverse/core';
+import { AbstractDriver, ExecutionOptions, Modalities, PromptRole, PromptSegment } from '@llumiverse/core';
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from "vitest";
-import { AzureOpenAIDriver, BedrockDriver, GroqDriver, MistralAIDriver, OpenAIDriver, TogetherAIDriver, VertexAIDriver, WatsonxDriver, xAIDriver } from '../src';
-import { assertCompletionOk, assertStreamingCompletionOk } from './assertions';
-import { testPrompt_color, testPrompt_describeImage, testSchema_animalDescription, testSchema_color } from './samples';
+import { BedrockDriver, OpenAIDriver, VertexAIDriver } from '../src';
+import { completionResultToString } from './utils';
 
 const TIMEOUT = 90 * 1000;
 
@@ -27,8 +26,9 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
             region: process.env.GOOGLE_REGION as string,
         }),
         models: [
-            "gemini-1.5-pro",
-            "publishers/anthropic/models/claude-3-7-sonnet",
+            "publishers/google/models/gemini-2.5-flash",
+            "publishers/anthropic/models/claude-sonnet-4-5",
+            "publishers/anthropic/models/claude-opus-4-6",
         ]
     })
 }
@@ -68,22 +68,20 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
 //     console.warn("TogetherAI tests are skipped: TOGETHER_API_KEY environment variable is not set");
 // }
 
-// if (process.env.OPENAI_API_KEY) {
-//     drivers.push({
-//         name: "openai",
-//         driver: new OpenAIDriver({
-//             apiKey: process.env.OPENAI_API_KEY as string
-//         }),
-//         models: [
-//             "gpt-4o",
-//             "gpt-3.5-turbo",
-//             "o1-mini",
-//         ]
-//     }
-//     )
-// } else {
-//     console.warn("OpenAI tests are skipped: OPENAI_API_KEY environment variable is not set");
-// }
+if (process.env.OPENAI_API_KEY) {
+    drivers.push({
+        name: "openai",
+        driver: new OpenAIDriver({
+            apiKey: process.env.OPENAI_API_KEY as string
+        }),
+        models: [
+            "gpt-4o",
+        ]
+    }
+    )
+} else {
+    console.warn("OpenAI tests are skipped: OPENAI_API_KEY environment variable is not set");
+}
 
 // const AZURE_OPENAI_MODELS = [
 //     "gpt-4o",
@@ -106,23 +104,21 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
 // }
 
 
-// if (process.env.BEDROCK_REGION) {
-//     drivers.push({
-//         name: "bedrock",
-//         driver: new BedrockDriver({
-//             region: process.env.BEDROCK_REGION as string,
-//         }),
-//         //Use foundation models and inference profiles to test the driver
-//         models: [
-//             "anthropic.claude-3-5-sonnet-20240620-v1:0",
-//             "us.meta.llama3-3-70b-instruct-v1:0",
-//             "us.amazon.nova-micro-v1:0",
-//             "ai21.jamba-1-5-mini-v1:0",
-//         ],
-//     });
-// } else {
-//     console.warn("Bedrock tests are skipped: BEDROCK_REGION environment variable is not set");
-// }
+if (process.env.BEDROCK_REGION) {
+    drivers.push({
+        name: "bedrock",
+        driver: new BedrockDriver({
+            region: process.env.BEDROCK_REGION as string,
+        }),
+        //Use foundation models and inference profiles to test the driver
+        models: [
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            //"us.writer.palmyra-x5-v1:0" // Only in us-west-2
+        ],
+    });
+} else {
+    console.warn("Bedrock tests are skipped: BEDROCK_REGION environment variable is not set");
+}
 
 // if (process.env.GROQ_API_KEY) {
 
@@ -178,18 +174,18 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
 
 const PROMPT_WITH_GET_NAME_TOOL = [
     {
-        "role": PromptRole.user,
-        "content": "What is the weather in Paris?",
+        role: PromptRole.user,
+        content: "What is the weather in Paris?",
     },
 ] satisfies PromptSegment[];
 
-function addToolRsponse(prompt: PromptSegment[], tool_use_id: string, response: string): PromptSegment[] {
+function addToolResponse(prompt: PromptSegment[], tool_use_id: string, response: string): PromptSegment[] {
     return [
         ...prompt,
         {
-            "role": PromptRole.tool,
-            "tool_use_id": tool_use_id,
-            "content": response
+            role: PromptRole.tool,
+            tool_use_id: tool_use_id,
+            content: response
         }
     ];
 
@@ -207,7 +203,7 @@ function getTestOptions(model: string): ExecutionOptions {
             //   top_logprobs: 5,        //Currently not supported, option will be ignored
             presence_penalty: 0.1,      //Cohere Command R does not support using presence & frequency penalty at the same time
             frequency_penalty: -0.1,
-            stop_sequence: ["adsoiuygsa"],
+            stop_sequence: ["Haemoglobin"],
         },
         output_modality: Modalities.text,
         tools: [
@@ -240,12 +236,15 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
         expect(r.tool_use?.[0].tool_name).toBe("get_weather");
         const tool_use = r.tool_use!;
         r = await driver.execute([{
-            "role": PromptRole.tool,
-            "tool_use_id": tool_use[0].id,
-            "content": "15 degrees"
-        }], { ...options, conversation: r.conversation });
-        expect(r.result.includes("15 degrees")).toBeTruthy();
-        //console.log("#######Result:", r.result, model);
+            role: PromptRole.tool,
+            tool_use_id: tool_use[0].id,
+            content: "15 degrees"
+        } satisfies PromptSegment], { ...options, conversation: r.conversation });
+        const stringResult = r.result.map(completionResultToString).join("");
+        if (!stringResult.includes("15")) {
+            console.error(`[${model}] Tool result not found in response:`, stringResult);
+        }
+        expect(stringResult.includes("15")).toBeTruthy();
     });
 
 });

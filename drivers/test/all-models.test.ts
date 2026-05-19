@@ -1,8 +1,8 @@
-import { AIModel, AbstractDriver, ExecutionOptions, Modalities } from '@llumiverse/core';
+import { AbstractDriver, AIModel, ExecutionOptions, getMaxOutputTokens, getMaxTokensLimitBedrock, getMaxTokensLimitVertexAi, Modalities, PromptSegment } from '@llumiverse/core';
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from "vitest";
-import { AzureOpenAIDriver, BedrockDriver, GroqDriver, MistralAIDriver, OpenAIDriver, TogetherAIDriver, VertexAIDriver, WatsonxDriver, xAIDriver } from '../src';
+import { AzureOpenAIDriver, BedrockDriver, GroqDriver, MistralAIDriver, OpenAICompatibleDriver, OpenAIDriver, TogetherAIDriver, VertexAIDriver, WatsonxDriver, xAIDriver } from '../src';
 import { assertCompletionOk, assertStreamingCompletionOk } from './assertions';
 import { testPrompt_color, testPrompt_describeImage, testSchema_animalDescription, testSchema_color } from './samples';
 
@@ -27,10 +27,9 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
             region: process.env.GOOGLE_REGION as string,
         }),
         models: [
-            "publishers/google/models/gemini-1.5-pro-002",
-            "gemini-1.5-flash", //legacy id format
-            //"gemini-1.5-pro",
-            "publishers/anthropic/models/claude-3-5-sonnet-v2",
+            "publishers/google/models/gemini-2.5-flash-lite",
+            "publishers/anthropic/models/claude-sonnet-4-5",
+            "publishers/anthropic/models/claude-opus-4-6",
         ]
     })
 } else {
@@ -46,8 +45,8 @@ if (process.env.MISTRAL_API_KEY) {
             endpoint_url: process.env.MISTRAL_ENDPOINT_URL as string ?? undefined
         }),
         models: [
-            "open-mixtral-8x7b",
-            "mistral-medium-latest",
+            "pixtral-large-latest",
+            "mistral-small-latest",
             "mistral-large-latest"
         ]
     }
@@ -63,7 +62,8 @@ if (process.env.TOGETHER_API_KEY) {
             apiKey: process.env.TOGETHER_API_KEY as string
         }),
         models: [
-            "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
+            //"meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo", // No longer serverless on TogetherAI
+            //"meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
             //"mistralai/Mixtral-8x7B-Instruct-v0.1" //too slow in tests for now
         ]
     }
@@ -79,9 +79,8 @@ if (process.env.OPENAI_API_KEY) {
             apiKey: process.env.OPENAI_API_KEY as string
         }),
         models: [
-            "gpt-4o",
-            "gpt-3.5-turbo",
-            "o1-mini",
+            "gpt-5.2",
+            "gpt-4o-mini",
         ]
     }
     )
@@ -90,8 +89,7 @@ if (process.env.OPENAI_API_KEY) {
 }
 
 const AZURE_OPENAI_MODELS = [
-    "gpt-4o",
-    "gpt-3.5-turbo"
+    "gpt-4",
 ]
 
 
@@ -118,8 +116,7 @@ if (process.env.BEDROCK_REGION) {
         }),
         //Use foundation models and inference profiles to test the driver
         models: [
-            "anthropic.claude-3-5-sonnet-20240620-v1:0",
-            "us.meta.llama3-3-70b-instruct-v1:0",
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             "us.amazon.nova-micro-v1:0",
             "ai21.jamba-1-5-mini-v1:0",
         ],
@@ -136,8 +133,10 @@ if (process.env.GROQ_API_KEY) {
             apiKey: process.env.GROQ_API_KEY as string
         }),
         models: [
-            "llama3-70b-8192",
-            "llama-3.3-70b-versatile"
+            //TODO: re enabled when groq has constrained decoding
+            //https://community.groq.com/t/gpt-oss-120b-ignoring-tools/385/29
+            //    "openai/gpt-oss-20b", 
+            //"llama-3.3-70b-versatile"
         ]
     })
 } else {
@@ -155,13 +154,35 @@ if (process.env.WATSONX_API_KEY) {
             endpointUrl: process.env.WATSONX_ENDPOINT_URL as string
         }),
         models: [
-            "ibm/granite-20b-multilingual",
-            "ibm/granite-34b-code-instruct",
-            "mistralai/mixtral-8x7b-instruct-v01"
+            "ibm/granite-3-2-8b-instruct",
+            "ibm/granite-3-2b-instruct",
+            //"ibm/granite-13b-instruct-v2" Does not work with schemas
+            //Non-ibm models don't work, may be account related
+            //"meta/llama-3-3-70b-instruct",
+            //"mistralai/pixtral-12b",
         ]
     })
 } else {
     console.warn("Watsonx tests are skipped: WATSONX_API_KEY environment variable is not set");
+}
+
+if (process.env.OPENROUTER_API_KEY) {
+    drivers.push({
+        name: "openrouter",
+        driver: new OpenAICompatibleDriver({
+            apiKey: process.env.OPENROUTER_API_KEY,
+            endpoint: "https://openrouter.ai/api/v1",
+        }),
+        models: [
+            "moonshotai/kimi-k2.5",
+            "qwen/qwen3.5-35b-a3b",
+            "minimax/minimax-m2.5",
+            "deepseek/deepseek-chat",
+            "google/gemini-3-flash-preview",
+        ]
+    });
+} else {
+    console.warn("OpenRouter tests are skipped: OPENROUTER_API_KEY environment variable is not set");
 }
 
 if (process.env.XAI_API_KEY) {
@@ -171,8 +192,7 @@ if (process.env.XAI_API_KEY) {
             apiKey: process.env.XAI_API_KEY as string,
         }),
         models: [
-            "grok-beta",
-            "grok-vision-beta"
+            "grok-4.1",
         ]
     })
 } else {
@@ -180,13 +200,13 @@ if (process.env.XAI_API_KEY) {
 }
 
 function getTestOptions(model: string): ExecutionOptions {
-    if (model == "o1-mini") {
+    if (model == "o1-mini" || model == "o3-mini") {
         return {
             model: model,
             model_options: {
                 _option_id: "openai-thinking",
-                max_tokens: 2048,
-                stop_sequence: ["adsoiuygsa"],
+                max_tokens: 3000,
+                stop_sequence: model == "o3-mini" ? ["haemoglobin"] : undefined,
             },
             output_modality: Modalities.text,
         };
@@ -196,14 +216,14 @@ function getTestOptions(model: string): ExecutionOptions {
         model: model,
         model_options: {
             _option_id: "text-fallback",
-            max_tokens: 128,
+            max_tokens: 512,
             temperature: 0.3,
             top_k: 40,
             top_p: 0.7,             //Some models do not support top_p = 1.0, set to 0.99 or lower.
             //   top_logprobs: 5,        //Currently not supported, option will be ignored
             presence_penalty: 0.1,      //Cohere Command R does not support using presence & frequency penalty at the same time
             frequency_penalty: -0.1,
-            stop_sequence: ["adsoiuygsa"],
+            stop_sequence: ["haemoglobin"],
         },
         output_modality: Modalities.text,
     };
@@ -259,6 +279,34 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
         console.log("Result for streaming with schema " + model, JSON.stringify(out));
     });
 
+
+    test.each(models)(`${name}: max_tokens at documented limit on %s`, { timeout: TIMEOUT, retry: 1 }, async (model) => {
+        // Resolve the documented max_tokens limit: prefer provider-specific, fallback to provider-agnostic
+        let limit: number | undefined;
+        if (driver.provider === 'bedrock') {
+            limit = getMaxTokensLimitBedrock(model);
+        } else if (driver.provider === 'vertexai') {
+            limit = getMaxTokensLimitVertexAi(model);
+        }
+        // Fallback to conservative provider-agnostic limit for all other providers
+        if (!limit) {
+            limit = getMaxOutputTokens(model);
+        }
+
+        const shortPrompt: PromptSegment[] = [{ role: 'user', content: 'Say "ok".' }];
+        const r = await driver.execute(shortPrompt, {
+            model,
+            model_options: {
+                _option_id: 'text-fallback',
+                max_tokens: limit,
+                temperature: 0,
+            },
+            output_modality: Modalities.text,
+        });
+        // If the provider rejects our limit value, r.error will be set
+        expect(r.error).toBeFalsy();
+        expect(r.finish_reason).toBeTruthy();
+    });
 
     test.each(models)(`${name}: multimodal test - describe image with %s`, { timeout: TIMEOUT, retry: 2 }, async (model) => {
 

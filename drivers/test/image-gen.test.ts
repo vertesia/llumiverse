@@ -68,9 +68,9 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
 
         const res = await driver.requestImageGeneration(testPrompt_textToImage, options);
         expect(res).toBeDefined();
-        expect(res.result).toHaveProperty("images");
-        expect(res.result.images).toHaveLength(1);
-        saveImagesToOutput(res.result.images, `text-to-image-${model}`);
+        expect(res.result).toHaveLength(1);
+        expect(res.result[0]).toHaveProperty("value");
+        saveImagesToOutput(res.result.filter(r => r.type === "image").map(r => r.value), `text-to-image-${model}`);
     });
 
     test.each(models)(`${name}: text to image guidance`, {timeout: 300*1000}, async (model) => {
@@ -88,9 +88,9 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
 
         const res = await driver.requestImageGeneration(testPrompt_textToImageGuidance, options);
         expect(res).toBeDefined();
-        expect(res.result).toHaveProperty("images");
-        expect(res.result.images).toHaveLength(1);
-        saveImagesToOutput(res.result.images, `text-to-image-guidance-${model}`);
+        expect(res.result).toHaveLength(1);
+        expect(res.result[0]).toHaveProperty("value");
+        saveImagesToOutput(res.result.filter(r => r.type === "image").map(r => r.value), `text-to-image-guidance-${model}`);
     });
 
 
@@ -107,10 +107,9 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
 
         const res = await driver.requestImageGeneration(testPrompt_imageVariations, options);
         expect(res).toBeDefined();
-        expect(res.result).toHaveProperty("images");
-        expect(res.result.images).toHaveLength(1);
-        saveImagesToOutput(res.result.images, `text-to-image-variation-${model}`);
-
+        expect(res.result).toHaveLength(1);
+        expect(res.result[0]).toHaveProperty("value");
+        saveImagesToOutput(res.result.filter(r => r.type === "image").map(r => r.value), `text-to-image-variation-${model}`);
     });
 
 });

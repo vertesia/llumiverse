@@ -132,11 +132,6 @@ export interface CompletionRequestParams {
     topP?: number,
     randomSeed?: number,
     stream?: boolean,
-    /**
-     * @deprecated use safePrompt instead
-     */
-    safeMode?: boolean,
-    safePrompt?: boolean,
     toolChoice?: ToolChoice,
     responseFormat?: ResponseFormat,
     stopSequences?: string[],

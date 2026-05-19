@@ -1,17 +1,11 @@
-import { AIModel, Completion, ExecutionOptions, ImageGeneration, Modalities, ModelType, PromptRole, PromptSegment, readStreamAsBase64 } from "@llumiverse/core";
-import { VertexAIDriver } from "../index.js";
-
-const projectId = process.env.GOOGLE_PROJECT_ID;
-const location = 'us-central1';
-
-import aiplatform, { protos } from '@google-cloud/aiplatform';
-
-// Imports the Google Cloud Prediction Service Client library
-const { PredictionServiceClient } = aiplatform.v1;
+import {
+    type AIModel, type Completion, type ExecutionOptions,
+    ModelType, PromptRole, type PromptSegment, readStreamAsBase64, type ImagenOptions
+} from "@llumiverse/core";
+import type { VertexAIDriver } from "../index.js";
 
 // Import the helper module for converting arbitrary protobuf.Value objects
-import { helpers } from '@google-cloud/aiplatform';
-import { ImagenOptions } from "../../../../core/src/options/vertexai.js";
+import { type protos, helpers } from '@google-cloud/aiplatform';
 
 interface ImagenBaseReference {
     referenceType: "REFERENCE_TYPE_RAW" | "REFERENCE_TYPE_MASK" | "REFERENCE_TYPE_SUBJECT" |
@@ -88,14 +82,6 @@ export interface ImagenPrompt {
     subjectDescription?: string; //Used for image customization to describe in the reference image
     negativePrompt?: string; //Used for negative prompts
 }
-
-// Specifies the location of the api endpoint
-const clientOptions = {
-    apiEndpoint: `${location}-aiplatform.googleapis.com`,
-};
-
-// Instantiates a client
-const predictionServiceClient = new PredictionServiceClient(clientOptions);
 
 function getImagenParameters(taskType: string, options: ImagenOptions) {
     const commonParameters = {
@@ -241,7 +227,7 @@ export class ImagenModelDefinition {
                             }
                             else if ((options.model_options as ImagenOptions)?.edit_mode === ImagenTaskType.CUSTOMIZATION_SUBJECT) {
                                 //First image is always the control image
-                                if (refId == 1) {
+                                if (refId === 1) {
                                     //Customization subject mode requires a control image
                                     prompt.referenceImages.push({
                                         referenceType: "REFERENCE_TYPE_CONTROL",
@@ -336,24 +322,21 @@ export class ImagenModelDefinition {
         return prompt
     }
 
-    async requestImageGeneration(driver: VertexAIDriver, prompt: ImagenPrompt, options: ExecutionOptions): Promise<Completion<ImageGeneration>> {
-        if (options.model_options?._option_id !== "vertexai-imagen") {
-            driver.logger.warn("Invalid model options", {options: options.model_options });
+    async requestImageGeneration(driver: VertexAIDriver, prompt: ImagenPrompt, options: ExecutionOptions): Promise<Completion> {
+        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "vertexai-imagen") {
+            driver.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
-        options.model_options = options.model_options as ImagenOptions;
+        options.model_options = options.model_options as ImagenOptions | undefined;
 
-        if (options.output_modality !== Modalities.image) {
-            throw new Error(`Image generation requires image output_modality`);
-        }
-
-        const taskType: string = options.model_options.edit_mode ?? ImagenTaskType.TEXT_IMAGE;
+        const taskType: string = options.model_options?.edit_mode ?? ImagenTaskType.TEXT_IMAGE;
 
         driver.logger.info("Task type: " + taskType);
 
         const modelName = options.model.split("/").pop() ?? '';
 
         // Configure the parent resource
-        const endpoint = `projects/${projectId}/locations/${location}/publishers/google/models/${modelName}`;
+        // TODO: make location configurable, fixed to us-central1 for now
+        const endpoint = `projects/${driver.options.project}/locations/us-central1/publishers/google/models/${modelName}`;
 
         const instanceValue = helpers.toValue(prompt);
         if (!instanceValue) {
@@ -361,7 +344,7 @@ export class ImagenModelDefinition {
         }
         const instances = [instanceValue];
 
-        let parameter: any = getImagenParameters(taskType, options.model_options);
+        let parameter: any = getImagenParameters(taskType, options.model_options ?? { _option_id: "vertexai-imagen" });
         parameter.negativePrompt = prompt.negativePrompt ?? undefined;
 
         const numberOfImages = options.model_options?.number_of_images ?? 1;
@@ -379,8 +362,10 @@ export class ImagenModelDefinition {
             parameters,
         };
 
+        const client = await driver.getImagenClient();
+
         // Predict request
-        const [response] = await predictionServiceClient.predict(request, { timeout: 120000 * numberOfImages }); //Extended timeout for image generation
+        const [response] = await client.predict(request, { timeout: 120000 * numberOfImages }); //Extended timeout for image generation
         const predictions = response.predictions;
 
         if (!predictions) {
@@ -393,9 +378,10 @@ export class ImagenModelDefinition {
         );
 
         return {
-            result: {
-                images
-            },
+            result: images.map(image => ({
+                type: "image" as const,
+                value: image
+            })),
         };
     }
 }

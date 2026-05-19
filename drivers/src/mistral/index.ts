@@ -1,8 +1,9 @@
-import { AIModel, AbstractDriver, Completion, CompletionChunk, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, ModelType, PromptSegment, TextFallbackOptions } from "@llumiverse/core";
+import { AbstractDriver, type AIModel, type Completion, type CompletionChunkObject, type DriverOptions, type EmbeddingsOptions, type EmbeddingsResult, type ExecutionOptions, LlumiverseError, MISTRAL_DEFAULT_EMBEDDING_MODEL, normalizeEmbeddingsOptions, type PromptSegment, type TextFallbackOptions } from "@llumiverse/core";
 import { transformSSEStream } from "@llumiverse/core/async";
-import { OpenAITextMessage, formatOpenAILikeTextPrompt, getJSONSafetyNotice } from "@llumiverse/core/formatters";
-import { FetchClient } from "api-fetch-client";
-import { ChatCompletionResponse, CompletionRequestParams, ListModelsResponse, ResponseFormat } from "./types.js";
+import { getJSONSafetyNotice } from "@llumiverse/core/formatters";
+import { FetchClient } from "@vertesia/api-fetch-client";
+import { formatOpenAILikeTextPrompt, type OpenAITextMessage } from "../openai/openai_format.js";
+import type { ChatCompletionResponse, CompletionRequestParams, ListModelsResponse, ResponseFormat } from "./types.js";
 
 //TODO retry on 429
 //const RETRY_STATUS_CODES = [429, 500, 502, 503, 504];
@@ -45,7 +46,7 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
         // return _options.result_schema ? responseFormatJson : responseFormatText;
 
         //TODO remove this when Mistral properly supports the parameters - it makes an error for now
-        // some models like mixtral mistrall tiny or medium are throwing an error when using the response_format parameter
+        // some models like mixtral mistral tiny or medium are throwing an error when using the response_format parameter
         return undefined
     }
 
@@ -61,27 +62,30 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
         return messages;
     }
 
-    async requestTextCompletion(messages: OpenAITextMessage[], options: ExecutionOptions): Promise<Completion<any>> {
-        if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", {options: options.model_options });
+    async requestTextCompletion(messages: OpenAITextMessage[], options: ExecutionOptions): Promise<Completion> {
+        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "text-fallback") {
+            this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
+        const requestPayload = _makeChatCompletionRequest({
+            model: options.model,
+            messages: messages,
+            maxTokens: options.model_options?.max_tokens,
+            temperature: options.model_options?.temperature,
+            responseFormat: this.getResponseFormat(options),
+        });
+        this.logger.debug({ payload: JSON.stringify(requestPayload) }, "Mistral request payload");
+
         const res = await this.client.post('/v1/chat/completions', {
-            payload: _makeChatCompletionRequest({
-                model: options.model,
-                messages: messages,
-                maxTokens: options.model_options?.max_tokens,
-                temperature: options.model_options?.temperature,
-                responseFormat: this.getResponseFormat(options),
-            })
+            payload: requestPayload,
         }) as ChatCompletionResponse;
 
         const choice = res.choices[0];
         const result = choice.message.content;
 
         return {
-            result: result,
+            result: result ? [{ type: "text", value: result }] : [],
             token_usage: {
                 prompt: res.usage.prompt_tokens,
                 result: res.usage.completion_tokens,
@@ -92,30 +96,34 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
         };
     }
 
-    async requestTextCompletionStream(messages: OpenAITextMessage[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
-        if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", {options: options.model_options });
+    async requestTextCompletionStream(messages: OpenAITextMessage[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "text-fallback") {
+            this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
+        const streamPayload = _makeChatCompletionRequest({
+            model: options.model,
+            messages: messages,
+            maxTokens: options.model_options?.max_tokens,
+            temperature: options.model_options?.temperature,
+            topP: options.model_options?.top_p,
+            responseFormat: this.getResponseFormat(options),
+            stream: true,
+            stopSequences: options.model_options?.stop_sequence,
+        });
+        this.logger.debug({ payload: JSON.stringify(streamPayload) }, "Mistral stream request payload");
+
         const stream = await this.client.post('/v1/chat/completions', {
-            payload: _makeChatCompletionRequest({
-                model: options.model,
-                messages: messages,
-                maxTokens: options.model_options?.max_tokens,
-                temperature: options.model_options?.temperature,
-                topP: options.model_options?.top_p,
-                responseFormat: this.getResponseFormat(options),
-                stream: true,
-                stopSequences: options.model_options?.stop_sequence,
-            }),
+            payload: streamPayload,
             reader: 'sse'
         });
 
         return transformSSEStream(stream, (data: string) => {
             const json = JSON.parse(data);
+            const content = json.choices[0]?.delta.content;
             return {
-                result: json.choices[0]?.delta.content ?? '',
+                result: content ? [{ type: "text", value: content }] : [],
                 finish_reason: json.choices[0]?.finish_reason,      //Uses expected "stop" , "length" format
                 token_usage: {
                     prompt: json.usage?.prompt_tokens,
@@ -130,7 +138,7 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
     async listModels(): Promise<AIModel<string>[]> {
         const models: ListModelsResponse = await this.client.get('v1/models');
 
-        const aimodels = models.data.map(m => {
+        const aiModels = models.data.map(m => {
             return {
                 id: m.id,
                 name: m.id,
@@ -140,7 +148,7 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
             }
         });
 
-        return aimodels.filter(m => !m.id.includes("embed"));
+        return aiModels.filter(m => !m.id.includes("embed"));
     }
 
     async listEmbeddingModels(): Promise<AIModel<string>[]> {
@@ -163,18 +171,45 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
         throw new Error("Method not implemented.");
     }
 
-    async generateEmbeddings({ text, model = "mistral-embed" }: EmbeddingsOptions): Promise<EmbeddingsResult> {
-        const r = await this.client.post('/v1/embeddings', {
-            payload: {
-                model,
-                input: [ text ],
-                encoding_format: "float"
-            },
+    async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
+        const normalized = normalizeEmbeddingsOptions(options);
+        const model = normalized.model ?? MISTRAL_DEFAULT_EMBEDDING_MODEL;
+        const texts = normalized.inputs.map((input) => {
+            if (input.type !== "text") {
+                throw new Error(`Provider 'mistralai' does not support '${input.type}' embeddings; only 'text' is supported.`);
+            }
+            return input.text;
         });
-        return {
-            values: r.data[0].embedding,
-            model,
-            token_count: r.usage.total_tokens || r.usage.prompt_tokens + r.usage.completion_tokens,
+
+        try {
+            const r = await this.client.post('/v1/embeddings', {
+                payload: {
+                    model,
+                    input: texts,
+                    encoding_format: "float",
+                },
+            });
+            const ordered: { index: number; embedding: number[] }[] = [...r.data].sort((a, b) => a.index - b.index);
+            const promptTokens: number | undefined = r.usage?.total_tokens
+                ?? (r.usage ? (r.usage.prompt_tokens ?? 0) + (r.usage.completion_tokens ?? 0) : undefined);
+
+            return {
+                model,
+                results: ordered.map((entry) => ({
+                    outputs: [{ values: entry.embedding, modality: "text" }],
+                })),
+                ...(typeof promptTokens === "number"
+                    ? { usage: { input_tokens: promptTokens, input_text_tokens: promptTokens } }
+                    : {}),
+            };
+        } catch (error) {
+            if (LlumiverseError.isLlumiverseError(error)) throw error;
+            if (error instanceof Error && typeof (error as any).status !== 'number') throw error;
+            throw this.formatLlumiverseError(error, {
+                provider: this.provider,
+                model,
+                operation: 'execute',
+            });
         }
     }
 
@@ -205,22 +240,19 @@ function _makeChatCompletionRequest({
     topP,
     randomSeed,
     stream,
-    safeMode,
-    safePrompt,
     toolChoice,
     responseFormat,
     stopSequences,
 }: CompletionRequestParams) {
     return {
-        model: model,
-        messages: messages,
+        model,
+        messages,
         tools: tools ?? undefined,
         temperature: temperature ?? undefined,
         max_tokens: maxTokens ?? undefined,
         top_p: topP ?? undefined,
         random_seed: randomSeed ?? undefined,
         stream: stream ?? undefined,
-        safe_prompt: (safeMode || safePrompt) ?? undefined,
         tool_choice: toolChoice ?? undefined,
         response_format: responseFormat ?? undefined,
         stop: stopSequences ?? undefined,

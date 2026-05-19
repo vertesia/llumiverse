@@ -3,11 +3,13 @@
   "packageRules": [
     {
       "groupName": "gh-actions deps",
-      "matchManagers": ["github-actions"]
+      "matchManagers": ["github-actions"],
+      "rangeStrategy": "bump"
     },
     {
       "groupName": "node deps",
-      "matchManagers": ["npm", "nvm", "nodenv"]
+      "matchManagers": ["npm", "nvm", "nodenv"],
+      "rangeStrategy": "bump"
     },
     {
       "groupName": "Model Provider Client libraries",
@@ -15,15 +17,26 @@
         "npm"
       ],
       "matchPackageNames": [
-        "@azure/openai",
-        "@azure/identity",
+        "@azure/**",
         "@google-cloud/**",
-        "@huggingface/inference",
+        "@google/**",
+        "@huggingface/**",
         "replicate",
         "openai",
         "groq-sdk",
         "@aws-sdk/**",
         "@anthropic-ai/**"
+      ],
+      "rangeStrategy": "bump"
+    },
+    {
+      "groupName": "Vertesia libraries",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchPackageNames": [
+        "@vertesia/**",
+        "ts-dual-module"
       ],
       "rangeStrategy": "bump"
     },
@@ -37,6 +50,18 @@
         "pnpm"
       ],
       "rangeStrategy": "bump"
+    },
+    // Overrides go at the bottom, highest precedence
+    {
+      "groupName": "Package Overrides",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchDepTypes": [
+        "overrides"
+      ],
+      "rangeStrategy": "bump",
+      "schedule": "* * * * 4" // Thursday
     }
-  ],
+  ]
 }

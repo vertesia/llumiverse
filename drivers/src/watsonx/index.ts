@@ -1,7 +1,7 @@
-import { AIModel, AbstractDriver, Completion, CompletionChunk, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, TextFallbackOptions } from "@llumiverse/core";
+import { AbstractDriver, type AIModel, type Completion, type CompletionChunkObject, type DriverOptions, type EmbeddingsOptions, type EmbeddingsResult, type ExecutionOptions, LlumiverseError, normalizeEmbeddingsOptions, type TextFallbackOptions, WATSONX_DEFAULT_EMBEDDING_MODEL } from "@llumiverse/core";
 import { transformSSEStream } from "@llumiverse/core/async";
-import { FetchClient } from "api-fetch-client";
-import { GenerateEmbeddingPayload, GenerateEmbeddingResponse, WatsonAuthToken, WatsonxListModelResponse, WatsonxModelSpec, WatsonxTextGenerationPayload, WatsonxTextGenerationResponse } from "./interfaces.js";
+import { FetchClient } from "@vertesia/api-fetch-client";
+import type { GenerateEmbeddingPayload, GenerateEmbeddingResponse, WatsonAuthToken, WatsonxListModelResponse, WatsonxModelSpec, WatsonxTextGenerationPayload, WatsonxTextGenerationResponse } from "./interfaces.js";
 
 interface WatsonxDriverOptions extends DriverOptions {
     apiKey: string;
@@ -29,18 +29,21 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
         this.fetchClient = new FetchClient(this.endpoint_url).withAuthCallback(async () => this.getAuthToken().then(token => `Bearer ${token}`));
     }
 
-    async requestTextCompletion(prompt: string, options: ExecutionOptions): Promise<Completion<any>> {
-        if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", {options: options.model_options });
+    async requestTextCompletion(prompt: string, options: ExecutionOptions): Promise<Completion> {
+        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "text-fallback") {
+            this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
-        options.model_options = options.model_options as TextFallbackOptions;
-        
+        options.model_options = options.model_options as TextFallbackOptions | undefined;
+
         const payload: WatsonxTextGenerationPayload = {
             model_id: options.model,
             input: prompt + "\n",
             parameters: {
-                max_new_tokens: options.model_options.max_tokens
-                //time_limit: options.time_limit,
+                max_new_tokens: options.model_options?.max_tokens,
+                temperature: options.model_options?.temperature,
+                top_k: options.model_options?.top_k,
+                top_p: options.model_options?.top_p,
+                stop_sequences: options.model_options?.stop_sequence,
             },
             project_id: this.projectId,
         }
@@ -50,7 +53,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
         const result = res.results[0];
 
         return {
-            result: result.generated_text,
+            result: [{ type: "text", value: result.generated_text }],
             token_usage: {
                 prompt: result.input_token_count,
                 result: result.generated_token_count,
@@ -61,17 +64,20 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
         }
     }
 
-    async requestTextCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
-        if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", {options: options.model_options });
+    async requestTextCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "text-fallback") {
+            this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
-        options.model_options = options.model_options as TextFallbackOptions;
+        options.model_options = options.model_options as TextFallbackOptions | undefined;
         const payload: WatsonxTextGenerationPayload = {
             model_id: options.model,
             input: prompt + "\n",
             parameters: {
-                max_new_tokens: options.model_options.temperature,
-                //time_limit: options.time_limit,
+                max_new_tokens: options.model_options?.max_tokens,
+                temperature: options.model_options?.temperature,
+                top_k: options.model_options?.top_k,
+                top_p: options.model_options?.top_p,
+                stop_sequences: options.model_options?.stop_sequence,
             },
             project_id: this.projectId,
         }
@@ -84,7 +90,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
         return transformSSEStream(stream, (data: string) => {
             const json = JSON.parse(data) as WatsonxTextGenerationResponse;
             return {
-                result: json.results[0]?.generated_text ?? '',
+                result: json.results[0]?.generated_text ? [{ type: "text", value: json.results[0].generated_text }] : [],
                 finish_reason: watsonFinishReason(json.results[0]?.stop_reason),
                 token_usage: {
                     prompt: json.results[0].input_token_count,
@@ -102,7 +108,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
         const res = await this.fetchClient.get(`/ml/v1/foundation_model_specs?version=${API_VERSION}&!filters=function_embedding`)
             .catch(err => this.logger.warn("Can't list models on Watsonx: " + err)) satisfies WatsonxListModelResponse;
 
-        const aimodels = res.resources.map((m: WatsonxModelSpec) => {
+        const aiModels = res.resources.map((m: WatsonxModelSpec) => {
             return {
                 id: m.model_id,
                 name: m.label,
@@ -111,7 +117,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
             }
         });
 
-        return aimodels;
+        return aiModels;
 
     }
 
@@ -139,7 +145,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
             if (now < this.authToken.expiration) {
                 return this.authToken.access_token;
             } else {
-                this.logger.debug("Token expired, refetching", this.authToken, now)
+                this.logger.debug("Token expired, refetching")
             }
         }
         const authToken = await fetch('https://iam.cloud.ibm.com/identity/token', {
@@ -159,33 +165,44 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
         return this.listModels()
             .then(() => true)
             .catch((err) => {
-                this.logger.warn("Failed to connect to WatsonX", { error: err });
+                this.logger.warn({ error: err }, "Failed to connect to WatsonX");
                 return false
             });
     }
 
     async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
-        if (options.image) {
-            throw new Error("Image embeddings not supported by Watsonx");
-        }
-
-        if (!options.text) {
-            throw new Error ("No text provided");
-        }
+        const normalized = normalizeEmbeddingsOptions(options);
+        const texts = normalized.inputs.map((input) => {
+            if (input.type !== "text") {
+                throw new Error(`Provider 'watsonx' does not support '${input.type}' embeddings; only 'text' is supported.`);
+            }
+            return input.text;
+        });
 
         const payload: GenerateEmbeddingPayload = {
-            inputs: [options.text],
-            model_id: options.model ?? 'ibm/slate-125m-english-rtrvr',
-            project_id: this.projectId
+            inputs: texts,
+            model_id: normalized.model ?? WATSONX_DEFAULT_EMBEDDING_MODEL,
+            project_id: this.projectId,
+        };
+
+        const model = payload.model_id;
+        try {
+            const res = await this.fetchClient.post(`/ml/v1/text/embeddings?version=${API_VERSION}`, { payload }) as GenerateEmbeddingResponse;
+            return {
+                model: res.model_id,
+                results: res.results.map((entry) => ({
+                    outputs: [{ values: entry.embedding, modality: "text" }],
+                })),
+            };
+        } catch (error) {
+            if (LlumiverseError.isLlumiverseError(error)) throw error;
+            if (error instanceof Error && typeof (error as any).status !== 'number') throw error;
+            throw this.formatLlumiverseError(error, {
+                provider: this.provider,
+                model,
+                operation: 'execute',
+            });
         }
-
-        const res = await this.fetchClient.post(`/ml/v1/text/embeddings?version=${API_VERSION}`, { payload }) as GenerateEmbeddingResponse;
-
-        return {
-            values: res.results[0].embedding,
-            model: res.model_id
-        }
-
     }
 
 }

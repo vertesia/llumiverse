@@ -1,8 +1,8 @@
+import { CompletionResult, ResultValidationError } from "@llumiverse/common";
 import { Ajv } from 'ajv';
 import addFormats from 'ajv-formats';
 import { extractAndParseJSON } from "./json.js";
 import { resolveField } from './resolver.js';
-import { ResultValidationError } from "./types.js";
 
 
 const ajv = new Ajv({
@@ -28,24 +28,47 @@ export class ValidationError extends Error implements ResultValidationError {
     }
 }
 
-export function validateResult(data: any, schema: Object) {
-    let json;
+function parseCompletionAsJson(data: CompletionResult[]) {
+    let lastError: ValidationError | undefined;
+    for (const part of data) {
+        if (part.type === "text") {
+            const text = part.value.trim();
+            try {
+                return extractAndParseJSON(text);
+            } catch (error: any) {
+                lastError = new ValidationError("json_error", error.message);
+            }
+        }
+    }
+    if (!lastError) {
+        lastError = new ValidationError("json_error", "No JSON compatible response found in completion result");
+    }
+    throw lastError;
+}
 
-    if (typeof data === "string") {
-        try {
-            json = extractAndParseJSON(data);
-        } catch (error: any) {
-            throw new ValidationError("json_error", error.message)
+
+export function validateResult(data: CompletionResult[], schema: object): CompletionResult[] {
+    let json;
+    if (Array.isArray(data)) {
+        const jsonResults = data.filter(r => r.type === "json");
+        if (jsonResults.length > 0) {
+            json = jsonResults[0].value;
+        } else {
+            try {
+                json = parseCompletionAsJson(data);
+            } catch (error: any) {
+                throw new ValidationError("json_error", error.message)
+            }
         }
     } else {
-        json = data;
+        throw new Error("Data to validate must be an array")
     }
 
     const validate = ajv.compile(schema);
     const valid = validate(json);
 
     if (!valid && validate.errors) {
-        let errors = [];    
+        const errors = [];
 
         for (const e of validate.errors) {
             const path = e.instancePath.split("/").slice(1);
@@ -55,7 +78,7 @@ export function validateResult(data: any, schema: Object) {
             const schemaField = resolveField(schema, schemaPath.slice(0, -3));
 
             //ignore date if empty or null
-            if (!value 
+            if (!value
                 && ["date", "date-time"].includes(schemaFieldFormat)
                 && !schemaField?.required?.includes(path[path.length - 1])) {
                 continue;
@@ -71,5 +94,5 @@ export function validateResult(data: any, schema: Object) {
         }
     }
 
-    return json;
+    return [{ type: "json", value: json }];
 }

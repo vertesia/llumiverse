@@ -1,0 +1,236 @@
+name: code-sync
+
+on:
+  push:
+    branches:
+      - preview
+  workflow_dispatch: # mainly for testing
+    inputs:
+      from_branch:
+        description: "From which branch to sync code with main"
+        required: true
+        default: "preview"
+      from_sha:
+        description: "From which commit SHA to sync code with main"
+        required: false
+        default: ""
+
+env:
+  FROM_BRANCH: ${{ inputs.from_branch || github.ref_name }}
+
+permissions:
+  contents: write # required for pushing changes to the repository
+  pull-requests: write # required for creating pull requests
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      is_merged: ${{ steps.sync.outputs.IS_MERGED }}
+      pr_number: ${{ steps.sync.outputs.PR_NUMBER }}
+      pr_url: ${{ steps.sync.outputs.PR_URL }}
+      should_cleanup: ${{ steps.sync.outputs.SHOULD_CLEANUP }}
+      sync_ref: ${{ steps.sync.outputs.SYNC_REF }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # Fetch all because we need to access info from different branches
+          fetch-tags: false
+
+      - name: Code Sync
+        id: sync
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          export SOURCE_REF="${{ env.FROM_BRANCH }}"
+          export SOURCE_SHA="$(git rev-parse 'origin/${{ env.FROM_BRANCH }}')"
+          export SOURCE_MSG="$(git log --format="%cd: %s by %an" --date=short -1 $SOURCE_SHA)"
+
+          export TARGET_REF="main"
+          export TARGET_SHA="$(git rev-parse origin/main)"
+          export TARGET_MSG="$(git log --format="%cd: %s by %an" --date=short -1 $TARGET_SHA)"
+
+          export TEMP_BRANCH="sync-${SOURCE_SHA::7}"
+
+          cat << EOF >> $GITHUB_STEP_SUMMARY
+          Type   | Item      | Value
+          :----- | :-------- | :---------------
+          Source | commit    | ${SOURCE_MSG}
+          Source | ref       | \`${SOURCE_REF}\` ([\`${SOURCE_SHA}\`](https://github.com/${{ github.repository }}/commit/${SOURCE_SHA}))
+          Target | commit    | ${TARGET_MSG}
+          Target | ref       | \`${TARGET_REF}\` ([\`${TARGET_SHA}\`](https://github.com/${{ github.repository }}/commit/${TARGET_SHA}))
+          Other  | branch    | \`${TEMP_BRANCH}\`
+          EOF
+
+          # don't exit if the script fails, we will handle the error manually
+          # see also: https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idstepsshell
+          set +e
+          bash .github/bin/sync-code.sh
+          is_sync_result=$?
+          set -e
+
+          if [ $is_sync_result -eq 0 ]; then
+            echo "Code sync successful. Pushing changes to the repository."
+            git push origin $TEMP_BRANCH
+
+            echo "PR_NUMBER=0" >> $GITHUB_OUTPUT
+            echo "SHOULD_CLEANUP=true" >> $GITHUB_OUTPUT
+            echo "SYNC_REF=${TEMP_BRANCH}" >> $GITHUB_OUTPUT
+            echo "IS_MERGED=true" >> $GITHUB_OUTPUT
+          elif [ $is_sync_result -eq 2 ]; then
+            echo "Code sync failed because merge conflicts cannot be resolved automatically."
+            echo "Preparing a PR and asking the author [${{ github.actor }}] to handle the synchronization..."
+
+            git push origin $TEMP_BRANCH
+
+            body=$(cat << EOF
+          The code sync from \`${SOURCE_REF}\` to \`${TARGET_REF}\` failed (see [GitHub Actions run](https://github.com/vertesia/llumiverse/actions/runs/${GITHUB_RUN_ID:-0})). Please resolve the conflicts and push the changes to the \`${TEMP_BRANCH}\` branch. Here are the recommended steps to handle the conflicts in your terminal:
+
+          \`\`\`sh
+          # fetch the Git references
+          git fetch origin
+
+          # checkout the current branch
+          git checkout ${TEMP_BRANCH}
+
+          # merge the 'main' branch into the current branch
+          git merge origin/main
+
+          # resolve the conflicts
+          \`\`\`
+
+          Once the conflicts are resolved, you can push the changes to GitHub. Please wait until the CI checks pass. Then, you can review the PR and merge it. :warning: Important: when merging the PR, please use the option **"Create a merge commit"** to preserve the conflict resolution history.
+          EOF
+          )
+
+            author_login=$(gh api repos/vertesia/llumiverse/commits/${SOURCE_SHA} --jq '.author.login // empty' || true)
+
+            pr_url=$(gh pr create \
+              --title "Merge branch \`${SOURCE_REF}\` (${SOURCE_SHA::7}) to \`${TARGET_REF}\`" \
+              --body "$body" \
+              --base main \
+              --head $TEMP_BRANCH \
+              --label "workflow:code-sync")
+            pr_number=$(echo "$pr_url" | grep -oP '(?<=pull/)\d+')
+
+            if [ -n "$author_login" ]; then
+              gh pr edit "$pr_number" --add-assignee "$author_login"
+            fi
+
+            echo "PR_NUMBER=${pr_number}" >> $GITHUB_OUTPUT
+            echo "PR_URL=${pr_url}" >> $GITHUB_OUTPUT
+            echo "SHOULD_CLEANUP=false" >> $GITHUB_OUTPUT
+            echo "SYNC_REF=${TEMP_BRANCH}" >> $GITHUB_OUTPUT
+            echo "IS_MERGED=false" >> $GITHUB_OUTPUT
+
+            # Don't exit with an error, we want to continue the workflow with a PR
+          else
+            echo "Code sync failed with an unexpected error. Please check the logs for more details." >&2
+
+            echo "PR_NUMBER=0" >> $GITHUB_OUTPUT
+            echo "SHOULD_CLEANUP=true" >> $GITHUB_OUTPUT
+            echo "SYNC_REF=${TEMP_BRANCH}" >> $GITHUB_OUTPUT
+            echo "IS_MERGED=false" >> $GITHUB_OUTPUT
+
+            exit 1
+          fi
+
+  # TODO: Add tests for the synced code
+
+  push:
+    needs:
+      - sync
+    if: ${{ needs.sync.outputs.is_merged == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # Fetch all because we need to access info from different branches
+          fetch-tags: false
+          ref: ${{ needs.sync.outputs.sync_ref }}
+          ssh-key: ${{ secrets.DEPLOY_KEY }} # Use deploy key to bypass branch protection rules
+
+      - name: Push changes to main branch
+        run: |
+          set -x
+
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+
+          git checkout main
+
+          # note: --ff-only ensures that the merge will only succeed if it can be fast-forwarded. This avoids creating
+          # a merge commit and keeps the history clean. If failed, user should trigger the workflow again, or resolving
+          # conflicts and then sync manually.
+          git merge --ff-only --no-edit ${{ needs.sync.outputs.sync_ref }}
+
+          git push origin main
+
+  notify:
+    runs-on: ubuntu-latest
+    needs:
+      - push
+    if: ${{ needs.push.result == 'success' && github.actor != 'github-actions[bot]' }}
+    steps:
+      - name: Notify studio
+        run: |
+          curl -L \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.STUDIO_DISPATCH_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --fail-with-body \
+            https://api.github.com/repos/vertesia/studio/dispatches \
+            -d '{
+              "event_type": "developer-notification",
+              "client_payload": {
+                "github_login": "${{ github.actor }}",
+                "message": "Your changes from `preview` have been synced to `main` in vertesia/llumiverse. See the <https://github.com/vertesia/llumiverse/actions/runs/${{ github.run_id }}|Action run>."
+              }
+            }'
+
+  notify_conflict:
+    needs: sync
+    if: ${{ needs.sync.outputs.pr_number != '0' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify studio for Slack notification
+        run: |
+          curl -L \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.STUDIO_DISPATCH_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --fail-with-body \
+            https://api.github.com/repos/vertesia/studio/dispatches \
+            -d '{
+              "event_type": "developer-notification",
+              "client_payload": {
+                "github_login": "${{ github.actor }}",
+                "message": "Your changes from `preview` failed to sync to `main` in vertesia/llumiverse due to merge conflicts. Please resolve this PR: ${{ needs.sync.outputs.pr_url }}"
+              }
+            }'
+
+  cleanup:
+    runs-on: ubuntu-latest
+    needs:
+      - sync
+      - push
+    # Always run cleanup except when there is a conflict PR that needs the branch to stay alive.
+    if: ${{ always() && needs.sync.outputs.should_cleanup != 'false' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # Fetch all because we need to access info from different branches
+          fetch-tags: false
+
+      - name: Cleanup temporary branch
+        run: |
+          set -x
+
+          TEMP_BRANCH="${{ needs.sync.outputs.sync_ref }}"
+          git branch -D "$TEMP_BRANCH" || true # Ignore if branch does not exist
+          git push origin --delete "$TEMP_BRANCH" || true # Ignore if branch does not exist

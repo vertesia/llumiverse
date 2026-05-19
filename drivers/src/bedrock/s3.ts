@@ -1,5 +1,5 @@
-import { CreateBucketCommand, HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
-import { Progress, Upload } from "@aws-sdk/lib-storage";
+import { CreateBucketCommand, HeadBucketCommand, type S3Client } from "@aws-sdk/client-s3";
+import { type Progress, Upload } from "@aws-sdk/lib-storage";
 
 export async function doesBucketExist(s3: S3Client, bucketName: string): Promise<boolean> {
     try {
@@ -58,4 +58,52 @@ export async function forceUploadFile(s3: S3Client, source: ReadableStream, buck
     // make sure the bucket exists
     await tryCreateBucket(s3, bucketName);
     return uploadFile(s3, source, bucketName, file, onProgress);
+}
+
+
+/**
+ * Parse an S3 HTTPS URL into an S3 URI format
+ * s3Url - The S3 HTTPS URL (e.g., https://bucket.s3.region.amazonaws.com/key)
+ * returns The S3 URI (e.g., s3://bucket/key)
+ */
+export function parseS3UrlToUri(s3Url: URL) {
+    try {
+        const url = new URL(s3Url);
+
+        // Extract the hostname which contains the bucket and S3 endpoint
+        const hostname = url.hostname;
+
+        // Parse the hostname to extract the bucket name
+        let bucketName;
+        if (hostname.endsWith('.amazonaws.com')) {
+            if (hostname.includes('.s3.')) {
+                // Format: bucket-name.s3.region.amazonaws.com
+                bucketName = hostname.split('.s3.')[0];
+            } else if (hostname.startsWith('s3.')) {
+                // Format: s3.region.amazonaws.com/bucket-name
+                // In this case, the bucket is actually in the first segment of the pathname
+                bucketName = url.pathname.split('/')[1];
+                // Adjust the pathname to remove the bucket name
+                const pathParts = url.pathname.split('/').slice(2);
+                url.pathname = '/' + pathParts.join('/');
+            } else {
+                throw new Error('Unable to determine bucket name from URL');
+            }
+        } else {
+            throw new Error('Unable to determine bucket name from URL');
+        }
+
+        // The key is the pathname without the leading slash
+        // If we had the bucket name in the path, it's already been removed above
+        let key = url.pathname;
+        if (key.startsWith('/')) {
+            key = key.substring(1);
+        }
+
+        // Construct the S3 URI
+        return `s3://${bucketName}/${key}`;
+    } catch (error) {
+        console.error('Error parsing S3 URL:', error);
+        throw error;
+    }
 }

@@ -1,7 +1,7 @@
-import { AIModel, AbstractDriver, Completion, CompletionChunk, DriverOptions, EmbeddingsResult, ExecutionOptions, TextFallbackOptions } from "@llumiverse/core";
+import { AbstractDriver, type AIModel, type Completion, type CompletionChunkObject, type DriverOptions, type EmbeddingsOptions, type EmbeddingsResult, type ExecutionOptions, type TextFallbackOptions } from "@llumiverse/core";
 import { transformSSEStream } from "@llumiverse/core/async";
-import { FetchClient } from "api-fetch-client";
-import { TextCompletion, TogetherModelInfo } from "./interfaces.js";
+import { FetchClient } from "@vertesia/api-fetch-client";
+import type { TextCompletion, TogetherModelInfo } from "./interfaces.js";
 
 interface TogetherAIDriverOptions extends DriverOptions {
     apiKey: string;
@@ -29,9 +29,9 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
             } : undefined;
     }
 
-    async requestTextCompletion(prompt: string, options: ExecutionOptions): Promise<Completion<any>> {
-        if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", {options: options.model_options });
+    async requestTextCompletion(prompt: string, options: ExecutionOptions): Promise<Completion> {
+        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "text-fallback") {
+            this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
@@ -60,7 +60,7 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
         const text = choice.text ?? '';
         const usage = res.usage || {};
         return {
-            result: text,
+            result: [{ type: "text", value: text }],
             token_usage: {
                 prompt: usage.prompt_tokens,
                 result: usage.completion_tokens,
@@ -71,9 +71,9 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
         }
     }
 
-    async requestTextCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
-        if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", {options: options.model_options });
+    async requestTextCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "text-fallback") {
+            this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
@@ -103,7 +103,7 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
         return transformSSEStream(stream, (data: string) => {
             const json = JSON.parse(data);
             return {
-                result: json.choices[0]?.text ?? '',
+                result: [{ type: "text", value: json.choices[0]?.text ?? '' }],
                 finish_reason: json.choices[0]?.finish_reason,          //Uses expected "stop" , "length" format
                 token_usage: {
                     prompt: json.usage?.prompt_tokens,
@@ -119,7 +119,7 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
         const models: TogetherModelInfo[] = await this.fetchClient.get("/models/info");
         //        logObject('#### LIST MODELS RESULT IS', models[0]);
 
-        const aimodels = models.map(m => {
+        const aiModels = models.map(m => {
             return {
                 id: m.name,
                 name: m.display_name,
@@ -128,7 +128,7 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
             }
         });
 
-        return aimodels;
+        return aiModels;
 
     }
 
@@ -140,7 +140,7 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
     validateConnection(): Promise<boolean> {
         throw new Error("Method not implemented.");
     }
-    generateEmbeddings(): Promise<EmbeddingsResult> {
+    generateEmbeddings(_options: EmbeddingsOptions): Promise<EmbeddingsResult> {
         throw new Error("Method not implemented.");
     }
 

@@ -56,7 +56,7 @@ async function main() {
     console.log('# Response took', streamingResponse.execution_time, 'ms')
     console.log('# Token usage:', streamingResponse.token_usage);
 
-    const result = await driver.execute([{ content: "Translate Hello in romanian", role: PromptRole.user }], {
+    const result = await driver.execute([{ content: "Translate Hello in Romanian", role: PromptRole.user }], {
         model,
         temperature: 0.6,
         max_tokens: 1024,

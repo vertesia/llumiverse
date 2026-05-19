@@ -1,8 +1,8 @@
 import {
-    AIModel,
     AbstractDriver,
+    AIModel,
     Completion,
-    CompletionChunk,
+    CompletionChunkObject,
     DataSource,
     DriverOptions,
     EmbeddingsResult,
@@ -15,7 +15,7 @@ import {
 } from "@llumiverse/core";
 import { EventStream } from "@llumiverse/core/async";
 import { EventSource } from "eventsource";
-import Replicate, { Prediction } from "replicate";
+import Replicate, { Prediction, Training } from "replicate";
 
 let cachedTrainableModels: AIModel[] | undefined;
 let cachedTrainableModelsTimestamp: number = 0;
@@ -64,12 +64,12 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
         };
     }
 
-    async requestTextCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunk>> {
-        if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", {options: options.model_options });
+    async requestTextCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "text-fallback") {
+            this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
         options.model_options = options.model_options as TextFallbackOptions;
-        
+
         const model = ReplicateDriver.parseModelId(options.model);
         const predictionData = {
             input: {
@@ -84,11 +84,11 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
         const prediction =
             await this.service.predictions.create(predictionData);
 
-        const stream = new EventStream<CompletionChunk>();
+        const stream = new EventStream<CompletionChunkObject>();
 
         const source = new EventSource(prediction.urls.stream!);
         source.addEventListener("output", (e: any) => {
-            stream.push(e.data);
+            stream.push({ result: [{ type: "text", value: e.data }] });
         });
         source.addEventListener("error", (e: any) => {
             let error: any;
@@ -97,7 +97,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
             } catch (error) {
                 error = JSON.stringify(e);
             }
-            this.logger?.error("Error in SSE stream", {e, error});
+            this.logger.error({ e, error }, "Error in SSE stream");
         });
         source.addEventListener("done", () => {
             try {
@@ -110,8 +110,8 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
     }
 
     async requestTextCompletion(prompt: string, options: ExecutionOptions) {
-        if (options.model_options?._option_id !== "text-fallback") {
-            this.logger.warn("Invalid model options", {options: options.model_options });
+        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "text-fallback") {
+            this.logger.debug({ options: options.model_options }, "Unexpected option id");
         }
         options.model_options = options.model_options as TextFallbackOptions;
         const model = ReplicateDriver.parseModelId(options.model);
@@ -136,9 +136,9 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
         //not streaming, wait for the result
         const res = await this.service.wait(prediction, {});
 
-        const text = res.output.join("");
+        const text: string = res.output.join("");
         return {
-            result: text,
+            result: [{ type: "text" as const, value: text }],
             original_response: options.include_original_response ? res : undefined,
         };
     }
@@ -236,8 +236,8 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
             this.service.models.versions.list(owner, model),
         ]);
 
-        if (!rModel || !versions || versions.length === 0) {
-            throw new Error("Model not found or no versions avaialble");
+        if (!rModel || !versions || (versions as any).results?.length === 0) {
+            throw new Error("Model not found or no versions available");
         }
 
         const models: AIModel[] = (versions as any).results.map((v: any) => {
@@ -294,7 +294,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
 
 }
 
-function jobInfo(job: Prediction, modelName?: string): TrainingJob {
+function jobInfo(job: Prediction | Training, modelName?: string): TrainingJob {
     // 'starting' | 'processing' | 'succeeded' | 'failed' | 'canceled'
     const jobStatus = job.status;
     let details: string | undefined;
@@ -303,7 +303,7 @@ function jobInfo(job: Prediction, modelName?: string): TrainingJob {
         status = TrainingJobStatus.succeeded;
     } else if (jobStatus === 'failed') {
         status = TrainingJobStatus.failed;
-        const error = job.error as any; 
+        const error = job.error as any;
         if (typeof error === 'string') {
             details = error;
         } else {
