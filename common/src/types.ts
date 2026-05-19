@@ -52,7 +52,7 @@ export const ProviderList: Record<Providers, ProviderParams> = {
     azure_foundry:
     {
         id: Providers.azure_foundry,
-        name: "Azure Foundry",
+        name: "Microsoft Foundry",
         requiresApiKey: true,
         requiresEndpointUrl: true,
         supportSearch: false,
@@ -75,7 +75,7 @@ export const ProviderList: Record<Providers, ProviderParams> = {
     bedrock:
     {
         id: Providers.bedrock,
-        name: "AWS Bedrock",
+        name: "Amazon Bedrock",
         requiresApiKey: false,
         requiresEndpointUrl: false,
         endpointPlaceholder: "region name (eg. us-east-1)",
