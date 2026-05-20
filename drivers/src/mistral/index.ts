@@ -1,9 +1,9 @@
 import { AbstractDriver, type AIModel, type Completion, type CompletionChunkObject, type DriverOptions, type EmbeddingsOptions, type EmbeddingsResult, type ExecutionOptions, LlumiverseError, MISTRAL_DEFAULT_EMBEDDING_MODEL, normalizeEmbeddingsOptions, type PromptSegment, type TextFallbackOptions } from "@llumiverse/core";
 import { transformSSEStream } from "@llumiverse/core/async";
 import { getJSONSafetyNotice } from "@llumiverse/core/formatters";
-import { FetchClient, type ServerSentEvent } from "@vertesia/api-fetch-client";
+import { FetchClient } from "@vertesia/api-fetch-client";
 import { formatOpenAILikeTextPrompt, type OpenAITextMessage } from "../openai/openai_format.js";
-import type { ChatCompletionResponse, CompletionRequestParams, EmbeddingResponse, ListModelsResponse, ResponseFormat } from "./types.js";
+import type { ChatCompletionResponse, CompletionRequestParams, ListModelsResponse, ResponseFormat } from "./types.js";
 
 //TODO retry on 429
 //const RETRY_STATUS_CODES = [429, 500, 502, 503, 504];
@@ -114,7 +114,7 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
         });
         this.logger.debug({ payload: JSON.stringify(streamPayload) }, "Mistral stream request payload");
 
-        const stream = await this.client.post<ReadableStream<ServerSentEvent>>('/v1/chat/completions', {
+        const stream = await this.client.post('/v1/chat/completions', {
             payload: streamPayload,
             reader: 'sse'
         });
@@ -166,7 +166,7 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
         });
 
         try {
-            const r = await this.client.post<EmbeddingResponse>('/v1/embeddings', {
+            const r = await this.client.post('/v1/embeddings', {
                 payload: {
                     model,
                     input: texts,

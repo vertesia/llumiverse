@@ -6,7 +6,6 @@ import {
 import { VertexAIDriver } from "../index.js";
 import { ModelDefinition } from "../models.js";
 import { transformSSEStream } from "@llumiverse/core/async";
-import type { ServerSentEvent } from "@vertesia/api-fetch-client";
 
 interface LLamaMessage {
     role: string;
@@ -240,7 +239,7 @@ export class LLamaModelDefinition implements ModelDefinition<LLamaPrompt> {
         const region = this.getLlamaModelRegion(modelName);
         const client = driver.getLLamaClient(region);
         const openaiEndpoint = `endpoints/openapi/chat/completions`;
-        const stream = await client.post<ReadableStream<ServerSentEvent>>(openaiEndpoint, {
+        const stream = await client.post(openaiEndpoint, {
             payload,
             reader: 'sse'
         });
