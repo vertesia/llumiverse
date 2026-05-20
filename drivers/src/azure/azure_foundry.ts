@@ -7,13 +7,20 @@ import { isUnexpected } from "@azure-rest/ai-inference";
 import { AIProjectClient, type DeploymentUnion, type ModelDeployment } from '@azure/ai-projects';
 import { createSseStream, type NodeJSReadableStream } from "@azure/core-sse";
 import { DefaultAzureCredential, getBearerTokenProvider, type TokenCredential } from "@azure/identity";
-import { AbstractDriver, type AIModel, type Completion, type CompletionChunkObject, dataSourceToBase64, type DriverOptions, type EmbeddingResultItem, type EmbeddingsOptions, type EmbeddingsResult, type ExecutionOptions, getModelCapabilities, type ImageEmbeddingInput, LlumiverseError, modelModalitiesToArray, normalizeEmbeddingsOptions, Providers, type TextEmbeddingInput } from "@llumiverse/core";
+import { AbstractDriver, type AIModel, type Completion, type CompletionChunkObject, dataSourceToBase64, type DriverOptions, type EmbeddingResultItem, type EmbeddingsOptions, type EmbeddingsResult, type ExecutionOptions, getModelCapabilities, type ImageEmbeddingInput, LlumiverseError, modelModalitiesToArray, normalizeEmbeddingsOptions, Providers, type TextEmbeddingInput, type TextFallbackOptions } from "@llumiverse/core";
 import type OpenAI from "openai";
 import { AzureOpenAIDriver } from "../openai/azure_openai.js";
 import { formatOpenAILikeMultimodalPrompt } from "../openai/openai_format.js";
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
+type SSEMessage = { data?: string };
+type ErrorWithStatus = Error & { status?: unknown };
+
+function hasNumericStatus(error: unknown): boolean {
+    return error instanceof Error && typeof (error as ErrorWithStatus).status === 'number';
+}
+
 export interface AzureFoundryDriverOptions extends DriverOptions {
     /**
      * The credentials to use to access Azure AI Foundry
@@ -104,7 +111,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
     async requestTextCompletion(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<Completion> {
         const { deploymentName } = parseAzureFoundryModelId(options.model);
-        const model_options = options.model_options as any;
+        const model_options = options.model_options as TextFallbackOptions | undefined;
         const isOpenAI = await this.isOpenAIDeployment(options.model);
 
         if (isOpenAI) {
@@ -144,7 +151,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
     async requestTextCompletionStream(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         const { deploymentName } = parseAzureFoundryModelId(options.model);
-        const model_options = options.model_options as any;
+        const model_options = options.model_options as TextFallbackOptions | undefined;
         const isOpenAI = await this.isOpenAIDeployment(options.model);
 
         if (isOpenAI) {
@@ -189,10 +196,10 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         }
     }
 
-    private async *processStreamResponse(sseStream: any): AsyncIterable<CompletionChunkObject> {
+    private async *processStreamResponse(sseStream: AsyncIterable<SSEMessage>): AsyncIterable<CompletionChunkObject> {
         try {
             for await (const event of sseStream) {
-                if (event.data === "[DONE]") {
+                if (!event.data || event.data === "[DONE]") {
                     break;
                 }
 
@@ -364,7 +371,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             });
         } catch (error) {
             if (LlumiverseError.isLlumiverseError(error)) throw error;
-            if (error instanceof Error && typeof (error as any).status !== 'number') throw error;
+            if (error instanceof Error && !hasNumericStatus(error)) throw error;
             this.logger.error({ error }, `Azure Foundry ${kind} embeddings error:`);
             throw this.formatLlumiverseError(error, {
                 provider: this.provider,
@@ -383,7 +390,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     }
 
     async _listModels(filter?: (m: ModelDeployment) => boolean): Promise<AIModel[]> {
-        let deploymentsIterable;
+        let deploymentsIterable: ReturnType<typeof this.service.deployments.list>;
         try {
             // List all deployments in the Azure AI Foundry project
             deploymentsIterable = this.service.deployments.list();

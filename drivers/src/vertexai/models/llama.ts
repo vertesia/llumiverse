@@ -6,13 +6,14 @@ import {
 import { VertexAIDriver } from "../index.js";
 import { ModelDefinition } from "../models.js";
 import { transformSSEStream } from "@llumiverse/core/async";
+import type { ServerSentEvent } from "@vertesia/api-fetch-client";
 
 interface LLamaMessage {
     role: string;
     content: string;
 }
 
-interface LLamaPrompt {
+export interface LLamaPrompt {
     messages: LLamaMessage[];
 }
 
@@ -61,7 +62,7 @@ interface LLamaStreamResponse {
 /**
  * Convert a stream to a string
  */
-async function streamToString(stream: any): Promise<string> {
+async function streamToString(stream: AsyncIterable<Uint8Array | Buffer | string>): Promise<string> {
     const chunks: Buffer[] = [];
     for await (const chunk of stream) {
         chunks.push(Buffer.from(chunk));
@@ -155,7 +156,7 @@ export class LLamaModelDefinition implements ModelDefinition<LLamaPrompt> {
 
         const modelOptions = options.model_options as TextFallbackOptions;
 
-        const payload: Record<string, any> = {
+        const payload: Record<string, unknown> = {
             model: `meta/${modelName}`,
             messages: conversation.messages,
             stream: false,
@@ -214,7 +215,7 @@ export class LLamaModelDefinition implements ModelDefinition<LLamaPrompt> {
 
         const modelOptions = options.model_options as TextFallbackOptions;
 
-        const payload: Record<string, any> = {
+        const payload: Record<string, unknown> = {
             model: `meta/${modelName}`,
             messages: conversation.messages,
             stream: true,
@@ -239,7 +240,7 @@ export class LLamaModelDefinition implements ModelDefinition<LLamaPrompt> {
         const region = this.getLlamaModelRegion(modelName);
         const client = driver.getLLamaClient(region);
         const openaiEndpoint = `endpoints/openapi/chat/completions`;
-        const stream = await client.post(openaiEndpoint, {
+        const stream = await client.post<ReadableStream<ServerSentEvent>>(openaiEndpoint, {
             payload,
             reader: 'sse'
         });

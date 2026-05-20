@@ -19,6 +19,22 @@ import Replicate, { Prediction, Training } from "replicate";
 
 let cachedTrainableModels: AIModel[] | undefined;
 let cachedTrainableModelsTimestamp: number = 0;
+type ReplicateEvent = { data: string };
+type ReplicateModelVersion = {
+    id: string;
+    cog_version: string;
+};
+type ReplicateVersionsResponse = {
+    results?: ReplicateModelVersion[];
+};
+type ReplicateSearchModel = {
+    name: string;
+    username: string;
+    description?: string;
+};
+type ReplicateSearchResponse = {
+    models: ReplicateSearchModel[];
+};
 
 const supportFineTunning = new Set([
     "meta/llama-2-70b-chat",
@@ -87,14 +103,14 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
         const stream = new EventStream<CompletionChunkObject>();
 
         const source = new EventSource(prediction.urls.stream!);
-        source.addEventListener("output", (e: any) => {
+        source.addEventListener("output", (e: ReplicateEvent) => {
             stream.push({ result: [{ type: "text", value: e.data }] });
         });
-        source.addEventListener("error", (e: any) => {
-            let error: any;
+        source.addEventListener("error", (e: ReplicateEvent) => {
+            let error: unknown;
             try {
                 error = JSON.parse(e.data);
-            } catch (error) {
+            } catch {
                 error = JSON.stringify(e);
             }
             this.logger.error({ e, error }, "Error in SSE stream");
@@ -149,7 +165,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
         }
         const { owner, model, version } = ReplicateDriver.parseModelId(options.model);
         const job = await this.service.trainings.create(owner, model, version, {
-            destination: options.name as any,
+            destination: options.name as `${string}/${string}`,
             input: {
                 train_data: await dataset.getURL(),
             },
@@ -185,7 +201,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
         try {
             await this.service.predictions.list();
             return true;
-        } catch (error) {
+        } catch {
             return false;
         }
     }
@@ -236,11 +252,12 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
             this.service.models.versions.list(owner, model),
         ]);
 
-        if (!rModel || !versions || (versions as any).results?.length === 0) {
+        const versionResults = (versions as ReplicateVersionsResponse).results ?? [];
+        if (!rModel || !versions || versionResults.length === 0) {
             throw new Error("Model not found or no versions available");
         }
 
-        const models: AIModel[] = (versions as any).results.map((v: any) => {
+        const models: AIModel[] = versionResults.map((v) => {
             const fullName = rModel.owner + '/' + rModel.name;
             return {
                 id: fullName + ':' + v.id,
@@ -267,9 +284,9 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
             },
         });
 
-        const rModels = ((await res.json()) as any).models;
+        const rModels = ((await res.json()) as ReplicateSearchResponse).models;
 
-        const models: AIModel[] = rModels.map((v: any) => {
+        const models: AIModel[] = rModels.map((v) => {
             return {
                 id: v.name,
                 name: v.name,
@@ -298,7 +315,7 @@ function jobInfo(job: Prediction | Training, modelName?: string): TrainingJob {
         status = TrainingJobStatus.succeeded;
     } else if (jobStatus === 'failed') {
         status = TrainingJobStatus.failed;
-        const error = job.error as any;
+        const error = job.error as unknown;
         if (typeof error === 'string') {
             details = error;
         } else {

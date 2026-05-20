@@ -5,8 +5,8 @@ export async function doesBucketExist(s3: S3Client, bucketName: string): Promise
     try {
         await s3.send(new HeadBucketCommand({ Bucket: bucketName }));
         return true;
-    } catch (err: any) {
-        if (err.name === 'NotFound') {
+    } catch (err: unknown) {
+        if (err && typeof err === 'object' && (err as { name?: unknown }).name === 'NotFound') {
             return false;
         }
         throw err;
@@ -74,7 +74,7 @@ export function parseS3UrlToUri(s3Url: URL) {
         const hostname = url.hostname;
 
         // Parse the hostname to extract the bucket name
-        let bucketName;
+        let bucketName: string | undefined;
         if (hostname.endsWith('.amazonaws.com')) {
             if (hostname.includes('.s3.')) {
                 // Format: bucket-name.s3.region.amazonaws.com

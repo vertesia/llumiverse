@@ -1,6 +1,6 @@
 import { AbstractDriver, type AIModel, type Completion, type CompletionChunkObject, type DriverOptions, type EmbeddingsOptions, type EmbeddingsResult, type ExecutionOptions, LlumiverseError, normalizeEmbeddingsOptions, type TextFallbackOptions, WATSONX_DEFAULT_EMBEDDING_MODEL } from "@llumiverse/core";
 import { transformSSEStream } from "@llumiverse/core/async";
-import { FetchClient } from "@vertesia/api-fetch-client";
+import { FetchClient, type ServerSentEvent } from "@vertesia/api-fetch-client";
 import type { GenerateEmbeddingPayload, GenerateEmbeddingResponse, WatsonAuthToken, WatsonxListModelResponse, WatsonxModelSpec, WatsonxTextGenerationPayload, WatsonxTextGenerationResponse } from "./interfaces.js";
 
 interface WatsonxDriverOptions extends DriverOptions {
@@ -82,7 +82,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
             project_id: this.projectId,
         }
 
-        const stream = await this.fetchClient.post(`/ml/v1/text/generation_stream?version=${API_VERSION}`, {
+        const stream = await this.fetchClient.post<ReadableStream<ServerSentEvent>>(`/ml/v1/text/generation_stream?version=${API_VERSION}`, {
             payload: payload,
             reader: 'sse'
         })
@@ -183,7 +183,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
             };
         } catch (error) {
             if (LlumiverseError.isLlumiverseError(error)) throw error;
-            if (error instanceof Error && typeof (error as any).status !== 'number') throw error;
+            if (error instanceof Error && typeof (error as { status?: unknown }).status !== 'number') throw error;
             throw this.formatLlumiverseError(error, {
                 provider: this.provider,
                 model,

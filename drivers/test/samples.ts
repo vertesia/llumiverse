@@ -27,24 +27,6 @@ export const testSchema_color: JSONSchema = {
     }
 }
 
-class ImageSource implements DataSource {
-    file: string;
-    mime_type: "image/jpeg" = "image/jpeg";
-    constructor(file: string) {
-        this.file = resolve(file);
-    }
-    get name() {
-        return basename(this.file);
-    }
-    async getURL(): Promise<string> {
-        return `file://${this.file}`;
-    }
-    async getStream(): Promise<ReadableStream<string | Uint8Array>> {
-        const stream = createReadStream(this.file);
-        return createReadableStreamFromReadable(stream);
-    }
-}
-
 class ImageUrlSource implements DataSource {
     constructor(public url: string, public mime_type: string = "image/jpeg") {
     }
@@ -60,7 +42,7 @@ class ImageUrlSource implements DataSource {
 }
 
 /** Fetch with timeout and fallback to a local test image */
-async function fetchWithFallback(url: string): Promise<ReadableStream<Uint8Array>> {
+async function fetchWithFallback(url: string): Promise<ReadableStream<string | Uint8Array>> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10_000);
     try {

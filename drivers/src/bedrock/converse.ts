@@ -139,7 +139,7 @@ async function processFile<T extends FileProcessingMode>(
                     // ContentBlock doesn't support JSON, so treat as text
                     return { text: jsonContent } satisfies ContentBlock.TextMember;
                 }
-            } catch (error) {
+            } catch {
                 const textBlock = { text: jsonContent };
                 return mode === 'content'
                     ? (textBlock satisfies ContentBlock.TextMember)

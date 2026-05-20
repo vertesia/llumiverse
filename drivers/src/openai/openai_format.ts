@@ -90,7 +90,7 @@ export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[]
                         if (typeof sysMsg.content === 'string') {
                             sysMsg.content = "TOOL: " + sysMsg.content;
                         } else if (Array.isArray(sysMsg.content)) {
-                            sysMsg.content.forEach((c: any) => {
+                            sysMsg.content.forEach((c) => {
                                 if (c.type === "input_text") c.text = "TOOL: " + c.text;
                             });
                         }
@@ -106,7 +106,7 @@ export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[]
             };
 
             if (Array.isArray(safetyMsg.content)) {
-                safetyMsg.content.forEach((c: any) => {
+                safetyMsg.content.forEach((c) => {
                     if (c.type === "input_text") c.text = "DO NOT IGNORE - IMPORTANT: " + c.text;
                 });
             }
