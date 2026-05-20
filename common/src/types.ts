@@ -811,6 +811,40 @@ export interface AIModel<ProviderKeys = string> {
     output_modalities?: string[]; //Output modalities supported by the model (e.g. text, image, video, audio)
     tool_support?: boolean; //if the model supports tool use
     environment?: string; //the environment name
+    /**
+     * Capability metadata for embedding models. Present when `type === ModelType.Embedding`
+     * and the model id is known to the static catalog in `options/embedding.ts`.
+     */
+    embedding?: EmbeddingModelCapabilities;
+}
+
+/**
+ * Capability descriptor for embedding models, returned via `listEmbeddingModels()`.
+ * Lets callers discover the legal output dimensions and accepted task types of a model
+ * without having to hard-code provider-specific knowledge.
+ */
+export interface EmbeddingModelCapabilities {
+    /** Native output dimension of the model (the value returned when `EmbeddingsOptions.dimensions` is unset). */
+    default_dimensions: number;
+
+    /**
+     * Discrete output dimensions the model supports.
+     * - When omitted or equal to `[default_dimensions]`, the model only emits its native dimension.
+     * - When listing multiple values these are the only valid dims unless `supports_dimension_truncation` is true.
+     */
+    supported_dimensions?: number[];
+
+    /**
+     * True for Matryoshka-style models that accept any integer from 1..`default_dimensions`.
+     * When true, `supported_dimensions` (if present) is treated as the *recommended* values.
+     */
+    supports_dimension_truncation?: boolean;
+
+    /** Maximum number of input tokens accepted per text input, when known. */
+    max_input_tokens?: number;
+
+    /** Task types this model understands (maps to `EmbeddingsOptions.task_type`). */
+    supported_task_types?: EmbeddingTaskType[];
 }
 
 export enum AIModelStatus {
