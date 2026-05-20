@@ -78,7 +78,7 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
         options.model_options = options.model_options as TextFallbackOptions;
 
         const stop_seq = options.model_options?.stop_sequence ?? [];
-        const stream = await this.fetchClient.post<ReadableStream<ServerSentEvent>>('/v1/completions', {
+        const stream = await this.fetchClient.post('/v1/completions', {
             payload: {
                 model: options.model,
                 prompt: prompt,
@@ -98,7 +98,7 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
                 ],
             },
             reader: 'sse'
-        })
+        }) as ReadableStream<ServerSentEvent>;
 
         return transformSSEStream(stream, (data: string) => {
             const json = JSON.parse(data);

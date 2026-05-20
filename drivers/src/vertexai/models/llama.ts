@@ -240,10 +240,10 @@ export class LLamaModelDefinition implements ModelDefinition<LLamaPrompt> {
         const region = this.getLlamaModelRegion(modelName);
         const client = driver.getLLamaClient(region);
         const openaiEndpoint = `endpoints/openapi/chat/completions`;
-        const stream = await client.post<ReadableStream<ServerSentEvent>>(openaiEndpoint, {
+        const stream = await client.post(openaiEndpoint, {
             payload,
             reader: 'sse'
-        });
+        }) as ReadableStream<ServerSentEvent>;
 
         return transformSSEStream(stream, (data: string): CompletionChunkObject => {
             const json = JSON.parse(data) as LLamaStreamResponse;

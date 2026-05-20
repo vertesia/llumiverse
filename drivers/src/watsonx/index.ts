@@ -82,10 +82,10 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
             project_id: this.projectId,
         }
 
-        const stream = await this.fetchClient.post<ReadableStream<ServerSentEvent>>(`/ml/v1/text/generation_stream?version=${API_VERSION}`, {
+        const stream = await this.fetchClient.post(`/ml/v1/text/generation_stream?version=${API_VERSION}`, {
             payload: payload,
             reader: 'sse'
-        })
+        }) as ReadableStream<ServerSentEvent>;
 
         return transformSSEStream(stream, (data: string) => {
             const json = JSON.parse(data) as WatsonxTextGenerationResponse;

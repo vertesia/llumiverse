@@ -1337,7 +1337,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 };
 
                 aiModels.push(model);
-                this.validateConnection;
             });
         }
 
@@ -1410,7 +1409,6 @@ function jobInfo(job: GetModelCustomizationJobCommandOutput, jobId: string): Tra
         status = TrainingJobStatus.running;
         details = jobStatus;
     }
-    job.baseModelArn
     return {
         id: jobId,
         model: job.outputModelArn,

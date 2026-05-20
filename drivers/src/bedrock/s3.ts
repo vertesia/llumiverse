@@ -39,7 +39,7 @@ export async function uploadFile(s3: S3Client, source: ReadableStream, bucketNam
         }
     });
 
-    onProgress && upload.on("httpUploadProgress", onProgress);
+    if (onProgress) upload.on("httpUploadProgress", onProgress);
 
     const result = await upload.done();
     return result;

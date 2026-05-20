@@ -27,14 +27,14 @@
     "rules": {
       "recommended": false,
       "correctness": {
-        "noUnusedFunctionParameters": "warn",
-        "noUnusedImports": "warn",
-        "noUnusedVariables": "warn"
+        "noUnusedFunctionParameters": "error",
+        "noUnusedImports": "error",
+        "noUnusedVariables": "error"
       },
       "suspicious": {
-        "noExplicitAny": "warn",
-        "noImplicitAnyLet": "warn",
-        "noUnusedExpressions": "off"
+        "noExplicitAny": "error",
+        "noImplicitAnyLet": "error",
+        "noUnusedExpressions": "error"
       }
     }
   },

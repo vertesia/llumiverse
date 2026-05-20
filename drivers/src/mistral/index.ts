@@ -114,10 +114,10 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
         });
         this.logger.debug({ payload: JSON.stringify(streamPayload) }, "Mistral stream request payload");
 
-        const stream = await this.client.post<ReadableStream<ServerSentEvent>>('/v1/chat/completions', {
+        const stream = await this.client.post('/v1/chat/completions', {
             payload: streamPayload,
             reader: 'sse'
-        });
+        }) as ReadableStream<ServerSentEvent>;
 
         return transformSSEStream(stream, (data: string) => {
             const json = JSON.parse(data);
@@ -166,13 +166,13 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
         });
 
         try {
-            const r = await this.client.post<EmbeddingResponse>('/v1/embeddings', {
+            const r = await this.client.post('/v1/embeddings', {
                 payload: {
                     model,
                     input: texts,
                     encoding_format: "float",
                 },
-            });
+            }) as EmbeddingResponse;
             const ordered: { index: number; embedding: number[] }[] = [...r.data].sort((a, b) => a.index - b.index);
             const promptTokens: number | undefined = r.usage?.total_tokens
                 ?? (r.usage ? (r.usage.prompt_tokens ?? 0) + (r.usage.completion_tokens ?? 0) : undefined);

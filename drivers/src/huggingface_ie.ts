@@ -40,7 +40,7 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
     async getModelURLEndpoint(
         modelId: string
     ): Promise<{ url: string; status: string; }> {
-        const res = await this.service.get<HuggingFaceIEModel>(`/${modelId}`);
+        const res = await this.service.get(`/${modelId}`) as HuggingFaceIEModel;
         return {
             url: res.status.url,
             status: getStatus(res),
@@ -132,7 +132,7 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
     // ============== management API ==============
 
     async listModels(): Promise<AIModel[]> {
-        const res = await this.service.get<{ items: HuggingFaceIEModel[] }>("/");
+        const res = await this.service.get("/") as { items: HuggingFaceIEModel[] };
         const hfModels = res.items;
         if (!hfModels || !hfModels.length) return [];
 
