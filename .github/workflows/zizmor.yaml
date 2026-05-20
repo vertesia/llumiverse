@@ -20,12 +20,52 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Check committed whitespace
+        shell: bash
+        run: |
+          zero_sha="0000000000000000000000000000000000000000"
+
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" && -n "${GITHUB_BASE_REF}" ]]; then
+            git diff --check "origin/${GITHUB_BASE_REF}...HEAD"
+          elif [[ -n "${EVENT_BEFORE}" && "${EVENT_BEFORE}" != "$zero_sha" ]]; then
+            git diff --check "${EVENT_BEFORE}..HEAD"
+          elif git rev-parse HEAD^ >/dev/null 2>&1; then
+            git diff --check HEAD^..HEAD
+          else
+            git diff --check
+          fi
+        env:
+          EVENT_BEFORE: ${{ github.event.before }}
+
+      - name: Check workflow shell env expansion
+        shell: bash
+        run: |
+          scan_paths=(.github)
+          patterns=(
+            "echo '\${"
+            "='\${"
+            "git rev-parse 'origin/\${"
+          )
+
+          found=0
+          for pattern in "${patterns[@]}"; do
+            if grep -R -n -F -- "$pattern" "${scan_paths[@]}"; then
+              found=1
+            fi
+          done
+
+          if [[ "$found" -ne 0 ]]; then
+            echo "::error::Found single-quoted shell references that prevent env var expansion."
+            exit 1
+          fi
 
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
 
       - name: Run zizmor
-        run: uvx zizmor@1.24.1 --format=sarif . > results.sarif
+        run: uvx zizmor@1.25.2 --format=sarif .github > results.sarif
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
