@@ -12,6 +12,7 @@ import {
     type ExecutionOptions,
     type ExecutionTokenUsage,
     getConversationMeta,
+    getEmbeddingModelsForProvider,
     getModelCapabilities,
     incrementConversationTurn,
     type JSONSchema,
@@ -23,7 +24,7 @@ import {
     OPENAI_DEFAULT_EMBEDDING_MODEL,
     type OpenAiDalleOptions,
     type OpenAiGptImageOptions,
-    type Providers,
+    Providers,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
     supportsToolUse,
@@ -420,6 +421,10 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
     async listModels(): Promise<AIModel[]> {
         return this._listModels();
+    }
+
+    async listEmbeddingModels(): Promise<AIModel[]> {
+        return getEmbeddingModelsForProvider(this.provider);
     }
 
     async _listModels(filter?: (m: OpenAI.Models.Model) => boolean): Promise<AIModel[]> {

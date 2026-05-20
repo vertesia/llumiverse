@@ -71,6 +71,10 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
         } satisfies AIModel));
     }
 
+    async listEmbeddingModels(): Promise<AIModel[]> {
+        return [];
+    }
+
     async validateConnection(): Promise<boolean> {
         try {
             await this.client.models.list({ limit: 1 });

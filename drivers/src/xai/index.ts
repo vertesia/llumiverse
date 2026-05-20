@@ -1,4 +1,4 @@
-import { AIModel, DriverOptions, PromptOptions, PromptSegment, Providers } from "@llumiverse/core";
+import { AIModel, DriverOptions, ModelType, PromptOptions, PromptSegment, Providers } from "@llumiverse/core";
 import { formatOpenAILikeMultimodalPrompt, OpenAIPromptFormatterOptions } from "../openai/openai_format.js";
 import { FetchClient } from "@vertesia/api-fetch-client";
 import OpenAI from "openai";
@@ -78,6 +78,20 @@ export class xAIDriver extends BaseOpenAIDriver {
 
         return models;
 
+    }
+
+    async listEmbeddingModels(): Promise<AIModel[]> {
+        const em = await this.xai_service.get("/embedding-models") as xAIModelResponse;
+        return em.models.map(model => ({
+            id: model.id,
+            provider: this.provider,
+            name: model.id,
+            description: `${model.id} by ${model.owned_by}`,
+            type: ModelType.Embedding,
+            is_multimodal: model.input_modalities.length > 1,
+            input_modalities: model.input_modalities,
+            output_modalities: ["vector"],
+        } satisfies AIModel));
     }
 
 

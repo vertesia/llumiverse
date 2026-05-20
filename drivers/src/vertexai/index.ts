@@ -10,10 +10,12 @@ import {
     type DriverOptions,
     type EmbeddingsOptions,
     type EmbeddingsResult,
+    enrichWithEmbeddingCatalog,
     type ExecutionOptions,
     type LlumiverseErrorContext,
     type ModelSearchPayload,
     type PromptSegment,
+    Providers,
     getConversationMeta,
     getModelCapabilities,
     incrementConversationTurn,
@@ -518,24 +520,20 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
     async listModels(_params?: ModelSearchPayload): Promise<AIModel<string>[]> {
         //Model Garden Publisher models - Pretrained models
-        const publishers = ['google', 'anthropic']
-        const supportedModels = { google: ['gemini', 'imagen'], anthropic: ['claude'] }
+        const publishers = ["google", "anthropic", "meta"];
+        // Meta "maas" models are LLama Models-As-A-Service. Non-maas models are not pre-deployed.
+        const supportedModels = { google: ["gemini", "imagen"], anthropic: ["claude"], meta: ["maas"] };
 
-        return await this._listModels(publishers, supportedModels, true);
+        return await this._listModels(publishers, supportedModels);
     }
 
-    async _listModels(publishers: string[], supportedModels: any, includeCustom: boolean = false): Promise<AIModel<string>[]> {
+    async _listModels(publishers: string[], supportedModels: any): Promise<AIModel<string>[]> {
         // Get clients
         const modelGarden = await this.getModelGardenClient();
         const aiplatform = await this.getAIPlatformClient();
         const globalGenAiClient = this.getGoogleGenAIClient("global");
 
         let models: AIModel<string>[] = [];
-
-        //Model Garden Publisher models - Pretrained models
-        const publishers = ["google", "anthropic", "meta"];
-        // Meta "maas" models are LLama Models-As-A-Service. Non-maas models are not pre-deployed.
-        const supportedModels = { google: ["gemini", "imagen"], anthropic: ["claude"], meta: ["maas"] };
         // Additional models not in the listings, but we want to include
         // TODO: Remove once the models are available in the listing API, or no longer needed
         const additionalModels = {
@@ -622,7 +620,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                     return false;
                 }
                 // Check if the model belongs to the supported model families
-                if (modelFamily.some(family => modelName.includes(family))) {
+                if (modelFamily.some((family: string) => modelName.includes(family))) {
                     return true;
                 }
                 return false;
@@ -646,7 +644,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                     if (retiredModels.some(retiredModel => modelName.includes(retiredModel))) {
                         return false;
                     }
-                    if (modelFamily.some(family => modelName.includes(family))) {
+                    if (modelFamily.some((family: string) => modelName.includes(family))) {
                         const versionMatch = modelName.match(/gemini-(\d+(?:\.\d+)?)/);
                         if (versionMatch) {
                             const version = parseFloat(versionMatch[1]);
@@ -686,7 +684,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                     if (retiredModels.some(retiredModel => modelName.includes(retiredModel))) {
                         return false;
                     }
-                    if (modelFamily.some(family => modelName.includes(family))) {
+                    if (modelFamily.some((family: string) => modelName.includes(family))) {
                         if (modelName.includes("claude-3-7")) {
                             return true;
                         }
@@ -738,7 +736,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         const publishers = ['google']
         const supportedModels = { google: ['embedding'] }
 
-        return await this._listModels(publishers, supportedModels, false);
+        const models = await this._listModels(publishers, supportedModels);
+        return enrichWithEmbeddingCatalog(Providers.vertexai, models);
     }
 
     validateConnection(): Promise<boolean> {

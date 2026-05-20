@@ -18,6 +18,7 @@ import {
     type EmbeddingsOptions, type EmbeddingsResult,
     type ExecutionOptions, type ExecutionTokenUsage,
     getConversationMeta,
+    getEmbeddingModelsForProvider,
     getMaxTokensLimitBedrock,
     getModelCapabilities,
     incrementConversationTurn,
@@ -27,6 +28,7 @@ import {
     type ModelOptions,
     type NovaCanvasOptions,
     type PromptSegment,
+    Providers,
     type StatelessExecutionOptions,
     stripBinaryFromConversation,
     stripHeartbeatsFromConversation,
@@ -1200,6 +1202,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         // exclude embedding models, not to be used for typical completions.
         const filter = (m: FoundationModelSummary) => (m.inferenceTypesSupported?.includes("ON_DEMAND") && !m.outputModalities?.includes("EMBEDDING")) ?? false;
         return this._listModels(filter);
+    }
+
+    async listEmbeddingModels(): Promise<AIModel[]> {
+        return getEmbeddingModelsForProvider(Providers.bedrock);
     }
 
     async _listModels(foundationFilter?: (m: FoundationModelSummary) => boolean): Promise<AIModel[]> {

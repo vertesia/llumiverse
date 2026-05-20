@@ -7,7 +7,7 @@ import { isUnexpected } from "@azure-rest/ai-inference";
 import { AIProjectClient, type DeploymentUnion, type ModelDeployment } from '@azure/ai-projects';
 import { createSseStream, type NodeJSReadableStream } from "@azure/core-sse";
 import { DefaultAzureCredential, getBearerTokenProvider, type TokenCredential } from "@azure/identity";
-import { AbstractDriver, type AIModel, type Completion, type CompletionChunkObject, dataSourceToBase64, type DriverOptions, type EmbeddingResultItem, type EmbeddingsOptions, type EmbeddingsResult, type ExecutionOptions, getModelCapabilities, type ImageEmbeddingInput, LlumiverseError, modelModalitiesToArray, normalizeEmbeddingsOptions, Providers, type TextEmbeddingInput } from "@llumiverse/core";
+import { AbstractDriver, type AIModel, type Completion, type CompletionChunkObject, dataSourceToBase64, type DriverOptions, type EmbeddingResultItem, type EmbeddingsOptions, type EmbeddingsResult, enrichWithEmbeddingCatalog, type ExecutionOptions, getModelCapabilities, type ImageEmbeddingInput, LlumiverseError, modelModalitiesToArray, normalizeEmbeddingsOptions, Providers, type TextEmbeddingInput } from "@llumiverse/core";
 import type OpenAI from "openai";
 import { AzureOpenAIDriver } from "../openai/azure_openai.js";
 import { formatOpenAILikeMultimodalPrompt } from "../openai/openai_format.js";
@@ -380,6 +380,12 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             return !!m.capabilities.chat_completion;
         };
         return this._listModels(filter);
+    }
+
+    async listEmbeddingModels(): Promise<AIModel[]> {
+        const filter = (m: ModelDeployment) => !!m.capabilities.embeddings;
+        const deployments = await this._listModels(filter);
+        return enrichWithEmbeddingCatalog(Providers.azure_foundry, deployments);
     }
 
     async _listModels(filter?: (m: ModelDeployment) => boolean): Promise<AIModel[]> {

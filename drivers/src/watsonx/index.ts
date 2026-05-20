@@ -1,4 +1,4 @@
-import { AbstractDriver, type AIModel, type Completion, type CompletionChunkObject, type DriverOptions, type EmbeddingsOptions, type EmbeddingsResult, type ExecutionOptions, LlumiverseError, normalizeEmbeddingsOptions, type TextFallbackOptions, WATSONX_DEFAULT_EMBEDDING_MODEL } from "@llumiverse/core";
+import { AbstractDriver, type AIModel, type Completion, type CompletionChunkObject, type DriverOptions, type EmbeddingsOptions, type EmbeddingsResult, enrichWithEmbeddingCatalog, type ExecutionOptions, LlumiverseError, ModelType, normalizeEmbeddingsOptions, Providers, type TextFallbackOptions, WATSONX_DEFAULT_EMBEDDING_MODEL } from "@llumiverse/core";
 import { transformSSEStream } from "@llumiverse/core/async";
 import { FetchClient } from "@vertesia/api-fetch-client";
 import type { GenerateEmbeddingPayload, GenerateEmbeddingResponse, WatsonAuthToken, WatsonxListModelResponse, WatsonxModelSpec, WatsonxTextGenerationPayload, WatsonxTextGenerationResponse } from "./interfaces.js";
@@ -125,16 +125,15 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
         const res = await this.fetchClient.get(`/ml/v1/foundation_model_specs?version=${API_VERSION}&filters=function_embedding`)
             .catch(err => this.logger.warn("Can't list models on Watsonx: " + err)) satisfies WatsonxListModelResponse;
 
-        const aimodels = res.resources.map((m: WatsonxModelSpec) => {
-            return {
-                id: m.model_id,
-                name: m.label,
-                description: m.short_description,
-                provider: this.provider,
-            }
-        });
+        const aimodels: AIModel[] = res.resources.map((m: WatsonxModelSpec) => ({
+            id: m.model_id,
+            name: m.label,
+            description: m.short_description,
+            provider: this.provider,
+            type: ModelType.Embedding,
+        } satisfies AIModel));
 
-        return aimodels;
+        return enrichWithEmbeddingCatalog(Providers.watsonx, aimodels);
     }
 
     async getAuthToken(): Promise<string> {

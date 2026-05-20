@@ -1,4 +1,4 @@
-import { AbstractDriver, type AIModel, type Completion, type CompletionChunkObject, type DriverOptions, type EmbeddingsOptions, type EmbeddingsResult, type ExecutionOptions, LlumiverseError, MISTRAL_DEFAULT_EMBEDDING_MODEL, normalizeEmbeddingsOptions, type PromptSegment, type TextFallbackOptions } from "@llumiverse/core";
+import { AbstractDriver, type AIModel, type Completion, type CompletionChunkObject, type DriverOptions, type EmbeddingsOptions, type EmbeddingsResult, enrichWithEmbeddingCatalog, type ExecutionOptions, LlumiverseError, MISTRAL_DEFAULT_EMBEDDING_MODEL, ModelType, normalizeEmbeddingsOptions, type PromptSegment, Providers, type TextFallbackOptions } from "@llumiverse/core";
 import { transformSSEStream } from "@llumiverse/core/async";
 import { getJSONSafetyNotice } from "@llumiverse/core/formatters";
 import { FetchClient } from "@vertesia/api-fetch-client";
@@ -153,18 +153,18 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
 
     async listEmbeddingModels(): Promise<AIModel<string>[]> {
         const models: ListModelsResponse = await this.client.get('v1/models');
-        const aimodels = models.data.map(m => {
-            return {
+        const aimodels = models.data
+            .filter(m => m.id.includes("embed"))
+            .map(m => ({
                 id: m.id,
                 name: m.id,
                 description: undefined,
                 provider: this.provider,
                 owner: m.owned_by,
                 type: ModelType.Embedding,
-            }
-        });
+            } satisfies AIModel<string>));
 
-        return aimodels.filter(m => m.id.includes("embed"));
+        return enrichWithEmbeddingCatalog(Providers.mistralai, aimodels);
     }
 
     validateConnection(): Promise<boolean> {
