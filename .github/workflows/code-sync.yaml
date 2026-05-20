@@ -47,7 +47,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           export SOURCE_REF="${FROM_BRANCH}"
-          export SOURCE_SHA="$(git rev-parse 'origin/${FROM_BRANCH}')"
+          export SOURCE_SHA="$(git rev-parse "origin/${FROM_BRANCH}")"
           export SOURCE_MSG="$(git log --format="%cd: %s by %an" --date=short -1 $SOURCE_SHA)"
 
           export TARGET_REF="main"
