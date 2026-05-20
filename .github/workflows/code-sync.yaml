@@ -19,12 +19,14 @@ env:
   FROM_BRANCH: ${{ inputs.from_branch || github.ref_name }}
 
 permissions:
-  contents: write # required for pushing changes to the repository
-  pull-requests: write # required for creating pull requests
+  contents: read
 
 jobs:
   sync:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # required for pushing changes to the repository
+      pull-requests: write # required for creating pull requests
     outputs:
       is_merged: ${{ steps.sync.outputs.IS_MERGED }}
       pr_number: ${{ steps.sync.outputs.PR_NUMBER }}
@@ -37,14 +39,15 @@ jobs:
         with:
           fetch-depth: 0 # Fetch all because we need to access info from different branches
           fetch-tags: false
+          persist-credentials: false
 
       - name: Code Sync
         id: sync
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          export SOURCE_REF="${{ env.FROM_BRANCH }}"
-          export SOURCE_SHA="$(git rev-parse 'origin/${{ env.FROM_BRANCH }}')"
+          export SOURCE_REF="${FROM_BRANCH}"
+          export SOURCE_SHA="$(git rev-parse 'origin/${FROM_BRANCH}')"
           export SOURCE_MSG="$(git log --format="%cd: %s by %an" --date=short -1 $SOURCE_SHA)"
 
           export TARGET_REF="main"
@@ -80,7 +83,7 @@ jobs:
             echo "IS_MERGED=true" >> $GITHUB_OUTPUT
           elif [ $is_sync_result -eq 2 ]; then
             echo "Code sync failed because merge conflicts cannot be resolved automatically."
-            echo "Preparing a PR and asking the author [${{ github.actor }}] to handle the synchronization..."
+            echo "Preparing a PR and asking the author [${GITHUB_ACTOR}] to handle the synchronization..."
 
             git push origin $TEMP_BRANCH
 
@@ -143,6 +146,8 @@ jobs:
       - sync
     if: ${{ needs.sync.outputs.is_merged == 'true' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # required for pushing changes to the repository
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -151,6 +156,7 @@ jobs:
           fetch-tags: false
           ref: ${{ needs.sync.outputs.sync_ref }}
           ssh-key: ${{ secrets.DEPLOY_KEY }} # Use deploy key to bypass branch protection rules
+          persist-credentials: false
 
       - name: Push changes to main branch
         run: |
@@ -164,9 +170,11 @@ jobs:
           # note: --ff-only ensures that the merge will only succeed if it can be fast-forwarded. This avoids creating
           # a merge commit and keeps the history clean. If failed, user should trigger the workflow again, or resolving
           # conflicts and then sync manually.
-          git merge --ff-only --no-edit ${{ needs.sync.outputs.sync_ref }}
+          git merge --ff-only --no-edit ${NEEDS_SYNC_OUTPUTS_SYNC_REF}
 
           git push origin main
+        env:
+          NEEDS_SYNC_OUTPUTS_SYNC_REF: ${{ needs.sync.outputs.sync_ref }}
 
   notify:
     runs-on: ubuntu-latest
@@ -186,7 +194,7 @@ jobs:
             -d '{
               "event_type": "developer-notification",
               "client_payload": {
-                "github_login": "${{ github.actor }}",
+                "github_login": "${GITHUB_ACTOR}",
                 "message": "Your changes from `preview` have been synced to `main` in vertesia/llumiverse. See the <https://github.com/vertesia/llumiverse/actions/runs/${{ github.run_id }}|Action run>."
               }
             }'
@@ -208,10 +216,12 @@ jobs:
             -d '{
               "event_type": "developer-notification",
               "client_payload": {
-                "github_login": "${{ github.actor }}",
-                "message": "Your changes from `preview` failed to sync to `main` in vertesia/llumiverse due to merge conflicts. Please resolve this PR: ${{ needs.sync.outputs.pr_url }}"
+                "github_login": "${GITHUB_ACTOR}",
+                "message": "Your changes from `preview` failed to sync to `main` in vertesia/llumiverse due to merge conflicts. Please resolve this PR: ${NEEDS_SYNC_OUTPUTS_PR_URL}"
               }
             }'
+        env:
+          NEEDS_SYNC_OUTPUTS_PR_URL: ${{ needs.sync.outputs.pr_url }}
 
   cleanup:
     runs-on: ubuntu-latest
@@ -220,17 +230,22 @@ jobs:
       - push
     # Always run cleanup except when there is a conflict PR that needs the branch to stay alive.
     if: ${{ always() && needs.sync.outputs.should_cleanup != 'false' }}
+    permissions:
+      contents: write # required for deleting the temporary branch
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0 # Fetch all because we need to access info from different branches
           fetch-tags: false
+          persist-credentials: false
 
       - name: Cleanup temporary branch
         run: |
           set -x
 
-          TEMP_BRANCH="${{ needs.sync.outputs.sync_ref }}"
+          TEMP_BRANCH="${NEEDS_SYNC_OUTPUTS_SYNC_REF}"
           git branch -D "$TEMP_BRANCH" || true # Ignore if branch does not exist
           git push origin --delete "$TEMP_BRANCH" || true # Ignore if branch does not exist
+        env:
+          NEEDS_SYNC_OUTPUTS_SYNC_REF: ${{ needs.sync.outputs.sync_ref }}
