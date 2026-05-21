@@ -1,39 +1,44 @@
 import {
     AbstractDriver,
-    AIModel,
-    Completion,
-    CompletionChunkObject,
-    CompletionResult,
-    DataSource,
-    DriverOptions,
-    EmbeddingsOptions,
-    EmbeddingsResult,
-    ExecutionOptions,
-    ExecutionTokenUsage,
+    type AIModel,
+    type Completion,
+    type CompletionChunkObject,
+    type CompletionResult,
+    type DataSource,
+    type DriverOptions,
+    type EmbeddingResultItem,
+    type EmbeddingsOptions,
+    type EmbeddingsResult,
+    type ExecutionOptions,
+    type ExecutionTokenUsage,
     getConversationMeta,
     getModelCapabilities,
     incrementConversationTurn,
-    JSONSchema,
+    type JSONSchema,
     LlumiverseError,
-    LlumiverseErrorContext,
+    type LlumiverseErrorContext,
     modelModalitiesToArray,
     ModelType,
-    OpenAiDalleOptions,
-    OpenAiGptImageOptions,
-    Providers,
+    normalizeEmbeddingsOptions,
+    OPENAI_DEFAULT_EMBEDDING_MODEL,
+    type OpenAiDalleOptions,
+    type OpenAiGptImageOptions,
+    type Providers,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
     supportsToolUse,
-    ToolDefinition,
-    ToolUse,
-    TrainingJob,
+    type ToolDefinition,
+    type ToolUse,
+    type TrainingJob,
     TrainingJobStatus,
-    TrainingOptions,
-    TrainingPromptOptions,
+    type TrainingOptions,
+    type TrainingPromptOptions,
+    type TextFallbackOptions,
     truncateLargeTextInConversation,
     unwrapConversationArray,
 } from "@llumiverse/core";
-import OpenAI, { AzureOpenAI } from "openai";
+import type OpenAI from "openai";
+import type { AzureOpenAI } from "openai";
 import {
     APIConnectionError,
     APIConnectionTimeoutError,
@@ -55,10 +60,28 @@ import { formatOpenAILikeMultimodalPrompt } from "./openai_format.js";
 // Response API types
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
+type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
+    image_detail?: "low" | "high" | "auto";
+    effort?: string;
+    reasoning_effort?: string;
+};
+type OpenAIErrorWithStatus = Error & { status?: unknown };
+type MutableRoleItem = { role: "user" | "developer" | "system" | "assistant" };
+type MutableInputImagePart = { type: string; detail?: string };
+type OpenAIFunctionItem = ResponseInputItem & {
+    type?: string;
+    name?: string;
+    arguments?: string;
+    output?: string;
+};
 
 // Helper function to convert string to CompletionResult[]
 function textToCompletionResult(text: string): CompletionResult[] {
     return text ? [{ type: "text", value: text }] : [];
+}
+
+function hasNumericStatus(error: unknown): boolean {
+    return error instanceof Error && typeof (error as OpenAIErrorWithStatus).status === 'number';
 }
 
 function isOpenAIReasoningModel(model: string): boolean {
@@ -154,7 +177,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
         convertRoles(prompt, options.model);
 
-        const model_options = options.model_options as any;
+        const model_options = options.model_options as OpenAIRequestOptions | undefined;
         insert_image_detail(prompt, model_options?.image_detail ?? "auto");
 
         let parsedSchema: JSONSchema | undefined = undefined;
@@ -164,7 +187,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                 parsedSchema = openAISchemaFormat(options.result_schema);
                 strictMode = true;
             }
-            catch (e) {
+            catch {
                 parsedSchema = limitedSchemaFormat(options.result_schema);
                 strictMode = false;
             }
@@ -205,7 +228,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
         convertRoles(prompt, options.model);
 
-        const model_options = options.model_options as any;
+        const model_options = options.model_options as OpenAIRequestOptions | undefined;
         insert_image_detail(prompt, model_options?.image_detail ?? "auto");
 
         const toolDefs = getToolDefinitions(options.tools);
@@ -227,7 +250,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                 parsedSchema = openAISchemaFormat(options.result_schema);
                 strictMode = true;
             }
-            catch (e) {
+            catch {
                 parsedSchema = limitedSchemaFormat(options.result_schema);
                 strictMode = false;
             }
@@ -405,7 +428,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         try {
             await this.service.models.list();
             return true;
-        } catch (error) {
+        } catch {
             return false;
         }
     }
@@ -436,7 +459,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         const aiModels = models.map((m) => {
             const modelCapability = getModelCapabilities(m.id, "openai");
             let owner = m.owned_by;
-            if (owner == "system") {
+            if (owner === "system") {
                 owner = "openai";
             }
 
@@ -463,28 +486,49 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     }
 
 
-    async generateEmbeddings({ text, image, model = "text-embedding-3-small" }: EmbeddingsOptions): Promise<EmbeddingsResult> {
+    async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
+        const normalized = normalizeEmbeddingsOptions(options);
+        const model = normalized.model ?? OPENAI_DEFAULT_EMBEDDING_MODEL;
 
-        if (image) {
-            throw new Error("Image embeddings not supported by OpenAI");
-        }
-
-        if (!text) {
-            throw new Error("No text provided");
-        }
-
-        const res = await this.service.embeddings.create({
-            input: text,
-            model: model,
+        const texts: string[] = normalized.inputs.map((input) => {
+            if (input.type !== "text") {
+                throw new Error(`Provider 'openai' does not support '${input.type}' embeddings; only 'text' is supported.`);
+            }
+            return input.text;
         });
 
-        const embeddings = res.data[0].embedding;
+        try {
+            const res = await this.service.embeddings.create({
+                input: texts,
+                model,
+                ...(normalized.dimensions ? { dimensions: normalized.dimensions } : {}),
+                encoding_format: "float",
+            });
 
-        if (!embeddings || embeddings.length === 0) {
-            throw new Error("No embedding found");
+            // OpenAI does not guarantee data is returned in the same order as the input,
+            // but does return a stable `index` per item. Sort by index to align with inputs.
+            const ordered = [...res.data].sort((a, b) => a.index - b.index);
+            const items = ordered.map((entry): EmbeddingResultItem => {
+                if (!entry.embedding || entry.embedding.length === 0) {
+                    throw new Error(`OpenAI embedding empty for input index ${entry.index}`);
+                }
+                return { outputs: [{ values: entry.embedding, modality: "text" }] };
+            });
+
+            const usage = res.usage
+                ? { input_tokens: res.usage.prompt_tokens, input_text_tokens: res.usage.prompt_tokens }
+                : undefined;
+
+            return { model, results: items, usage };
+        } catch (error) {
+            if (LlumiverseError.isLlumiverseError(error)) throw error;
+            if (error instanceof Error && !hasNumericStatus(error)) throw error;
+            throw this.formatLlumiverseError(error, {
+                provider: this.provider,
+                model,
+                operation: 'execute',
+            });
         }
-
-        return { values: embeddings, model } satisfies EmbeddingsResult;
     }
 
     imageModels = ["dall-e", "gpt-image", "chatgpt-image"];
@@ -577,13 +621,17 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                 result: results
             };
 
-        } catch (error: any) {
+        } catch (error: unknown) {
             this.logger.error({ error }, `[${this.provider}] Image generation failed`);
+            const generationError = error instanceof Error ? error : new Error(String(error));
+            const errorCode = (error as { code?: unknown })?.code === 'content_policy_violation'
+                ? 'content_policy_violation'
+                : 'validation_error';
             return {
                 result: [],
                 error: {
-                    message: error.message,
-                    code: error.code || 'GENERATION_FAILED'
+                    message: generationError.message,
+                    code: errorCode
                 }
             };
         }
@@ -842,8 +890,10 @@ function completionResultsToText(completionResults: CompletionResult[] | undefin
                 case 'image':
                     // Skip images in conversation - they're in the result
                     return '';
-                default:
-                    return String((r as any).value || '');
+                default: {
+                    const _exhaustive: never = r;
+                    return String(_exhaustive);
+                }
             }
         })
         .join('');
@@ -896,11 +946,11 @@ export function mapResponseStream(stream: AsyncIterable<OpenAI.Responses.Respons
                     if (event.item.call_id) {
                         toolCallMetadata.set(event.item.call_id, metadata);
                     }
-                    const toolUse: ToolUse & { _actual_id?: string } = {
+                    const toolUse: ToolUse<unknown> & { _actual_id?: string } = {
                         id: syntheticId,
                         _actual_id: callId,
                         tool_name: event.item.name,
-                        tool_input: '' as any,
+                        tool_input: '',
                     };
                     yield {
                         result: [],
@@ -910,11 +960,11 @@ export function mapResponseStream(stream: AsyncIterable<OpenAI.Responses.Respons
                     const metadata = toolCallMetadata.get(event.item_id);
                     const syntheticId = metadata?.syntheticId ?? `tool_${event.output_index}`;
                     const callId = metadata?.callId ?? event.item_id;
-                    const toolUse: ToolUse & { _actual_id?: string } = {
+                    const toolUse: ToolUse<unknown> & { _actual_id?: string } = {
                         id: syntheticId,
                         _actual_id: callId,
                         tool_name: metadata?.name ?? '',
-                        tool_input: event.delta as any,
+                        tool_input: event.delta,
                     };
                     yield {
                         result: [],
@@ -961,7 +1011,7 @@ function insert_image_detail(items: ResponseInputItem[], detail_level: string): 
                 if (Array.isArray(content)) {
                     for (const part of content) {
                         if (typeof part === 'object' && part.type === 'input_image') {
-                            (part as any).detail = detail_level;
+                            (part as MutableInputImagePart).detail = detail_level;
                         }
                     }
                 }
@@ -978,14 +1028,14 @@ function convertRoles(items: ResponseInputItem[], model: string): ResponseInputI
             //o1-mini and o1-preview support neither system nor developer
             for (const item of items) {
                 if ('role' in item && (item as EasyInputMessage).role === 'system') {
-                    (item as any).role = 'user';
+                    (item as MutableRoleItem).role = 'user';
                 }
             }
         } else {
             //Models newer than o1 use developer role
             for (const item of items) {
                 if ('role' in item && (item as EasyInputMessage).role === 'system') {
-                    (item as any).role = 'developer';
+                    (item as MutableRoleItem).role = 'developer';
                 }
             }
         }
@@ -1010,13 +1060,13 @@ function supportsSchema(model: string): boolean {
  */
 export function convertOpenAIFunctionItemsToText(items: ResponseInputItem[]): ResponseInputItem[] {
     const hasFunctionItems = items.some(item => {
-        const type = (item as any).type;
+        const type = (item as OpenAIFunctionItem).type;
         return type === 'function_call' || type === 'function_call_output';
     });
     if (!hasFunctionItems) return items;
 
     return items.map(item => {
-        const typed = item as any;
+        const typed = item as OpenAIFunctionItem;
         if (typed.type === 'function_call') {
             const argsStr = typed.arguments || '';
             const truncated = argsStr.length > 500 ? argsStr.substring(0, 500) + '...' : argsStr;
@@ -1049,7 +1099,7 @@ function getToolDefinition(toolDef: ToolDefinition): OpenAI.Responses.FunctionTo
             parsedSchema = openAISchemaFormat(toolDef.input_schema as JSONSchema);
             strictMode = true;
         }
-        catch (e) {
+        catch {
             //TODO: type assertion here is not safe, does not work with satisfies
             parsedSchema = limitedSchemaFormat(toolDef.input_schema as JSONSchema);
             strictMode = false;
@@ -1080,12 +1130,12 @@ function updateConversation(conversation: unknown, items: ResponseInputItem[]): 
     return [...convArray, ...items];
 }
 
-export function collectTools(output?: OpenAI.Responses.ResponseOutputItem[]): ToolUse[] | undefined {
+export function collectTools(output?: OpenAI.Responses.ResponseOutputItem[]): ToolUse<unknown>[] | undefined {
     if (!output) {
         return undefined;
     }
 
-    const tools: ToolUse[] = [];
+    const tools: ToolUse<unknown>[] = [];
     for (const item of output) {
         if (item.type === 'function_call') {
             const id = item.call_id || item.id;
@@ -1141,7 +1191,7 @@ function extractCompletionResults(output?: OpenAI.Responses.ResponseOutputItem[]
 
 //For strict mode false
 function limitedSchemaFormat(schema: JSONSchema): JSONSchema {
-    const formattedSchema = { ...schema };
+    const formattedSchema: JSONSchema = { ...schema };
 
     // Defaults not supported
     delete formattedSchema.default;
@@ -1185,7 +1235,7 @@ function openAISchemaFormat(schema: JSONSchema, nesting: number = 0): JSONSchema
         throw new Error("OpenAI schema nesting too deep");
     }
 
-    const formattedSchema = { ...schema };
+    const formattedSchema: JSONSchema = { ...schema };
 
     // Defaults not supported
     delete formattedSchema.default;
@@ -1220,7 +1270,7 @@ function openAISchemaFormat(schema: JSONSchema, nesting: number = 0): JSONSchema
             }
         }
     }
-    if (formattedSchema?.type === 'object' && (!formattedSchema?.properties || Object.keys(formattedSchema?.properties ?? {}).length == 0)) {
+    if (formattedSchema?.type === 'object' && (!formattedSchema?.properties || Object.keys(formattedSchema?.properties ?? {}).length === 0)) {
         //If no properties are defined, then additionalProperties: true was set or the object would be empty.
         //OpenAI does not support this on structured output/ strict mode.
         throw new Error("OpenAI does not support empty objects or objects with additionalProperties set to true");
@@ -1229,7 +1279,7 @@ function openAISchemaFormat(schema: JSONSchema, nesting: number = 0): JSONSchema
     return formattedSchema
 }
 
-function responseFinishReason(response: OpenAI.Responses.Response, tools?: ToolUse[] | undefined): string | undefined {
+function responseFinishReason(response: OpenAI.Responses.Response, tools?: ToolUse<unknown>[] | undefined): string | undefined {
     if (tools && tools.length > 0) {
         return "tool_use";
     }
@@ -1310,7 +1360,7 @@ export function fixOrphanedToolUse(items: ResponseInputItem[]): ResponseInputIte
     return result;
 }
 
-function safeJsonParse(value: unknown): any {
+function safeJsonParse(value: unknown): unknown {
     if (typeof value !== 'string') {
         return value;
     }

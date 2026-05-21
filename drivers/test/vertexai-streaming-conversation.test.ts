@@ -1,7 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { Content } from "@google/genai";
 import { ExecutionOptions, unwrapConversationArray } from "@llumiverse/core";
-import { VertexAIDriver } from "../src";
+import { VertexAIDriver, VertexAIPrompt } from "../src";
+import type { Tree } from "./__helpers__/test-utils.js";
 
 function extractTextParts(message: { parts?: Array<{ text?: string }> }): string[] {
     if (!message.parts) return [];
@@ -27,11 +28,11 @@ describe("VertexAI streaming conversation rebuild", () => {
         const result = [{ type: "text", value: "response" }];
 
         const conversation = driver.buildStreamingConversation(
-            prompt as any,
-            result as any,
+            prompt as unknown as VertexAIPrompt,
+            result,
             undefined,
             options
-        ) as unknown;
+        );
 
         const unwrapped = unwrapConversationArray<Content>(conversation) ?? (conversation as Content[]);
 
@@ -68,11 +69,11 @@ describe("VertexAI streaming conversation rebuild", () => {
         const result = [{ type: "text", value: "response" }];
 
         const conversation = driver.buildStreamingConversation(
-            prompt as any,
-            result as any,
+            prompt as unknown as VertexAIPrompt,
+            result,
             undefined,
             options
-        ) as any;
+        ) as unknown as Tree;
 
         expect(conversation.system).toEqual(existing.system);
         expect(conversation.messages.length).toBe(3);

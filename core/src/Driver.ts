@@ -30,9 +30,16 @@ import { DefaultCompletionStream, FallbackCompletionStream } from "./CompletionS
 import { formatTextPrompt } from "./formatters/index.js";
 import { validateResult } from "./validation.js";
 
+function getObjectProperty(value: unknown, key: string): unknown {
+    if (value && typeof value === 'object' && key in value) {
+        return (value as Record<string, unknown>)[key];
+    }
+    return undefined;
+}
+
 // Helper to create logger methods that support both message-only and object-first signatures
 function createConsoleLoggerMethod(consoleMethod: (...args: unknown[]) => void): Logger['info'] {
-    return ((objOrMsg: any, msgOrNever?: any, ...args: (string | number | boolean)[]) => {
+    return ((objOrMsg: unknown, msgOrNever?: string, ...args: (string | number | boolean)[]) => {
         if (typeof objOrMsg === 'string') {
             // Message-only: logger.info("message", ...args)
             consoleMethod(objOrMsg, msgOrNever, ...args);
@@ -104,7 +111,13 @@ export interface Driver<PromptT = unknown> {
     //check that it is possible to connect to the environment
     validateConnection(): Promise<boolean>;
 
-    //generate embeddings for a given text or image
+    /**
+     * Generate embeddings for one or more inputs.
+     * Inputs may be text, image, video, or audio depending on the model and
+     * provider. Returns one result item per input, each with one or more
+     * output vectors (single-vector for text/image, multi-vector for
+     * segmented video/audio or joint-multimodal models).
+     */
     generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult>;
 
     /**
@@ -152,12 +165,15 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         if (!result.tool_use && !result.error && options.result_schema) {
             try {
                 result.result = validateResult(result.result, options.result_schema);
-            } catch (error: any) {
-                const errorMessage = `[${this.provider}] [${options.model}] ${error.code ? '[' + error.code + '] ' : ''}Result validation error: ${error.message}`;
+            } catch (error: unknown) {
+                const validationError = error instanceof Error ? error : new Error(String(error));
+                const rawCode = getObjectProperty(error, 'code');
+                const code = rawCode === 'json_error' || rawCode === 'validation_error' ? rawCode : undefined;
+                const errorMessage = `[${this.provider}] [${options.model}] ${code ? '[' + code + '] ' : ''}Result validation error: ${validationError.message}`;
                 this.logger.error({ err: error, data: result.result }, errorMessage);
                 result.error = {
-                    code: error.code || error.name,
-                    message: error.message,
+                    code: code || 'validation_error',
+                    message: validationError.message,
                     data: result.result,
                 }
             }
@@ -166,7 +182,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     async execute(segments: PromptSegment[], options: ExecutionOptions): Promise<ExecutionResponse<PromptT>> {
         const prompt = await this.createPrompt(segments, options);
-        return this._execute(prompt, options).catch((error: any) => {
+        return this._execute(prompt, options).catch((error: unknown) => {
             // Don't wrap if already a LlumiverseError
             if (LlumiverseError.isLlumiverseError(error)) {
                 throw error;
@@ -182,7 +198,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     async _execute(prompt: PromptT, options: ExecutionOptions): Promise<ExecutionResponse<PromptT>> {
         try {
             const start = Date.now();
-            let result;
+            let result: Completion;
 
             if (this.isImageModel(options.model)) {
                 this.logger.debug(
@@ -241,7 +257,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     }
 
     public async createPrompt(segments: PromptSegment[], opts: PromptOptions): Promise<PromptT> {
-        return await (opts.format ? opts.format(segments, opts.result_schema) : this.formatPrompt(segments, opts));
+        return await (opts.format ? opts.format(segments, opts.result_schema) as PromptT : this.formatPrompt(segments, opts));
     }
 
     /**
@@ -307,16 +323,17 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     ): LlumiverseError {
         // Extract status code from common locations (only if numeric)
         let code: number | undefined;
-        const rawCode = (error as any)?.status
-            || (error as any)?.statusCode
-            || (error as any)?.code;
+        const rawCode = getObjectProperty(error, 'status')
+            || getObjectProperty(error, 'statusCode')
+            || getObjectProperty(error, 'code');
 
         if (typeof rawCode === 'number') {
             code = rawCode;
         }
 
         // Extract error name if available
-        const errorName = (error as any)?.name;
+        const rawErrorName = getObjectProperty(error, 'name');
+        const errorName = typeof rawErrorName === 'string' ? rawErrorName : undefined;
 
         // Extract message
         const message = error instanceof Error

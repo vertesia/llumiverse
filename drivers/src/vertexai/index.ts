@@ -11,25 +11,27 @@ import {
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
-    type LlumiverseError,
     type LlumiverseErrorContext,
     type ModelSearchPayload,
     type PromptSegment,
+    type ToolUse,
     getConversationMeta,
     getModelCapabilities,
     incrementConversationTurn,
+    type LlumiverseError,
     modelModalitiesToArray,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
-    truncateLargeTextInConversation,
+    truncateLargeTextInConversation
 } from "@llumiverse/core";
 import { FetchClient } from "@vertesia/api-fetch-client";
 import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from "google-auth-library";
-import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
-import { type TextEmbeddingsOptions, getEmbeddingsForText } from "./embeddings/embeddings-text.js";
 import { getModelDefinition } from "./models.js";
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from "./models/claude.js";
 import { ImagenModelDefinition, type ImagenPrompt } from "./models/imagen.js";
+import type { ClaudePrompt } from "../shared/claude-messages.js";
+import type { LLamaPrompt } from "./models/llama.js";
+import { generateVertexAiEmbeddings } from "./embeddings/embed.js";
 
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
@@ -41,9 +43,15 @@ export interface GenerateContentPrompt {
     contents: Content[];
     system?: Content;
 }
+type ClaudeStreamingPrompt = { messages: unknown[]; system?: unknown[] };
+type ConversationWrapper = { messages?: unknown[]; system?: unknown[] };
+
+function isClaudeStreamingPrompt(prompt: unknown): prompt is ClaudeStreamingPrompt {
+    return prompt !== null && typeof prompt === 'object' && 'messages' in prompt && Array.isArray((prompt as ConversationWrapper).messages);
+}
 
 //General Prompt type for VertexAI
-export type VertexAIPrompt = ImagenPrompt | GenerateContentPrompt;
+export type VertexAIPrompt = ImagenPrompt | GenerateContentPrompt | ClaudePrompt | LLamaPrompt;
 
 export function trimModelName(model: string) {
     const i = model.lastIndexOf("@");
@@ -63,8 +71,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     llamaClient: FetchClient & { region?: string } | undefined;
     modelGarden: v1beta1.ModelGardenServiceClient | undefined;
     imagenClient: PredictionServiceClient | undefined;
+    predictionClient: PredictionServiceClient | undefined;
 
-    googleAuth: GoogleAuth<any>;
+    googleAuth: GoogleAuth<AuthClient>;
     private authClientPromise: Promise<AuthClient> | undefined;
 
     constructor(options: VertexAIDriverOptions) {
@@ -79,9 +88,20 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         this.modelGarden = undefined;
         this.llamaClient = undefined;
         this.imagenClient = undefined;
+        this.predictionClient = undefined;
 
-        this.googleAuth = new GoogleAuth(options.googleAuthOptions) as GoogleAuth<any>;
+        this.googleAuth = new GoogleAuth(options.googleAuthOptions);
         this.authClientPromise = undefined;
+    }
+
+    /**
+     * Cleanup Google Cloud clients when the driver is evicted from the cache.
+     */
+    destroy(): void {
+        this.aiplatform?.close();
+        this.modelGarden?.close();
+        this.imagenClient?.close();
+        this.predictionClient?.close();
     }
 
     private async getAuthClient(): Promise<AuthClient> {
@@ -92,8 +112,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     public getGoogleGenAIClient(region: string = this.options.region, flex: boolean = false): GoogleGenAI {
-        if (this.googleGenAI && 
-            this.googleGenAIRegion === region && 
+        if (this.googleGenAI &&
+            this.googleGenAIRegion === region &&
             this.googleGenAIFlex === flex) {
             // Return existing client if region and flex settings match
             return this.googleGenAI;
@@ -123,11 +143,11 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         });
     }
 
-    public getFetchClient(): FetchClient {
+    public getFetchClient(region: string = this.options.region): FetchClient {
         //Lazy initialization
         if (!this.fetchClient) {
             this.fetchClient = createFetchClient({
-                region: this.options.region,
+                region: region,
                 project: this.options.project,
             }).withAuthCallback(async () => {
                 const token = await this.googleAuth.getAccessToken();
@@ -228,6 +248,19 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return this.imagenClient;
     }
 
+    public async getPredictionServiceClient(): Promise<PredictionServiceClient> {
+        //Lazy initialization using the driver's configured region
+        if (!this.predictionClient) {
+            const authClient = await this.getAuthClient();
+            this.predictionClient = new PredictionServiceClient({
+                projectId: this.options.project,
+                apiEndpoint: `${this.options.region}-${API_BASE_PATH}`,
+                authClient,
+            });
+        }
+        return this.predictionClient;
+    }
+
     validateResult(result: Completion, options: ExecutionOptions) {
         // Optionally preprocess the result before validation
         const modelDef = getModelDefinition(options.model);
@@ -280,8 +313,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         options: ExecutionOptions
     ): Content[] | unknown | undefined {
         // Handle Claude-style prompts (has 'messages' array)
-        if ('messages' in prompt && Array.isArray((prompt as any).messages)) {
-            return this.buildClaudeStreamingConversation(prompt as any, result, toolUse, options);
+        if (isClaudeStreamingPrompt(prompt)) {
+            return this.buildClaudeStreamingConversation(prompt, result, toolUse, options);
         }
 
         // Only handle Gemini-style prompts with contents array
@@ -302,21 +335,23 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                     case 'image':
                         // Skip images in conversation - they're in the result
                         return '';
-                    default:
-                        return String((r as any).value || '');
+                    default: {
+                        const _exhaustive: never = r;
+                        return String(_exhaustive);
+                    }
                 }
             })
             .join('');
 
         // Build parts array for assistant message
-        const parts: any[] = [];
+        const parts: unknown[] = [];
         if (textContent) {
             parts.push({ text: textContent });
         }
         // Add function calls if present (Gemini format)
         if (toolUse && toolUse.length > 0) {
-            for (const tool of toolUse as any[]) {
-                const functionCallPart: any = {
+            for (const tool of toolUse as ToolUse<unknown>[]) {
+                const functionCallPart: Record<string, unknown> = {
                     functionCall: {
                         name: tool.tool_name,
                         args: tool.tool_input,
@@ -343,7 +378,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         if (parts.length > 0) {
             conversation.push({
                 role: 'model',
-                parts: parts
+                parts: parts as Content['parts']
             });
         }
 
@@ -399,8 +434,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                         return typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
                     case 'image':
                         return '';
-                    default:
-                        return String((r as any).value || '');
+                    default: {
+                        const _exhaustive: never = r;
+                        return String(_exhaustive);
+                    }
                 }
             })
             .join('');
@@ -418,7 +455,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
         // Add tool_use blocks in Claude format
         if (toolUse && toolUse.length > 0) {
-            for (const tool of toolUse as any[]) {
+            for (const tool of toolUse as ToolUse<unknown>[]) {
                 content.push({
                     type: 'tool_use',
                     id: tool.id,
@@ -430,8 +467,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
         // Claude's requestTextCompletionStream does NOT mutate prompt.messages
         // to include history, so we must prepend options.conversation here.
-        const existingMessages = (options.conversation as any)?.messages ?? [];
-        const existingSystem = (options.conversation as any)?.system ?? prompt.system;
+        const existingConversation = options.conversation as ConversationWrapper | undefined;
+        const existingMessages = existingConversation?.messages ?? [];
+        const existingSystem = existingConversation?.system ?? prompt.system;
 
         // Build the new messages array
         const newMessages = [
@@ -707,26 +745,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
-        if (options.image || options.model?.includes("multimodal")) {
-            if (options.text && options.image) {
-                throw new Error("Text and Image simultaneous embedding not implemented. Submit separately");
-            }
-            return getEmbeddingsForImages(this, options);
-        }
-        const text_options: TextEmbeddingsOptions = {
-            content: options.text ?? "",
-            model: options.model,
-        };
-        return getEmbeddingsForText(this, text_options);
-    }
-
-    /**
-     * Cleanup Google Cloud clients when the driver is evicted from the cache.
-     */
-    destroy(): void {
-        this.aiplatform?.close();
-        this.modelGarden?.close();
-        this.imagenClient?.close();
+        return generateVertexAiEmbeddings(this, options);
     }
 
     /**
@@ -749,7 +768,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         if (modelDef.formatLlumiverseError) {
             try {
                 return modelDef.formatLlumiverseError(this, error, context);
-            } catch (formattingError) {
+            } catch {
                 // If model-specific handler throws, fall through to default handling
                 // This allows model handlers to explicitly opt out for certain errors
             }

@@ -6,9 +6,6 @@ import { BedrockDriver } from "../src";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "../src/bedrock/nova-image-payload";
 import { testPrompt_imageVariations, testPrompt_textToImage, testPrompt_textToImageGuidance } from "./samples";
 
-const TIMEOUT = 120 * 1000;
-
-
 interface TestDriver {
     driver: AbstractDriver;
     models: string[];

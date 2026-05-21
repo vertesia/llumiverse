@@ -13,8 +13,17 @@ import {
 } from '@anthropic-ai/sdk/error';
 import { LlumiverseError } from '@llumiverse/core';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { VertexAIDriver } from '../index.js';
+import type { VertexAIDriver } from '../index.js';
 import { ClaudeModelDefinition } from './claude.js';
+import { exposePrivate } from '../../../test/__helpers__/test-utils.js';
+
+type ClaudeModelInternals = {
+    isClaudeErrorRetryable: (
+        error: unknown,
+        httpStatusCode: number | undefined,
+        errorType: string | undefined,
+    ) => boolean | undefined;
+};
 
 describe('ClaudeModelDefinition Error Handling', () => {
     let modelDef: ClaudeModelDefinition;
@@ -25,7 +34,7 @@ describe('ClaudeModelDefinition Error Handling', () => {
         driver = {
             provider: 'vertexai',
             logger: { warn: () => { }, info: () => { }, error: () => { } },
-        } as any;
+        } as unknown as VertexAIDriver;
     });
 
     describe('formatLlumiverseError', () => {
@@ -307,7 +316,7 @@ describe('ClaudeModelDefinition Error Handling', () => {
             ];
 
             for (const error of retryableErrors) {
-                const result = (modelDef as any).isClaudeErrorRetryable(error, error.status, undefined);
+                const result = exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(error, error.status, undefined);
                 expect(result, `${error.constructor.name} should be retryable`).toBe(true);
             }
         });
@@ -322,54 +331,54 @@ describe('ClaudeModelDefinition Error Handling', () => {
             ];
 
             for (const error of nonRetryableErrors) {
-                const result = (modelDef as any).isClaudeErrorRetryable(error, error.status, undefined);
+                const result = exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(error, error.status, undefined);
                 expect(result, `${error.constructor.name} should not be retryable`).toBe(false);
             }
         });
 
         it('should use HTTP status codes when available', () => {
             const apiError = new APIError(429, {}, 'Too many requests', new Headers());
-            expect((modelDef as any).isClaudeErrorRetryable(apiError, 429, undefined)).toBe(true);
+            expect(exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError, 429, undefined)).toBe(true);
 
             const apiError2 = new APIError(408, {}, 'Request timeout', new Headers());
-            expect((modelDef as any).isClaudeErrorRetryable(apiError2, 408, undefined)).toBe(true);
+            expect(exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError2, 408, undefined)).toBe(true);
 
             const apiError3 = new APIError(529, {}, 'Overloaded', new Headers());
-            expect((modelDef as any).isClaudeErrorRetryable(apiError3, 529, undefined)).toBe(true);
+            expect(exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError3, 529, undefined)).toBe(true);
 
             const apiError4 = new APIError(503, {}, 'Service unavailable', new Headers());
-            expect((modelDef as any).isClaudeErrorRetryable(apiError4, 503, undefined)).toBe(true);
+            expect(exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError4, 503, undefined)).toBe(true);
         });
 
         it('should classify 4xx as non-retryable', () => {
             const apiError = new APIError(400, {}, 'Bad request', new Headers());
-            expect((modelDef as any).isClaudeErrorRetryable(apiError, 400, undefined)).toBe(false);
+            expect(exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError, 400, undefined)).toBe(false);
 
             const apiError2 = new APIError(403, {}, 'Forbidden', new Headers());
-            expect((modelDef as any).isClaudeErrorRetryable(apiError2, 403, undefined)).toBe(false);
+            expect(exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError2, 403, undefined)).toBe(false);
         });
 
         it('should classify 5xx as retryable', () => {
             const apiError = new APIError(500, {}, 'Internal error', new Headers());
-            expect((modelDef as any).isClaudeErrorRetryable(apiError, 500, undefined)).toBe(true);
+            expect(exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError, 500, undefined)).toBe(true);
 
             const apiError2 = new APIError(502, {}, 'Bad gateway', new Headers());
-            expect((modelDef as any).isClaudeErrorRetryable(apiError2, 502, undefined)).toBe(true);
+            expect(exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError2, 502, undefined)).toBe(true);
         });
 
         it('should classify invalid_request_error as non-retryable', () => {
             const apiError = new APIError(400, {}, 'Invalid request', new Headers());
-            expect((modelDef as any).isClaudeErrorRetryable(apiError, 400, 'invalid_request_error')).toBe(false);
+            expect(exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError, 400, 'invalid_request_error')).toBe(false);
         });
 
         it('should classify APIConnectionError (non-timeout) as retryable', () => {
             const connectionError = new APIConnectionError({ message: 'Network failure' });
-            expect((modelDef as any).isClaudeErrorRetryable(connectionError, undefined, undefined)).toBe(true);
+            expect(exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(connectionError, undefined, undefined)).toBe(true);
         });
 
         it('should return undefined for unknown errors', () => {
-            const apiError = new APIError(undefined, {}, 'Unknown error', undefined as any);
-            expect((modelDef as any).isClaudeErrorRetryable(apiError, undefined, undefined)).toBeUndefined();
+            const apiError = new APIError(undefined, {}, 'Unknown error', undefined);
+            expect(exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError, undefined, undefined)).toBeUndefined();
         });
     });
 

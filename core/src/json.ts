@@ -15,11 +15,11 @@ export function parseJSON(text: string): JSONValue {
     text = text.trim();
     try {
         return JSON.parse(text);
-    } catch (err: any) {
+    } catch (err: unknown) {
         // use a relaxed parser
         try {
             return JSON.parse(jsonrepair(text));
-        } catch (err2: any) { // throw the original error
+        } catch { // throw the original error
             throw err;
         }
     }

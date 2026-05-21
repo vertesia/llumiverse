@@ -12,6 +12,7 @@ import {
 } from '@llumiverse/common';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { AbstractDriver } from './Driver.js';
+import { errorWith, getProp } from '../test/__helpers__/test-utils.js';
 
 // Simple test driver implementation
 class TestDriver extends AbstractDriver<DriverOptions, string> {
@@ -133,8 +134,7 @@ describe('AbstractDriver Error Formatting', () => {
 
     describe('formatLlumiverseError', () => {
         it('should format error with status code', () => {
-            const originalError = new Error('Rate limit exceeded');
-            (originalError as any).status = 429;
+            const originalError = errorWith('Rate limit exceeded', { status: 429 });
 
             const formatted = driver['formatLlumiverseError'](originalError, mockContext);
 
@@ -148,8 +148,7 @@ describe('AbstractDriver Error Formatting', () => {
         });
 
         it('should extract status from statusCode property', () => {
-            const originalError = new Error('Server error');
-            (originalError as any).statusCode = 500;
+            const originalError = errorWith('Server error', { statusCode: 500 });
 
             const formatted = driver['formatLlumiverseError'](originalError, mockContext);
 
@@ -158,8 +157,7 @@ describe('AbstractDriver Error Formatting', () => {
         });
 
         it('should extract status from code property', () => {
-            const originalError = new Error('Timeout');
-            (originalError as any).code = 408;
+            const originalError = errorWith('Timeout', { code: 408 });
 
             const formatted = driver['formatLlumiverseError'](originalError, mockContext);
 
@@ -195,14 +193,12 @@ describe('AbstractDriver Error Formatting', () => {
 
         it('should determine retryability based on status and message', () => {
             // Retryable by status
-            const retryableError = new Error('Error');
-            (retryableError as any).status = 429;
+            const retryableError = errorWith('Error', { status: 429 });
             const formatted1 = driver['formatLlumiverseError'](retryableError, mockContext);
             expect(formatted1.retryable).toBe(true);
 
             // Not retryable by status
-            const nonRetryableError = new Error('Error');
-            (nonRetryableError as any).status = 400;
+            const nonRetryableError = errorWith('Error', { status: 400 });
             const formatted2 = driver['formatLlumiverseError'](nonRetryableError, mockContext);
             expect(formatted2.retryable).toBe(false);
 
@@ -220,7 +216,7 @@ describe('AbstractDriver Error Formatting', () => {
                 context: LlumiverseErrorContext
             ): LlumiverseError {
                 // Custom logic: check for specific error type
-                if ((error as any).type === 'custom_retryable') {
+                if (getProp(error, 'type') === 'custom_retryable') {
                     return new LlumiverseError(
                         `[${this.provider}] Custom retryable error`,
                         true,
@@ -249,8 +245,7 @@ describe('AbstractDriver Error Formatting', () => {
 
         it('should fall back to default for non-custom errors', () => {
             const customDriver = new CustomDriver({});
-            const regularError = new Error('Regular error');
-            (regularError as any).status = 500;
+            const regularError = errorWith('Regular error', { status: 500 });
 
             const formatted = customDriver['formatLlumiverseError'](regularError, mockContext);
 

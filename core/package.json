@@ -58,6 +58,7 @@
   "scripts": {
     "lint": "biome lint src",
     "test": "vitest run",
+    "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
     "build": "pnpm exec tsmod build",
     "clean": "rimraf ./lib tsconfig.tsbuildinfo"
   },

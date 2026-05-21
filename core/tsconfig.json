@@ -34,6 +34,7 @@
     "noFallthroughCasesInSwitch": true,
     "useUnknownInCatchVariables": true,
     "noPropertyAccessFromIndexSignature": false,
+    "noImplicitAny": true,
   },
   "include": [
     "src"

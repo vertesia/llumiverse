@@ -1,4 +1,4 @@
-import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, PromptSegment, TextFallbackOptions, ToolDefinition, ToolUse } from "@llumiverse/core";
+import { AbstractDriver, type AIModel, type Completion, type CompletionChunkObject, type DriverOptions, type EmbeddingsOptions, type EmbeddingsResult, type ExecutionOptions, type PromptSegment, type TextFallbackOptions, type ToolDefinition, type ToolUse } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import Groq from "groq-sdk";
 import type { ChatCompletionMessageParam, ChatCompletionTool } from "groq-sdk/resources/chat/completions";
@@ -8,6 +8,15 @@ import { formatOpenAILikeMultimodalPrompt } from "../openai/openai_format.js";
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
+type GroqToolCallMessage = {
+    tool_calls?: Array<{
+        id: string;
+        function: {
+            name: string;
+            arguments?: string;
+        };
+    }>;
+};
 
 interface GroqDriverOptions extends DriverOptions {
     apiKey: string;
@@ -76,12 +85,12 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
         }));
     }
 
-    private extractToolUse(message: any): ToolUse[] | undefined {
+    private extractToolUse(message: GroqToolCallMessage): ToolUse<unknown>[] | undefined {
         if (!message.tool_calls || message.tool_calls.length === 0) {
             return undefined;
         }
 
-        return message.tool_calls.map((toolCall: any) => ({
+        return message.tool_calls.map((toolCall) => ({
             id: toolCall.id,
             tool_name: toolCall.function.name,
             tool_input: JSON.parse(toolCall.function.arguments || '{}'),
@@ -91,17 +100,20 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
     private sanitizeMessagesForGroq(messages: ChatCompletionMessageParam[]): ChatCompletionMessageParam[] {
         return messages.map(message => {
             // Remove any reasoning field from message objects
-            const { reasoning, ...sanitizedMessage } = message as any;
+            const sanitizedMessage = { ...(message as unknown as Record<string, unknown>) };
+            delete sanitizedMessage.reasoning;
 
             // If message has content array, filter out reasoning content types
-            if (Array.isArray(sanitizedMessage.content)) {
-                sanitizedMessage.content = sanitizedMessage.content.filter((part: any) => {
+            const content = sanitizedMessage.content;
+            if (Array.isArray(content)) {
+                sanitizedMessage.content = content.filter((part) => {
                     // Filter out any reasoning-related content parts
-                    return part.type !== 'reasoning' && !('reasoning' in part);
+                    const typedPart = part as { type?: string; reasoning?: unknown };
+                    return typedPart.type !== 'reasoning' && !('reasoning' in typedPart);
                 });
             }
 
-            return sanitizedMessage as ChatCompletionMessageParam;
+            return sanitizedMessage as unknown as ChatCompletionMessageParam;
         });
     }
 
