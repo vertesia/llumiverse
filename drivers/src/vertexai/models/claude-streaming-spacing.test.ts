@@ -1,9 +1,10 @@
-import { ExecutionOptions } from '@llumiverse/core';
+import type { CompletionChunkObject, ExecutionOptions } from '@llumiverse/core';
 import { describe, expect, it } from 'vitest';
-import { VertexAIDriver } from '../index.js';
+import type { VertexAIDriver } from '../index.js';
 import { ClaudeModelDefinition } from './claude.js';
+import type { ClaudePrompt } from '../../shared/claude-messages.js';
 
-function createAsyncStream(events: any[]): AsyncIterable<any> {
+function createAsyncStream(events: unknown[]): AsyncIterable<unknown> {
     return (async function* () {
         for (const event of events) {
             yield event;
@@ -11,8 +12,8 @@ function createAsyncStream(events: any[]): AsyncIterable<any> {
     })();
 }
 
-async function collectChunks(stream: AsyncIterable<any>) {
-    const chunks: any[] = [];
+async function collectChunks(stream: AsyncIterable<CompletionChunkObject>): Promise<CompletionChunkObject[]> {
+    const chunks: CompletionChunkObject[] = [];
     for await (const chunk of stream) {
         chunks.push(chunk);
     }
@@ -53,7 +54,7 @@ describe('ClaudeModelDefinition streaming spacing', () => {
 
         const prompt = {
             messages: [{ role: 'user', content: [{ type: 'text', text: 'Weather?' }] }],
-        } as any;
+        } as unknown as ClaudePrompt;
 
         const options = {
             model: 'publishers/anthropic/models/claude-sonnet-4-5',
@@ -101,7 +102,7 @@ describe('ClaudeModelDefinition streaming spacing', () => {
 
         const prompt = {
             messages: [{ role: 'user', content: [{ type: 'text', text: 'Question?' }] }],
-        } as any;
+        } as unknown as ClaudePrompt;
 
         const options = {
             model: 'publishers/anthropic/models/claude-sonnet-4-5',
@@ -155,7 +156,7 @@ describe('ClaudeModelDefinition streaming spacing', () => {
 
         const prompt = {
             messages: [{ role: 'user', content: [{ type: 'text', text: 'Weather?' }] }],
-        } as any;
+        } as unknown as ClaudePrompt;
 
         const options = {
             model: 'publishers/anthropic/models/claude-sonnet-4-5',

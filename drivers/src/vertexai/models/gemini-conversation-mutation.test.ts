@@ -13,10 +13,10 @@
  * Fix: use a local `payloadContents` variable so the caller's conversation is never mutated.
  */
 
-import { ExecutionOptions } from '@llumiverse/core';
+import type { ExecutionOptions } from '@llumiverse/core';
 import { FinishReason } from '@google/genai';
 import { describe, expect, it } from 'vitest';
-import { VertexAIDriver } from '../index.js';
+import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
 import { convertGeminiFunctionPartsToText, GeminiModelDefinition } from './gemini.js';
 
 // ---------------------------------------------------------------------------
@@ -105,7 +105,7 @@ function makeContentsWithFunctionParts() {
     ];
 }
 
-function makeDriver(overrides: { generateContent?: () => Promise<any>; generateContentStream?: () => Promise<AsyncIterable<any>> }) {
+function makeDriver(overrides: { generateContent?: () => Promise<unknown>; generateContentStream?: () => Promise<AsyncIterable<unknown>> }) {
     return {
         logger: { warn: () => {}, info: () => {}, error: () => {} },
         getGoogleGenAIClient: () => ({
@@ -142,7 +142,7 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
         const contentsSnapshot = JSON.stringify(originalContents);
 
         const driver = makeDriver({ generateContent: async () => mockNonStreamingResponse });
-        const prompt = { contents: originalContents, system: undefined } as any;
+        const prompt = { contents: originalContents, system: undefined } as unknown as GenerateContentPrompt;
         const options: ExecutionOptions = { model: 'publishers/google/models/gemini-2.0-flash', tools: [] };
 
         await modelDef.requestTextCompletion(driver, prompt, options);
@@ -160,7 +160,7 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
         const driver = makeDriver({
             generateContentStream: async () => (async function* () { yield mockStreamingChunk; })(),
         });
-        const prompt = { contents: originalContents, system: undefined } as any;
+        const prompt = { contents: originalContents, system: undefined } as unknown as GenerateContentPrompt;
         const options: ExecutionOptions = { model: 'publishers/google/models/gemini-2.0-flash', tools: [] };
 
         const stream = await modelDef.requestTextCompletionStream(driver, prompt, options);

@@ -1,11 +1,11 @@
 import {
-    AIModel, Completion, ExecutionOptions,
-    ModelType, PromptRole, PromptSegment, readStreamAsBase64, ImagenOptions
+    type AIModel, type Completion, type ExecutionOptions,
+    ModelType, PromptRole, type PromptSegment, readStreamAsBase64, type ImagenOptions
 } from "@llumiverse/core";
-import { VertexAIDriver } from "../index.js";
+import type { VertexAIDriver } from "../index.js";
 
 // Import the helper module for converting arbitrary protobuf.Value objects
-import { protos, helpers } from '@google-cloud/aiplatform';
+import { type protos, helpers } from '@google-cloud/aiplatform';
 
 interface ImagenBaseReference {
     referenceType: "REFERENCE_TYPE_RAW" | "REFERENCE_TYPE_MASK" | "REFERENCE_TYPE_SUBJECT" |
@@ -227,7 +227,7 @@ export class ImagenModelDefinition {
                             }
                             else if ((options.model_options as ImagenOptions)?.edit_mode === ImagenTaskType.CUSTOMIZATION_SUBJECT) {
                                 //First image is always the control image
-                                if (refId == 1) {
+                                if (refId === 1) {
                                     //Customization subject mode requires a control image
                                     prompt.referenceImages.push({
                                         referenceType: "REFERENCE_TYPE_CONTROL",
@@ -344,7 +344,7 @@ export class ImagenModelDefinition {
         }
         const instances = [instanceValue];
 
-        let parameter: any = getImagenParameters(taskType, options.model_options ?? { _option_id: "vertexai-imagen" });
+        let parameter = getImagenParameters(taskType, options.model_options ?? { _option_id: "vertexai-imagen" }) as ReturnType<typeof getImagenParameters> & { negativePrompt?: string };
         parameter.negativePrompt = prompt.negativePrompt ?? undefined;
 
         const numberOfImages = options.model_options?.number_of_images ?? 1;
@@ -352,7 +352,7 @@ export class ImagenModelDefinition {
         // Remove all undefined values
         parameter = Object.fromEntries(
             Object.entries(parameter).filter(([_, v]) => v !== undefined)
-        ) as any;
+        ) as typeof parameter;
 
         const parameters = helpers.toValue(parameter);
 

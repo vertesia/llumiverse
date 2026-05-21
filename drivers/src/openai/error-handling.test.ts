@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { BaseOpenAIDriver } from './index.js';
-import { LlumiverseError, LlumiverseErrorContext, Providers } from '@llumiverse/core';
+import { LlumiverseError, Providers } from '@llumiverse/core';
 import OpenAI from 'openai';
 import {
     APIError,
@@ -16,8 +16,17 @@ import {
     APIConnectionTimeoutError,
     LengthFinishReasonError,
     ContentFilterFinishReasonError,
-    OpenAIError,
 } from 'openai/error';
+import { exposePrivate, getProp } from '../../test/__helpers__/test-utils.js';
+
+type BaseOpenAIDriverInternals = {
+    isOpenAIErrorRetryable: (
+        error: unknown,
+        httpStatusCode: number | undefined,
+        errorCode: string | null | undefined,
+        errorType: string | undefined,
+    ) => boolean | undefined;
+};
 
 // Test implementation of BaseOpenAIDriver
 class TestOpenAIDriver extends BaseOpenAIDriver {
@@ -385,7 +394,7 @@ describe('BaseOpenAIDriver Error Handling', () => {
             ];
 
             for (const error of retryableErrors) {
-                const result = (driver as any).isOpenAIErrorRetryable(error, error.status, null, undefined);
+                const result = exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(error, error.status, null, undefined);
                 expect(result, `${error.constructor.name} should be retryable`).toBe(true);
             }
         });
@@ -403,83 +412,83 @@ describe('BaseOpenAIDriver Error Handling', () => {
             ];
 
             for (const error of nonRetryableErrors) {
-                const status = 'status' in error ? (error as any).status : undefined;
-                const result = (driver as any).isOpenAIErrorRetryable(error, status, null, undefined);
+                const status = getProp<number>(error, 'status');
+                const result = exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(error, status, null, undefined);
                 expect(result, `${error.constructor.name} should not be retryable`).toBe(false);
             }
         });
 
         it('should classify retryable error codes correctly', () => {
-            const apiError = new APIError(undefined as any, {}, 'Error', new Headers());
+            const apiError = new APIError(undefined, {}, 'Error', new Headers());
             
-            expect((driver as any).isOpenAIErrorRetryable(apiError, undefined, 'timeout', undefined)).toBe(true);
-            expect((driver as any).isOpenAIErrorRetryable(apiError, undefined, 'server_error', undefined)).toBe(true);
-            expect((driver as any).isOpenAIErrorRetryable(apiError, undefined, 'service_unavailable', undefined)).toBe(true);
-            expect((driver as any).isOpenAIErrorRetryable(apiError, undefined, 'rate_limit_exceeded', undefined)).toBe(true);
+            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, undefined, 'timeout', undefined)).toBe(true);
+            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, undefined, 'server_error', undefined)).toBe(true);
+            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, undefined, 'service_unavailable', undefined)).toBe(true);
+            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, undefined, 'rate_limit_exceeded', undefined)).toBe(true);
         });
 
         it('should classify non-retryable error codes correctly', () => {
-            const apiError = new APIError(undefined as any, {}, 'Error', new Headers());
+            const apiError = new APIError(undefined, {}, 'Error', new Headers());
             
-            expect((driver as any).isOpenAIErrorRetryable(apiError, undefined, 'invalid_api_key', undefined)).toBe(false);
-            expect((driver as any).isOpenAIErrorRetryable(apiError, undefined, 'invalid_request_error', undefined)).toBe(false);
-            expect((driver as any).isOpenAIErrorRetryable(apiError, undefined, 'model_not_found', undefined)).toBe(false);
-            expect((driver as any).isOpenAIErrorRetryable(apiError, undefined, 'insufficient_quota', undefined)).toBe(false);
-            expect((driver as any).isOpenAIErrorRetryable(apiError, undefined, 'invalid_model', undefined)).toBe(false);
-            expect((driver as any).isOpenAIErrorRetryable(apiError, undefined, 'invalid_parameter', undefined)).toBe(false);
+            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, undefined, 'invalid_api_key', undefined)).toBe(false);
+            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, undefined, 'invalid_request_error', undefined)).toBe(false);
+            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, undefined, 'model_not_found', undefined)).toBe(false);
+            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, undefined, 'insufficient_quota', undefined)).toBe(false);
+            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, undefined, 'invalid_model', undefined)).toBe(false);
+            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, undefined, 'invalid_parameter', undefined)).toBe(false);
         });
 
         it('should classify error types correctly', () => {
-            const apiError = new APIError(undefined as any, {}, 'Error', new Headers());
+            const apiError = new APIError(undefined, {}, 'Error', new Headers());
             
-            expect((driver as any).isOpenAIErrorRetryable(apiError, undefined, null, 'invalid_request_error')).toBe(false);
-            expect((driver as any).isOpenAIErrorRetryable(apiError, undefined, null, 'authentication_error')).toBe(false);
+            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, undefined, null, 'invalid_request_error')).toBe(false);
+            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, undefined, null, 'authentication_error')).toBe(false);
         });
 
         it('should use HTTP status codes when available', () => {
             const apiError = new APIError(429, {}, 'Too many requests', new Headers());
-            expect((driver as any).isOpenAIErrorRetryable(apiError, 429, null, undefined)).toBe(true);
+            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, 429, null, undefined)).toBe(true);
             
             const apiError2 = new APIError(408, {}, 'Request timeout', new Headers());
-            expect((driver as any).isOpenAIErrorRetryable(apiError2, 408, null, undefined)).toBe(true);
+            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError2, 408, null, undefined)).toBe(true);
             
             const apiError3 = new APIError(502, {}, 'Bad gateway', new Headers());
-            expect((driver as any).isOpenAIErrorRetryable(apiError3, 502, null, undefined)).toBe(true);
+            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError3, 502, null, undefined)).toBe(true);
             
             const apiError4 = new APIError(503, {}, 'Service unavailable', new Headers());
-            expect((driver as any).isOpenAIErrorRetryable(apiError4, 503, null, undefined)).toBe(true);
+            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError4, 503, null, undefined)).toBe(true);
             
             const apiError5 = new APIError(504, {}, 'Gateway timeout', new Headers());
-            expect((driver as any).isOpenAIErrorRetryable(apiError5, 504, null, undefined)).toBe(true);
+            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError5, 504, null, undefined)).toBe(true);
             
             const apiError6 = new APIError(529, {}, 'Overloaded', new Headers());
-            expect((driver as any).isOpenAIErrorRetryable(apiError6, 529, null, undefined)).toBe(true);
+            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError6, 529, null, undefined)).toBe(true);
         });
 
         it('should classify 4xx as non-retryable', () => {
             const apiError = new APIError(400, {}, 'Bad request', new Headers());
-            expect((driver as any).isOpenAIErrorRetryable(apiError, 400, null, undefined)).toBe(false);
+            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, 400, null, undefined)).toBe(false);
             
             const apiError2 = new APIError(403, {}, 'Forbidden', new Headers());
-            expect((driver as any).isOpenAIErrorRetryable(apiError2, 403, null, undefined)).toBe(false);
+            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError2, 403, null, undefined)).toBe(false);
         });
 
         it('should classify 5xx as retryable', () => {
             const apiError = new APIError(500, {}, 'Internal error', new Headers());
-            expect((driver as any).isOpenAIErrorRetryable(apiError, 500, null, undefined)).toBe(true);
+            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, 500, null, undefined)).toBe(true);
             
             const apiError2 = new APIError(502, {}, 'Bad gateway', new Headers());
-            expect((driver as any).isOpenAIErrorRetryable(apiError2, 502, null, undefined)).toBe(true);
+            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError2, 502, null, undefined)).toBe(true);
         });
 
         it('should classify APIConnectionError (non-timeout) as retryable', () => {
             const connectionError = new APIConnectionError({ message: 'Network failure' });
-            expect((driver as any).isOpenAIErrorRetryable(connectionError, undefined, null, undefined)).toBe(true);
+            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(connectionError, undefined, null, undefined)).toBe(true);
         });
 
         it('should return undefined for unknown errors', () => {
-            const apiError = new APIError(undefined as any, {}, 'Unknown error', undefined as any);
-            expect((driver as any).isOpenAIErrorRetryable(apiError, undefined, null, undefined)).toBeUndefined();
+            const apiError = new APIError(undefined, {}, 'Unknown error', undefined);
+            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, undefined, null, undefined)).toBeUndefined();
         });
     });
 

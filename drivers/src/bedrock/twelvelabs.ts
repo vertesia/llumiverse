@@ -1,5 +1,5 @@
-import { DataSource, ExecutionOptions, readStreamAsBase64 } from "@llumiverse/core";
-import { PromptSegment, PromptRole } from "@llumiverse/core";
+import { type DataSource, type ExecutionOptions, type JSONSchema, readStreamAsBase64, type TextFallbackOptions } from "@llumiverse/core";
+import { type PromptSegment, PromptRole } from "@llumiverse/core";
 
 // TwelveLabs Pegasus Request/Response Types
 export interface TwelvelabsPegasusRequest {
@@ -9,7 +9,7 @@ export interface TwelvelabsPegasusRequest {
         type: "json_schema";
         json_schema: {
             name: string;
-            schema: any;
+            schema: JSONSchema;
         };
     };
     mediaSource: {
@@ -111,7 +111,7 @@ export async function formatTwelvelabsPegasusPrompt(
                 base64String
             };
         }
-    } catch (error) {
+    } catch {
         // If getting URL fails, use base64 encoding
         const stream = await videoFile.getStream();
         const base64String = await readStreamAsBase64(stream);
@@ -127,7 +127,7 @@ export async function formatTwelvelabsPegasusPrompt(
     };
 
     // Add optional parameters from model options
-    const modelOptions = options.model_options as any;
+    const modelOptions = options.model_options as TextFallbackOptions | undefined;
     if (modelOptions?.temperature !== undefined) {
         request.temperature = modelOptions.temperature;
     }

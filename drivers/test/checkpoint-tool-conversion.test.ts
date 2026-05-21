@@ -30,7 +30,7 @@ interface TestDriver {
 const drivers: TestDriver[] = [];
 
 if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
-    const _auth = new GoogleAuth();
+    new GoogleAuth();
     drivers.push({
         name: 'google-vertex',
         driver: new VertexAIDriver({
@@ -151,8 +151,7 @@ describe.concurrent.each(drivers)('Driver $name - checkpoint tool conversion', (
         // 2. finish_reason should NOT be tool_use (no tools were provided)
         expect(checkpointResult.finish_reason).not.toBe('tool_use');
         // 3. Should have text content back
-        const hasContent = checkpointResult.result_text ||
-            (checkpointResult.result && checkpointResult.result.length > 0);
+        const hasContent = Array.isArray(checkpointResult.result) && checkpointResult.result.length > 0;
         expect(hasContent).toBeTruthy();
     });
 });

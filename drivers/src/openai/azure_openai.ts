@@ -8,7 +8,7 @@ export interface AzureOpenAIDriverOptions extends DriverOptions {
     /**
      * The credentials to use to access Azure OpenAI
      */
-    azureADTokenProvider?: any; //type with azure credentials
+    azureADTokenProvider?: (options?: unknown) => Promise<string>;
 
     apiKey?: string;
 

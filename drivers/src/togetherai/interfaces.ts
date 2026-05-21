@@ -1,5 +1,5 @@
 interface ModelInstanceConfig {
-    appearsIn: any[];
+    appearsIn: unknown[];
     order: number;
 }
 

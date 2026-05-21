@@ -551,7 +551,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(driver, response.usageMetadata);
 
         let tool_use: ToolUse[] | undefined;
-        let finish_reason: string | undefined, result: any;
+        let finish_reason: string | undefined, result: CompletionResult[] | undefined;
         const candidate = response.candidates && response.candidates[0];
         if (candidate) {
             switch (candidate.finishReason) {
@@ -788,7 +788,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             error !== null &&
             typeof error === 'object' &&
             'status' in error &&
-            typeof (error as any).status === 'number' &&
+            typeof (error as { status?: unknown }).status === 'number' &&
             'message' in error
         );
     }
@@ -967,7 +967,7 @@ function formatFunctionResponse(response: string): JSONObject {
     if (response.startsWith("{") && response.endsWith("}")) {
         try {
             return JSON.parse(response);
-        } catch (e) {
+        } catch {
             return { output: response };
         }
     } else {

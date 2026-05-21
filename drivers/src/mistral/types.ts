@@ -112,6 +112,7 @@ export interface ChatCompletionResponseChunk {
 export interface Embedding {
     id: string;
     object: 'embedding';
+    index: number;
     embedding: number[];
 }
 

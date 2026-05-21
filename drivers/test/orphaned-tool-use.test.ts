@@ -19,6 +19,7 @@ import { describe, expect, test } from 'vitest';
 import { fixOrphanedToolUse as fixOrphanedToolUseBedrock } from '../src/bedrock/index.js';
 import { fixOrphanedToolUse as fixOrphanedToolUseOpenAI } from '../src/openai/index.js';
 import { fixOrphanedToolUse as fixOrphanedToolUseClaude } from '../src/shared/claude-messages.js';
+import type { Tree } from './__helpers__/test-utils.js';
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 
@@ -425,19 +426,19 @@ describe('fixOrphanedToolUse - OpenAI', () => {
         // 3 function_calls + 3 synthetic outputs + 1 user message
         expect(result).toHaveLength(7);
 
-        expect((result[0] as any).type).toBe('function_call');
-        expect((result[1] as any).type).toBe('function_call');
-        expect((result[2] as any).type).toBe('function_call');
+        expect((result[0] as unknown as Tree).type).toBe('function_call');
+        expect((result[1] as unknown as Tree).type).toBe('function_call');
+        expect((result[2] as unknown as Tree).type).toBe('function_call');
 
         // 3 synthetic outputs
-        expect((result[3] as any).type).toBe('function_call_output');
-        expect((result[3] as any).call_id).toBe('fc_1');
-        expect((result[4] as any).type).toBe('function_call_output');
-        expect((result[4] as any).call_id).toBe('fc_2');
-        expect((result[5] as any).type).toBe('function_call_output');
-        expect((result[5] as any).call_id).toBe('fc_3');
+        expect((result[3] as unknown as Tree).type).toBe('function_call_output');
+        expect((result[3] as unknown as Tree).call_id).toBe('fc_1');
+        expect((result[4] as unknown as Tree).type).toBe('function_call_output');
+        expect((result[4] as unknown as Tree).call_id).toBe('fc_2');
+        expect((result[5] as unknown as Tree).type).toBe('function_call_output');
+        expect((result[5] as unknown as Tree).call_id).toBe('fc_3');
 
-        expect((result[6] as any).role).toBe('user');
+        expect((result[6] as unknown as Tree).role).toBe('user');
     });
 
     test('handles partial outputs - only injects for missing ones', () => {
@@ -453,17 +454,17 @@ describe('fixOrphanedToolUse - OpenAI', () => {
         // fc_1 has output, fc_2 is orphaned
         expect(result).toHaveLength(5);
 
-        expect((result[0] as any).type).toBe('function_call');
-        expect((result[1] as any).type).toBe('function_call');
-        expect((result[2] as any).type).toBe('function_call_output');
-        expect((result[2] as any).call_id).toBe('fc_1');
+        expect((result[0] as unknown as Tree).type).toBe('function_call');
+        expect((result[1] as unknown as Tree).type).toBe('function_call');
+        expect((result[2] as unknown as Tree).type).toBe('function_call_output');
+        expect((result[2] as unknown as Tree).call_id).toBe('fc_1');
 
         // Synthetic output for fc_2 injected before user message
-        expect((result[3] as any).type).toBe('function_call_output');
-        expect((result[3] as any).call_id).toBe('fc_2');
-        expect((result[3] as any).output).toContain('Tool interrupted');
+        expect((result[3] as unknown as Tree).type).toBe('function_call_output');
+        expect((result[3] as unknown as Tree).call_id).toBe('fc_2');
+        expect((result[3] as unknown as Tree).output).toContain('Tool interrupted');
 
-        expect((result[4] as any).role).toBe('user');
+        expect((result[4] as unknown as Tree).role).toBe('user');
     });
 
     test('handles trailing orphan at end of conversation', () => {
@@ -477,9 +478,9 @@ describe('fixOrphanedToolUse - OpenAI', () => {
 
         // Trailing orphan should get a synthetic output appended
         expect(result).toHaveLength(4);
-        expect((result[2] as any).type).toBe('function_call');
-        expect((result[3] as any).type).toBe('function_call_output');
-        expect((result[3] as any).call_id).toBe('fc_1');
+        expect((result[2] as unknown as Tree).type).toBe('function_call');
+        expect((result[3] as unknown as Tree).type).toBe('function_call_output');
+        expect((result[3] as unknown as Tree).call_id).toBe('fc_1');
     });
 
     test('real-world scenario: user stops agent mid-execution (ask_user)', () => {
@@ -507,7 +508,7 @@ describe('fixOrphanedToolUse - OpenAI', () => {
         expect(synthetic.output).toContain('ask_user');
 
         // Last user message is preserved
-        expect((result[5] as any).role).toBe('user');
+        expect((result[5] as unknown as Tree).role).toBe('user');
     });
 
     test('does not inject when function_call_output exists later in the array', () => {

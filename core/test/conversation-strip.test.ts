@@ -10,6 +10,8 @@ import {
     deserializeBinaryFromStorage
 } from "../src/conversation-utils";
 
+import { Tree } from "./__helpers__/test-utils";
+
 const IMAGE_PLACEHOLDER = '[Image removed from conversation history]';
 const DOCUMENT_PLACEHOLDER = '[Document removed from conversation history]';
 const VIDEO_PLACEHOLDER = '[Video removed from conversation history]';
@@ -36,7 +38,7 @@ describe('stripBinaryFromConversation', () => {
             }]
         };
 
-        const result = stripBinaryFromConversation(input, FORCE_STRIP) as any;
+        const result = stripBinaryFromConversation(input, FORCE_STRIP) as Tree;
 
         expect(result.messages[0].content[0].toolResult.content[0].text).toBe('Image loaded');
         // Image block should be replaced with text block
@@ -56,7 +58,7 @@ describe('stripBinaryFromConversation', () => {
         };
 
         // Default keepForTurns=Infinity means serialize for safe JSON storage
-        const result = stripBinaryFromConversation(input) as any;
+        const result = stripBinaryFromConversation(input) as Tree;
         expect(result.messages[0].content[0].image.source.bytes._base64).toBeDefined();
     });
 
@@ -89,7 +91,7 @@ describe('stripBinaryFromConversation', () => {
             new Uint8Array([4, 5, 6])
         ];
 
-        const result = stripBinaryFromConversation(input, FORCE_STRIP) as any[];
+        const result = stripBinaryFromConversation(input, FORCE_STRIP) as unknown as Tree[];
 
         expect(result[0].text).toBe('normal');
         expect(result[1]).toBe(IMAGE_PLACEHOLDER);
@@ -109,7 +111,7 @@ describe('stripBinaryFromConversation', () => {
             }
         }];
 
-        const result = stripBinaryFromConversation(input, FORCE_STRIP) as any[];
+        const result = stripBinaryFromConversation(input, FORCE_STRIP) as unknown as Tree[];
         expect(result[0]).toEqual({ text: DOCUMENT_PLACEHOLDER });
     });
 
@@ -121,7 +123,7 @@ describe('stripBinaryFromConversation', () => {
             }
         }];
 
-        const result = stripBinaryFromConversation(input, FORCE_STRIP) as any[];
+        const result = stripBinaryFromConversation(input, FORCE_STRIP) as unknown as Tree[];
         expect(result[0]).toEqual({ text: VIDEO_PLACEHOLDER });
     });
 
@@ -136,7 +138,7 @@ describe('stripBinaryFromConversation', () => {
             ]
         };
 
-        const result = stripBinaryFromConversation(input, FORCE_STRIP) as any;
+        const result = stripBinaryFromConversation(input, FORCE_STRIP) as Tree;
 
         expect(result.content[0]).toEqual({ text: 'First' });
         expect(result.content[1]).toEqual({ text: IMAGE_PLACEHOLDER });
@@ -159,7 +161,7 @@ describe('stripBase64ImagesFromConversation', () => {
             }]
         };
 
-        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as any;
+        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as Tree;
         // Should be replaced with text block
         expect(result.messages[0].content[0]).toEqual({ type: 'text', text: IMAGE_PLACEHOLDER });
     });
@@ -175,7 +177,7 @@ describe('stripBase64ImagesFromConversation', () => {
         };
 
         // Default keepForTurns=Infinity means don't strip
-        const result = stripBase64ImagesFromConversation(input) as any;
+        const result = stripBase64ImagesFromConversation(input) as Tree;
         expect(result.messages[0].content[0].image_url.url).toBe('data:image/png;base64,abc123');
     });
 
@@ -191,7 +193,7 @@ describe('stripBase64ImagesFromConversation', () => {
             }]
         };
 
-        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as any;
+        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as Tree;
         // Should be replaced with text block
         expect(result.parts[0]).toEqual({ text: IMAGE_PLACEHOLDER });
     });
@@ -206,7 +208,7 @@ describe('stripBase64ImagesFromConversation', () => {
             }]
         };
 
-        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as any;
+        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as Tree;
         expect(result.parts[0].inlineData.data).toBe('short');
     });
 
@@ -220,7 +222,7 @@ describe('stripBase64ImagesFromConversation', () => {
             }]
         };
 
-        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as any;
+        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as Tree;
         // Should NOT be stripped - only base64 data URLs are stripped
         expect(result.messages[0].content[0].image_url.url).toBe('https://example.com/image.jpg');
     });
@@ -235,7 +237,7 @@ describe('stripBase64ImagesFromConversation', () => {
             url: 'data:text/plain;base64,SGVsbG8gV29ybGQ='
         };
 
-        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as any;
+        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as Tree;
         expect(result.url).toBe('data:text/plain;base64,SGVsbG8gV29ybGQ=');
     });
 
@@ -257,7 +259,7 @@ describe('stripBase64ImagesFromConversation', () => {
             }]
         };
 
-        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as any;
+        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as Tree;
 
         expect(result.messages[0].content[0]).toEqual({ type: 'text', text: 'Here is an image' });
         expect(result.messages[0].content[1]).toEqual({ type: 'text', text: IMAGE_PLACEHOLDER });
@@ -281,7 +283,7 @@ describe('stripBase64ImagesFromConversation', () => {
             }]
         };
 
-        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as any;
+        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as Tree;
 
         expect(result.messages[0].content[0]).toEqual({ type: 'text', text: 'Here is a document' });
         expect(result.messages[0].content[1]).toEqual({ type: 'text', text: DOCUMENT_PLACEHOLDER });
@@ -301,7 +303,7 @@ describe('stripBase64ImagesFromConversation', () => {
             }]
         };
 
-        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as any;
+        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as Tree;
 
         // URL-based images should not be stripped
         expect(result.messages[0].content[0].source.url).toBe('https://example.com/image.png');
@@ -316,7 +318,7 @@ describe('stripBase64ImagesFromConversation', () => {
             ]
         };
 
-        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as any;
+        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as Tree;
 
         expect(result.content[0]).toEqual({ type: 'text', text: 'Hello' });
         expect(result.content[1]).toEqual({ type: 'text', text: IMAGE_PLACEHOLDER });
@@ -372,7 +374,7 @@ describe('turn-based stripping', () => {
             const result = stripBinaryFromConversation(input, {
                 keepForTurns: 3,
                 currentTurn: 1
-            }) as any;
+            }) as Tree;
 
             // Should have serialized format (bytes._base64), not placeholder
             expect(result.content[0].image.source.bytes._base64).toBeDefined();
@@ -393,7 +395,7 @@ describe('turn-based stripping', () => {
             const result = stripBinaryFromConversation(input, {
                 keepForTurns: 2,
                 currentTurn: 2
-            }) as any;
+            }) as Tree;
 
             expect(result.content[0]).toEqual({ text: IMAGE_PLACEHOLDER });
         });
@@ -412,7 +414,7 @@ describe('turn-based stripping', () => {
             const result = stripBinaryFromConversation(input, {
                 keepForTurns: 2,
                 currentTurn: 5
-            }) as any;
+            }) as Tree;
 
             expect(result.content[0]).toEqual({ text: IMAGE_PLACEHOLDER });
         });
@@ -430,13 +432,13 @@ describe('turn-based stripping', () => {
             const result = stripBinaryFromConversation(input, {
                 keepForTurns: 0,
                 currentTurn: 0
-            }) as any;
+            }) as Tree;
 
             expect(result.content[0]).toEqual({ text: IMAGE_PLACEHOLDER });
         });
 
         test('should use turn number from metadata when currentTurn not provided', () => {
-            let conversation: any = {
+            let conversation: unknown = {
                 content: [{
                     image: {
                         format: 'png',
@@ -451,7 +453,7 @@ describe('turn-based stripping', () => {
             // Keep for 3 turns - should serialize (turn 1 < 3)
             const result = stripBinaryFromConversation(conversation, {
                 keepForTurns: 3
-            }) as any;
+            }) as Tree;
 
             expect(result.content[0].image.source.bytes._base64).toBeDefined();
         });
@@ -473,7 +475,7 @@ describe('turn-based stripping', () => {
             const serialized = stripBinaryFromConversation(input, {
                 keepForTurns: 5,
                 currentTurn: 1
-            }) as any;
+            }) as Tree;
 
             // Should be base64 encoded (bytes becomes { _base64: ... })
             expect(serialized.content[0].image.source.bytes._base64).toBeDefined();
@@ -484,9 +486,9 @@ describe('turn-based stripping', () => {
             expect(parsed.content[0].image.source.bytes._base64).toBe(serialized.content[0].image.source.bytes._base64);
 
             // Should be deserializable back to Uint8Array
-            const deserialized = deserializeBinaryFromStorage(parsed) as any;
+            const deserialized = deserializeBinaryFromStorage(parsed) as Tree;
             expect(deserialized.content[0].image.source.bytes).toBeInstanceOf(Uint8Array);
-            expect(Array.from(deserialized.content[0].image.source.bytes)).toEqual(Array.from(originalBytes));
+            expect(Array.from(deserialized.content[0].image.source.bytes as unknown as Uint8Array)).toEqual(Array.from(originalBytes));
         });
 
         test('should strip serialized images when threshold exceeded', () => {
@@ -506,7 +508,7 @@ describe('turn-based stripping', () => {
             const result = stripBinaryFromConversation(serializedConversation, {
                 keepForTurns: 2,
                 currentTurn: 3
-            }) as any;
+            }) as Tree;
 
             // Should be stripped to placeholder
             expect(result.content[0]).toEqual({ text: IMAGE_PLACEHOLDER });
@@ -526,7 +528,7 @@ describe('turn-based stripping', () => {
             const result = stripBase64ImagesFromConversation(input, {
                 keepForTurns: 3,
                 currentTurn: 1
-            }) as any;
+            }) as Tree;
 
             // Should still have the image URL
             expect(result.content[0].image_url.url).toBe('data:image/png;base64,abc123');
@@ -544,7 +546,7 @@ describe('turn-based stripping', () => {
             const result = stripBase64ImagesFromConversation(input, {
                 keepForTurns: 2,
                 currentTurn: 3
-            }) as any;
+            }) as Tree;
 
             expect(result.content[0]).toEqual({ type: 'text', text: IMAGE_PLACEHOLDER });
         });
@@ -559,7 +561,7 @@ describe('truncateLargeTextInConversation', () => {
             content: [{ text: 'a'.repeat(100000) }]
         };
 
-        const result = truncateLargeTextInConversation(input) as any;
+        const result = truncateLargeTextInConversation(input) as Tree;
 
         expect(result.content[0].text.length).toBe(100000);
     });
@@ -569,7 +571,7 @@ describe('truncateLargeTextInConversation', () => {
             content: [{ text: 'a'.repeat(100000) }]
         };
 
-        const result = truncateLargeTextInConversation(input, { textMaxTokens: 0 }) as any;
+        const result = truncateLargeTextInConversation(input, { textMaxTokens: 0 }) as Tree;
 
         expect(result.content[0].text.length).toBe(100000);
     });
@@ -581,12 +583,12 @@ describe('truncateLargeTextInConversation', () => {
             content: [{ text: longText }]
         };
 
-        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as any;
+        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as Tree;
 
         // Should be truncated to ~40000 chars + marker
         expect(result.content[0].text.length).toBeLessThan(50000);
         expect(result.content[0].text).toContain(TEXT_TRUNCATED_MARKER);
-        expect(result.content[0].text.substring(0, 40000)).toBe('a'.repeat(40000));
+        expect((result.content[0].text as unknown as string).substring(0, 40000)).toBe('a'.repeat(40000));
     });
 
     test('should not truncate text within token limit', () => {
@@ -595,7 +597,7 @@ describe('truncateLargeTextInConversation', () => {
             content: [{ text: shortText }]
         };
 
-        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as any;
+        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as Tree;
 
         expect(result.content[0].text).toBe(shortText);
     });
@@ -615,7 +617,7 @@ describe('truncateLargeTextInConversation', () => {
             }]
         };
 
-        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as any;
+        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as Tree;
 
         const resultText = result.messages[0].content[0].toolResult.content[0].text;
         expect(resultText.length).toBeLessThan(50000);
@@ -632,7 +634,7 @@ describe('truncateLargeTextInConversation', () => {
             }]
         };
 
-        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as any;
+        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as Tree;
 
         expect(result.messages[0].content.length).toBeLessThan(50000);
         expect(result.messages[0].content).toContain(TEXT_TRUNCATED_MARKER);
@@ -645,7 +647,7 @@ describe('truncateLargeTextInConversation', () => {
             _llumiverse_meta: { turnNumber: 5 }
         };
 
-        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as any;
+        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as Tree;
 
         expect(result._llumiverse_meta).toEqual({ turnNumber: 5 });
         expect(result.content[0].text).toContain(TEXT_TRUNCATED_MARKER);
@@ -660,7 +662,7 @@ describe('truncateLargeTextInConversation', () => {
             ]
         };
 
-        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as any;
+        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as Tree;
 
         expect(result.items[0].text).toBe('short');
         expect(result.items[1].text).toContain(TEXT_TRUNCATED_MARKER);
@@ -695,7 +697,7 @@ describe('truncateLargeTextInConversation', () => {
             }]
         };
 
-        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as any;
+        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as Tree;
 
         const toolResult = result.messages[0].content[0];
         // Text should be truncated
@@ -721,7 +723,7 @@ describe('truncateLargeTextInConversation', () => {
             }]
         };
 
-        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as any;
+        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as Tree;
 
         expect(result.messages[0].content[0].source.data).toBe(largeBase64);
     });
@@ -737,7 +739,7 @@ describe('truncateLargeTextInConversation', () => {
             }]
         };
 
-        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as any;
+        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as Tree;
 
         expect(result.messages[0].content[0].image_url.url).toBe(largeBase64);
     });
@@ -755,14 +757,14 @@ describe('truncateLargeTextInConversation', () => {
             }]
         };
 
-        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as any;
+        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as Tree;
 
         expect(result.messages[0].content[0].image.source.bytes._base64).toBe(largeBase64);
     });
 
     test('should not truncate retained OpenAI base64 image payloads before image stripping threshold', () => {
         const originalUrl = `data:image/png;base64,${'a'.repeat(50000)}`;
-        let conversation: any = {
+        let conversation: unknown = {
             messages: [{
                 role: 'user',
                 content: [{
@@ -777,16 +779,16 @@ describe('truncateLargeTextInConversation', () => {
         const retainedConversation = stripBase64ImagesFromConversation(conversation, {
             keepForTurns: 3,
             currentTurn,
-        }) as any;
+        }) as Tree;
 
-        const result = truncateLargeTextInConversation(retainedConversation, { textMaxTokens: 5000 }) as any;
+        const result = truncateLargeTextInConversation(retainedConversation, { textMaxTokens: 5000 }) as Tree;
 
         expect(result.messages[0].content[0].image_url.url).toBe(originalUrl);
     });
 
     test('should not truncate retained Gemini inlineData image payloads before image stripping threshold', () => {
         const originalData = 'b'.repeat(50000);
-        let conversation: any = {
+        let conversation: unknown = {
             contents: [{
                 role: 'user',
                 parts: [{
@@ -803,16 +805,16 @@ describe('truncateLargeTextInConversation', () => {
         const retainedConversation = stripBase64ImagesFromConversation(conversation, {
             keepForTurns: 3,
             currentTurn,
-        }) as any;
+        }) as Tree;
 
-        const result = truncateLargeTextInConversation(retainedConversation, { textMaxTokens: 5000 }) as any;
+        const result = truncateLargeTextInConversation(retainedConversation, { textMaxTokens: 5000 }) as Tree;
 
         expect(result.contents[0].parts[0].inlineData.data).toBe(originalData);
     });
 
     test('should not truncate retained Claude base64 image payloads before image stripping threshold', () => {
         const originalData = 'c'.repeat(50000);
-        let conversation: any = {
+        let conversation: unknown = {
             messages: [{
                 role: 'user',
                 content: [{
@@ -831,9 +833,9 @@ describe('truncateLargeTextInConversation', () => {
         const retainedConversation = stripBase64ImagesFromConversation(conversation, {
             keepForTurns: 3,
             currentTurn,
-        }) as any;
+        }) as Tree;
 
-        const result = truncateLargeTextInConversation(retainedConversation, { textMaxTokens: 5000 }) as any;
+        const result = truncateLargeTextInConversation(retainedConversation, { textMaxTokens: 5000 }) as Tree;
 
         expect(result.messages[0].content[0].source.data).toBe(originalData);
     });
@@ -896,7 +898,7 @@ describe('conversation serialization safety', () => {
     });
 
     test('metadata should be preserved through serialization and stripping', () => {
-        let conversation: any = { messages: [] };
+        let conversation: unknown = { messages: [] };
         conversation = incrementConversationTurn(conversation);
         conversation = incrementConversationTurn(conversation);
 
@@ -930,7 +932,7 @@ describe('stripHeartbeatsFromConversation', () => {
             }]
         };
 
-        const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as any;
+        const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as Tree;
         expect(result.messages[0].content[0].text).toBe(HEARTBEAT_PLACEHOLDER);
     });
 
@@ -946,7 +948,7 @@ describe('stripHeartbeatsFromConversation', () => {
         const result = stripHeartbeatsFromConversation(input, {
             keepForTurns: 3,
             currentTurn: 1,
-        }) as any;
+        }) as Tree;
 
         expect(result.messages[0].content[0].text).toBe(HEARTBEAT_MSG);
     });
@@ -962,7 +964,7 @@ describe('stripHeartbeatsFromConversation', () => {
         const result = stripHeartbeatsFromConversation(input, {
             keepForTurns: 1,
             currentTurn: 2,
-        }) as any;
+        }) as Tree;
 
         expect(result.messages[0].content[0].text).toBe(HEARTBEAT_PLACEHOLDER);
     });
@@ -973,7 +975,7 @@ describe('stripHeartbeatsFromConversation', () => {
         };
 
         // Default keepForTurns is 1, currentTurn 1 means strip
-        const result = stripHeartbeatsFromConversation(input, { currentTurn: 1 }) as any;
+        const result = stripHeartbeatsFromConversation(input, { currentTurn: 1 }) as Tree;
         expect(result.content[0].text).toBe(HEARTBEAT_PLACEHOLDER);
     });
 
@@ -983,7 +985,7 @@ describe('stripHeartbeatsFromConversation', () => {
         };
 
         // Default keepForTurns is 1, currentTurn 0 means keep
-        const result = stripHeartbeatsFromConversation(input, { currentTurn: 0 }) as any;
+        const result = stripHeartbeatsFromConversation(input, { currentTurn: 0 }) as Tree;
         expect(result.content[0].text).toBe(HEARTBEAT_MSG);
     });
 
@@ -995,7 +997,7 @@ describe('stripHeartbeatsFromConversation', () => {
         const result = stripHeartbeatsFromConversation(input, {
             keepForTurns: Infinity,
             currentTurn: 100,
-        }) as any;
+        }) as Tree;
 
         expect(result.content[0].text).toBe(HEARTBEAT_MSG);
     });
@@ -1009,7 +1011,7 @@ describe('stripHeartbeatsFromConversation', () => {
             ]
         };
 
-        const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as any;
+        const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as Tree;
 
         expect(result.messages[0].content[0].text).toBe('Hello, how are you?');
         expect(result.messages[1].content[0].text).toBe('[System] Some other system message');
@@ -1022,7 +1024,7 @@ describe('stripHeartbeatsFromConversation', () => {
             { role: 'assistant', content: [{ type: 'text', text: 'Acknowledged.' }] },
         ];
 
-        const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as any[];
+        const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as unknown as Tree[];
 
         expect(result[0].content[0].text).toBe(HEARTBEAT_PLACEHOLDER);
         expect(result[1].content[0].text).toBe('Acknowledged.');
@@ -1036,7 +1038,7 @@ describe('stripHeartbeatsFromConversation', () => {
             ]
         };
 
-        const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as any;
+        const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as Tree;
 
         expect(result.messages[0].content[0].text).toBe(HEARTBEAT_PLACEHOLDER);
         expect(result.messages[1].content[0].text).toBe('Acknowledged.');
@@ -1048,7 +1050,7 @@ describe('stripHeartbeatsFromConversation', () => {
             { role: 'model', parts: [{ text: 'Acknowledged.' }] },
         ];
 
-        const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as any[];
+        const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as unknown as Tree[];
 
         expect(result[0].parts[0].text).toBe(HEARTBEAT_PLACEHOLDER);
         expect(result[1].parts[0].text).toBe('Acknowledged.');
@@ -1065,7 +1067,7 @@ describe('stripHeartbeatsFromConversation', () => {
             _llumiverse_meta: { turnNumber: 5 },
         };
 
-        const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as any;
+        const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as Tree;
 
         expect(result._llumiverse_meta).toEqual({ turnNumber: 5 });
         expect(result.messages[0].content[0].text).toBe(HEARTBEAT_PLACEHOLDER);
@@ -1083,7 +1085,7 @@ describe('stripHeartbeatsFromConversation', () => {
             ]
         };
 
-        const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as any;
+        const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as Tree;
 
         expect(result.messages[0].content[0].text).toBe('Analyze this data');
         expect(result.messages[1].content[0].text).toBe(HEARTBEAT_PLACEHOLDER);
@@ -1094,7 +1096,7 @@ describe('stripHeartbeatsFromConversation', () => {
     });
 
     test('should use turn number from metadata when currentTurn not provided', () => {
-        let conversation: any = {
+        let conversation: unknown = {
             content: [{ text: HEARTBEAT_MSG }]
         };
 
@@ -1104,7 +1106,7 @@ describe('stripHeartbeatsFromConversation', () => {
         // keepForTurns 1, turn 2 from metadata → should strip
         const result = stripHeartbeatsFromConversation(conversation, {
             keepForTurns: 1,
-        }) as any;
+        }) as Tree;
 
         expect(result.content[0].text).toBe(HEARTBEAT_PLACEHOLDER);
     });
@@ -1118,7 +1120,7 @@ describe('stripHeartbeatsFromConversation', () => {
             ]
         };
 
-        const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as any;
+        const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as Tree;
 
         // None of these should be stripped - they don't have both opening and closing tags
         expect(result.content[0].text).toBe('<heartbeat>partial tag without close');

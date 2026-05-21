@@ -26,7 +26,7 @@ export function transformSSEStream(stream: ReadableStream<ServerSentEvent>, tran
                 try {
                     const result = transform(event.data) ?? ''
                     controller.enqueue(result);
-                } catch (err) {
+                } catch {
                     // double check for the last event which is not a JSON - at this time togetherai and mistralai returns the string [DONE]
                     // do nothing - happens if data is not a JSON - the last event data is the [DONE] string
                 }
@@ -35,12 +35,12 @@ export function transformSSEStream(stream: ReadableStream<ServerSentEvent>, tran
     })) satisfies ReadableStream<CompletionChunkObject> & AsyncIterable<CompletionChunkObject>;
 }
 
-export class EventStream<T, ReturnT = any> implements AsyncIterable<T> {
+export class EventStream<T, ReturnT = unknown> implements AsyncIterable<T> {
 
     private queue: T[] = [];
     private pending?: {
         resolve: (result: IteratorResult<T, ReturnT | undefined>) => void,
-        reject: (err: any) => void
+        reject: (err: unknown) => void
     };
     private done = false;
 

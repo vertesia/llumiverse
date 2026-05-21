@@ -114,37 +114,6 @@ if (process.env.ANTHROPIC_API_KEY) {
 const hasClaudeDrivers = drivers.some(driver => driver.name.includes("claude"));
 
 /**
- * DataSource implementation that fetches image from URL and provides it as a stream.
- * This simulates how Studio sends images - fetched and converted to base64/bytes.
- */
-class ImageUrlSource implements DataSource {
-    private cachedBuffer: ArrayBuffer | null = null;
-
-    constructor(public url: string, public mime_type: string = "image/jpeg") { }
-
-    get name() {
-        return this.url.split('/').pop() || 'image';
-    }
-
-    async getURL(): Promise<string> {
-        // Return the original URL - driver will fetch it
-        return this.url;
-    }
-
-    async getStream(): Promise<ReadableStream<string | Uint8Array>> {
-        // Fetch the image and return as stream (this is what Studio does)
-        const response = await fetch(this.url);
-        if (!response.ok) {
-            throw new Error(`Failed to fetch image from url: ${this.url}`);
-        }
-        if (!response.body) {
-            throw new Error(`No content from url: ${this.url}`);
-        }
-        return response.body;
-    }
-}
-
-/**
  * DataSource implementation that provides pre-fetched image data as base64.
  * This more closely simulates how Studio sends images through the conversation.
  */
@@ -227,7 +196,7 @@ function getClaudeOptionsWithCache(model: string, driverName: string): Execution
             _option_id: optionId,
             max_tokens: 256,
             cache_enabled: true,
-        } as any,
+        },
         output_modality: Modalities.text,
     };
 }
@@ -291,7 +260,7 @@ describe.skipIf(hasClaudeDrivers)("Claude prompt caching (no Claude drivers conf
     });
 });
 
-describe.concurrent.skipIf(!hasDrivers).each(drivers)("Driver $name - Multi-turn Conversations", ({ name, driver, textModel, visionModel }) => {
+describe.skipIf(!hasDrivers).concurrent.each(drivers)("Driver $name - Multi-turn Conversations", ({ name, driver, textModel, visionModel }) => {
 
     test(`${name}: multi-turn text conversation (3 turns)`, { timeout: TIMEOUT }, async () => {
         const options = getTextOptions(textModel);

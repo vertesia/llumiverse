@@ -133,13 +133,17 @@ export class FireflyDriver extends AbstractDriver<FireflyDriverOptions> {
                 }))
             };
 
-        } catch (error: any) {
+        } catch (error: unknown) {
             this.logger.error({ error }, "[Firefly] Image generation failed");
+            const generationError = error instanceof Error ? error : new Error(String(error));
+            const errorCode = (error as { code?: unknown })?.code === 'content_policy_violation'
+                ? 'content_policy_violation'
+                : 'validation_error';
             return {
                 result: [],
                 error: {
-                    message: error.message,
-                    code: error.code || 'GENERATION_FAILED'
+                    message: generationError.message,
+                    code: errorCode
                 }
             };
         }
