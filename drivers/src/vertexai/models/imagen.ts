@@ -344,7 +344,7 @@ export class ImagenModelDefinition {
         }
         const instances = [instanceValue];
 
-        let parameter: any = getImagenParameters(taskType, options.model_options ?? { _option_id: "vertexai-imagen" });
+        let parameter = getImagenParameters(taskType, options.model_options ?? { _option_id: "vertexai-imagen" }) as ReturnType<typeof getImagenParameters> & { negativePrompt?: string };
         parameter.negativePrompt = prompt.negativePrompt ?? undefined;
 
         const numberOfImages = options.model_options?.number_of_images ?? 1;
@@ -352,7 +352,7 @@ export class ImagenModelDefinition {
         // Remove all undefined values
         parameter = Object.fromEntries(
             Object.entries(parameter).filter(([_, v]) => v !== undefined)
-        ) as any;
+        ) as typeof parameter;
 
         const parameters = helpers.toValue(parameter);
 

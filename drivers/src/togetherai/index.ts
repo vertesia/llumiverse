@@ -1,6 +1,6 @@
 import { AbstractDriver, type AIModel, type Completion, type CompletionChunkObject, type DriverOptions, type EmbeddingsOptions, type EmbeddingsResult, type ExecutionOptions, type TextFallbackOptions } from "@llumiverse/core";
 import { transformSSEStream } from "@llumiverse/core/async";
-import { FetchClient } from "@vertesia/api-fetch-client";
+import { FetchClient, type ServerSentEvent } from "@vertesia/api-fetch-client";
 import type { TextCompletion, TogetherModelInfo } from "./interfaces.js";
 
 interface TogetherAIDriverOptions extends DriverOptions {
@@ -21,7 +21,7 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
         });
     }
 
-    getResponseFormat = (options: ExecutionOptions): { type: string; schema: any } | undefined => {
+    getResponseFormat = (options: ExecutionOptions): { type: string; schema: unknown } | undefined => {
         return options.result_schema ?
             {
                 type: "json_object",
@@ -98,7 +98,7 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
                 ],
             },
             reader: 'sse'
-        })
+        }) as ReadableStream<ServerSentEvent>;
 
         return transformSSEStream(stream, (data: string) => {
             const json = JSON.parse(data);

@@ -12,7 +12,8 @@ import {
 } from '@llumiverse/common';
 import { AbstractDriver } from '@llumiverse/core';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { BedrockDriver } from './index.js';
+import { BedrockDriver, BedrockPrompt } from './index.js';
+import type { Tree } from '../../test/__helpers__/test-utils.js';
 
 // ---------------------------------------------------------------------------
 // Unit tests: getExtractedStream tool use handling
@@ -154,9 +155,9 @@ describe('driver.stream() — Bedrock tool use accumulation', () => {
 
         // Simulate what the fixed getExtractedStream emits for one tool call
         driver.chunks = [
-            { result: [], tool_use: [{ id: 'tool-1', tool_name: 'do_thing', tool_input: '' as any }] },
-            { result: [], tool_use: [{ id: 'tool-1', tool_name: '', tool_input: '{"param"' as any }] },
-            { result: [], tool_use: [{ id: 'tool-1', tool_name: '', tool_input: ':"hello"}' as any }] },
+            { result: [], tool_use: [{ id: 'tool-1', tool_name: 'do_thing', tool_input: '' as unknown }] },
+            { result: [], tool_use: [{ id: 'tool-1', tool_name: '', tool_input: '{"param"' as unknown }] },
+            { result: [], tool_use: [{ id: 'tool-1', tool_name: '', tool_input: ':"hello"}' as unknown }] },
             { result: [], finish_reason: 'tool_use' },
         ];
 
@@ -177,10 +178,10 @@ describe('driver.stream() — Bedrock tool use accumulation', () => {
         const options: ExecutionOptions = { model: 'test-model' };
 
         driver.chunks = [
-            { result: [], tool_use: [{ id: 'id-a', tool_name: 'tool_a', tool_input: '' as any }] },
-            { result: [], tool_use: [{ id: 'id-b', tool_name: 'tool_b', tool_input: '' as any }] },
-            { result: [], tool_use: [{ id: 'id-a', tool_name: '', tool_input: '{"x":1}' as any }] },
-            { result: [], tool_use: [{ id: 'id-b', tool_name: '', tool_input: '{"y":2}' as any }] },
+            { result: [], tool_use: [{ id: 'id-a', tool_name: 'tool_a', tool_input: '' as unknown }] },
+            { result: [], tool_use: [{ id: 'id-b', tool_name: 'tool_b', tool_input: '' as unknown }] },
+            { result: [], tool_use: [{ id: 'id-a', tool_name: '', tool_input: '{"x":1}' as unknown }] },
+            { result: [], tool_use: [{ id: 'id-b', tool_name: '', tool_input: '{"y":2}' as unknown }] },
             { result: [], finish_reason: 'tool_use' },
         ];
 
@@ -198,8 +199,8 @@ describe('driver.stream() — Bedrock tool use accumulation', () => {
         const options: ExecutionOptions = { model: 'test-model' };
 
         driver.chunks = [
-            { result: [], tool_use: [{ id: 'trunc', tool_name: 'tool_c', tool_input: '' as any }] },
-            { result: [], tool_use: [{ id: 'trunc', tool_name: '', tool_input: '{"incomplete' as any }] },
+            { result: [], tool_use: [{ id: 'trunc', tool_name: 'tool_c', tool_input: '' as unknown }] },
+            { result: [], tool_use: [{ id: 'trunc', tool_name: '', tool_input: '{"incomplete' as unknown }] },
             { result: [], finish_reason: 'length' },
         ];
 
@@ -221,15 +222,15 @@ describe('BedrockDriver buildStreamingConversation', () => {
         };
 
         const conversation = driver.buildStreamingConversation(
-            prompt as any,
-            [{ type: 'text', value: 'Let me check.' }] as any,
+            prompt as unknown as BedrockPrompt,
+            [{ type: 'text', value: 'Let me check.' }],
             [{
                 id: 'tool-1',
                 tool_name: 'get_weather',
                 tool_input: { location: 'Paris' },
             }],
             { model: 'anthropic.claude-sonnet' } as ExecutionOptions
-        ) as any;
+        ) as unknown as Tree;
 
         expect(conversation.messages).toHaveLength(2);
         expect(conversation.messages[0]).toEqual(prompt.messages[0]);

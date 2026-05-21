@@ -40,7 +40,7 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
     async getModelURLEndpoint(
         modelId: string
     ): Promise<{ url: string; status: string; }> {
-        const res = (await this.service.get(`/${modelId}`)) as HuggingFaceIEModel;
+        const res = await this.service.get(`/${modelId}`) as HuggingFaceIEModel;
         return {
             url: res.status.url,
             status: getStatus(res),
@@ -132,8 +132,8 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
     // ============== management API ==============
 
     async listModels(): Promise<AIModel[]> {
-        const res = await this.service.get("/");
-        const hfModels = res.items as HuggingFaceIEModel[];
+        const res = await this.service.get("/") as { items: HuggingFaceIEModel[] };
+        const hfModels = res.items;
         if (!hfModels || !hfModels.length) return [];
 
         const models: AIModel[] = hfModels.map((model: HuggingFaceIEModel) => ({
@@ -151,7 +151,7 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
         try {
             await this.service.get("/models");
             return true;
-        } catch (error) {
+        } catch {
             return false;
         }
     }

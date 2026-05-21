@@ -4,12 +4,15 @@ import {
     ExecutionOptions,
     ExecutionResponse,
     ExecutionTokenUsage,
+    CompletionResult,
     ToolUse,
     LlumiverseError
 } from "@llumiverse/common";
 import { AbstractDriver } from "./Driver.js";
 
-export class DefaultCompletionStream<PromptT = any> implements CompletionStream<PromptT> {
+type StreamingToolUse = ToolUse<unknown> & { _actual_id?: string };
+
+export class DefaultCompletionStream<PromptT = unknown> implements CompletionStream<PromptT> {
 
     chunks: number; // Counter for number of chunks instead of storing strings
     completion: ExecutionResponse<PromptT> | undefined;
@@ -24,8 +27,8 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
         // reset state
         this.completion = undefined;
         this.chunks = 0;
-        const accumulatedResults: any[] = []; // Accumulate CompletionResult[] from chunks
-        const accumulatedToolUse: Map<string, ToolUse> = new Map(); // Accumulate tool_use by id
+        const accumulatedResults: CompletionResult[] = []; // Accumulate CompletionResult[] from chunks
+        const accumulatedToolUse: Map<string, StreamingToolUse> = new Map(); // Accumulate tool_use by id
 
         this.driver.logger.debug(
             `[${this.driver.provider}] Streaming Execution of ${this.options.model} with prompt`,
@@ -72,10 +75,10 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
                                         const newInput = tool.tool_input as unknown;
                                         if (typeof existingInput === 'string' && typeof newInput === 'string') {
                                             // Concatenate string arguments
-                                            (existing as any).tool_input = existingInput + newInput;
+                                            existing.tool_input = existingInput + newInput;
                                         } else if (existingInput && typeof existingInput === 'object' && newInput && typeof newInput === 'object') {
                                             // Merge objects
-                                            existing.tool_input = { ...(existingInput as object), ...(newInput as object) } as any;
+                                            existing.tool_input = { ...(existingInput as Record<string, unknown>), ...(newInput as Record<string, unknown>) };
                                         } else {
                                             existing.tool_input = tool.tool_input;
                                         }
@@ -85,8 +88,9 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
                                         existing.tool_name = tool.tool_name;
                                     }
                                     // Update actual ID if provided (OpenAI sends id only in first chunk)
-                                    if ((tool as any)._actual_id) {
-                                        (existing as any)._actual_id = (tool as any)._actual_id;
+                                    const streamingTool = tool as StreamingToolUse;
+                                    if (streamingTool._actual_id) {
+                                        existing._actual_id = streamingTool._actual_id;
                                     }
                                 } else {
                                     // New tool call
@@ -144,8 +148,10 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
                                         // Show truncated image placeholder for streaming
                                         const truncatedValue = typeof r.value === 'string' ? r.value.slice(0, 10) : String(r.value).slice(0, 10);
                                         return `\n[Image: ${truncatedValue}...]\n`;
-                                    default:
-                                        return String((r as any).value || '');
+                                    default: {
+                                        const _exhaustive: never = r;
+                                        return String(_exhaustive);
+                                    }
                                 }
                             }).join('');
 
@@ -157,7 +163,7 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
                     }
                 }
             }
-        } catch (error: any) {
+        } catch (error: unknown) {
             // Don't wrap if already a LlumiverseError
             if (LlumiverseError.isLlumiverseError(error)) {
                 throw error;
@@ -188,9 +194,9 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
             const truncatedToolIds = new Set<string>();
             for (const tool of toolUseArray) {
                 // Restore actual ID from OpenAI (was stored in _actual_id during streaming)
-                if ((tool as any)._actual_id) {
-                    tool.id = (tool as any)._actual_id;
-                    delete (tool as any)._actual_id;
+                if (tool._actual_id) {
+                    tool.id = tool._actual_id;
+                    delete tool._actual_id;
                 }
                 // Parse tool_input strings as JSON if needed (streaming sends arguments as string chunks)
                 if (typeof tool.tool_input === 'string') {
@@ -240,7 +246,7 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
             if (this.completion) {
                 this.driver.validateResult(this.completion, this.options);
             }
-        } catch (error: any) {
+        } catch (error: unknown) {
             // Don't wrap if already a LlumiverseError
             if (LlumiverseError.isLlumiverseError(error)) {
                 throw error;
@@ -255,7 +261,7 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
 
 }
 
-export class FallbackCompletionStream<PromptT = any> implements CompletionStream<PromptT> {
+export class FallbackCompletionStream<PromptT = unknown> implements CompletionStream<PromptT> {
 
     completion: ExecutionResponse<PromptT> | undefined;
 
@@ -283,13 +289,15 @@ export class FallbackCompletionStream<PromptT = any> implements CompletionStream
                         // Show truncated image placeholder for streaming
                         const truncatedValue = typeof r.value === 'string' ? r.value.slice(0, 10) : String(r.value).slice(0, 10);
                         return `[Image: ${truncatedValue}...]`;
-                    default:
-                        return String((r as any).value || '');
+                    default: {
+                        const _exhaustive: never = r;
+                        return String(_exhaustive);
+                    }
                 }
             }).join('');
             yield content;
             this.completion = completion; // Return the original completion with untouched CompletionResult[]
-        } catch (error: any) {
+        } catch (error: unknown) {
             // Don't wrap if already a LlumiverseError
             if (LlumiverseError.isLlumiverseError(error)) {
                 throw error;

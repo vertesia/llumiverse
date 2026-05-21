@@ -22,6 +22,7 @@ import { convertOpenAIFunctionItemsToText } from '../src/openai/index.js';
 import { claudeMessagesContainToolBlocks, convertClaudeToolBlocksToText } from '../src/shared/claude-messages.js';
 // VertexAI Gemini
 import { convertGeminiFunctionPartsToText } from '../src/vertexai/models/gemini.js';
+import type { Tree } from './__helpers__/test-utils.js';
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 
@@ -64,16 +65,16 @@ describe('Bedrock - convertToolBlocksToText', () => {
         const result = convertToolBlocksToText(messages);
 
         // Plain message unchanged
-        expect((result[0].content![0] as any).text).toBe('Search');
+        expect((result[0].content![0] as unknown as Tree).text).toBe('Search');
         // Text block preserved, toolUse converted
-        expect((result[1].content![0] as any).text).toBe('Searching...');
-        expect((result[1].content![1] as any).text).toContain('[Tool call: search_docs');
-        expect((result[1].content![1] as any).text).toContain('query');
-        expect((result[1].content![1] as any).toolUse).toBeUndefined();
+        expect((result[1].content![0] as unknown as Tree).text).toBe('Searching...');
+        expect((result[1].content![1] as unknown as Tree).text).toContain('[Tool call: search_docs');
+        expect((result[1].content![1] as unknown as Tree).text).toContain('query');
+        expect((result[1].content![1] as unknown as Tree).toolUse).toBeUndefined();
         // toolResult converted
-        expect((result[2].content![0] as any).text).toContain('[Tool result:');
-        expect((result[2].content![0] as any).text).toContain('Found 3 docs');
-        expect((result[2].content![0] as any).toolResult).toBeUndefined();
+        expect((result[2].content![0] as unknown as Tree).text).toContain('[Tool result:');
+        expect((result[2].content![0] as unknown as Tree).text).toContain('Found 3 docs');
+        expect((result[2].content![0] as unknown as Tree).toolResult).toBeUndefined();
     });
 
     test('truncates large inputs and results', () => {
@@ -82,10 +83,10 @@ describe('Bedrock - convertToolBlocksToText', () => {
             { role: 'user', content: [{ toolResult: { toolUseId: 't1', content: [{ text: 'y'.repeat(1000) }] } }] },
         ];
         const result = convertToolBlocksToText(messages);
-        expect((result[0].content![0] as any).text.length).toBeLessThan(700);
-        expect((result[0].content![0] as any).text).toContain('...');
-        expect((result[1].content![0] as any).text.length).toBeLessThan(700);
-        expect((result[1].content![0] as any).text).toContain('...');
+        expect((result[0].content![0] as unknown as Tree).text.length).toBeLessThan(700);
+        expect((result[0].content![0] as unknown as Tree).text).toContain('...');
+        expect((result[1].content![0] as unknown as Tree).text.length).toBeLessThan(700);
+        expect((result[1].content![0] as unknown as Tree).text).toContain('...');
     });
 
     test('preparePayload converts when tools=[] but preserves when tools provided', () => {
@@ -101,8 +102,8 @@ describe('Bedrock - convertToolBlocksToText', () => {
         // tools=[] → conversion, no toolConfig
         const emptyTools = driver.preparePayload(prompt, { model: 'anthropic.claude-sonnet-4-20250514', tools: [] } as ExecutionOptions);
         expect(emptyTools.toolConfig).toBeUndefined();
-        expect((emptyTools.messages![1].content![0] as any).toolUse).toBeUndefined();
-        expect((emptyTools.messages![1].content![0] as any).text).toContain('[Tool call: think');
+        expect((emptyTools.messages![1].content![0] as unknown as Tree).toolUse).toBeUndefined();
+        expect((emptyTools.messages![1].content![0] as unknown as Tree).text).toContain('[Tool call: think');
 
         // tools provided → no conversion, toolConfig set
         const withTools = driver.preparePayload(
@@ -110,7 +111,7 @@ describe('Bedrock - convertToolBlocksToText', () => {
             { model: 'anthropic.claude-sonnet-4-20250514', tools: [{ name: 'x', description: 'x', input_schema: { type: 'object' } }] } as ExecutionOptions,
         );
         expect(withTools.toolConfig).toBeDefined();
-        expect((withTools.messages![1].content![0] as any).toolUse).toBeDefined();
+        expect((withTools.messages![1].content![0] as unknown as Tree).toolUse).toBeDefined();
     });
 
     test('no conversion when conversation has no tool blocks', () => {
@@ -311,14 +312,14 @@ describe('OpenAI - convertOpenAIFunctionItemsToText', () => {
         expect(result[4]).toEqual(items[4]);
 
         // function_call converted to assistant text
-        const callItem = result[2] as any;
+        const callItem = result[2] as unknown as Tree;
         expect(callItem.role).toBe('assistant');
         expect(callItem.content).toContain('[Tool call: get_weather');
         expect(callItem.content).toContain('Paris');
         expect(callItem.type).toBeUndefined();
 
         // function_call_output converted to user text
-        const outputItem = result[3] as any;
+        const outputItem = result[3] as unknown as Tree;
         expect(outputItem.role).toBe('user');
         expect(outputItem.content).toContain('[Tool result:');
         expect(outputItem.content).toContain('15 degrees');
@@ -331,10 +332,10 @@ describe('OpenAI - convertOpenAIFunctionItemsToText', () => {
             { type: 'function_call_output', call_id: 'fc1', output: 'y'.repeat(1000) } as ResponseInputItem,
         ];
         const result = convertOpenAIFunctionItemsToText(items);
-        expect((result[0] as any).content.length).toBeLessThan(700);
-        expect((result[0] as any).content).toContain('...');
-        expect((result[1] as any).content.length).toBeLessThan(700);
-        expect((result[1] as any).content).toContain('...');
+        expect((result[0] as unknown as Tree).content.length).toBeLessThan(700);
+        expect((result[0] as unknown as Tree).content).toContain('...');
+        expect((result[1] as unknown as Tree).content.length).toBeLessThan(700);
+        expect((result[1] as unknown as Tree).content).toContain('...');
     });
 
     test('no conversion when no function items', () => {
@@ -355,10 +356,10 @@ describe('OpenAI - convertOpenAIFunctionItemsToText', () => {
             { role: 'user', content: 'Summarize' },
         ];
         const result = convertOpenAIFunctionItemsToText(items);
-        expect((result[0] as any).content).toContain('[Tool call: search');
-        expect((result[1] as any).content).toContain('[Tool call: fetch');
-        expect((result[2] as any).content).toContain('[Tool result:');
-        expect((result[3] as any).content).toContain('[Tool result:');
+        expect((result[0] as unknown as Tree).content).toContain('[Tool call: search');
+        expect((result[1] as unknown as Tree).content).toContain('[Tool call: fetch');
+        expect((result[2] as unknown as Tree).content).toContain('[Tool result:');
+        expect((result[3] as unknown as Tree).content).toContain('[Tool result:');
         expect(result[4]).toEqual(items[4]); // user message unchanged
     });
 });

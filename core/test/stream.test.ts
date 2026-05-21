@@ -13,7 +13,6 @@ function createStreamFromString(text: string): ReadableStream {
 }
 
 function createStreamFromChunks(chunks: string[]): ReadableStream {
-    let index = 0;
     return new ReadableStream({
         start(controller) {
             const encoder = new TextEncoder();

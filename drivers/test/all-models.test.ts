@@ -1,4 +1,4 @@
-import { AbstractDriver, AIModel, ExecutionOptions, getMaxOutputTokens, getMaxTokensLimitBedrock, getMaxTokensLimitVertexAi, Modalities, PromptSegment } from '@llumiverse/core';
+import { AbstractDriver, AIModel, ExecutionOptions, getMaxOutputTokens, getMaxTokensLimitBedrock, getMaxTokensLimitVertexAi, Modalities, PromptRole, PromptSegment } from '@llumiverse/core';
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from "vitest";
@@ -18,8 +18,7 @@ const drivers: TestDriver[] = [];
 
 
 if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
-    const auth = new GoogleAuth();
-    const client = auth.getClient();
+    new GoogleAuth();
     drivers.push({
         name: "google-vertex",
         driver: new VertexAIDriver({
@@ -293,7 +292,7 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
             limit = getMaxOutputTokens(model);
         }
 
-        const shortPrompt: PromptSegment[] = [{ role: 'user', content: 'Say "ok".' }];
+        const shortPrompt: PromptSegment[] = [{ role: PromptRole.user, content: 'Say "ok".' }];
         const r = await driver.execute(shortPrompt, {
             model,
             model_options: {

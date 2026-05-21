@@ -1,4 +1,4 @@
-import { CompletionResult, ResultValidationError } from "@llumiverse/common";
+import { CompletionResult, JSONValue, ResultValidationError } from "@llumiverse/common";
 import { Ajv } from 'ajv';
 import addFormats from 'ajv-formats';
 import { extractAndParseJSON } from "./json.js";
@@ -16,6 +16,18 @@ const ajv = new Ajv({
 //use ts ignore to avoid error with ESM and ajv-formats
 // @ts-ignore This expression is not callable
 addFormats(ajv)
+
+function errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+}
+
+function getRequiredFields(schemaField: unknown): string[] {
+    if (!schemaField || typeof schemaField !== 'object') {
+        return [];
+    }
+    const required = (schemaField as Record<string, unknown>).required;
+    return Array.isArray(required) ? required.filter((field): field is string => typeof field === 'string') : [];
+}
 
 
 export class ValidationError extends Error implements ResultValidationError {
@@ -35,8 +47,8 @@ function parseCompletionAsJson(data: CompletionResult[]) {
             const text = part.value.trim();
             try {
                 return extractAndParseJSON(text);
-            } catch (error: any) {
-                lastError = new ValidationError("json_error", error.message);
+            } catch (error: unknown) {
+                lastError = new ValidationError("json_error", errorMessage(error));
             }
         }
     }
@@ -48,7 +60,7 @@ function parseCompletionAsJson(data: CompletionResult[]) {
 
 
 export function validateResult(data: CompletionResult[], schema: object): CompletionResult[] {
-    let json;
+    let json: JSONValue;
     if (Array.isArray(data)) {
         const jsonResults = data.filter(r => r.type === "json");
         if (jsonResults.length > 0) {
@@ -56,8 +68,8 @@ export function validateResult(data: CompletionResult[], schema: object): Comple
         } else {
             try {
                 json = parseCompletionAsJson(data);
-            } catch (error: any) {
-                throw new ValidationError("json_error", error.message)
+            } catch (error: unknown) {
+                throw new ValidationError("json_error", errorMessage(error))
             }
         }
     } else {
@@ -79,8 +91,9 @@ export function validateResult(data: CompletionResult[], schema: object): Comple
 
             //ignore date if empty or null
             if (!value
+                && typeof schemaFieldFormat === 'string'
                 && ["date", "date-time"].includes(schemaFieldFormat)
-                && !schemaField?.required?.includes(path[path.length - 1])) {
+                && !getRequiredFields(schemaField).includes(path[path.length - 1])) {
                 continue;
             } else {
                 errors.push(e);

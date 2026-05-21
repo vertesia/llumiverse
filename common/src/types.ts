@@ -390,7 +390,7 @@ export class LlumiverseError extends Error {
 
 export interface BaseResult {
     type: "text" | "json" | "image";
-    value: any;
+    value: unknown;
 }
 
 export interface TextResult extends BaseResult {
@@ -400,6 +400,7 @@ export interface TextResult extends BaseResult {
 
 export interface JsonResult extends BaseResult {
     type: "json";
+    value: JSONValue;
 }
 
 export interface ImageResult extends BaseResult {
@@ -422,7 +423,7 @@ export interface CompletionChunkObject {
      * Tool calls returned by the model during streaming.
      * Each chunk may contain partial tool call information that needs to be aggregated.
      */
-    tool_use?: ToolUse[];
+    tool_use?: ToolUse<unknown>[];
 }
 
 /**
@@ -464,7 +465,7 @@ export interface Completion {
     /**
      * Contains the tools from which the model awaits information.
      */
-    tool_use?: ToolUse[];
+    tool_use?: ToolUse<unknown>[];
     /**
      * The finish reason as reported by the model: stop | length or other model specific values
      */
@@ -479,7 +480,7 @@ export interface Completion {
     /**
      * The original response. Only included if the option include_original_response is set to true and the request is made using execute. Not supported when streaming.
      */
-    original_response?: Record<string, any>;
+    original_response?: unknown;
 
     /**
      * The conversation context. This is an opaque structure that can be passed to the next request to restore the context.
@@ -487,7 +488,7 @@ export interface Completion {
     conversation?: unknown;
 }
 
-export interface ExecutionResponse<PromptT = any> extends Completion {
+export interface ExecutionResponse<PromptT = unknown> extends Completion {
     prompt: PromptT;
     /**
      * The time it took to execute the request in seconds
@@ -500,7 +501,7 @@ export interface ExecutionResponse<PromptT = any> extends Completion {
 }
 
 
-export interface CompletionStream<PromptT = any> extends AsyncIterable<string> {
+export interface CompletionStream<PromptT = unknown> extends AsyncIterable<string> {
     completion: ExecutionResponse<PromptT> | undefined;
 }
 
@@ -560,12 +561,16 @@ export interface JSONSchema {
     type?: JSONSchemaTypeName | JSONSchemaTypeName[];
     description?: string;
     properties?: JSONSchemaProperties;
+    items?: JSONSchema;
+    format?: string;
+    editor?: unknown;
+    default?: unknown;
     additionalProperties?: boolean | JSONSchema;
     required?: string[];
-    [k: string]: any;
+    [k: string]: unknown;
 }
 
-export type PromptFormatter<T = any> = (messages: PromptSegment[], schema?: JSONSchema) => T;
+export type PromptFormatter<T = unknown> = (messages: PromptSegment[], schema?: JSONSchema) => T;
 
 //Options are split into PromptOptions, ModelOptions and ExecutionOptions.
 //ExecutionOptions are most often used within llumiverse as they are the most complete.

@@ -30,7 +30,7 @@ export function completionResultToString(result: CompletionResult): string {
  * Expects the text to be pure JSON if no JSON result is found
  * Throws if no JSON result is found or if parsing fails
  */
-export function parseCompletionResultsToJson(results: CompletionResult[]): any {
+export function parseCompletionResultsToJson(results: CompletionResult[]): unknown {
     const jsonResults = results.filter(r => r.type === "json");
     if (jsonResults.length >= 1) {
         return jsonResults[0].value;
@@ -54,7 +54,7 @@ export function parseCompletionResultsToJson(results: CompletionResult[]): any {
  * Joins text results with the specified separator, default is empty string
  * If multiple JSON results are found only the first one is returned
  */
-export function parseCompletionResults(result: CompletionResult[], separator: string = ""): any {
+export function parseCompletionResults(result: CompletionResult[], separator: string = ""): unknown {
     try {
         return parseCompletionResultsToJson(result);
     } catch {

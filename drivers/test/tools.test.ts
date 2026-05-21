@@ -17,8 +17,7 @@ const drivers: TestDriver[] = [];
 
 
 if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
-    const auth = new GoogleAuth();
-    const client = auth.getClient();
+    new GoogleAuth();
     drivers.push({
         name: "google-vertex",
         driver: new VertexAIDriver({
@@ -178,18 +177,6 @@ const PROMPT_WITH_GET_NAME_TOOL = [
         content: "What is the weather in Paris?",
     },
 ] satisfies PromptSegment[];
-
-function addToolResponse(prompt: PromptSegment[], tool_use_id: string, response: string): PromptSegment[] {
-    return [
-        ...prompt,
-        {
-            role: PromptRole.tool,
-            tool_use_id: tool_use_id,
-            content: response
-        }
-    ];
-
-}
 
 function getTestOptions(model: string): ExecutionOptions {
     return {
