@@ -7,6 +7,7 @@
  * 3. The conversation object survives JSON.stringify/parse (no Uint8Array corruption)
  */
 
+// biome-ignore lint/suspicious/noDeprecatedImports: exercising deprecated output_modality path until that API is removed
 import { AbstractDriver, DataSource, ExecutionOptions, Modalities, PromptRole, PromptSegment } from '@llumiverse/core';
 import 'dotenv/config';
 import { describe, expect, test } from "vitest";
