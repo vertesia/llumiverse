@@ -33,6 +33,7 @@
         "noUnusedImports": "error",
         "noUnusedVariables": "error",
         "noVoidTypeReturn": "error",
+        "useJsxKeyInIterable": "error",
         "useParseIntRadix": "error"
       },
       "complexity": {
