@@ -37,6 +37,11 @@ class TestDriver extends AbstractDriver<DriverOptions, string> {
     async generateEmbeddings(_options: EmbeddingsOptions): Promise<EmbeddingsResult> {
         throw new Error('Not implemented');
     }
+
+    // Re-exposed for tests — base class declares this as protected
+    isRetryableError(statusCode: number | undefined, message: string): boolean | undefined {
+        return super.isRetryableError(statusCode, message);
+    }
 }
 
 describe('AbstractDriver Error Formatting', () => {
