@@ -144,10 +144,10 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
                                         return r.value;
                                     case 'json':
                                         return JSON.stringify(r.value);
-                                    case 'image':
-                                        // Show truncated image placeholder for streaming
+                                    case 'image': {
                                         const truncatedValue = typeof r.value === 'string' ? r.value.slice(0, 10) : String(r.value).slice(0, 10);
                                         return `\n[Image: ${truncatedValue}...]\n`;
+                                    }
                                     default: {
                                         const _exhaustive: never = r;
                                         return String(_exhaustive);
@@ -285,10 +285,10 @@ export class FallbackCompletionStream<PromptT = unknown> implements CompletionSt
                         return r.value;
                     case 'json':
                         return JSON.stringify(r.value);
-                    case 'image':
-                        // Show truncated image placeholder for streaming
+                    case 'image': {
                         const truncatedValue = typeof r.value === 'string' ? r.value.slice(0, 10) : String(r.value).slice(0, 10);
                         return `[Image: ${truncatedValue}...]`;
+                    }
                     default: {
                         const _exhaustive: never = r;
                         return String(_exhaustive);

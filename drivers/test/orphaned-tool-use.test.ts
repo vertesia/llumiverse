@@ -353,10 +353,10 @@ describe('fixOrphanedToolUse - Bedrock', () => {
         expect(lastUserContent).toHaveLength(3); // 2 synthetic + 1 text
 
         expect(lastUserContent[0].toolResult?.toolUseId).toBe('toolu_search');
-        expect(lastUserContent[0].toolResult?.content![0].text).toContain('user stopped');
+        expect(lastUserContent[0].toolResult?.content?.[0].text).toContain('user stopped');
 
         expect(lastUserContent[1].toolResult?.toolUseId).toBe('toolu_analyze');
-        expect(lastUserContent[1].toolResult?.content![0].text).toContain('user stopped');
+        expect(lastUserContent[1].toolResult?.content?.[0].text).toContain('user stopped');
 
         expect(lastUserContent[2].text).toBe('Never mind, do something else instead');
     });
