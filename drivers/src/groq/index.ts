@@ -251,7 +251,7 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
         throw new Error("Method not implemented.");
     }
 
-    async generateEmbeddings({ }: EmbeddingsOptions): Promise<EmbeddingsResult> {
+    async generateEmbeddings(_options: EmbeddingsOptions): Promise<EmbeddingsResult> {
         throw new Error("Method not implemented.");
     }
 

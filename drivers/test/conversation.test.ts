@@ -236,7 +236,7 @@ function verifyConversationSerializable(conversation: unknown, driverName: strin
         }
 
         if (Array.isArray(obj)) {
-            obj.forEach((item, i) => checkForCorruptedBytes(item, `${path}[${i}]`));
+            obj.forEach((item, i) => { checkForCorruptedBytes(item, `${path}[${i}]`); });
         }
     };
 

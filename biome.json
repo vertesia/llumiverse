@@ -27,14 +27,20 @@
     "rules": {
       "recommended": false,
       "correctness": {
+        "noEmptyPattern": "error",
+        "noUnreachable": "error",
         "noUnusedFunctionParameters": "error",
         "noUnusedImports": "error",
         "noUnusedVariables": "error",
+        "noVoidTypeReturn": "error",
         "useParseIntRadix": "error"
       },
       "complexity": {
         "useLiteralKeys": "error",
         "useOptionalChain": "error"
+      },
+      "security": {
+        "noDangerouslySetInnerHtml": "error"
       },
       "style": {
         "useImportType": "error",
@@ -42,10 +48,14 @@
         "useTemplate": "error"
       },
       "suspicious": {
+        "noControlCharactersInRegex": "error",
+        "noDeprecatedImports": "error",
+        "noDoubleEquals": "error",
         "noExplicitAny": "error",
         "noImplicitAnyLet": "error",
+        "noShadowRestrictedNames": "error",
         "noUnusedExpressions": "error",
-        "noDeprecatedImports": "error"
+        "useIterableCallbackReturn": "error"
       }
     }
   },

@@ -1,5 +1,4 @@
 import { type ModelOptionInfoItem, type ModelOptions, type ModelOptionsInfo, OptionType, type ReasoningEffort, SharedOptions } from "../types.js";
-import { textOptionsFallback } from "./fallback.js";
 
 // Union type of all OpenAI options
 /**
@@ -264,7 +263,6 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
             ],
         }
     }
-    return textOptionsFallback;
 }
 
 function isO1Full(model: string): boolean {

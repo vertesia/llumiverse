@@ -200,13 +200,13 @@ if (process.env.XAI_API_KEY) {
 }
 
 function getTestOptions(model: string): ExecutionOptions {
-    if (model == "o1-mini" || model == "o3-mini") {
+    if (model === "o1-mini" || model === "o3-mini") {
         return {
             model: model,
             model_options: {
                 _option_id: "openai-thinking",
                 max_tokens: 3000,
-                stop_sequence: model == "o3-mini" ? ["haemoglobin"] : undefined,
+                stop_sequence: model === "o3-mini" ? ["haemoglobin"] : undefined,
             },
             output_modality: Modalities.text,
         };
