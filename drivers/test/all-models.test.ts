@@ -1,5 +1,5 @@
 // biome-ignore lint/suspicious/noDeprecatedImports: exercising deprecated output_modality path until that API is removed
-import { AbstractDriver, AIModel, ExecutionOptions, getMaxOutputTokens, getMaxTokensLimitBedrock, getMaxTokensLimitVertexAi, Modalities, PromptRole, PromptSegment } from '@llumiverse/core';
+import { type AbstractDriver, type AIModel, type ExecutionOptions, getMaxOutputTokens, getMaxTokensLimitBedrock, getMaxTokensLimitVertexAi, Modalities, PromptRole, type PromptSegment } from '@llumiverse/core';
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from "vitest";
@@ -257,26 +257,26 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
 
     test.each(models)(`${name}: execute prompt on %s`, { timeout: TIMEOUT, retry: 2 }, async (model) => {
         const r = await driver.execute(testPrompt_color, getTestOptions(model));
-        console.log("Result for execute " + model, JSON.stringify(r));
+        console.log(`Result for execute ${model}`, JSON.stringify(r));
         assertCompletionOk(r, model, driver);
     });
 
     test.each(models)(`${name}: execute prompt with streaming on %s`, { timeout: TIMEOUT, retry: 2 }, async (model) => {
         const r = await driver.stream(testPrompt_color, getTestOptions(model));
         const out = await assertStreamingCompletionOk(r);
-        console.log("Result for streaming " + model, JSON.stringify(out));
+        console.log(`Result for streaming ${model}`, JSON.stringify(out));
     });
 
     test.each(models)(`${name}: execute prompt with schema on %s`, { timeout: TIMEOUT, retry: 2 }, async (model) => {
         const r = await driver.execute(testPrompt_color, { ...getTestOptions(model), result_schema: testSchema_color });
-        console.log("Result for execute with schema " + model, JSON.stringify(r.result));
+        console.log(`Result for execute with schema ${model}`, JSON.stringify(r.result));
         assertCompletionOk(r, model, driver);
     });
 
     test.each(models)(`${name}: execute prompt with streaming and schema on %s`, { timeout: TIMEOUT, retry: 2 }, async (model) => {
         const r = await driver.stream(testPrompt_color, { ...getTestOptions(model), result_schema: testSchema_color });
         const out = await assertStreamingCompletionOk(r, true);
-        console.log("Result for streaming with schema " + model, JSON.stringify(out));
+        console.log(`Result for streaming with schema ${model}`, JSON.stringify(out));
     });
 
 
@@ -316,7 +316,7 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
 
         const isMultiModal = fetchedModels?.find(r => r.id === model)?.is_multimodal;
 
-        console.log(`${model} is multimodal: ` + isMultiModal)
+        console.log(`${model} is multimodal: ${isMultiModal}`)
         if (!isMultiModal) return;
 
         const r = await driver.execute(testPrompt_describeImage, {

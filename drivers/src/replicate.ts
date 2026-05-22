@@ -1,21 +1,21 @@
 import {
     AbstractDriver,
-    AIModel,
-    Completion,
-    CompletionChunkObject,
-    DataSource,
-    DriverOptions,
-    EmbeddingsResult,
-    ExecutionOptions,
-    ModelSearchPayload,
-    TextFallbackOptions,
-    TrainingJob,
+    type AIModel,
+    type Completion,
+    type CompletionChunkObject,
+    type DataSource,
+    type DriverOptions,
+    type EmbeddingsResult,
+    type ExecutionOptions,
+    type ModelSearchPayload,
+    type TextFallbackOptions,
+    type TrainingJob,
     TrainingJobStatus,
-    TrainingOptions,
+    type TrainingOptions,
 } from "@llumiverse/core";
 import { EventStream } from "@llumiverse/core/async";
 import { EventSource } from "eventsource";
-import Replicate, { Prediction, Training } from "replicate";
+import Replicate, { type Prediction, type Training } from "replicate";
 
 let cachedTrainableModels: AIModel[] | undefined;
 let cachedTrainableModelsTimestamp: number = 0;
@@ -213,12 +213,12 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
         });
         const results = await Promise.all(promises);
         return results.filter(m => !!m.latest_version).map(m => {
-            const fullName = m.owner + '/' + m.name;
+            const fullName = `${m.owner}/${m.name}`;
             const v = m.latest_version!;
             return {
-                id: fullName + ':' + v.id,
+                id: `${fullName}:${v.id}`,
                 name:
-                    fullName + "@" + v.cog_version + ":" + v.id.slice(0, 6),
+                    `${fullName}@${v.cog_version}:${v.id.slice(0, 6)}`,
                 provider: this.provider,
                 owner: m.owner,
                 description: m.description,
@@ -258,11 +258,11 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
         }
 
         const models: AIModel[] = versionResults.map((v) => {
-            const fullName = rModel.owner + '/' + rModel.name;
+            const fullName = `${rModel.owner}/${rModel.name}`;
             return {
-                id: fullName + ':' + v.id,
+                id: `${fullName}:${v.id}`,
                 name:
-                    fullName + "@" + v.cog_version + ":" + v.id.slice(0, 6),
+                    `${fullName}@${v.cog_version}:${v.id.slice(0, 6)}`,
                 provider: this.provider,
                 owner: rModel.owner,
                 description: rModel.description,
@@ -332,7 +332,7 @@ function jobInfo(job: Prediction | Training, modelName?: string): TrainingJob {
         id: job.id,
         status,
         details,
-        model: modelName ? modelName + ':' + job.version : job.version
+        model: modelName ? `${modelName}:${job.version}` : job.version
     } as TrainingJob;
 
 }

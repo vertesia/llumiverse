@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { AIModel, PromptRole, PromptSegment } from "@llumiverse/core";
+import { type AIModel, PromptRole, type PromptSegment } from "@llumiverse/core";
 import { HuggingFaceIEDriver } from "@llumiverse/drivers";
 
 async function main() {

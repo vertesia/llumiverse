@@ -1,4 +1,4 @@
-import { CompletionResult, JSONValue, ResultValidationError } from "@llumiverse/common";
+import type { CompletionResult, JSONValue, ResultValidationError } from "@llumiverse/common";
 import { Ajv } from 'ajv';
 import addFormats from 'ajv-formats';
 import { extractAndParseJSON } from "./json.js";

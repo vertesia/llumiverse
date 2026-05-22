@@ -29,7 +29,17 @@
       "correctness": {
         "noUnusedFunctionParameters": "error",
         "noUnusedImports": "error",
-        "noUnusedVariables": "error"
+        "noUnusedVariables": "error",
+        "useParseIntRadix": "error"
+      },
+      "complexity": {
+        "useLiteralKeys": "error",
+        "useOptionalChain": "error"
+      },
+      "style": {
+        "useImportType": "error",
+        "useNodejsImportProtocol": "error",
+        "useTemplate": "error"
       },
       "suspicious": {
         "noExplicitAny": "error",

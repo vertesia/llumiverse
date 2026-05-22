@@ -1,7 +1,7 @@
-import fs, { readFileSync } from 'fs';
+import fs, { readFileSync } from 'node:fs';
 import { describe, expect, test } from "vitest";
 import { extractAndParseJSON, parseJSON } from "../src/json";
-import { JSONArray, JSONObject, JsonResult } from '@llumiverse/common';
+import type { JSONArray, JSONObject, JsonResult } from '@llumiverse/common';
 import { validateResult, ValidationError } from '../src/validation';
 import { readDataFile } from './utils';
 

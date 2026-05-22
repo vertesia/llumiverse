@@ -1,5 +1,5 @@
 // biome-ignore lint/suspicious/noDeprecatedImports: exercising deprecated output_modality path until that API is removed
-import { AbstractDriver, ExecutionOptions, Modalities, PromptRole, PromptSegment } from '@llumiverse/core';
+import { type AbstractDriver, type ExecutionOptions, Modalities, PromptRole, type PromptSegment } from '@llumiverse/core';
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from "vitest";

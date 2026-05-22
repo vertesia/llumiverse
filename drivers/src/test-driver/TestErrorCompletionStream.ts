@@ -1,4 +1,4 @@
-import { CompletionStream, ExecutionOptions, ExecutionResponse, PromptSegment } from "@llumiverse/core";
+import type { CompletionStream, ExecutionOptions, ExecutionResponse, PromptSegment } from "@llumiverse/core";
 import { sleep, throwError } from "./utils.js";
 
 export class TestErrorCompletionStream implements CompletionStream<PromptSegment[]> {

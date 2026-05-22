@@ -26,7 +26,7 @@ async function textToImagePayload(prompt: NovaMessagesPrompt, options: Execution
 
     const textMessages = prompt.messages.map(m => m.content.map(c => c.text)).flat();
     let text = textMessages.join("\n\n");
-    text += prompt.system ? "\n\n\nIMPORTANT: " + prompt.system?.map(m => m.text).join("\n\n") : '';
+    text += prompt.system ? `\n\n\nIMPORTANT: ${prompt.system?.map(m => m.text).join("\n\n")}` : '';
 
     const conditionImage = (conditionImage: boolean) => {
         const img = getFirstImageFromPrompt(prompt.messages);
@@ -90,7 +90,7 @@ async function colorGuidedGenerationPayload(prompt: NovaMessagesPrompt, options:
 
     const textMessages = prompt.messages.map(m => m.content.map(c => c.text)).flat();
     let text = textMessages.join("\n\n");
-    text += prompt.system ? "\n\n\nIMPORTANT: " + prompt.system?.map(m => m.text).join("\n\n") : '';
+    text += prompt.system ? `\n\n\nIMPORTANT: ${prompt.system?.map(m => m.text).join("\n\n")}` : '';
 
     const conditionImage = (conditionImage: boolean) => {
         const img = getFirstImageFromPrompt(prompt.messages);

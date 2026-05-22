@@ -159,7 +159,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
     public getLLamaClient(region: string = "us-central1"): FetchClient {
         //Lazy initialization
-        if (!this.llamaClient || this.llamaClient["region"] !== region) {
+        if (!this.llamaClient || this.llamaClient.region !== region) {
             this.llamaClient = createFetchClient({
                 region: region,
                 project: this.options.project,
@@ -169,7 +169,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 return `Bearer ${token}`;
             });
             // Store the region for potential client reuse
-            this.llamaClient["region"] = region;
+            this.llamaClient.region = region;
         }
         return this.llamaClient;
     }
@@ -604,8 +604,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             globalGoogleResult.map((model) => {
                 const modelCapability = getModelCapabilities(model.name ?? '', "vertexai");
                 return {
-                    id: "locations/global/" + model.name,
-                    name: "Global " + model.name?.split('/').pop(),
+                    id: `locations/global/${model.name}`,
+                    name: `Global ${model.name?.split('/').pop()}`,
                     provider: "vertexai",
                     owner: "google",
                     input_modalities: modelModalitiesToArray(modelCapability.input),
@@ -659,7 +659,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                             if (version >= 2.5) {
                                 // Check if already present
                                 const shortName = modelName.split('/').pop();
-                                const globalName = "Global " + shortName;
+                                const globalName = `Global ${shortName}`;
                                 if (models.some(m => m.name === globalName)) {
                                     return false;
                                 }
@@ -672,8 +672,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 }).map(model => {
                     const modelCapability = getModelCapabilities(model.name ?? '', "vertexai");
                     return {
-                        id: "locations/global/" + model.name,
-                        name: "Global " + model.name?.split('/').pop(),
+                        id: `locations/global/${model.name}`,
+                        name: `Global ${model.name?.split('/').pop()}`,
                         provider: 'vertexai',
                         owner: publisher,
                         input_modalities: modelModalitiesToArray(modelCapability.input),
@@ -702,8 +702,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 }).map(model => {
                     const modelCapability = getModelCapabilities(model.name ?? '', "vertexai");
                     return {
-                        id: "locations/global/" + model.name,
-                        name: "Global " + model.name?.split('/').pop(),
+                        id: `locations/global/${model.name}`,
+                        name: `Global ${model.name?.split('/').pop()}`,
                         provider: 'vertexai',
                         owner: publisher,
                         input_modalities: modelModalitiesToArray(modelCapability.input),

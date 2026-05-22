@@ -1,13 +1,13 @@
 import { Base64DataSource, type Driver } from '@llumiverse/core';
 import 'dotenv/config';
-import { readFile } from 'fs/promises';
+import { readFile } from 'node:fs/promises';
 import { describe, expect, test } from "vitest";
 import { BedrockDriver, MistralAIDriver, OpenAIDriver, VertexAIDriver, WatsonxDriver } from "../src/index.js";
 
 const TIMEOUT = 15000;
 const TEXT = "Hello";
 
-const IMAGE_SRC = import.meta.dirname + "/hello_world.jpg";
+const IMAGE_SRC = `${import.meta.dirname}/hello_world.jpg`;
 
 async function convertImageToBase64(path: string) {
     const data = await readFile(path);

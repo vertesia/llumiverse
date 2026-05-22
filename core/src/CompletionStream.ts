@@ -1,14 +1,14 @@
 import {
-    CompletionStream,
-    DriverOptions,
-    ExecutionOptions,
-    ExecutionResponse,
-    ExecutionTokenUsage,
-    CompletionResult,
-    ToolUse,
+    type CompletionStream,
+    type DriverOptions,
+    type ExecutionOptions,
+    type ExecutionResponse,
+    type ExecutionTokenUsage,
+    type CompletionResult,
+    type ToolUse,
     LlumiverseError
 } from "@llumiverse/common";
-import { AbstractDriver } from "./Driver.js";
+import type { AbstractDriver } from "./Driver.js";
 
 type StreamingToolUse = ToolUse<unknown> & { _actual_id?: string };
 

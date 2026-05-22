@@ -458,10 +458,10 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 // Fallback to putting the schema in the system instructions, if not using structured output.
                 if (options.tools) {
                     system.parts?.push({
-                        text: "When not calling tools, the output must be a JSON object using the following JSON Schema:\n" + JSON.stringify(schema)
+                        text: `When not calling tools, the output must be a JSON object using the following JSON Schema:\n${JSON.stringify(schema)}`
                     });
                 } else {
-                    system.parts?.push({ text: "The output must be a JSON object using the following JSON Schema:\n" + JSON.stringify(schema) });
+                    system.parts?.push({ text: `The output must be a JSON object using the following JSON Schema:\n${JSON.stringify(schema)}` });
                 }
             }
         }
@@ -483,7 +483,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
     }
 
     usageMetadataToTokenUsage(driver: VertexAIDriver, usageMetadata: GenerateContentResponseUsageMetadata | undefined): ExecutionTokenUsage {
-        if (!usageMetadata || !usageMetadata.totalTokenCount) {
+        if (!usageMetadata?.totalTokenCount) {
             return {};
         }
         const tokenUsage: ExecutionTokenUsage = {
@@ -552,7 +552,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         let tool_use: ToolUse[] | undefined;
         let finish_reason: string | undefined, result: CompletionResult[] | undefined;
-        const candidate = response.candidates && response.candidates[0];
+        const candidate = response.candidates?.[0];
         if (candidate) {
             switch (candidate.finishReason) {
                 case FinishReason.MAX_TOKENS: finish_reason = "length"; break;
@@ -871,13 +871,13 @@ export function convertGeminiFunctionPartsToText(contents: Content[]): Content[]
         const newParts = content.parts.map(part => {
             if (part.functionCall) {
                 const argsStr = part.functionCall.args ? JSON.stringify(part.functionCall.args) : '';
-                const truncated = argsStr.length > 500 ? argsStr.substring(0, 500) + '...' : argsStr;
+                const truncated = argsStr.length > 500 ? `${argsStr.substring(0, 500)}...` : argsStr;
                 return { text: `[Tool call: ${part.functionCall.name}(${truncated})]` };
             }
             if (part.functionResponse) {
                 const respStr = part.functionResponse.response
                     ? JSON.stringify(part.functionResponse.response) : 'No response';
-                const truncated = respStr.length > 500 ? respStr.substring(0, 500) + '...' : respStr;
+                const truncated = respStr.length > 500 ? `${respStr.substring(0, 500)}...` : respStr;
                 return { text: `[Tool result for ${part.functionResponse.name}: ${truncated}]` };
             }
             return part;

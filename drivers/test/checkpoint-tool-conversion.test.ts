@@ -13,7 +13,7 @@
  * 2. Then running a follow-up with tools=[] (checkpoint summary scenario)
  */
 
-import { AbstractDriver, ExecutionOptions, PromptRole, PromptSegment } from '@llumiverse/core';
+import { type AbstractDriver, type ExecutionOptions, PromptRole, type PromptSegment } from '@llumiverse/core';
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from 'vitest';

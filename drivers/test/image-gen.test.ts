@@ -1,7 +1,7 @@
 // biome-ignore lint/suspicious/noDeprecatedImports: exercising deprecated output_modality path until that API is removed
-import { AbstractDriver, ExecutionOptions, Modalities } from "@llumiverse/core";
+import { type AbstractDriver, type ExecutionOptions, Modalities } from "@llumiverse/core";
 import "dotenv/config";
-import fs from "fs";
+import fs from "node:fs";
 import { describe, expect, test } from "vitest";
 import { BedrockDriver } from "../src";
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "../src/bedrock/nova-image-payload";

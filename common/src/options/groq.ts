@@ -1,4 +1,4 @@
-import { ModelOptionsInfo, ModelOptionInfoItem, ModelOptions, OptionType, SharedOptions } from "../types.js";
+import { type ModelOptionsInfo, type ModelOptionInfoItem, type ModelOptions, OptionType, SharedOptions } from "../types.js";
 import { textOptionsFallback } from "./fallback.js";
 
 // Union type of all Bedrock options

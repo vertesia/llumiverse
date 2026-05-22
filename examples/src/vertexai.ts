@@ -1,4 +1,4 @@
-import { AIModel, PromptRole, PromptSegment } from "@llumiverse/core";
+import { type AIModel, PromptRole, type PromptSegment } from "@llumiverse/core";
 import { VertexAIDriver } from "@llumiverse/drivers";
 
 async function main() {

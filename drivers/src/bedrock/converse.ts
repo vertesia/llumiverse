@@ -114,7 +114,7 @@ async function processFile<T extends FileProcessingMode>(
     const source = await f.getStream();
 
     //Image file - "png" | "jpeg" | "gif" | "webp"
-    if (f.mime_type && f.mime_type.startsWith("image")) {
+    if (f.mime_type?.startsWith("image")) {
         const imageBlock = {
             image: {
                 format: mimeToImageType(f.mime_type),
@@ -129,7 +129,7 @@ async function processFile<T extends FileProcessingMode>(
     //Document file - "pdf | csv | doc | docx | xls | xlsx | html | txt | md"
     else if (f.mime_type && (f.mime_type.startsWith("text") || f.mime_type?.startsWith("application"))) {
         // Handle JSON files specially
-        if (f.mime_type === "application/json" || (f.name && f.name.endsWith('.json'))) {
+        if (f.mime_type === "application/json" || (f.name?.endsWith('.json'))) {
             const jsonContent = await readStreamAsString(source);
             try {
                 const parsedJson = JSON.parse(jsonContent);
@@ -160,7 +160,7 @@ async function processFile<T extends FileProcessingMode>(
         }
     }
     //Video file - "mov | mkv | mp4 | webm | flv | mpeg | mpg | wmv | three_gp"
-    else if (f.mime_type && f.mime_type.startsWith("video")) {
+    else if (f.mime_type?.startsWith("video")) {
         let url_string = (await f.getURL()).toLowerCase();
         let url_format = new URL(url_string);
         if (url_format.hostname.endsWith("amazonaws.com") &&
@@ -345,11 +345,11 @@ export async function formatConversePrompt(segments: PromptSegment[], options: E
     if (options.result_schema) {
         let schemaText: string;
         if (options.tools && options.tools.length > 0) {
-            schemaText = "When not calling tools, the answer must be a JSON object using the following JSON Schema:\n" + JSON.stringify(options.result_schema, undefined, 2);
+            schemaText = `When not calling tools, the answer must be a JSON object using the following JSON Schema:\n${JSON.stringify(options.result_schema, undefined, 2)}`;
         } else {
-            schemaText = "The answer must be a JSON object using the following JSON Schema:\n" + JSON.stringify(options.result_schema, undefined, 2);
+            schemaText = `The answer must be a JSON object using the following JSON Schema:\n${JSON.stringify(options.result_schema, undefined, 2)}`;
         }
-        system.push({ text: "IMPORTANT: " + schemaText });
+        system.push({ text: `IMPORTANT: ${schemaText}` });
     }
 
     // Safety messages are user messages that should be included at the end.

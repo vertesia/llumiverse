@@ -8,7 +8,7 @@
  */
 
 // biome-ignore lint/suspicious/noDeprecatedImports: exercising deprecated output_modality path until that API is removed
-import { AbstractDriver, DataSource, ExecutionOptions, Modalities, PromptRole, PromptSegment } from '@llumiverse/core';
+import { type AbstractDriver, type DataSource, type ExecutionOptions, Modalities, PromptRole, type PromptSegment } from '@llumiverse/core';
 import 'dotenv/config';
 import { describe, expect, test } from "vitest";
 import { AnthropicDriver, BedrockDriver, OpenAIDriver, VertexAIDriver, xAIDriver } from '../src';

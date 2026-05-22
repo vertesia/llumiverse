@@ -1,10 +1,10 @@
 import {
-    AIModel, Completion, CompletionChunkObject, ExecutionOptions, ModelType,
-    PromptOptions, PromptRole, PromptSegment,
-    TextFallbackOptions
+    type AIModel, type Completion, type CompletionChunkObject, type ExecutionOptions, ModelType,
+    type PromptOptions, PromptRole, type PromptSegment,
+    type TextFallbackOptions
 } from "@llumiverse/core";
-import { VertexAIDriver } from "../index.js";
-import { ModelDefinition } from "../models.js";
+import type { VertexAIDriver } from "../index.js";
+import type { ModelDefinition } from "../models.js";
 import { transformSSEStream } from "@llumiverse/core/async";
 import type { ServerSentEvent } from "@vertesia/api-fetch-client";
 
@@ -138,7 +138,7 @@ export class LLamaModelDefinition implements ModelDefinition<LLamaPrompt> {
         if (options.result_schema) {
             messages.push({
                 role: 'user',
-                content: "The answer must be a JSON object using the following JSON Schema:\n" + JSON.stringify(options.result_schema)
+                content: `The answer must be a JSON object using the following JSON Schema:\n${JSON.stringify(options.result_schema)}`
             });
         }
 

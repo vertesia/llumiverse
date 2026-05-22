@@ -1,5 +1,5 @@
 
-import { AbstractDriver, CompletionStream, ExecutionResponse, extractAndParseJSON } from '@llumiverse/core';
+import { type AbstractDriver, type CompletionStream, type ExecutionResponse, extractAndParseJSON } from '@llumiverse/core';
 import { expect } from "vitest";
 import { completionResultToString, parseCompletionResultsToJson } from './utils.js';
 

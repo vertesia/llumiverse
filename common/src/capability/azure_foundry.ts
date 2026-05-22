@@ -1,4 +1,4 @@
-import { ModelModalities, ModelCapabilities } from "../types.js";
+import type { ModelModalities, ModelCapabilities } from "../types.js";
 
 // Global feature flags - temporarily disable tool support for non-OpenAI models
 const ENABLE_TOOL_SUPPORT_NON_OPENAI = false;

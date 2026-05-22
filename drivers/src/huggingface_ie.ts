@@ -1,16 +1,16 @@
 import {
     InferenceClient,
-    TextGenerationStreamOutput,
+    type TextGenerationStreamOutput,
 } from "@huggingface/inference";
 import {
     AbstractDriver,
-    AIModel,
+    type AIModel,
     AIModelStatus,
-    CompletionChunkObject,
-    DriverOptions,
-    EmbeddingsResult,
-    ExecutionOptions,
-    TextFallbackOptions,
+    type CompletionChunkObject,
+    type DriverOptions,
+    type EmbeddingsResult,
+    type ExecutionOptions,
+    type TextFallbackOptions,
 } from "@llumiverse/core";
 import { transformAsyncIterator } from "@llumiverse/core/async";
 import { FetchClient } from "@vertesia/api-fetch-client";
@@ -34,7 +34,7 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
             throw new Error(`Endpoint URL is required for ${this.provider}`);
         }
         this.service = new FetchClient(this.options.endpoint_url);
-        this.service.headers["Authorization"] = `Bearer ${this.options.apiKey}`;
+        this.service.headers.Authorization = `Bearer ${this.options.apiKey}`;
     }
 
     async getModelURLEndpoint(
@@ -134,7 +134,7 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
     async listModels(): Promise<AIModel[]> {
         const res = await this.service.get("/") as { items: HuggingFaceIEModel[] };
         const hfModels = res.items;
-        if (!hfModels || !hfModels.length) return [];
+        if (!hfModels?.length) return [];
 
         const models: AIModel[] = hfModels.map((model: HuggingFaceIEModel) => ({
             id: model.name,

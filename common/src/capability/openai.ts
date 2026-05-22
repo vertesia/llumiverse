@@ -1,4 +1,4 @@
-import { ModelModalities } from "../types.js";
+import type { ModelModalities } from "../types.js";
 
 // OpenAI model capability type - tool_support_streaming defaults to tool_support for OpenAI models
 type OpenAIModelCapability = { input: ModelModalities; output: ModelModalities; tool_support?: boolean; tool_support_streaming?: boolean };
