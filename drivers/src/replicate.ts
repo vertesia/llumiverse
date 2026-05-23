@@ -102,6 +102,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
 
         const stream = new EventStream<CompletionChunkObject>();
 
+        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
         const source = new EventSource(prediction.urls.stream!);
         source.addEventListener("output", (e: ReplicateEvent) => {
             stream.push({ result: [{ type: "text", value: e.data }] });
@@ -214,6 +215,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
         const results = await Promise.all(promises);
         return results.filter(m => !!m.latest_version).map(m => {
             const fullName = `${m.owner}/${m.name}`;
+            // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
             const v = m.latest_version!;
             return {
                 id: `${fullName}:${v.id}`,

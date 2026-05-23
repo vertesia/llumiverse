@@ -35,12 +35,12 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
         );
 
         const start = Date.now();
-        let finish_reason: string | undefined = undefined;
+        let finish_reason: string | undefined ;
         let promptTokens: number = 0;
-        let resultTokens: number | undefined = undefined;
-        let promptCachedTokens: number | undefined = undefined;
-        let promptCacheWriteTokens: number | undefined = undefined;
-        let promptNewTokens: number | undefined = undefined;
+        let resultTokens: number | undefined ;
+        let promptCachedTokens: number | undefined ;
+        let promptCacheWriteTokens: number | undefined ;
+        let promptNewTokens: number | undefined ;
 
         try {
             const stream = await this.driver.requestTextCompletionStream(this.prompt, this.options);

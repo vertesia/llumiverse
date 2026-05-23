@@ -109,7 +109,7 @@ export function getModelCapabilitiesAzureFoundry(model: string): ModelCapabiliti
     }
 
     // 2. Fallback: find the longest matching family prefix in RECORD_FAMILY_CAPABILITIES
-    let bestFamilyKey = undefined;
+    let bestFamilyKey: string | undefined;
     let bestFamilyLength = 0;
     for (const key of Object.keys(RECORD_FAMILY_CAPABILITIES)) {
         if (normalized.startsWith(key) && key.length > bestFamilyLength) {

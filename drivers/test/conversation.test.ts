@@ -382,6 +382,7 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)("Driver $name - Multi-turn
     });
 
     test.skipIf(!visionModel)(`${name}: multi-turn conversation with image`, { timeout: TIMEOUT }, async () => {
+        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
         const options = getTextOptions(visionModel!);
 
         // Turn 1: Send an image as base64 (like Studio does)
@@ -441,6 +442,7 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)("Driver $name - Multi-turn
     });
 
     test.skipIf(!visionModel)(`${name}: conversation with multiple images`, { timeout: TIMEOUT }, async () => {
+        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
         const options = getTextOptions(visionModel!);
 
         // Turn 1: Send two images as base64 (like Studio does)

@@ -199,7 +199,7 @@ interface HuggingFaceIEModel {
     model: {
         framework: string;
         image: {
-            huggingface: {};
+            huggingface: Record<string, never>;
         };
         repository: string;
         revision: string;

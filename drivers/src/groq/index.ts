@@ -381,7 +381,6 @@ function convertResponseItemsToGroqMessages(items: ResponseInputItem[]): ChatCom
                     }
                 }]
             });
-            continue;
         }
     }
 

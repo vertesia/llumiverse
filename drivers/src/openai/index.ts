@@ -180,7 +180,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         const model_options = options.model_options as OpenAIRequestOptions | undefined;
         insert_image_detail(prompt, model_options?.image_detail ?? "auto");
 
-        let parsedSchema: JSONSchema | undefined = undefined;
+        let parsedSchema: JSONSchema | undefined ;
         let strictMode = false;
         if (options.result_schema && supportsSchema(options.model)) {
             try {
@@ -243,7 +243,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             conversation = convertOpenAIFunctionItemsToText(conversation);
         }
 
-        let parsedSchema: JSONSchema | undefined = undefined;
+        let parsedSchema: JSONSchema | undefined ;
         let strictMode = false;
         if (options.result_schema && supportsSchema(options.model)) {
             try {
@@ -1091,7 +1091,7 @@ function getToolDefinitions(tools: ToolDefinition[] | undefined | null): OpenAI.
     return tools ? tools.map(getToolDefinition) : undefined;
 }
 function getToolDefinition(toolDef: ToolDefinition): OpenAI.Responses.FunctionTool {
-    let parsedSchema: JSONSchema | undefined = undefined;
+    let parsedSchema: JSONSchema | undefined ;
     let strictMode = false;
     if (toolDef.input_schema) {
         try {

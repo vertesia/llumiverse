@@ -55,7 +55,9 @@
         "noExplicitAny": "error",
         "noImplicitAnyLet": "error",
         "noShadowRestrictedNames": "error",
+        "noTemplateCurlyInString": "off",
         "noUnusedExpressions": "error",
+        "useBiomeIgnoreFolder": "off",
         "useIterableCallbackReturn": "error"
       }
     }

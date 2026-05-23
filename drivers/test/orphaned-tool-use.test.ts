@@ -258,12 +258,13 @@ describe('fixOrphanedToolUse - Bedrock', () => {
         expect(result[1].role).toBe('user');
 
         // The user message should have synthetic toolResult prepended
+        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
         const userContent = result[1].content!;
         expect(userContent).toHaveLength(2);
         expect(userContent[0].toolResult).toBeDefined();
-        expect(userContent[0].toolResult!.toolUseId).toBe('tool_1');
-        expect(userContent[0].toolResult!.content![0].text).toContain('Tool interrupted');
-        expect(userContent[0].toolResult!.content![0].text).toContain('search');
+        expect(userContent[0].toolResult?.toolUseId).toBe('tool_1');
+        expect(userContent[0].toolResult?.content?.[0].text).toContain('Tool interrupted');
+        expect(userContent[0].toolResult?.content?.[0].text).toContain('search');
         expect(userContent[1].text).toBe('Actually, stop that and do something else');
     });
 
@@ -286,6 +287,7 @@ describe('fixOrphanedToolUse - Bedrock', () => {
 
         const result = fixOrphanedToolUseBedrock(messages);
 
+        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
         const userContent = result[1].content!;
         expect(userContent).toHaveLength(4); // 3 synthetic toolResults + 1 text
 
@@ -316,6 +318,7 @@ describe('fixOrphanedToolUse - Bedrock', () => {
 
         const result = fixOrphanedToolUseBedrock(messages);
 
+        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
         const userContent = result[1].content!;
         expect(userContent).toHaveLength(3); // 1 synthetic + 1 real toolResult + 1 text
 
@@ -349,6 +352,7 @@ describe('fixOrphanedToolUse - Bedrock', () => {
         expect(result).toHaveLength(5);
 
         // Check that the last user message has synthetic toolResults
+        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
         const lastUserContent = result[4].content!;
         expect(lastUserContent).toHaveLength(3); // 2 synthetic + 1 text
 

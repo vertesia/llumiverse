@@ -10,21 +10,18 @@ function getFirstImageFromPrompt(prompt: NovaMessage[]) {
     return msgImage.content.find(c => c.image)?.image;
 }
 
-function getAllImagesFromPrompt(prompt: NovaMessage[]) {
-    const contentMsg = prompt.filter(m => m.content).map(m => m.content).flat();
-    const imgParts = contentMsg.filter(c => c.image);
-    if (!imgParts?.length) {
-        return undefined;
-    }
-
-    const images = imgParts.map(i => i.image).filter(i => i?.source?.bytes).map(i => i!.source.bytes);
-    return images;
+function getAllImagesFromPrompt(prompt: NovaMessage[]): string[] | undefined {
+    const contentMsg = prompt.filter(m => m.content).flatMap(m => m.content);
+    const images = contentMsg
+        .map(c => c.image?.source?.bytes)
+        .filter((b): b is string => b !== undefined);
+    return images.length > 0 ? images : undefined;
 }
 
 async function textToImagePayload(prompt: NovaMessagesPrompt, options: ExecutionOptions): Promise<NovaTextToImagePayload> {
     const modelOptions = options.model_options as NovaCanvasOptions;
 
-    const textMessages = prompt.messages.map(m => m.content.map(c => c.text)).flat();
+    const textMessages = prompt.messages.flatMap(m => m.content.map(c => c.text));
     let text = textMessages.join("\n\n");
     text += prompt.system ? `\n\n\nIMPORTANT: ${prompt.system?.map(m => m.text).join("\n\n")}` : '';
 
@@ -48,7 +45,7 @@ async function textToImagePayload(prompt: NovaMessagesPrompt, options: Execution
         },
         textToImageParams: {
             text: text,
-            conditionImage: conditionImage(modelOptions?.controlMode ? true : false)?.source.bytes,
+            conditionImage: conditionImage(!!modelOptions?.controlMode)?.source.bytes,
             controlMode: modelOptions?.controlMode,
             controlStrength: modelOptions?.controlStrength,
             negativeText: prompt.negative
@@ -88,7 +85,7 @@ async function imageVariationPayload(prompt: NovaMessagesPrompt, options: Execut
 async function colorGuidedGenerationPayload(prompt: NovaMessagesPrompt, options: ExecutionOptions): Promise<NovaColorGuidedGenerationPayload> {
     const modelOptions = options.model_options as NovaCanvasOptions;
 
-    const textMessages = prompt.messages.map(m => m.content.map(c => c.text)).flat();
+    const textMessages = prompt.messages.flatMap(m => m.content.map(c => c.text));
     let text = textMessages.join("\n\n");
     text += prompt.system ? `\n\n\nIMPORTANT: ${prompt.system?.map(m => m.text).join("\n\n")}` : '';
 
@@ -113,7 +110,7 @@ async function colorGuidedGenerationPayload(prompt: NovaMessagesPrompt, options:
         colorGuidedGenerationParams: {
             colors: modelOptions.colors ?? [],
             text: text,
-            referenceImage: conditionImage(modelOptions?.controlMode ? true : false)?.source.bytes,
+            referenceImage: conditionImage(!!modelOptions?.controlMode)?.source.bytes,
             negativeText: prompt.negative
         }
     }
@@ -162,7 +159,7 @@ async function inpaintingPayload(prompt: NovaMessagesPrompt, options: ExecutionO
         inPaintingParams: {
             image: sourceImage,
             maskImage: maskImage,
-            text: prompt.messages.map(m => m.content.map(c => c.text)).flat().join("\n\n"),
+            text: prompt.messages.flatMap(m => m.content.map(c => c.text)).join("\n\n"),
             negativeText: prompt.negative
         }
     }
@@ -193,7 +190,7 @@ async function outpaintingPayload(prompt: NovaMessagesPrompt, options: Execution
         outPaintingParams: {
             image: sourceImage,
             maskImage: maskImage,
-            text: prompt.messages.map(m => m.content.map(c => c.text)).flat().join("\n\n"),
+            text: prompt.messages.flatMap(m => m.content.map(c => c.text)).join("\n\n"),
             negativeText: prompt.negative,
             outPaintingMode: modelOptions?.outPaintingMode ?? "DEFAULT"
         }

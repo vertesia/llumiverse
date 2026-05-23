@@ -68,7 +68,7 @@ export function getModelCapabilitiesOpenAI(model: string): { input: ModelModalit
             tool_support_streaming: record.tool_support_streaming ?? record.tool_support
         };
     }
-    let bestFamilyKey = undefined;
+    let bestFamilyKey: string | undefined;
     let bestFamilyLength = 0;
     for (const key of Object.keys(RECORD_FAMILY_CAPABILITIES)) {
         if (normalized.startsWith(key) && key.length > bestFamilyLength) {

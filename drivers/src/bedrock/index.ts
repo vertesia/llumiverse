@@ -681,7 +681,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         // Increment turn counter for deferred stripping
         conversation = incrementConversationTurn(conversation) as ConverseRequest;
 
-        let tool_use: ToolUse<unknown>[] | undefined = undefined;
+        let tool_use: ToolUse<unknown>[] | undefined ;
         //Get tool requests, we check tool use regardless of finish reason, as you can hit length and still get a valid response.
         tool_use = res.output?.message?.content?.reduce((tools: ToolUse<unknown>[], c) => {
             if (c.toolUse) {
@@ -1172,6 +1172,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             jobIdentifier: response.jobArn
         }));
 
+        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
         return jobInfo(job, response.jobArn!);
     }
 
