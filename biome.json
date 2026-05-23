@@ -58,7 +58,8 @@
         "noTemplateCurlyInString": "off",
         "noUnusedExpressions": "error",
         "useBiomeIgnoreFolder": "off",
-        "useIterableCallbackReturn": "error"
+        "useIterableCallbackReturn": "error",
+        "noImportCycles": "error"
       }
     }
   },

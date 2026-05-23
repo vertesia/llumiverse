@@ -26,7 +26,7 @@ import {
 } from "@llumiverse/core";
 import { FetchClient } from "@vertesia/api-fetch-client";
 import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from "google-auth-library";
-import { getModelDefinition } from "./models.js";
+import { getModelDefinition, trimModelName } from "./models.js";
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from "./models/claude.js";
 import { ImagenModelDefinition, type ImagenPrompt } from "./models/imagen.js";
 import type { ClaudePrompt } from "../shared/claude-messages.js";
@@ -53,10 +53,7 @@ function isClaudeStreamingPrompt(prompt: unknown): prompt is ClaudeStreamingProm
 //General Prompt type for VertexAI
 export type VertexAIPrompt = ImagenPrompt | GenerateContentPrompt | ClaudePrompt | LLamaPrompt;
 
-export function trimModelName(model: string) {
-    const i = model.lastIndexOf("@");
-    return i > -1 ? model.substring(0, i) : model;
-}
+export { trimModelName };
 
 export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, VertexAIPrompt> {
     static PROVIDER = "vertexai";
