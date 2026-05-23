@@ -60,6 +60,9 @@
         "useBiomeIgnoreFolder": "off",
         "useIterableCallbackReturn": "error",
         "noImportCycles": "error"
+      },
+      "nursery": {
+        "noFloatingPromises": "error"
       }
     }
   },

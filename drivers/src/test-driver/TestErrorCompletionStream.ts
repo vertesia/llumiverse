@@ -10,7 +10,7 @@ export class TestErrorCompletionStream implements CompletionStream<PromptSegment
     }
     async *[Symbol.asyncIterator]() {
         yield "Started TestError. Next we will thrown an error.\n";
-        sleep(1000);
+        await sleep(1000);
         throwError("Testing stream completion error.", this.segments);
     }
 }
