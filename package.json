@@ -17,10 +17,16 @@
     "devDependencies": {
         "@biomejs/biome": "^2.4.4",
         "cross-spawn": "^7.0.6",
+        "lint-staged": "^17.0.5",
         "npm-ws-tools": "^0.3.0",
         "rollup": "^4.59.0",
         "typescript": "^6.0.2",
         "vitest": "^4.1.4"
+    },
+    "lint-staged": {
+        "*.{js,cjs,mjs,jsx,ts,tsx,css,html}": [
+            "pnpm exec biome lint --no-errors-on-unmatched --files-ignore-unknown=true --diagnostic-level=error"
+        ]
     },
     "packageManager": "pnpm@11.1.2"
 }
