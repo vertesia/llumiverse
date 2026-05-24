@@ -1,6 +1,7 @@
 import { DefaultAzureCredential, getBearerTokenProvider } from "@azure/identity";
-import { AIModel, DriverOptions, getModelCapabilities, modelModalitiesToArray, Providers } from "@llumiverse/core";
-import OpenAI, { AzureOpenAI } from "openai";
+import { type AIModel, type DriverOptions, getModelCapabilities, modelModalitiesToArray, Providers } from "@llumiverse/core";
+import type OpenAI from "openai";
+import { AzureOpenAI } from "openai";
 import { BaseOpenAIDriver } from "./index.js";
 
 export interface AzureOpenAIDriverOptions extends DriverOptions {

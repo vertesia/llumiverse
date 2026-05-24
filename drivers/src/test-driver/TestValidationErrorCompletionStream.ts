@@ -1,4 +1,4 @@
-import { CompletionStream, ExecutionOptions, ExecutionResponse, PromptSegment } from "@llumiverse/core";
+import type { CompletionStream, ExecutionOptions, ExecutionResponse, PromptSegment } from "@llumiverse/core";
 import { createValidationErrorCompletion, sleep } from "./utils.js";
 
 

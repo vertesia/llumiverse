@@ -1,4 +1,4 @@
-import { CompletionResult, JSONValue, ResultValidationError } from "@llumiverse/common";
+import type { CompletionResult, JSONValue, ResultValidationError } from "@llumiverse/common";
 import { Ajv } from 'ajv';
 import addFormats from 'ajv-formats';
 import { extractAndParseJSON } from "./json.js";
@@ -13,9 +13,9 @@ const ajv = new Ajv({
     removeAdditional: "failing"
 });
 
-//use ts ignore to avoid error with ESM and ajv-formats
-// @ts-ignore This expression is not callable
-addFormats(ajv)
+// biome-ignore lint/suspicious/noTsIgnore: ajv-formats default export inconsistently callable under ESM/CJS interop
+// @ts-ignore - ajv-formats default export is not callable under one of the TS configs in this monorepo
+addFormats(ajv);
 
 function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
@@ -94,7 +94,6 @@ export function validateResult(data: CompletionResult[], schema: object): Comple
                 && typeof schemaFieldFormat === 'string'
                 && ["date", "date-time"].includes(schemaFieldFormat)
                 && !getRequiredFields(schemaField).includes(path[path.length - 1])) {
-                continue;
             } else {
                 errors.push(e);
             }

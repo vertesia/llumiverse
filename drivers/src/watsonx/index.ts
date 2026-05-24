@@ -37,7 +37,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
 
         const payload: WatsonxTextGenerationPayload = {
             model_id: options.model,
-            input: prompt + "\n",
+            input: `${prompt}\n`,
             parameters: {
                 max_new_tokens: options.model_options?.max_tokens,
                 temperature: options.model_options?.temperature,
@@ -71,7 +71,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
         options.model_options = options.model_options as TextFallbackOptions | undefined;
         const payload: WatsonxTextGenerationPayload = {
             model_id: options.model,
-            input: prompt + "\n",
+            input: `${prompt}\n`,
             parameters: {
                 max_new_tokens: options.model_options?.max_tokens,
                 temperature: options.model_options?.temperature,
@@ -109,7 +109,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
 
 
         const res = await this.fetchClient.get(`/ml/v1/foundation_model_specs?version=${API_VERSION}`)
-            .catch(err => this.logger.warn("Can't list models on Watsonx: " + err)) as WatsonxListModelResponse;
+            .catch(err => this.logger.warn(`Can't list models on Watsonx: ${err}`)) as WatsonxListModelResponse;
 
         const aiModels = res.resources.map((m: WatsonxModelSpec) => {
             return {

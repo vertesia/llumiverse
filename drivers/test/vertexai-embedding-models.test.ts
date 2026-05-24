@@ -32,7 +32,7 @@ if (!vertex) {
     describe("VertexAI text embedding model coverage via @google/genai", () => {
         for (const model of VERTEX_TEXT_MODELS) {
             test(`${model} — text-only single input`, async () => {
-                const result = await vertex!.generateEmbeddings({
+                const result = await vertex?.generateEmbeddings({
                     inputs: [{ type: "text", text: TEXT }],
                     model,
                 });

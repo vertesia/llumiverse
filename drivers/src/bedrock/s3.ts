@@ -85,7 +85,7 @@ export function parseS3UrlToUri(s3Url: URL) {
                 bucketName = url.pathname.split('/')[1];
                 // Adjust the pathname to remove the bucket name
                 const pathParts = url.pathname.split('/').slice(2);
-                url.pathname = '/' + pathParts.join('/');
+                url.pathname = `/${pathParts.join('/')}`;
             } else {
                 throw new Error('Unable to determine bucket name from URL');
             }

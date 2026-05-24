@@ -1,4 +1,4 @@
-import { ModelOptionsInfo, ModelOptionInfoItem, ModelOptions, OptionType, SharedOptions } from "../types.js";
+import { type ModelOptionsInfo, type ModelOptionInfoItem, type ModelOptions, OptionType, SharedOptions } from "../types.js";
 import { getMaxOutputTokens } from "./context-windows.js";
 
 // Helper function to parse composite model IDs

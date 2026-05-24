@@ -1,5 +1,5 @@
 
-import { AbstractDriver, CompletionStream, ExecutionResponse, extractAndParseJSON } from '@llumiverse/core';
+import { type AbstractDriver, type CompletionStream, type ExecutionResponse, extractAndParseJSON } from '@llumiverse/core';
 import { expect } from "vitest";
 import { completionResultToString, parseCompletionResultsToJson } from './utils.js';
 
@@ -9,7 +9,7 @@ export function assertCompletionOk(r: ExecutionResponse, model?: string, driver?
     //TODO: This just checks for existence of the object,
     //could do with more thorough test however not all models support token_usage.
     //Only create the object when there is meaningful information you want to interpret as a pass.
-    if (!(driver?.provider == 'bedrock' && model?.includes("mistral"))) { //Skip if bedrock:mistral, token_usage not supported.
+    if (!(driver?.provider === 'bedrock' && model?.includes("mistral"))) { //Skip if bedrock:mistral, token_usage not supported.
         expect(r.token_usage).toBeTruthy();
     }
     expect(r.finish_reason).toBeTruthy();
