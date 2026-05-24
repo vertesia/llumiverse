@@ -29,7 +29,6 @@ jobs:
           cache: "pnpm"
       - run: pnpm install
       - run: pnpm build
-      - run: pnpm typecheck:test
 
       - name: Authenticate with Google Cloud
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
@@ -45,7 +44,7 @@ jobs:
           role-session-name: github-actions
           aws-region: us-east-1
 
-      - run: npx vitest
+      - name: Typecheck and test
         env:
           TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
@@ -54,6 +53,7 @@ jobs:
           BEDROCK_REGION: us-east-1
           GOOGLE_PROJECT_ID: dengenlabs
           GOOGLE_REGION: us-central1
+        run: pnpm typecheck:test && npx vitest
 
   notify-repo-composableai:
     runs-on: ubuntu-latest
