@@ -30,5 +30,5 @@
             "pnpm exec biome lint --no-errors-on-unmatched --files-ignore-unknown=true --diagnostic-level=error"
         ]
     },
-    "packageManager": "pnpm@11.1.2"
+    "packageManager": "pnpm@11.3.0"
 }
