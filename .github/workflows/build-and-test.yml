@@ -74,6 +74,6 @@ jobs:
               "event_type": "update-git-submodule-request",
               "client_payload": {
                 "llumiverse_sha": "${{ github.sha }}",
-                "branch": "${GITHUB_REF_NAME}"
+                "branch": "${{ github.ref_name }}"
               }
             }'
