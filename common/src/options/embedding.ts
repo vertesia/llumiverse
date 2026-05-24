@@ -88,5 +88,5 @@ export function getDefaultEmbeddingModel(
 ): string | undefined {
     const byProvider = DEFAULT_EMBEDDING_MODELS[provider];
     if (!byProvider) return undefined;
-    return byProvider[modality] ?? byProvider["text"];
+    return byProvider[modality] ?? byProvider.text;
 }

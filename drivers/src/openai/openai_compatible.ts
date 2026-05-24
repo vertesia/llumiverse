@@ -1,4 +1,4 @@
-import { AIModel, DriverOptions, ModelType, Providers, getModelCapabilities, modelModalitiesToArray } from "@llumiverse/core";
+import { type AIModel, type DriverOptions, ModelType, Providers, getModelCapabilities, modelModalitiesToArray } from "@llumiverse/core";
 import OpenAI from "openai";
 import { BaseOpenAIDriver } from "./index.js";
 

@@ -318,7 +318,7 @@ async function generateCohereEmbeddings(
     for (const entry of textInputs) {
         const key = cohereInputType(entry.input.task_type ?? options.task_type);
         if (!textGroups.has(key)) textGroups.set(key, []);
-        textGroups.get(key)!.push(entry);
+        textGroups.get(key)?.push(entry);
     }
     for (const [groupInputType, group] of textGroups) {
         const body: CohereEmbeddingRequest = {

@@ -26,7 +26,7 @@ import {
 } from "@llumiverse/core";
 import { FetchClient } from "@vertesia/api-fetch-client";
 import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from "google-auth-library";
-import { getModelDefinition } from "./models.js";
+import { getModelDefinition, trimModelName } from "./models.js";
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from "./models/claude.js";
 import { ImagenModelDefinition, type ImagenPrompt } from "./models/imagen.js";
 import type { ClaudePrompt } from "../shared/claude-messages.js";
@@ -53,10 +53,7 @@ function isClaudeStreamingPrompt(prompt: unknown): prompt is ClaudeStreamingProm
 //General Prompt type for VertexAI
 export type VertexAIPrompt = ImagenPrompt | GenerateContentPrompt | ClaudePrompt | LLamaPrompt;
 
-export function trimModelName(model: string) {
-    const i = model.lastIndexOf("@");
-    return i > -1 ? model.substring(0, i) : model;
-}
+export { trimModelName };
 
 export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, VertexAIPrompt> {
     static PROVIDER = "vertexai";
@@ -159,7 +156,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
     public getLLamaClient(region: string = "us-central1"): FetchClient {
         //Lazy initialization
-        if (!this.llamaClient || this.llamaClient["region"] !== region) {
+        if (!this.llamaClient || this.llamaClient.region !== region) {
             this.llamaClient = createFetchClient({
                 region: region,
                 project: this.options.project,
@@ -169,7 +166,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 return `Bearer ${token}`;
             });
             // Store the region for potential client reuse
-            this.llamaClient["region"] = region;
+            this.llamaClient.region = region;
         }
         return this.llamaClient;
     }
@@ -604,8 +601,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             globalGoogleResult.map((model) => {
                 const modelCapability = getModelCapabilities(model.name ?? '', "vertexai");
                 return {
-                    id: "locations/global/" + model.name,
-                    name: "Global " + model.name?.split('/').pop(),
+                    id: `locations/global/${model.name}`,
+                    name: `Global ${model.name?.split('/').pop()}`,
                     provider: "vertexai",
                     owner: "google",
                     input_modalities: modelModalitiesToArray(modelCapability.input),
@@ -659,7 +656,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                             if (version >= 2.5) {
                                 // Check if already present
                                 const shortName = modelName.split('/').pop();
-                                const globalName = "Global " + shortName;
+                                const globalName = `Global ${shortName}`;
                                 if (models.some(m => m.name === globalName)) {
                                     return false;
                                 }
@@ -672,8 +669,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 }).map(model => {
                     const modelCapability = getModelCapabilities(model.name ?? '', "vertexai");
                     return {
-                        id: "locations/global/" + model.name,
-                        name: "Global " + model.name?.split('/').pop(),
+                        id: `locations/global/${model.name}`,
+                        name: `Global ${model.name?.split('/').pop()}`,
                         provider: 'vertexai',
                         owner: publisher,
                         input_modalities: modelModalitiesToArray(modelCapability.input),
@@ -702,8 +699,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 }).map(model => {
                     const modelCapability = getModelCapabilities(model.name ?? '', "vertexai");
                     return {
-                        id: "locations/global/" + model.name,
-                        name: "Global " + model.name?.split('/').pop(),
+                        id: `locations/global/${model.name}`,
+                        name: `Global ${model.name?.split('/').pop()}`,
                         provider: 'vertexai',
                         owner: publisher,
                         input_modalities: modelModalitiesToArray(modelCapability.input),

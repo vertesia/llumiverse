@@ -1,7 +1,7 @@
 // This file is used by multiple drivers
 // to format prompts in a way that is compatible with OpenAI's API.
 
-import { PromptRole, PromptOptions, PromptSegment } from "@llumiverse/common";
+import { PromptRole, type PromptOptions, type PromptSegment } from "@llumiverse/common";
 import { readStreamAsBase64 } from "@llumiverse/core";
 import type OpenAI from "openai";
 
@@ -29,7 +29,7 @@ export function formatOpenAILikeTextPrompt(segments: PromptSegment[]): OpenAITex
         if (msg.role === PromptRole.system) {
             system.push({ content: msg.content, role: "system" });
         } else if (msg.role === PromptRole.safety) {
-            safety.push({ content: "IMPORTANT: " + msg.content, role: "system" });
+            safety.push({ content: `IMPORTANT: ${msg.content}`, role: "system" });
         } else if (msg.role !== PromptRole.negative && msg.role !== PromptRole.mask && msg.role !== PromptRole.tool) {
             user.push({
                 content: msg.content,
@@ -88,10 +88,10 @@ export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[]
                     if ((s as EasyInputMessage).role === 'system') {
                         const sysMsg = s as EasyInputMessage;
                         if (typeof sysMsg.content === 'string') {
-                            sysMsg.content = "TOOL: " + sysMsg.content;
+                            sysMsg.content = `TOOL: ${sysMsg.content}`;
                         } else if (Array.isArray(sysMsg.content)) {
                             sysMsg.content.forEach((c) => {
-                                if (c.type === "input_text") c.text = "TOOL: " + c.text;
+                                if (c.type === "input_text") c.text = `TOOL: ${c.text}`;
                             });
                         }
                     }
@@ -107,7 +107,7 @@ export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[]
 
             if (Array.isArray(safetyMsg.content)) {
                 safetyMsg.content.forEach((c) => {
-                    if (c.type === "input_text") c.text = "DO NOT IGNORE - IMPORTANT: " + c.text;
+                    if (c.type === "input_text") c.text = `DO NOT IGNORE - IMPORTANT: ${c.text}`;
                 });
             }
 
@@ -137,7 +137,7 @@ export async function formatOpenAILikeMultimodalPrompt(segments: PromptSegment[]
             role: "system",
             content: [{
                 type: "input_text",
-                text: "IMPORTANT: only answer using JSON, and respecting the schema included below, between the <response_schema> tags. " + `<response_schema>${JSON.stringify(opts.result_schema)}</response_schema>`
+                text: `IMPORTANT: only answer using JSON, and respecting the schema included below, between the <response_schema> tags. <response_schema>${JSON.stringify(opts.result_schema)}</response_schema>`
             }]
         };
         system.push(schemaMsg);

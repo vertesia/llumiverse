@@ -528,7 +528,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
         }
         if (error) {
-            console.warn("Error on canStream check for model: " + model + " region detected: " + region, error);
+            console.warn(`Error on canStream check for model: ${model} region detected: ${region}`, error);
         }
         return canStream;
     }
@@ -681,7 +681,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         // Increment turn counter for deferred stripping
         conversation = incrementConversationTurn(conversation) as ConverseRequest;
 
-        let tool_use: ToolUse<unknown>[] | undefined = undefined;
+        let tool_use: ToolUse<unknown>[] | undefined ;
         //Get tool requests, we check tool use regardless of finish reason, as you can hit length and still get a valid response.
         tool_use = res.output?.message?.content?.reduce((tools: ToolUse<unknown>[], c) => {
             if (c.toolUse) {
@@ -1105,7 +1105,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const executor = this.getExecutor();
         const taskType = model_options.taskType ?? NovaImageGenerationTaskType.TEXT_IMAGE;
 
-        this.logger.info("Task type: " + taskType);
+        this.logger.info(`Task type: ${taskType}`);
 
         if (typeof prompt === "string") {
             throw new Error("Bad prompt format");
@@ -1154,11 +1154,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         const service = this.getService();
         const response = await service.send(new CreateModelCustomizationJobCommand({
-            jobName: options.name + "-job",
+            jobName: `${options.name}-job`,
             customModelName: options.name,
             roleArn: this.options.training_role_arn || undefined,
             baseModelIdentifier: options.model,
-            clientRequestToken: "llumiverse-" + Date.now(),
+            clientRequestToken: `llumiverse-${Date.now()}`,
             trainingDataConfig: {
                 s3Uri: `s3://${upload.Bucket}/${upload.Key}`,
             },
@@ -1172,6 +1172,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             jobIdentifier: response.jobArn
         }));
 
+        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
         return jobInfo(job, response.jobArn!);
     }
 
@@ -1476,7 +1477,7 @@ export function convertToolBlocksToText(messages: Message[]): Message[] {
             const toolResult = (block as ContentBlock.ToolResultMember).toolResult;
             if (toolUse) {
                 const inputStr = toolUse.input ? JSON.stringify(toolUse.input) : '';
-                const truncatedInput = inputStr.length > 500 ? inputStr.substring(0, 500) + '...' : inputStr;
+                const truncatedInput = inputStr.length > 500 ? `${inputStr.substring(0, 500)}...` : inputStr;
                 newContent.push({
                     text: `[Tool call: ${toolUse.name}(${truncatedInput})]`,
                 } as ContentBlock.TextMember);
@@ -1486,7 +1487,7 @@ export function convertToolBlocksToText(messages: Message[]): Message[] {
                     for (const c of toolResult.content) {
                         if ('text' in c && typeof c.text === 'string') {
                             const text = c.text;
-                            resultTexts.push(text.length > 500 ? text.substring(0, 500) + '...' : text);
+                            resultTexts.push(text.length > 500 ? `${text.substring(0, 500)}...` : text);
                         }
                     }
                 }

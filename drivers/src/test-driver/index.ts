@@ -1,4 +1,4 @@
-import { AIModel, AIModelStatus, CompletionStream, Driver, EmbeddingsResult, ExecutionOptions, ExecutionResponse, ModelType, PromptSegment, TrainingJob } from "@llumiverse/core";
+import { type AIModel, AIModelStatus, type CompletionStream, type Driver, type EmbeddingsResult, type ExecutionOptions, type ExecutionResponse, ModelType, type PromptSegment, type TrainingJob } from "@llumiverse/core";
 import { TestErrorCompletionStream } from "./TestErrorCompletionStream.js";
 import { TestValidationErrorCompletionStream } from "./TestValidationErrorCompletionStream.js";
 import { createValidationErrorCompletion, sleep, throwError } from "./utils.js";
@@ -41,7 +41,7 @@ export class TestDriver implements Driver<PromptSegment[]> {
             case TestDriverModels.validationError:
                 return this.executeValidationError(segments, options);
             default:
-                throwError("[test driver] Unknown model: " + options.model, segments)
+                throwError(`[test driver] Unknown model: ${options.model}`, segments)
         }
     }
     async stream(segments: PromptSegment[], options: ExecutionOptions): Promise<CompletionStream<PromptSegment[]>> {
@@ -51,7 +51,7 @@ export class TestDriver implements Driver<PromptSegment[]> {
             case TestDriverModels.validationError:
                 return new TestValidationErrorCompletionStream(segments, options);
             default:
-                throwError("[test driver] Unknown model: " + options.model, segments)
+                throwError(`[test driver] Unknown model: ${options.model}`, segments)
         }
     }
 

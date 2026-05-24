@@ -1,8 +1,40 @@
 #!/usr/bin/env bash
 # Pre-commit hook:
-# - Runs the repository lint command
+# - Uses lint-staged to run biome on staged files only (fast feedback).
+# - Standalone clone or local `pnpm install`: lint-staged is reachable via pnpm exec.
+# - Submodule mode (no local node_modules): falls back to the parent workspace's
+#   lint-staged + biome binaries at `../node_modules/.bin/`. Uses this repo's
+#   lint-staged config (passed via --config).
 
 set -euo pipefail
 
-echo "Running lint..."
-pnpm run lint --diagnostic-level=error
+if [ -d node_modules ]; then
+    pnpm exec lint-staged
+    exit $?
+fi
+
+# Submodule mode (nested under composableai/, which may itself be nested under
+# the studio parent — walk up until we find a node_modules/.bin/lint-staged).
+find_parent_bin() {
+    local dir="$(pwd)"
+    while [ "$dir" != "/" ]; do
+        dir="$(dirname "$dir")"
+        if [ -x "$dir/node_modules/.bin/lint-staged" ]; then
+            echo "$dir"
+            return 0
+        fi
+    done
+    return 1
+}
+
+if PARENT_DIR="$(find_parent_bin)"; then
+    PARENT_LINT_STAGED="$PARENT_DIR/node_modules/.bin/lint-staged"
+    echo "[pre-commit] lint-staged not installed locally — falling back to $PARENT_LINT_STAGED"
+    PATH="$PARENT_DIR/node_modules/.bin:$PATH" "$PARENT_LINT_STAGED" --config package.json
+    exit $?
+fi
+
+echo "Error: lint-staged not found in this workspace or any ancestor."
+echo "Run 'pnpm install' from inside llumiverse to install local devDeps,"
+echo "or commit with --no-verify to skip this check."
+exit 1
