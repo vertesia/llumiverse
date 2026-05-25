@@ -1,4 +1,4 @@
-name: code-sync
+name: (sync) preview -> main
 
 on:
   push:
@@ -15,6 +15,12 @@ on:
         required: false
         default: ""
 
+# Serialize concurrent runs so two simultaneous pushes don't race on the
+# shared temporary branch or step on each other's PR creation.
+concurrency:
+  group: code-sync-${{ inputs.from_branch || github.ref_name }}
+  cancel-in-progress: false
+
 env:
   FROM_BRANCH: ${{ inputs.from_branch || github.ref_name }}
 
@@ -23,10 +29,11 @@ permissions:
 
 jobs:
   sync:
+    name: Sync code from preview to main
     runs-on: ubuntu-latest
     permissions:
-      contents: write # required for pushing changes to the repository
-      pull-requests: write # required for creating pull requests
+      contents: write # required for pushing the temporary sync branch
+      pull-requests: write # required for creating the conflict-resolution PR
     outputs:
       is_merged: ${{ steps.sync.outputs.IS_MERGED }}
       pr_number: ${{ steps.sync.outputs.PR_NUMBER }}
@@ -45,6 +52,7 @@ jobs:
         id: sync
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           export SOURCE_REF="${FROM_BRANCH}"
           export SOURCE_SHA="$(git rev-parse "origin/${FROM_BRANCH}")"
@@ -60,9 +68,9 @@ jobs:
           Type   | Item      | Value
           :----- | :-------- | :---------------
           Source | commit    | ${SOURCE_MSG}
-          Source | ref       | \`${SOURCE_REF}\` ([\`${SOURCE_SHA}\`](https://github.com/${{ github.repository }}/commit/${SOURCE_SHA}))
+          Source | ref       | \`${SOURCE_REF}\` ([\`${SOURCE_SHA}\`](https://github.com/${GITHUB_REPOSITORY}/commit/${SOURCE_SHA}))
           Target | commit    | ${TARGET_MSG}
-          Target | ref       | \`${TARGET_REF}\` ([\`${TARGET_SHA}\`](https://github.com/${{ github.repository }}/commit/${TARGET_SHA}))
+          Target | ref       | \`${TARGET_REF}\` ([\`${TARGET_SHA}\`](https://github.com/${GITHUB_REPOSITORY}/commit/${TARGET_SHA}))
           Other  | branch    | \`${TEMP_BRANCH}\`
           EOF
 
@@ -142,12 +150,15 @@ jobs:
   # TODO: Add tests for the synced code
 
   push:
+    name: Fast-forward main with the synced branch
     needs:
       - sync
     if: ${{ needs.sync.outputs.is_merged == 'true' }}
     runs-on: ubuntu-latest
+    # Scopes DEPLOY_KEY to a dedicated environment (zizmor: secrets-outside-env).
+    environment: build
     permissions:
-      contents: write # required for pushing changes to the repository
+      contents: write # required for fast-forwarding main with the synced branch
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -159,6 +170,8 @@ jobs:
           persist-credentials: false
 
       - name: Push changes to main branch
+        env:
+          NEEDS_SYNC_OUTPUTS_SYNC_REF: ${{ needs.sync.outputs.sync_ref }}
         run: |
           set -x
 
@@ -170,60 +183,63 @@ jobs:
           # note: --ff-only ensures that the merge will only succeed if it can be fast-forwarded. This avoids creating
           # a merge commit and keeps the history clean. If failed, user should trigger the workflow again, or resolving
           # conflicts and then sync manually.
-          git merge --ff-only --no-edit ${NEEDS_SYNC_OUTPUTS_SYNC_REF}
+          git merge --ff-only --no-edit "${NEEDS_SYNC_OUTPUTS_SYNC_REF}"
 
           git push origin main
-        env:
-          NEEDS_SYNC_OUTPUTS_SYNC_REF: ${{ needs.sync.outputs.sync_ref }}
 
   notify:
+    name: Notify developer of successful sync
     runs-on: ubuntu-latest
     needs:
       - push
     if: ${{ needs.push.result == 'success' && github.actor != 'github-actions[bot]' }}
+    # Scopes the cross-repo dispatch token to a dedicated environment.
+    environment: build
     steps:
       - name: Notify studio
+        env:
+          STUDIO_DISPATCH_TOKEN: ${{ secrets.STUDIO_DISPATCH_TOKEN }}
+          ACTION_RUN_URL: https://github.com/vertesia/llumiverse/actions/runs/${{ github.run_id }}
         run: |
           curl -L \
             -X POST \
             -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${{ secrets.STUDIO_DISPATCH_TOKEN }}" \
+            -H "Authorization: Bearer ${STUDIO_DISPATCH_TOKEN}" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             --fail-with-body \
             https://api.github.com/repos/vertesia/studio/dispatches \
-            -d '{
-              "event_type": "developer-notification",
-              "client_payload": {
-                "github_login": "${GITHUB_ACTOR}",
-                "message": "Your changes from `preview` have been synced to `main` in vertesia/llumiverse. See the <https://github.com/vertesia/llumiverse/actions/runs/${{ github.run_id }}|Action run>."
-              }
-            }'
+            -d "$(jq -nc \
+              --arg actor "${GITHUB_ACTOR}" \
+              --arg url "${ACTION_RUN_URL}" \
+              '{event_type: "developer-notification", client_payload: {github_login: $actor, message: ("Your changes from `preview` have been synced to `main` in vertesia/llumiverse. See the <" + $url + "|Action run>.")}}')"
 
   notify_conflict:
+    name: Notify developer of conflict PR
     needs: sync
     if: ${{ needs.sync.outputs.pr_number != '0' }}
     runs-on: ubuntu-latest
+    # Scopes the cross-repo dispatch token to a dedicated environment.
+    environment: build
     steps:
       - name: Notify studio for Slack notification
+        env:
+          STUDIO_DISPATCH_TOKEN: ${{ secrets.STUDIO_DISPATCH_TOKEN }}
+          NEEDS_SYNC_OUTPUTS_PR_URL: ${{ needs.sync.outputs.pr_url }}
         run: |
           curl -L \
             -X POST \
             -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${{ secrets.STUDIO_DISPATCH_TOKEN }}" \
+            -H "Authorization: Bearer ${STUDIO_DISPATCH_TOKEN}" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             --fail-with-body \
             https://api.github.com/repos/vertesia/studio/dispatches \
-            -d '{
-              "event_type": "developer-notification",
-              "client_payload": {
-                "github_login": "${GITHUB_ACTOR}",
-                "message": "Your changes from `preview` failed to sync to `main` in vertesia/llumiverse due to merge conflicts. Please resolve this PR: ${NEEDS_SYNC_OUTPUTS_PR_URL}"
-              }
-            }'
-        env:
-          NEEDS_SYNC_OUTPUTS_PR_URL: ${{ needs.sync.outputs.pr_url }}
+            -d "$(jq -nc \
+              --arg actor "${GITHUB_ACTOR}" \
+              --arg url "${NEEDS_SYNC_OUTPUTS_PR_URL}" \
+              '{event_type: "developer-notification", client_payload: {github_login: $actor, message: ("Your changes from `preview` failed to sync to `main` in vertesia/llumiverse due to merge conflicts. Please resolve this PR: " + $url)}}')"
 
   cleanup:
+    name: Cleanup temporary sync branch
     runs-on: ubuntu-latest
     needs:
       - sync
@@ -231,7 +247,7 @@ jobs:
     # Always run cleanup except when there is a conflict PR that needs the branch to stay alive.
     if: ${{ always() && needs.sync.outputs.should_cleanup != 'false' }}
     permissions:
-      contents: write # required for deleting the temporary branch
+      contents: write # required for deleting the temporary sync branch
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -241,11 +257,11 @@ jobs:
           persist-credentials: false
 
       - name: Cleanup temporary branch
+        env:
+          NEEDS_SYNC_OUTPUTS_SYNC_REF: ${{ needs.sync.outputs.sync_ref }}
         run: |
           set -x
 
           TEMP_BRANCH="${NEEDS_SYNC_OUTPUTS_SYNC_REF}"
           git branch -D "$TEMP_BRANCH" || true # Ignore if branch does not exist
           git push origin --delete "$TEMP_BRANCH" || true # Ignore if branch does not exist
-        env:
-          NEEDS_SYNC_OUTPUTS_SYNC_REF: ${{ needs.sync.outputs.sync_ref }}
