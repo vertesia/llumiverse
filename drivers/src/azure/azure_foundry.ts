@@ -10,13 +10,27 @@ import { createSseStream, type NodeJSReadableStream } from "@azure/core-sse";
 import { DefaultAzureCredential, getBearerTokenProvider, type TokenCredential } from "@azure/identity";
 import { AbstractDriver, type AIModel, type Completion, type CompletionChunkObject, dataSourceToBase64, type DriverOptions, type EmbeddingResultItem, type EmbeddingsOptions, type EmbeddingsResult, type ExecutionOptions, getModelCapabilities, type ImageEmbeddingInput, LlumiverseError, modelModalitiesToArray, normalizeEmbeddingsOptions, Providers, type TextEmbeddingInput, type TextFallbackOptions } from "@llumiverse/core";
 import type OpenAI from "openai";
-import { AzureOpenAIDriver } from "../openai/azure_openai.js";
+import { BaseOpenAIDriver } from "../openai/index.js";
 import { formatOpenAILikeMultimodalPrompt } from "../openai/openai_format.js";
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
 type SSEMessage = { data?: string };
 type ErrorWithStatus = Error & { status?: unknown };
+
+class AzureFoundryOpenAIProtocolDriver extends BaseOpenAIDriver {
+    service: OpenAI;
+    readonly provider = Providers.azure_foundry;
+
+    constructor(service: OpenAI) {
+        super({});
+        this.service = service;
+    }
+
+    async listModels(): Promise<AIModel[]> {
+        return [];
+    }
+}
 
 function hasNumericStatus(error: unknown): boolean {
     return error instanceof Error && typeof (error as ErrorWithStatus).status === 'number';
@@ -117,8 +131,8 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
         if (isOpenAI) {
             // Use the Azure OpenAI client for OpenAI models
-            const azureOpenAI = await this.service.getAzureOpenAIClient({ apiVersion: this.OPENAI_API_VERSION });
-            const subDriver = new AzureOpenAIDriver(azureOpenAI);
+            const openAI = this.service.getOpenAIClient();
+            const subDriver = new AzureFoundryOpenAIProtocolDriver(openAI);
             // Use deployment name for API calls
             const modifiedOptions = { ...options, model: deploymentName };
             return subDriver.requestTextCompletion(prompt, modifiedOptions);
@@ -156,8 +170,8 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         const isOpenAI = await this.isOpenAIDeployment(options.model);
 
         if (isOpenAI) {
-            const azureOpenAI = await this.service.getAzureOpenAIClient({ apiVersion: this.OPENAI_API_VERSION });
-            const subDriver = new AzureOpenAIDriver(azureOpenAI);
+            const openAI = this.service.getOpenAIClient();
+            const subDriver = new AzureFoundryOpenAIProtocolDriver(openAI);
             const modifiedOptions = { ...options, model: deploymentName };
             const stream = await subDriver.requestTextCompletionStream(prompt, modifiedOptions);
             return stream;
