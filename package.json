@@ -17,13 +17,13 @@
         "typecheck:test": "pnpm -r typecheck:test"
     },
     "devDependencies": {
-        "@biomejs/biome": "^2.4.4",
+        "@biomejs/biome": "^2.4.15",
         "cross-spawn": "^7.0.6",
         "lint-staged": "^17.0.5",
         "npm-ws-tools": "^0.3.0",
-        "rollup": "^4.59.0",
-        "typescript": "^6.0.2",
-        "vitest": "^4.1.4"
+        "rollup": "^4.60.4",
+        "typescript": "^6.0.3",
+        "vitest": "^4.1.7"
     },
     "lint-staged": {
         "*.{js,cjs,mjs,jsx,ts,tsx,css,html}": [
