@@ -1,6 +1,15 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  // Bypass the 7-day minimum release age for security fixes.
+  "vulnerabilityAlerts": {
+    "minimumReleaseAge": "0 days"
+  },
   "packageRules": [
+    {
+      // Renovate PRs should wait until new releases have aged enough to reduce
+      // exposure to accidental bad publishes and supply-chain compromise.
+      "minimumReleaseAge": "7 days"
+    },
     {
       "groupName": "gh-actions deps",
       "matchManagers": ["github-actions"],
