@@ -1,4 +1,4 @@
-import { ModelOptionsInfo, OptionType, SharedOptions } from "../types.js";
+import { type ModelOptionsInfo, OptionType, SharedOptions } from "../types.js";
 
 export interface TextFallbackOptions {
     _option_id: "text-fallback";    //For specific models should be format as "provider-model"

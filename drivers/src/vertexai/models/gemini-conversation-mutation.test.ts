@@ -64,7 +64,7 @@ describe('convertGeminiFunctionPartsToText', () => {
 
         const result = convertGeminiFunctionPartsToText(contents);
 
-        expect(result[0].parts![0]).toEqual({
+        expect(result[0].parts?.[0]).toEqual({
             text: '[Tool call: get_weather({"location":"Paris"})]',
         });
     });
@@ -79,7 +79,7 @@ describe('convertGeminiFunctionPartsToText', () => {
 
         const result = convertGeminiFunctionPartsToText(contents);
 
-        expect(result[0].parts![0]).toEqual({
+        expect(result[0].parts?.[0]).toEqual({
             text: '[Tool result for get_weather: {"temperature":"15°C"}]',
         });
     });
@@ -90,7 +90,7 @@ describe('convertGeminiFunctionPartsToText', () => {
 
         const result = convertGeminiFunctionPartsToText(contents);
 
-        expect(result[0].parts![0]).toBe(textPart);
+        expect(result[0].parts?.[0]).toBe(textPart);
     });
 });
 

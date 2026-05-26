@@ -180,7 +180,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         const model_options = options.model_options as OpenAIRequestOptions | undefined;
         insert_image_detail(prompt, model_options?.image_detail ?? "auto");
 
-        let parsedSchema: JSONSchema | undefined = undefined;
+        let parsedSchema: JSONSchema | undefined ;
         let strictMode = false;
         if (options.result_schema && supportsSchema(options.model)) {
             try {
@@ -243,7 +243,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             conversation = convertOpenAIFunctionItemsToText(conversation);
         }
 
-        let parsedSchema: JSONSchema | undefined = undefined;
+        let parsedSchema: JSONSchema | undefined ;
         let strictMode = false;
         if (options.result_schema && supportsSchema(options.model)) {
             try {
@@ -392,7 +392,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             return super.createTrainingPrompt(options);
         } else {
             // babbage, davinci not yet implemented
-            throw new Error("Unsupported model for training: " + options.model);
+            throw new Error(`Unsupported model for training: ${options.model}`);
         }
     }
 
@@ -555,12 +555,12 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         let promptText = "";
         for (const item of prompt) {
             if ('content' in item && typeof item.content === 'string') {
-                promptText += item.content + "\\n";
+                promptText += `${item.content}\\n`;
             } else if ('content' in item && Array.isArray(item.content)) {
                 // Extract text from content array
                 for (const part of item.content) {
                     if ('type' in part && part.type === 'input_text' && 'text' in part) {
-                        promptText += part.text + "\\n";
+                        promptText += `${part.text}\\n`;
                     }
                 }
             }
@@ -848,7 +848,7 @@ function jobInfo(job: OpenAI.FineTuning.Jobs.FineTuningJob): TrainingJob {
         status = TrainingJobStatus.succeeded;
     } else if (jobStatus === 'failed') {
         status = TrainingJobStatus.failed;
-        details = job.error ? `${job.error.code} - ${job.error.message} ${job.error.param ? " [" + job.error.param + "]" : ""}` : "error";
+        details = job.error ? `${job.error.code} - ${job.error.message} ${job.error.param ? ` [${job.error.param}]` : ""}` : "error";
     } else if (jobStatus === 'cancelled') {
         status = TrainingJobStatus.cancelled;
     } else {
@@ -1069,7 +1069,7 @@ export function convertOpenAIFunctionItemsToText(items: ResponseInputItem[]): Re
         const typed = item as OpenAIFunctionItem;
         if (typed.type === 'function_call') {
             const argsStr = typed.arguments || '';
-            const truncated = argsStr.length > 500 ? argsStr.substring(0, 500) + '...' : argsStr;
+            const truncated = argsStr.length > 500 ? `${argsStr.substring(0, 500)}...` : argsStr;
             return {
                 role: 'assistant' as const,
                 content: `[Tool call: ${typed.name}(${truncated})]`,
@@ -1077,7 +1077,7 @@ export function convertOpenAIFunctionItemsToText(items: ResponseInputItem[]): Re
         }
         if (typed.type === 'function_call_output') {
             const output = typed.output || 'No output';
-            const truncated = output.length > 500 ? output.substring(0, 500) + '...' : output;
+            const truncated = output.length > 500 ? `${output.substring(0, 500)}...` : output;
             return {
                 role: 'user' as const,
                 content: `[Tool result: ${truncated}]`,
@@ -1091,7 +1091,7 @@ function getToolDefinitions(tools: ToolDefinition[] | undefined | null): OpenAI.
     return tools ? tools.map(getToolDefinition) : undefined;
 }
 function getToolDefinition(toolDef: ToolDefinition): OpenAI.Responses.FunctionTool {
-    let parsedSchema: JSONSchema | undefined = undefined;
+    let parsedSchema: JSONSchema | undefined ;
     let strictMode = false;
     if (toolDef.input_schema) {
         try {

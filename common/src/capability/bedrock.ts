@@ -1,4 +1,4 @@
-import { ModelCapabilities, ModelModalities } from "../types.js";
+import type { ModelCapabilities, ModelModalities } from "../types.js";
 
 // Explicit exception lists keyed by the model identifier (last segment after the prefix)
 const RECORD_FOUNDATION_EXCEPTIONS: Record<string, ModelCapabilities> = {};

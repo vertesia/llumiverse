@@ -12,7 +12,7 @@ function _prop(object: unknown, name: string): unknown {
     }
     if (Array.isArray(object)) {
         const index = +name;
-        if (isNaN(index)) {
+        if (Number.isNaN(index)) {
             // map array to property
             return object.map(item => item && typeof item === 'object' ? (item as Record<string, unknown>)[name] : undefined);
         } else {

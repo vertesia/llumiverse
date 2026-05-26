@@ -257,8 +257,8 @@ export async function formatClaudePrompt(segments: PromptSegment[], options: Exe
 
     if (options.result_schema) {
         const schemaText = options.tools && options.tools.length > 0
-            ? 'When not calling tools, the answer must be a JSON object using the following JSON Schema:\n' + JSON.stringify(options.result_schema)
-            : 'The answer must be a JSON object using the following JSON Schema:\n' + JSON.stringify(options.result_schema);
+            ? `When not calling tools, the answer must be a JSON object using the following JSON Schema:\n${JSON.stringify(options.result_schema)}`
+            : `The answer must be a JSON object using the following JSON Schema:\n${JSON.stringify(options.result_schema)}`;
         system.push({ text: schemaText, type: 'text' as const });
     }
 
@@ -463,16 +463,16 @@ export function convertClaudeToolBlocksToText(messages: MessageParam[]): Message
             if (typeof block === 'string') { newContent.push(block); continue; }
             if (block.type === 'tool_use') {
                 const inputStr = block.input ? JSON.stringify(block.input) : '';
-                const truncated = inputStr.length > 500 ? inputStr.substring(0, 500) + '...' : inputStr;
+                const truncated = inputStr.length > 500 ? `${inputStr.substring(0, 500)}...` : inputStr;
                 (newContent as Array<{ type: 'text'; text: string }>).push({ type: 'text', text: `[Tool call: ${block.name}(${truncated})]` });
             } else if (block.type === 'tool_result') {
                 let resultStr = 'No content';
                 if (typeof block.content === 'string') {
-                    resultStr = block.content.length > 500 ? block.content.substring(0, 500) + '...' : block.content;
+                    resultStr = block.content.length > 500 ? `${block.content.substring(0, 500)}...` : block.content;
                 } else if (Array.isArray(block.content)) {
                     const texts = block.content
                         .filter((c): c is { type: 'text'; text: string } => c.type === 'text')
-                        .map((c) => (c.text.length > 500 ? c.text.substring(0, 500) + '...' : c.text));
+                        .map((c) => (c.text.length > 500 ? `${c.text.substring(0, 500)}...` : c.text));
                     resultStr = texts.join('\n') || 'No text content';
                 }
                 (newContent as Array<{ type: 'text'; text: string }>).push({ type: 'text', text: `[Tool result: ${resultStr}]` });
@@ -827,11 +827,11 @@ export function formatAnthropicLlumiverseError(error: unknown, context: Llumiver
 
     if (apiError.error && typeof apiError.error === 'object') {
         const nested = apiError.error as Record<string, unknown>;
-        if (nested['error'] && typeof nested['error'] === 'object') {
-            const innerError = nested['error'] as Record<string, unknown>;
-            errorType = innerError['type'] as string | undefined;
-            if (typeof innerError['message'] === 'string') {
-                message = innerError['message'];
+        if (nested.error && typeof nested.error === 'object') {
+            const innerError = nested.error as Record<string, unknown>;
+            errorType = innerError.type as string | undefined;
+            if (typeof innerError.message === 'string') {
+                message = innerError.message;
             }
         }
     }

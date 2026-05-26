@@ -10,6 +10,7 @@ describe('List models using API keys', () => {
         'Gemini: list models with API key',
         { timeout: TIMEOUT },
         async () => {
+            // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
             const client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
             const pager = await client.models.list({ config: { pageSize: 100 } });

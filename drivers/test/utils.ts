@@ -1,6 +1,6 @@
-import { dirname, join } from 'path';
-import { readFileSync } from 'fs';
-import { CompletionResult } from '@llumiverse/common';
+import { dirname, join } from 'node:path';
+import { readFileSync } from 'node:fs';
+import type { CompletionResult } from '@llumiverse/common';
 
 const dataDir = join(dirname(new URL(import.meta.url).pathname), 'data');
 const dataFile = (file: string) => join(dataDir, file);

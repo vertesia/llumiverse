@@ -1,4 +1,4 @@
-import { CompletionStream, ExecutionOptions, ExecutionResponse, PromptSegment } from "@llumiverse/core";
+import type { CompletionStream, ExecutionOptions, ExecutionResponse, PromptSegment } from "@llumiverse/core";
 import { sleep, throwError } from "./utils.js";
 
 export class TestErrorCompletionStream implements CompletionStream<PromptSegment[]> {
@@ -10,7 +10,7 @@ export class TestErrorCompletionStream implements CompletionStream<PromptSegment
     }
     async *[Symbol.asyncIterator]() {
         yield "Started TestError. Next we will thrown an error.\n";
-        sleep(1000);
+        await sleep(1000);
         throwError("Testing stream completion error.", this.segments);
     }
 }

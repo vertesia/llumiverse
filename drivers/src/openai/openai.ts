@@ -1,6 +1,6 @@
 
 
-import { DriverOptions, Providers } from "@llumiverse/core";
+import { type DriverOptions, Providers } from "@llumiverse/core";
 import OpenAI from "openai";
 import { BaseOpenAIDriver } from "./index.js";
 
