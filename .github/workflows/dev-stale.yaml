@@ -49,7 +49,7 @@ jobs:
 
           close-pr-message: "This pull request has been closed due to continued inactivity."
 
-          # Include draft PRs since long-lived drafts can also go stale
+          # Process PRs regardless of assignment status
           include-only-assigned: false
 
           # Delete the branch when closing a stale PR
