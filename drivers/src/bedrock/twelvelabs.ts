@@ -65,12 +65,12 @@ export async function formatTwelvelabsPegasusPrompt(
     for (const segment of segments) {
         if (segment.role === PromptRole.system || segment.role === PromptRole.user) {
             if (segment.content) {
-                inputPrompt += segment.content + "\n";
+                inputPrompt += `${segment.content}\n`;
             }
 
             // Look for video files
             for (const file of segment.files ?? []) {
-                if (file.mime_type && file.mime_type.startsWith("video/")) {
+                if (file.mime_type?.startsWith("video/")) {
                     videoFile = file;
                     break; // Use the first video file found
                 }

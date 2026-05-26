@@ -1,4 +1,4 @@
-import { ExecutionResponse, PromptSegment } from "@llumiverse/core";
+import type { ExecutionResponse, PromptSegment } from "@llumiverse/core";
 
 export function throwError(message: string, prompt: PromptSegment[]): never {
     const err = new Error(message) as Error & { prompt?: PromptSegment[] };

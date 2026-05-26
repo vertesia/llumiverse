@@ -25,16 +25,44 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": false,
+      "recommended": true,
       "correctness": {
+        "noEmptyPattern": "error",
+        "noUnreachable": "error",
         "noUnusedFunctionParameters": "error",
         "noUnusedImports": "error",
-        "noUnusedVariables": "error"
+        "noUnusedVariables": "error",
+        "noVoidTypeReturn": "error",
+        "useJsxKeyInIterable": "error",
+        "useParseIntRadix": "error"
+      },
+      "complexity": {
+        "useLiteralKeys": "error",
+        "useOptionalChain": "error"
+      },
+      "security": {
+        "noDangerouslySetInnerHtml": "error"
+      },
+      "style": {
+        "useImportType": "error",
+        "useNodejsImportProtocol": "error",
+        "useTemplate": "error"
       },
       "suspicious": {
+        "noControlCharactersInRegex": "error",
+        "noDeprecatedImports": "error",
+        "noDoubleEquals": "error",
         "noExplicitAny": "error",
         "noImplicitAnyLet": "error",
-        "noUnusedExpressions": "error"
+        "noShadowRestrictedNames": "error",
+        "noTemplateCurlyInString": "off",
+        "noUnusedExpressions": "error",
+        "useBiomeIgnoreFolder": "off",
+        "useIterableCallbackReturn": "error",
+        "noImportCycles": "error"
+      },
+      "nursery": {
+        "noFloatingPromises": "error"
       }
     }
   },

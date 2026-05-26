@@ -10,7 +10,7 @@ import {
     deserializeBinaryFromStorage
 } from "../src/conversation-utils";
 
-import { Tree } from "./__helpers__/test-utils";
+import type { Tree } from "./__helpers__/test-utils";
 
 const IMAGE_PLACEHOLDER = '[Image removed from conversation history]';
 const DOCUMENT_PLACEHOLDER = '[Document removed from conversation history]';
@@ -729,7 +729,7 @@ describe('truncateLargeTextInConversation', () => {
     });
 
     test('should preserve OpenAI base64 image blocks', () => {
-        const largeBase64 = 'data:image/png;base64,' + 'c'.repeat(200000);
+        const largeBase64 = `data:image/png;base64,${'c'.repeat(200000)}`;
         const input = {
             messages: [{
                 content: [{

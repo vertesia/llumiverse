@@ -1,4 +1,4 @@
-import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, ModelSearchPayload, PromptSegment } from "@llumiverse/core";
+import { AbstractDriver, type AIModel, type Completion, type CompletionChunkObject, type DriverOptions, type EmbeddingsOptions, type EmbeddingsResult, type ExecutionOptions, type ModelSearchPayload, type PromptSegment } from "@llumiverse/core";
 
 interface FireflyImageSource {
     url?: string;

@@ -458,10 +458,10 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 // Fallback to putting the schema in the system instructions, if not using structured output.
                 if (options.tools) {
                     system.parts?.push({
-                        text: "When not calling tools, the output must be a JSON object using the following JSON Schema:\n" + JSON.stringify(schema)
+                        text: `When not calling tools, the output must be a JSON object using the following JSON Schema:\n${JSON.stringify(schema)}`
                     });
                 } else {
-                    system.parts?.push({ text: "The output must be a JSON object using the following JSON Schema:\n" + JSON.stringify(schema) });
+                    system.parts?.push({ text: `The output must be a JSON object using the following JSON Schema:\n${JSON.stringify(schema)}` });
                 }
             }
         }
@@ -483,7 +483,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
     }
 
     usageMetadataToTokenUsage(driver: VertexAIDriver, usageMetadata: GenerateContentResponseUsageMetadata | undefined): ExecutionTokenUsage {
-        if (!usageMetadata || !usageMetadata.totalTokenCount) {
+        if (!usageMetadata?.totalTokenCount) {
             return {};
         }
         const tokenUsage: ExecutionTokenUsage = {
@@ -518,7 +518,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
     async requestTextCompletion(driver: VertexAIDriver, prompt: GenerateContentPrompt, options: ExecutionOptions): Promise<Completion> {
         const splits = options.model.split("/");
-        let region: string | undefined = undefined;
+        let region: string | undefined ;
         if (splits[0] === "locations" && splits.length >= 2) {
             region = splits[1];
         }
@@ -552,7 +552,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         let tool_use: ToolUse[] | undefined;
         let finish_reason: string | undefined, result: CompletionResult[] | undefined;
-        const candidate = response.candidates && response.candidates[0];
+        const candidate = response.candidates?.[0];
         if (candidate) {
             switch (candidate.finishReason) {
                 case FinishReason.MAX_TOKENS: finish_reason = "length"; break;
@@ -631,7 +631,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
     async requestTextCompletionStream(driver: VertexAIDriver, prompt: GenerateContentPrompt, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
         const splits = options.model.split("/");
-        let region: string | undefined = undefined;
+        let region: string | undefined ;
         if (splits[0] === "locations" && splits.length >= 2) {
             region = splits[1];
         }
@@ -765,7 +765,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         }
 
         // Determine retryability based on Google error codes
-        const retryable = this.isGeminiErrorRetryable(httpStatusCode);
+        const retryable = this.isGeminiErrorRetryable(httpStatusCode, message);
 
         // Extract error name/type from message if present
         const errorName = this.extractErrorName(message);
@@ -811,11 +811,18 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
      * - 404 (NOT_FOUND): Resource not found
      * - 409 (CONFLICT): Resource conflict
      * - Other 4xx client errors
-     * 
+     *
+     * Exception: certain 400s from Vertex AI's inline URL fetcher (used when
+     * passing a file by URL to multimodal models) surface as INVALID_ARGUMENT
+     * but are actually transient throttling/rate-limit signals on the
+     * fetcher, not a bad request. Detect those by message substring and
+     * treat them as retryable.
+     *
      * @param httpStatusCode - The HTTP status code from the API error
+     * @param message - The error message (used to detect transient 400 sub-cases)
      * @returns True if retryable, false if not retryable, undefined if unknown
      */
-    private isGeminiErrorRetryable(httpStatusCode: number): boolean | undefined {
+    private isGeminiErrorRetryable(httpStatusCode: number, message?: string): boolean | undefined {
         // Retryable status codes
         if (httpStatusCode === 408) return true; // Request timeout
         if (httpStatusCode === 429) return true; // Rate limit/quota
@@ -823,6 +830,17 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         if (httpStatusCode === 503) return true; // Service unavailable
         if (httpStatusCode === 504) return true; // Gateway timeout
         if (httpStatusCode >= 500 && httpStatusCode < 600) return true; // Other 5xx server errors
+
+        // Vertex AI URL fetcher transient throttling, surfaced as 400 INVALID_ARGUMENT
+        // but really a Google-side rate limit on the inline-content fetcher.
+        if (httpStatusCode === 400 && message) {
+            if (
+                message.includes('URL_REJECTED-REJECTED_CLIENT_THROTTLED') ||
+                message.includes('URL_REJECTED-REJECTED_RATE_LIMITED')
+            ) {
+                return true;
+            }
+        }
 
         // Non-retryable 4xx client errors
         if (httpStatusCode >= 400 && httpStatusCode < 500) return false;
@@ -871,13 +889,13 @@ export function convertGeminiFunctionPartsToText(contents: Content[]): Content[]
         const newParts = content.parts.map(part => {
             if (part.functionCall) {
                 const argsStr = part.functionCall.args ? JSON.stringify(part.functionCall.args) : '';
-                const truncated = argsStr.length > 500 ? argsStr.substring(0, 500) + '...' : argsStr;
+                const truncated = argsStr.length > 500 ? `${argsStr.substring(0, 500)}...` : argsStr;
                 return { text: `[Tool call: ${part.functionCall.name}(${truncated})]` };
             }
             if (part.functionResponse) {
                 const respStr = part.functionResponse.response
                     ? JSON.stringify(part.functionResponse.response) : 'No response';
-                const truncated = respStr.length > 500 ? respStr.substring(0, 500) + '...' : respStr;
+                const truncated = respStr.length > 500 ? `${respStr.substring(0, 500)}...` : respStr;
                 return { text: `[Tool result for ${part.functionResponse.name}: ${truncated}]` };
             }
             return part;

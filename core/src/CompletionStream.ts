@@ -1,14 +1,14 @@
 import {
-    CompletionStream,
-    DriverOptions,
-    ExecutionOptions,
-    ExecutionResponse,
-    ExecutionTokenUsage,
-    CompletionResult,
-    ToolUse,
+    type CompletionStream,
+    type DriverOptions,
+    type ExecutionOptions,
+    type ExecutionResponse,
+    type ExecutionTokenUsage,
+    type CompletionResult,
+    type ToolUse,
     LlumiverseError
 } from "@llumiverse/common";
-import { AbstractDriver } from "./Driver.js";
+import type { AbstractDriver } from "./Driver.js";
 
 type StreamingToolUse = ToolUse<unknown> & { _actual_id?: string };
 
@@ -35,12 +35,12 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
         );
 
         const start = Date.now();
-        let finish_reason: string | undefined = undefined;
+        let finish_reason: string | undefined ;
         let promptTokens: number = 0;
-        let resultTokens: number | undefined = undefined;
-        let promptCachedTokens: number | undefined = undefined;
-        let promptCacheWriteTokens: number | undefined = undefined;
-        let promptNewTokens: number | undefined = undefined;
+        let resultTokens: number | undefined ;
+        let promptCachedTokens: number | undefined ;
+        let promptCacheWriteTokens: number | undefined ;
+        let promptNewTokens: number | undefined ;
 
         try {
             const stream = await this.driver.requestTextCompletionStream(this.prompt, this.options);
@@ -144,10 +144,10 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
                                         return r.value;
                                     case 'json':
                                         return JSON.stringify(r.value);
-                                    case 'image':
-                                        // Show truncated image placeholder for streaming
+                                    case 'image': {
                                         const truncatedValue = typeof r.value === 'string' ? r.value.slice(0, 10) : String(r.value).slice(0, 10);
                                         return `\n[Image: ${truncatedValue}...]\n`;
+                                    }
                                     default: {
                                         const _exhaustive: never = r;
                                         return String(_exhaustive);
@@ -285,10 +285,10 @@ export class FallbackCompletionStream<PromptT = unknown> implements CompletionSt
                         return r.value;
                     case 'json':
                         return JSON.stringify(r.value);
-                    case 'image':
-                        // Show truncated image placeholder for streaming
+                    case 'image': {
                         const truncatedValue = typeof r.value === 'string' ? r.value.slice(0, 10) : String(r.value).slice(0, 10);
                         return `[Image: ${truncatedValue}...]`;
+                    }
                     default: {
                         const _exhaustive: never = r;
                         return String(_exhaustive);

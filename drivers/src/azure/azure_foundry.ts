@@ -93,16 +93,16 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     async isOpenAIDeployment(model: string): Promise<boolean> {
         const { deploymentName } = parseAzureFoundryModelId(model);
 
-        let deployment = undefined;
+        let deployment: ModelDeployment | undefined;
         // First, verify the deployment exists
         try {
-            deployment = await this.service.deployments.get(deploymentName);
+            deployment = await this.service.deployments.get(deploymentName) as ModelDeployment;
             this.logger.debug(`[Azure Foundry] Deployment ${deploymentName} found`);
         } catch (deploymentError) {
             this.logger.error({ deploymentError }, `[Azure Foundry] Deployment ${deploymentName} not found:`);
         }
 
-        return (deployment as ModelDeployment).modelPublisher === "OpenAI";
+        return deployment?.modelPublisher === "OpenAI";
     }
 
     protected canStream(_options: ExecutionOptions): Promise<boolean> {
@@ -226,7 +226,6 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                     yield chunk;
                 } catch (parseError) {
                     this.logger.warn({ parseError }, `[Azure Foundry] Failed to parse streaming response:`);
-                    continue;
                 }
             }
         } catch (error) {

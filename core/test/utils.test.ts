@@ -1,7 +1,7 @@
-import fs, { readFileSync } from 'fs';
+import fs, { readFileSync } from 'node:fs';
 import { describe, expect, test } from "vitest";
 import { extractAndParseJSON, parseJSON } from "../src/json";
-import { JSONArray, JSONObject, JsonResult } from '@llumiverse/common';
+import type { JSONArray, JSONObject, JsonResult } from '@llumiverse/common';
 import { validateResult, ValidationError } from '../src/validation';
 import { readDataFile } from './utils';
 
@@ -14,6 +14,7 @@ describe('Core Utilities', () => {
     test('parseJSON', () => {
         const url = new URL("./json.txt", import.meta.url);
         const text = readFileSync(url, "utf8");
+        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
         const json = parseJSON(text)!;
         expect((json as JSONObject).key1).toBe("value1 \" test");
         expect((json as JSONObject).key2).toBe("value2");
