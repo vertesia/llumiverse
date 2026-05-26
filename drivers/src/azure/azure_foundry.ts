@@ -2,8 +2,9 @@ import type {
     ChatCompletionsOutput,
     ChatCompletionsToolCall,
     ChatRequestMessage,
+    ModelClient as AzureInferenceClient,
 } from "@azure-rest/ai-inference";
-import { isUnexpected } from "@azure-rest/ai-inference";
+import ModelClient, { isUnexpected } from "@azure-rest/ai-inference";
 import { AIProjectClient, type DeploymentUnion, type ModelDeployment } from '@azure/ai-projects';
 import { createSseStream, type NodeJSReadableStream } from "@azure/core-sse";
 import { DefaultAzureCredential, getBearerTokenProvider, type TokenCredential } from "@azure/identity";
@@ -44,6 +45,7 @@ export type AzureFoundryPrompt = AzureFoundryInferencePrompt | AzureFoundryOpenA
 
 export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions, ResponseInputItem[]> {
     service: AIProjectClient;
+    private readonly inferenceClient: AzureInferenceClient;
     readonly provider = Providers.azure_foundry;
 
     OPENAI_API_VERSION = "2025-01-01-preview";
@@ -68,17 +70,16 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             throw new Error("Failed to initialize Azure AD token provider");
         }
 
-        // Initialize AI Projects client which provides access to inference operations
-        this.service = new AIProjectClient(
-            opts.endpoint,
-            opts.azureADTokenProvider
-        );
-
         if (opts.apiVersion) {
             this.OPENAI_API_VERSION = opts.apiVersion;
             this.INFERENCE_API_VERSION = opts.apiVersion;
             this.logger.info(`[Azure Foundry] Overriding default API version, using API version: ${opts.apiVersion}`);
         }
+
+        this.service = new AIProjectClient(opts.endpoint, opts.azureADTokenProvider);
+        this.inferenceClient = ModelClient(opts.endpoint, opts.azureADTokenProvider, {
+            apiVersion: this.INFERENCE_API_VERSION,
+        });
     }
 
     /**
@@ -116,7 +117,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
         if (isOpenAI) {
             // Use the Azure OpenAI client for OpenAI models
-            const azureOpenAI = await this.service.inference.azureOpenAI({ apiVersion: this.OPENAI_API_VERSION });
+            const azureOpenAI = await this.service.getAzureOpenAIClient({ apiVersion: this.OPENAI_API_VERSION });
             const subDriver = new AzureOpenAIDriver(azureOpenAI);
             // Use deployment name for API calls
             const modifiedOptions = { ...options, model: deploymentName };
@@ -126,7 +127,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             // Use the chat completions client from the inference operations
             // Convert ResponseInputItem[] to ChatRequestMessage[] for non-OpenAI inference
             const messages = convertToInferenceMessages(prompt);
-            const chatClient = this.service.inference.chatCompletions({ apiVersion: this.INFERENCE_API_VERSION });
+            const chatClient = this.inferenceClient.path("/chat/completions");
             const response = await chatClient.post({
                 body: {
                     messages,
@@ -155,7 +156,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         const isOpenAI = await this.isOpenAIDeployment(options.model);
 
         if (isOpenAI) {
-            const azureOpenAI = await this.service.inference.azureOpenAI({ apiVersion: this.OPENAI_API_VERSION });
+            const azureOpenAI = await this.service.getAzureOpenAIClient({ apiVersion: this.OPENAI_API_VERSION });
             const subDriver = new AzureOpenAIDriver(azureOpenAI);
             const modifiedOptions = { ...options, model: deploymentName };
             const stream = await subDriver.requestTextCompletionStream(prompt, modifiedOptions);
@@ -163,7 +164,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         } else {
             // Convert ResponseInputItem[] to ChatRequestMessage[] for non-OpenAI inference
             const messages = convertToInferenceMessages(prompt);
-            const chatClient = this.service.inference.chatCompletions({ apiVersion: this.INFERENCE_API_VERSION });
+            const chatClient = this.inferenceClient.path("/chat/completions");
             const response = await chatClient.post({
                 body: {
                     messages,
@@ -350,7 +351,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     private async callAzureEmbeddings(input: string[], model: string, kind: "text" | "image"): Promise<number[][]> {
         const { deploymentName } = parseAzureFoundryModelId(model);
         try {
-            const embeddingsClient = this.service.inference.embeddings({ apiVersion: this.INFERENCE_API_VERSION });
+            const embeddingsClient = this.inferenceClient.path("/embeddings");
             const response = await embeddingsClient.post({ body: { input, model: deploymentName } });
             if (isUnexpected(response)) {
                 throw new Error(`${kind} embeddings request failed: ${response.status} ${response.body?.error?.message || 'Unknown error'}`);
