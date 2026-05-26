@@ -1,0 +1,59 @@
+name: (dev) stale pull requests
+
+on:
+  schedule:
+    # Run twice per day at 00:00 and 12:00 UTC
+    - cron: "0 0,12 * * *"
+  workflow_dispatch:
+
+# Cancel superseded stale runs on the same ref.
+concurrency:
+  group: dev-stale-${{ github.ref }}
+  cancel-in-progress: true
+
+# see "Recommended permissions"
+# https://github.com/actions/stale?tab=readme-ov-file#recommended-permissions
+permissions:
+  contents: read
+
+jobs:
+  stale-pull-request:
+    name: Mark stale pull requests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      issues: write # required to label PRs because PR labels are issue labels
+      contents: write # for delete-branch option
+      pull-requests: write # required to mark and close stale PRs
+    steps:
+      - uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10.3.0
+        with:
+          # Only process pull requests, not issues
+          days-before-issue-stale: -1
+          days-before-issue-close: -1
+
+          # A pull request is stale after 30 days of inactivity
+          days-before-pr-stale: 30
+          # A stale pull request is closed 3 days after being marked stale
+          days-before-pr-close: 3
+
+          stale-pr-label: "stale"
+          stale-pr-message: >
+            This pull request has been marked as stale due to inactivity for 30 days.
+
+
+            If this is still a priority, please add a comment or push an update to keep it active.
+
+
+            Otherwise, it may be closed to keep the backlog manageable.
+
+          close-pr-message: "This pull request has been closed due to continued inactivity."
+
+          # Include draft PRs since long-lived drafts can also go stale
+          include-only-assigned: false
+
+          # Delete the branch when closing a stale PR
+          delete-branch: true
+
+          # Remove the stale label when the PR is updated
+          remove-stale-when-updated: true
