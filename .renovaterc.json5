@@ -51,6 +51,20 @@
       ],
       "rangeStrategy": "bump"
     },
+    {
+      "description": "Keep Node.js-related updates on v24 until the runtime is upgraded deliberately.",
+      "matchManagers": [
+        "npm",
+        "nvm",
+        "nodenv"
+      ],
+      "matchPackageNames": [
+        "node",
+        "@types/node"
+      ],
+      "allowedVersions": "<25",
+      "rangeStrategy": "bump"
+    },
     // Overrides go at the bottom, highest precedence
     {
       "groupName": "Package Overrides",

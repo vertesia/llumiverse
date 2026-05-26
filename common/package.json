@@ -70,7 +70,7 @@
     "url": "git+ssh://git@github.com/vertesia/llumiverse.git"
   },
   "devDependencies": {
-    "@types/node": "^25.9.1",
+    "@types/node": "^24.12.2",
     "rimraf": "^6.1.2",
     "ts-dual-module": "^0.6.3",
     "typescript": "^6.0.2",
