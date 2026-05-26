@@ -1,4 +1,4 @@
-import { JSONValue } from "@llumiverse/common";
+import type { JSONValue } from "@llumiverse/common";
 import { jsonrepair } from 'jsonrepair';
 
 function extractJsonFromText(text: string): string {

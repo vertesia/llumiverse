@@ -330,7 +330,7 @@ export class ImagenModelDefinition {
 
         const taskType: string = options.model_options?.edit_mode ?? ImagenTaskType.TEXT_IMAGE;
 
-        driver.logger.info("Task type: " + taskType);
+        driver.logger.info(`Task type: ${taskType}`);
 
         const modelName = options.model.split("/").pop() ?? '';
 

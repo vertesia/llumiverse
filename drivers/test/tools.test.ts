@@ -1,4 +1,5 @@
-import { AbstractDriver, ExecutionOptions, Modalities, PromptRole, PromptSegment } from '@llumiverse/core';
+// biome-ignore lint/suspicious/noDeprecatedImports: exercising deprecated output_modality path until that API is removed
+import { type AbstractDriver, type ExecutionOptions, Modalities, PromptRole, type PromptSegment } from '@llumiverse/core';
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from "vitest";
@@ -221,6 +222,7 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
         expect(r.tool_use?.[0].id).toBeDefined();
         expect(r.tool_use?.[0].tool_input).toBeDefined();
         expect(r.tool_use?.[0].tool_name).toBe("get_weather");
+        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
         const tool_use = r.tool_use!;
         r = await driver.execute([{
             role: PromptRole.tool,

@@ -5,25 +5,25 @@
  */
 
 import {
-    AIModel,
-    Completion,
-    CompletionChunkObject,
-    CompletionStream,
-    DataSource,
-    DriverOptions,
-    EmbeddingsOptions,
-    EmbeddingsResult,
-    ExecutionOptions,
-    ExecutionResponse,
-    LlumiverseErrorContext,
-    Logger,
-    ModelSearchPayload,
-    PromptOptions,
-    PromptSegment,
-    Providers,
-    TrainingJob,
-    TrainingOptions,
-    TrainingPromptOptions,
+    type AIModel,
+    type Completion,
+    type CompletionChunkObject,
+    type CompletionStream,
+    type DataSource,
+    type DriverOptions,
+    type EmbeddingsOptions,
+    type EmbeddingsResult,
+    type ExecutionOptions,
+    type ExecutionResponse,
+    type LlumiverseErrorContext,
+    type Logger,
+    type ModelSearchPayload,
+    type PromptOptions,
+    type PromptSegment,
+    type Providers,
+    type TrainingJob,
+    type TrainingOptions,
+    type TrainingPromptOptions,
     LlumiverseError
 } from "@llumiverse/common";
 import { DefaultCompletionStream, FallbackCompletionStream } from "./CompletionStream.js";
@@ -169,7 +169,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
                 const validationError = error instanceof Error ? error : new Error(String(error));
                 const rawCode = getObjectProperty(error, 'code');
                 const code = rawCode === 'json_error' || rawCode === 'validation_error' ? rawCode : undefined;
-                const errorMessage = `[${this.provider}] [${options.model}] ${code ? '[' + code + '] ' : ''}Result validation error: ${validationError.message}`;
+                const errorMessage = `[${this.provider}] [${options.model}] ${code ? `[${code}] ` : ''}Result validation error: ${validationError.message}`;
                 this.logger.error({ err: error, data: result.result }, errorMessage);
                 result.error = {
                     code: code || 'validation_error',

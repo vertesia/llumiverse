@@ -1,5 +1,4 @@
-import { ModelOptionInfoItem, ModelOptions, ModelOptionsInfo, OptionType, ReasoningEffort, SharedOptions } from "../types.js";
-import { textOptionsFallback } from "./fallback.js";
+import { type ModelOptionInfoItem, type ModelOptions, type ModelOptionsInfo, OptionType, type ReasoningEffort, SharedOptions } from "../types.js";
 
 // Union type of all OpenAI options
 /**
@@ -62,7 +61,7 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
             sizeOptions["1024x1024"] = "1024x1024";
             sizeOptions["1024x1536"] = "1024x1536";
             sizeOptions["1536x1024"] = "1536x1024";
-            sizeOptions["Auto"] = "auto";
+            sizeOptions.Auto = "auto";
         } else if (isDallE2) {
             sizeOptions["256x256"] = "256x256";
             sizeOptions["512x512"] = "512x512";
@@ -264,7 +263,6 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
             ],
         }
     }
-    return textOptionsFallback;
 }
 
 function isO1Full(model: string): boolean {

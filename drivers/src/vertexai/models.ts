@@ -1,8 +1,13 @@
 import type { AIModel, Completion, CompletionChunkObject, ExecutionOptions, LlumiverseError, LlumiverseErrorContext, PromptSegment } from "@llumiverse/core";
-import { type VertexAIDriver, type VertexAIPrompt, trimModelName } from "./index.js";
+import type { VertexAIDriver, VertexAIPrompt } from "./index.js";
 import { ClaudeModelDefinition } from "./models/claude.js";
 import { GeminiModelDefinition } from "./models/gemini.js";
 import { LLamaModelDefinition } from "./models/llama.js";
+
+export function trimModelName(model: string): string {
+    const i = model.lastIndexOf("@");
+    return i > -1 ? model.substring(0, i) : model;
+}
 
 export interface ModelDefinition<PromptT = VertexAIPrompt> {
     model: AIModel;

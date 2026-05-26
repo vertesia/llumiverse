@@ -56,7 +56,7 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
         if (opts.result_schema) {
             messages.push({
                 role: "user",
-                content: "IMPORTANT: " + getJSONSafetyNotice(opts.result_schema)
+                content: `IMPORTANT: ${getJSONSafetyNotice(opts.result_schema)}`
             });
         }
         return messages;

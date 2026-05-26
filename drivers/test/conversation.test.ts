@@ -7,7 +7,8 @@
  * 3. The conversation object survives JSON.stringify/parse (no Uint8Array corruption)
  */
 
-import { AbstractDriver, DataSource, ExecutionOptions, Modalities, PromptRole, PromptSegment } from '@llumiverse/core';
+// biome-ignore lint/suspicious/noDeprecatedImports: exercising deprecated output_modality path until that API is removed
+import { type AbstractDriver, type DataSource, type ExecutionOptions, Modalities, PromptRole, type PromptSegment } from '@llumiverse/core';
 import 'dotenv/config';
 import { describe, expect, test } from "vitest";
 import { AnthropicDriver, BedrockDriver, OpenAIDriver, VertexAIDriver, xAIDriver } from '../src';
@@ -235,7 +236,7 @@ function verifyConversationSerializable(conversation: unknown, driverName: strin
         }
 
         if (Array.isArray(obj)) {
-            obj.forEach((item, i) => checkForCorruptedBytes(item, `${path}[${i}]`));
+            obj.forEach((item, i) => { checkForCorruptedBytes(item, `${path}[${i}]`); });
         }
     };
 
@@ -381,6 +382,7 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)("Driver $name - Multi-turn
     });
 
     test.skipIf(!visionModel)(`${name}: multi-turn conversation with image`, { timeout: TIMEOUT }, async () => {
+        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
         const options = getTextOptions(visionModel!);
 
         // Turn 1: Send an image as base64 (like Studio does)
@@ -440,6 +442,7 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)("Driver $name - Multi-turn
     });
 
     test.skipIf(!visionModel)(`${name}: conversation with multiple images`, { timeout: TIMEOUT }, async () => {
+        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
         const options = getTextOptions(visionModel!);
 
         // Turn 1: Send two images as base64 (like Studio does)

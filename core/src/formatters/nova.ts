@@ -1,5 +1,5 @@
-import { JSONSchema } from "@llumiverse/common";
-import { PromptRole, PromptSegment } from "@llumiverse/common";
+import type { JSONSchema } from "@llumiverse/common";
+import { PromptRole, type PromptSegment } from "@llumiverse/common";
 import { readStreamAsBase64 } from "../stream.js";
 import { getJSONSafetyNotice } from "./commons.js";
 
@@ -102,7 +102,7 @@ export async function formatNovaPrompt(segments: PromptSegment[], schema?: JSONS
     }
 
     if (schema) {
-        safety.push("IMPORTANT: " + getJSONSafetyNotice(schema));
+        safety.push(`IMPORTANT: ${getJSONSafetyNotice(schema)}`);
     }
 
     // messages must contains at least 1 item. If the prompt does not contains a user message (but only system messages)
@@ -116,7 +116,7 @@ export async function formatNovaPrompt(segments: PromptSegment[], schema?: JSONS
         messages.push({ content: [{ text: systemMessage }], role: 'user' });
         systemMessage = safety.join('\n');
     } else if (safety.length > 0) {
-        systemMessage = systemMessage + '\n\nIMPORTANT: ' + safety.join('\n');
+        systemMessage = `${systemMessage}\n\nIMPORTANT: ${safety.join('\n')}`;
     }
 
     /*start Nova's message to make sure it answers properly in JSON

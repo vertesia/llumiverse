@@ -1,4 +1,4 @@
-import { ModelModalities } from "../types.js";
+import type { ModelModalities } from "../types.js";
 
 // Record of Vertex AI model capabilities keyed by model ID (last path segment, lowercased)
 const RECORD_MODEL_CAPABILITIES: Record<string, { input: ModelModalities; output: ModelModalities; tool_support?: boolean }> = {
@@ -52,7 +52,7 @@ export function getModelCapabilitiesVertexAI(model: string): { input: ModelModal
     const normalized = normalizeVertexAIModelName(model);
     const record = RECORD_MODEL_CAPABILITIES[normalized];
     if (record) return record;
-    let bestFamilyKey = undefined;
+    let bestFamilyKey: string | undefined;
     let bestFamilyLength = 0;
     for (const key of Object.keys(RECORD_FAMILY_CAPABILITIES)) {
         if (normalized.startsWith(key) && key.length > bestFamilyLength) {

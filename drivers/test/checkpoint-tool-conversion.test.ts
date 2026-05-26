@@ -13,7 +13,7 @@
  * 2. Then running a follow-up with tools=[] (checkpoint summary scenario)
  */
 
-import { AbstractDriver, ExecutionOptions, PromptRole, PromptSegment } from '@llumiverse/core';
+import { type AbstractDriver, type ExecutionOptions, PromptRole, type PromptSegment } from '@llumiverse/core';
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from 'vitest';
@@ -110,13 +110,13 @@ describe.concurrent.each(drivers)('Driver $name - checkpoint tool conversion', (
         const toolResult = await driver.execute(TOOL_PROMPT, toolOptions);
 
         expect(toolResult.tool_use).toBeDefined();
-        expect(toolResult.tool_use!.length).toBeGreaterThan(0);
+        expect(toolResult.tool_use?.length).toBeGreaterThan(0);
         expect(toolResult.conversation).toBeDefined();
 
         // Step 2: Provide tool result to continue the conversation
         const toolResponse: PromptSegment = {
             role: PromptRole.tool,
-            tool_use_id: toolResult.tool_use![0].id,
+            tool_use_id: toolResult.tool_use?.[0].id,
             content: '15 degrees celsius, sunny',
         };
         const continueResult = await driver.execute([toolResponse], {

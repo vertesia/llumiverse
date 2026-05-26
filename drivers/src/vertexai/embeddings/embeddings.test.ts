@@ -414,7 +414,7 @@ function makeLiveDriver() {
 function assertVector(values: number[]) {
     expect(Array.isArray(values)).toBe(true);
     expect(values.length).toBeGreaterThan(0);
-    expect(values.every((v) => typeof v === "number" && isFinite(v))).toBe(true);
+    expect(values.every((v) => typeof v === "number" && Number.isFinite(v))).toBe(true);
 }
 
 describe.skipIf(!USE_REAL_API)("generateVertexAiEmbeddings — live API", () => {
