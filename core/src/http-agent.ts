@@ -1,5 +1,5 @@
 import type { HttpTimeoutOptions } from "@llumiverse/common";
-import { Agent, fetch as undiciFetch } from "undici";
+import { Agent } from "undici";
 
 /**
  * Default HTTP timeouts used by {@link createDriverHttpAgent} when the
@@ -40,20 +40,32 @@ export function createDriverHttpAgent(opts?: HttpTimeoutOptions): Agent {
 }
 
 /**
- * Wrap `undici.fetch` so every request routes through the given Agent.
- * The returned function is type-compatible with the global `fetch`, so
- * it can be passed directly to SDKs that accept a `fetch` option
- * (OpenAI, Anthropic, `@google/genai`, Bedrock via Smithy, …) or used
- * as a drop-in replacement for the global `fetch` in drivers that
- * make raw HTTP calls.
+ * Wrap the global `fetch` so every request routes through the given
+ * undici Agent. The returned function is type-compatible with global
+ * `fetch`, so it can be passed directly to SDKs that accept a `fetch`
+ * option (OpenAI, Anthropic, `@google/genai`, Bedrock via Smithy, …)
+ * or used as a drop-in replacement for the global `fetch` in drivers
+ * that make raw HTTP calls.
+ *
+ * Goes through `globalThis.fetch` (which is undici under the hood in
+ * Node 18+ / Bun) rather than calling `undici.fetch` directly, because
+ * the undici package's exported `fetch` uses its own internal `Request`
+ * class — if a caller constructs a `Request` via `globalThis.Request`
+ * and passes it through, the `instanceof` check inside `undici.fetch`
+ * fails and the input gets coerced to the string `"[object Request]"`,
+ * producing an `Invalid URL` error. Routing through `globalThis.fetch`
+ * keeps everything on the same Request class while still honoring the
+ * undici-specific `dispatcher` init field (passed straight through).
  */
 export function createAgentBackedFetch(agent: Agent): typeof fetch {
     return ((input: RequestInfo | URL, init?: RequestInit) =>
-        undiciFetch(input as Parameters<typeof undiciFetch>[0], {
-            ...init,
+        globalThis.fetch(input, {
+            ...(init ?? {}),
+            // `dispatcher` is an undici-specific extension to RequestInit
+            // that Node's wrapper passes straight through.
             dispatcher: agent,
-        } as Parameters<typeof undiciFetch>[1])
-    ) as unknown as typeof fetch;
+        } as RequestInit & { dispatcher?: unknown })
+    ) as typeof fetch;
 }
 
 /** Re-export the undici `Agent` type so driver code can type its agent
