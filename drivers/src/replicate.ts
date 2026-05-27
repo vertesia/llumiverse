@@ -70,6 +70,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
         super(options);
         this.service = new Replicate({
             auth: options.apiKey,
+            fetch: this.getDriverFetch(),
         });
     }
 

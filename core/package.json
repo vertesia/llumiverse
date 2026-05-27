@@ -81,7 +81,8 @@
     "@types/node": "^24.12.4",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
-    "jsonrepair": "^3.14.0"
+    "jsonrepair": "^3.14.0",
+    "undici": "^7.20.0"
   },
   "ts_dual_module": {
     "outDir": "lib",

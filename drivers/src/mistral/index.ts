@@ -27,9 +27,10 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
         super(options);
         this.apiKey = options.apiKey;
         //this.client = new MistralClient(options.apiKey, options.endpointUrl);
-        this.client = new FetchClient(options.endpoint_url || ENDPOINT).withHeaders({
-            authorization: `Bearer ${this.apiKey}`
-        });
+        this.client = new FetchClient(options.endpoint_url || ENDPOINT, this.getDriverFetch())
+            .withHeaders({
+                authorization: `Bearer ${this.apiKey}`
+            });
     }
 
     getResponseFormat = (_options: ExecutionOptions): ResponseFormat | undefined => {

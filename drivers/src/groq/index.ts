@@ -35,7 +35,8 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
         this.apiKey = options.apiKey;
         this.client = new Groq({
             apiKey: options.apiKey,
-            baseURL: options.endpoint_url
+            baseURL: options.endpoint_url,
+            fetch: this.getDriverFetch(),
         });
     }
 

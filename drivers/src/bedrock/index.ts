@@ -146,11 +146,25 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
     }
 
+    /**
+     * Build a Smithy `requestHandler` config from the driver's
+     * `httpTimeout` so AWS SDK calls fail fast on hung upstream Bedrock
+     * endpoints instead of using the AWS default (no request timeout).
+     * Returns a partial config the SDK merges into its default handler.
+     */
+    private getBedrockRequestHandlerConfig() {
+        return {
+            requestTimeout:    this.options.httpTimeout?.headersTimeout ?? 60_000,
+            connectionTimeout: this.options.httpTimeout?.connectTimeout ?? 10_000,
+        };
+    }
+
     getExecutor() {
         if (!this._executor) {
             this._executor = new BedrockRuntime({
                 region: this.options.region,
                 credentials: this.options.credentials,
+                requestHandler: this.getBedrockRequestHandlerConfig(),
             });
         }
         return this._executor;
@@ -161,6 +175,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             this._service = new Bedrock({
                 region: region,
                 credentials: this.options.credentials,
+                requestHandler: this.getBedrockRequestHandlerConfig(),
             });
             this._service_region = region;
         }

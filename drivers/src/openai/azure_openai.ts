@@ -45,7 +45,8 @@ export class AzureOpenAIDriver extends BaseOpenAIDriver {
             azureADTokenProvider: opts.azureADTokenProvider,
             endpoint: opts.endpoint,
             apiVersion: opts.apiVersion ?? "2024-10-21",
-            deployment: opts.deployment
+            deployment: opts.deployment,
+            fetch: this.getDriverFetch(),
         });
     }
 

@@ -45,6 +45,7 @@ export class OpenAICompatibleDriver extends BaseOpenAIDriver {
             apiKey: opts.apiKey,
             baseURL: opts.endpoint,
             defaultHeaders: opts.default_headers,
+            fetch: this.getDriverFetch(),
         });
     }
 

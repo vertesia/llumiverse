@@ -26,8 +26,10 @@ import {
     type TrainingPromptOptions,
     LlumiverseError
 } from "@llumiverse/common";
+import type { Agent } from "undici";
 import { DefaultCompletionStream, FallbackCompletionStream } from "./CompletionStream.js";
 import { formatTextPrompt } from "./formatters/index.js";
+import { createAgentBackedFetch, createDriverHttpAgent } from "./http-agent.js";
 import { validateResult } from "./validation.js";
 
 function getObjectProperty(value: unknown, key: string): unknown {
@@ -136,10 +138,44 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     abstract provider: Providers | string; // the provider name
 
+    private _httpAgent?: Agent;
+    private _driverFetch?: typeof fetch;
+
     constructor(opts: OptionsT) {
         this.options = opts;
         this.logger = createLogger(opts.logger);
     }
+
+    /**
+     * Lazily-created undici `Agent` driven by `options.httpTimeout`.
+     * Pools sockets for the lifetime of the driver. Subclasses can
+     * either pass this directly to an SDK that accepts a `dispatcher`
+     * option (rare), or — much more commonly — use {@link getDriverFetch}
+     * to get a fetch implementation backed by it.
+     *
+     * Released via {@link destroy}.
+     */
+    protected getHttpAgent(): Agent {
+        if (!this._httpAgent) {
+            this._httpAgent = createDriverHttpAgent(this.options.httpTimeout);
+        }
+        return this._httpAgent;
+    }
+
+    /**
+     * Fetch-compatible function backed by the driver's HTTP agent.
+     * Pass to any SDK that accepts a custom `fetch` option (OpenAI,
+     * Anthropic, `@google/genai`, Bedrock via Smithy, …) or use as a
+     * drop-in replacement for the global `fetch` in drivers that make
+     * raw HTTP calls.
+     */
+    protected getDriverFetch(): typeof fetch {
+        if (!this._driverFetch) {
+            this._driverFetch = createAgentBackedFetch(this.getHttpAgent());
+        }
+        return this._driverFetch;
+    }
+
 
     async createTrainingPrompt(options: TrainingPromptOptions): Promise<string> {
         const prompt = await this.createPrompt(options.segments, { result_schema: options.schema, model: options.model })
@@ -415,9 +451,15 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     /**
      * Cleanup method called when the driver is evicted from the cache.
-     * Override this in driver implementations that need to release resources.
+     * Releases the lazily-created HTTP agent socket pool. Override this
+     * in driver implementations that need to release additional resources
+     * — MUST call `super.destroy()` to avoid leaking sockets.
      */
     destroy(): void {
-        // No-op by default
+        this._httpAgent?.close().catch(() => {
+            /* shutdown best-effort */
+        });
+        this._httpAgent = undefined;
+        this._driverFetch = undefined;
     }
 }

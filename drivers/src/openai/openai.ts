@@ -24,7 +24,8 @@ export class OpenAIDriver extends BaseOpenAIDriver {
     constructor(opts: OpenAIDriverOptions) {
         super(opts);
         this.service = new OpenAI({
-            apiKey: opts.apiKey
+            apiKey: opts.apiKey,
+            fetch: this.getDriverFetch(),
         });
     }
 }

@@ -16,9 +16,10 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
     constructor(options: TogetherAIDriverOptions) {
         super(options);
         this.apiKey = options.apiKey;
-        this.fetchClient = new FetchClient('https://api.together.xyz').withHeaders({
-            authorization: `Bearer ${this.apiKey}`
-        });
+        this.fetchClient = new FetchClient('https://api.together.xyz', this.getDriverFetch())
+            .withHeaders({
+                authorization: `Bearer ${this.apiKey}`
+            });
     }
 
     getResponseFormat = (options: ExecutionOptions): { type: string; schema: unknown } | undefined => {

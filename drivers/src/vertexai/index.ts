@@ -93,12 +93,15 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
     /**
      * Cleanup Google Cloud clients when the driver is evicted from the cache.
+     * `super.destroy()` releases the HTTP agent socket pool created by
+     * {@link AbstractDriver.getHttpAgent} / {@link AbstractDriver.getDriverFetch}.
      */
     destroy(): void {
         this.aiplatform?.close();
         this.modelGarden?.close();
         this.imagenClient?.close();
         this.predictionClient?.close();
+        super.destroy();
     }
 
     private async getAuthClient(): Promise<AuthClient> {
@@ -122,6 +125,15 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     private buildGoogleGenAIClient(region: string, flex: boolean): GoogleGenAI {
+        // The @google/genai Vertex-flavored HttpOptions doesn't expose a
+        // custom `fetch` (that's only on the Gemini-direct path), so we
+        // can't route through the driver's undici Agent here. Fall back
+        // to the SDK's wall-clock `timeout`, which under the hood calls
+        // `AbortSignal.timeout()` per request. Uses `headersTimeout` as
+        // the dominant cue since gemini-flash should respond well within
+        // its head-of-line latency budget.
+        const requestTimeoutMs = this.options.httpTimeout?.headersTimeout ?? 60_000;
+
         return new GoogleGenAI({
             project: this.options.project,
             location: region,
@@ -129,14 +141,15 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             googleAuthOptions: this.options.googleAuthOptions || {
                 scopes: ["https://www.googleapis.com/auth/cloud-platform"],
             },
-            ...(flex ? {
-                httpOptions: {
+            httpOptions: {
+                timeout: requestTimeoutMs,
+                ...(flex ? {
                     headers: {
                         "X-Vertex-AI-LLM-Request-Type": "shared",
                         "X-Vertex-AI-LLM-Shared-Request-Type": "flex",
                     }
-                }
-            } : {}),
+                } : {}),
+            },
         });
     }
 

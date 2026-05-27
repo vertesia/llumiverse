@@ -26,7 +26,8 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
         this.apiKey = options.apiKey;
         this.projectId = options.projectId;
         this.endpoint_url = options.endpointUrl;
-        this.fetchClient = new FetchClient(this.endpoint_url).withAuthCallback(async () => this.getAuthToken().then(token => `Bearer ${token}`));
+        this.fetchClient = new FetchClient(this.endpoint_url, this.getDriverFetch())
+            .withAuthCallback(async () => this.getAuthToken().then(token => `Bearer ${token}`));
     }
 
     async requestTextCompletion(prompt: string, options: ExecutionOptions): Promise<Completion> {
@@ -135,7 +136,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
                 this.logger.debug("Token expired, refetching")
             }
         }
-        const authToken = await fetch('https://iam.cloud.ibm.com/identity/token', {
+        const authToken = await this.getDriverFetch()('https://iam.cloud.ibm.com/identity/token', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
