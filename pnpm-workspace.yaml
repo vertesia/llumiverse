@@ -3,6 +3,7 @@ packages:
   - ./core
   - ./drivers
   - ./examples
+verifyDepsBeforeRun: false
 allowBuilds:
   '@google/genai': true
   esbuild: true

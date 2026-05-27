@@ -21,7 +21,7 @@ diff --git a/lib/build.js b/lib/build.js
      return params;
  }
  export async function build(pkg, args) {
-@@ -105,13 +107,13 @@ export async function build(pkg, args) {
+@@ -105,16 +108,27 @@ export async function build(pkg, args) {
      }
  }
  function _build(params) {
@@ -33,7 +33,21 @@ diff --git a/lib/build.js b/lib/build.js
          val && args.push(val);
      }
 -    const r = spawnSync('npx', args, {
++    const startedAt = new Date();
++    console.error(`tsmod tsc start ${startedAt.toISOString()} ${params['--project'] ?? ''}`);
 +    const r = spawnSync(process.execPath, args, {
          stdio: ['inherit', 'inherit', 'inherit'],
      });
++    const endedAt = new Date();
++    console.error(`tsmod tsc end ${endedAt.toISOString()} duration=${endedAt.getTime() - startedAt.getTime()}ms`);
++    if (r.error) {
++        throw r.error;
++    }
++    if (r.signal) {
++        console.error(`tsc terminated by ${r.signal}`);
++        process.exit(1);
++    }
      if (r.status) {
+         process.exit(r.status);
+     }
+ }
