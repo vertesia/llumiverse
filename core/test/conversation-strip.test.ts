@@ -1,13 +1,13 @@
 import { describe, expect, test } from 'vitest';
 import {
-    deserializeBinaryFromStorage,
-    getConversationMeta,
-    incrementConversationTurn,
-    setConversationMeta,
-    stripBase64ImagesFromConversation,
     stripBinaryFromConversation,
+    stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
     truncateLargeTextInConversation,
+    getConversationMeta,
+    setConversationMeta,
+    incrementConversationTurn,
+    deserializeBinaryFromStorage,
 } from '../src/conversation-utils';
 
 import type { Tree } from './__helpers__/test-utils';

@@ -1,4 +1,5 @@
 export * from './capability.js';
+export * from './options.js';
 export * from './options/anthropic.js';
 export * from './options/bedrock.js';
 export * from './options/context-windows.js';
@@ -9,5 +10,4 @@ export * from './options/openai.js';
 export * from './options/shared-parsing.js';
 export * from './options/version-parsing.js';
 export * from './options/vertexai.js';
-export * from './options.js';
 export * from './types.js';

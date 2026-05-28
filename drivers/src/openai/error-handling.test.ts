@@ -1,23 +1,23 @@
+import { describe, it, expect, beforeEach } from 'vitest';
+import { BaseOpenAIDriver } from './index.js';
 import { LlumiverseError, Providers } from '@llumiverse/core';
 import OpenAI from 'openai';
 import {
+    APIError,
+    BadRequestError,
+    AuthenticationError,
+    PermissionDeniedError,
+    NotFoundError,
+    ConflictError,
+    UnprocessableEntityError,
+    RateLimitError,
+    InternalServerError,
     APIConnectionError,
     APIConnectionTimeoutError,
-    APIError,
-    AuthenticationError,
-    BadRequestError,
-    ConflictError,
-    ContentFilterFinishReasonError,
-    InternalServerError,
     LengthFinishReasonError,
-    NotFoundError,
-    PermissionDeniedError,
-    RateLimitError,
-    UnprocessableEntityError,
+    ContentFilterFinishReasonError,
 } from 'openai/error';
-import { beforeEach, describe, expect, it } from 'vitest';
 import { exposePrivate, getProp } from '../../test/__helpers__/test-utils.js';
-import { BaseOpenAIDriver } from './index.js';
 
 type BaseOpenAIDriverInternals = {
     isOpenAIErrorRetryable: (

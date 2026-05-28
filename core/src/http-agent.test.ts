@@ -1,7 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import {
-    PromptRole,
     type AIModel,
     type Completion,
     type CompletionChunkObject,
@@ -10,14 +9,15 @@ import {
     type EmbeddingsResult,
     type ExecutionOptions,
     type ModelSearchPayload,
+    PromptRole,
 } from '@llumiverse/common';
-import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Agent } from 'undici';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AbstractDriver } from './Driver.js';
 import {
-    DEFAULT_DRIVER_HTTP_TIMEOUTS,
     createAgentBackedFetch,
     createDriverHttpAgent,
+    DEFAULT_DRIVER_HTTP_TIMEOUTS,
     mergeDriverHttpTimeoutOptions,
     resolveDriverHttpTimeouts,
 } from './http-agent.js';

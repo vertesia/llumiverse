@@ -12,8 +12,8 @@ import {
 } from '@llumiverse/common';
 import { AbstractDriver } from '@llumiverse/core/driver';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { BedrockDriver, type BedrockPrompt } from './index.js';
 import type { Tree } from '../../test/__helpers__/test-utils.js';
+import { BedrockDriver, type BedrockPrompt } from './index.js';
 
 // ---------------------------------------------------------------------------
 // Unit tests: getExtractedStream tool use handling

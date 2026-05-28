@@ -1,4 +1,6 @@
+import type { HttpTimeoutOptions } from '@llumiverse/core';
 import { describe, expect, it } from 'vitest';
+import { exposePrivate } from '../test/__helpers__/test-utils.js';
 import { AnthropicDriver } from './anthropic/index.js';
 import { BedrockDriver } from './bedrock/index.js';
 import { GroqDriver } from './groq/index.js';
@@ -12,8 +14,6 @@ import { TogetherAIDriver } from './togetherai/index.js';
 import { VertexAIDriver } from './vertexai/index.js';
 import { WatsonxDriver } from './watsonx/index.js';
 import { xAIDriver } from './xai/index.js';
-import { exposePrivate } from '../test/__helpers__/test-utils.js';
-import type { HttpTimeoutOptions } from '@llumiverse/core';
 
 type DriverFetchInternals = {
     _driverFetch?: typeof fetch;

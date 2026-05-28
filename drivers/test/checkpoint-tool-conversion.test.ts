@@ -94,57 +94,58 @@ function getToolOptions(model: string): ExecutionOptions {
 }
 
 describe.concurrent.each(drivers)('Driver $name - checkpoint tool conversion', ({ name, driver, models }) => {
-    test.each(models)(`${name}: tools=[] with tool blocks in conversation for %s`, {
-        timeout: TIMEOUT,
-        retry: 1,
-    }, async (model) => {
-        // Step 1: Execute a tool call to get a conversation with tool blocks
-        const toolOptions = getToolOptions(model);
-        const toolResult = await driver.execute(TOOL_PROMPT, toolOptions);
+    test.each(models)(
+        `${name}: tools=[] with tool blocks in conversation for %s`,
+        { timeout: TIMEOUT, retry: 1 },
+        async (model) => {
+            // Step 1: Execute a tool call to get a conversation with tool blocks
+            const toolOptions = getToolOptions(model);
+            const toolResult = await driver.execute(TOOL_PROMPT, toolOptions);
 
-        expect(toolResult.tool_use).toBeDefined();
-        expect(toolResult.tool_use?.length).toBeGreaterThan(0);
-        expect(toolResult.conversation).toBeDefined();
+            expect(toolResult.tool_use).toBeDefined();
+            expect(toolResult.tool_use?.length).toBeGreaterThan(0);
+            expect(toolResult.conversation).toBeDefined();
 
-        // Step 2: Provide tool result to continue the conversation
-        const toolResponse: PromptSegment = {
-            role: PromptRole.tool,
-            tool_use_id: toolResult.tool_use?.[0].id,
-            content: '15 degrees celsius, sunny',
-        };
-        const continueResult = await driver.execute([toolResponse], {
-            ...toolOptions,
-            conversation: toolResult.conversation,
-        });
-        expect(continueResult.conversation).toBeDefined();
+            // Step 2: Provide tool result to continue the conversation
+            const toolResponse: PromptSegment = {
+                role: PromptRole.tool,
+                tool_use_id: toolResult.tool_use?.[0].id,
+                content: '15 degrees celsius, sunny',
+            };
+            const continueResult = await driver.execute([toolResponse], {
+                ...toolOptions,
+                conversation: toolResult.conversation,
+            });
+            expect(continueResult.conversation).toBeDefined();
 
-        // Step 3: Checkpoint scenario — send tools=[] with the conversation that has tool blocks
-        // This is what createCheckpoint does when asking for a summary
-        const checkpointPrompt: PromptSegment[] = [
-            {
-                role: PromptRole.user,
-                content: 'Summarize what happened in this conversation. Do NOT call any tools — just output text.',
-            },
-        ];
+            // Step 3: Checkpoint scenario — send tools=[] with the conversation that has tool blocks
+            // This is what createCheckpoint does when asking for a summary
+            const checkpointPrompt: PromptSegment[] = [
+                {
+                    role: PromptRole.user,
+                    content: 'Summarize what happened in this conversation. Do NOT call any tools — just output text.',
+                },
+            ];
 
-        const checkpointResult = await driver.execute(checkpointPrompt, {
-            model,
-            model_options: {
-                _option_id: 'text-fallback',
-                max_tokens: 256,
-                temperature: 0.3,
-            },
-            tools: [], // No tools — checkpoint summary
-            conversation: continueResult.conversation,
-        });
+            const checkpointResult = await driver.execute(checkpointPrompt, {
+                model,
+                model_options: {
+                    _option_id: 'text-fallback',
+                    max_tokens: 256,
+                    temperature: 0.3,
+                },
+                tools: [], // No tools — checkpoint summary
+                conversation: continueResult.conversation,
+            });
 
-        // Key assertions:
-        // 1. The call succeeded (no API error about missing tool config)
-        expect(checkpointResult).toBeDefined();
-        // 2. finish_reason should NOT be tool_use (no tools were provided)
-        expect(checkpointResult.finish_reason).not.toBe('tool_use');
-        // 3. Should have text content back
-        const hasContent = Array.isArray(checkpointResult.result) && checkpointResult.result.length > 0;
-        expect(hasContent).toBeTruthy();
-    });
+            // Key assertions:
+            // 1. The call succeeded (no API error about missing tool config)
+            expect(checkpointResult).toBeDefined();
+            // 2. finish_reason should NOT be tool_use (no tools were provided)
+            expect(checkpointResult.finish_reason).not.toBe('tool_use');
+            // 3. Should have text content back
+            const hasContent = Array.isArray(checkpointResult.result) && checkpointResult.result.length > 0;
+            expect(hasContent).toBeTruthy();
+        },
+    );
 });

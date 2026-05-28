@@ -1,7 +1,6 @@
 import { defaultProvider } from '@aws-sdk/credential-provider-node';
 import { type AIModel, PromptRole, type PromptSegment } from '@llumiverse/core';
 import { BedrockDriver } from '@llumiverse/drivers';
-
 const credentials = defaultProvider({
     profile: 'default',
 });

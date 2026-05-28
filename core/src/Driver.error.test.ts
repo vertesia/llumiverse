@@ -6,13 +6,13 @@ import {
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
+    LlumiverseError,
     type LlumiverseErrorContext,
     type ModelSearchPayload,
-    LlumiverseError,
 } from '@llumiverse/common';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { AbstractDriver } from './Driver.js';
 import { errorWith, getProp } from '../test/__helpers__/test-utils.js';
+import { AbstractDriver } from './Driver.js';
 
 // Simple test driver implementation
 class TestDriver extends AbstractDriver<DriverOptions, string> {

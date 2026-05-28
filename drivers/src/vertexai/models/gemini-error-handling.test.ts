@@ -1,8 +1,8 @@
 import { LlumiverseError } from '@llumiverse/core';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { exposePrivate, getProp } from '../../../test/__helpers__/test-utils.js';
 import { VertexAIDriver } from '../index.js';
 import { GeminiModelDefinition } from './gemini.js';
+import { exposePrivate, getProp } from '../../../test/__helpers__/test-utils.js';
 
 type GeminiModelInternals = {
     isGeminiErrorRetryable: (httpStatusCode: number, message?: string) => boolean | undefined;

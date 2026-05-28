@@ -1,7 +1,7 @@
 // This file is used by multiple drivers
 // to format prompts in a way that is compatible with OpenAI's API.
 
-import { type PromptOptions, PromptRole, type PromptSegment } from '@llumiverse/common';
+import { PromptRole, type PromptOptions, type PromptSegment } from '@llumiverse/common';
 import { readStreamAsBase64 } from '@llumiverse/core';
 import type OpenAI from 'openai';
 

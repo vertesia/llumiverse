@@ -1,4 +1,4 @@
-import { LlumiverseError, type LlumiverseErrorContext } from '@llumiverse/common';
+import { type LlumiverseErrorContext, LlumiverseError } from '@llumiverse/common';
 import { describe, expect, it } from 'vitest';
 
 describe('LlumiverseError', () => {

@@ -1,5 +1,5 @@
-import type OpenAI from 'openai';
 import { describe, expect, test } from 'vitest';
+import type OpenAI from 'openai';
 import { mapResponseStream } from '../src/openai/index.js';
 import type { Tree } from './__helpers__/test-utils.js';
 

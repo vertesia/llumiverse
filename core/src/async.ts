@@ -1,5 +1,5 @@
-import type { CompletionChunkObject } from '@llumiverse/common';
 import type { ServerSentEvent } from '@vertesia/api-fetch-client';
+import type { CompletionChunkObject } from '@llumiverse/common';
 
 export async function* asyncMap<T, R>(asyncIterable: AsyncIterable<T>, callback: (value: T, index: number) => R) {
     let i = 0;

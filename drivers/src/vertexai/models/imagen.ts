@@ -1,16 +1,17 @@
-// Import the helper module for converting arbitrary protobuf.Value objects
-import { helpers, type protos } from '@google-cloud/aiplatform';
 import {
     type AIModel,
     type Completion,
     type ExecutionOptions,
-    type ImagenOptions,
     ModelType,
     PromptRole,
     type PromptSegment,
     readStreamAsBase64,
+    type ImagenOptions,
 } from '@llumiverse/core';
 import type { VertexAIDriver } from '../index.js';
+
+// Import the helper module for converting arbitrary protobuf.Value objects
+import { type protos, helpers } from '@google-cloud/aiplatform';
 
 interface ImagenBaseReference {
     referenceType:

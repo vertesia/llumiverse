@@ -1,7 +1,7 @@
 import {
+    type ModelOptionsInfo,
     type ModelOptionInfoItem,
     type ModelOptions,
-    type ModelOptionsInfo,
     OptionType,
     SharedOptions,
 } from '../types.js';

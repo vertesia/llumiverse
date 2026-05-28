@@ -1,10 +1,10 @@
-import { createReadStream } from 'node:fs';
-import { basename, dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import type { JSONSchema } from '@llumiverse/core';
 import { type DataSource, PromptRole, type PromptSegment, readStreamAsBase64 } from '@llumiverse/core';
 import type { NovaMessagesPrompt } from '@llumiverse/core/formatters';
+import { createReadStream } from 'node:fs';
+import type { JSONSchema } from '@llumiverse/core';
 import { createReadableStreamFromReadable } from 'node-web-stream-adapters';
+import { basename, dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // 512x512 JPEG fallback — within Bedrock's [320, 4096] range

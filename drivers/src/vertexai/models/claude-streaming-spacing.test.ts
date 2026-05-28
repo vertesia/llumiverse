@@ -1,8 +1,8 @@
 import type { CompletionChunkObject, ExecutionOptions } from '@llumiverse/core';
 import { describe, expect, it } from 'vitest';
-import type { ClaudePrompt } from '../../shared/claude-messages.js';
 import type { VertexAIDriver } from '../index.js';
 import { ClaudeModelDefinition } from './claude.js';
+import type { ClaudePrompt } from '../../shared/claude-messages.js';
 
 function createAsyncStream(events: unknown[]): AsyncIterable<unknown> {
     return (async function* () {

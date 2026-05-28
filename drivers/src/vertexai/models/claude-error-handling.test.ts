@@ -13,9 +13,9 @@ import {
 } from '@anthropic-ai/sdk/error';
 import { LlumiverseError } from '@llumiverse/core';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { exposePrivate } from '../../../test/__helpers__/test-utils.js';
 import type { VertexAIDriver } from '../index.js';
 import { ClaudeModelDefinition } from './claude.js';
+import { exposePrivate } from '../../../test/__helpers__/test-utils.js';
 
 type ClaudeModelInternals = {
     isClaudeErrorRetryable: (

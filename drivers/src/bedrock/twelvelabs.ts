@@ -2,11 +2,10 @@ import {
     type DataSource,
     type ExecutionOptions,
     type JSONSchema,
-    PromptRole,
-    type PromptSegment,
     readStreamAsBase64,
     type TextFallbackOptions,
 } from '@llumiverse/core';
+import { type PromptSegment, PromptRole } from '@llumiverse/core';
 import { isAmazonS3Hostname, parseS3UrlToUri } from './s3.js';
 
 // TwelveLabs Pegasus Request/Response Types
