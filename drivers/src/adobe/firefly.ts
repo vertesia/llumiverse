@@ -1,4 +1,15 @@
-import { AbstractDriver, type AIModel, type Completion, type CompletionChunkObject, type DriverOptions, type EmbeddingsOptions, type EmbeddingsResult, type ExecutionOptions, type ModelSearchPayload, type PromptSegment } from "@llumiverse/core";
+import type {
+    AIModel,
+    Completion,
+    CompletionChunkObject,
+    DriverOptions,
+    EmbeddingsOptions,
+    EmbeddingsResult,
+    ExecutionOptions,
+    ModelSearchPayload,
+    PromptSegment,
+} from '@llumiverse/core';
+import { AbstractDriver } from '@llumiverse/core/driver';
 
 interface FireflyImageSource {
     url?: string;
@@ -67,7 +78,7 @@ export interface FireflyDriverOptions extends DriverOptions {
 }
 
 export class FireflyDriver extends AbstractDriver<FireflyDriverOptions> {
-    static PROVIDER = "firefly";
+    static PROVIDER = 'firefly';
     provider = FireflyDriver.PROVIDER;
 
     private readonly endpoint: string;
@@ -76,24 +87,26 @@ export class FireflyDriver extends AbstractDriver<FireflyDriverOptions> {
         super(options);
 
         if (!options.apiKey) {
-            throw new Error("No API key provided for Firefly driver");
+            throw new Error('No API key provided for Firefly driver');
         }
 
-        this.endpoint = options.endpoint || "https://firefly-api.adobe.io/v3";
+        this.endpoint = options.endpoint || 'https://firefly-api.adobe.io/v3';
     }
 
     async requestTextCompletion(_prompt: string, _options: ExecutionOptions): Promise<Completion> {
-        throw new Error("Text completion not supported by Firefly");
+        throw new Error('Text completion not supported by Firefly');
     }
 
-    async requestTextCompletionStream(_prompt: string, _options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
-        throw new Error("Text completion streaming not supported by Firefly");
+    async requestTextCompletionStream(
+        _prompt: string,
+        _options: ExecutionOptions,
+    ): Promise<AsyncIterable<CompletionChunkObject>> {
+        throw new Error('Text completion streaming not supported by Firefly');
     }
 
     async requestImageGeneration(segments: PromptSegment[], options: ExecutionOptions): Promise<Completion> {
         this.logger.debug(`[${this.provider}] Generating image with model ${options.model}`);
-        const prompt = segments.map(s => s.content).join("\n\n");
-
+        const prompt = segments.map((s) => s.content).join('\n\n');
 
         try {
             const payload: FireflyGenerateRequest = {
@@ -106,7 +119,7 @@ export class FireflyDriver extends AbstractDriver<FireflyDriverOptions> {
                     'Content-Type': 'application/json',
                     'x-api-key': this.options.apiKey,
                 },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(payload),
             });
 
             if (!response.ok) {
@@ -120,31 +133,31 @@ export class FireflyDriver extends AbstractDriver<FireflyDriverOptions> {
                 return {
                     result: [],
                     error: {
-                        message: "Prompt contains denied words or blocked artists",
-                        code: "content_policy_violation"
-                    }
+                        message: 'Prompt contains denied words or blocked artists',
+                        code: 'content_policy_violation',
+                    },
                 };
             }
 
             return {
-                result: result.outputs.map(output => ({
-                    type: "image" as const,
-                    value: output.image.url
-                }))
+                result: result.outputs.map((output) => ({
+                    type: 'image' as const,
+                    value: output.image.url,
+                })),
             };
-
         } catch (error: unknown) {
-            this.logger.error({ error }, "[Firefly] Image generation failed");
+            this.logger.error({ error }, '[Firefly] Image generation failed');
             const generationError = error instanceof Error ? error : new Error(String(error));
-            const errorCode = (error as { code?: unknown })?.code === 'content_policy_violation'
-                ? 'content_policy_violation'
-                : 'validation_error';
+            const errorCode =
+                (error as { code?: unknown })?.code === 'content_policy_violation'
+                    ? 'content_policy_violation'
+                    : 'validation_error';
             return {
                 result: [],
                 error: {
                     message: generationError.message,
-                    code: errorCode
-                }
+                    code: errorCode,
+                },
             };
         }
     }
@@ -160,26 +173,26 @@ export class FireflyDriver extends AbstractDriver<FireflyDriverOptions> {
     async listModels(_params?: ModelSearchPayload): Promise<AIModel[]> {
         return [
             {
-                id: "firefly-v3-text-to-image",
-                name: "Firefly v3 Text to Image",
+                id: 'firefly-v3-text-to-image',
+                name: 'Firefly v3 Text to Image',
                 provider: this.provider,
-                description: "Adobe Firefly v3 text to image generation model",
-                tags: ["image-generation"]
+                description: 'Adobe Firefly v3 text to image generation model',
+                tags: ['image-generation'],
             },
             {
-                id: "firefly-v3-image-to-image",
-                name: "Firefly v3 Image to Image",
+                id: 'firefly-v3-image-to-image',
+                name: 'Firefly v3 Image to Image',
                 provider: this.provider,
-                description: "Adobe Firefly v3 image to image generation model",
-                tags: ["image-generation"]
+                description: 'Adobe Firefly v3 image to image generation model',
+                tags: ['image-generation'],
             },
             {
-                id: "firefly-v3-inpainting",
-                name: "Firefly v3 Inpainting",
+                id: 'firefly-v3-inpainting',
+                name: 'Firefly v3 Inpainting',
                 provider: this.provider,
-                description: "Adobe Firefly v3 inpainting model",
-                tags: ["image-generation"]
-            }
+                description: 'Adobe Firefly v3 inpainting model',
+                tags: ['image-generation'],
+            },
         ];
     }
 
@@ -187,17 +200,17 @@ export class FireflyDriver extends AbstractDriver<FireflyDriverOptions> {
         try {
             const response = await this.getDriverFetch()(`${this.endpoint}/auth/validate`, {
                 headers: {
-                    'x-api-key': this.options.apiKey
-                }
+                    'x-api-key': this.options.apiKey,
+                },
             });
             return response.ok;
         } catch (error) {
-            this.logger.error({ error }, "[Firefly] Connection validation failed");
+            this.logger.error({ error }, '[Firefly] Connection validation failed');
             return false;
         }
     }
 
     async generateEmbeddings(_options: EmbeddingsOptions): Promise<EmbeddingsResult> {
-        throw new Error("Embeddings not supported by Firefly");
+        throw new Error('Embeddings not supported by Firefly');
     }
 }

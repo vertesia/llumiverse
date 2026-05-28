@@ -1,14 +1,15 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type {
-    AIModel,
-    Completion,
-    CompletionChunkObject,
-    DriverOptions,
-    EmbeddingsOptions,
-    EmbeddingsResult,
-    ExecutionOptions,
-    ModelSearchPayload,
+import {
+    PromptRole,
+    type AIModel,
+    type Completion,
+    type CompletionChunkObject,
+    type DriverOptions,
+    type EmbeddingsOptions,
+    type EmbeddingsResult,
+    type ExecutionOptions,
+    type ModelSearchPayload,
 } from '@llumiverse/common';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Agent } from 'undici';
@@ -17,6 +18,7 @@ import {
     DEFAULT_DRIVER_HTTP_TIMEOUTS,
     createAgentBackedFetch,
     createDriverHttpAgent,
+    mergeDriverHttpTimeoutOptions,
     resolveDriverHttpTimeouts,
 } from './http-agent.js';
 
@@ -31,11 +33,17 @@ class TestDriver extends AbstractDriver<DriverOptions, string> {
         return this.getDriverFetch();
     }
 
-    async requestTextCompletion(_prompt: string, _options: ExecutionOptions): Promise<Completion> {
-        throw new Error('Not implemented');
+    async requestTextCompletion(prompt: string, _options: ExecutionOptions): Promise<Completion> {
+        const response = await this.getDriverFetch()(prompt);
+        return {
+            result: [{ type: 'text', value: await response.text() }],
+        };
     }
 
-    async requestTextCompletionStream(_prompt: string, _options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+    async requestTextCompletionStream(
+        _prompt: string,
+        _options: ExecutionOptions,
+    ): Promise<AsyncIterable<CompletionChunkObject>> {
         throw new Error('Not implemented');
     }
 
@@ -72,9 +80,10 @@ async function startServer(handler: (req: IncomingMessage, res: ServerResponse) 
 
     return {
         url: `http://127.0.0.1:${(address as AddressInfo).port}`,
-        close: () => new Promise<void>((resolve, reject) => {
-            server.close((error?: Error) => error ? reject(error) : resolve());
-        }),
+        close: () =>
+            new Promise<void>((resolve, reject) => {
+                server.close((error?: Error) => (error ? reject(error) : resolve()));
+            }),
     };
 }
 
@@ -85,14 +94,36 @@ describe('driver HTTP agent helpers', () => {
 
     it('fills missing timeout options from defaults', () => {
         expect(resolveDriverHttpTimeouts()).toEqual(DEFAULT_DRIVER_HTTP_TIMEOUTS);
-        expect(resolveDriverHttpTimeouts({
-            headersTimeout: 123,
-            keepAliveTimeout: 456,
-        })).toEqual({
+        expect(
+            resolveDriverHttpTimeouts({
+                headersTimeout: 123,
+                keepAliveTimeout: 456,
+            }),
+        ).toEqual({
             headersTimeout: 123,
             bodyTimeout: DEFAULT_DRIVER_HTTP_TIMEOUTS.bodyTimeout,
             connectTimeout: DEFAULT_DRIVER_HTTP_TIMEOUTS.connectTimeout,
             keepAliveTimeout: 456,
+        });
+    });
+
+    it('merges per-call timeout overrides without replacing defined defaults with undefined', () => {
+        expect(
+            mergeDriverHttpTimeoutOptions(
+                {
+                    headersTimeout: 1_000,
+                    bodyTimeout: 2_000,
+                    connectTimeout: 300,
+                },
+                {
+                    headersTimeout: undefined,
+                    bodyTimeout: 500,
+                },
+            ),
+        ).toEqual({
+            headersTimeout: 1_000,
+            bodyTimeout: 500,
+            connectTimeout: 300,
         });
     });
 
@@ -117,14 +148,18 @@ describe('driver HTTP agent helpers', () => {
         const server = await startServer((req, res) => {
             let body = '';
             req.setEncoding('utf8');
-            req.on('data', chunk => { body += chunk; });
+            req.on('data', (chunk) => {
+                body += chunk;
+            });
             req.on('end', () => {
                 res.writeHead(200, { 'content-type': 'application/json' });
-                res.end(JSON.stringify({
-                    method: req.method,
-                    body,
-                    contentType: req.headers['content-type'],
-                }));
+                res.end(
+                    JSON.stringify({
+                        method: req.method,
+                        body,
+                        contentType: req.headers['content-type'],
+                    }),
+                );
             });
         });
         const agent = createDriverHttpAgent();
@@ -213,5 +248,34 @@ describe('driver HTTP agent helpers', () => {
         expect(driver.getAgent()).not.toBe(agent);
 
         driver.destroy();
+    });
+
+    it('applies per-execution timeout overrides without replacing the cached driver fetch', async () => {
+        const server = await startServer((_req, res) => {
+            const timer = setTimeout(() => {
+                if (!res.destroyed) {
+                    res.writeHead(200, { 'content-type': 'text/plain' });
+                    res.end('late');
+                }
+            }, 3_000);
+            res.on('close', () => clearTimeout(timer));
+        });
+        const driver = new TestDriver({ httpTimeout: { headersTimeout: 2_000 } });
+        const cachedFetch = driver.getFetch();
+        const startedAt = Date.now();
+
+        try {
+            await expect(
+                driver.execute([{ role: PromptRole.user, content: server.url }], {
+                    model: 'test-model',
+                    httpTimeout: { headersTimeout: 100 },
+                }),
+            ).rejects.toThrow();
+            expect(Date.now() - startedAt).toBeLessThan(2_500);
+            expect(driver.getFetch()).toBe(cachedFetch);
+        } finally {
+            driver.destroy();
+            await server.close();
+        }
     });
 });

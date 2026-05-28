@@ -1,9 +1,5 @@
+import { InferenceClient, type TextGenerationStreamOutput } from '@huggingface/inference';
 import {
-    InferenceClient,
-    type TextGenerationStreamOutput,
-} from "@huggingface/inference";
-import {
-    AbstractDriver,
     type AIModel,
     AIModelStatus,
     type CompletionChunkObject,
@@ -11,9 +7,10 @@ import {
     type EmbeddingsResult,
     type ExecutionOptions,
     type TextFallbackOptions,
-} from "@llumiverse/core";
-import { transformAsyncIterator } from "@llumiverse/core/async";
-import { FetchClient } from "@vertesia/api-fetch-client";
+} from '@llumiverse/core';
+import { transformAsyncIterator } from '@llumiverse/core/async';
+import { AbstractDriver } from '@llumiverse/core/driver';
+import { FetchClient } from '@vertesia/api-fetch-client';
 
 export interface HuggingFaceIEDriverOptions extends DriverOptions {
     apiKey: string;
@@ -21,14 +18,12 @@ export interface HuggingFaceIEDriverOptions extends DriverOptions {
 }
 
 export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptions, string> {
-    static PROVIDER = "huggingface_ie";
+    static PROVIDER = 'huggingface_ie';
     provider = HuggingFaceIEDriver.PROVIDER;
     service: FetchClient;
     _executor?: InferenceClient;
 
-    constructor(
-        options: HuggingFaceIEDriverOptions
-    ) {
+    constructor(options: HuggingFaceIEDriverOptions) {
         super(options);
         if (!options.endpoint_url) {
             throw new Error(`Endpoint URL is required for ${this.provider}`);
@@ -37,10 +32,8 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
         this.service.headers.Authorization = `Bearer ${this.options.apiKey}`;
     }
 
-    async getModelURLEndpoint(
-        modelId: string
-    ): Promise<{ url: string; status: string; }> {
-        const res = await this.service.get(`/${modelId}`) as HuggingFaceIEModel;
+    async getModelURLEndpoint(modelId: string): Promise<{ url: string; status: string }> {
+        const res = (await this.service.get(`/${modelId}`)) as HuggingFaceIEModel;
         return {
             url: res.status.url,
             status: getStatus(res),
@@ -50,26 +43,19 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
     async getExecutor(model: string) {
         if (!this._executor) {
             const endpoint = await this.getModelURLEndpoint(model);
-            if (!endpoint.url)
-                throw new Error(
-                    `Endpoint URL not found for model ${model}`
-                );
+            if (!endpoint.url) throw new Error(`Endpoint URL not found for model ${model}`);
             if (endpoint.status !== AIModelStatus.Available)
-                throw new Error(
-                    `Endpoint ${model} is not running - current status: ${endpoint.status}`
-                );
+                throw new Error(`Endpoint ${model} is not running - current status: ${endpoint.status}`);
 
             // Use the new InferenceClient and bind it to the endpoint URL
-            this._executor = new InferenceClient(this.options.apiKey).endpoint(
-                endpoint.url
-            );
+            this._executor = new InferenceClient(this.options.apiKey).endpoint(endpoint.url);
         }
         return this._executor;
     }
 
     async requestTextCompletionStream(prompt: string, options: ExecutionOptions) {
-        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "text-fallback") {
-            this.logger.debug({ options: options.model_options }, "Unexpected option id");
+        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== 'text-fallback') {
+            this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
@@ -86,22 +72,22 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
             //special like <s> are not part of the result
             if (val.token.special) return { result: [] };
             let finish_reason = val.details?.finish_reason as string;
-            if (finish_reason === "eos_token") {
-                finish_reason = "stop";
+            if (finish_reason === 'eos_token') {
+                finish_reason = 'stop';
             }
             return {
-                result: val.token.text ? [{ type: "text" as const, value: val.token.text }] : [],
+                result: val.token.text ? [{ type: 'text' as const, value: val.token.text }] : [],
                 finish_reason: finish_reason,
                 token_usage: {
                     result: val.details?.generated_tokens ?? 0,
-                }
+                },
             };
         });
     }
 
     async requestTextCompletion(prompt: string, options: ExecutionOptions) {
-        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "text-fallback") {
-            this.logger.debug({ options: options.model_options }, "Unexpected option id");
+        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== 'text-fallback') {
+            this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
@@ -115,24 +101,23 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
         });
 
         let finish_reason = res.details?.finish_reason as string;
-        if (finish_reason === "eos_token") {
-            finish_reason = "stop";
+        if (finish_reason === 'eos_token') {
+            finish_reason = 'stop';
         }
         return {
-            result: [{ type: "text" as const, value: res.generated_text }],
+            result: [{ type: 'text' as const, value: res.generated_text }],
             finish_reason: finish_reason,
             token_usage: {
-                result: res.details?.generated_tokens
+                result: res.details?.generated_tokens,
             },
             original_response: options.include_original_response ? res : undefined,
         };
-
     }
 
     // ============== management API ==============
 
     async listModels(): Promise<AIModel[]> {
-        const res = await this.service.get("/") as { items: HuggingFaceIEModel[] };
+        const res = (await this.service.get('/')) as { items: HuggingFaceIEModel[] };
         const hfModels = res.items;
         if (!hfModels?.length) return [];
 
@@ -149,7 +134,7 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
 
     async validateConnection(): Promise<boolean> {
         try {
-            await this.service.get("/models");
+            await this.service.get('/models');
             return true;
         } catch {
             return false;
@@ -157,28 +142,27 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
     }
 
     async generateEmbeddings(): Promise<EmbeddingsResult> {
-        throw new Error("Method not implemented.");
+        throw new Error('Method not implemented.');
     }
-
 }
 
 //get status from HF status
 function getStatus(hfModel: HuggingFaceIEModel): AIModelStatus {
     //[ pending, initializing, updating, updateFailed, running, paused, failed, scaledToZero ]
     switch (hfModel.status.state) {
-        case "running":
+        case 'running':
             return AIModelStatus.Available;
-        case "initializing":
+        case 'initializing':
             return AIModelStatus.Pending;
-        case "updating":
+        case 'updating':
             return AIModelStatus.Pending;
-        case "updateFailed":
+        case 'updateFailed':
             return AIModelStatus.Unavailable;
-        case "paused":
+        case 'paused':
             return AIModelStatus.Stopped;
-        case "failed":
+        case 'failed':
             return AIModelStatus.Unavailable;
-        case "scaledToZero":
+        case 'scaledToZero':
             return AIModelStatus.Available;
         default:
             return AIModelStatus.Unknown;

@@ -33,8 +33,14 @@
       "async": [
         "./lib/types/async.d.ts"
       ],
+      "driver": [
+        "./lib/types/Driver.d.ts"
+      ],
       "formatters": [
         "./lib/types/formatters/index.d.ts"
+      ],
+      "http-agent": [
+        "./lib/types/http-agent.d.ts"
       ]
     }
   },
@@ -49,10 +55,20 @@
       "import": "./lib/esm/async.js",
       "require": "./lib/cjs/async.js"
     },
+    "./driver": {
+      "types": "./lib/types/Driver.d.ts",
+      "import": "./lib/esm/Driver.js",
+      "require": "./lib/cjs/Driver.js"
+    },
     "./formatters": {
       "types": "./lib/types/formatters/index.d.ts",
       "import": "./lib/esm/formatters/index.js",
       "require": "./lib/cjs/formatters/index.js"
+    },
+    "./http-agent": {
+      "types": "./lib/types/http-agent.d.ts",
+      "import": "./lib/esm/http-agent.js",
+      "require": "./lib/cjs/http-agent.js"
     }
   },
   "scripts": {
@@ -88,7 +104,9 @@
     "outDir": "lib",
     "exports": {
       "async": "async.js",
-      "formatters": "formatters/index.js"
+      "driver": "Driver.js",
+      "formatters": "formatters/index.js",
+      "http-agent": "http-agent.js"
     }
   }
 }

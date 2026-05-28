@@ -10,7 +10,7 @@ import {
     PromptRole,
     type PromptSegment,
 } from '@llumiverse/common';
-import { AbstractDriver } from '@llumiverse/core';
+import { AbstractDriver } from '@llumiverse/core/driver';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BedrockDriver, type BedrockPrompt } from './index.js';
 import type { Tree } from '../../test/__helpers__/test-utils.js';
@@ -38,7 +38,7 @@ describe('BedrockDriver getExtractedStream — tool use', () => {
             },
             undefined,
             undefined,
-            toolBlocks
+            toolBlocks,
         );
 
         expect(chunk.tool_use).toHaveLength(1);
@@ -58,7 +58,7 @@ describe('BedrockDriver getExtractedStream — tool use', () => {
             },
             undefined,
             undefined,
-            toolBlocks
+            toolBlocks,
         );
 
         expect(chunk.tool_use).toHaveLength(1);
@@ -68,12 +68,7 @@ describe('BedrockDriver getExtractedStream — tool use', () => {
     it('removes the block from the map on contentBlockStop', () => {
         toolBlocks.set(1, { id: 'tool-abc', name: 'my_tool' });
 
-        driver.getExtractedStream(
-            { contentBlockStop: { contentBlockIndex: 1 } },
-            undefined,
-            undefined,
-            toolBlocks
-        );
+        driver.getExtractedStream({ contentBlockStop: { contentBlockIndex: 1 } }, undefined, undefined, toolBlocks);
 
         expect(toolBlocks.has(1)).toBe(false);
     });
@@ -81,11 +76,15 @@ describe('BedrockDriver getExtractedStream — tool use', () => {
     it('tracks two interleaved tool calls by independent contentBlockIndex', () => {
         driver.getExtractedStream(
             { contentBlockStart: { contentBlockIndex: 1, start: { toolUse: { toolUseId: 'id-1', name: 'tool_a' } } } },
-            undefined, undefined, toolBlocks
+            undefined,
+            undefined,
+            toolBlocks,
         );
         driver.getExtractedStream(
             { contentBlockStart: { contentBlockIndex: 3, start: { toolUse: { toolUseId: 'id-2', name: 'tool_b' } } } },
-            undefined, undefined, toolBlocks
+            undefined,
+            undefined,
+            toolBlocks,
         );
 
         expect(toolBlocks.get(1)).toEqual({ id: 'id-1', name: 'tool_a' });
@@ -93,7 +92,9 @@ describe('BedrockDriver getExtractedStream — tool use', () => {
 
         const chunk = driver.getExtractedStream(
             { contentBlockDelta: { contentBlockIndex: 3, delta: { toolUse: { input: '"val"' } } } },
-            undefined, undefined, toolBlocks
+            undefined,
+            undefined,
+            toolBlocks,
         );
         expect(chunk.tool_use?.[0].id).toBe('id-2');
     });
@@ -103,7 +104,7 @@ describe('BedrockDriver getExtractedStream — tool use', () => {
             { contentBlockDelta: { contentBlockIndex: 0, delta: { text: 'hello' } } },
             undefined,
             undefined,
-            toolBlocks
+            toolBlocks,
         );
 
         expect(chunk.result).toEqual([{ type: 'text', value: 'hello' }]);
@@ -115,7 +116,7 @@ describe('BedrockDriver getExtractedStream — tool use', () => {
             { messageStop: { stopReason: 'tool_use' } },
             undefined,
             undefined,
-            toolBlocks
+            toolBlocks,
         );
 
         expect(chunk.finish_reason).toBe('tool_use');
@@ -134,13 +135,22 @@ class FakeDriver extends AbstractDriver<DriverOptions, string> {
         throw new Error('not implemented');
     }
 
-    async requestTextCompletionStream(_prompt: string, _options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+    async requestTextCompletionStream(
+        _prompt: string,
+        _options: ExecutionOptions,
+    ): Promise<AsyncIterable<CompletionChunkObject>> {
         const chunks = this.chunks;
-        return (async function* () { for (const c of chunks) yield c; })();
+        return (async function* () {
+            for (const c of chunks) yield c;
+        })();
     }
 
-    async listModels(_params?: ModelSearchPayload): Promise<AIModel[]> { return []; }
-    async validateConnection(): Promise<boolean> { return true; }
+    async listModels(_params?: ModelSearchPayload): Promise<AIModel[]> {
+        return [];
+    }
+    async validateConnection(): Promise<boolean> {
+        return true;
+    }
     async generateEmbeddings(_options: EmbeddingsOptions): Promise<EmbeddingsResult> {
         throw new Error('not implemented');
     }
@@ -162,7 +172,9 @@ describe('driver.stream() — Bedrock tool use accumulation', () => {
         ];
 
         const stream = await driver.stream(FAKE_SEGMENTS, options);
-        for await (const _ of stream) { /* drain */ }
+        for await (const _ of stream) {
+            /* drain */
+        }
 
         expect(stream.completion?.finish_reason).toBe('tool_use');
         expect(stream.completion?.tool_use).toHaveLength(1);
@@ -186,12 +198,14 @@ describe('driver.stream() — Bedrock tool use accumulation', () => {
         ];
 
         const stream = await driver.stream(FAKE_SEGMENTS, options);
-        for await (const _ of stream) { /* drain */ }
+        for await (const _ of stream) {
+            /* drain */
+        }
 
         const toolUse = stream.completion?.tool_use ?? [];
         expect(toolUse).toHaveLength(2);
-        expect(toolUse.find(t => t.id === 'id-a')?.tool_input).toEqual({ x: 1 });
-        expect(toolUse.find(t => t.id === 'id-b')?.tool_input).toEqual({ y: 2 });
+        expect(toolUse.find((t) => t.id === 'id-a')?.tool_input).toEqual({ x: 1 });
+        expect(toolUse.find((t) => t.id === 'id-b')?.tool_input).toEqual({ y: 2 });
     });
 
     it('drops truncated tool calls when finish_reason is length', async () => {
@@ -205,7 +219,9 @@ describe('driver.stream() — Bedrock tool use accumulation', () => {
         ];
 
         const stream = await driver.stream(FAKE_SEGMENTS, options);
-        for await (const _ of stream) { /* drain */ }
+        for await (const _ of stream) {
+            /* drain */
+        }
 
         expect(stream.completion?.tool_use).toBeUndefined();
     });
@@ -216,20 +232,20 @@ describe('BedrockDriver buildStreamingConversation', () => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
         const prompt = {
             modelId: 'anthropic.claude-sonnet',
-            messages: [
-                { role: 'user', content: [{ text: 'What is the weather in Paris?' }] },
-            ],
+            messages: [{ role: 'user', content: [{ text: 'What is the weather in Paris?' }] }],
         };
 
         const conversation = driver.buildStreamingConversation(
             prompt as unknown as BedrockPrompt,
             [{ type: 'text', value: 'Let me check.' }],
-            [{
-                id: 'tool-1',
-                tool_name: 'get_weather',
-                tool_input: { location: 'Paris' },
-            }],
-            { model: 'anthropic.claude-sonnet' } as ExecutionOptions
+            [
+                {
+                    id: 'tool-1',
+                    tool_name: 'get_weather',
+                    tool_input: { location: 'Paris' },
+                },
+            ],
+            { model: 'anthropic.claude-sonnet' } as ExecutionOptions,
         ) as unknown as Tree;
 
         expect(conversation.messages).toHaveLength(2);

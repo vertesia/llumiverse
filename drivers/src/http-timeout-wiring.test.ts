@@ -13,6 +13,7 @@ import { VertexAIDriver } from './vertexai/index.js';
 import { WatsonxDriver } from './watsonx/index.js';
 import { xAIDriver } from './xai/index.js';
 import { exposePrivate } from '../test/__helpers__/test-utils.js';
+import type { HttpTimeoutOptions } from '@llumiverse/core';
 
 type DriverFetchInternals = {
     _driverFetch?: typeof fetch;
@@ -66,7 +67,7 @@ describe('driver HTTP timeout wiring', () => {
         });
 
         const config = exposePrivate<{
-            getBedrockRequestHandlerConfig: () => BedrockRequestHandlerConfig;
+            getBedrockRequestHandlerConfig: (httpTimeout?: HttpTimeoutOptions) => BedrockRequestHandlerConfig;
         }>(driver).getBedrockRequestHandlerConfig();
 
         expect(config).toEqual({
@@ -75,6 +76,27 @@ describe('driver HTTP timeout wiring', () => {
             connectionTimeout: 345,
             socketTimeout: 2_345,
         });
+
+        const overrideConfig = exposePrivate<{
+            getBedrockRequestHandlerConfig: (httpTimeout?: HttpTimeoutOptions) => BedrockRequestHandlerConfig;
+        }>(driver).getBedrockRequestHandlerConfig({
+            headersTimeout: 456,
+            bodyTimeout: 567,
+        });
+
+        expect(overrideConfig).toEqual({
+            requestTimeout: 456,
+            throwOnRequestTimeout: true,
+            connectionTimeout: 345,
+            socketTimeout: 567,
+        });
+
+        const defaultExecutor = driver.getExecutor();
+        const scopedExecutor = driver.getExecutor({ headersTimeout: 456 });
+        expect(scopedExecutor).not.toBe(defaultExecutor);
+        expect(driver.getExecutor()).toBe(defaultExecutor);
+        scopedExecutor.destroy();
+        driver.destroy();
     });
 
     it('passes the driver fetch to SDK clients that accept a custom fetch implementation', () => {
@@ -166,11 +188,18 @@ describe('driver HTTP timeout wiring', () => {
         });
 
         const internals = exposePrivate<{
-            getGoogleGenAIHttpOptions: (flex: boolean) => {
+            getGoogleGenAIHttpOptions: (
+                flex: boolean,
+                httpTimeout?: HttpTimeoutOptions,
+            ) => {
                 timeout: number;
                 headers?: Record<string, string>;
             };
-            getAnthropicVertexClientOptions: (region: string, authClient: unknown) => {
+            getAnthropicVertexClientOptions: (
+                region: string,
+                authClient: unknown,
+                httpTimeout?: HttpTimeoutOptions,
+            ) => {
                 timeout: number;
                 region: string;
                 projectId: string;
@@ -188,6 +217,14 @@ describe('driver HTTP timeout wiring', () => {
                 'X-Vertex-AI-LLM-Shared-Request-Type': 'flex',
             },
         });
+        expect(
+            internals.getGoogleGenAIHttpOptions(false, {
+                headersTimeout: 10_000,
+                bodyTimeout: 20_000,
+            }),
+        ).toEqual({
+            timeout: 20_000,
+        });
 
         const anthropicOptions = internals.getAnthropicVertexClientOptions('global', {});
         expect(anthropicOptions).toEqual({
@@ -197,6 +234,29 @@ describe('driver HTTP timeout wiring', () => {
             authClient: {},
             fetch: driverFetch(driver),
         });
+        expect(
+            internals.getAnthropicVertexClientOptions(
+                'global',
+                {},
+                {
+                    headersTimeout: 10_000,
+                    bodyTimeout: 20_000,
+                },
+            ),
+        ).toEqual({
+            timeout: 20_000,
+            region: 'global',
+            projectId: 'project',
+            authClient: {},
+            fetch: driverFetch(driver),
+        });
+
+        const defaultGoogleClient = driver.getGoogleGenAIClient();
+        const overrideGoogleClient = driver.getGoogleGenAIClient('us-central1', false, {
+            headersTimeout: 10_000,
+        });
+        expect(overrideGoogleClient).not.toBe(defaultGoogleClient);
+        expect(driver.getGoogleGenAIClient()).toBe(defaultGoogleClient);
 
         driver.destroy();
     });
