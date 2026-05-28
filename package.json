@@ -17,7 +17,7 @@
     "typecheck:test": "pnpm -r typecheck:test"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.4",
+    "@biomejs/biome": "2.4.4",
     "cross-spawn": "^7.0.6",
     "lint-staged": "^17.0.5",
     "npm-ws-tools": "^0.3.0",
