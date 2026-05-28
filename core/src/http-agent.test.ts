@@ -113,6 +113,44 @@ describe('driver HTTP agent helpers', () => {
         }
     });
 
+    it('preserves a global Request body when callers pass undefined init fields', async () => {
+        const server = await startServer((req, res) => {
+            let body = '';
+            req.setEncoding('utf8');
+            req.on('data', chunk => { body += chunk; });
+            req.on('end', () => {
+                res.writeHead(200, { 'content-type': 'application/json' });
+                res.end(JSON.stringify({
+                    method: req.method,
+                    body,
+                    contentType: req.headers['content-type'],
+                }));
+            });
+        });
+        const agent = createDriverHttpAgent();
+        const wrappedFetch = createAgentBackedFetch(agent);
+        const request = new Request(server.url, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ ok: true }),
+        });
+
+        try {
+            const response = await wrappedFetch(request, {
+                method: undefined,
+                body: undefined,
+            });
+            await expect(response.json()).resolves.toEqual({
+                method: 'POST',
+                body: '{"ok":true}',
+                contentType: 'application/json',
+            });
+        } finally {
+            await agent.close();
+            await server.close();
+        }
+    });
+
     it('enforces headersTimeout through the wrapped fetch', async () => {
         const server = await startServer((_req, res) => {
             const timer = setTimeout(() => {

@@ -178,7 +178,8 @@ function getTextOptions(model: string): ExecutionOptions {
         model: model,
         model_options: isReasoningModel ? {
             _option_id: "openai-thinking",
-            max_tokens: 1024,
+            max_tokens: 3000,
+            effort: "low",
         } : {
             _option_id: "text-fallback",
             max_tokens: 256,

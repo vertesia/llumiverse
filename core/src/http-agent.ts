@@ -1,5 +1,5 @@
 import type { HttpTimeoutOptions } from "@llumiverse/common";
-import { Agent, fetch as undiciFetch } from "undici";
+import { Agent } from "undici";
 
 /**
  * Default HTTP timeouts used by {@link createDriverHttpAgent} when the
@@ -50,7 +50,7 @@ export function createDriverHttpAgent(opts?: HttpTimeoutOptions): Agent {
 }
 
 /**
- * Wrap `undici.fetch` so every request routes through the given Agent.
+ * Wrap the global `fetch` so every request routes through the given Agent.
  * The returned function is type-compatible with global `fetch`, so it
  * can be passed directly to SDKs that accept a `fetch` option (OpenAI,
  * Anthropic, `@google/genai`, Bedrock via Smithy, …) or used as a
@@ -58,10 +58,11 @@ export function createDriverHttpAgent(opts?: HttpTimeoutOptions): Agent {
  * calls.
  *
  * `@vertesia/api-fetch-client` builds requests with `globalThis.Request`,
- * while the undici package uses its own `Request` class. Passing a global
- * Request directly to `undici.fetch` is parsed as `"[object Request]"`.
- * Normalize those requests to URL + init first so we keep the undici
- * Agent timeout behavior without the Request-class mismatch.
+ * while the undici package uses its own `Request` class. Calling
+ * `undici.fetch` directly can parse a global Request as `"[object Request]"`.
+ * Use `globalThis.fetch` (undici-backed in Node/Bun) and pass the undici
+ * dispatcher extension through init so the Agent timeout behavior is still
+ * applied without crossing Request/Response implementations.
  */
 export function createAgentBackedFetch(agent: Agent): typeof fetch {
     return ((input: RequestInfo | URL, init?: RequestInit) => {
@@ -69,10 +70,10 @@ export function createAgentBackedFetch(agent: Agent): typeof fetch {
             ? normalizeRequestInput(input, init)
             : { input, init };
 
-        return undiciFetch(requestInput.input as Parameters<typeof undiciFetch>[0], {
+        return globalThis.fetch(requestInput.input, {
             ...(requestInput.init ?? {}),
             dispatcher: agent,
-        } as Parameters<typeof undiciFetch>[1]);
+        } as RequestInit & { dispatcher?: unknown });
     }) as unknown as typeof fetch;
 }
 
@@ -82,6 +83,7 @@ type NormalizedRequestInput = {
 };
 
 function normalizeRequestInput(request: Request, init?: RequestInit): NormalizedRequestInput {
+    const overrides = stripUndefinedRequestInit(init);
     const requestInit: RequestInit & { duplex?: 'half' } = {
         method: request.method,
         headers: request.headers,
@@ -105,9 +107,17 @@ function normalizeRequestInput(request: Request, init?: RequestInit): Normalized
         input: request.url,
         init: {
             ...requestInit,
-            ...(init ?? {}),
+            ...overrides,
         },
     };
+}
+
+function stripUndefinedRequestInit(init?: RequestInit): RequestInit | undefined {
+    if (!init) {
+        return undefined;
+    }
+    const entries = Object.entries(init).filter(([, value]) => value !== undefined);
+    return Object.fromEntries(entries) as RequestInit;
 }
 
 /** Re-export the undici `Agent` type so driver code can type its agent
