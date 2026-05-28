@@ -24,30 +24,31 @@ describe('ClaudeModelDefinition streaming spacing', () => {
     it('does not leak deferred spacing when tool use follows thinking', async () => {
         const modelDef = new ClaudeModelDefinition('claude-sonnet-4-5');
         const driver = {
-            logger: { warn: () => { }, info: () => { }, error: () => { } },
+            logger: { warn: () => {}, info: () => {}, error: () => {} },
             getAnthropicClient: async () => ({
                 messages: {
-                    stream: async () => createAsyncStream([
-                        {
-                            type: 'content_block_delta',
-                            delta: { type: 'thinking_delta', thinking: 'Thinking...' },
-                        },
-                        {
-                            type: 'content_block_delta',
-                            delta: { type: 'signature_delta' },
-                        },
-                        {
-                            type: 'content_block_start',
-                            content_block: { type: 'tool_use', id: 'tool-1', name: 'get_weather' },
-                        },
-                        {
-                            type: 'content_block_delta',
-                            delta: { type: 'input_json_delta', partial_json: '{"city":"Paris"}' },
-                        },
-                        {
-                            type: 'content_block_stop',
-                        },
-                    ]),
+                    stream: async () =>
+                        createAsyncStream([
+                            {
+                                type: 'content_block_delta',
+                                delta: { type: 'thinking_delta', thinking: 'Thinking...' },
+                            },
+                            {
+                                type: 'content_block_delta',
+                                delta: { type: 'signature_delta' },
+                            },
+                            {
+                                type: 'content_block_start',
+                                content_block: { type: 'tool_use', id: 'tool-1', name: 'get_weather' },
+                            },
+                            {
+                                type: 'content_block_delta',
+                                delta: { type: 'input_json_delta', partial_json: '{"city":"Paris"}' },
+                            },
+                            {
+                                type: 'content_block_stop',
+                            },
+                        ]),
                 },
             }),
         } as unknown as VertexAIDriver;
@@ -67,8 +68,11 @@ describe('ClaudeModelDefinition streaming spacing', () => {
         const stream = await modelDef.requestTextCompletionStream(driver, prompt, options);
         const chunks = await collectChunks(stream);
 
-        const textOutput = chunks.flatMap(chunk => chunk.result ?? []).map(part => part.value).join('');
-        const toolChunks = chunks.flatMap(chunk => chunk.tool_use ?? []);
+        const textOutput = chunks
+            .flatMap((chunk) => chunk.result ?? [])
+            .map((part) => part.value)
+            .join('');
+        const toolChunks = chunks.flatMap((chunk) => chunk.tool_use ?? []);
 
         expect(textOutput).toBe('Thinking...');
         expect(toolChunks).toHaveLength(2);
@@ -79,23 +83,24 @@ describe('ClaudeModelDefinition streaming spacing', () => {
     it('flushes deferred spacing into the first text delta after thinking', async () => {
         const modelDef = new ClaudeModelDefinition('claude-sonnet-4-5');
         const driver = {
-            logger: { warn: () => { }, info: () => { }, error: () => { } },
+            logger: { warn: () => {}, info: () => {}, error: () => {} },
             getAnthropicClient: async () => ({
                 messages: {
-                    stream: async () => createAsyncStream([
-                        {
-                            type: 'content_block_delta',
-                            delta: { type: 'thinking_delta', thinking: 'Thinking...' },
-                        },
-                        {
-                            type: 'content_block_delta',
-                            delta: { type: 'signature_delta' },
-                        },
-                        {
-                            type: 'content_block_delta',
-                            delta: { type: 'text_delta', text: 'Answer' },
-                        },
-                    ]),
+                    stream: async () =>
+                        createAsyncStream([
+                            {
+                                type: 'content_block_delta',
+                                delta: { type: 'thinking_delta', thinking: 'Thinking...' },
+                            },
+                            {
+                                type: 'content_block_delta',
+                                delta: { type: 'signature_delta' },
+                            },
+                            {
+                                type: 'content_block_delta',
+                                delta: { type: 'text_delta', text: 'Answer' },
+                            },
+                        ]),
                 },
             }),
         } as unknown as VertexAIDriver;
@@ -115,41 +120,42 @@ describe('ClaudeModelDefinition streaming spacing', () => {
         const stream = await modelDef.requestTextCompletionStream(driver, prompt, options);
         const chunks = await collectChunks(stream);
 
-        const textParts = chunks.flatMap(chunk => chunk.result ?? []).map(part => part.value);
+        const textParts = chunks.flatMap((chunk) => chunk.result ?? []).map((part) => part.value);
         expect(textParts).toEqual(['Thinking...', '\n\nAnswer']);
     });
 
     it('does not reintroduce deferred spacing when text arrives after a tool call', async () => {
         const modelDef = new ClaudeModelDefinition('claude-sonnet-4-5');
         const driver = {
-            logger: { warn: () => { }, info: () => { }, error: () => { } },
+            logger: { warn: () => {}, info: () => {}, error: () => {} },
             getAnthropicClient: async () => ({
                 messages: {
-                    stream: async () => createAsyncStream([
-                        {
-                            type: 'content_block_delta',
-                            delta: { type: 'thinking_delta', thinking: 'Thinking...' },
-                        },
-                        {
-                            type: 'content_block_delta',
-                            delta: { type: 'signature_delta' },
-                        },
-                        {
-                            type: 'content_block_start',
-                            content_block: { type: 'tool_use', id: 'tool-1', name: 'get_weather' },
-                        },
-                        {
-                            type: 'content_block_delta',
-                            delta: { type: 'input_json_delta', partial_json: '{"city":"Paris"}' },
-                        },
-                        {
-                            type: 'content_block_stop',
-                        },
-                        {
-                            type: 'content_block_delta',
-                            delta: { type: 'text_delta', text: 'Answer after tool' },
-                        },
-                    ]),
+                    stream: async () =>
+                        createAsyncStream([
+                            {
+                                type: 'content_block_delta',
+                                delta: { type: 'thinking_delta', thinking: 'Thinking...' },
+                            },
+                            {
+                                type: 'content_block_delta',
+                                delta: { type: 'signature_delta' },
+                            },
+                            {
+                                type: 'content_block_start',
+                                content_block: { type: 'tool_use', id: 'tool-1', name: 'get_weather' },
+                            },
+                            {
+                                type: 'content_block_delta',
+                                delta: { type: 'input_json_delta', partial_json: '{"city":"Paris"}' },
+                            },
+                            {
+                                type: 'content_block_stop',
+                            },
+                            {
+                                type: 'content_block_delta',
+                                delta: { type: 'text_delta', text: 'Answer after tool' },
+                            },
+                        ]),
                 },
             }),
         } as unknown as VertexAIDriver;
@@ -169,7 +175,7 @@ describe('ClaudeModelDefinition streaming spacing', () => {
         const stream = await modelDef.requestTextCompletionStream(driver, prompt, options);
         const chunks = await collectChunks(stream);
 
-        const textParts = chunks.flatMap(chunk => chunk.result ?? []).map(part => part.value);
+        const textParts = chunks.flatMap((chunk) => chunk.result ?? []).map((part) => part.value);
         expect(textParts).toEqual(['Thinking...', 'Answer after tool']);
     });
 });

@@ -24,11 +24,11 @@ import {
     type TrainingJob,
     type TrainingOptions,
     type TrainingPromptOptions,
-    LlumiverseError
-} from "@llumiverse/common";
-import { DefaultCompletionStream, FallbackCompletionStream } from "./CompletionStream.js";
-import { formatTextPrompt } from "./formatters/index.js";
-import { validateResult } from "./validation.js";
+    LlumiverseError,
+} from '@llumiverse/common';
+import { DefaultCompletionStream, FallbackCompletionStream } from './CompletionStream.js';
+import { formatTextPrompt } from './formatters/index.js';
+import { validateResult } from './validation.js';
 
 function getObjectProperty(value: unknown, key: string): unknown {
     if (value && typeof value === 'object' && key in value) {
@@ -58,7 +58,7 @@ const ConsoleLogger: Logger = {
     info: createConsoleLoggerMethod(console.info.bind(console)),
     warn: createConsoleLoggerMethod(console.warn.bind(console)),
     error: createConsoleLoggerMethod(console.error.bind(console)),
-}
+};
 
 const noop = () => void 0;
 const NoopLogger: Logger = {
@@ -66,10 +66,10 @@ const NoopLogger: Logger = {
     info: noop as Logger['info'],
     warn: noop as Logger['warn'],
     error: noop as Logger['error'],
-}
+};
 
-export function createLogger(logger: Logger | "console" | undefined) {
-    if (logger === "console") {
+export function createLogger(logger: Logger | 'console' | undefined) {
+    if (logger === 'console') {
         return ConsoleLogger;
     } else if (logger) {
         return logger;
@@ -79,7 +79,6 @@ export function createLogger(logger: Logger | "console" | undefined) {
 }
 
 export interface Driver<PromptT = unknown> {
-
     /**
      *
      * @param segments
@@ -130,7 +129,9 @@ export interface Driver<PromptT = unknown> {
 /**
  * To be implemented by each driver
  */
-export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOptions, PromptT = unknown> implements Driver<PromptT> {
+export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOptions, PromptT = unknown>
+    implements Driver<PromptT>
+{
     options: OptionsT;
     logger: Logger;
 
@@ -142,23 +143,27 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     }
 
     async createTrainingPrompt(options: TrainingPromptOptions): Promise<string> {
-        const prompt = await this.createPrompt(options.segments, { result_schema: options.schema, model: options.model })
+        const prompt = await this.createPrompt(options.segments, {
+            result_schema: options.schema,
+            model: options.model,
+        });
         return JSON.stringify({
             prompt,
-            completion: typeof options.completion === 'string' ? options.completion : JSON.stringify(options.completion)
+            completion:
+                typeof options.completion === 'string' ? options.completion : JSON.stringify(options.completion),
         });
     }
 
     startTraining(_dataset: DataSource, _options: TrainingOptions): Promise<TrainingJob> {
-        throw new Error("Method not implemented.");
+        throw new Error('Method not implemented.');
     }
 
     cancelTraining(_jobId: string): Promise<TrainingJob> {
-        throw new Error("Method not implemented.");
+        throw new Error('Method not implemented.');
     }
 
     getTrainingJob(_jobId: string): Promise<TrainingJob> {
-        throw new Error("Method not implemented.");
+        throw new Error('Method not implemented.');
     }
 
     validateResult(result: Completion, options: ExecutionOptions) {
@@ -175,7 +180,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
                     code: code || 'validation_error',
                     message: validationError.message,
                     data: result.result,
-                }
+                };
             }
         }
     }
@@ -201,12 +206,10 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
             let result: Completion;
 
             if (this.isImageModel(options.model)) {
-                this.logger.debug(
-                    `[${this.provider}] Executing prompt on ${options.model}, image pathway.`);
+                this.logger.debug(`[${this.provider}] Executing prompt on ${options.model}, image pathway.`);
                 result = await this.requestImageGeneration(prompt, options);
             } else {
-                this.logger.debug(
-                    `[${this.provider}] Executing prompt on ${options.model}, text pathway.`);
+                this.logger.debug(`[${this.provider}] Executing prompt on ${options.model}, text pathway.`);
                 result = await this.requestTextCompletion(prompt, options);
                 this.validateResult(result, options);
             }
@@ -219,7 +222,10 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
                 throw error;
             }
             // Log the original error for debugging
-            this.logger.error({ err: error, data: { provider: this.provider, model: options.model, operation: 'execute', prompt } }, `Error during execution in provider ${this.provider}:`);
+            this.logger.error(
+                { err: error, data: { provider: this.provider, model: options.model, operation: 'execute', prompt } },
+                `Error during execution in provider ${this.provider}:`,
+            );
             throw this.formatLlumiverseError(error, {
                 provider: this.provider,
                 model: options.model,
@@ -234,7 +240,10 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     // by default no stream is supported. we block and we return all at once
     async stream(segments: PromptSegment[], options: ExecutionOptions): Promise<CompletionStream<PromptT>> {
-        this.logger.debug(options, `Executing prompt with provider ${this.provider} with options: ${JSON.stringify(options)}`);
+        this.logger.debug(
+            options,
+            `Executing prompt with provider ${this.provider} with options: ${JSON.stringify(options)}`,
+        );
         const prompt = await this.createPrompt(segments, options);
         const canStream = await this.canStream(options);
         if (canStream) {
@@ -257,7 +266,9 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     }
 
     public async createPrompt(segments: PromptSegment[], opts: PromptOptions): Promise<PromptT> {
-        return await (opts.format ? opts.format(segments, opts.result_schema) as PromptT : this.formatPrompt(segments, opts));
+        return await (opts.format
+            ? (opts.format(segments, opts.result_schema) as PromptT)
+            : this.formatPrompt(segments, opts));
     }
 
     /**
@@ -296,7 +307,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         _prompt: PromptT,
         _result: unknown[],
         _toolUse: unknown[] | undefined,
-        _options: ExecutionOptions
+        _options: ExecutionOptions,
     ): unknown | undefined {
         // Default implementation returns undefined - drivers can override
         return undefined;
@@ -305,27 +316,25 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     /**
      * Format an error into LlumiverseError. Override in driver implementations
      * to provide provider-specific error parsing.
-     * 
+     *
      * The default implementation uses common patterns:
      * - Status 429, 408: retryable (rate limit, timeout)
      * - Status 529: retryable (overloaded)
      * - Status 5xx: retryable (server errors)
      * - Status 4xx (except above): not retryable (client errors)
      * - Error messages containing "rate limit", "timeout", etc.: retryable
-     * 
+     *
      * @param error - The error to format
      * @param context - Context about where the error occurred
      * @returns A standardized LlumiverseError
      */
-    public formatLlumiverseError(
-        error: unknown,
-        context: LlumiverseErrorContext
-    ): LlumiverseError {
+    public formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
         // Extract status code from common locations (only if numeric)
         let code: number | undefined;
-        const rawCode = getObjectProperty(error, 'status')
-            || getObjectProperty(error, 'statusCode')
-            || getObjectProperty(error, 'code');
+        const rawCode =
+            getObjectProperty(error, 'status') ||
+            getObjectProperty(error, 'statusCode') ||
+            getObjectProperty(error, 'code');
 
         if (typeof rawCode === 'number') {
             code = rawCode;
@@ -336,27 +345,18 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         const errorName = typeof rawErrorName === 'string' ? rawErrorName : undefined;
 
         // Extract message
-        const message = error instanceof Error
-            ? error.message
-            : String(error);
+        const message = error instanceof Error ? error.message : String(error);
 
         // Determine retryability
         const retryable = this.isRetryableError(code, message);
 
-        return new LlumiverseError(
-            `[${this.provider}] ${message}`,
-            retryable,
-            context,
-            error,
-            code,
-            errorName
-        );
+        return new LlumiverseError(`[${this.provider}] ${message}`, retryable, context, error, code, errorName);
     }
 
     /**
      * Determine if an error is retryable based on status code and message.
      * Can be overridden by drivers for provider-specific logic.
-     * 
+     *
      * @param statusCode - The HTTP status code (if available)
      * @param message - The error message
      * @returns True if retryable, false if not retryable, undefined if unknown
@@ -397,10 +397,13 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     abstract requestTextCompletion(prompt: PromptT, options: ExecutionOptions): Promise<Completion>;
 
-    abstract requestTextCompletionStream(prompt: PromptT, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>>;
+    abstract requestTextCompletionStream(
+        prompt: PromptT,
+        options: ExecutionOptions,
+    ): Promise<AsyncIterable<CompletionChunkObject>>;
 
     async requestImageGeneration(_prompt: PromptT, _options: ExecutionOptions): Promise<Completion> {
-        throw new Error("Image generation not implemented.");
+        throw new Error('Image generation not implemented.');
         //Cannot be made abstract, as abstract methods are required in the derived class
     }
 

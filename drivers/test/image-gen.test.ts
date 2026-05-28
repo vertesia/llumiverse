@@ -1,11 +1,11 @@
 // biome-ignore lint/suspicious/noDeprecatedImports: exercising deprecated output_modality path until that API is removed
-import { type AbstractDriver, type ExecutionOptions, Modalities } from "@llumiverse/core";
-import "dotenv/config";
-import fs from "node:fs";
-import { describe, expect, test } from "vitest";
-import { BedrockDriver } from "../src";
-import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "../src/bedrock/nova-image-payload";
-import { testPrompt_imageVariations, testPrompt_textToImage, testPrompt_textToImageGuidance } from "./samples";
+import { type AbstractDriver, type ExecutionOptions, Modalities } from '@llumiverse/core';
+import 'dotenv/config';
+import fs from 'node:fs';
+import { describe, expect, test } from 'vitest';
+import { BedrockDriver } from '../src';
+import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from '../src/bedrock/nova-image-payload';
+import { testPrompt_imageVariations, testPrompt_textToImage, testPrompt_textToImageGuidance } from './samples';
 
 interface TestDriver {
     driver: AbstractDriver;
@@ -17,107 +17,110 @@ const drivers: TestDriver[] = [];
 
 if (process.env.BEDROCK_REGION) {
     drivers.push({
-        name: "bedrock",
+        name: 'bedrock',
         driver: new BedrockDriver({
             region: process.env.BEDROCK_REGION as string,
         }),
-        models: [
-            "amazon.nova-canvas-v1:0",
-        ]
-    }
-    )
+        models: ['amazon.nova-canvas-v1:0'],
+    });
 } else {
-    console.warn("Bedrock tests are skipped: BEDROCK_REGION environment variable is not set");
+    console.warn('Bedrock tests are skipped: BEDROCK_REGION environment variable is not set');
 }
 
 //TODO: Add vertexai imagen tests
 
-describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => {
-
-    
-    test("generate a prompt Nova canvas", async () => {
+describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => {
+    test('generate a prompt Nova canvas', async () => {
         const options: ExecutionOptions = {
-            model: "amazon.nova-canvas-v1:0",
+            model: 'amazon.nova-canvas-v1:0',
             output_modality: Modalities.image,
             model_options: {
-                _option_id: "bedrock-nova-canvas",
-                taskType: "TEXT_IMAGE",
-            }
-        }
-        const res = await formatNovaImageGenerationPayload(NovaImageGenerationTaskType.TEXT_IMAGE, testPrompt_textToImage, options)
+                _option_id: 'bedrock-nova-canvas',
+                taskType: 'TEXT_IMAGE',
+            },
+        };
+        const res = await formatNovaImageGenerationPayload(
+            NovaImageGenerationTaskType.TEXT_IMAGE,
+            testPrompt_textToImage,
+            options,
+        );
         expect(res).toBeDefined();
-        expect(res).toHaveProperty("textToImageParams");
-        expect(res).toHaveProperty("taskType");
+        expect(res).toHaveProperty('textToImageParams');
+        expect(res).toHaveProperty('taskType');
         console.log(res);
     });
 
-    test.each(models)(`${name}: text to image generation`, {timeout: 300*1000}, async (model) => {
-
+    test.each(models)(`${name}: text to image generation`, { timeout: 300 * 1000 }, async (model) => {
         console.log(`Testing model ${model}`);
 
         const options: ExecutionOptions = {
             model: model,
             output_modality: Modalities.image,
             model_options: {
-                _option_id: "bedrock-nova-canvas",
-                taskType: "TEXT_IMAGE",
-            }
-        }
+                _option_id: 'bedrock-nova-canvas',
+                taskType: 'TEXT_IMAGE',
+            },
+        };
 
         const res = await driver.requestImageGeneration(testPrompt_textToImage, options);
         expect(res).toBeDefined();
         expect(res.result).toHaveLength(1);
-        expect(res.result[0]).toHaveProperty("value");
-        saveImagesToOutput(res.result.filter(r => r.type === "image").map(r => r.value), `text-to-image-${model}`);
+        expect(res.result[0]).toHaveProperty('value');
+        saveImagesToOutput(
+            res.result.filter((r) => r.type === 'image').map((r) => r.value),
+            `text-to-image-${model}`,
+        );
     });
 
-    test.each(models)(`${name}: text to image guidance`, {timeout: 300*1000}, async (model) => {
-
+    test.each(models)(`${name}: text to image guidance`, { timeout: 300 * 1000 }, async (model) => {
         console.log(`Testing model ${model}`);
 
         const options: ExecutionOptions = {
             model: model,
             output_modality: Modalities.image,
             model_options: {
-                _option_id: "bedrock-nova-canvas",
-                taskType: "TEXT_IMAGE",
-            }
-        }
+                _option_id: 'bedrock-nova-canvas',
+                taskType: 'TEXT_IMAGE',
+            },
+        };
 
         const res = await driver.requestImageGeneration(testPrompt_textToImageGuidance, options);
         expect(res).toBeDefined();
         expect(res.result).toHaveLength(1);
-        expect(res.result[0]).toHaveProperty("value");
-        saveImagesToOutput(res.result.filter(r => r.type === "image").map(r => r.value), `text-to-image-guidance-${model}`);
+        expect(res.result[0]).toHaveProperty('value');
+        saveImagesToOutput(
+            res.result.filter((r) => r.type === 'image').map((r) => r.value),
+            `text-to-image-guidance-${model}`,
+        );
     });
 
-
-    test.each(models)(`${name}: text to image variation`, {timeout: 300*1000}, async (model) => {
-
+    test.each(models)(`${name}: text to image variation`, { timeout: 300 * 1000 }, async (model) => {
         const options: ExecutionOptions = {
             model: model,
             output_modality: Modalities.image,
             model_options: {
-                _option_id: "bedrock-nova-canvas",
-                taskType: "IMAGE_VARIATION",
-            }
-        }
+                _option_id: 'bedrock-nova-canvas',
+                taskType: 'IMAGE_VARIATION',
+            },
+        };
 
         const res = await driver.requestImageGeneration(testPrompt_imageVariations, options);
         expect(res).toBeDefined();
         expect(res.result).toHaveLength(1);
-        expect(res.result[0]).toHaveProperty("value");
-        saveImagesToOutput(res.result.filter(r => r.type === "image").map(r => r.value), `text-to-image-variation-${model}`);
+        expect(res.result[0]).toHaveProperty('value');
+        saveImagesToOutput(
+            res.result.filter((r) => r.type === 'image').map((r) => r.value),
+            `text-to-image-variation-${model}`,
+        );
     });
-
 });
 
 function saveImagesToOutput(images: string[] = [], name: string) {
-    if (!fs.existsSync("output")) {
-        fs.mkdirSync("output");
+    if (!fs.existsSync('output')) {
+        fs.mkdirSync('output');
     }
     if (images.length === 0) {
-        return
+        return;
     }
     images.forEach((image, i) => {
         const filename = `output/${name}-${i}.png`;

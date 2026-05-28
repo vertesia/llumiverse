@@ -36,9 +36,9 @@ import {
     type TextFallbackOptions,
     truncateLargeTextInConversation,
     unwrapConversationArray,
-} from "@llumiverse/core";
-import type OpenAI from "openai";
-import type { AzureOpenAI } from "openai";
+} from '@llumiverse/core';
+import type OpenAI from 'openai';
+import type { AzureOpenAI } from 'openai';
 import {
     APIConnectionError,
     APIConnectionTimeoutError,
@@ -55,18 +55,18 @@ import {
     RateLimitError,
     UnprocessableEntityError,
 } from 'openai/error';
-import { formatOpenAILikeMultimodalPrompt } from "./openai_format.js";
+import { formatOpenAILikeMultimodalPrompt } from './openai_format.js';
 
 // Response API types
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
 type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
-    image_detail?: "low" | "high" | "auto";
+    image_detail?: 'low' | 'high' | 'auto';
     effort?: string;
     reasoning_effort?: string;
 };
 type OpenAIErrorWithStatus = Error & { status?: unknown };
-type MutableRoleItem = { role: "user" | "developer" | "system" | "assistant" };
+type MutableRoleItem = { role: 'user' | 'developer' | 'system' | 'assistant' };
 type MutableInputImagePart = { type: string; detail?: string };
 type OpenAIFunctionItem = ResponseInputItem & {
     type?: string;
@@ -77,7 +77,7 @@ type OpenAIFunctionItem = ResponseInputItem & {
 
 // Helper function to convert string to CompletionResult[]
 function textToCompletionResult(text: string): CompletionResult[] {
-    return text ? [{ type: "text", value: text }] : [];
+    return text ? [{ type: 'text', value: text }] : [];
 }
 
 function hasNumericStatus(error: unknown): boolean {
@@ -86,10 +86,12 @@ function hasNumericStatus(error: unknown): boolean {
 
 function isOpenAIReasoningModel(model: string): boolean {
     const normalized = model.toLowerCase();
-    return normalized.includes("o1")
-        || normalized.includes("o3")
-        || normalized.includes("o4")
-        || normalized.includes("gpt-5");
+    return (
+        normalized.includes('o1') ||
+        normalized.includes('o3') ||
+        normalized.includes('o4') ||
+        normalized.includes('gpt-5')
+    );
 }
 
 function isGpt5ProModel(model: string): boolean {
@@ -97,33 +99,34 @@ function isGpt5ProModel(model: string): boolean {
     return /^gpt-5(?:\.\d+)?-pro/.test(modelName);
 }
 
-function openAIReasoningEffort(model: string, effort: string | undefined): "low" | "medium" | "high" | undefined {
+function openAIReasoningEffort(model: string, effort: string | undefined): 'low' | 'medium' | 'high' | undefined {
     if (!effort || !isOpenAIReasoningModel(model)) {
         return undefined;
     }
     if (isGpt5ProModel(model)) {
-        return "high";
+        return 'high';
     }
-    return effort === "low" || effort === "medium" || effort === "high" ? effort : undefined;
+    return effort === 'low' || effort === 'medium' || effort === 'high' ? effort : undefined;
 }
 
 //TODO: Do we need a list?, replace with if statements and modernize?
 const supportFineTunning = new Set([
-    "gpt-3.5-turbo-1106",
-    "gpt-3.5-turbo-0613",
-    "babbage-002",
-    "davinci-002",
-    "gpt-4-0613"
+    'gpt-3.5-turbo-1106',
+    'gpt-3.5-turbo-0613',
+    'babbage-002',
+    'davinci-002',
+    'gpt-4-0613',
 ]);
 
-export interface BaseOpenAIDriverOptions extends DriverOptions {
-}
+export interface BaseOpenAIDriverOptions extends DriverOptions {}
 
-export abstract class BaseOpenAIDriver extends AbstractDriver<
-    BaseOpenAIDriverOptions,
-    ResponseInputItem[]
-> {
-    abstract provider: Providers.openai | Providers.azure_openai | Providers.xai | Providers.azure_foundry | Providers.openai_compatible;
+export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOptions, ResponseInputItem[]> {
+    abstract provider:
+        | Providers.openai
+        | Providers.azure_openai
+        | Providers.xai
+        | Providers.azure_foundry
+        | Providers.openai_compatible;
     abstract service: OpenAI | AzureOpenAI;
 
     constructor(opts: BaseOpenAIDriverOptions) {
@@ -131,10 +134,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         this.formatPrompt = formatOpenAILikeMultimodalPrompt;
     }
 
-    extractDataFromResponse(
-        _options: ExecutionOptions,
-        result: OpenAI.Responses.Response
-    ): Completion {
+    extractDataFromResponse(_options: ExecutionOptions, result: OpenAI.Responses.Response): Completion {
         const tokenInfo = mapUsage(result.usage);
 
         const tools = collectTools(result.output);
@@ -142,8 +142,8 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         const allResults = extractCompletionResults(result.output);
 
         if (allResults.length === 0 && !tools) {
-            this.logger.error({ result }, "[OpenAI] Response is not valid");
-            throw new Error("Response is not valid: no data");
+            this.logger.error({ result }, '[OpenAI] Response is not valid');
+            throw new Error('Response is not valid: no data');
         }
 
         return {
@@ -154,12 +154,17 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         };
     }
 
-    async requestTextCompletionStream(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
-        if (options.model_options?._option_id !== undefined &&
-            options.model_options?._option_id !== "openai-text" &&
-            options.model_options?._option_id !== "openai-thinking" &&
-            options.model_options?._option_id !== "text-fallback") {
-            this.logger.debug({ options: options.model_options }, "Unexpected option id");
+    async requestTextCompletionStream(
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+    ): Promise<AsyncIterable<CompletionChunkObject>> {
+        if (
+            options.model_options?._option_id !== undefined &&
+            options.model_options?._option_id !== 'openai-text' &&
+            options.model_options?._option_id !== 'openai-thinking' &&
+            options.model_options?._option_id !== 'text-fallback'
+        ) {
+            this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
 
         // Include conversation history (same as non-streaming)
@@ -178,16 +183,15 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         convertRoles(prompt, options.model);
 
         const model_options = options.model_options as OpenAIRequestOptions | undefined;
-        insert_image_detail(prompt, model_options?.image_detail ?? "auto");
+        insert_image_detail(prompt, model_options?.image_detail ?? 'auto');
 
-        let parsedSchema: JSONSchema | undefined ;
+        let parsedSchema: JSONSchema | undefined;
         let strictMode = false;
         if (options.result_schema && supportsSchema(options.model)) {
             try {
                 parsedSchema = openAISchemaFormat(options.result_schema);
                 strictMode = true;
-            }
-            catch {
+            } catch {
                 parsedSchema = limitedSchemaFormat(options.result_schema);
                 strictMode = false;
             }
@@ -206,30 +210,34 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             top_p: isReasoningModel ? undefined : model_options?.top_p,
             max_output_tokens: model_options?.max_tokens,
             tools: useTools ? toolDefs : undefined,
-            text: parsedSchema ? {
-                format: {
-                    type: "json_schema",
-                    name: "format_output",
-                    schema: parsedSchema,
-                    strict: strictMode,
-                }
-            } : undefined,
+            text: parsedSchema
+                ? {
+                      format: {
+                          type: 'json_schema',
+                          name: 'format_output',
+                          schema: parsedSchema,
+                          strict: strictMode,
+                      },
+                  }
+                : undefined,
         });
 
         return mapResponseStream(stream);
     }
 
     async requestTextCompletion(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<Completion> {
-        if (options.model_options?._option_id !== undefined &&
-            options.model_options?._option_id !== "openai-text" &&
-            options.model_options?._option_id !== "openai-thinking") {
-            this.logger.debug({ options: options.model_options }, "Unexpected option id");
+        if (
+            options.model_options?._option_id !== undefined &&
+            options.model_options?._option_id !== 'openai-text' &&
+            options.model_options?._option_id !== 'openai-thinking'
+        ) {
+            this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
 
         convertRoles(prompt, options.model);
 
         const model_options = options.model_options as OpenAIRequestOptions | undefined;
-        insert_image_detail(prompt, model_options?.image_detail ?? "auto");
+        insert_image_detail(prompt, model_options?.image_detail ?? 'auto');
 
         const toolDefs = getToolDefinitions(options.tools);
         const useTools: boolean = toolDefs ? supportsToolUse(options.model, this.provider) : false;
@@ -243,14 +251,13 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             conversation = convertOpenAIFunctionItemsToText(conversation);
         }
 
-        let parsedSchema: JSONSchema | undefined ;
+        let parsedSchema: JSONSchema | undefined;
         let strictMode = false;
         if (options.result_schema && supportsSchema(options.model)) {
             try {
                 parsedSchema = openAISchemaFormat(options.result_schema);
                 strictMode = true;
-            }
-            catch {
+            } catch {
                 parsedSchema = limitedSchemaFormat(options.result_schema);
                 strictMode = false;
             }
@@ -269,14 +276,16 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             top_p: isReasoningModel ? undefined : model_options?.top_p,
             max_output_tokens: model_options?.max_tokens, //TODO: use max_tokens for older models, currently relying on OpenAI to handle it
             tools: useTools ? toolDefs : undefined,
-            text: parsedSchema ? {
-                format: {
-                    type: "json_schema",
-                    name: "format_output",
-                    schema: parsedSchema,
-                    strict: strictMode,
-                }
-            } : undefined,
+            text: parsedSchema
+                ? {
+                      format: {
+                          type: 'json_schema',
+                          name: 'format_output',
+                          schema: parsedSchema,
+                          strict: strictMode,
+                      },
+                  }
+                : undefined,
         });
 
         const completion = this.extractDataFromResponse(options, res);
@@ -294,7 +303,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         const stripOptions = {
             keepForTurns: options.stripImagesAfterTurns ?? Infinity,
             currentTurn,
-            textMaxTokens: options.stripTextMaxTokens
+            textMaxTokens: options.stripTextMaxTokens,
         };
         let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions);
 
@@ -314,14 +323,15 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
     protected canStream(_options: ExecutionOptions): Promise<boolean> {
         // Image generation models don't support streaming
-        if (_options.model.includes("dall-e")
-            || _options.model.includes("gpt-image")
-            || _options.model.includes("chatgpt-image")) {
+        if (
+            _options.model.includes('dall-e') ||
+            _options.model.includes('gpt-image') ||
+            _options.model.includes('chatgpt-image')
+        ) {
             return Promise.resolve(false);
         }
 
-        if (_options.model.includes("o1")
-            && !(_options.model.includes("mini") || _options.model.includes("preview"))) {
+        if (_options.model.includes('o1') && !(_options.model.includes('mini') || _options.model.includes('preview'))) {
             //o1 full does not support streaming
             //TODO: Update when OpenAI adds support for streaming, last check 16/02/2025
             return Promise.resolve(false);
@@ -337,7 +347,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         prompt: ResponseInputItem[],
         result: unknown[],
         toolUse: unknown[] | undefined,
-        options: ExecutionOptions
+        options: ExecutionOptions,
     ): ResponseInputItem[] | undefined {
         // Build assistant message from accumulated CompletionResult[]
         const completionResults = result as CompletionResult[];
@@ -358,7 +368,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
         // Add function calls as separate items (Response API format)
         if (toolUse && toolUse.length > 0) {
-            const functionCalls: OpenAI.Responses.ResponseFunctionToolCall[] = (toolUse as ToolUse[]).map(t => ({
+            const functionCalls: OpenAI.Responses.ResponseFunctionToolCall[] = (toolUse as ToolUse[]).map((t) => ({
                 type: 'function_call' as const,
                 call_id: t.id,
                 name: t.tool_name,
@@ -375,7 +385,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         const stripOptions = {
             keepForTurns: options.stripImagesAfterTurns ?? Infinity,
             currentTurn,
-            textMaxTokens: options.stripTextMaxTokens
+            textMaxTokens: options.stripTextMaxTokens,
         };
         let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions);
         processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
@@ -388,7 +398,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     }
 
     createTrainingPrompt(options: TrainingPromptOptions): Promise<string> {
-        if (options.model.includes("gpt")) {
+        if (options.model.includes('gpt')) {
             return super.createTrainingPrompt(options);
         } else {
             // babbage, davinci not yet implemented
@@ -400,14 +410,14 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         const url = await dataset.getURL();
         const file = await this.service.files.create({
             file: await fetch(url),
-            purpose: "fine-tune",
+            purpose: 'fine-tune',
         });
 
         const job = await this.service.fineTuning.jobs.create({
             training_file: file.id,
             model: options.model,
-            hyperparameters: options.params
-        })
+            hyperparameters: options.params,
+        });
 
         return jobInfo(job);
     }
@@ -446,9 +456,21 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
 
         //Some of these use the completions API instead of the chat completions API.
         //Others are for non-text input modalities. Therefore common to both.
-        const wordBlacklist = ["embed", "whisper", "transcribe", "audio", "moderation", "tts",
-            "realtime", "babbage", "davinci", "codex", "o1-pro", "computer-use", "sora"];
-
+        const wordBlacklist = [
+            'embed',
+            'whisper',
+            'transcribe',
+            'audio',
+            'moderation',
+            'tts',
+            'realtime',
+            'babbage',
+            'davinci',
+            'codex',
+            'o1-pro',
+            'computer-use',
+            'sora',
+        ];
 
         //OpenAI has very little information, filtering based on name.
         result = result.filter((m) => {
@@ -456,43 +478,45 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         });
 
         const models = filter ? result.filter(filter) : result;
-        const aiModels = models.map((m) => {
-            const modelCapability = getModelCapabilities(m.id, "openai");
-            let owner = m.owned_by;
-            if (owner === "system") {
-                owner = "openai";
-            }
+        const aiModels = models
+            .map((m) => {
+                const modelCapability = getModelCapabilities(m.id, 'openai');
+                let owner = m.owned_by;
+                if (owner === 'system') {
+                    owner = 'openai';
+                }
 
-            // Determine model type based on capabilities
-            let modelType = ModelType.Text;
-            if (m.id.includes("dall-e") || m.id.includes("gpt-image")) {
-                modelType = ModelType.Image;
-            }
+                // Determine model type based on capabilities
+                let modelType = ModelType.Text;
+                if (m.id.includes('dall-e') || m.id.includes('gpt-image')) {
+                    modelType = ModelType.Image;
+                }
 
-
-            return {
-                id: m.id,
-                name: m.id,
-                provider: this.provider,
-                owner: owner,
-                type: modelType,
-                input_modalities: modelModalitiesToArray(modelCapability.input),
-                output_modalities: modelModalitiesToArray(modelCapability.output),
-                tool_support: modelCapability.tool_support,
-            } satisfies AIModel<string>;
-        }).sort((a, b) => a.id.localeCompare(b.id));
+                return {
+                    id: m.id,
+                    name: m.id,
+                    provider: this.provider,
+                    owner: owner,
+                    type: modelType,
+                    input_modalities: modelModalitiesToArray(modelCapability.input),
+                    output_modalities: modelModalitiesToArray(modelCapability.output),
+                    tool_support: modelCapability.tool_support,
+                } satisfies AIModel<string>;
+            })
+            .sort((a, b) => a.id.localeCompare(b.id));
 
         return aiModels;
     }
-
 
     async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
         const normalized = normalizeEmbeddingsOptions(options);
         const model = normalized.model ?? OPENAI_DEFAULT_EMBEDDING_MODEL;
 
         const texts: string[] = normalized.inputs.map((input) => {
-            if (input.type !== "text") {
-                throw new Error(`Provider 'openai' does not support '${input.type}' embeddings; only 'text' is supported.`);
+            if (input.type !== 'text') {
+                throw new Error(
+                    `Provider 'openai' does not support '${input.type}' embeddings; only 'text' is supported.`,
+                );
             }
             return input.text;
         });
@@ -502,7 +526,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                 input: texts,
                 model,
                 ...(normalized.dimensions ? { dimensions: normalized.dimensions } : {}),
-                encoding_format: "float",
+                encoding_format: 'float',
             });
 
             // OpenAI does not guarantee data is returned in the same order as the input,
@@ -512,7 +536,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                 if (!entry.embedding || entry.embedding.length === 0) {
                     throw new Error(`OpenAI embedding empty for input index ${entry.index}`);
                 }
-                return { outputs: [{ values: entry.embedding, modality: "text" }] };
+                return { outputs: [{ values: entry.embedding, modality: 'text' }] };
             });
 
             const usage = res.usage
@@ -531,7 +555,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         }
     }
 
-    imageModels = ["dall-e", "gpt-image", "chatgpt-image"];
+    imageModels = ['dall-e', 'gpt-image', 'chatgpt-image'];
 
     /**
      * Determine if a model is specifically an image generation model (not conversational image model)
@@ -539,7 +563,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     isImageModel(model: string): boolean {
         // DALL-E models are standalone image generation
         // gpt-image models can generate images in conversations, not standalone
-        return this.imageModels.some(imageModel => model.includes(imageModel));
+        return this.imageModels.some((imageModel) => model.includes(imageModel));
     }
 
     /**
@@ -552,7 +576,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         const model_options = options.model_options as OpenAiDalleOptions | OpenAiGptImageOptions | undefined;
 
         // Extract prompt text from ResponseInputItem[]
-        let promptText = "";
+        let promptText = '';
         for (const item of prompt) {
             if ('content' in item && typeof item.content === 'string') {
                 promptText += `${item.content}\\n`;
@@ -571,17 +595,17 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             const generateParams: OpenAI.Images.ImageGenerateParamsNonStreaming = {
                 model: options.model,
                 prompt: promptText,
-                size: model_options?.size || "1024x1024",
+                size: model_options?.size || '1024x1024',
             };
 
             // Add DALL-E specific options
-            if (options.model.includes("dall-e") || model_options?._option_id === "openai-dalle") {
+            if (options.model.includes('dall-e') || model_options?._option_id === 'openai-dalle') {
                 const dalleOptions = model_options as OpenAiDalleOptions | undefined;
                 generateParams.n = dalleOptions?.n || 1;
-                generateParams.response_format = dalleOptions?.response_format || "b64_json";
+                generateParams.response_format = dalleOptions?.response_format || 'b64_json';
 
-                if (options.model.includes("dall-e-3")) {
-                    generateParams.quality = dalleOptions?.image_quality || "standard";
+                if (options.model.includes('dall-e-3')) {
+                    generateParams.quality = dalleOptions?.image_quality || 'standard';
                     if (dalleOptions?.style) {
                         generateParams.style = dalleOptions.style;
                     }
@@ -611,35 +635,35 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
                     }
 
                     results.push({
-                        type: "image",
-                        value: imageValue
+                        type: 'image',
+                        value: imageValue,
                     });
                 }
             }
 
             return {
-                result: results
+                result: results,
             };
-
         } catch (error: unknown) {
             this.logger.error({ error }, `[${this.provider}] Image generation failed`);
             const generationError = error instanceof Error ? error : new Error(String(error));
-            const errorCode = (error as { code?: unknown })?.code === 'content_policy_violation'
-                ? 'content_policy_violation'
-                : 'validation_error';
+            const errorCode =
+                (error as { code?: unknown })?.code === 'content_policy_violation'
+                    ? 'content_policy_violation'
+                    : 'validation_error';
             return {
                 result: [],
                 error: {
                     message: generationError.message,
-                    code: errorCode
-                }
+                    code: errorCode,
+                },
             };
         }
     }
 
     /**
      * Format OpenAI API errors into LlumiverseError with proper status codes and retryability.
-     * 
+     *
      * OpenAI API errors have a specific structure:
      * - APIError.status: HTTP status code (400, 401, 403, 404, 409, 422, 429, 500+)
      * - APIError.error: Error object with type, message, param, code
@@ -647,7 +671,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
      * - APIError.code: Error code (e.g., 'invalid_api_key', 'rate_limit_exceeded')
      * - APIError.param: Parameter that caused the error (optional)
      * - APIError.type: Error type (optional)
-     * 
+     *
      * Common error types:
      * - BadRequestError (400): Invalid request parameters
      * - AuthenticationError (401): Invalid API key
@@ -661,20 +685,17 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
      * - APIConnectionTimeoutError: Request timeout (no status code)
      * - LengthFinishReasonError: Response truncated due to length
      * - ContentFilterFinishReasonError: Content filtered
-     * 
+     *
      * This implementation works for:
      * - OpenAI API
      * - Azure OpenAI
      * - xAI (uses OpenAI-compatible API)
      * - Azure Foundry (OpenAI-compatible)
      * - Other OpenAI-compatible APIs
-     * 
+     *
      * @see https://platform.openai.com/docs/guides/error-codes
      */
-    public formatLlumiverseError(
-        error: unknown,
-        context: LlumiverseErrorContext
-    ): LlumiverseError {
+    public formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
         // Check if it's an OpenAI API error
         const isOpenAIError = this.isOpenAIApiError(error);
 
@@ -729,7 +750,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
             context,
             error,
             httpStatusCode,
-            errorName
+            errorName,
         );
     }
 
@@ -738,22 +759,20 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
      */
     private isOpenAIApiError(error: unknown): error is APIError | OpenAIError {
         return (
-            error !== null &&
-            typeof error === 'object' &&
-            (error instanceof APIError || error instanceof OpenAIError)
+            error !== null && typeof error === 'object' && (error instanceof APIError || error instanceof OpenAIError)
         );
     }
 
     /**
      * Determine if an OpenAI API error is retryable.
-     * 
+     *
      * Retryable errors:
      * - RateLimitError (429): Rate limit exceeded, retry with backoff
      * - InternalServerError (500+): Server-side errors
      * - APIConnectionTimeoutError: Request timeout
      * - Error codes: 'timeout', 'server_error', 'service_unavailable'
      * - Status codes: 408, 429, 502, 503, 504, 529, 5xx
-     * 
+     *
      * Non-retryable errors:
      * - BadRequestError (400): Invalid request parameters
      * - AuthenticationError (401): Invalid API key
@@ -765,7 +784,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
      * - ContentFilterFinishReasonError: Content filtered
      * - Error codes: 'invalid_api_key', 'invalid_request_error', 'model_not_found'
      * - Other 4xx client errors
-     * 
+     *
      * @param error - The error object
      * @param httpStatusCode - The HTTP status code if available
      * @param errorCode - The error code if available
@@ -776,7 +795,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         error: unknown,
         httpStatusCode: number | undefined,
         errorCode: string | null | undefined,
-        errorType: string | undefined
+        errorType: string | undefined,
     ): boolean | undefined {
         // Check specific OpenAI error types by class
         if (error instanceof RateLimitError) return true;
@@ -835,9 +854,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
         // Unknown error type - let consumer decide retry strategy
         return undefined;
     }
-
 }
-
 
 function jobInfo(job: OpenAI.FineTuning.Jobs.FineTuningJob): TrainingJob {
     //validating_files`, `queued`, `running`, `succeeded`, `failed`, or `cancelled`.
@@ -848,7 +865,9 @@ function jobInfo(job: OpenAI.FineTuning.Jobs.FineTuningJob): TrainingJob {
         status = TrainingJobStatus.succeeded;
     } else if (jobStatus === 'failed') {
         status = TrainingJobStatus.failed;
-        details = job.error ? `${job.error.code} - ${job.error.message} ${job.error.param ? ` [${job.error.param}]` : ""}` : "error";
+        details = job.error
+            ? `${job.error.code} - ${job.error.message} ${job.error.param ? ` [${job.error.param}]` : ''}`
+            : 'error';
     } else if (jobStatus === 'cancelled') {
         status = TrainingJobStatus.cancelled;
     } else {
@@ -859,8 +878,8 @@ function jobInfo(job: OpenAI.FineTuning.Jobs.FineTuningJob): TrainingJob {
         id: job.id,
         model: job.fine_tuned_model || undefined,
         status,
-        details
-    }
+        details,
+    };
 }
 
 function mapUsage(usage?: OpenAI.Responses.ResponseUsage | null): ExecutionTokenUsage | undefined {
@@ -881,7 +900,7 @@ function completionResultsToText(completionResults: CompletionResult[] | undefin
         return '';
     }
     return completionResults
-        .map(r => {
+        .map((r) => {
             switch (r.type) {
                 case 'text':
                     return r.value;
@@ -919,9 +938,7 @@ function createAssistantMessageFromCompletion(completion: Completion): ResponseI
                 type: 'function_call',
                 call_id: t.id,
                 name: t.tool_name,
-                arguments: typeof t.tool_input === 'string'
-                    ? t.tool_input
-                    : JSON.stringify(t.tool_input ?? {}),
+                arguments: typeof t.tool_input === 'string' ? t.tool_input : JSON.stringify(t.tool_input ?? {}),
             };
             result.push(functionCall);
         }
@@ -930,8 +947,10 @@ function createAssistantMessageFromCompletion(completion: Completion): ResponseI
     return result;
 }
 
-export function mapResponseStream(stream: AsyncIterable<OpenAI.Responses.ResponseStreamEvent>): AsyncIterable<CompletionChunkObject> {
-    const toolCallMetadata = new Map<string, { syntheticId: string, callId?: string, name?: string }>();
+export function mapResponseStream(
+    stream: AsyncIterable<OpenAI.Responses.ResponseStreamEvent>,
+): AsyncIterable<CompletionChunkObject> {
+    const toolCallMetadata = new Map<string, { syntheticId: string; callId?: string; name?: string }>();
 
     return {
         async *[Symbol.asyncIterator]() {
@@ -989,7 +1008,11 @@ export function mapResponseStream(stream: AsyncIterable<OpenAI.Responses.Respons
                 }
                 // Note: We don't emit response.output_text.done because the text was already
                 // streamed via delta events. Emitting it again would duplicate the content.
-                else if (event.type === 'response.completed' || event.type === 'response.incomplete' || event.type === 'response.failed') {
+                else if (
+                    event.type === 'response.completed' ||
+                    event.type === 'response.incomplete' ||
+                    event.type === 'response.failed'
+                ) {
                     const finalTools = collectTools(event.response.output);
                     yield {
                         result: [],
@@ -998,12 +1021,12 @@ export function mapResponseStream(stream: AsyncIterable<OpenAI.Responses.Respons
                     } satisfies CompletionChunkObject;
                 }
             }
-        }
+        },
     };
 }
 
 function insert_image_detail(items: ResponseInputItem[], detail_level: string): ResponseInputItem[] {
-    if (detail_level === "auto" || detail_level === "low" || detail_level === "high") {
+    if (detail_level === 'auto' || detail_level === 'low' || detail_level === 'high') {
         for (const item of items) {
             // Check if it's an EasyInputMessage or Message with content array
             if ('role' in item && 'content' in item && item.role !== 'assistant') {
@@ -1023,8 +1046,8 @@ function insert_image_detail(items: ResponseInputItem[], detail_level: string): 
 
 function convertRoles(items: ResponseInputItem[], model: string): ResponseInputItem[] {
     //New openai models use developer role instead of system
-    if (model.includes("o1") || model.includes("o3")) {
-        if (model.includes("o1-mini") || model.includes("o1-preview")) {
+    if (model.includes('o1') || model.includes('o3')) {
+        if (model.includes('o1-mini') || model.includes('o1-preview')) {
             //o1-mini and o1-preview support neither system nor developer
             for (const item of items) {
                 if ('role' in item && (item as EasyInputMessage).role === 'system') {
@@ -1046,11 +1069,11 @@ function convertRoles(items: ResponseInputItem[], model: string): ResponseInputI
 //Structured output support is typically aligned with tool use support
 //Not true for realtime models, which do not support structured output, but do support tool use.
 function supportsSchema(model: string): boolean {
-    const realtimeModel = model.includes("realtime");
+    const realtimeModel = model.includes('realtime');
     if (realtimeModel) {
         return false;
     }
-    return supportsToolUse(model, "openai");
+    return supportsToolUse(model, 'openai');
 }
 
 /**
@@ -1059,13 +1082,13 @@ function supportsSchema(model: string): boolean {
  * tools to be defined in the API request.
  */
 export function convertOpenAIFunctionItemsToText(items: ResponseInputItem[]): ResponseInputItem[] {
-    const hasFunctionItems = items.some(item => {
+    const hasFunctionItems = items.some((item) => {
         const type = (item as OpenAIFunctionItem).type;
         return type === 'function_call' || type === 'function_call_output';
     });
     if (!hasFunctionItems) return items;
 
-    return items.map(item => {
+    return items.map((item) => {
         const typed = item as OpenAIFunctionItem;
         if (typed.type === 'function_call') {
             const argsStr = typed.arguments || '';
@@ -1091,15 +1114,14 @@ function getToolDefinitions(tools: ToolDefinition[] | undefined | null): OpenAI.
     return tools ? tools.map(getToolDefinition) : undefined;
 }
 function getToolDefinition(toolDef: ToolDefinition): OpenAI.Responses.FunctionTool {
-    let parsedSchema: JSONSchema | undefined ;
+    let parsedSchema: JSONSchema | undefined;
     let strictMode = false;
     if (toolDef.input_schema) {
         try {
             //TODO: type assertion here is not safe, does not work with satisfies
             parsedSchema = openAISchemaFormat(toolDef.input_schema as JSONSchema);
             strictMode = true;
-        }
-        catch {
+        } catch {
             //TODO: type assertion here is not safe, does not work with satisfies
             parsedSchema = limitedSchemaFormat(toolDef.input_schema as JSONSchema);
             strictMode = false;
@@ -1107,7 +1129,7 @@ function getToolDefinition(toolDef: ToolDefinition): OpenAI.Responses.FunctionTo
     }
 
     return {
-        type: "function",
+        type: 'function',
         name: toolDef.name,
         description: toolDef.description,
         parameters: parsedSchema ?? null,
@@ -1119,7 +1141,7 @@ function updateConversation(conversation: unknown, items: ResponseInputItem[]): 
     if (!items) {
         // Unwrap array if wrapped, otherwise treat as array
         const unwrapped = unwrapConversationArray<ResponseInputItem>(conversation);
-        return unwrapped ?? (conversation as ResponseInputItem[] || []);
+        return unwrapped ?? ((conversation as ResponseInputItem[]) || []);
     }
     if (!conversation) {
         return items;
@@ -1168,8 +1190,8 @@ function extractCompletionResults(output?: OpenAI.Responses.ResponseOutputItem[]
             for (const part of item.content) {
                 if (part.type === 'output_text' && part.text) {
                     results.push({
-                        type: "text",
-                        value: part.text
+                        type: 'text',
+                        value: part.text,
                     });
                 }
             }
@@ -1177,12 +1199,10 @@ function extractCompletionResults(output?: OpenAI.Responses.ResponseOutputItem[]
             // GPT-image models return base64 encoded images in result field
             const base64Data = item.result;
             // Format as data URL for consistency with other image outputs
-            const imageUrl = base64Data.startsWith('data:')
-                ? base64Data
-                : `data:image/png;base64,${base64Data}`;
+            const imageUrl = base64Data.startsWith('data:') ? base64Data : `data:image/png;base64,${base64Data}`;
             results.push({
-                type: "image",
-                value: imageUrl
+                type: 'image',
+                value: imageUrl,
             });
         }
     }
@@ -1232,7 +1252,7 @@ function limitedSchemaFormat(schema: JSONSchema): JSONSchema {
 //For strict mode true
 function openAISchemaFormat(schema: JSONSchema, nesting: number = 0): JSONSchema {
     if (nesting > 5) {
-        throw new Error("OpenAI schema nesting too deep");
+        throw new Error('OpenAI schema nesting too deep');
     }
 
     const formattedSchema: JSONSchema = { ...schema };
@@ -1241,7 +1261,7 @@ function openAISchemaFormat(schema: JSONSchema, nesting: number = 0): JSONSchema
     delete formattedSchema.default;
 
     // Additional properties not supported, required to be set.
-    if (formattedSchema?.type === "object") {
+    if (formattedSchema?.type === 'object') {
         formattedSchema.additionalProperties = false;
     }
 
@@ -1270,18 +1290,24 @@ function openAISchemaFormat(schema: JSONSchema, nesting: number = 0): JSONSchema
             }
         }
     }
-    if (formattedSchema?.type === 'object' && (!formattedSchema?.properties || Object.keys(formattedSchema?.properties ?? {}).length === 0)) {
+    if (
+        formattedSchema?.type === 'object' &&
+        (!formattedSchema?.properties || Object.keys(formattedSchema?.properties ?? {}).length === 0)
+    ) {
         //If no properties are defined, then additionalProperties: true was set or the object would be empty.
         //OpenAI does not support this on structured output/ strict mode.
-        throw new Error("OpenAI does not support empty objects or objects with additionalProperties set to true");
+        throw new Error('OpenAI does not support empty objects or objects with additionalProperties set to true');
     }
 
-    return formattedSchema
+    return formattedSchema;
 }
 
-function responseFinishReason(response: OpenAI.Responses.Response, tools?: ToolUse<unknown>[] | undefined): string | undefined {
+function responseFinishReason(
+    response: OpenAI.Responses.Response,
+    tools?: ToolUse<unknown>[] | undefined,
+): string | undefined {
     if (tools && tools.length > 0) {
-        return "tool_use";
+        return 'tool_use';
     }
     if (response.status === 'incomplete') {
         if (response.incomplete_details?.reason === 'max_output_tokens') {

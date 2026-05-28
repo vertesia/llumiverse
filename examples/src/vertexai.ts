@@ -1,11 +1,10 @@
-import { type AIModel, PromptRole, type PromptSegment } from "@llumiverse/core";
-import { VertexAIDriver } from "@llumiverse/drivers";
+import { type AIModel, PromptRole, type PromptSegment } from '@llumiverse/core';
+import { VertexAIDriver } from '@llumiverse/drivers';
 
 async function main() {
-
     const driver = new VertexAIDriver({
         project: 'dengenlabs',
-        region: 'us-central1'
+        region: 'us-central1',
     });
 
     // list models
@@ -20,27 +19,27 @@ async function main() {
     const prompt: PromptSegment[] = [
         {
             role: PromptRole.user,
-            content: 'Hello'
-        }
-    ]
+            content: 'Hello',
+        },
+    ];
 
     console.log('\n# Executing model text-bison with prompt: ', prompt);
     const response = await driver.execute(prompt, {
         model: 'text-bison',
         temperature: 0.6,
-        max_tokens: 1024
+        max_tokens: 1024,
     });
 
-    console.log('\n# LLM response:', response.result)
-    console.log('# Response took', response.execution_time, 'ms')
+    console.log('\n# LLM response:', response.result);
+    console.log('# Response took', response.execution_time, 'ms');
     console.log('# Token usage:', response.token_usage);
 
-    // execute a model in streaming mode 
+    // execute a model in streaming mode
     console.log('\n# Executing model text-bison in streaming mode with prompt: ', prompt);
     const stream = await driver.stream(prompt, {
         model: 'text-bison',
         temperature: 0.6,
-        max_tokens: 1024
+        max_tokens: 1024,
     });
 
     // show the streaming response as it comes
@@ -52,10 +51,9 @@ async function main() {
     // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
     const streamingResponse = stream.completion!;
 
-    console.log('\n# LLM response:', streamingResponse.result)
-    console.log('# Response took', streamingResponse.execution_time, 'ms')
+    console.log('\n# LLM response:', streamingResponse.result);
+    console.log('# Response took', streamingResponse.execution_time, 'ms');
     console.log('# Token usage:', streamingResponse.token_usage);
-
 }
 
 main().catch(console.error);

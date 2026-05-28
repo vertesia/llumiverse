@@ -125,17 +125,17 @@ export interface EmbeddingResponse {
 }
 
 export interface CompletionRequestParams {
-    model: string,
-    messages: Array<{ role: string; name?: string, content: string | string[], tool_calls?: ToolCalls[]; }>,
-    tools?: Array<{ type: string; function: Function; }>,
-    temperature?: number,
-    maxTokens?: number,
-    topP?: number,
-    randomSeed?: number,
-    stream?: boolean,
-    toolChoice?: ToolChoice,
-    responseFormat?: ResponseFormat,
-    stopSequences?: string[],
+    model: string;
+    messages: Array<{ role: string; name?: string; content: string | string[]; tool_calls?: ToolCalls[] }>;
+    tools?: Array<{ type: string; function: Function }>;
+    temperature?: number;
+    maxTokens?: number;
+    topP?: number;
+    randomSeed?: number;
+    stream?: boolean;
+    toolChoice?: ToolChoice;
+    responseFormat?: ResponseFormat;
+    stopSequences?: string[];
 }
 
 // class MistralClient {

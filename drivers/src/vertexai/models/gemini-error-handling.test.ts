@@ -328,20 +328,14 @@ describe('GeminiModelDefinition Error Handling', () => {
             // Vertex AI surfaces inline-URL-fetcher throttling as 400 INVALID_ARGUMENT.
             // The status is misleading — it's a transient Google-side throttle.
             const message =
-                'Cannot fetch content from the provided URL. ' +
-                'Status: URL_REJECTED-REJECTED_CLIENT_THROTTLED';
-            expect(
-                exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(400, message),
-            ).toBe(true);
+                'Cannot fetch content from the provided URL. ' + 'Status: URL_REJECTED-REJECTED_CLIENT_THROTTLED';
+            expect(exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(400, message)).toBe(true);
         });
 
         it('should treat 400 URL_REJECTED-REJECTED_RATE_LIMITED as retryable', () => {
             const message =
-                'Cannot fetch content from the provided URL. ' +
-                'Status: URL_REJECTED-REJECTED_RATE_LIMITED';
-            expect(
-                exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(400, message),
-            ).toBe(true);
+                'Cannot fetch content from the provided URL. ' + 'Status: URL_REJECTED-REJECTED_RATE_LIMITED';
+            expect(exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(400, message)).toBe(true);
         });
 
         it('should still treat plain 400 INVALID_ARGUMENT as non-retryable', () => {

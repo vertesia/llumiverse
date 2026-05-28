@@ -6,13 +6,9 @@
  * max-tokens limits for non-Claude models, etc.).
  */
 
-import { type ModelOptionInfoItem, OptionType } from "../types.js";
-import { getMaxOutputTokens } from "./context-windows.js";
-import {
-    getAvailableEffortLevels,
-    isClaudeVersionGTE,
-    supportsAdaptiveThinking,
-} from "./version-parsing.js";
+import { type ModelOptionInfoItem, OptionType } from '../types.js';
+import { getMaxOutputTokens } from './context-windows.js';
+import { getAvailableEffortLevels, isClaudeVersionGTE, supportsAdaptiveThinking } from './version-parsing.js';
 
 // ============================================================================
 // Max tokens
@@ -39,10 +35,11 @@ export function getClaudeMaxTokensLimit(model: string): number {
 export function buildClaudeCacheOptions(): ModelOptionInfoItem[] {
     return [
         {
-            name: "cache_enabled",
+            name: 'cache_enabled',
             type: OptionType.boolean,
             default: false,
-            description: "Enable prompt caching. Injects cache breakpoints at the system prompt, tools, and conversation pivot.",
+            description:
+                'Enable prompt caching. Injects cache breakpoints at the system prompt, tools, and conversation pivot.',
         },
     ];
 }
@@ -55,10 +52,10 @@ export function buildClaudeCacheTtlOptions(cacheEnabled?: boolean): ModelOptionI
     if (!cacheEnabled) return [];
     return [
         {
-            name: "cache_ttl",
+            name: 'cache_ttl',
             type: OptionType.enum,
-            enum: { "5 minutes (default)": "5m", "1 hour": "1h" },
-            default: "5m",
+            enum: { '5 minutes (default)': '5m', '1 hour': '1h' },
+            default: '5m',
             description: "TTL for cache breakpoints. '1h' requires extended caching to be enabled on your account.",
         },
     ];
@@ -77,10 +74,11 @@ export function buildClaudeEffortOptions(model: string): ModelOptionInfoItem[] {
     if (!effortLevels) return [];
     return [
         {
-            name: "effort",
+            name: 'effort',
             type: OptionType.enum,
             enum: effortLevels,
-            description: "Controls how many tokens Claude uses when responding. Lower effort trades thoroughness for speed and cost savings.",
+            description:
+                'Controls how many tokens Claude uses when responding. Lower effort trades thoroughness for speed and cost savings.',
         },
     ];
 }
@@ -103,12 +101,12 @@ export function buildClaudeThinkingBudgetOption(model: string): ModelOptionInfoI
     if (!isClaudeVersionGTE(model, 3, 7) || supportsAdaptiveThinking(model)) return [];
     return [
         {
-            name: "thinking_budget_tokens",
+            name: 'thinking_budget_tokens',
             type: OptionType.numeric,
             min: 1024,
             integer: true,
             step: 1024,
-            description: "Token budget for extended thinking. Enables thinking when set.",
+            description: 'Token budget for extended thinking. Enables thinking when set.',
         },
     ];
 }
@@ -124,7 +122,7 @@ export function buildClaudeIncludeThoughtsOption(model: string): ModelOptionInfo
     if (!isClaudeVersionGTE(model, 3, 7)) return [];
     return [
         {
-            name: "include_thoughts",
+            name: 'include_thoughts',
             type: OptionType.boolean,
             default: false,
             description: "Include the model's thinking content in the response.",
@@ -137,8 +135,5 @@ export function buildClaudeIncludeThoughtsOption(model: string): ModelOptionInfo
  * Kept for backwards compatibility — delegates to the two new helpers.
  */
 export function buildClaudeThinkingOptions(model: string): ModelOptionInfoItem[] {
-    return [
-        ...buildClaudeThinkingBudgetOption(model),
-        ...buildClaudeIncludeThoughtsOption(model),
-    ];
+    return [...buildClaudeThinkingBudgetOption(model), ...buildClaudeIncludeThoughtsOption(model)];
 }

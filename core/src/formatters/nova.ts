@@ -1,37 +1,37 @@
-import type { JSONSchema } from "@llumiverse/common";
-import { PromptRole, type PromptSegment } from "@llumiverse/common";
-import { readStreamAsBase64 } from "../stream.js";
-import { getJSONSafetyNotice } from "./commons.js";
+import type { JSONSchema } from '@llumiverse/common';
+import { PromptRole, type PromptSegment } from '@llumiverse/common';
+import { readStreamAsBase64 } from '../stream.js';
+import { getJSONSafetyNotice } from './commons.js';
 
 export interface NovaMessage {
-    role: 'user' | 'assistant',
-    content: NovaMessagePart[]
+    role: 'user' | 'assistant';
+    content: NovaMessagePart[];
 }
 
 export interface NovaSystemMessage {
-    text: string
+    text: string;
 }
 
 interface NovaMessagePart {
-    text?: string // only set for text messages
+    text?: string; // only set for text messages
     image?: {
-        format: "jpeg" | "png" | "gif" | "webp",
+        format: 'jpeg' | 'png' | 'gif' | 'webp';
         source: {
-            bytes: string //"base64",
-        }
-    }
+            bytes: string; //"base64",
+        };
+    };
     video?: {
-        format: "mkv" | "mov" | "mp4" | "webm" | "three_gp" | "flv" | "mpeg" | "mpg" | "wmv",
+        format: 'mkv' | 'mov' | 'mp4' | 'webm' | 'three_gp' | 'flv' | 'mpeg' | 'mpg' | 'wmv';
         source: {
             //Option 1: sending a s3 location
             s3Location?: {
-                uri: string, // example: s3://my-bucket/object-key
-                bucketOwner: string // optional. example: "123456789012"
-            }
+                uri: string; // example: s3://my-bucket/object-key
+                bucketOwner: string; // optional. example: "123456789012"
+            };
             //Option 2: sending a base64 encoded video
-            bytes?: string //"base64",
-        }
-    }
+            bytes?: string; //"base64",
+        };
+    };
 }
 
 export interface NovaMessagesPrompt {
@@ -49,36 +49,36 @@ export async function formatNovaPrompt(segments: PromptSegment[], schema?: JSONS
     const system: string[] = [];
     const safety: string[] = [];
     const messages: NovaMessage[] = [];
-    let negative: string = "";
-    let mask: string = "";
+    let negative: string = '';
+    let mask: string = '';
 
     for (const segment of segments) {
-
         const parts: NovaMessagePart[] = [];
-        if (segment.files) for (const f of segment.files) {
-            //TODO add video support
-            if (!f.mime_type?.startsWith('image')) {
-                continue;
-            }
-
-            const source = await f.getStream();
-            const data = await readStreamAsBase64(source);
-            const format = f.mime_type?.split('/')[1] || 'png';
-
-            parts.push({
-                image: {
-                    format: format as "jpeg" | "png" | "gif" | "webp",
-                    source: {
-                        bytes: data
-                    }
+        if (segment.files)
+            for (const f of segment.files) {
+                //TODO add video support
+                if (!f.mime_type?.startsWith('image')) {
+                    continue;
                 }
-            })
-        }
+
+                const source = await f.getStream();
+                const data = await readStreamAsBase64(source);
+                const format = f.mime_type?.split('/')[1] || 'png';
+
+                parts.push({
+                    image: {
+                        format: format as 'jpeg' | 'png' | 'gif' | 'webp',
+                        source: {
+                            bytes: data,
+                        },
+                    },
+                });
+            }
 
         if (segment.content) {
             parts.push({
-                text: segment.content
-            })
+                text: segment.content,
+            });
         }
 
         if (segment.role === PromptRole.system) {
@@ -96,7 +96,7 @@ export async function formatNovaPrompt(segments: PromptSegment[], schema?: JSONS
         } else if (segment.role !== PromptRole.tool) {
             messages.push({
                 role: segment.role,
-                content: parts
+                content: parts,
             });
         }
     }
@@ -124,18 +124,20 @@ export async function formatNovaPrompt(segments: PromptSegment[], schema?: JSONS
 
     if (schema) {
         messages.push({
-            role: "assistant",
-            content: [{
-                text: "{"
-            }]
+            role: 'assistant',
+            content: [
+                {
+                    text: '{',
+                },
+            ],
         });
     }
 
     // put system messages first and safety last
     return {
-        system: systemMessage ? [{ text: systemMessage }] : [{ text: "" }],
+        system: systemMessage ? [{ text: systemMessage }] : [{ text: '' }],
         messages: messages,
         negative: negative || undefined,
         mask: mask || undefined,
-    }
+    };
 }
