@@ -247,6 +247,29 @@ describe('GeminiModelDefinition Error Handling', () => {
             expect(error.name).toBe('ValidationError');
         });
 
+        it('should mark URL_REJECTED-REJECTED_CLIENT_THROTTLED 400s as retryable', () => {
+            // Reproduces a real Vertex AI failure: passing an audio file by URL
+            // (sys:AnalyzeAudio) sometimes 400s with INVALID_ARGUMENT whose
+            // message contains URL_REJECTED-REJECTED_CLIENT_THROTTLED — that's
+            // really a transient throttle on Google's URL fetcher.
+            const googleError = {
+                status: 400,
+                message:
+                    'Cannot fetch content from the provided URL. Please ensure the URL is valid ' +
+                    'and accessible by Vertex AI. Vertex AI respects robots.txt rules, so confirm ' +
+                    'the URL is allowed to be crawled. Status: URL_REJECTED-REJECTED_CLIENT_THROTTLED',
+            };
+
+            const error = modelDef.formatLlumiverseError(driver, googleError, {
+                provider: 'vertexai',
+                model: 'gemini-2.5-flash',
+                operation: 'execute',
+            });
+
+            expect(error.code).toBe(400);
+            expect(error.retryable).toBe(true);
+        });
+
         it('should handle errors without extractable name', () => {
             const googleError = {
                 status: 500,
@@ -294,6 +317,26 @@ describe('GeminiModelDefinition Error Handling', () => {
             expect((modelDef as any).isGeminiErrorRetryable(402)).toBe(false);
             expect((modelDef as any).isGeminiErrorRetryable(405)).toBe(false);
             expect((modelDef as any).isGeminiErrorRetryable(499)).toBe(false);
+        });
+
+        it('should treat 400 URL_REJECTED-REJECTED_CLIENT_THROTTLED as retryable', () => {
+            // Vertex AI surfaces inline-URL-fetcher throttling as 400 INVALID_ARGUMENT.
+            // The status is misleading — it's a transient Google-side throttle.
+            const message =
+                'Cannot fetch content from the provided URL. ' +
+                'Status: URL_REJECTED-REJECTED_CLIENT_THROTTLED';
+            expect((modelDef as any).isGeminiErrorRetryable(400, message)).toBe(true);
+        });
+
+        it('should treat 400 URL_REJECTED-REJECTED_RATE_LIMITED as retryable', () => {
+            const message =
+                'Cannot fetch content from the provided URL. ' +
+                'Status: URL_REJECTED-REJECTED_RATE_LIMITED';
+            expect((modelDef as any).isGeminiErrorRetryable(400, message)).toBe(true);
+        });
+
+        it('should still treat plain 400 INVALID_ARGUMENT as non-retryable', () => {
+            expect((modelDef as any).isGeminiErrorRetryable(400, 'INVALID_ARGUMENT: bad input')).toBe(false);
         });
     });
 
