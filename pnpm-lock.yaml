@@ -43,7 +43,7 @@ importers:
   .:
     devDependencies:
       '@biomejs/biome':
-        specifier: ^2.4.15
+        specifier: ^2.4.4
         version: 2.4.15
       cross-spawn:
         specifier: ^7.0.6
