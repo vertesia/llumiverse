@@ -22,7 +22,10 @@ class TestDriver extends AbstractDriver<DriverOptions, string> {
         throw new Error('Not implemented');
     }
 
-    async requestTextCompletionStream(_prompt: string, _options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+    async requestTextCompletionStream(
+        _prompt: string,
+        _options: ExecutionOptions,
+    ): Promise<AsyncIterable<CompletionChunkObject>> {
         throw new Error('Not implemented');
     }
 
@@ -82,6 +85,17 @@ describe('AbstractDriver Error Formatting', () => {
                 expect(driver.isRetryableError(401, 'Unauthorized')).toBe(false);
                 expect(driver.isRetryableError(403, 'Forbidden')).toBe(false);
                 expect(driver.isRetryableError(404, 'Not found')).toBe(false);
+            });
+
+            it('should honor transient provider messages before non-retryable 4xx status codes', () => {
+                expect(
+                    driver.isRetryableError(400, 'Unable to fetch URL. Status: URL_REJECTED-REJECTED_CLIENT_THROTTLED'),
+                ).toBe(true);
+                expect(
+                    driver.isRetryableError(400, 'Unable to fetch URL. Status: URL_REJECTED-REJECTED_RATE_LIMITED'),
+                ).toBe(true);
+                expect(driver.isRetryableError(400, 'Request throttled by upstream host')).toBe(true);
+                expect(driver.isRetryableError(400, 'Please retry with a valid model id')).toBe(false);
             });
 
             it('should mark 2xx and 3xx as not retryable', () => {
@@ -216,10 +230,7 @@ describe('AbstractDriver Error Formatting', () => {
 
     describe('driver override capability', () => {
         class CustomDriver extends TestDriver {
-            public formatLlumiverseError(
-                error: unknown,
-                context: LlumiverseErrorContext
-            ): LlumiverseError {
+            public formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
                 // Custom logic: check for specific error type
                 if (getProp(error, 'type') === 'custom_retryable') {
                     return new LlumiverseError(
@@ -228,7 +239,7 @@ describe('AbstractDriver Error Formatting', () => {
                         context,
                         error,
                         undefined,
-                        'CUSTOM_ERROR'
+                        'CUSTOM_ERROR',
                     );
                 }
                 // Fall back to default

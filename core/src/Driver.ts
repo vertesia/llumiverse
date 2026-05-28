@@ -337,8 +337,8 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
      * - Status 429, 408: retryable (rate limit, timeout)
      * - Status 529: retryable (overloaded)
      * - Status 5xx: retryable (server errors)
-     * - Status 4xx (except above): not retryable (client errors)
-     * - Error messages containing "rate limit", "timeout", etc.: retryable
+     * - High-confidence transient messages containing "rate limit", "timeout", etc.: retryable
+     * - Status 4xx (except above and transient provider quirks): not retryable (client errors)
      *
      * @param error - The error to format
      * @param context - Context about where the error occurred
@@ -378,6 +378,23 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
      * @returns True if retryable, false if not retryable, undefined if unknown
      */
     protected isRetryableError(statusCode: number | undefined, message: string): boolean | undefined {
+        const lowerMessage = message.toLowerCase();
+
+        // Provider APIs sometimes surface transient failures under misleading
+        // client status codes, so high-confidence transient message signals
+        // must be honored before the generic 4xx classification below.
+        if (lowerMessage.includes('url_rejected-rejected_client_throttled')) return true;
+        if (lowerMessage.includes('url_rejected-rejected_rate_limited')) return true;
+        if (lowerMessage.includes('rate') && lowerMessage.includes('limit')) return true;
+        if (lowerMessage.includes('timeout')) return true;
+        if (lowerMessage.includes('timed') && lowerMessage.includes('out')) return true;
+        if (lowerMessage.includes('time') && lowerMessage.includes('out')) return true;
+        if (lowerMessage.includes('resource') && lowerMessage.includes('exhaust')) return true;
+        if (lowerMessage.includes('overload')) return true;
+        if (lowerMessage.includes('throttl')) return true;
+        if (lowerMessage.includes('429')) return true;
+        if (lowerMessage.includes('529')) return true;
+
         // Numeric status codes
         if (statusCode !== undefined) {
             if (statusCode === 429 || statusCode === 408) return true; // Rate limit, timeout
@@ -387,25 +404,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         }
 
         // Message-based detection for non-HTTP errors
-        const lowerMessage = message.toLowerCase();
-
-        // Rate limit variations
-        if (lowerMessage.includes('rate') && lowerMessage.includes('limit')) return true;
-
-        // Timeout variations (timeout, timed out, time out)
-        if (lowerMessage.includes('timeout')) return true;
-        if (lowerMessage.includes('timed') && lowerMessage.includes('out')) return true;
-        if (lowerMessage.includes('time') && lowerMessage.includes('out')) return true;
-
-        // Resource exhausted variations
-        if (lowerMessage.includes('resource') && lowerMessage.includes('exhaust')) return true;
-
-        // Other retryable patterns
         if (lowerMessage.includes('retry')) return true;
-        if (lowerMessage.includes('overload')) return true;
-        if (lowerMessage.includes('throttl')) return true;
-        if (lowerMessage.includes('429')) return true;
-        if (lowerMessage.includes('529')) return true;
 
         // Unknown errors - let consumer decide retry strategy
         return undefined;
