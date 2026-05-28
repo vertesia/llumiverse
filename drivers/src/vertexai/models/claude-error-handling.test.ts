@@ -33,7 +33,7 @@ describe('ClaudeModelDefinition Error Handling', () => {
         modelDef = new ClaudeModelDefinition('claude-haiku-4-5');
         driver = {
             provider: 'vertexai',
-            logger: { warn: () => { }, info: () => { }, error: () => { } },
+            logger: { warn: () => {}, info: () => {}, error: () => {} },
         } as unknown as VertexAIDriver;
     });
 
@@ -48,11 +48,11 @@ describe('ClaudeModelDefinition Error Handling', () => {
                     type: 'error',
                     error: {
                         type: 'invalid_request_error',
-                        message: 'temperature: range: 0..1'
-                    }
+                        message: 'temperature: range: 0..1',
+                    },
                 },
                 '400 {"type":"error","error":{"type":"invalid_request_error","message":"temperature: range: 0..1"},"request_id":"req_test_123"}',
-                headers
+                headers,
             );
 
             const error = modelDef.formatLlumiverseError(driver, anthropicError, {
@@ -76,7 +76,7 @@ describe('ClaudeModelDefinition Error Handling', () => {
                 429,
                 { type: 'error', error: { type: 'rate_limit_error', message: 'Rate limit exceeded' } },
                 'Rate limit exceeded',
-                new Headers()
+                new Headers(),
             );
 
             const error = modelDef.formatLlumiverseError(driver, anthropicError, {
@@ -95,7 +95,7 @@ describe('ClaudeModelDefinition Error Handling', () => {
                 500,
                 { type: 'error', error: { type: 'internal_error', message: 'Internal server error' } },
                 'Internal server error',
-                new Headers()
+                new Headers(),
             );
 
             const error = modelDef.formatLlumiverseError(driver, anthropicError, {
@@ -114,7 +114,7 @@ describe('ClaudeModelDefinition Error Handling', () => {
                 401,
                 { type: 'error', error: { type: 'authentication_error', message: 'Invalid API key' } },
                 'Invalid API key',
-                new Headers()
+                new Headers(),
             );
 
             const error = modelDef.formatLlumiverseError(driver, anthropicError, {
@@ -133,7 +133,7 @@ describe('ClaudeModelDefinition Error Handling', () => {
                 403,
                 { type: 'error', error: { type: 'permission_error', message: 'Insufficient permissions' } },
                 'Insufficient permissions',
-                new Headers()
+                new Headers(),
             );
 
             const error = modelDef.formatLlumiverseError(driver, anthropicError, {
@@ -152,7 +152,7 @@ describe('ClaudeModelDefinition Error Handling', () => {
                 404,
                 { type: 'error', error: { type: 'not_found_error', message: 'Model not found' } },
                 'Model not found',
-                new Headers()
+                new Headers(),
             );
 
             const error = modelDef.formatLlumiverseError(driver, anthropicError, {
@@ -171,7 +171,7 @@ describe('ClaudeModelDefinition Error Handling', () => {
                 409,
                 { type: 'error', error: { type: 'conflict_error', message: 'Resource conflict' } },
                 'Resource conflict',
-                new Headers()
+                new Headers(),
             );
 
             const error = modelDef.formatLlumiverseError(driver, anthropicError, {
@@ -190,7 +190,7 @@ describe('ClaudeModelDefinition Error Handling', () => {
                 422,
                 { type: 'error', error: { type: 'validation_error', message: 'Validation failed' } },
                 'Validation failed',
-                new Headers()
+                new Headers(),
             );
 
             const error = modelDef.formatLlumiverseError(driver, anthropicError, {
@@ -239,11 +239,11 @@ describe('ClaudeModelDefinition Error Handling', () => {
                     type: 'error',
                     error: {
                         type: 'invalid_request_error',
-                        message: 'Missing required field'
-                    }
+                        message: 'Missing required field',
+                    },
                 },
                 'Missing required field',
-                new Headers()
+                new Headers(),
             );
 
             const error = modelDef.formatLlumiverseError(driver, anthropicError, {
@@ -264,7 +264,7 @@ describe('ClaudeModelDefinition Error Handling', () => {
                 400,
                 { type: 'error', error: { type: 'invalid_request_error', message: 'Bad request' } },
                 'Bad request',
-                headers
+                headers,
             );
 
             const error = modelDef.formatLlumiverseError(driver, anthropicError, {
@@ -293,7 +293,7 @@ describe('ClaudeModelDefinition Error Handling', () => {
                 400,
                 { type: 'error', error: { type: 'invalid_request_error', message: 'Test error' } },
                 'Test error',
-                new Headers()
+                new Headers(),
             );
 
             const error = modelDef.formatLlumiverseError(driver, anthropicError, {
@@ -316,7 +316,11 @@ describe('ClaudeModelDefinition Error Handling', () => {
             ];
 
             for (const error of retryableErrors) {
-                const result = exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(error, error.status, undefined);
+                const result = exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(
+                    error,
+                    error.status,
+                    undefined,
+                );
                 expect(result, `${error.constructor.name} should be retryable`).toBe(true);
             }
         });
@@ -331,54 +335,88 @@ describe('ClaudeModelDefinition Error Handling', () => {
             ];
 
             for (const error of nonRetryableErrors) {
-                const result = exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(error, error.status, undefined);
+                const result = exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(
+                    error,
+                    error.status,
+                    undefined,
+                );
                 expect(result, `${error.constructor.name} should not be retryable`).toBe(false);
             }
         });
 
         it('should use HTTP status codes when available', () => {
             const apiError = new APIError(429, {}, 'Too many requests', new Headers());
-            expect(exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError, 429, undefined)).toBe(true);
+            expect(exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError, 429, undefined)).toBe(
+                true,
+            );
 
             const apiError2 = new APIError(408, {}, 'Request timeout', new Headers());
-            expect(exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError2, 408, undefined)).toBe(true);
+            expect(
+                exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError2, 408, undefined),
+            ).toBe(true);
 
             const apiError3 = new APIError(529, {}, 'Overloaded', new Headers());
-            expect(exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError3, 529, undefined)).toBe(true);
+            expect(
+                exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError3, 529, undefined),
+            ).toBe(true);
 
             const apiError4 = new APIError(503, {}, 'Service unavailable', new Headers());
-            expect(exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError4, 503, undefined)).toBe(true);
+            expect(
+                exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError4, 503, undefined),
+            ).toBe(true);
         });
 
         it('should classify 4xx as non-retryable', () => {
             const apiError = new APIError(400, {}, 'Bad request', new Headers());
-            expect(exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError, 400, undefined)).toBe(false);
+            expect(exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError, 400, undefined)).toBe(
+                false,
+            );
 
             const apiError2 = new APIError(403, {}, 'Forbidden', new Headers());
-            expect(exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError2, 403, undefined)).toBe(false);
+            expect(
+                exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError2, 403, undefined),
+            ).toBe(false);
         });
 
         it('should classify 5xx as retryable', () => {
             const apiError = new APIError(500, {}, 'Internal error', new Headers());
-            expect(exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError, 500, undefined)).toBe(true);
+            expect(exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError, 500, undefined)).toBe(
+                true,
+            );
 
             const apiError2 = new APIError(502, {}, 'Bad gateway', new Headers());
-            expect(exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError2, 502, undefined)).toBe(true);
+            expect(
+                exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError2, 502, undefined),
+            ).toBe(true);
         });
 
         it('should classify invalid_request_error as non-retryable', () => {
             const apiError = new APIError(400, {}, 'Invalid request', new Headers());
-            expect(exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError, 400, 'invalid_request_error')).toBe(false);
+            expect(
+                exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(
+                    apiError,
+                    400,
+                    'invalid_request_error',
+                ),
+            ).toBe(false);
         });
 
         it('should classify APIConnectionError (non-timeout) as retryable', () => {
             const connectionError = new APIConnectionError({ message: 'Network failure' });
-            expect(exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(connectionError, undefined, undefined)).toBe(true);
+            expect(
+                exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(
+                    connectionError,
+                    undefined,
+                    undefined,
+                ),
+            ).toBe(true);
         });
 
         it('should return undefined for unknown errors', () => {
             const apiError = new APIError(undefined, {}, 'Unknown error', undefined);
-            expect(exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError, undefined, undefined)).toBeUndefined();
+            expect(
+                exposePrivate<ClaudeModelInternals>(modelDef).isClaudeErrorRetryable(apiError, undefined, undefined),
+            ).toBeUndefined();
         });
     });
 
@@ -393,11 +431,11 @@ describe('ClaudeModelDefinition Error Handling', () => {
                     type: 'error',
                     error: {
                         type: 'rate_limit_error',
-                        message: 'Rate limit exceeded'
-                    }
+                        message: 'Rate limit exceeded',
+                    },
                 },
                 'Rate limit exceeded',
-                headers
+                headers,
             );
 
             const error = modelDef.formatLlumiverseError(driver, anthropicError, {
@@ -423,7 +461,7 @@ describe('ClaudeModelDefinition Error Handling', () => {
                     400,
                     { type: 'error', error: { type: 'invalid_request_error', message: 'Invalid parameter' } },
                     'Invalid parameter',
-                    new Headers()
+                    new Headers(),
                 );
 
                 const error = modelDef.formatLlumiverseError(driver, anthropicError, {

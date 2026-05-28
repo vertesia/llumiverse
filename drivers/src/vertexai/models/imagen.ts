@@ -1,80 +1,96 @@
 import {
-    type AIModel, type Completion, type ExecutionOptions,
-    ModelType, PromptRole, type PromptSegment, readStreamAsBase64, type ImagenOptions
-} from "@llumiverse/core";
-import type { VertexAIDriver } from "../index.js";
+    type AIModel,
+    type Completion,
+    type ExecutionOptions,
+    ModelType,
+    PromptRole,
+    type PromptSegment,
+    readStreamAsBase64,
+    type ImagenOptions,
+} from '@llumiverse/core';
+import type { VertexAIDriver } from '../index.js';
 
 // Import the helper module for converting arbitrary protobuf.Value objects
 import { type protos, helpers } from '@google-cloud/aiplatform';
 
 interface ImagenBaseReference {
-    referenceType: "REFERENCE_TYPE_RAW" | "REFERENCE_TYPE_MASK" | "REFERENCE_TYPE_SUBJECT" |
-    "REFERENCE_TYPE_CONTROL" | "REFERENCE_TYPE_STYLE";
+    referenceType:
+        | 'REFERENCE_TYPE_RAW'
+        | 'REFERENCE_TYPE_MASK'
+        | 'REFERENCE_TYPE_SUBJECT'
+        | 'REFERENCE_TYPE_CONTROL'
+        | 'REFERENCE_TYPE_STYLE';
     referenceId: number;
     referenceImage: {
         bytesBase64Encoded: string; //10MB max
-    }
+    };
 }
 
 export enum ImagenTaskType {
-    TEXT_IMAGE = "TEXT_IMAGE",
-    EDIT_MODE_INPAINT_REMOVAL = "EDIT_MODE_INPAINT_REMOVAL",
-    EDIT_MODE_INPAINT_INSERTION = "EDIT_MODE_INPAINT_INSERTION",
-    EDIT_MODE_BGSWAP = "EDIT_MODE_BGSWAP",
-    EDIT_MODE_OUTPAINT = "EDIT_MODE_OUTPAINT",
-    CUSTOMIZATION_SUBJECT = "CUSTOMIZATION_SUBJECT",
-    CUSTOMIZATION_STYLE = "CUSTOMIZATION_STYLE",
-    CUSTOMIZATION_CONTROLLED = "CUSTOMIZATION_CONTROLLED",
-    CUSTOMIZATION_INSTRUCT = "CUSTOMIZATION_INSTRUCT",
+    TEXT_IMAGE = 'TEXT_IMAGE',
+    EDIT_MODE_INPAINT_REMOVAL = 'EDIT_MODE_INPAINT_REMOVAL',
+    EDIT_MODE_INPAINT_INSERTION = 'EDIT_MODE_INPAINT_INSERTION',
+    EDIT_MODE_BGSWAP = 'EDIT_MODE_BGSWAP',
+    EDIT_MODE_OUTPAINT = 'EDIT_MODE_OUTPAINT',
+    CUSTOMIZATION_SUBJECT = 'CUSTOMIZATION_SUBJECT',
+    CUSTOMIZATION_STYLE = 'CUSTOMIZATION_STYLE',
+    CUSTOMIZATION_CONTROLLED = 'CUSTOMIZATION_CONTROLLED',
+    CUSTOMIZATION_INSTRUCT = 'CUSTOMIZATION_INSTRUCT',
 }
 
 export enum ImagenMaskMode {
-    MASK_MODE_USER_PROVIDED = "MASK_MODE_USER_PROVIDED",
-    MASK_MODE_BACKGROUND = "MASK_MODE_BACKGROUND",
-    MASK_MODE_FOREGROUND = "MASK_MODE_FOREGROUND",
-    MASK_MODE_SEMANTIC = "MASK_MODE_SEMANTIC",
+    MASK_MODE_USER_PROVIDED = 'MASK_MODE_USER_PROVIDED',
+    MASK_MODE_BACKGROUND = 'MASK_MODE_BACKGROUND',
+    MASK_MODE_FOREGROUND = 'MASK_MODE_FOREGROUND',
+    MASK_MODE_SEMANTIC = 'MASK_MODE_SEMANTIC',
 }
 
 interface ImagenReferenceRaw extends ImagenBaseReference {
-    referenceType: "REFERENCE_TYPE_RAW";
+    referenceType: 'REFERENCE_TYPE_RAW';
 }
 
-interface ImagenReferenceMask extends Omit<ImagenBaseReference, "referenceImage"> {
-    referenceType: "REFERENCE_TYPE_MASK";
+interface ImagenReferenceMask extends Omit<ImagenBaseReference, 'referenceImage'> {
+    referenceType: 'REFERENCE_TYPE_MASK';
     maskImageConfig: {
         maskMode?: ImagenMaskMode;
         maskClasses?: number[]; //Used for MASK_MODE_SEMANTIC, based on https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/imagen-api-customization#segment-ids
         dilation?: number; //Recommendation depends on mode: Inpaint: 0.01, BGSwap: 0.0, Outpaint: 0.01-0.03
-    }
-    referenceImage?: {  //Only used for MASK_MODE_USER_PROVIDED
+    };
+    referenceImage?: {
+        //Only used for MASK_MODE_USER_PROVIDED
         bytesBase64Encoded: string; //10MB max
-    }
+    };
 }
 
 interface ImagenReferenceSubject extends ImagenBaseReference {
-    referenceType: "REFERENCE_TYPE_SUBJECT";
+    referenceType: 'REFERENCE_TYPE_SUBJECT';
     subjectImageConfig: {
         subjectDescription: string;
-        subjectType: "SUBJECT_TYPE_PERSON" | "SUBJECT_TYPE_ANIMAL" | "SUBJECT_TYPE_PRODUCT" | "SUBJECT_TYPE_DEFAULT";
-    }
+        subjectType: 'SUBJECT_TYPE_PERSON' | 'SUBJECT_TYPE_ANIMAL' | 'SUBJECT_TYPE_PRODUCT' | 'SUBJECT_TYPE_DEFAULT';
+    };
 }
 
 interface ImagenReferenceControl extends ImagenBaseReference {
-    referenceType: "REFERENCE_TYPE_CONTROL";
+    referenceType: 'REFERENCE_TYPE_CONTROL';
     controlImageConfig: {
-        controlType: "CONTROL_TYPE_FACE_MESH" | "CONTROL_TYPE_CANNY" | "CONTROL_TYPE_SCRIBBLE";
+        controlType: 'CONTROL_TYPE_FACE_MESH' | 'CONTROL_TYPE_CANNY' | 'CONTROL_TYPE_SCRIBBLE';
         enableControlImageComputation?: boolean; //If true, the model will compute the control image
-    }
+    };
 }
 
 interface ImagenReferenceStyle extends ImagenBaseReference {
-    referenceType: "REFERENCE_TYPE_STYLE";
+    referenceType: 'REFERENCE_TYPE_STYLE';
     styleImageConfig: {
         styleDescription?: string;
-    }
+    };
 }
 
-type ImagenMessage = ImagenReferenceRaw | ImagenReferenceMask | ImagenReferenceSubject | ImagenReferenceControl | ImagenReferenceStyle;
+type ImagenMessage =
+    | ImagenReferenceRaw
+    | ImagenReferenceMask
+    | ImagenReferenceSubject
+    | ImagenReferenceControl
+    | ImagenReferenceStyle;
 
 export interface ImagenPrompt {
     prompt: string;
@@ -89,7 +105,7 @@ function getImagenParameters(taskType: string, options: ImagenOptions) {
         seed: options?.seed,
         safetySetting: options?.safety_setting,
         personGeneration: options?.person_generation,
-        negativePrompt: taskType ? undefined : "", //Filled in later from the prompt
+        negativePrompt: taskType ? undefined : '', //Filled in later from the prompt
         //TODO: Add more safety and prompt rejection information
         //includeSafetyAttributes: true,
         //includeRaiReason: true,
@@ -98,35 +114,35 @@ function getImagenParameters(taskType: string, options: ImagenOptions) {
         case ImagenTaskType.EDIT_MODE_INPAINT_REMOVAL:
             return {
                 ...commonParameters,
-                editMode: "EDIT_MODE_INPAINT_REMOVAL",
+                editMode: 'EDIT_MODE_INPAINT_REMOVAL',
                 editConfig: {
                     baseSteps: options?.edit_steps,
                 },
-            }
+            };
         case ImagenTaskType.EDIT_MODE_INPAINT_INSERTION:
             return {
                 ...commonParameters,
-                editMode: "EDIT_MODE_INPAINT_INSERTION",
+                editMode: 'EDIT_MODE_INPAINT_INSERTION',
                 editConfig: {
                     baseSteps: options?.edit_steps,
                 },
-            }
+            };
         case ImagenTaskType.EDIT_MODE_BGSWAP:
             return {
                 ...commonParameters,
-                editMode: "EDIT_MODE_BGSWAP",
+                editMode: 'EDIT_MODE_BGSWAP',
                 editConfig: {
                     baseSteps: options?.edit_steps,
                 },
-            }
+            };
         case ImagenTaskType.EDIT_MODE_OUTPAINT:
             return {
                 ...commonParameters,
-                editMode: "EDIT_MODE_OUTPAINT",
+                editMode: 'EDIT_MODE_OUTPAINT',
                 editConfig: {
                     baseSteps: options?.edit_steps,
                 },
-            }
+            };
         case ImagenTaskType.TEXT_IMAGE:
             return {
                 ...commonParameters,
@@ -141,15 +157,14 @@ function getImagenParameters(taskType: string, options: ImagenOptions) {
         case ImagenTaskType.CUSTOMIZATION_STYLE:
             return {
                 ...commonParameters,
-            }
+            };
         default:
-            throw new Error("Task type not supported");
+            throw new Error('Task type not supported');
     }
 }
 
 export class ImagenModelDefinition {
-
-    model: AIModel
+    model: AIModel;
 
     constructor(modelId: string) {
         this.model = {
@@ -161,16 +176,20 @@ export class ImagenModelDefinition {
         };
     }
 
-    async createPrompt(_driver: VertexAIDriver, segments: PromptSegment[], options: ExecutionOptions): Promise<ImagenPrompt> {
-        const splits = options.model.split("/");
+    async createPrompt(
+        _driver: VertexAIDriver,
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+    ): Promise<ImagenPrompt> {
+        const splits = options.model.split('/');
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
 
         const prompt: ImagenPrompt = {
-            prompt: "",
-        }
+            prompt: '',
+        };
 
-        //Collect text prompts, Imagen does not support roles, so everything gets merged together 
+        //Collect text prompts, Imagen does not support roles, so everything gets merged together
         // however we still respect our typical pattern. System First, Safety Last.
         const system: string[] = [];
         const user: string[] = [];
@@ -197,92 +216,109 @@ export class ImagenModelDefinition {
                     prompt.referenceImages = [];
                 }
 
-                //Always required, but only used by customisation. 
+                //Always required, but only used by customisation.
                 //Each ref ID refers to a single "reference", i.e. object. To provide multiple images of a single ref,
                 //include multiple images in one prompt.
                 const refId = prompt.referenceImages.length + 1;
                 for (const img of msg.files) {
-                    if (img.mime_type?.includes("image")) {
+                    if (img.mime_type?.includes('image')) {
                         if (msg.role !== PromptRole.mask) {
                             //Editing based mode requires a reference image
-                            if (imagenOptions?.edit_mode?.includes("EDIT_MODE")) {
+                            if (imagenOptions?.edit_mode?.includes('EDIT_MODE')) {
                                 prompt.referenceImages.push({
-                                    referenceType: "REFERENCE_TYPE_RAW",
+                                    referenceType: 'REFERENCE_TYPE_RAW',
                                     referenceId: refId,
                                     referenceImage: {
                                         bytesBase64Encoded: await readStreamAsBase64(await img.getStream()),
-                                    }
+                                    },
                                 });
                                 //If mask is auto-generated, add a mask reference
                                 if (mask_mode !== ImagenMaskMode.MASK_MODE_USER_PROVIDED) {
                                     prompt.referenceImages.push({
-                                        referenceType: "REFERENCE_TYPE_MASK",
+                                        referenceType: 'REFERENCE_TYPE_MASK',
                                         referenceId: refId,
                                         maskImageConfig: {
                                             maskMode: mask_mode,
                                             dilation: imagenOptions?.mask_dilation,
-                                        }
+                                        },
                                     });
                                 }
-                            }
-                            else if ((options.model_options as ImagenOptions)?.edit_mode === ImagenTaskType.CUSTOMIZATION_SUBJECT) {
+                            } else if (
+                                (options.model_options as ImagenOptions)?.edit_mode ===
+                                ImagenTaskType.CUSTOMIZATION_SUBJECT
+                            ) {
                                 //First image is always the control image
                                 if (refId === 1) {
                                     //Customization subject mode requires a control image
                                     prompt.referenceImages.push({
-                                        referenceType: "REFERENCE_TYPE_CONTROL",
+                                        referenceType: 'REFERENCE_TYPE_CONTROL',
                                         referenceId: refId,
                                         referenceImage: {
                                             bytesBase64Encoded: await readStreamAsBase64(await img.getStream()),
                                         },
                                         controlImageConfig: {
-                                            controlType: imagenOptions?.controlType === "CONTROL_TYPE_FACE_MESH" ? "CONTROL_TYPE_FACE_MESH" : "CONTROL_TYPE_CANNY",
+                                            controlType:
+                                                imagenOptions?.controlType === 'CONTROL_TYPE_FACE_MESH'
+                                                    ? 'CONTROL_TYPE_FACE_MESH'
+                                                    : 'CONTROL_TYPE_CANNY',
                                             enableControlImageComputation: imagenOptions?.controlImageComputation,
-                                        }
+                                        },
                                     });
                                 } else {
                                     // Subject images
                                     prompt.referenceImages.push({
-                                        referenceType: "REFERENCE_TYPE_SUBJECT",
+                                        referenceType: 'REFERENCE_TYPE_SUBJECT',
                                         referenceId: refId,
                                         referenceImage: {
                                             bytesBase64Encoded: await readStreamAsBase64(await img.getStream()),
                                         },
                                         subjectImageConfig: {
                                             subjectDescription: prompt.subjectDescription ?? msg.content,
-                                            subjectType: imagenOptions?.subjectType ?? "SUBJECT_TYPE_DEFAULT",
-                                        }
+                                            subjectType: imagenOptions?.subjectType ?? 'SUBJECT_TYPE_DEFAULT',
+                                        },
                                     });
                                 }
-                            } else if ((options.model_options as ImagenOptions)?.edit_mode === ImagenTaskType.CUSTOMIZATION_STYLE) {
+                            } else if (
+                                (options.model_options as ImagenOptions)?.edit_mode ===
+                                ImagenTaskType.CUSTOMIZATION_STYLE
+                            ) {
                                 // Style images
                                 prompt.referenceImages.push({
-                                    referenceType: "REFERENCE_TYPE_STYLE",
+                                    referenceType: 'REFERENCE_TYPE_STYLE',
                                     referenceId: refId,
                                     referenceImage: {
                                         bytesBase64Encoded: await readStreamAsBase64(await img.getStream()),
                                     },
                                     styleImageConfig: {
                                         styleDescription: prompt.subjectDescription ?? msg.content,
-                                    }
+                                    },
                                 });
-                            } else if ((options.model_options as ImagenOptions)?.edit_mode === ImagenTaskType.CUSTOMIZATION_CONTROLLED) {
+                            } else if (
+                                (options.model_options as ImagenOptions)?.edit_mode ===
+                                ImagenTaskType.CUSTOMIZATION_CONTROLLED
+                            ) {
                                 // Control images
                                 prompt.referenceImages.push({
-                                    referenceType: "REFERENCE_TYPE_CONTROL",
+                                    referenceType: 'REFERENCE_TYPE_CONTROL',
                                     referenceId: refId,
                                     referenceImage: {
                                         bytesBase64Encoded: await readStreamAsBase64(await img.getStream()),
                                     },
                                     controlImageConfig: {
-                                        controlType: imagenOptions?.controlType === "CONTROL_TYPE_FACE_MESH" ? "CONTROL_TYPE_FACE_MESH" : "CONTROL_TYPE_CANNY",
+                                        controlType:
+                                            imagenOptions?.controlType === 'CONTROL_TYPE_FACE_MESH'
+                                                ? 'CONTROL_TYPE_FACE_MESH'
+                                                : 'CONTROL_TYPE_CANNY',
                                         enableControlImageComputation: imagenOptions?.controlImageComputation,
-                                    }
+                                    },
                                 });
-                            } else if ((options.model_options as ImagenOptions)?.edit_mode === ImagenTaskType.CUSTOMIZATION_INSTRUCT) {
+                            } else if (
+                                (options.model_options as ImagenOptions)?.edit_mode ===
+                                ImagenTaskType.CUSTOMIZATION_INSTRUCT
+                            ) {
                                 // Control images
                                 prompt.referenceImages.push({
-                                    referenceType: "REFERENCE_TYPE_RAW",
+                                    referenceType: 'REFERENCE_TYPE_RAW',
                                     referenceId: refId,
                                     referenceImage: {
                                         bytesBase64Encoded: await readStreamAsBase64(await img.getStream()),
@@ -293,7 +329,7 @@ export class ImagenModelDefinition {
                         //If mask is user-provided, add a mask reference
                         if (msg.role === PromptRole.mask && mask_mode === ImagenMaskMode.MASK_MODE_USER_PROVIDED) {
                             prompt.referenceImages.push({
-                                referenceType: "REFERENCE_TYPE_MASK",
+                                referenceType: 'REFERENCE_TYPE_MASK',
                                 referenceId: refId,
                                 referenceImage: {
                                     bytesBase64Encoded: await readStreamAsBase64(await img.getStream()),
@@ -301,7 +337,7 @@ export class ImagenModelDefinition {
                                 maskImageConfig: {
                                     maskMode: mask_mode,
                                     dilation: imagenOptions?.mask_dilation,
-                                }
+                                },
                             });
                         }
                     }
@@ -310,21 +346,28 @@ export class ImagenModelDefinition {
         }
 
         //Extract the text from the segments
-        prompt.prompt += [system.join("\n\n"), user.join("\n\n"), safety.join("\n\n")].join("\n\n");
+        prompt.prompt += [system.join('\n\n'), user.join('\n\n'), safety.join('\n\n')].join('\n\n');
 
         //Negative prompt
         if (negative.length > 0) {
-            prompt.negativePrompt = negative.join(", ");
+            prompt.negativePrompt = negative.join(', ');
         }
 
         console.log(prompt);
 
-        return prompt
+        return prompt;
     }
 
-    async requestImageGeneration(driver: VertexAIDriver, prompt: ImagenPrompt, options: ExecutionOptions): Promise<Completion> {
-        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "vertexai-imagen") {
-            driver.logger.debug({ options: options.model_options }, "Unexpected option id");
+    async requestImageGeneration(
+        driver: VertexAIDriver,
+        prompt: ImagenPrompt,
+        options: ExecutionOptions,
+    ): Promise<Completion> {
+        if (
+            options.model_options?._option_id !== undefined &&
+            options.model_options?._option_id !== 'vertexai-imagen'
+        ) {
+            driver.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
         options.model_options = options.model_options as ImagenOptions | undefined;
 
@@ -332,7 +375,7 @@ export class ImagenModelDefinition {
 
         driver.logger.info(`Task type: ${taskType}`);
 
-        const modelName = options.model.split("/").pop() ?? '';
+        const modelName = options.model.split('/').pop() ?? '';
 
         // Configure the parent resource
         // TODO: make location configurable, fixed to us-central1 for now
@@ -344,14 +387,17 @@ export class ImagenModelDefinition {
         }
         const instances = [instanceValue];
 
-        let parameter = getImagenParameters(taskType, options.model_options ?? { _option_id: "vertexai-imagen" }) as ReturnType<typeof getImagenParameters> & { negativePrompt?: string };
+        let parameter = getImagenParameters(
+            taskType,
+            options.model_options ?? { _option_id: 'vertexai-imagen' },
+        ) as ReturnType<typeof getImagenParameters> & { negativePrompt?: string };
         parameter.negativePrompt = prompt.negativePrompt ?? undefined;
 
         const numberOfImages = options.model_options?.number_of_images ?? 1;
 
         // Remove all undefined values
         parameter = Object.fromEntries(
-            Object.entries(parameter).filter(([_, v]) => v !== undefined)
+            Object.entries(parameter).filter(([_, v]) => v !== undefined),
         ) as typeof parameter;
 
         const parameters = helpers.toValue(parameter);
@@ -373,14 +419,14 @@ export class ImagenModelDefinition {
         }
 
         // Extract base64 encoded images from predictions
-        const images: string[] = predictions.map(prediction =>
-            prediction.structValue?.fields?.bytesBase64Encoded?.stringValue ?? ''
+        const images: string[] = predictions.map(
+            (prediction) => prediction.structValue?.fields?.bytesBase64Encoded?.stringValue ?? '',
         );
 
         return {
-            result: images.map(image => ({
-                type: "image" as const,
-                value: image
+            result: images.map((image) => ({
+                type: 'image' as const,
+                value: image,
             })),
         };
     }

@@ -22,7 +22,10 @@ class TestDriver extends AbstractDriver<DriverOptions, string> {
         throw new Error('Not implemented');
     }
 
-    async requestTextCompletionStream(_prompt: string, _options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+    async requestTextCompletionStream(
+        _prompt: string,
+        _options: ExecutionOptions,
+    ): Promise<AsyncIterable<CompletionChunkObject>> {
         throw new Error('Not implemented');
     }
 
@@ -216,10 +219,7 @@ describe('AbstractDriver Error Formatting', () => {
 
     describe('driver override capability', () => {
         class CustomDriver extends TestDriver {
-            public formatLlumiverseError(
-                error: unknown,
-                context: LlumiverseErrorContext
-            ): LlumiverseError {
+            public formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
                 // Custom logic: check for specific error type
                 if (getProp(error, 'type') === 'custom_retryable') {
                     return new LlumiverseError(
@@ -228,7 +228,7 @@ describe('AbstractDriver Error Formatting', () => {
                         context,
                         error,
                         undefined,
-                        'CUSTOM_ERROR'
+                        'CUSTOM_ERROR',
                     );
                 }
                 // Fall back to default

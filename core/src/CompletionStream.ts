@@ -6,20 +6,21 @@ import {
     type ExecutionTokenUsage,
     type CompletionResult,
     type ToolUse,
-    LlumiverseError
-} from "@llumiverse/common";
-import type { AbstractDriver } from "./Driver.js";
+    LlumiverseError,
+} from '@llumiverse/common';
+import type { AbstractDriver } from './Driver.js';
 
 type StreamingToolUse = ToolUse<unknown> & { _actual_id?: string };
 
 export class DefaultCompletionStream<PromptT = unknown> implements CompletionStream<PromptT> {
-
     chunks: number; // Counter for number of chunks instead of storing strings
     completion: ExecutionResponse<PromptT> | undefined;
 
-    constructor(public driver: AbstractDriver<DriverOptions, PromptT>,
+    constructor(
+        public driver: AbstractDriver<DriverOptions, PromptT>,
         public prompt: PromptT,
-        public options: ExecutionOptions) {
+        public options: ExecutionOptions,
+    ) {
         this.chunks = 0;
     }
 
@@ -30,17 +31,15 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
         const accumulatedResults: CompletionResult[] = []; // Accumulate CompletionResult[] from chunks
         const accumulatedToolUse: Map<string, StreamingToolUse> = new Map(); // Accumulate tool_use by id
 
-        this.driver.logger.debug(
-            `[${this.driver.provider}] Streaming Execution of ${this.options.model} with prompt`,
-        );
+        this.driver.logger.debug(`[${this.driver.provider}] Streaming Execution of ${this.options.model} with prompt`);
 
         const start = Date.now();
-        let finish_reason: string | undefined ;
+        let finish_reason: string | undefined;
         let promptTokens: number = 0;
-        let resultTokens: number | undefined ;
-        let promptCachedTokens: number | undefined ;
-        let promptCacheWriteTokens: number | undefined ;
-        let promptNewTokens: number | undefined ;
+        let resultTokens: number | undefined;
+        let promptCachedTokens: number | undefined;
+        let promptCacheWriteTokens: number | undefined;
+        let promptNewTokens: number | undefined;
 
         try {
             const stream = await this.driver.requestTextCompletionStream(this.prompt, this.options);
@@ -50,8 +49,9 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
                         this.chunks++;
                         yield chunk;
                     } else {
-                        if (chunk.finish_reason) {                           //Do not replace non-null values with null values
-                            finish_reason = chunk.finish_reason;             //Used to skip empty finish_reason chunks coming after "stop" or "length"
+                        if (chunk.finish_reason) {
+                            //Do not replace non-null values with null values
+                            finish_reason = chunk.finish_reason; //Used to skip empty finish_reason chunks coming after "stop" or "length"
                         }
                         if (chunk.token_usage) {
                             //Tokens returned include prior parts of stream,
@@ -59,8 +59,10 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
                             //Math.max used as some models report final token count at beginning of stream
                             promptTokens = Math.max(promptTokens, chunk.token_usage.prompt ?? 0);
                             resultTokens = Math.max(resultTokens ?? 0, chunk.token_usage.result ?? 0);
-                            if (chunk.token_usage.prompt_cached != null) promptCachedTokens = chunk.token_usage.prompt_cached;
-                            if (chunk.token_usage.prompt_cache_write != null) promptCacheWriteTokens = chunk.token_usage.prompt_cache_write;
+                            if (chunk.token_usage.prompt_cached != null)
+                                promptCachedTokens = chunk.token_usage.prompt_cached;
+                            if (chunk.token_usage.prompt_cache_write != null)
+                                promptCacheWriteTokens = chunk.token_usage.prompt_cache_write;
                             if (chunk.token_usage.prompt_new != null) promptNewTokens = chunk.token_usage.prompt_new;
                         }
                         // Accumulate tool_use from chunks
@@ -76,9 +78,17 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
                                         if (typeof existingInput === 'string' && typeof newInput === 'string') {
                                             // Concatenate string arguments
                                             existing.tool_input = existingInput + newInput;
-                                        } else if (existingInput && typeof existingInput === 'object' && newInput && typeof newInput === 'object') {
+                                        } else if (
+                                            existingInput &&
+                                            typeof existingInput === 'object' &&
+                                            newInput &&
+                                            typeof newInput === 'object'
+                                        ) {
                                             // Merge objects
-                                            existing.tool_input = { ...(existingInput as Record<string, unknown>), ...(newInput as Record<string, unknown>) };
+                                            existing.tool_input = {
+                                                ...(existingInput as Record<string, unknown>),
+                                                ...(newInput as Record<string, unknown>),
+                                            };
                                         } else {
                                             existing.tool_input = tool.tool_input;
                                         }
@@ -104,9 +114,11 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
                                 // Check if we can combine with the last accumulated result
                                 const lastResult = accumulatedResults[accumulatedResults.length - 1];
 
-                                if (lastResult &&
+                                if (
+                                    lastResult &&
                                     ((lastResult.type === 'text' && result.type === 'text') ||
-                                        (lastResult.type === 'json' && result.type === 'json'))) {
+                                        (lastResult.type === 'json' && result.type === 'json'))
+                                ) {
                                     // Combine consecutive text or JSON results
                                     if (result.type === 'text') {
                                         lastResult.value += result.value;
@@ -115,14 +127,24 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
                                         try {
                                             const lastParsed = lastResult.value;
                                             const currentParsed = result.value;
-                                            if (lastParsed !== null && typeof lastParsed === 'object' &&
-                                                currentParsed !== null && typeof currentParsed === 'object') {
+                                            if (
+                                                lastParsed !== null &&
+                                                typeof lastParsed === 'object' &&
+                                                currentParsed !== null &&
+                                                typeof currentParsed === 'object'
+                                            ) {
                                                 const combined = { ...lastParsed, ...currentParsed };
                                                 lastResult.value = combined;
                                             } else {
                                                 // If not objects, convert to string and concatenate
-                                                const lastStr = typeof lastParsed === 'string' ? lastParsed : JSON.stringify(lastParsed);
-                                                const currentStr = typeof currentParsed === 'string' ? currentParsed : JSON.stringify(currentParsed);
+                                                const lastStr =
+                                                    typeof lastParsed === 'string'
+                                                        ? lastParsed
+                                                        : JSON.stringify(lastParsed);
+                                                const currentStr =
+                                                    typeof currentParsed === 'string'
+                                                        ? currentParsed
+                                                        : JSON.stringify(currentParsed);
                                                 lastResult.value = lastStr + currentStr;
                                             }
                                         } catch {
@@ -138,22 +160,27 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
 
                             // Convert CompletionResult[] to string for streaming
                             // Only yield if we have results to show
-                            const resultText = chunk.result.map(r => {
-                                switch (r.type) {
-                                    case 'text':
-                                        return r.value;
-                                    case 'json':
-                                        return JSON.stringify(r.value);
-                                    case 'image': {
-                                        const truncatedValue = typeof r.value === 'string' ? r.value.slice(0, 10) : String(r.value).slice(0, 10);
-                                        return `\n[Image: ${truncatedValue}...]\n`;
+                            const resultText = chunk.result
+                                .map((r) => {
+                                    switch (r.type) {
+                                        case 'text':
+                                            return r.value;
+                                        case 'json':
+                                            return JSON.stringify(r.value);
+                                        case 'image': {
+                                            const truncatedValue =
+                                                typeof r.value === 'string'
+                                                    ? r.value.slice(0, 10)
+                                                    : String(r.value).slice(0, 10);
+                                            return `\n[Image: ${truncatedValue}...]\n`;
+                                        }
+                                        default: {
+                                            const _exhaustive: never = r;
+                                            return String(_exhaustive);
+                                        }
                                     }
-                                    default: {
-                                        const _exhaustive: never = r;
-                                        return String(_exhaustive);
-                                    }
-                                }
-                            }).join('');
+                                })
+                                .join('');
 
                             if (resultText) {
                                 this.chunks++;
@@ -177,14 +204,17 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
 
         // Return undefined only if we never received any token data from the provider.
         // Use !== undefined (not truthiness) because resultTokens === 0 is valid (e.g. empty output with stop).
-        const tokens: ExecutionTokenUsage | undefined = resultTokens !== undefined ? {
-            prompt: promptTokens,
-            result: resultTokens,
-            total: resultTokens + promptTokens,
-            ...(promptCachedTokens != null && { prompt_cached: promptCachedTokens }),
-            ...(promptCacheWriteTokens != null && { prompt_cache_write: promptCacheWriteTokens }),
-            ...(promptNewTokens != null && { prompt_new: promptNewTokens }),
-        } : undefined
+        const tokens: ExecutionTokenUsage | undefined =
+            resultTokens !== undefined
+                ? {
+                      prompt: promptTokens,
+                      result: resultTokens,
+                      total: resultTokens + promptTokens,
+                      ...(promptCachedTokens != null && { prompt_cached: promptCachedTokens }),
+                      ...(promptCacheWriteTokens != null && { prompt_cache_write: promptCacheWriteTokens }),
+                      ...(promptNewTokens != null && { prompt_new: promptNewTokens }),
+                  }
+                : undefined;
 
         // Convert accumulated tool_use Map to array
         let toolUseArray = accumulatedToolUse.size > 0 ? Array.from(accumulatedToolUse.values()) : undefined;
@@ -214,7 +244,7 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
             // If finish_reason is "length" (max_tokens hit), drop truncated tool calls entirely —
             // they were cut off mid-generation and would produce invalid results.
             if (finish_reason === 'length' && truncatedToolIds.size > 0) {
-                toolUseArray = toolUseArray.filter(t => !truncatedToolIds.has(t.id));
+                toolUseArray = toolUseArray.filter((t) => !truncatedToolIds.has(t.id));
                 if (toolUseArray.length === 0) {
                     toolUseArray = undefined;
                 }
@@ -229,14 +259,14 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
             finish_reason: finish_reason,
             chunks: this.chunks,
             tool_use: toolUseArray,
-        }
+        };
 
         // Build conversation context for multi-turn support
         const conversation = this.driver.buildStreamingConversation(
             this.prompt,
             accumulatedResults,
             toolUseArray,
-            this.options
+            this.options,
         );
         if (conversation !== undefined) {
             this.completion.conversation = conversation;
@@ -258,43 +288,45 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
             });
         }
     }
-
 }
 
 export class FallbackCompletionStream<PromptT = unknown> implements CompletionStream<PromptT> {
-
     completion: ExecutionResponse<PromptT> | undefined;
 
-    constructor(public driver: AbstractDriver<DriverOptions, PromptT>,
+    constructor(
+        public driver: AbstractDriver<DriverOptions, PromptT>,
         public prompt: PromptT,
-        public options: ExecutionOptions) {
-    }
+        public options: ExecutionOptions,
+    ) {}
 
     async *[Symbol.asyncIterator]() {
         // reset state
         this.completion = undefined;
         this.driver.logger.debug(
-            `[${this.driver.provider}] Streaming is not supported, falling back to blocking execution`
+            `[${this.driver.provider}] Streaming is not supported, falling back to blocking execution`,
         );
         try {
             const completion = await this.driver._execute(this.prompt, this.options);
             // For fallback streaming, yield the text content but keep the original completion
-            const content = completion.result.map(r => {
-                switch (r.type) {
-                    case 'text':
-                        return r.value;
-                    case 'json':
-                        return JSON.stringify(r.value);
-                    case 'image': {
-                        const truncatedValue = typeof r.value === 'string' ? r.value.slice(0, 10) : String(r.value).slice(0, 10);
-                        return `[Image: ${truncatedValue}...]`;
+            const content = completion.result
+                .map((r) => {
+                    switch (r.type) {
+                        case 'text':
+                            return r.value;
+                        case 'json':
+                            return JSON.stringify(r.value);
+                        case 'image': {
+                            const truncatedValue =
+                                typeof r.value === 'string' ? r.value.slice(0, 10) : String(r.value).slice(0, 10);
+                            return `[Image: ${truncatedValue}...]`;
+                        }
+                        default: {
+                            const _exhaustive: never = r;
+                            return String(_exhaustive);
+                        }
                     }
-                    default: {
-                        const _exhaustive: never = r;
-                        return String(_exhaustive);
-                    }
-                }
-            }).join('');
+                })
+                .join('');
             yield content;
             this.completion = completion; // Return the original completion with untouched CompletionResult[]
         } catch (error: unknown) {

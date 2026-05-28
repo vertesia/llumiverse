@@ -50,20 +50,21 @@ describe('BaseOpenAIDriver Error Handling', () => {
         it('should handle BadRequestError with status code and parameter', () => {
             const headers = new Headers();
             headers.set('x-request-id', 'req_test_123');
-            
+
             const openaiError = new BadRequestError(
                 400,
                 {
-                    message: "Invalid 'temperature': decimal above maximum value. Expected a value <= 2, but got 31313 instead.",
+                    message:
+                        "Invalid 'temperature': decimal above maximum value. Expected a value <= 2, but got 31313 instead.",
                     type: 'invalid_request_error',
                     param: 'temperature',
-                    code: 'decimal_above_max_value'
+                    code: 'decimal_above_max_value',
                 },
                 "Invalid 'temperature': decimal above maximum value. Expected a value <= 2, but got 31313 instead.",
-                headers
+                headers,
             );
 
-            const error = driver.formatLlumiverseError( openaiError, {
+            const error = driver.formatLlumiverseError(openaiError, {
                 provider: 'openai',
                 model: 'gpt-4',
                 operation: 'execute',
@@ -86,13 +87,13 @@ describe('BaseOpenAIDriver Error Handling', () => {
                 {
                     message: 'Rate limit exceeded',
                     type: 'rate_limit_error',
-                    code: 'rate_limit_exceeded'
+                    code: 'rate_limit_exceeded',
                 },
                 'Rate limit exceeded',
-                headers
+                headers,
             );
 
-            const error = driver.formatLlumiverseError( openaiError, {
+            const error = driver.formatLlumiverseError(openaiError, {
                 provider: 'openai',
                 model: 'gpt-4',
                 operation: 'execute',
@@ -109,13 +110,13 @@ describe('BaseOpenAIDriver Error Handling', () => {
                 {
                     message: 'Internal server error',
                     type: 'server_error',
-                    code: 'server_error'
+                    code: 'server_error',
                 },
                 'Internal server error',
-                new Headers()
+                new Headers(),
             );
 
-            const error = driver.formatLlumiverseError( openaiError, {
+            const error = driver.formatLlumiverseError(openaiError, {
                 provider: 'openai',
                 model: 'gpt-4',
                 operation: 'execute',
@@ -132,13 +133,13 @@ describe('BaseOpenAIDriver Error Handling', () => {
                 {
                     message: 'Invalid API key',
                     type: 'authentication_error',
-                    code: 'invalid_api_key'
+                    code: 'invalid_api_key',
                 },
                 'Invalid API key',
-                new Headers()
+                new Headers(),
             );
 
-            const error = driver.formatLlumiverseError( openaiError, {
+            const error = driver.formatLlumiverseError(openaiError, {
                 provider: 'openai',
                 model: 'gpt-4',
                 operation: 'execute',
@@ -154,13 +155,13 @@ describe('BaseOpenAIDriver Error Handling', () => {
                 403,
                 {
                     message: 'Insufficient permissions',
-                    type: 'permission_error'
+                    type: 'permission_error',
                 },
                 'Insufficient permissions',
-                new Headers()
+                new Headers(),
             );
 
-            const error = driver.formatLlumiverseError( openaiError, {
+            const error = driver.formatLlumiverseError(openaiError, {
                 provider: 'openai',
                 model: 'gpt-4',
                 operation: 'execute',
@@ -177,13 +178,13 @@ describe('BaseOpenAIDriver Error Handling', () => {
                 {
                     message: 'Model not found',
                     type: 'invalid_request_error',
-                    code: 'model_not_found'
+                    code: 'model_not_found',
                 },
                 'Model not found',
-                new Headers()
+                new Headers(),
             );
 
-            const error = driver.formatLlumiverseError( openaiError, {
+            const error = driver.formatLlumiverseError(openaiError, {
                 provider: 'openai',
                 model: 'gpt-invalid',
                 operation: 'execute',
@@ -199,13 +200,13 @@ describe('BaseOpenAIDriver Error Handling', () => {
                 409,
                 {
                     message: 'Resource conflict',
-                    type: 'conflict_error'
+                    type: 'conflict_error',
                 },
                 'Resource conflict',
-                new Headers()
+                new Headers(),
             );
 
-            const error = driver.formatLlumiverseError( openaiError, {
+            const error = driver.formatLlumiverseError(openaiError, {
                 provider: 'openai',
                 model: 'gpt-4',
                 operation: 'execute',
@@ -221,13 +222,13 @@ describe('BaseOpenAIDriver Error Handling', () => {
                 422,
                 {
                     message: 'Validation failed',
-                    type: 'validation_error'
+                    type: 'validation_error',
                 },
                 'Validation failed',
-                new Headers()
+                new Headers(),
             );
 
-            const error = driver.formatLlumiverseError( openaiError, {
+            const error = driver.formatLlumiverseError(openaiError, {
                 provider: 'openai',
                 model: 'gpt-4',
                 operation: 'execute',
@@ -241,7 +242,7 @@ describe('BaseOpenAIDriver Error Handling', () => {
         it('should handle APIConnectionTimeoutError as retryable', () => {
             const openaiError = new APIConnectionTimeoutError({ message: 'Request timed out' });
 
-            const error = driver.formatLlumiverseError( openaiError, {
+            const error = driver.formatLlumiverseError(openaiError, {
                 provider: 'openai',
                 model: 'gpt-4',
                 operation: 'execute',
@@ -255,7 +256,7 @@ describe('BaseOpenAIDriver Error Handling', () => {
         it('should handle APIConnectionError as retryable', () => {
             const openaiError = new APIConnectionError({ message: 'Connection failed' });
 
-            const error = driver.formatLlumiverseError( openaiError, {
+            const error = driver.formatLlumiverseError(openaiError, {
                 provider: 'openai',
                 model: 'gpt-4',
                 operation: 'execute',
@@ -269,7 +270,7 @@ describe('BaseOpenAIDriver Error Handling', () => {
         it('should handle LengthFinishReasonError as not retryable', () => {
             const openaiError = new LengthFinishReasonError();
 
-            const error = driver.formatLlumiverseError( openaiError, {
+            const error = driver.formatLlumiverseError(openaiError, {
                 provider: 'openai',
                 model: 'gpt-4',
                 operation: 'execute',
@@ -282,7 +283,7 @@ describe('BaseOpenAIDriver Error Handling', () => {
         it('should handle ContentFilterFinishReasonError as not retryable', () => {
             const openaiError = new ContentFilterFinishReasonError();
 
-            const error = driver.formatLlumiverseError( openaiError, {
+            const error = driver.formatLlumiverseError(openaiError, {
                 provider: 'openai',
                 model: 'gpt-4',
                 operation: 'execute',
@@ -298,13 +299,13 @@ describe('BaseOpenAIDriver Error Handling', () => {
                 400,
                 {
                     message: 'Invalid parameter',
-                    code: 'invalid_parameter'
+                    code: 'invalid_parameter',
                 },
                 'Invalid parameter',
-                headers
+                headers,
             );
 
-            const error = driver.formatLlumiverseError( openaiError, {
+            const error = driver.formatLlumiverseError(openaiError, {
                 provider: 'openai',
                 model: 'gpt-4',
                 operation: 'execute',
@@ -320,13 +321,13 @@ describe('BaseOpenAIDriver Error Handling', () => {
                 {
                     message: 'Invalid value',
                     param: 'max_tokens',
-                    code: 'invalid_value'
+                    code: 'invalid_value',
                 },
                 'Invalid value',
-                headers
+                headers,
             );
 
-            const error = driver.formatLlumiverseError( openaiError, {
+            const error = driver.formatLlumiverseError(openaiError, {
                 provider: 'openai',
                 model: 'gpt-4',
                 operation: 'execute',
@@ -338,15 +339,10 @@ describe('BaseOpenAIDriver Error Handling', () => {
         it('should include request ID when available', () => {
             const headers = new Headers();
             headers.set('x-request-id', 'req_xyz789');
-            
-            const openaiError = new BadRequestError(
-                400,
-                { message: 'Bad request' },
-                'Bad request',
-                headers
-            );
 
-            const error = driver.formatLlumiverseError( openaiError, {
+            const openaiError = new BadRequestError(400, { message: 'Bad request' }, 'Bad request', headers);
+
+            const error = driver.formatLlumiverseError(openaiError, {
                 provider: 'openai',
                 model: 'gpt-4',
                 operation: 'execute',
@@ -359,7 +355,7 @@ describe('BaseOpenAIDriver Error Handling', () => {
             const regularError = new Error('Regular error');
 
             expect(() => {
-                driver.formatLlumiverseError( regularError, {
+                driver.formatLlumiverseError(regularError, {
                     provider: 'openai',
                     model: 'gpt-4',
                     operation: 'execute',
@@ -368,14 +364,9 @@ describe('BaseOpenAIDriver Error Handling', () => {
         });
 
         it('should preserve original error for debugging', () => {
-            const openaiError = new BadRequestError(
-                400,
-                { message: 'Test error' },
-                'Test error',
-                new Headers()
-            );
+            const openaiError = new BadRequestError(400, { message: 'Test error' }, 'Test error', new Headers());
 
-            const error = driver.formatLlumiverseError( openaiError, {
+            const error = driver.formatLlumiverseError(openaiError, {
                 provider: 'openai',
                 model: 'gpt-4',
                 operation: 'execute',
@@ -394,7 +385,12 @@ describe('BaseOpenAIDriver Error Handling', () => {
             ];
 
             for (const error of retryableErrors) {
-                const result = exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(error, error.status, null, undefined);
+                const result = exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                    error,
+                    error.status,
+                    null,
+                    undefined,
+                );
                 expect(result, `${error.constructor.name} should be retryable`).toBe(true);
             }
         });
@@ -413,82 +409,240 @@ describe('BaseOpenAIDriver Error Handling', () => {
 
             for (const error of nonRetryableErrors) {
                 const status = getProp<number>(error, 'status');
-                const result = exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(error, status, null, undefined);
+                const result = exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                    error,
+                    status,
+                    null,
+                    undefined,
+                );
                 expect(result, `${error.constructor.name} should not be retryable`).toBe(false);
             }
         });
 
         it('should classify retryable error codes correctly', () => {
             const apiError = new APIError(undefined, {}, 'Error', new Headers());
-            
-            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, undefined, 'timeout', undefined)).toBe(true);
-            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, undefined, 'server_error', undefined)).toBe(true);
-            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, undefined, 'service_unavailable', undefined)).toBe(true);
-            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, undefined, 'rate_limit_exceeded', undefined)).toBe(true);
+
+            expect(
+                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                    apiError,
+                    undefined,
+                    'timeout',
+                    undefined,
+                ),
+            ).toBe(true);
+            expect(
+                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                    apiError,
+                    undefined,
+                    'server_error',
+                    undefined,
+                ),
+            ).toBe(true);
+            expect(
+                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                    apiError,
+                    undefined,
+                    'service_unavailable',
+                    undefined,
+                ),
+            ).toBe(true);
+            expect(
+                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                    apiError,
+                    undefined,
+                    'rate_limit_exceeded',
+                    undefined,
+                ),
+            ).toBe(true);
         });
 
         it('should classify non-retryable error codes correctly', () => {
             const apiError = new APIError(undefined, {}, 'Error', new Headers());
-            
-            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, undefined, 'invalid_api_key', undefined)).toBe(false);
-            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, undefined, 'invalid_request_error', undefined)).toBe(false);
-            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, undefined, 'model_not_found', undefined)).toBe(false);
-            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, undefined, 'insufficient_quota', undefined)).toBe(false);
-            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, undefined, 'invalid_model', undefined)).toBe(false);
-            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, undefined, 'invalid_parameter', undefined)).toBe(false);
+
+            expect(
+                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                    apiError,
+                    undefined,
+                    'invalid_api_key',
+                    undefined,
+                ),
+            ).toBe(false);
+            expect(
+                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                    apiError,
+                    undefined,
+                    'invalid_request_error',
+                    undefined,
+                ),
+            ).toBe(false);
+            expect(
+                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                    apiError,
+                    undefined,
+                    'model_not_found',
+                    undefined,
+                ),
+            ).toBe(false);
+            expect(
+                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                    apiError,
+                    undefined,
+                    'insufficient_quota',
+                    undefined,
+                ),
+            ).toBe(false);
+            expect(
+                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                    apiError,
+                    undefined,
+                    'invalid_model',
+                    undefined,
+                ),
+            ).toBe(false);
+            expect(
+                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                    apiError,
+                    undefined,
+                    'invalid_parameter',
+                    undefined,
+                ),
+            ).toBe(false);
         });
 
         it('should classify error types correctly', () => {
             const apiError = new APIError(undefined, {}, 'Error', new Headers());
-            
-            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, undefined, null, 'invalid_request_error')).toBe(false);
-            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, undefined, null, 'authentication_error')).toBe(false);
+
+            expect(
+                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                    apiError,
+                    undefined,
+                    null,
+                    'invalid_request_error',
+                ),
+            ).toBe(false);
+            expect(
+                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                    apiError,
+                    undefined,
+                    null,
+                    'authentication_error',
+                ),
+            ).toBe(false);
         });
 
         it('should use HTTP status codes when available', () => {
             const apiError = new APIError(429, {}, 'Too many requests', new Headers());
-            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, 429, null, undefined)).toBe(true);
-            
+            expect(
+                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, 429, null, undefined),
+            ).toBe(true);
+
             const apiError2 = new APIError(408, {}, 'Request timeout', new Headers());
-            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError2, 408, null, undefined)).toBe(true);
-            
+            expect(
+                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                    apiError2,
+                    408,
+                    null,
+                    undefined,
+                ),
+            ).toBe(true);
+
             const apiError3 = new APIError(502, {}, 'Bad gateway', new Headers());
-            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError3, 502, null, undefined)).toBe(true);
-            
+            expect(
+                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                    apiError3,
+                    502,
+                    null,
+                    undefined,
+                ),
+            ).toBe(true);
+
             const apiError4 = new APIError(503, {}, 'Service unavailable', new Headers());
-            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError4, 503, null, undefined)).toBe(true);
-            
+            expect(
+                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                    apiError4,
+                    503,
+                    null,
+                    undefined,
+                ),
+            ).toBe(true);
+
             const apiError5 = new APIError(504, {}, 'Gateway timeout', new Headers());
-            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError5, 504, null, undefined)).toBe(true);
-            
+            expect(
+                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                    apiError5,
+                    504,
+                    null,
+                    undefined,
+                ),
+            ).toBe(true);
+
             const apiError6 = new APIError(529, {}, 'Overloaded', new Headers());
-            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError6, 529, null, undefined)).toBe(true);
+            expect(
+                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                    apiError6,
+                    529,
+                    null,
+                    undefined,
+                ),
+            ).toBe(true);
         });
 
         it('should classify 4xx as non-retryable', () => {
             const apiError = new APIError(400, {}, 'Bad request', new Headers());
-            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, 400, null, undefined)).toBe(false);
-            
+            expect(
+                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, 400, null, undefined),
+            ).toBe(false);
+
             const apiError2 = new APIError(403, {}, 'Forbidden', new Headers());
-            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError2, 403, null, undefined)).toBe(false);
+            expect(
+                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                    apiError2,
+                    403,
+                    null,
+                    undefined,
+                ),
+            ).toBe(false);
         });
 
         it('should classify 5xx as retryable', () => {
             const apiError = new APIError(500, {}, 'Internal error', new Headers());
-            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, 500, null, undefined)).toBe(true);
-            
+            expect(
+                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, 500, null, undefined),
+            ).toBe(true);
+
             const apiError2 = new APIError(502, {}, 'Bad gateway', new Headers());
-            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError2, 502, null, undefined)).toBe(true);
+            expect(
+                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                    apiError2,
+                    502,
+                    null,
+                    undefined,
+                ),
+            ).toBe(true);
         });
 
         it('should classify APIConnectionError (non-timeout) as retryable', () => {
             const connectionError = new APIConnectionError({ message: 'Network failure' });
-            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(connectionError, undefined, null, undefined)).toBe(true);
+            expect(
+                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                    connectionError,
+                    undefined,
+                    null,
+                    undefined,
+                ),
+            ).toBe(true);
         });
 
         it('should return undefined for unknown errors', () => {
             const apiError = new APIError(undefined, {}, 'Unknown error', undefined);
-            expect(exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, undefined, null, undefined)).toBeUndefined();
+            expect(
+                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                    apiError,
+                    undefined,
+                    null,
+                    undefined,
+                ),
+            ).toBeUndefined();
         });
     });
 
@@ -498,10 +652,10 @@ describe('BaseOpenAIDriver Error Handling', () => {
                 429,
                 { message: 'Rate limit exceeded' },
                 'Rate limit exceeded',
-                new Headers()
+                new Headers(),
             );
 
-            const error = driver.formatLlumiverseError( openaiError, {
+            const error = driver.formatLlumiverseError(openaiError, {
                 provider: 'azure_openai',
                 model: 'gpt-4',
                 operation: 'execute',
@@ -518,10 +672,10 @@ describe('BaseOpenAIDriver Error Handling', () => {
                 400,
                 { message: 'Invalid parameter' },
                 'Invalid parameter',
-                new Headers()
+                new Headers(),
             );
 
-            const error = driver.formatLlumiverseError( openaiError, {
+            const error = driver.formatLlumiverseError(openaiError, {
                 provider: 'xai',
                 model: 'grok-2',
                 operation: 'execute',
@@ -538,10 +692,10 @@ describe('BaseOpenAIDriver Error Handling', () => {
                 500,
                 { message: 'Server error' },
                 'Server error',
-                new Headers()
+                new Headers(),
             );
 
-            const error = driver.formatLlumiverseError( openaiError, {
+            const error = driver.formatLlumiverseError(openaiError, {
                 provider: 'azure_foundry',
                 model: 'gpt-4',
                 operation: 'execute',
@@ -558,10 +712,10 @@ describe('BaseOpenAIDriver Error Handling', () => {
                 401,
                 { message: 'Invalid API key' },
                 'Invalid API key',
-                new Headers()
+                new Headers(),
             );
 
-            const error = driver.formatLlumiverseError( openaiError, {
+            const error = driver.formatLlumiverseError(openaiError, {
                 provider: 'openai_compatible',
                 model: 'custom-model',
                 operation: 'execute',

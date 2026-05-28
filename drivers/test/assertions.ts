@@ -1,6 +1,10 @@
-
-import { type AbstractDriver, type CompletionStream, type ExecutionResponse, extractAndParseJSON } from '@llumiverse/core';
-import { expect } from "vitest";
+import {
+    type AbstractDriver,
+    type CompletionStream,
+    type ExecutionResponse,
+    extractAndParseJSON,
+} from '@llumiverse/core';
+import { expect } from 'vitest';
 import { completionResultToString, parseCompletionResultsToJson } from './utils.js';
 
 export function assertCompletionOk(r: ExecutionResponse, model?: string, driver?: AbstractDriver) {
@@ -9,25 +13,25 @@ export function assertCompletionOk(r: ExecutionResponse, model?: string, driver?
     //TODO: This just checks for existence of the object,
     //could do with more thorough test however not all models support token_usage.
     //Only create the object when there is meaningful information you want to interpret as a pass.
-    if (!(driver?.provider === 'bedrock' && model?.includes("mistral"))) { //Skip if bedrock:mistral, token_usage not supported.
+    if (!(driver?.provider === 'bedrock' && model?.includes('mistral'))) {
+        //Skip if bedrock:mistral, token_usage not supported.
         expect(r.token_usage).toBeTruthy();
     }
     expect(r.finish_reason).toBeTruthy();
     //if r.result is string, it should be longer than 2
-    const stringResult = r.result.map(completionResultToString).join("");
+    const stringResult = r.result.map(completionResultToString).join('');
     expect(stringResult.length).toBeGreaterThan(2);
 }
 
 export async function assertStreamingCompletionOk(stream: CompletionStream, jsonMode: boolean = false) {
-
-    const out: string[] = []
+    const out: string[] = [];
     for await (const chunk of stream) {
-        out.push(chunk)
-        console.log(chunk)
+        out.push(chunk);
+        console.log(chunk);
     }
-    console.log(out.join(""));
+    console.log(out.join(''));
     const r = stream.completion as ExecutionResponse;
-    const jsonObject = jsonMode ? extractAndParseJSON(out.join("")) : undefined;
+    const jsonObject = jsonMode ? extractAndParseJSON(out.join('')) : undefined;
     const jsonResult = jsonMode ? parseCompletionResultsToJson(r.result) : undefined;
     console.log(jsonObject);
     console.log(jsonResult);
@@ -39,7 +43,7 @@ export async function assertStreamingCompletionOk(stream: CompletionStream, json
     expect(r.prompt).toBeTruthy();
     expect(r.token_usage).toBeTruthy();
     expect(r.finish_reason).toBeTruthy();
-    const stringResult = r.result.map(completionResultToString).join("");
+    const stringResult = r.result.map(completionResultToString).join('');
     expect(stringResult.length).toBeGreaterThan(2);
 
     return out;

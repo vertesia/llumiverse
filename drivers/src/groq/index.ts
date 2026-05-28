@@ -1,10 +1,23 @@
-import { AbstractDriver, type AIModel, type Completion, type CompletionChunkObject, type DriverOptions, type EmbeddingsOptions, type EmbeddingsResult, type ExecutionOptions, type PromptSegment, type TextFallbackOptions, type ToolDefinition, type ToolUse } from "@llumiverse/core";
-import { transformAsyncIterator } from "@llumiverse/core/async";
-import Groq from "groq-sdk";
-import type { ChatCompletionMessageParam, ChatCompletionTool } from "groq-sdk/resources/chat/completions";
-import type { FunctionParameters } from "groq-sdk/resources/shared";
-import type OpenAI from "openai";
-import { formatOpenAILikeMultimodalPrompt } from "../openai/openai_format.js";
+import {
+    AbstractDriver,
+    type AIModel,
+    type Completion,
+    type CompletionChunkObject,
+    type DriverOptions,
+    type EmbeddingsOptions,
+    type EmbeddingsResult,
+    type ExecutionOptions,
+    type PromptSegment,
+    type TextFallbackOptions,
+    type ToolDefinition,
+    type ToolUse,
+} from '@llumiverse/core';
+import { transformAsyncIterator } from '@llumiverse/core/async';
+import Groq from 'groq-sdk';
+import type { ChatCompletionMessageParam, ChatCompletionTool } from 'groq-sdk/resources/chat/completions';
+import type { FunctionParameters } from 'groq-sdk/resources/shared';
+import type OpenAI from 'openai';
+import { formatOpenAILikeMultimodalPrompt } from '../openai/openai_format.js';
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
@@ -24,7 +37,7 @@ interface GroqDriverOptions extends DriverOptions {
 }
 
 export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletionMessageParam[]> {
-    static PROVIDER = "groq";
+    static PROVIDER = 'groq';
     provider = GroqDriver.PROVIDER;
     apiKey: string;
     client: Groq;
@@ -35,7 +48,7 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
         this.apiKey = options.apiKey;
         this.client = new Groq({
             apiKey: options.apiKey,
-            baseURL: options.endpoint_url
+            baseURL: options.endpoint_url,
         });
     }
 
@@ -59,7 +72,10 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
         return undefined;
     }
 
-    protected async formatPrompt(segments: PromptSegment[], opts: ExecutionOptions): Promise<ChatCompletionMessageParam[]> {
+    protected async formatPrompt(
+        segments: PromptSegment[],
+        opts: ExecutionOptions,
+    ): Promise<ChatCompletionMessageParam[]> {
         // Use OpenAI's multimodal formatter as base then convert to Groq types
         const responseItems = await formatOpenAILikeMultimodalPrompt(segments, {
             ...opts,
@@ -75,13 +91,13 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
             return undefined;
         }
 
-        return tools.map(tool => ({
+        return tools.map((tool) => ({
             type: 'function' as const,
             function: {
                 name: tool.name,
                 description: tool.description,
                 parameters: tool.input_schema satisfies FunctionParameters,
-            }
+            },
         }));
     }
 
@@ -98,7 +114,7 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
     }
 
     private sanitizeMessagesForGroq(messages: ChatCompletionMessageParam[]): ChatCompletionMessageParam[] {
-        return messages.map(message => {
+        return messages.map((message) => {
             // Remove any reasoning field from message objects
             const sanitizedMessage = { ...(message as unknown as Record<string, unknown>) };
             delete sanitizedMessage.reasoning;
@@ -117,11 +133,16 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
         });
     }
 
-    async requestTextCompletion(messages: ChatCompletionMessageParam[], options: ExecutionOptions): Promise<Completion> {
-        if (options.model_options?._option_id !== undefined &&
-            options.model_options?._option_id !== "text-fallback" &&
-            options.model_options?._option_id !== "groq-deepseek-thinking") {
-            this.logger.debug({ options: options.model_options }, "Unexpected option id");
+    async requestTextCompletion(
+        messages: ChatCompletionMessageParam[],
+        options: ExecutionOptions,
+    ): Promise<Completion> {
+        if (
+            options.model_options?._option_id !== undefined &&
+            options.model_options?._option_id !== 'text-fallback' &&
+            options.model_options?._option_id !== 'groq-deepseek-thinking'
+        ) {
+            this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
@@ -158,11 +179,11 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
 
         let finish_reason = choice.finish_reason;
         if (tool_use && tool_use.length > 0) {
-            finish_reason = "tool_calls";
+            finish_reason = 'tool_calls';
         }
 
         return {
-            result: result ? [{ type: "text", value: result }] : [],
+            result: result ? [{ type: 'text', value: result }] : [],
             token_usage: {
                 prompt: res.usage?.prompt_tokens,
                 result: res.usage?.completion_tokens,
@@ -175,9 +196,12 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
         };
     }
 
-    async requestTextCompletionStream(messages: ChatCompletionMessageParam[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
-        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "text-fallback") {
-            this.logger.debug({ options: options.model_options }, "Unexpected option id");
+    async requestTextCompletionStream(
+        messages: ChatCompletionMessageParam[],
+        options: ExecutionOptions,
+    ): Promise<AsyncIterable<CompletionChunkObject>> {
+        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== 'text-fallback') {
+            this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
@@ -209,11 +233,11 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
 
             // Check for tool calls in the delta
             if (choice.delta.tool_calls && choice.delta.tool_calls.length > 0) {
-                finish_reason = "tool_calls";
+                finish_reason = 'tool_calls';
             }
 
             return {
-                result: choice.delta.content ? [{ type: "text", value: choice.delta.content }] : [],
+                result: choice.delta.content ? [{ type: 'text', value: choice.delta.content }] : [],
                 finish_reason: finish_reason ?? undefined,
                 token_usage: {
                     prompt: chunk.x_groq?.usage?.prompt_tokens,
@@ -228,12 +252,12 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
         const models = await this.client.models.list();
 
         if (!models.data) {
-            throw new Error("No models found");
+            throw new Error('No models found');
         }
 
-        const aiModels = models.data?.map(m => {
+        const aiModels = models.data?.map((m) => {
             if (!m.id) {
-                throw new Error("Model id is missing");
+                throw new Error('Model id is missing');
             }
             return {
                 id: m.id,
@@ -241,20 +265,19 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
                 description: undefined,
                 provider: this.provider,
                 owner: m.owned_by || '',
-            }
+            };
         });
 
         return aiModels;
     }
 
     validateConnection(): Promise<boolean> {
-        throw new Error("Method not implemented.");
+        throw new Error('Method not implemented.');
     }
 
     async generateEmbeddings(_options: EmbeddingsOptions): Promise<EmbeddingsResult> {
-        throw new Error("Method not implemented.");
+        throw new Error('Method not implemented.');
     }
-
 }
 
 /**
@@ -265,7 +288,7 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
  */
 function updateConversation(
     conversation: ChatCompletionMessageParam[] | undefined,
-    messages: ChatCompletionMessageParam[]
+    messages: ChatCompletionMessageParam[],
 ): ChatCompletionMessageParam[] {
     return (conversation || []).concat(messages);
 }
@@ -290,7 +313,7 @@ function convertResponseItemsToGroqMessages(items: ResponseInputItem[]): ChatCom
                 } else if (Array.isArray(msg.content)) {
                     content = msg.content
                         .filter((part): part is OpenAI.Responses.ResponseInputText => part.type === 'input_text')
-                        .map(part => part.text)
+                        .map((part) => part.text)
                         .join('\n');
                 } else {
                     content = '';
@@ -301,11 +324,19 @@ function convertResponseItemsToGroqMessages(items: ResponseInputItem[]): ChatCom
 
             // Handle user messages
             if (role === 'user') {
-                let content: string | Array<{ type: 'text', text: string } | { type: 'image_url', image_url: { url: string, detail?: 'auto' | 'low' | 'high' } }>;
+                let content:
+                    | string
+                    | Array<
+                          | { type: 'text'; text: string }
+                          | { type: 'image_url'; image_url: { url: string; detail?: 'auto' | 'low' | 'high' } }
+                      >;
                 if (typeof msg.content === 'string') {
                     content = msg.content;
                 } else if (Array.isArray(msg.content)) {
-                    const parts: Array<{ type: 'text', text: string } | { type: 'image_url', image_url: { url: string, detail?: 'auto' | 'low' | 'high' } }> = [];
+                    const parts: Array<
+                        | { type: 'text'; text: string }
+                        | { type: 'image_url'; image_url: { url: string; detail?: 'auto' | 'low' | 'high' } }
+                    > = [];
                     for (const part of msg.content) {
                         if (part.type === 'input_text') {
                             parts.push({ type: 'text', text: part.text });
@@ -313,7 +344,7 @@ function convertResponseItemsToGroqMessages(items: ResponseInputItem[]): ChatCom
                             const imgPart = part as OpenAI.Responses.ResponseInputImage;
                             if (imgPart.image_url) {
                                 const image_url: { url: string; detail?: 'auto' | 'low' | 'high' } = {
-                                    url: imgPart.image_url
+                                    url: imgPart.image_url,
                                 };
 
                                 if (imgPart.detail) {
@@ -322,7 +353,7 @@ function convertResponseItemsToGroqMessages(items: ResponseInputItem[]): ChatCom
 
                                 parts.push({
                                     type: 'image_url',
-                                    image_url
+                                    image_url,
                                 });
                             }
                         }
@@ -341,10 +372,11 @@ function convertResponseItemsToGroqMessages(items: ResponseInputItem[]): ChatCom
                 if (typeof msg.content === 'string') {
                     content = msg.content;
                 } else if (Array.isArray(msg.content)) {
-                    content = msg.content
-                        .filter((part): part is OpenAI.Responses.ResponseInputText => part.type === 'input_text')
-                        .map(part => part.text)
-                        .join('\n') || null;
+                    content =
+                        msg.content
+                            .filter((part): part is OpenAI.Responses.ResponseInputText => part.type === 'input_text')
+                            .map((part) => part.text)
+                            .join('\n') || null;
                 } else {
                     content = null;
                 }
@@ -372,14 +404,16 @@ function convertResponseItemsToGroqMessages(items: ResponseInputItem[]): ChatCom
             messages.push({
                 role: 'assistant',
                 content: null,
-                tool_calls: [{
-                    id: call.call_id,
-                    type: 'function',
-                    function: {
-                        name: call.name,
-                        arguments: call.arguments,
-                    }
-                }]
+                tool_calls: [
+                    {
+                        id: call.call_id,
+                        type: 'function',
+                        function: {
+                            name: call.name,
+                            arguments: call.arguments,
+                        },
+                    },
+                ],
             });
         }
     }

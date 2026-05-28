@@ -147,9 +147,7 @@ function isOpenAIBase64ImageBlock(obj: unknown): boolean {
     if (o.type !== 'image_url') return false;
     if (!o.image_url || typeof o.image_url !== 'object') return false;
     const imgUrl = o.image_url as Record<string, unknown>;
-    return typeof imgUrl.url === 'string' &&
-        imgUrl.url.startsWith('data:image/') &&
-        imgUrl.url.includes(';base64,');
+    return typeof imgUrl.url === 'string' && imgUrl.url.startsWith('data:image/') && imgUrl.url.includes(';base64,');
 }
 
 /**
@@ -236,7 +234,7 @@ export function setConversationMeta(conversation: unknown, meta: ConversationMet
         return { [ARRAY_WRAPPER_KEY]: conversation, [META_KEY]: meta };
     }
     if (typeof conversation === 'object' && conversation !== null) {
-        return { ...conversation as object, [META_KEY]: meta };
+        return { ...(conversation as object), [META_KEY]: meta };
     }
     return conversation;
 }
@@ -305,7 +303,7 @@ function serializeBinaryForStorage(obj: unknown): unknown {
     }
 
     if (Array.isArray(obj)) {
-        return obj.map(item => serializeBinaryForStorage(item));
+        return obj.map((item) => serializeBinaryForStorage(item));
     }
 
     if (typeof obj === 'object') {
@@ -335,7 +333,7 @@ export function deserializeBinaryFromStorage(obj: unknown): unknown {
     }
 
     if (Array.isArray(obj)) {
-        return obj.map(item => deserializeBinaryFromStorage(item));
+        return obj.map((item) => deserializeBinaryFromStorage(item));
     }
 
     if (typeof obj === 'object') {
@@ -366,7 +364,7 @@ function stripBinaryFromConversationInternal(obj: unknown): unknown {
     }
 
     if (Array.isArray(obj)) {
-        return obj.map(item => {
+        return obj.map((item) => {
             // Replace entire Bedrock image/document/video blocks with text blocks
             if (isBedrockImageBlock(item) || isSerializedBedrockImageBlock(item)) {
                 return { text: IMAGE_PLACEHOLDER };
@@ -432,7 +430,7 @@ function stripBase64ImagesFromConversationInternal(obj: unknown): unknown {
     }
 
     if (Array.isArray(obj)) {
-        return obj.map(item => {
+        return obj.map((item) => {
             // Replace entire OpenAI image_url blocks with text blocks
             if (isOpenAIBase64ImageBlock(item)) {
                 return { type: 'text', text: IMAGE_PLACEHOLDER };
@@ -505,9 +503,14 @@ function shouldPreserveMediaPayload(obj: unknown): boolean {
     const o = obj as Record<string, unknown>;
 
     // Preserved Bedrock binary blocks and their serialized storage wrapper.
-    if (isBedrockImageBlock(obj) || isSerializedBedrockImageBlock(obj) ||
-        isBedrockDocumentBlock(obj) || isSerializedBedrockDocumentBlock(obj) ||
-        isBedrockVideoBlock(obj) || isSerializedBedrockVideoBlock(obj)) {
+    if (
+        isBedrockImageBlock(obj) ||
+        isSerializedBedrockImageBlock(obj) ||
+        isBedrockDocumentBlock(obj) ||
+        isSerializedBedrockDocumentBlock(obj) ||
+        isBedrockVideoBlock(obj) ||
+        isSerializedBedrockVideoBlock(obj)
+    ) {
         return true;
     }
 
@@ -516,8 +519,12 @@ function shouldPreserveMediaPayload(obj: unknown): boolean {
     }
 
     // Preserved base64 media payloads for OpenAI, Gemini, and Anthropic/Claude.
-    if (isOpenAIBase64ImageBlock(obj) || isGeminiInlineDataBlock(obj) ||
-        isAnthropicBase64ImageBlock(obj) || isAnthropicBase64DocumentBlock(obj)) {
+    if (
+        isOpenAIBase64ImageBlock(obj) ||
+        isGeminiInlineDataBlock(obj) ||
+        isAnthropicBase64ImageBlock(obj) ||
+        isAnthropicBase64DocumentBlock(obj)
+    ) {
         return true;
     }
 
@@ -539,7 +546,7 @@ function truncateLargeTextInternal(obj: unknown, maxChars: number): unknown {
     }
 
     if (Array.isArray(obj)) {
-        return obj.map(item => truncateLargeTextInternal(item, maxChars));
+        return obj.map((item) => truncateLargeTextInternal(item, maxChars));
     }
 
     if (typeof obj === 'object') {
@@ -608,7 +615,7 @@ function stripHeartbeatsInternal(obj: unknown): unknown {
     }
 
     if (Array.isArray(obj)) {
-        return obj.map(item => stripHeartbeatsInternal(item));
+        return obj.map((item) => stripHeartbeatsInternal(item));
     }
 
     if (typeof obj === 'object') {

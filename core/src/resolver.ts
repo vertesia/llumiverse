@@ -14,7 +14,9 @@ function _prop(object: unknown, name: string): unknown {
         const index = +name;
         if (Number.isNaN(index)) {
             // map array to property
-            return object.map(item => item && typeof item === 'object' ? (item as Record<string, unknown>)[name] : undefined);
+            return object.map((item) =>
+                item && typeof item === 'object' ? (item as Record<string, unknown>)[name] : undefined,
+            );
         } else {
             return object[index];
         }
@@ -23,7 +25,6 @@ function _prop(object: unknown, name: string): unknown {
     } else {
         return undefined;
     }
-
 }
 
 export function resolveField(object: unknown, path: string[]): unknown {
@@ -32,7 +33,7 @@ export function resolveField(object: unknown, path: string[]): unknown {
     if (!path.length) return p;
     const last = path.length - 1;
     for (let i = 0; i < last; i++) {
-        p = _prop(p, path[i])
+        p = _prop(p, path[i]);
         if (!p) {
             return undefined;
         }

@@ -96,9 +96,9 @@ export function isClaudeVersionGTE(modelString: string, targetMajor: number, tar
  */
 function isClaudeVariantVersionGTE(
     modelString: string,
-    variant: "opus" | "sonnet",
+    variant: 'opus' | 'sonnet',
     targetMajor: number,
-    targetMinor: number
+    targetMinor: number,
 ): boolean {
     const version = parseClaudeVersion(modelString);
     if (!version) return false;
@@ -118,7 +118,7 @@ function isClaudeVariantVersionGTE(
  * @returns true if Opus 4.7+ or equivalent future model
  */
 export function hasSamplingParameterRemoval(modelString: string): boolean {
-    return isClaudeVariantVersionGTE(modelString, "opus", 4, 7);
+    return isClaudeVariantVersionGTE(modelString, 'opus', 4, 7);
 }
 
 /**
@@ -134,7 +134,7 @@ export function hasSamplingParameterRemoval(modelString: string): boolean {
  * @returns true if Opus 4.6+ or equivalent future model
  */
 export function requiresAdaptiveThinking(modelString: string): boolean {
-    return isClaudeVariantVersionGTE(modelString, "opus", 4, 6);
+    return isClaudeVariantVersionGTE(modelString, 'opus', 4, 6);
 }
 
 /**
@@ -148,7 +148,7 @@ export function requiresAdaptiveThinking(modelString: string): boolean {
  * @returns true if the model supports adaptive thinking
  */
 export function supportsAdaptiveThinking(modelString: string): boolean {
-    return requiresAdaptiveThinking(modelString) || isClaudeVariantVersionGTE(modelString, "sonnet", 4, 6);
+    return requiresAdaptiveThinking(modelString) || isClaudeVariantVersionGTE(modelString, 'sonnet', 4, 6);
 }
 
 /**
@@ -236,11 +236,11 @@ export function supportsEffort(modelString: string): boolean {
         return true;
     }
     // Opus 4.5+ supports effort
-    if (isClaudeVariantVersionGTE(modelString, "opus", 4, 5)) {
+    if (isClaudeVariantVersionGTE(modelString, 'opus', 4, 5)) {
         return true;
     }
     // Sonnet 4.6+ supports effort
-    if (isClaudeVariantVersionGTE(modelString, "sonnet", 4, 6)) {
+    if (isClaudeVariantVersionGTE(modelString, 'sonnet', 4, 6)) {
         return true;
     }
     return false;
@@ -255,7 +255,7 @@ export function supportsEffort(modelString: string): boolean {
  * @returns true if the model supports xhigh effort
  */
 export function supportsXHighEffort(modelString: string): boolean {
-    return isClaudeVariantVersionGTE(modelString, "opus", 4, 7);
+    return isClaudeVariantVersionGTE(modelString, 'opus', 4, 7);
 }
 
 /**
@@ -273,19 +273,19 @@ export function getAvailableEffortLevels(modelString: string): Record<string, Cl
         return null;
     }
     const levels: Record<string, ClaudeEffortLevel> = {
-        "Low": "low",
-        "Medium": "medium",
-        "High (default)": "high",
-        "Max": "max",
+        Low: 'low',
+        Medium: 'medium',
+        'High (default)': 'high',
+        Max: 'max',
     };
     if (supportsXHighEffort(modelString)) {
         // Insert xhigh between high and max
         return {
-            "Low": "low",
-            "Medium": "medium",
-            "High (default)": "high",
-            "Extra High": "xhigh",
-            "Max": "max",
+            Low: 'low',
+            Medium: 'medium',
+            'High (default)': 'high',
+            'Extra High': 'xhigh',
+            Max: 'max',
         };
     }
     return levels;

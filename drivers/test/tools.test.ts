@@ -1,8 +1,14 @@
-// biome-ignore lint/suspicious/noDeprecatedImports: exercising deprecated output_modality path until that API is removed
-import { type AbstractDriver, type ExecutionOptions, Modalities, PromptRole, type PromptSegment } from '@llumiverse/core';
+import {
+    type AbstractDriver,
+    type ExecutionOptions,
+    // biome-ignore lint/suspicious/noDeprecatedImports: exercising deprecated output_modality path until that API is removed
+    Modalities,
+    PromptRole,
+    type PromptSegment,
+} from '@llumiverse/core';
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from 'vitest';
 import { BedrockDriver, OpenAIDriver, VertexAIDriver } from '../src';
 import { completionResultToString } from './utils';
 
@@ -16,23 +22,21 @@ interface TestDriver {
 
 const drivers: TestDriver[] = [];
 
-
 if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
     new GoogleAuth();
     drivers.push({
-        name: "google-vertex",
+        name: 'google-vertex',
         driver: new VertexAIDriver({
             project: process.env.GOOGLE_PROJECT_ID as string,
             region: process.env.GOOGLE_REGION as string,
         }),
         models: [
-            "publishers/google/models/gemini-2.5-flash",
-            "publishers/anthropic/models/claude-sonnet-4-5",
-            "publishers/anthropic/models/claude-opus-4-6",
-        ]
-    })
+            'publishers/google/models/gemini-2.5-flash',
+            'publishers/anthropic/models/claude-sonnet-4-5',
+            'publishers/anthropic/models/claude-opus-4-6',
+        ],
+    });
 }
-
 
 // if (process.env.MISTRAL_API_KEY) {
 //     drivers.push({
@@ -70,24 +74,20 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
 
 if (process.env.OPENAI_API_KEY) {
     drivers.push({
-        name: "openai",
+        name: 'openai',
         driver: new OpenAIDriver({
-            apiKey: process.env.OPENAI_API_KEY as string
+            apiKey: process.env.OPENAI_API_KEY as string,
         }),
-        models: [
-            "gpt-4o",
-        ]
-    }
-    )
+        models: ['gpt-4o'],
+    });
 } else {
-    console.warn("OpenAI tests are skipped: OPENAI_API_KEY environment variable is not set");
+    console.warn('OpenAI tests are skipped: OPENAI_API_KEY environment variable is not set');
 }
 
 // const AZURE_OPENAI_MODELS = [
 //     "gpt-4o",
 //     "gpt-3.5-turbo"
 // ]
-
 
 // if (process.env.AZURE_OPENAI_KEY && process.env.AZURE_OPENAI_ENDPOINT) {
 //     drivers.push({
@@ -103,21 +103,20 @@ if (process.env.OPENAI_API_KEY) {
 //     console.warn("Azure OpenAI tests are skipped: AZURE_OPENAI_KEY environment variable is not set");
 // }
 
-
 if (process.env.BEDROCK_REGION) {
     drivers.push({
-        name: "bedrock",
+        name: 'bedrock',
         driver: new BedrockDriver({
             region: process.env.BEDROCK_REGION as string,
         }),
         //Use foundation models and inference profiles to test the driver
         models: [
-            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
             //"us.writer.palmyra-x5-v1:0" // Only in us-west-2
         ],
     });
 } else {
-    console.warn("Bedrock tests are skipped: BEDROCK_REGION environment variable is not set");
+    console.warn('Bedrock tests are skipped: BEDROCK_REGION environment variable is not set');
 }
 
 // if (process.env.GROQ_API_KEY) {
@@ -136,7 +135,6 @@ if (process.env.BEDROCK_REGION) {
 // } else {
 //     console.warn("Groq tests are skipped: GROQ_API_KEY environment variable is not set");
 // }
-
 
 // if (process.env.WATSONX_API_KEY) {
 
@@ -171,11 +169,10 @@ if (process.env.BEDROCK_REGION) {
 //     })
 // }
 
-
 const PROMPT_WITH_GET_NAME_TOOL = [
     {
         role: PromptRole.user,
-        content: "What is the weather in Paris?",
+        content: 'What is the weather in Paris?',
     },
 ] satisfies PromptSegment[];
 
@@ -183,37 +180,37 @@ function getTestOptions(model: string): ExecutionOptions {
     return {
         model: model,
         model_options: {
-            _option_id: "text-fallback",
+            _option_id: 'text-fallback',
             max_tokens: 128,
             temperature: 0.3,
             top_k: 40,
-            top_p: 0.7,             //Some models do not support top_p = 1.0, set to 0.99 or lower.
+            top_p: 0.7, //Some models do not support top_p = 1.0, set to 0.99 or lower.
             //   top_logprobs: 5,        //Currently not supported, option will be ignored
-            presence_penalty: 0.1,      //Cohere Command R does not support using presence & frequency penalty at the same time
+            presence_penalty: 0.1, //Cohere Command R does not support using presence & frequency penalty at the same time
             frequency_penalty: -0.1,
-            stop_sequence: ["Haemoglobin"],
+            stop_sequence: ['Haemoglobin'],
         },
         output_modality: Modalities.text,
         tools: [
             {
-                "name": "get_weather",
-                "description": "Get the current weather in a given location",
-                "input_schema": {
-                    type: "object",
+                name: 'get_weather',
+                description: 'Get the current weather in a given location',
+                input_schema: {
+                    type: 'object',
                     properties: {
-                        "location": {
-                            "type": "string",
-                            "description": "The city to get the weather for, e.g. Paris, San Francisco etc."
-                        }
+                        location: {
+                            type: 'string',
+                            description: 'The city to get the weather for, e.g. Paris, San Francisco etc.',
+                        },
                     },
-                    "required": ["location"]
-                }
-            }
-        ]
+                    required: ['location'],
+                },
+            },
+        ],
     };
 }
 
-describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => {
+describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => {
     test.each(models)(`${name}: generation with tools for %s`, { timeout: TIMEOUT, retry: 1 }, async (model) => {
         const options = getTestOptions(model);
         let r = await driver.execute(PROMPT_WITH_GET_NAME_TOOL, options);
@@ -221,19 +218,23 @@ describe.concurrent.each(drivers)("Driver $name", ({ name, driver, models }) => 
         expect(r.tool_use?.length).toBe(1);
         expect(r.tool_use?.[0].id).toBeDefined();
         expect(r.tool_use?.[0].tool_input).toBeDefined();
-        expect(r.tool_use?.[0].tool_name).toBe("get_weather");
+        expect(r.tool_use?.[0].tool_name).toBe('get_weather');
         // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
         const tool_use = r.tool_use!;
-        r = await driver.execute([{
-            role: PromptRole.tool,
-            tool_use_id: tool_use[0].id,
-            content: "15 degrees"
-        } satisfies PromptSegment], { ...options, conversation: r.conversation });
-        const stringResult = r.result.map(completionResultToString).join("");
-        if (!stringResult.includes("15")) {
+        r = await driver.execute(
+            [
+                {
+                    role: PromptRole.tool,
+                    tool_use_id: tool_use[0].id,
+                    content: '15 degrees',
+                } satisfies PromptSegment,
+            ],
+            { ...options, conversation: r.conversation },
+        );
+        const stringResult = r.result.map(completionResultToString).join('');
+        if (!stringResult.includes('15')) {
             console.error(`[${model}] Tool result not found in response:`, stringResult);
         }
-        expect(stringResult.includes("15")).toBeTruthy();
+        expect(stringResult.includes('15')).toBeTruthy();
     });
-
 });

@@ -17,7 +17,7 @@ describe('LlumiverseError', () => {
                 mockContext,
                 originalError,
                 429,
-                'RateLimitError'
+                'RateLimitError',
             );
 
             expect(error).toBeInstanceOf(Error);
@@ -34,24 +34,13 @@ describe('LlumiverseError', () => {
             const originalError = new Error('Original error');
             const originalStack = originalError.stack;
 
-            const error = new LlumiverseError(
-                'Wrapped error',
-                true,
-                mockContext,
-                originalError,
-                500
-            );
+            const error = new LlumiverseError('Wrapped error', true, mockContext, originalError, 500);
 
             expect(error.stack).toBe(originalStack);
         });
 
         it('should handle undefined code', () => {
-            const error = new LlumiverseError(
-                'Test error',
-                true,
-                mockContext,
-                new Error('Unknown error')
-            );
+            const error = new LlumiverseError('Test error', true, mockContext, new Error('Unknown error'));
 
             expect(error.code).toBeUndefined();
             expect(error.name).toBe('LlumiverseError'); // Default name
@@ -64,7 +53,7 @@ describe('LlumiverseError', () => {
                 mockContext,
                 new Error('Unauthorized'),
                 401,
-                'AuthenticationError'
+                'AuthenticationError',
             );
 
             expect(error.retryable).toBe(false);
@@ -75,14 +64,7 @@ describe('LlumiverseError', () => {
     describe('toJSON', () => {
         it('should serialize to JSON', () => {
             const originalError = new Error('Original error');
-            const error = new LlumiverseError(
-                'Test error',
-                true,
-                mockContext,
-                originalError,
-                429,
-                'RateLimitError'
-            );
+            const error = new LlumiverseError('Test error', true, mockContext, originalError, 429, 'RateLimitError');
 
             const json = error.toJSON();
 
@@ -96,13 +78,7 @@ describe('LlumiverseError', () => {
         });
 
         it('should handle non-Error original error', () => {
-            const error = new LlumiverseError(
-                'Test error',
-                true,
-                mockContext,
-                'string error',
-                500
-            );
+            const error = new LlumiverseError('Test error', true, mockContext, 'string error', 500);
 
             const json = error.toJSON();
             expect(json.originalErrorMessage).toBe('string error');
@@ -111,13 +87,7 @@ describe('LlumiverseError', () => {
 
     describe('isLlumiverseError', () => {
         it('should return true for LlumiverseError instances', () => {
-            const error = new LlumiverseError(
-                'Test error',
-                true,
-                mockContext,
-                new Error('Original'),
-                500
-            );
+            const error = new LlumiverseError('Test error', true, mockContext, new Error('Original'), 500);
 
             expect(LlumiverseError.isLlumiverseError(error)).toBe(true);
         });
@@ -143,7 +113,7 @@ describe('LlumiverseError', () => {
                 true,
                 { ...mockContext, operation: 'execute' as const },
                 new Error('Too many requests'),
-                429
+                429,
             );
 
             expect(error.retryable).toBe(true);
@@ -156,7 +126,7 @@ describe('LlumiverseError', () => {
                 true,
                 { ...mockContext, operation: 'stream' as const },
                 new Error('Server error'),
-                500
+                500,
             );
 
             expect(error.retryable).toBe(true);
@@ -164,52 +134,28 @@ describe('LlumiverseError', () => {
         });
 
         it('should handle authentication errors', () => {
-            const error = new LlumiverseError(
-                'Invalid API key',
-                false,
-                mockContext,
-                new Error('Unauthorized'),
-                401
-            );
+            const error = new LlumiverseError('Invalid API key', false, mockContext, new Error('Unauthorized'), 401);
 
             expect(error.retryable).toBe(false);
             expect(error.code).toBe(401);
         });
 
         it('should handle validation errors', () => {
-            const error = new LlumiverseError(
-                'Invalid request',
-                false,
-                mockContext,
-                new Error('Bad request'),
-                400
-            );
+            const error = new LlumiverseError('Invalid request', false, mockContext, new Error('Bad request'), 400);
 
             expect(error.retryable).toBe(false);
             expect(error.code).toBe(400);
         });
 
         it('should handle timeout errors', () => {
-            const error = new LlumiverseError(
-                'Request timeout',
-                true,
-                mockContext,
-                new Error('Timeout'),
-                408
-            );
+            const error = new LlumiverseError('Request timeout', true, mockContext, new Error('Timeout'), 408);
 
             expect(error.retryable).toBe(true);
             expect(error.code).toBe(408);
         });
 
         it('should handle service overloaded errors', () => {
-            const error = new LlumiverseError(
-                'Service overloaded',
-                true,
-                mockContext,
-                new Error('Overloaded'),
-                529
-            );
+            const error = new LlumiverseError('Service overloaded', true, mockContext, new Error('Overloaded'), 529);
 
             expect(error.retryable).toBe(true);
             expect(error.code).toBe(529);
@@ -223,7 +169,7 @@ describe('LlumiverseError', () => {
                 true,
                 { ...mockContext, provider: 'openai' },
                 new Error('Test'),
-                500
+                500,
             );
 
             expect(error.context.provider).toBe('openai');
@@ -235,7 +181,7 @@ describe('LlumiverseError', () => {
                 true,
                 { ...mockContext, model: 'gpt-4' },
                 new Error('Test'),
-                500
+                500,
             );
 
             expect(error.context.model).toBe('gpt-4');
@@ -247,7 +193,7 @@ describe('LlumiverseError', () => {
                 true,
                 { ...mockContext, operation: 'execute' as const },
                 new Error('Test'),
-                500
+                500,
             );
 
             const streamError = new LlumiverseError(
@@ -255,7 +201,7 @@ describe('LlumiverseError', () => {
                 true,
                 { ...mockContext, operation: 'stream' as const },
                 new Error('Test'),
-                500
+                500,
             );
 
             expect(executeError.context.operation).toBe('execute');

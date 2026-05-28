@@ -24,7 +24,8 @@ describe('BedrockDriver Error Handling', () => {
         it('should handle ValidationException with status code in message', () => {
             const awsError = {
                 name: 'ValidationException',
-                message: "1 validation error detected: Value '32424.0' at 'inferenceConfig.temperature' failed to satisfy constraint: Member must have value less than or equal to 1",
+                message:
+                    "1 validation error detected: Value '32424.0' at 'inferenceConfig.temperature' failed to satisfy constraint: Member must have value less than or equal to 1",
                 $fault: 'client',
                 $metadata: {
                     httpStatusCode: 400,
@@ -323,7 +324,11 @@ describe('BedrockDriver Error Handling', () => {
             ];
 
             retryableErrors.forEach((errorName) => {
-                const result = exposePrivate<BedrockDriverInternals>(driver).isBedrockErrorRetryable(errorName, undefined, undefined);
+                const result = exposePrivate<BedrockDriverInternals>(driver).isBedrockErrorRetryable(
+                    errorName,
+                    undefined,
+                    undefined,
+                );
                 expect(result, `${errorName} should be retryable`).toBe(true);
             });
         });
@@ -339,25 +344,57 @@ describe('BedrockDriver Error Handling', () => {
             ];
 
             nonRetryableErrors.forEach((errorName) => {
-                const result = exposePrivate<BedrockDriverInternals>(driver).isBedrockErrorRetryable(errorName, undefined, undefined);
+                const result = exposePrivate<BedrockDriverInternals>(driver).isBedrockErrorRetryable(
+                    errorName,
+                    undefined,
+                    undefined,
+                );
                 expect(result, `${errorName} should not be retryable`).toBe(false);
             });
         });
 
         it('should use HTTP status codes when available', () => {
-            expect(exposePrivate<BedrockDriverInternals>(driver).isBedrockErrorRetryable('UnknownError', 429, undefined)).toBe(true);
-            expect(exposePrivate<BedrockDriverInternals>(driver).isBedrockErrorRetryable('UnknownError', 408, undefined)).toBe(true);
-            expect(exposePrivate<BedrockDriverInternals>(driver).isBedrockErrorRetryable('UnknownError', 529, undefined)).toBe(true);
-            expect(exposePrivate<BedrockDriverInternals>(driver).isBedrockErrorRetryable('UnknownError', 500, undefined)).toBe(true);
-            expect(exposePrivate<BedrockDriverInternals>(driver).isBedrockErrorRetryable('UnknownError', 503, undefined)).toBe(true);
-            expect(exposePrivate<BedrockDriverInternals>(driver).isBedrockErrorRetryable('UnknownError', 400, undefined)).toBe(false);
-            expect(exposePrivate<BedrockDriverInternals>(driver).isBedrockErrorRetryable('UnknownError', 403, undefined)).toBe(false);
-            expect(exposePrivate<BedrockDriverInternals>(driver).isBedrockErrorRetryable('UnknownError', 404, undefined)).toBe(false);
+            expect(
+                exposePrivate<BedrockDriverInternals>(driver).isBedrockErrorRetryable('UnknownError', 429, undefined),
+            ).toBe(true);
+            expect(
+                exposePrivate<BedrockDriverInternals>(driver).isBedrockErrorRetryable('UnknownError', 408, undefined),
+            ).toBe(true);
+            expect(
+                exposePrivate<BedrockDriverInternals>(driver).isBedrockErrorRetryable('UnknownError', 529, undefined),
+            ).toBe(true);
+            expect(
+                exposePrivate<BedrockDriverInternals>(driver).isBedrockErrorRetryable('UnknownError', 500, undefined),
+            ).toBe(true);
+            expect(
+                exposePrivate<BedrockDriverInternals>(driver).isBedrockErrorRetryable('UnknownError', 503, undefined),
+            ).toBe(true);
+            expect(
+                exposePrivate<BedrockDriverInternals>(driver).isBedrockErrorRetryable('UnknownError', 400, undefined),
+            ).toBe(false);
+            expect(
+                exposePrivate<BedrockDriverInternals>(driver).isBedrockErrorRetryable('UnknownError', 403, undefined),
+            ).toBe(false);
+            expect(
+                exposePrivate<BedrockDriverInternals>(driver).isBedrockErrorRetryable('UnknownError', 404, undefined),
+            ).toBe(false);
         });
 
         it('should use fault type as fallback', () => {
-            expect(exposePrivate<BedrockDriverInternals>(driver).isBedrockErrorRetryable('UnknownError', undefined, 'server')).toBe(true);
-            expect(exposePrivate<BedrockDriverInternals>(driver).isBedrockErrorRetryable('UnknownError', undefined, 'client')).toBe(false);
+            expect(
+                exposePrivate<BedrockDriverInternals>(driver).isBedrockErrorRetryable(
+                    'UnknownError',
+                    undefined,
+                    'server',
+                ),
+            ).toBe(true);
+            expect(
+                exposePrivate<BedrockDriverInternals>(driver).isBedrockErrorRetryable(
+                    'UnknownError',
+                    undefined,
+                    'client',
+                ),
+            ).toBe(false);
         });
     });
 });

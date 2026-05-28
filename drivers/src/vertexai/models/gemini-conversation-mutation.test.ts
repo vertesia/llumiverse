@@ -35,8 +35,8 @@ describe('convertGeminiFunctionPartsToText', () => {
                 parts: [{ functionResponse: { name: 'plan', response: { output: 'done' } } }],
             },
         ];
-        const originalItemRefs = original.map(c => c);
-        const originalPartRefs = original.map(c => c.parts[0]);
+        const originalItemRefs = original.map((c) => c);
+        const originalPartRefs = original.map((c) => c.parts[0]);
 
         const result = convertGeminiFunctionPartsToText(original);
 
@@ -105,7 +105,10 @@ function makeContentsWithFunctionParts() {
     ];
 }
 
-function makeDriver(overrides: { generateContent?: () => Promise<unknown>; generateContentStream?: () => Promise<AsyncIterable<unknown>> }) {
+function makeDriver(overrides: {
+    generateContent?: () => Promise<unknown>;
+    generateContentStream?: () => Promise<AsyncIterable<unknown>>;
+}) {
     return {
         logger: { warn: () => {}, info: () => {}, error: () => {} },
         getGoogleGenAIClient: () => ({
@@ -119,20 +122,24 @@ function makeDriver(overrides: { generateContent?: () => Promise<unknown>; gener
 
 const mockNonStreamingResponse = {
     usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15 },
-    candidates: [{
-        finishReason: FinishReason.STOP,
-        content: { role: 'model', parts: [{ text: 'Summary.' }] },
-        safetyRatings: [],
-    }],
+    candidates: [
+        {
+            finishReason: FinishReason.STOP,
+            content: { role: 'model', parts: [{ text: 'Summary.' }] },
+            safetyRatings: [],
+        },
+    ],
 };
 
 const mockStreamingChunk = {
     usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15 },
-    candidates: [{
-        finishReason: FinishReason.STOP,
-        content: { role: 'model', parts: [{ text: 'Summary.' }] },
-        safetyRatings: [],
-    }],
+    candidates: [
+        {
+            finishReason: FinishReason.STOP,
+            content: { role: 'model', parts: [{ text: 'Summary.' }] },
+            safetyRatings: [],
+        },
+    ],
 };
 
 describe('GeminiModelDefinition - no conversation mutation', () => {
@@ -158,14 +165,19 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
         const contentsSnapshot = JSON.stringify(originalContents);
 
         const driver = makeDriver({
-            generateContentStream: async () => (async function* () { yield mockStreamingChunk; })(),
+            generateContentStream: async () =>
+                (async function* () {
+                    yield mockStreamingChunk;
+                })(),
         });
         const prompt = { contents: originalContents, system: undefined } as unknown as GenerateContentPrompt;
         const options: ExecutionOptions = { model: 'publishers/google/models/gemini-2.0-flash', tools: [] };
 
         const stream = await modelDef.requestTextCompletionStream(driver, prompt, options);
         // Drain the stream to trigger all processing
-        for await (const _chunk of stream) { /* noop */ }
+        for await (const _chunk of stream) {
+            /* noop */
+        }
 
         expect(JSON.stringify(originalContents)).toBe(contentsSnapshot);
         expect(originalContents[0].parts[0]).toHaveProperty('functionCall');

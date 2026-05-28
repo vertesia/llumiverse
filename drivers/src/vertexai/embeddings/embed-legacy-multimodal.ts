@@ -1,4 +1,4 @@
-import { helpers, type protos } from "@google-cloud/aiplatform";
+import { helpers, type protos } from '@google-cloud/aiplatform';
 import {
     type AudioEmbeddingInput,
     buildEmbeddingsResult,
@@ -9,20 +9,22 @@ import {
     type EmbeddingsResult,
     LlumiverseError,
     type VideoEmbeddingInput,
-} from "@llumiverse/core";
-import type { VertexAIDriver } from "../index.js";
-import { dataSourceToVertexSourceData } from "./source-utils.js";
+} from '@llumiverse/core';
+import type { VertexAIDriver } from '../index.js';
+import { dataSourceToVertexSourceData } from './source-utils.js';
 
-const DEFAULT_LEGACY_MULTIMODAL_MODEL = "multimodalembedding@001";
+const DEFAULT_LEGACY_MULTIMODAL_MODEL = 'multimodalembedding@001';
 
-async function dataSourceToImagePart(ds: DataSource): Promise<{ gcsUri?: string; mimeType?: string; bytesBase64Encoded?: string }> {
+async function dataSourceToImagePart(
+    ds: DataSource,
+): Promise<{ gcsUri?: string; mimeType?: string; bytesBase64Encoded?: string }> {
     const source = await dataSourceToVertexSourceData(ds);
     if (source.gcsUri) {
         return { gcsUri: source.gcsUri, mimeType: ds.mime_type };
     }
 
     if (!source.bytesBase64Encoded) {
-        throw new Error("Data source conversion produced neither GCS URI nor inline bytes");
+        throw new Error('Data source conversion produced neither GCS URI nor inline bytes');
     }
 
     return { bytesBase64Encoded: source.bytesBase64Encoded, mimeType: ds.mime_type };
@@ -44,7 +46,7 @@ async function dataSourceToVideoPart(
     if (input.start_sec !== undefined && input.length_sec !== undefined) {
         segmentConfig.endOffsetSec = input.start_sec + input.length_sec;
     }
-    if ("interval_sec" in input && input.interval_sec !== undefined) {
+    if ('interval_sec' in input && input.interval_sec !== undefined) {
         segmentConfig.intervalSec = input.interval_sec;
     }
     const config = Object.keys(segmentConfig).length > 0 ? segmentConfig : undefined;
@@ -53,34 +55,32 @@ async function dataSourceToVideoPart(
     }
 
     if (!source.bytesBase64Encoded) {
-        throw new Error("Data source conversion produced neither GCS URI nor inline bytes");
+        throw new Error('Data source conversion produced neither GCS URI nor inline bytes');
     }
 
     return { bytesBase64Encoded: source.bytesBase64Encoded, videoSegmentConfig: config };
 }
 
-type Modality = "text" | "image" | "video" | "audio";
+type Modality = 'text' | 'image' | 'video' | 'audio';
 
 type LegacyInstance =
     | { text: string }
     | { image: Awaited<ReturnType<typeof dataSourceToImagePart>> }
     | { video: Awaited<ReturnType<typeof dataSourceToVideoPart>> };
 
-async function buildLegacyInstance(
-    input: EmbeddingInput,
-): Promise<{ instance: LegacyInstance; modality: Modality }> {
+async function buildLegacyInstance(input: EmbeddingInput): Promise<{ instance: LegacyInstance; modality: Modality }> {
     switch (input.type) {
-        case "text":
-            return { instance: { text: input.text }, modality: "text" };
-        case "image":
-            return { instance: { image: await dataSourceToImagePart(input.source) }, modality: "image" };
-        case "video":
-            return { instance: { video: await dataSourceToVideoPart(input.source, input) }, modality: "video" };
-        case "audio":
+        case 'text':
+            return { instance: { text: input.text }, modality: 'text' };
+        case 'image':
+            return { instance: { image: await dataSourceToImagePart(input.source) }, modality: 'image' };
+        case 'video':
+            return { instance: { video: await dataSourceToVideoPart(input.source, input) }, modality: 'video' };
+        case 'audio':
             // multimodalembedding@001 has no dedicated audio modality; the API treats audio
             // like video (uses videoEmbeddings in the response). Route through the video path
             // and preserve the "audio" modality label so callers can identify the outputs.
-            return { instance: { video: await dataSourceToVideoPart(input.source, input) }, modality: "audio" };
+            return { instance: { video: await dataSourceToVideoPart(input.source, input) }, modality: 'audio' };
     }
 }
 
@@ -107,7 +107,7 @@ function decodePredictionValue(
 ): MultimodalPrediction {
     type HelperValue = Parameters<typeof helpers.fromValue>[0];
     const decoded = helpers.fromValue(value as unknown as HelperValue);
-    if (!decoded || typeof decoded !== "object") {
+    if (!decoded || typeof decoded !== 'object') {
         throw new Error(`Vertex predict returned an empty prediction for input ${index} (model ${model})`);
     }
 
@@ -119,14 +119,14 @@ function decodePredictionValue(
     return prediction;
 }
 
-function predictionToOutputs(prediction: MultimodalPrediction, modality: Modality): EmbeddingResultItem["outputs"] {
-    if (modality === "text" && prediction.textEmbedding) {
-        return [{ values: prediction.textEmbedding, modality: "text" }];
+function predictionToOutputs(prediction: MultimodalPrediction, modality: Modality): EmbeddingResultItem['outputs'] {
+    if (modality === 'text' && prediction.textEmbedding) {
+        return [{ values: prediction.textEmbedding, modality: 'text' }];
     }
-    if (modality === "image" && prediction.imageEmbedding) {
-        return [{ values: prediction.imageEmbedding, modality: "image" }];
+    if (modality === 'image' && prediction.imageEmbedding) {
+        return [{ values: prediction.imageEmbedding, modality: 'image' }];
     }
-    if ((modality === "video" || modality === "audio") && prediction.videoEmbeddings?.length) {
+    if ((modality === 'video' || modality === 'audio') && prediction.videoEmbeddings?.length) {
         return prediction.videoEmbeddings.map((segment) => ({
             values: segment.embedding,
             modality,
@@ -135,17 +135,17 @@ function predictionToOutputs(prediction: MultimodalPrediction, modality: Modalit
         }));
     }
     // Fallback: return whatever is present
-    if (prediction.textEmbedding) return [{ values: prediction.textEmbedding, modality: "text" }];
-    if (prediction.imageEmbedding) return [{ values: prediction.imageEmbedding, modality: "image" }];
+    if (prediction.textEmbedding) return [{ values: prediction.textEmbedding, modality: 'text' }];
+    if (prediction.imageEmbedding) return [{ values: prediction.imageEmbedding, modality: 'image' }];
     if (prediction.videoEmbeddings?.length) {
         return prediction.videoEmbeddings.map((segment) => ({
             values: segment.embedding,
-            modality: "video" as const,
+            modality: 'video' as const,
             start_sec: segment.startOffsetSec,
             end_sec: segment.endOffsetSec,
         }));
     }
-    throw new Error("Vertex multimodal prediction returned no embedding values");
+    throw new Error('Vertex multimodal prediction returned no embedding values');
 }
 
 /**
@@ -166,12 +166,11 @@ export async function generateLegacyMultimodalEmbeddings(
         .filter((v): v is NonNullable<typeof v> => v != null);
 
     if (instances.length !== built.length) {
-        throw new Error("Failed to encode one or more multimodal embedding instances");
+        throw new Error('Failed to encode one or more multimodal embedding instances');
     }
 
-    const parameters = options.dimensions !== undefined
-        ? helpers.toValue({ dimension: options.dimensions })
-        : undefined;
+    const parameters =
+        options.dimensions !== undefined ? helpers.toValue({ dimension: options.dimensions }) : undefined;
 
     const endpoint = `projects/${driver.options.project}/locations/${driver.options.region}/publishers/google/models/${model}`;
 
@@ -197,9 +196,12 @@ export async function generateLegacyMultimodalEmbeddings(
         if (LlumiverseError.isLlumiverseError(error)) throw error;
         // @google-cloud/aiplatform uses gRPC, which surfaces errors with a numeric `code`
         // field rather than `status`. Check both to avoid wrapping plain programming errors.
-        if (error instanceof Error
-            && typeof (error as { status?: unknown }).status !== 'number'
-            && typeof (error as { code?: unknown }).code !== 'number') throw error;
+        if (
+            error instanceof Error &&
+            typeof (error as { status?: unknown }).status !== 'number' &&
+            typeof (error as { code?: unknown }).code !== 'number'
+        )
+            throw error;
         throw driver.formatLlumiverseError(error, {
             provider: 'vertexai',
             model,

@@ -6,8 +6,8 @@ import type {
     EmbeddingsResult,
     EmbeddingTaskType,
     TextEmbeddingInput,
-} from "@llumiverse/common";
-import { readStreamAsBase64, readStreamAsUint8Array } from "./stream.js";
+} from '@llumiverse/common';
+import { readStreamAsBase64, readStreamAsUint8Array } from './stream.js';
 
 /** DataSource wrapping an in-memory base64 string. */
 export class Base64DataSource implements DataSource {
@@ -15,10 +15,10 @@ export class Base64DataSource implements DataSource {
         public readonly name: string,
         public readonly mime_type: string,
         private readonly base64: string,
-    ) { }
+    ) {}
 
     async getStream(): Promise<ReadableStream<Uint8Array>> {
-        const bytes = Buffer.from(this.base64, "base64");
+        const bytes = Buffer.from(this.base64, 'base64');
         return new ReadableStream<Uint8Array>({
             start(controller) {
                 controller.enqueue(new Uint8Array(bytes));
@@ -47,7 +47,7 @@ export class URLDataSource implements DataSource {
         public readonly name: string,
         public readonly mime_type: string,
         private readonly url: string,
-    ) { }
+    ) {}
 
     async getStream(): Promise<ReadableStream<Uint8Array>> {
         const response = await fetch(this.url);
@@ -87,7 +87,7 @@ export async function dataSourceToBytes(ds: DataSource): Promise<Uint8Array> {
 export function firstVector(result: EmbeddingsResult): number[] {
     const first = result.results[0]?.outputs[0]?.values;
     if (!first) {
-        throw new Error("EmbeddingsResult contains no vectors");
+        throw new Error('EmbeddingsResult contains no vectors');
     }
     return first;
 }
@@ -101,11 +101,11 @@ export function firstVector(result: EmbeddingsResult): number[] {
  */
 export function normalizeEmbeddingsOptions(options: EmbeddingsOptions): EmbeddingsOptions {
     if (!options.inputs || options.inputs.length === 0) {
-        throw new Error("EmbeddingsOptions.inputs must contain at least one input");
+        throw new Error('EmbeddingsOptions.inputs must contain at least one input');
     }
 
     const inputs: EmbeddingInput[] = options.inputs.map((input) => {
-        if (input.type === "text") {
+        if (input.type === 'text') {
             const text = input as TextEmbeddingInput;
             return {
                 ...text,
@@ -143,7 +143,7 @@ export function applyTaskTypePrefix(
 export function buildEmbeddingsResult(
     model: string,
     results: EmbeddingResultItem[],
-    usage?: EmbeddingsResult["usage"],
+    usage?: EmbeddingsResult['usage'],
 ): EmbeddingsResult {
     return { model, results, usage };
 }
