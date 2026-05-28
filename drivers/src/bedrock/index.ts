@@ -27,6 +27,7 @@ import {
     type ModelOptions,
     type NovaCanvasOptions,
     type PromptSegment,
+    resolveDriverHttpTimeouts,
     type StatelessExecutionOptions,
     stripBinaryFromConversation,
     stripHeartbeatsFromConversation,
@@ -153,9 +154,12 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
      * Returns a partial config the SDK merges into its default handler.
      */
     private getBedrockRequestHandlerConfig() {
+        const timeouts = resolveDriverHttpTimeouts(this.options.httpTimeout);
         return {
-            requestTimeout:    this.options.httpTimeout?.headersTimeout ?? 60_000,
-            connectionTimeout: this.options.httpTimeout?.connectTimeout ?? 10_000,
+            requestTimeout: timeouts.headersTimeout,
+            throwOnRequestTimeout: true,
+            connectionTimeout: timeouts.connectTimeout,
+            socketTimeout: timeouts.bodyTimeout,
         };
     }
 

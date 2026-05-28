@@ -14,6 +14,7 @@ import {
     type LlumiverseErrorContext,
     type ModelSearchPayload,
     type PromptSegment,
+    resolveDriverHttpTimeouts,
     type ToolUse,
     getConversationMeta,
     getModelCapabilities,
@@ -24,7 +25,7 @@ import {
     stripHeartbeatsFromConversation,
     truncateLargeTextInConversation
 } from "@llumiverse/core";
-import { FetchClient } from "@vertesia/api-fetch-client";
+import { FetchClient, type FETCH_FN } from "@vertesia/api-fetch-client";
 import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from "google-auth-library";
 import { getModelDefinition, trimModelName } from "./models.js";
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from "./models/claude.js";
@@ -111,6 +112,33 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return this.authClientPromise;
     }
 
+    private getSdkRequestTimeoutMs(): number {
+        const timeouts = resolveDriverHttpTimeouts(this.options.httpTimeout);
+        return Math.max(timeouts.headersTimeout, timeouts.bodyTimeout);
+    }
+
+    private getGoogleGenAIHttpOptions(flex: boolean) {
+        return {
+            timeout: this.getSdkRequestTimeoutMs(),
+            ...(flex ? {
+                headers: {
+                    "X-Vertex-AI-LLM-Request-Type": "shared",
+                    "X-Vertex-AI-LLM-Shared-Request-Type": "flex",
+                }
+            } : {}),
+        };
+    }
+
+    private getAnthropicVertexClientOptions(region: string, authClient: AuthClient) {
+        return {
+            timeout: this.getSdkRequestTimeoutMs(),
+            region,
+            projectId: this.options.project,
+            authClient: authClient,
+            fetch: this.getDriverFetch(),
+        };
+    }
+
     public getGoogleGenAIClient(region: string = this.options.region, flex: boolean = false): GoogleGenAI {
         if (this.googleGenAI &&
             this.googleGenAIRegion === region &&
@@ -125,15 +153,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     private buildGoogleGenAIClient(region: string, flex: boolean): GoogleGenAI {
-        // The @google/genai Vertex-flavored HttpOptions doesn't expose a
-        // custom `fetch` (that's only on the Gemini-direct path), so we
-        // can't route through the driver's undici Agent here. Fall back
-        // to the SDK's wall-clock `timeout`, which under the hood calls
-        // `AbortSignal.timeout()` per request. Uses `headersTimeout` as
-        // the dominant cue since gemini-flash should respond well within
-        // its head-of-line latency budget.
-        const requestTimeoutMs = this.options.httpTimeout?.headersTimeout ?? 60_000;
-
         return new GoogleGenAI({
             project: this.options.project,
             location: region,
@@ -141,15 +160,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             googleAuthOptions: this.options.googleAuthOptions || {
                 scopes: ["https://www.googleapis.com/auth/cloud-platform"],
             },
-            httpOptions: {
-                timeout: requestTimeoutMs,
-                ...(flex ? {
-                    headers: {
-                        "X-Vertex-AI-LLM-Request-Type": "shared",
-                        "X-Vertex-AI-LLM-Shared-Request-Type": "flex",
-                    }
-                } : {}),
-            },
+            httpOptions: this.getGoogleGenAIHttpOptions(flex),
         });
     }
 
@@ -159,6 +170,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             this.fetchClient = createFetchClient({
                 region: region,
                 project: this.options.project,
+                fetchImpl: this.getDriverFetch(),
             }).withAuthCallback(async () => {
                 const token = await this.googleAuth.getAccessToken();
                 return `Bearer ${token}`;
@@ -174,6 +186,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 region: region,
                 project: this.options.project,
                 apiVersion: "v1beta1",
+                fetchImpl: this.getDriverFetch(),
             }).withAuthCallback(async () => {
                 const token = await this.googleAuth.getAccessToken();
                 return `Bearer ${token}`;
@@ -198,22 +211,12 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
         // If mapped region is different from default mapped region, create one-off client
         if (mappedRegion !== defaultMappedRegion) {
-            return new AnthropicVertex({
-                timeout: 20 * 60 * 10000, // Set to 20 minutes, 10 minute default, setting this disables long request error: https://github.com/anthropics/anthropic-sdk-typescript?#long-requests
-                region: mappedRegion,
-                projectId: this.options.project,
-                authClient: authClient,
-            });
+            return new AnthropicVertex(this.getAnthropicVertexClientOptions(mappedRegion, authClient));
         }
 
         //Lazy initialization for default region
         if (!this.anthropicClient) {
-            this.anthropicClient = new AnthropicVertex({
-                timeout: 20 * 60 * 10000, // Set to 20 minutes, 10 minute default, setting this disables long request error: https://github.com/anthropics/anthropic-sdk-typescript?#long-requests
-                region: mappedRegion,
-                projectId: this.options.project,
-                authClient: authClient,
-            });
+            this.anthropicClient = new AnthropicVertex(this.getAnthropicVertexClientOptions(mappedRegion, authClient));
         }
         return this.anthropicClient;
     }
@@ -796,15 +799,18 @@ function createFetchClient({
     project,
     apiEndpoint,
     apiVersion = "v1",
+    fetchImpl,
 }: {
     region: string;
     project: string;
     apiEndpoint?: string;
     apiVersion?: string;
+    fetchImpl?: FETCH_FN;
 }) {
     const vertexBaseEndpoint = apiEndpoint ?? `${region}-${API_BASE_PATH}`;
     return new FetchClient(
         `https://${vertexBaseEndpoint}/${apiVersion}/projects/${project}/locations/${region}`,
+        fetchImpl,
     ).withHeaders({
         "Content-Type": "application/json",
     });
