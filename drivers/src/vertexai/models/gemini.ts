@@ -765,7 +765,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         }
 
         // Determine retryability based on Google error codes
-        const retryable = this.isGeminiErrorRetryable(httpStatusCode);
+        const retryable = this.isGeminiErrorRetryable(httpStatusCode, message);
 
         // Extract error name/type from message if present
         const errorName = this.extractErrorName(message);
@@ -811,11 +811,18 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
      * - 404 (NOT_FOUND): Resource not found
      * - 409 (CONFLICT): Resource conflict
      * - Other 4xx client errors
-     * 
+     *
+     * Exception: certain 400s from Vertex AI's inline URL fetcher (used when
+     * passing a file by URL to multimodal models) surface as INVALID_ARGUMENT
+     * but are actually transient throttling/rate-limit signals on the
+     * fetcher, not a bad request. Detect those by message substring and
+     * treat them as retryable.
+     *
      * @param httpStatusCode - The HTTP status code from the API error
+     * @param message - The error message (used to detect transient 400 sub-cases)
      * @returns True if retryable, false if not retryable, undefined if unknown
      */
-    private isGeminiErrorRetryable(httpStatusCode: number): boolean | undefined {
+    private isGeminiErrorRetryable(httpStatusCode: number, message?: string): boolean | undefined {
         // Retryable status codes
         if (httpStatusCode === 408) return true; // Request timeout
         if (httpStatusCode === 429) return true; // Rate limit/quota
@@ -823,6 +830,17 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         if (httpStatusCode === 503) return true; // Service unavailable
         if (httpStatusCode === 504) return true; // Gateway timeout
         if (httpStatusCode >= 500 && httpStatusCode < 600) return true; // Other 5xx server errors
+
+        // Vertex AI URL fetcher transient throttling, surfaced as 400 INVALID_ARGUMENT
+        // but really a Google-side rate limit on the inline-content fetcher.
+        if (httpStatusCode === 400 && message) {
+            if (
+                message.includes('URL_REJECTED-REJECTED_CLIENT_THROTTLED') ||
+                message.includes('URL_REJECTED-REJECTED_RATE_LIMITED')
+            ) {
+                return true;
+            }
+        }
 
         // Non-retryable 4xx client errors
         if (httpStatusCode >= 400 && httpStatusCode < 500) return false;
