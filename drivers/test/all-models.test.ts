@@ -5,6 +5,7 @@ import {
     getMaxOutputTokens,
     getMaxTokensLimitBedrock,
     getMaxTokensLimitVertexAi,
+    // biome-ignore lint/suspicious/noDeprecatedImports: exercising deprecated output_modality path until that API is removed
     Modalities,
     PromptRole,
     type PromptSegment,
