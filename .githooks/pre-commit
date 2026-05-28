@@ -1,40 +1,75 @@
 #!/usr/bin/env bash
 # Pre-commit hook:
-# - Uses lint-staged to run biome on staged files only (fast feedback).
-# - Standalone clone or local `pnpm install`: lint-staged is reachable via pnpm exec.
-# - Submodule mode (no local node_modules): falls back to the parent workspace's
-#   lint-staged + biome binaries at `../node_modules/.bin/`. Uses this repo's
-#   lint-staged config (passed via --config).
+# - Runs biome format checks, then biome lint, on staged files only.
+# - These checks never write fixes and never mutate the git index.
+# - Standalone clone or local `pnpm install`: biome is reachable via pnpm exec.
+# - Submodule mode (no local node_modules): walks up to the first parent
+#   workspace with a biome binary while still using this repo as the working directory.
 
 set -euo pipefail
 
+hook_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$hook_dir/.." && pwd)"
+cd "$repo_root"
+
+BIOME_CMD=()
+
 if [ -d node_modules ]; then
-    pnpm exec lint-staged
-    exit $?
+    BIOME_CMD=(pnpm exec biome)
+else
+    find_parent_biome() {
+        local dir="$repo_root"
+        while [ "$dir" != "/" ]; do
+            dir="$(dirname "$dir")"
+            if [ -x "$dir/node_modules/.bin/biome" ]; then
+                echo "$dir/node_modules/.bin/biome"
+                return 0
+            fi
+        done
+        return 1
+    }
+
+    if PARENT_BIOME="$(find_parent_biome)"; then
+        echo "[pre-commit] biome not installed locally - falling back to $PARENT_BIOME"
+        BIOME_CMD=("$PARENT_BIOME")
+    else
+        echo "Error: biome not found in this workspace or any ancestor."
+        echo "Run 'pnpm install' from inside llumiverse to install local devDeps,"
+        echo "or commit with --no-verify to skip this check."
+        exit 1
+    fi
 fi
 
-# Submodule mode (nested under composableai/, which may itself be nested under
-# the studio parent — walk up until we find a node_modules/.bin/lint-staged).
-find_parent_bin() {
-    local dir="$(pwd)"
-    while [ "$dir" != "/" ]; do
-        dir="$(dirname "$dir")"
-        if [ -x "$dir/node_modules/.bin/lint-staged" ]; then
-            echo "$dir"
-            return 0
+staged_files=()
+while IFS= read -r -d '' file; do
+    case "$file" in
+        *.js | *.cjs | *.mjs | *.jsx | *.ts | *.tsx)
+            staged_files+=("$file")
+            ;;
+    esac
+done < <(git diff --cached --name-only --diff-filter=ACMR -z)
+
+if (( ${#staged_files[@]} == 0 )); then
+    exit 0
+fi
+
+run_biome() {
+    local command="$1"
+    shift
+
+    local chunk=()
+    for file in "${staged_files[@]}"; do
+        chunk+=("$file")
+        if (( ${#chunk[@]} >= 100 )); then
+            "${BIOME_CMD[@]}" "$command" --no-errors-on-unmatched --files-ignore-unknown=true "$@" "${chunk[@]}"
+            chunk=()
         fi
     done
-    return 1
+
+    if (( ${#chunk[@]} > 0 )); then
+        "${BIOME_CMD[@]}" "$command" --no-errors-on-unmatched --files-ignore-unknown=true "$@" "${chunk[@]}"
+    fi
 }
 
-if PARENT_DIR="$(find_parent_bin)"; then
-    PARENT_LINT_STAGED="$PARENT_DIR/node_modules/.bin/lint-staged"
-    echo "[pre-commit] lint-staged not installed locally — falling back to $PARENT_LINT_STAGED"
-    PATH="$PARENT_DIR/node_modules/.bin:$PATH" "$PARENT_LINT_STAGED" --config package.json
-    exit $?
-fi
-
-echo "Error: lint-staged not found in this workspace or any ancestor."
-echo "Run 'pnpm install' from inside llumiverse to install local devDeps,"
-echo "or commit with --no-verify to skip this check."
-exit 1
+run_biome format
+run_biome lint --diagnostic-level=error

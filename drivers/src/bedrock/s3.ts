@@ -1,5 +1,11 @@
-import { CreateBucketCommand, HeadBucketCommand, type S3Client } from "@aws-sdk/client-s3";
-import { type Progress, Upload } from "@aws-sdk/lib-storage";
+import { CreateBucketCommand, HeadBucketCommand, type S3Client } from '@aws-sdk/client-s3';
+import { type Progress, Upload } from '@aws-sdk/lib-storage';
+
+const S3_AMAZONAWS_HOSTNAME_RE = /^(?:s3(?:\.[a-z0-9-]+)*|.+\.s3(?:\.[a-z0-9-]+)*)\.amazonaws\.com$/;
+
+export function isAmazonS3Hostname(hostname: string): boolean {
+    return S3_AMAZONAWS_HOSTNAME_RE.test(hostname.toLowerCase());
+}
 
 export async function doesBucketExist(s3: S3Client, bucketName: string): Promise<boolean> {
     try {
@@ -14,11 +20,12 @@ export async function doesBucketExist(s3: S3Client, bucketName: string): Promise
 }
 
 export function createBucket(s3: S3Client, bucketName: string) {
-    return s3.send(new CreateBucketCommand({
-        Bucket: bucketName
-    }));
+    return s3.send(
+        new CreateBucketCommand({
+            Bucket: bucketName,
+        }),
+    );
 }
-
 
 export async function tryCreateBucket(s3: S3Client, bucketName: string) {
     const exists = await doesBucketExist(s3, bucketName);
@@ -27,19 +34,23 @@ export async function tryCreateBucket(s3: S3Client, bucketName: string) {
     }
 }
 
-
-export async function uploadFile(s3: S3Client, source: ReadableStream, bucketName: string, file: string, onProgress?: (progress: Progress) => void) {
-
+export async function uploadFile(
+    s3: S3Client,
+    source: ReadableStream,
+    bucketName: string,
+    file: string,
+    onProgress?: (progress: Progress) => void,
+) {
     const upload = new Upload({
         client: s3,
         params: {
             Bucket: bucketName,
             Key: file,
             Body: source,
-        }
+        },
     });
 
-    if (onProgress) upload.on("httpUploadProgress", onProgress);
+    if (onProgress) upload.on('httpUploadProgress', onProgress);
 
     const result = await upload.done();
     return result;
@@ -47,19 +58,24 @@ export async function uploadFile(s3: S3Client, source: ReadableStream, bucketNam
 
 /**
  * Create the bucket if not already exists and then upload the file.
- * @param s3 
- * @param source 
- * @param bucketName 
- * @param file 
- * @param onProgress 
- * @returns 
+ * @param s3
+ * @param source
+ * @param bucketName
+ * @param file
+ * @param onProgress
+ * @returns
  */
-export async function forceUploadFile(s3: S3Client, source: ReadableStream, bucketName: string, file: string, onProgress?: (progress: Progress) => void) {
+export async function forceUploadFile(
+    s3: S3Client,
+    source: ReadableStream,
+    bucketName: string,
+    file: string,
+    onProgress?: (progress: Progress) => void,
+) {
     // make sure the bucket exists
     await tryCreateBucket(s3, bucketName);
     return uploadFile(s3, source, bucketName, file, onProgress);
 }
-
 
 /**
  * Parse an S3 HTTPS URL into an S3 URI format
@@ -71,25 +87,28 @@ export function parseS3UrlToUri(s3Url: URL) {
         const url = new URL(s3Url);
 
         // Extract the hostname which contains the bucket and S3 endpoint
-        const hostname = url.hostname;
+        const hostname = url.hostname.toLowerCase();
+
+        if (!isAmazonS3Hostname(hostname)) {
+            throw new Error('Unable to determine bucket name from URL');
+        }
 
         // Parse the hostname to extract the bucket name
         let bucketName: string | undefined;
-        if (hostname.endsWith('.amazonaws.com')) {
-            if (hostname.includes('.s3.')) {
-                // Format: bucket-name.s3.region.amazonaws.com
-                bucketName = hostname.split('.s3.')[0];
-            } else if (hostname.startsWith('s3.')) {
-                // Format: s3.region.amazonaws.com/bucket-name
-                // In this case, the bucket is actually in the first segment of the pathname
-                bucketName = url.pathname.split('/')[1];
-                // Adjust the pathname to remove the bucket name
-                const pathParts = url.pathname.split('/').slice(2);
-                url.pathname = `/${pathParts.join('/')}`;
-            } else {
-                throw new Error('Unable to determine bucket name from URL');
-            }
+        const virtualHostedMatch = hostname.match(/^(.+)\.s3(?:\.[a-z0-9-]+)*\.amazonaws\.com$/);
+        if (virtualHostedMatch) {
+            // Format: bucket-name.s3.region.amazonaws.com
+            bucketName = virtualHostedMatch[1];
         } else {
+            // Format: s3.region.amazonaws.com/bucket-name
+            // In this case, the bucket is actually in the first segment of the pathname
+            bucketName = url.pathname.split('/')[1];
+            // Adjust the pathname to remove the bucket name
+            const pathParts = url.pathname.split('/').slice(2);
+            url.pathname = `/${pathParts.join('/')}`;
+        }
+
+        if (!bucketName) {
             throw new Error('Unable to determine bucket name from URL');
         }
 

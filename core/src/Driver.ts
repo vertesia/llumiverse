@@ -15,6 +15,7 @@ import {
     type EmbeddingsResult,
     type ExecutionOptions,
     type ExecutionResponse,
+    LlumiverseError,
     type LlumiverseErrorContext,
     type Logger,
     type ModelSearchPayload,
@@ -24,7 +25,6 @@ import {
     type TrainingJob,
     type TrainingOptions,
     type TrainingPromptOptions,
-    LlumiverseError,
 } from '@llumiverse/common';
 import type { Agent } from 'undici';
 import { DefaultCompletionStream, FallbackCompletionStream } from './CompletionStream.js';

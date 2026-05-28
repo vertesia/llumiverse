@@ -1,9 +1,9 @@
-import type { JSONValue } from "@llumiverse/common";
+import type { JSONValue } from '@llumiverse/common';
 import { jsonrepair } from 'jsonrepair';
 
 function extractJsonFromText(text: string): string {
-    const start = text.indexOf("{");
-    const end = text.lastIndexOf("}");
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
     return text.substring(start, end + 1);
 }
 
@@ -19,7 +19,8 @@ export function parseJSON(text: string): JSONValue {
         // use a relaxed parser
         try {
             return JSON.parse(jsonrepair(text));
-        } catch { // throw the original error
+        } catch {
+            // throw the original error
             throw err;
         }
     }

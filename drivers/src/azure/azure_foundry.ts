@@ -1,19 +1,19 @@
-import type {
-    ChatCompletionsOutput,
-    ChatCompletionsToolCall,
-    ChatRequestMessage,
-    ModelClient as AzureInferenceClient,
-} from '@azure-rest/ai-inference';
-import ModelClient, { isUnexpected } from '@azure-rest/ai-inference';
 import { AIProjectClient, type DeploymentUnion, type ModelDeployment } from '@azure/ai-projects';
 import { createSseStream, type NodeJSReadableStream } from '@azure/core-sse';
 import { DefaultAzureCredential, getBearerTokenProvider, type TokenCredential } from '@azure/identity';
+import type {
+    ModelClient as AzureInferenceClient,
+    ChatCompletionsOutput,
+    ChatCompletionsToolCall,
+    ChatRequestMessage,
+} from '@azure-rest/ai-inference';
+import ModelClient, { isUnexpected } from '@azure-rest/ai-inference';
 import {
     type AIModel,
     type Completion,
     type CompletionChunkObject,
-    dataSourceToBase64,
     type DriverOptions,
+    dataSourceToBase64,
     type EmbeddingResultItem,
     type EmbeddingsOptions,
     type EmbeddingsResult,

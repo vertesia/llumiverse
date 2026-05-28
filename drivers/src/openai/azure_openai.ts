@@ -1,11 +1,16 @@
-import { DefaultAzureCredential, getBearerTokenProvider } from "@azure/identity";
-import { type AIModel, type DriverOptions, getModelCapabilities, modelModalitiesToArray, Providers } from "@llumiverse/core";
-import type OpenAI from "openai";
-import { AzureOpenAI } from "openai";
-import { BaseOpenAIDriver } from "./index.js";
+import { DefaultAzureCredential, getBearerTokenProvider } from '@azure/identity';
+import {
+    type AIModel,
+    type DriverOptions,
+    getModelCapabilities,
+    modelModalitiesToArray,
+    Providers,
+} from '@llumiverse/core';
+import type OpenAI from 'openai';
+import { AzureOpenAI } from 'openai';
+import { BaseOpenAIDriver } from './index.js';
 
 export interface AzureOpenAIDriverOptions extends DriverOptions {
-
     /**
      * The credentials to use to access Azure OpenAI
      */
@@ -15,15 +20,12 @@ export interface AzureOpenAIDriverOptions extends DriverOptions {
 
     endpoint?: string;
 
-    apiVersion?: string
+    apiVersion?: string;
 
     deployment?: string;
-
 }
 
 export class AzureOpenAIDriver extends BaseOpenAIDriver {
-
-
     service: AzureOpenAI;
     readonly provider = Providers.azure_openai;
 
@@ -44,7 +46,7 @@ export class AzureOpenAIDriver extends BaseOpenAIDriver {
             apiKey: opts.apiKey,
             azureADTokenProvider: opts.azureADTokenProvider,
             endpoint: opts.endpoint,
-            apiVersion: opts.apiVersion ?? "2024-10-21",
+            apiVersion: opts.apiVersion ?? '2024-10-21',
             deployment: opts.deployment,
             fetch: this.getDriverFetch(),
         });
@@ -54,7 +56,7 @@ export class AzureOpenAIDriver extends BaseOpenAIDriver {
      * Get default authentication for Azure Cognitive Services API
      */
     getDefaultCognitiveServicesAuth() {
-        const scope = "https://cognitiveservices.azure.com/.default";
+        const scope = 'https://cognitiveservices.azure.com/.default';
         const azureADTokenProvider = getBearerTokenProvider(new DefaultAzureCredential(), scope);
         return azureADTokenProvider;
     }
@@ -65,7 +67,9 @@ export class AzureOpenAIDriver extends BaseOpenAIDriver {
 
     async _listModels(_filter?: (m: OpenAI.Models.Model) => boolean): Promise<AIModel[]> {
         if (!this.service.deploymentName) {
-            throw new Error("A specific deployment is not set. Azure OpenAI cannot list deployments. Update your endpoint URL to include the deployment name, e.g., https://your-resource.openai.azure.com/openai/deployments/your-deployment/chat/completions");
+            throw new Error(
+                'A specific deployment is not set. Azure OpenAI cannot list deployments. Update your endpoint URL to include the deployment name, e.g., https://your-resource.openai.azure.com/openai/deployments/your-deployment/chat/completions',
+            );
         }
 
         //Do a test execution to check if the model works and to get the model ID.
@@ -73,22 +77,24 @@ export class AzureOpenAIDriver extends BaseOpenAIDriver {
         try {
             const testResponse = await this.service.chat.completions.create({
                 model: this.service.deploymentName,
-                messages: [{ role: "user", content: "Hi" }],
+                messages: [{ role: 'user', content: 'Hi' }],
                 max_tokens: 1,
             });
             modelID = testResponse.model;
         } catch (error) {
-            this.logger.error({ error }, "Failed to test model for Azure OpenAI listing :");
+            this.logger.error({ error }, 'Failed to test model for Azure OpenAI listing :');
         }
-        const modelCapability = getModelCapabilities(modelID, "openai");
-        return [{
-            id: modelID,
-            name: this.service.deploymentName,
-            provider: this.provider,
-            owner: "openai",
-            input_modalities: modelModalitiesToArray(modelCapability.input),
-            output_modalities: modelModalitiesToArray(modelCapability.output),
-            tool_support: modelCapability.tool_support,
-        } satisfies AIModel<string>];
+        const modelCapability = getModelCapabilities(modelID, 'openai');
+        return [
+            {
+                id: modelID,
+                name: this.service.deploymentName,
+                provider: this.provider,
+                owner: 'openai',
+                input_modalities: modelModalitiesToArray(modelCapability.input),
+                output_modalities: modelModalitiesToArray(modelCapability.output),
+                tool_support: modelCapability.tool_support,
+            } satisfies AIModel<string>,
+        ];
     }
 }

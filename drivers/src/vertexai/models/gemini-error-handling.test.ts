@@ -1,8 +1,8 @@
 import { LlumiverseError } from '@llumiverse/core';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { exposePrivate, getProp } from '../../../test/__helpers__/test-utils.js';
 import { VertexAIDriver } from '../index.js';
 import { GeminiModelDefinition } from './gemini.js';
-import { exposePrivate, getProp } from '../../../test/__helpers__/test-utils.js';
 
 type GeminiModelInternals = {
     isGeminiErrorRetryable: (httpStatusCode: number, message?: string) => boolean | undefined;
@@ -328,20 +328,14 @@ describe('GeminiModelDefinition Error Handling', () => {
             // Vertex AI surfaces inline-URL-fetcher throttling as 400 INVALID_ARGUMENT.
             // The status is misleading — it's a transient Google-side throttle.
             const message =
-                'Cannot fetch content from the provided URL. ' +
-                'Status: URL_REJECTED-REJECTED_CLIENT_THROTTLED';
-            expect(
-                exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(400, message),
-            ).toBe(true);
+                'Cannot fetch content from the provided URL. ' + 'Status: URL_REJECTED-REJECTED_CLIENT_THROTTLED';
+            expect(exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(400, message)).toBe(true);
         });
 
         it('should treat 400 URL_REJECTED-REJECTED_RATE_LIMITED as retryable', () => {
             const message =
-                'Cannot fetch content from the provided URL. ' +
-                'Status: URL_REJECTED-REJECTED_RATE_LIMITED';
-            expect(
-                exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(400, message),
-            ).toBe(true);
+                'Cannot fetch content from the provided URL. ' + 'Status: URL_REJECTED-REJECTED_RATE_LIMITED';
+            expect(exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(400, message)).toBe(true);
         });
 
         it('should still treat plain 400 INVALID_ARGUMENT as non-retryable', () => {

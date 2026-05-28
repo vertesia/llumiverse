@@ -1,4 +1,4 @@
-import { Base64DataSource, type DataSource, dataSourceToBase64 } from "@llumiverse/core";
+import { Base64DataSource, type DataSource, dataSourceToBase64 } from '@llumiverse/core';
 
 interface VertexSourceData {
     gcsUri?: string;
@@ -6,9 +6,11 @@ interface VertexSourceData {
 }
 
 export function isGcsUrl(url: string): boolean {
-    return url.startsWith("gs://")
-        || url.startsWith("https://storage.googleapis.com/")
-        || url.startsWith("https://storage.cloud.google.com/");
+    return (
+        url.startsWith('gs://') ||
+        url.startsWith('https://storage.googleapis.com/') ||
+        url.startsWith('https://storage.cloud.google.com/')
+    );
 }
 
 export async function dataSourceToVertexSourceData(ds: DataSource): Promise<VertexSourceData> {

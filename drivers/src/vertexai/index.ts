@@ -1,6 +1,6 @@
 import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
-import { PredictionServiceClient, v1beta1 } from '@google-cloud/aiplatform';
 import { type Content, GoogleGenAI, type Model } from '@google/genai';
+import { PredictionServiceClient, v1beta1 } from '@google-cloud/aiplatform';
 import {
     type AIModel,
     type Completion,
@@ -10,30 +10,30 @@ import {
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
-    type HttpTimeoutOptions,
-    type LlumiverseErrorContext,
-    type ModelSearchPayload,
-    type PromptSegment,
-    type ToolUse,
     getConversationMeta,
     getModelCapabilities,
+    type HttpTimeoutOptions,
     incrementConversationTurn,
     type LlumiverseError,
+    type LlumiverseErrorContext,
+    type ModelSearchPayload,
     modelModalitiesToArray,
+    type PromptSegment,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
+    type ToolUse,
     truncateLargeTextInConversation,
 } from '@llumiverse/core';
 import { AbstractDriver } from '@llumiverse/core/driver';
 import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
-import { FetchClient, type FETCH_FN } from '@vertesia/api-fetch-client';
+import { type FETCH_FN, FetchClient } from '@vertesia/api-fetch-client';
 import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from 'google-auth-library';
-import { getModelDefinition, trimModelName } from './models.js';
+import type { ClaudePrompt } from '../shared/claude-messages.js';
+import { generateVertexAiEmbeddings } from './embeddings/embed.js';
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
 import { ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
-import type { ClaudePrompt } from '../shared/claude-messages.js';
 import type { LLamaPrompt } from './models/llama.js';
-import { generateVertexAiEmbeddings } from './embeddings/embed.js';
+import { getModelDefinition, trimModelName } from './models.js';
 
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;

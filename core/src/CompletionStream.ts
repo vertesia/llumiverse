@@ -1,13 +1,13 @@
 import {
-    type CompletionStream,
     type CompletionChunkObject,
+    type CompletionResult,
+    type CompletionStream,
     type DriverOptions,
     type ExecutionOptions,
     type ExecutionResponse,
     type ExecutionTokenUsage,
-    type CompletionResult,
-    type ToolUse,
     LlumiverseError,
+    type ToolUse,
 } from '@llumiverse/common';
 import type { AbstractDriver } from './Driver.js';
 

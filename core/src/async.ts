@@ -1,49 +1,51 @@
-import type { ServerSentEvent } from "@vertesia/api-fetch-client"
-import type { CompletionChunkObject } from "@llumiverse/common";
+import type { CompletionChunkObject } from '@llumiverse/common';
+import type { ServerSentEvent } from '@vertesia/api-fetch-client';
 
 export async function* asyncMap<T, R>(asyncIterable: AsyncIterable<T>, callback: (value: T, index: number) => R) {
     let i = 0;
-    for await (const val of asyncIterable)
-        yield callback(val, i++);
+    for await (const val of asyncIterable) yield callback(val, i++);
 }
 
 export function oneAsyncIterator<T>(value: T): AsyncIterable<T> {
     return {
         async *[Symbol.asyncIterator]() {
-            yield value
-        }
-    }
+            yield value;
+        },
+    };
 }
 
 /**
  * Given a ReadableStream of server sent events, tran
  */
-export function transformSSEStream(stream: ReadableStream<ServerSentEvent>, transform: (data: string) => CompletionChunkObject): ReadableStream<CompletionChunkObject> & AsyncIterable<CompletionChunkObject> {
+export function transformSSEStream(
+    stream: ReadableStream<ServerSentEvent>,
+    transform: (data: string) => CompletionChunkObject,
+): ReadableStream<CompletionChunkObject> & AsyncIterable<CompletionChunkObject> {
     // on node and bun the ReadableStream is an async iterable
-    return stream.pipeThrough(new TransformStream<ServerSentEvent, CompletionChunkObject>({
-        transform(event: ServerSentEvent, controller) {
-            if (event.type === 'event' && event.data && event.data !== '[DONE]') {
-                try {
-                    const result = transform(event.data) ?? ''
-                    controller.enqueue(result);
-                } catch {
-                    // double check for the last event which is not a JSON - at this time togetherai and mistralai returns the string [DONE]
-                    // do nothing - happens if data is not a JSON - the last event data is the [DONE] string
+    return stream.pipeThrough(
+        new TransformStream<ServerSentEvent, CompletionChunkObject>({
+            transform(event: ServerSentEvent, controller) {
+                if (event.type === 'event' && event.data && event.data !== '[DONE]') {
+                    try {
+                        const result = transform(event.data) ?? '';
+                        controller.enqueue(result);
+                    } catch {
+                        // double check for the last event which is not a JSON - at this time togetherai and mistralai returns the string [DONE]
+                        // do nothing - happens if data is not a JSON - the last event data is the [DONE] string
+                    }
                 }
-            }
-        }
-    })) satisfies ReadableStream<CompletionChunkObject> & AsyncIterable<CompletionChunkObject>;
+            },
+        }),
+    ) satisfies ReadableStream<CompletionChunkObject> & AsyncIterable<CompletionChunkObject>;
 }
 
 export class EventStream<T, ReturnT = unknown> implements AsyncIterable<T> {
-
     private queue: T[] = [];
     private pending?: {
-        resolve: (result: IteratorResult<T, ReturnT | undefined>) => void,
-        reject: (err: unknown) => void
+        resolve: (result: IteratorResult<T, ReturnT | undefined>) => void;
+        reject: (err: unknown) => void;
     };
     private done = false;
-
 
     push(event: T) {
         if (this.done) {
@@ -92,12 +94,10 @@ export class EventStream<T, ReturnT = unknown> implements AsyncIterable<T> {
                 }
                 const _value = await value;
                 return { done: true, value: _value };
-            }
-        }
+            },
+        };
     }
 }
-
-
 
 /**
  * Transform an async iterator by applying a function to each value.
@@ -107,7 +107,7 @@ export class EventStream<T, ReturnT = unknown> implements AsyncIterable<T> {
 export async function* transformAsyncIterator<T, V>(
     originalGenerator: AsyncIterable<T>,
     transform: (value: T) => V | Promise<V>,
-    initCallback?: () => V | Promise<V>
+    initCallback?: () => V | Promise<V>,
 ): AsyncIterable<V> {
     if (initCallback) {
         yield initCallback();
