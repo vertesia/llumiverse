@@ -14,7 +14,7 @@ import {
     readStreamAsString,
     readStreamAsUint8Array,
 } from '@llumiverse/core';
-import { parseS3UrlToUri } from './s3.js';
+import { isAmazonS3Hostname, parseS3UrlToUri } from './s3.js';
 
 function roleConversion(role: PromptRole): ConversationRole {
     return role === PromptRole.assistant ? ConversationRole.ASSISTANT : ConversationRole.USER;
@@ -170,12 +170,9 @@ async function processFile<T extends FileProcessingMode>(
     }
     //Video file - "mov | mkv | mp4 | webm | flv | mpeg | mpg | wmv | three_gp"
     else if (f.mime_type?.startsWith('video')) {
-        let url_string = (await f.getURL()).toLowerCase();
+        let url_string = await f.getURL();
         let url_format = new URL(url_string);
-        if (
-            url_format.hostname.endsWith('amazonaws.com') &&
-            (url_format.hostname.startsWith('s3.') || url_format.hostname.includes('.s3.'))
-        ) {
+        if (isAmazonS3Hostname(url_format.hostname)) {
             //Convert to s3:// format
             const parsedUrl = parseS3UrlToUri(new URL(url_string));
             url_string = parsedUrl;

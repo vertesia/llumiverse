@@ -6,6 +6,7 @@ import {
     type TextFallbackOptions,
 } from '@llumiverse/core';
 import { type PromptSegment, PromptRole } from '@llumiverse/core';
+import { isAmazonS3Hostname, parseS3UrlToUri } from './s3.js';
 
 // TwelveLabs Pegasus Request/Response Types
 export interface TwelvelabsPegasusRequest {
@@ -96,18 +97,11 @@ export async function formatTwelvelabsPegasusPrompt(
         const url = await videoFile.getURL();
         const parsedUrl = new URL(url);
 
-        if (
-            parsedUrl.hostname.endsWith('amazonaws.com') &&
-            (parsedUrl.hostname.startsWith('s3.') || parsedUrl.hostname.includes('.s3.'))
-        ) {
+        if (parsedUrl.protocol === 's3:' || isAmazonS3Hostname(parsedUrl.hostname)) {
             // Convert S3 URL to s3:// format
-            const bucketMatch = parsedUrl.hostname.match(/^(?:s3\.)?([^.]+)\.s3\./);
-            const bucket = bucketMatch ? bucketMatch[1] : parsedUrl.hostname.split('.')[0];
-            const key = parsedUrl.pathname.substring(1); // Remove leading slash
-
             mediaSource = {
                 s3Location: {
-                    uri: `s3://${bucket}/${key}`,
+                    uri: parsedUrl.protocol === 's3:' ? url : parseS3UrlToUri(parsedUrl),
                 },
             };
         } else {
