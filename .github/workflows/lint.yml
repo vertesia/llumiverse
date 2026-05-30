@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   lint:
-    name: Lint codebase
+    name: Check codebase
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -32,5 +32,5 @@ jobs:
           cache: pnpm
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
-      - name: Lint codebase
-        run: pnpm lint
+      - name: Check codebase
+        run: pnpm check
