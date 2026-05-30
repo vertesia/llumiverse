@@ -1,6 +1,5 @@
 import { InferenceClient, type TextGenerationStreamOutput } from '@huggingface/inference';
 import {
-    AbstractDriver,
     type AIModel,
     AIModelStatus,
     type CompletionChunkObject,
@@ -10,6 +9,7 @@ import {
     type TextFallbackOptions,
 } from '@llumiverse/core';
 import { transformAsyncIterator } from '@llumiverse/core/async';
+import { AbstractDriver } from '@llumiverse/core/driver';
 import { FetchClient } from '@vertesia/api-fetch-client';
 
 export interface HuggingFaceIEDriverOptions extends DriverOptions {
@@ -28,7 +28,7 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
         if (!options.endpoint_url) {
             throw new Error(`Endpoint URL is required for ${this.provider}`);
         }
-        this.service = new FetchClient(this.options.endpoint_url);
+        this.service = new FetchClient(this.options.endpoint_url, this.getDriverFetch());
         this.service.headers.Authorization = `Bearer ${this.options.apiKey}`;
     }
 

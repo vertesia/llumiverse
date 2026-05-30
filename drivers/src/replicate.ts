@@ -1,5 +1,4 @@
 import {
-    AbstractDriver,
     type AIModel,
     type Completion,
     type CompletionChunkObject,
@@ -14,6 +13,7 @@ import {
     type TrainingOptions,
 } from '@llumiverse/core';
 import { EventStream } from '@llumiverse/core/async';
+import { AbstractDriver } from '@llumiverse/core/driver';
 import { EventSource } from 'eventsource';
 import Replicate, { type Prediction, type Training } from 'replicate';
 
@@ -72,6 +72,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
         super(options);
         this.service = new Replicate({
             auth: options.apiKey,
+            fetch: this.getDriverFetch(),
         });
     }
 

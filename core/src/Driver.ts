@@ -15,6 +15,7 @@ import {
     type EmbeddingsResult,
     type ExecutionOptions,
     type ExecutionResponse,
+    LlumiverseError,
     type LlumiverseErrorContext,
     type Logger,
     type ModelSearchPayload,
@@ -24,58 +25,26 @@ import {
     type TrainingJob,
     type TrainingOptions,
     type TrainingPromptOptions,
-    LlumiverseError,
 } from '@llumiverse/common';
+import type { Agent } from 'undici';
 import { DefaultCompletionStream, FallbackCompletionStream } from './CompletionStream.js';
 import { formatTextPrompt } from './formatters/index.js';
+import {
+    createAgentBackedFetch,
+    createDriverHttpAgent,
+    createDriverHttpAgentScope,
+    type DriverHttpAgentScope,
+} from './http-agent.js';
+import { createLogger } from './logger.js';
 import { validateResult } from './validation.js';
+
+export { createLogger } from './logger.js';
 
 function getObjectProperty(value: unknown, key: string): unknown {
     if (value && typeof value === 'object' && key in value) {
         return (value as Record<string, unknown>)[key];
     }
     return undefined;
-}
-
-// Helper to create logger methods that support both message-only and object-first signatures
-function createConsoleLoggerMethod(consoleMethod: (...args: unknown[]) => void): Logger['info'] {
-    return ((objOrMsg: unknown, msgOrNever?: string, ...args: (string | number | boolean)[]) => {
-        if (typeof objOrMsg === 'string') {
-            // Message-only: logger.info("message", ...args)
-            consoleMethod(objOrMsg, msgOrNever, ...args);
-        } else if (msgOrNever !== undefined) {
-            // Object-first: logger.info({ obj }, "message", ...args)
-            consoleMethod(msgOrNever, objOrMsg, ...args);
-        } else {
-            // Object-only: logger.info({ obj })
-            consoleMethod(objOrMsg, ...args);
-        }
-    }) as Logger['info'];
-}
-
-const ConsoleLogger: Logger = {
-    debug: createConsoleLoggerMethod(console.debug.bind(console)),
-    info: createConsoleLoggerMethod(console.info.bind(console)),
-    warn: createConsoleLoggerMethod(console.warn.bind(console)),
-    error: createConsoleLoggerMethod(console.error.bind(console)),
-};
-
-const noop = () => void 0;
-const NoopLogger: Logger = {
-    debug: noop as Logger['debug'],
-    info: noop as Logger['info'],
-    warn: noop as Logger['warn'],
-    error: noop as Logger['error'],
-};
-
-export function createLogger(logger: Logger | 'console' | undefined) {
-    if (logger === 'console') {
-        return ConsoleLogger;
-    } else if (logger) {
-        return logger;
-    } else {
-        return NoopLogger;
-    }
 }
 
 export interface Driver<PromptT = unknown> {
@@ -137,9 +106,46 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     abstract provider: Providers | string; // the provider name
 
+    private _httpAgent?: Agent;
+    private _driverFetch?: typeof fetch;
+
     constructor(opts: OptionsT) {
         this.options = opts;
         this.logger = createLogger(opts.logger);
+    }
+
+    /**
+     * Lazily-created undici `Agent` driven by `options.httpTimeout`.
+     * Pools sockets for the lifetime of the driver. Subclasses can
+     * either pass this directly to an SDK that accepts a `dispatcher`
+     * option (rare), or — much more commonly — use {@link getDriverFetch}
+     * to get a fetch implementation backed by it.
+     *
+     * Released via {@link destroy}.
+     */
+    protected getHttpAgent(): Agent {
+        if (!this._httpAgent) {
+            this._httpAgent = createDriverHttpAgent(this.options.httpTimeout);
+        }
+        return this._httpAgent;
+    }
+
+    /**
+     * Fetch-compatible function backed by the driver's HTTP agent.
+     * Pass to any SDK that accepts a custom `fetch` option (OpenAI,
+     * Anthropic, `@google/genai`, Bedrock via Smithy, …) or use as a
+     * drop-in replacement for the global `fetch` in drivers that make
+     * raw HTTP calls.
+     */
+    protected getDriverFetch(): typeof fetch {
+        if (!this._driverFetch) {
+            this._driverFetch = createAgentBackedFetch(this.getHttpAgent());
+        }
+        return this._driverFetch;
+    }
+
+    public createExecutionHttpAgentScope(options: Pick<ExecutionOptions, 'httpTimeout'>): DriverHttpAgentScope {
+        return createDriverHttpAgentScope(this.options.httpTimeout, options.httpTimeout);
     }
 
     async createTrainingPrompt(options: TrainingPromptOptions): Promise<string> {
@@ -201,36 +207,46 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     }
 
     async _execute(prompt: PromptT, options: ExecutionOptions): Promise<ExecutionResponse<PromptT>> {
+        const httpScope = this.createExecutionHttpAgentScope(options);
         try {
-            const start = Date.now();
-            let result: Completion;
+            return await httpScope.run(async () => {
+                try {
+                    const start = Date.now();
+                    let result: Completion;
 
-            if (this.isImageModel(options.model)) {
-                this.logger.debug(`[${this.provider}] Executing prompt on ${options.model}, image pathway.`);
-                result = await this.requestImageGeneration(prompt, options);
-            } else {
-                this.logger.debug(`[${this.provider}] Executing prompt on ${options.model}, text pathway.`);
-                result = await this.requestTextCompletion(prompt, options);
-                this.validateResult(result, options);
-            }
+                    if (this.isImageModel(options.model)) {
+                        this.logger.debug(`[${this.provider}] Executing prompt on ${options.model}, image pathway.`);
+                        result = await this.requestImageGeneration(prompt, options);
+                    } else {
+                        this.logger.debug(`[${this.provider}] Executing prompt on ${options.model}, text pathway.`);
+                        result = await this.requestTextCompletion(prompt, options);
+                        this.validateResult(result, options);
+                    }
 
-            const execution_time = Date.now() - start;
-            return { ...result, prompt, execution_time };
-        } catch (error) {
-            // Don't wrap if already a LlumiverseError
-            if (LlumiverseError.isLlumiverseError(error)) {
-                throw error;
-            }
-            // Log the original error for debugging
-            this.logger.error(
-                { err: error, data: { provider: this.provider, model: options.model, operation: 'execute', prompt } },
-                `Error during execution in provider ${this.provider}:`,
-            );
-            throw this.formatLlumiverseError(error, {
-                provider: this.provider,
-                model: options.model,
-                operation: 'execute',
+                    const execution_time = Date.now() - start;
+                    return { ...result, prompt, execution_time };
+                } catch (error) {
+                    // Don't wrap if already a LlumiverseError
+                    if (LlumiverseError.isLlumiverseError(error)) {
+                        throw error;
+                    }
+                    // Log the original error for debugging
+                    this.logger.error(
+                        {
+                            err: error,
+                            data: { provider: this.provider, model: options.model, operation: 'execute', prompt },
+                        },
+                        `Error during execution in provider ${this.provider}:`,
+                    );
+                    throw this.formatLlumiverseError(error, {
+                        provider: this.provider,
+                        model: options.model,
+                        operation: 'execute',
+                    });
+                }
             });
+        } finally {
+            await httpScope.close();
         }
     }
 
@@ -321,8 +337,8 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
      * - Status 429, 408: retryable (rate limit, timeout)
      * - Status 529: retryable (overloaded)
      * - Status 5xx: retryable (server errors)
-     * - Status 4xx (except above): not retryable (client errors)
-     * - Error messages containing "rate limit", "timeout", etc.: retryable
+     * - High-confidence transient messages containing "rate limit", "timeout", etc.: retryable
+     * - Status 4xx (except above and transient provider quirks): not retryable (client errors)
      *
      * @param error - The error to format
      * @param context - Context about where the error occurred
@@ -362,6 +378,23 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
      * @returns True if retryable, false if not retryable, undefined if unknown
      */
     protected isRetryableError(statusCode: number | undefined, message: string): boolean | undefined {
+        const lowerMessage = message.toLowerCase();
+
+        // Provider APIs sometimes surface transient failures under misleading
+        // client status codes, so high-confidence transient message signals
+        // must be honored before the generic 4xx classification below.
+        if (lowerMessage.includes('url_rejected-rejected_client_throttled')) return true;
+        if (lowerMessage.includes('url_rejected-rejected_rate_limited')) return true;
+        if (lowerMessage.includes('rate') && lowerMessage.includes('limit')) return true;
+        if (lowerMessage.includes('timeout')) return true;
+        if (lowerMessage.includes('timed') && lowerMessage.includes('out')) return true;
+        if (lowerMessage.includes('time') && lowerMessage.includes('out')) return true;
+        if (lowerMessage.includes('resource') && lowerMessage.includes('exhaust')) return true;
+        if (lowerMessage.includes('overload')) return true;
+        if (lowerMessage.includes('throttl')) return true;
+        if (lowerMessage.includes('429')) return true;
+        if (lowerMessage.includes('529')) return true;
+
         // Numeric status codes
         if (statusCode !== undefined) {
             if (statusCode === 429 || statusCode === 408) return true; // Rate limit, timeout
@@ -371,25 +404,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         }
 
         // Message-based detection for non-HTTP errors
-        const lowerMessage = message.toLowerCase();
-
-        // Rate limit variations
-        if (lowerMessage.includes('rate') && lowerMessage.includes('limit')) return true;
-
-        // Timeout variations (timeout, timed out, time out)
-        if (lowerMessage.includes('timeout')) return true;
-        if (lowerMessage.includes('timed') && lowerMessage.includes('out')) return true;
-        if (lowerMessage.includes('time') && lowerMessage.includes('out')) return true;
-
-        // Resource exhausted variations
-        if (lowerMessage.includes('resource') && lowerMessage.includes('exhaust')) return true;
-
-        // Other retryable patterns
         if (lowerMessage.includes('retry')) return true;
-        if (lowerMessage.includes('overload')) return true;
-        if (lowerMessage.includes('throttl')) return true;
-        if (lowerMessage.includes('429')) return true;
-        if (lowerMessage.includes('529')) return true;
 
         // Unknown errors - let consumer decide retry strategy
         return undefined;
@@ -418,9 +433,15 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     /**
      * Cleanup method called when the driver is evicted from the cache.
-     * Override this in driver implementations that need to release resources.
+     * Releases the lazily-created HTTP agent socket pool. Override this
+     * in driver implementations that need to release additional resources
+     * — MUST call `super.destroy()` to avoid leaking sockets.
      */
     destroy(): void {
-        // No-op by default
+        this._httpAgent?.close().catch(() => {
+            /* shutdown best-effort */
+        });
+        this._httpAgent = undefined;
+        this._driverFetch = undefined;
     }
 }

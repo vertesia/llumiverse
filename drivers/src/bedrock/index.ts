@@ -15,13 +15,13 @@ import {
     type ConverseResponse,
     type ConverseStreamOutput,
     type InferenceConfiguration,
+    type InvokeModelCommandOutput,
     type Message,
     type Tool,
 } from '@aws-sdk/client-bedrock-runtime';
 import { S3Client } from '@aws-sdk/client-s3';
 import type { AwsCredentialIdentity, Provider } from '@aws-sdk/types';
 import {
-    AbstractDriver,
     type AIModel,
     type BedrockClaudeOptions,
     type BedrockGptOssOptions,
@@ -30,8 +30,8 @@ import {
     type CompletionChunkObject,
     type CompletionResult,
     type DataSource,
-    deserializeBinaryFromStorage,
     type DriverOptions,
+    deserializeBinaryFromStorage,
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
@@ -39,12 +39,13 @@ import {
     getConversationMeta,
     getMaxTokensLimitBedrock,
     getModelCapabilities,
+    type HttpTimeoutOptions,
     incrementConversationTurn,
     isClaudeVersionGTE,
     LlumiverseError,
     type LlumiverseErrorContext,
-    modelModalitiesToArray,
     type ModelOptions,
+    modelModalitiesToArray,
     type NovaCanvasOptions,
     type PromptSegment,
     type StatelessExecutionOptions,
@@ -59,7 +60,9 @@ import {
     truncateLargeTextInConversation,
 } from '@llumiverse/core';
 import { transformAsyncIterator } from '@llumiverse/core/async';
+import { AbstractDriver } from '@llumiverse/core/driver';
 import { formatNovaPrompt, type NovaMessagesPrompt } from '@llumiverse/core/formatters';
+import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
 import { LRUCache } from 'mnemonist';
 import { resolveClaudeThinking } from '../shared/claude-thinking.js';
 import {
@@ -89,6 +92,10 @@ type ReasoningBlockStart = {
         redactedContent?: Uint8Array;
     };
 };
+type BedrockRuntimeExecutorScope = {
+    executor: BedrockRuntime;
+    close(): void;
+};
 
 enum BedrockModelType {
     FoundationModel = 'foundation-model',
@@ -109,6 +116,18 @@ function converseFinishReason(reason: string | undefined) {
         default:
             return reason;
     }
+}
+
+function withBedrockRuntimeScope<T>(iterable: AsyncIterable<T>, scope: BedrockRuntimeExecutorScope): AsyncIterable<T> {
+    return {
+        async *[Symbol.asyncIterator]() {
+            try {
+                yield* iterable;
+            } finally {
+                scope.close();
+            }
+        },
+    };
 }
 
 export interface BedrockModelCapabilities {
@@ -174,14 +193,55 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
     }
 
-    getExecutor() {
+    /**
+     * Build a Smithy `requestHandler` config from the driver's
+     * `httpTimeout` so AWS SDK calls fail fast on hung upstream Bedrock
+     * endpoints instead of using the AWS default (no request timeout).
+     * Returns a partial config the SDK merges into its default handler.
+     */
+    private getBedrockRequestHandlerConfig(httpTimeout?: HttpTimeoutOptions) {
+        const timeouts = resolveDriverHttpTimeouts(
+            mergeDriverHttpTimeoutOptions(this.options.httpTimeout, httpTimeout),
+        );
+        return {
+            requestTimeout: timeouts.headersTimeout,
+            throwOnRequestTimeout: true,
+            connectionTimeout: timeouts.connectTimeout,
+            socketTimeout: timeouts.bodyTimeout,
+        };
+    }
+
+    private createExecutor(httpTimeout?: HttpTimeoutOptions) {
+        return new BedrockRuntime({
+            region: this.options.region,
+            credentials: this.options.credentials,
+            requestHandler: this.getBedrockRequestHandlerConfig(httpTimeout),
+        });
+    }
+
+    getExecutor(httpTimeout?: HttpTimeoutOptions) {
+        if (httpTimeout) {
+            return this.createExecutor(httpTimeout);
+        }
         if (!this._executor) {
-            this._executor = new BedrockRuntime({
-                region: this.options.region,
-                credentials: this.options.credentials,
-            });
+            this._executor = this.createExecutor();
         }
         return this._executor;
+    }
+
+    private getScopedExecutor(options: Pick<ExecutionOptions, 'httpTimeout'>): BedrockRuntimeExecutorScope {
+        if (!options.httpTimeout) {
+            return {
+                executor: this.getExecutor(),
+                close: () => undefined,
+            };
+        }
+
+        const executor = this.getExecutor(options.httpTimeout);
+        return {
+            executor,
+            close: () => executor.destroy(),
+        };
     }
 
     getService(region: string = this.options.region) {
@@ -189,6 +249,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             this._service = new Bedrock({
                 region: region,
                 credentials: this.options.credentials,
+                requestHandler: this.getBedrockRequestHandlerConfig(),
             });
             this._service_region = region;
         }
@@ -718,11 +779,16 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         let conversation = updateConversation(incomingConversation, conversePrompt);
 
         const payload = this.preparePayload(conversation, options);
-        const executor = this.getExecutor();
+        const executorScope = this.getScopedExecutor(options);
 
-        const res = await executor.converse({
-            ...payload,
-        });
+        let res: ConverseResponse;
+        try {
+            res = await executorScope.executor.converse({
+                ...payload,
+            });
+        } finally {
+            executorScope.close();
+        }
 
         // Strip reasoningContent from assistant messages before storing in conversation
         // (DeepSeek R1 returns reasoning blocks but rejects them in subsequent user turns)
@@ -788,14 +854,19 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         prompt: TwelvelabsPegasusRequest,
         options: ExecutionOptions,
     ): Promise<Completion> {
-        const executor = this.getExecutor();
+        const executorScope = this.getScopedExecutor(options);
 
-        const res = await executor.invokeModel({
-            modelId: options.model,
-            contentType: 'application/json',
-            accept: 'application/json',
-            body: JSON.stringify(prompt),
-        });
+        let res: InvokeModelCommandOutput;
+        try {
+            res = await executorScope.executor.invokeModel({
+                modelId: options.model,
+                contentType: 'application/json',
+                accept: 'application/json',
+                body: JSON.stringify(prompt),
+            });
+        } finally {
+            executorScope.close();
+        }
 
         const decoder = new TextDecoder();
         const body = decoder.decode(res.body);
@@ -825,61 +896,67 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         prompt: TwelvelabsPegasusRequest,
         options: ExecutionOptions,
     ): Promise<AsyncIterable<CompletionChunkObject>> {
-        const executor = this.getExecutor();
+        const executorScope = this.getScopedExecutor(options);
 
-        const res = await executor.invokeModelWithResponseStream({
-            modelId: options.model,
-            contentType: 'application/json',
-            accept: 'application/json',
-            body: JSON.stringify(prompt),
-        });
+        try {
+            const res = await executorScope.executor.invokeModelWithResponseStream({
+                modelId: options.model,
+                contentType: 'application/json',
+                accept: 'application/json',
+                body: JSON.stringify(prompt),
+            });
 
-        if (!res.body) {
-            throw new Error('[Bedrock] Stream not found in response');
-        }
-
-        return transformAsyncIterator(res.body, (chunk) => {
-            if (chunk.chunk?.bytes) {
-                const decoder = new TextDecoder();
-                const body = decoder.decode(chunk.chunk.bytes);
-
-                try {
-                    const result = JSON.parse(body);
-
-                    // Extract streaming response according to TwelveLabs Pegasus format
-                    let finishReason: string | undefined;
-                    if (result.finishReason) {
-                        switch (result.finishReason) {
-                            case 'stop':
-                                finishReason = 'stop';
-                                break;
-                            case 'length':
-                                finishReason = 'length';
-                                break;
-                            default:
-                                finishReason = result.finishReason;
-                        }
-                    }
-
-                    return {
-                        result:
-                            result.delta || result.message
-                                ? [{ type: 'text' as const, value: result.delta || result.message || '' }]
-                                : [],
-                        finish_reason: finishReason,
-                    } satisfies CompletionChunkObject;
-                } catch {
-                    // If JSON parsing fails, return empty chunk
-                    return {
-                        result: [],
-                    } satisfies CompletionChunkObject;
-                }
+            if (!res.body) {
+                throw new Error('[Bedrock] Stream not found in response');
             }
 
-            return {
-                result: [],
-            } satisfies CompletionChunkObject;
-        });
+            const stream = transformAsyncIterator(res.body, (chunk) => {
+                if (chunk.chunk?.bytes) {
+                    const decoder = new TextDecoder();
+                    const body = decoder.decode(chunk.chunk.bytes);
+
+                    try {
+                        const result = JSON.parse(body);
+
+                        // Extract streaming response according to TwelveLabs Pegasus format
+                        let finishReason: string | undefined;
+                        if (result.finishReason) {
+                            switch (result.finishReason) {
+                                case 'stop':
+                                    finishReason = 'stop';
+                                    break;
+                                case 'length':
+                                    finishReason = 'length';
+                                    break;
+                                default:
+                                    finishReason = result.finishReason;
+                            }
+                        }
+
+                        return {
+                            result:
+                                result.delta || result.message
+                                    ? [{ type: 'text' as const, value: result.delta || result.message || '' }]
+                                    : [],
+                            finish_reason: finishReason,
+                        } satisfies CompletionChunkObject;
+                    } catch {
+                        // If JSON parsing fails, return empty chunk
+                        return {
+                            result: [],
+                        } satisfies CompletionChunkObject;
+                    }
+                }
+
+                return {
+                    result: [],
+                } satisfies CompletionChunkObject;
+            });
+            return withBedrockRuntimeScope(stream, executorScope);
+        } catch (err) {
+            executorScope.close();
+            throw err;
+        }
     }
 
     async requestTextCompletionStream(
@@ -900,8 +977,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const conversation = updateConversation(incomingConversation, conversePrompt);
 
         const payload = this.preparePayload(conversation, options);
-        const executor = this.getExecutor();
-        return executor
+        const executorScope = this.getScopedExecutor(options);
+        return executorScope.executor
             .converseStream({
                 ...payload,
             })
@@ -913,11 +990,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 }
 
                 const streamingToolBlocks = new Map<number, { id: string; name: string }>();
-                return transformAsyncIterator(stream, (streamSegment: ConverseStreamOutput) => {
+                const transformedStream = transformAsyncIterator(stream, (streamSegment: ConverseStreamOutput) => {
                     return this.getExtractedStream(streamSegment, conversePrompt, options, streamingToolBlocks);
                 });
+                return withBedrockRuntimeScope(transformedStream, executorScope);
             })
             .catch((err) => {
+                executorScope.close();
                 this.logger.error({ error: err }, '[Bedrock] Failed to stream');
                 throw err;
             });
@@ -1186,7 +1265,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
         const model_options = options.model_options as NovaCanvasOptions;
 
-        const executor = this.getExecutor();
         const taskType = model_options.taskType ?? NovaImageGenerationTaskType.TEXT_IMAGE;
 
         this.logger.info(`Task type: ${taskType}`);
@@ -1196,18 +1274,29 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
 
         const payload = await formatNovaImageGenerationPayload(taskType, prompt, options);
+        const executorScope = this.getScopedExecutor(options);
 
-        const res = await executor.invokeModel(
-            {
-                modelId: options.model,
-                contentType: 'application/json',
-                accept: 'application/json',
-                body: JSON.stringify(payload),
-            },
-            {
-                requestTimeout: 60000 * 5,
-            },
-        );
+        let res: InvokeModelCommandOutput;
+        try {
+            const requestTimeout = options.httpTimeout
+                ? resolveDriverHttpTimeouts(
+                      mergeDriverHttpTimeoutOptions(this.options.httpTimeout, options.httpTimeout),
+                  ).headersTimeout
+                : (this.options.httpTimeout?.headersTimeout ?? 60_000 * 5);
+            res = await executorScope.executor.invokeModel(
+                {
+                    modelId: options.model,
+                    contentType: 'application/json',
+                    accept: 'application/json',
+                    body: JSON.stringify(payload),
+                },
+                {
+                    requestTimeout,
+                },
+            );
+        } finally {
+            executorScope.close();
+        }
 
         const decoder = new TextDecoder();
         const body = decoder.decode(res.body);
@@ -1505,6 +1594,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     destroy(): void {
         this._executor?.destroy();
         this._service?.destroy();
+        this._executor = undefined;
+        this._service = undefined;
+        super.destroy();
     }
 }
 

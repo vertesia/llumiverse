@@ -17,6 +17,7 @@ export class OpenAIDriver extends BaseOpenAIDriver {
         super(opts);
         this.service = new OpenAI({
             apiKey: opts.apiKey,
+            fetch: this.getDriverFetch(),
         });
     }
 }

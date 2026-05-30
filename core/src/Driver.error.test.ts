@@ -6,13 +6,13 @@ import {
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
+    LlumiverseError,
     type LlumiverseErrorContext,
     type ModelSearchPayload,
-    LlumiverseError,
 } from '@llumiverse/common';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { AbstractDriver } from './Driver.js';
 import { errorWith, getProp } from '../test/__helpers__/test-utils.js';
+import { AbstractDriver } from './Driver.js';
 
 // Simple test driver implementation
 class TestDriver extends AbstractDriver<DriverOptions, string> {
@@ -85,6 +85,17 @@ describe('AbstractDriver Error Formatting', () => {
                 expect(driver.isRetryableError(401, 'Unauthorized')).toBe(false);
                 expect(driver.isRetryableError(403, 'Forbidden')).toBe(false);
                 expect(driver.isRetryableError(404, 'Not found')).toBe(false);
+            });
+
+            it('should honor transient provider messages before non-retryable 4xx status codes', () => {
+                expect(
+                    driver.isRetryableError(400, 'Unable to fetch URL. Status: URL_REJECTED-REJECTED_CLIENT_THROTTLED'),
+                ).toBe(true);
+                expect(
+                    driver.isRetryableError(400, 'Unable to fetch URL. Status: URL_REJECTED-REJECTED_RATE_LIMITED'),
+                ).toBe(true);
+                expect(driver.isRetryableError(400, 'Request throttled by upstream host')).toBe(true);
+                expect(driver.isRetryableError(400, 'Please retry with a valid model id')).toBe(false);
             });
 
             it('should mark 2xx and 3xx as not retryable', () => {

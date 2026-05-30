@@ -1,8 +1,8 @@
 import { type AIModel, type DriverOptions, type PromptOptions, type PromptSegment, Providers } from '@llumiverse/core';
-import { formatOpenAILikeMultimodalPrompt, type OpenAIPromptFormatterOptions } from '../openai/openai_format.js';
 import { FetchClient } from '@vertesia/api-fetch-client';
 import OpenAI from 'openai';
 import { BaseOpenAIDriver } from '../openai/index.js';
+import { formatOpenAILikeMultimodalPrompt, type OpenAIPromptFormatterOptions } from '../openai/openai_format.js';
 
 export interface xAiDriverOptions extends DriverOptions {
     apiKey: string;
@@ -26,10 +26,12 @@ export class xAIDriver extends BaseOpenAIDriver {
         this.service = new OpenAI({
             apiKey: opts.apiKey,
             baseURL: opts.endpoint ?? this.DEFAULT_ENDPOINT,
+            fetch: this.getDriverFetch(),
         });
-        this.xai_service = new FetchClient(opts.endpoint ?? this.DEFAULT_ENDPOINT).withAuthCallback(
-            async () => `Bearer ${opts.apiKey}`,
-        );
+        this.xai_service = new FetchClient(
+            opts.endpoint ?? this.DEFAULT_ENDPOINT,
+            this.getDriverFetch(),
+        ).withAuthCallback(async () => `Bearer ${opts.apiKey}`);
         //this.formatPrompt = this._formatPrompt; //TODO: fix xai prompt formatting
     }
 

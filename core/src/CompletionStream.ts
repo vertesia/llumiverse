@@ -1,12 +1,13 @@
 import {
+    type CompletionChunkObject,
+    type CompletionResult,
     type CompletionStream,
     type DriverOptions,
     type ExecutionOptions,
     type ExecutionResponse,
     type ExecutionTokenUsage,
-    type CompletionResult,
-    type ToolUse,
     LlumiverseError,
+    type ToolUse,
 } from '@llumiverse/common';
 import type { AbstractDriver } from './Driver.js';
 
@@ -40,10 +41,23 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
         let promptCachedTokens: number | undefined;
         let promptCacheWriteTokens: number | undefined;
         let promptNewTokens: number | undefined;
+        const httpScope = this.driver.createExecutionHttpAgentScope(this.options);
+        let sourceIterator: AsyncIterator<CompletionChunkObject> | undefined;
+        let streamCompleted = false;
 
         try {
-            const stream = await this.driver.requestTextCompletionStream(this.prompt, this.options);
-            for await (const chunk of stream) {
+            const stream = await httpScope.run(() =>
+                this.driver.requestTextCompletionStream(this.prompt, this.options),
+            );
+            const iterator = stream[Symbol.asyncIterator]();
+            sourceIterator = iterator;
+            while (true) {
+                const next = await httpScope.run(() => iterator.next());
+                if (next.done) {
+                    streamCompleted = true;
+                    break;
+                }
+                const chunk = next.value;
                 if (chunk) {
                     if (typeof chunk === 'string') {
                         this.chunks++;
@@ -200,6 +214,16 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
                 model: this.options.model,
                 operation: 'stream',
             });
+        } finally {
+            if (!streamCompleted && sourceIterator?.return) {
+                const returnIterator = sourceIterator.return.bind(sourceIterator);
+                try {
+                    await httpScope.run(() => returnIterator());
+                } catch {
+                    /* stream cleanup best-effort */
+                }
+            }
+            await httpScope.close();
         }
 
         // Return undefined only if we never received any token data from the provider.

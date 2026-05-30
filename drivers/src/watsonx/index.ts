@@ -1,5 +1,4 @@
 import {
-    AbstractDriver,
     type AIModel,
     type Completion,
     type CompletionChunkObject,
@@ -13,6 +12,7 @@ import {
     WATSONX_DEFAULT_EMBEDDING_MODEL,
 } from '@llumiverse/core';
 import { transformSSEStream } from '@llumiverse/core/async';
+import { AbstractDriver } from '@llumiverse/core/driver';
 import { FetchClient, type ServerSentEvent } from '@vertesia/api-fetch-client';
 import type {
     GenerateEmbeddingPayload,
@@ -47,7 +47,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
         this.apiKey = options.apiKey;
         this.projectId = options.projectId;
         this.endpoint_url = options.endpointUrl;
-        this.fetchClient = new FetchClient(this.endpoint_url).withAuthCallback(async () =>
+        this.fetchClient = new FetchClient(this.endpoint_url, this.getDriverFetch()).withAuthCallback(async () =>
             this.getAuthToken().then((token) => `Bearer ${token}`),
         );
     }
@@ -157,7 +157,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
                 this.logger.debug('Token expired, refetching');
             }
         }
-        const authToken = (await fetch('https://iam.cloud.ibm.com/identity/token', {
+        const authToken = (await this.getDriverFetch()('https://iam.cloud.ibm.com/identity/token', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',

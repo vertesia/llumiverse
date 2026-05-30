@@ -1,10 +1,10 @@
 import {
     type AIModel,
     type DriverOptions,
-    ModelType,
-    Providers,
     getModelCapabilities,
+    ModelType,
     modelModalitiesToArray,
+    Providers,
 } from '@llumiverse/core';
 import OpenAI from 'openai';
 import { BaseOpenAIDriver } from './index.js';
@@ -52,6 +52,7 @@ export class OpenAICompatibleDriver extends BaseOpenAIDriver {
             apiKey: opts.apiKey,
             baseURL: opts.endpoint,
             defaultHeaders: opts.default_headers,
+            fetch: this.getDriverFetch(),
         });
     }
 

@@ -48,6 +48,7 @@ export class AzureOpenAIDriver extends BaseOpenAIDriver {
             endpoint: opts.endpoint,
             apiVersion: opts.apiVersion ?? '2024-10-21',
             deployment: opts.deployment,
+            fetch: this.getDriverFetch(),
         });
     }
 

@@ -1,5 +1,4 @@
 import {
-    AbstractDriver,
     type AIModel,
     type Completion,
     type CompletionChunkObject,
@@ -17,8 +16,8 @@ import {
     type JSONSchema,
     LlumiverseError,
     type LlumiverseErrorContext,
-    modelModalitiesToArray,
     ModelType,
+    modelModalitiesToArray,
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
     type OpenAiDalleOptions,
@@ -27,16 +26,17 @@ import {
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
     supportsToolUse,
+    type TextFallbackOptions,
     type ToolDefinition,
     type ToolUse,
     type TrainingJob,
     TrainingJobStatus,
     type TrainingOptions,
     type TrainingPromptOptions,
-    type TextFallbackOptions,
     truncateLargeTextInConversation,
     unwrapConversationArray,
 } from '@llumiverse/core';
+import { AbstractDriver } from '@llumiverse/core/driver';
 import type OpenAI from 'openai';
 import type { AzureOpenAI } from 'openai';
 import {

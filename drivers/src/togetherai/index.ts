@@ -1,15 +1,15 @@
-import {
-    AbstractDriver,
-    type AIModel,
-    type Completion,
-    type CompletionChunkObject,
-    type DriverOptions,
-    type EmbeddingsOptions,
-    type EmbeddingsResult,
-    type ExecutionOptions,
-    type TextFallbackOptions,
+import type {
+    AIModel,
+    Completion,
+    CompletionChunkObject,
+    DriverOptions,
+    EmbeddingsOptions,
+    EmbeddingsResult,
+    ExecutionOptions,
+    TextFallbackOptions,
 } from '@llumiverse/core';
 import { transformSSEStream } from '@llumiverse/core/async';
+import { AbstractDriver } from '@llumiverse/core/driver';
 import { FetchClient, type ServerSentEvent } from '@vertesia/api-fetch-client';
 import type { TextCompletion, TogetherModelInfo } from './interfaces.js';
 
@@ -26,7 +26,7 @@ export class TogetherAIDriver extends AbstractDriver<TogetherAIDriverOptions, st
     constructor(options: TogetherAIDriverOptions) {
         super(options);
         this.apiKey = options.apiKey;
-        this.fetchClient = new FetchClient('https://api.together.xyz').withHeaders({
+        this.fetchClient = new FetchClient('https://api.together.xyz', this.getDriverFetch()).withHeaders({
             authorization: `Bearer ${this.apiKey}`,
         });
     }

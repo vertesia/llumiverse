@@ -1,18 +1,18 @@
-import {
-    AbstractDriver,
-    type AIModel,
-    type Completion,
-    type CompletionChunkObject,
-    type DriverOptions,
-    type EmbeddingsOptions,
-    type EmbeddingsResult,
-    type ExecutionOptions,
-    type PromptSegment,
-    type TextFallbackOptions,
-    type ToolDefinition,
-    type ToolUse,
+import type {
+    AIModel,
+    Completion,
+    CompletionChunkObject,
+    DriverOptions,
+    EmbeddingsOptions,
+    EmbeddingsResult,
+    ExecutionOptions,
+    PromptSegment,
+    TextFallbackOptions,
+    ToolDefinition,
+    ToolUse,
 } from '@llumiverse/core';
 import { transformAsyncIterator } from '@llumiverse/core/async';
+import { AbstractDriver } from '@llumiverse/core/driver';
 import Groq from 'groq-sdk';
 import type { ChatCompletionMessageParam, ChatCompletionTool } from 'groq-sdk/resources/chat/completions';
 import type { FunctionParameters } from 'groq-sdk/resources/shared';
@@ -49,6 +49,7 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
         this.client = new Groq({
             apiKey: options.apiKey,
             baseURL: options.endpoint_url,
+            fetch: this.getDriverFetch(),
         });
     }
 

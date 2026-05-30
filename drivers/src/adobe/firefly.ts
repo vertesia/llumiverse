@@ -1,15 +1,15 @@
-import {
-    AbstractDriver,
-    type AIModel,
-    type Completion,
-    type CompletionChunkObject,
-    type DriverOptions,
-    type EmbeddingsOptions,
-    type EmbeddingsResult,
-    type ExecutionOptions,
-    type ModelSearchPayload,
-    type PromptSegment,
+import type {
+    AIModel,
+    Completion,
+    CompletionChunkObject,
+    DriverOptions,
+    EmbeddingsOptions,
+    EmbeddingsResult,
+    ExecutionOptions,
+    ModelSearchPayload,
+    PromptSegment,
 } from '@llumiverse/core';
+import { AbstractDriver } from '@llumiverse/core/driver';
 
 interface FireflyImageSource {
     url?: string;
@@ -113,7 +113,7 @@ export class FireflyDriver extends AbstractDriver<FireflyDriverOptions> {
                 prompt: prompt as string,
             };
 
-            const response = await fetch(`${this.endpoint}/images/generate`, {
+            const response = await this.getDriverFetch()(`${this.endpoint}/images/generate`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -198,7 +198,7 @@ export class FireflyDriver extends AbstractDriver<FireflyDriverOptions> {
 
     async validateConnection(): Promise<boolean> {
         try {
-            const response = await fetch(`${this.endpoint}/auth/validate`, {
+            const response = await this.getDriverFetch()(`${this.endpoint}/auth/validate`, {
                 headers: {
                     'x-api-key': this.options.apiKey,
                 },

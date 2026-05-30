@@ -1,5 +1,4 @@
 import {
-    AbstractDriver,
     type AIModel,
     type Completion,
     type CompletionChunkObject,
@@ -14,6 +13,7 @@ import {
     type TextFallbackOptions,
 } from '@llumiverse/core';
 import { transformSSEStream } from '@llumiverse/core/async';
+import { AbstractDriver } from '@llumiverse/core/driver';
 import { getJSONSafetyNotice } from '@llumiverse/core/formatters';
 import { FetchClient, type ServerSentEvent } from '@vertesia/api-fetch-client';
 import { formatOpenAILikeTextPrompt, type OpenAITextMessage } from '../openai/openai_format.js';
@@ -47,7 +47,7 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
         super(options);
         this.apiKey = options.apiKey;
         //this.client = new MistralClient(options.apiKey, options.endpointUrl);
-        this.client = new FetchClient(options.endpoint_url || ENDPOINT).withHeaders({
+        this.client = new FetchClient(options.endpoint_url || ENDPOINT, this.getDriverFetch()).withHeaders({
             authorization: `Bearer ${this.apiKey}`,
         });
     }

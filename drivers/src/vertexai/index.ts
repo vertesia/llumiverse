@@ -1,9 +1,8 @@
 import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
-import { PredictionServiceClient, v1beta1 } from '@google-cloud/aiplatform';
 import { type Content, GoogleGenAI, type Model } from '@google/genai';
+import { PredictionServiceClient, v1beta1 } from '@google-cloud/aiplatform';
 import {
     type AIModel,
-    AbstractDriver,
     type Completion,
     type CompletionChunkObject,
     type CompletionResult,
@@ -11,27 +10,30 @@ import {
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
-    type LlumiverseErrorContext,
-    type ModelSearchPayload,
-    type PromptSegment,
-    type ToolUse,
     getConversationMeta,
     getModelCapabilities,
+    type HttpTimeoutOptions,
     incrementConversationTurn,
     type LlumiverseError,
+    type LlumiverseErrorContext,
+    type ModelSearchPayload,
     modelModalitiesToArray,
+    type PromptSegment,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
+    type ToolUse,
     truncateLargeTextInConversation,
 } from '@llumiverse/core';
-import { FetchClient } from '@vertesia/api-fetch-client';
+import { AbstractDriver } from '@llumiverse/core/driver';
+import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
+import { type FETCH_FN, FetchClient } from '@vertesia/api-fetch-client';
 import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from 'google-auth-library';
-import { getModelDefinition, trimModelName } from './models.js';
+import type { ClaudePrompt } from '../shared/claude-messages.js';
+import { generateVertexAiEmbeddings } from './embeddings/embed.js';
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
 import { ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
-import type { ClaudePrompt } from '../shared/claude-messages.js';
 import type { LLamaPrompt } from './models/llama.js';
-import { generateVertexAiEmbeddings } from './embeddings/embed.js';
+import { getModelDefinition, trimModelName } from './models.js';
 
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
@@ -98,12 +100,15 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
     /**
      * Cleanup Google Cloud clients when the driver is evicted from the cache.
+     * `super.destroy()` releases the HTTP agent socket pool created by
+     * {@link AbstractDriver.getHttpAgent} / {@link AbstractDriver.getDriverFetch}.
      */
     destroy(): void {
         this.aiplatform?.close();
         this.modelGarden?.close();
         this.imagenClient?.close();
         this.predictionClient?.close();
+        super.destroy();
     }
 
     private async getAuthClient(): Promise<AuthClient> {
@@ -113,7 +118,45 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return this.authClientPromise;
     }
 
-    public getGoogleGenAIClient(region: string = this.options.region, flex: boolean = false): GoogleGenAI {
+    private getSdkRequestTimeoutMs(httpTimeout?: HttpTimeoutOptions): number {
+        const timeouts = resolveDriverHttpTimeouts(
+            mergeDriverHttpTimeoutOptions(this.options.httpTimeout, httpTimeout),
+        );
+        return Math.max(timeouts.headersTimeout, timeouts.bodyTimeout);
+    }
+
+    private getGoogleGenAIHttpOptions(flex: boolean, httpTimeout?: HttpTimeoutOptions) {
+        return {
+            timeout: this.getSdkRequestTimeoutMs(httpTimeout),
+            ...(flex
+                ? {
+                      headers: {
+                          'X-Vertex-AI-LLM-Request-Type': 'shared',
+                          'X-Vertex-AI-LLM-Shared-Request-Type': 'flex',
+                      },
+                  }
+                : {}),
+        };
+    }
+
+    private getAnthropicVertexClientOptions(region: string, authClient: AuthClient, httpTimeout?: HttpTimeoutOptions) {
+        return {
+            timeout: this.getSdkRequestTimeoutMs(httpTimeout),
+            region,
+            projectId: this.options.project,
+            authClient: authClient,
+            fetch: this.getDriverFetch(),
+        };
+    }
+
+    public getGoogleGenAIClient(
+        region: string = this.options.region,
+        flex: boolean = false,
+        httpTimeout?: HttpTimeoutOptions,
+    ): GoogleGenAI {
+        if (httpTimeout) {
+            return this.buildGoogleGenAIClient(region, flex, httpTimeout);
+        }
         if (this.googleGenAI && this.googleGenAIRegion === region && this.googleGenAIFlex === flex) {
             // Return existing client if region and flex settings match
             return this.googleGenAI;
@@ -124,7 +167,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return this.googleGenAI;
     }
 
-    private buildGoogleGenAIClient(region: string, flex: boolean): GoogleGenAI {
+    private buildGoogleGenAIClient(region: string, flex: boolean, httpTimeout?: HttpTimeoutOptions): GoogleGenAI {
         return new GoogleGenAI({
             project: this.options.project,
             location: region,
@@ -132,16 +175,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             googleAuthOptions: this.options.googleAuthOptions || {
                 scopes: ['https://www.googleapis.com/auth/cloud-platform'],
             },
-            ...(flex
-                ? {
-                      httpOptions: {
-                          headers: {
-                              'X-Vertex-AI-LLM-Request-Type': 'shared',
-                              'X-Vertex-AI-LLM-Shared-Request-Type': 'flex',
-                          },
-                      },
-                  }
-                : {}),
+            httpOptions: this.getGoogleGenAIHttpOptions(flex, httpTimeout),
         });
     }
 
@@ -151,6 +185,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             this.fetchClient = createFetchClient({
                 region: region,
                 project: this.options.project,
+                fetchImpl: this.getDriverFetch(),
             }).withAuthCallback(async () => {
                 const token = await this.googleAuth.getAccessToken();
                 return `Bearer ${token}`;
@@ -166,6 +201,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 region: region,
                 project: this.options.project,
                 apiVersion: 'v1beta1',
+                fetchImpl: this.getDriverFetch(),
             }).withAuthCallback(async () => {
                 const token = await this.googleAuth.getAccessToken();
                 return `Bearer ${token}`;
@@ -176,7 +212,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return this.llamaClient;
     }
 
-    public async getAnthropicClient(region: string = this.options.region): Promise<AnthropicVertex> {
+    public async getAnthropicClient(
+        region: string = this.options.region,
+        httpTimeout?: HttpTimeoutOptions,
+    ): Promise<AnthropicVertex> {
         // Extract region prefix and map if it exists in ANTHROPIC_REGIONS, otherwise use as-is
         const getRegionPrefix = (r: string) => r.split('-')[0];
         const regionPrefix = getRegionPrefix(region);
@@ -189,23 +228,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         const authClient = await this.getAuthClient();
 
         // If mapped region is different from default mapped region, create one-off client
-        if (mappedRegion !== defaultMappedRegion) {
-            return new AnthropicVertex({
-                timeout: 20 * 60 * 10000, // Set to 20 minutes, 10 minute default, setting this disables long request error: https://github.com/anthropics/anthropic-sdk-typescript?#long-requests
-                region: mappedRegion,
-                projectId: this.options.project,
-                authClient: authClient,
-            });
+        if (httpTimeout || mappedRegion !== defaultMappedRegion) {
+            return new AnthropicVertex(this.getAnthropicVertexClientOptions(mappedRegion, authClient, httpTimeout));
         }
 
         //Lazy initialization for default region
         if (!this.anthropicClient) {
-            this.anthropicClient = new AnthropicVertex({
-                timeout: 20 * 60 * 10000, // Set to 20 minutes, 10 minute default, setting this disables long request error: https://github.com/anthropics/anthropic-sdk-typescript?#long-requests
-                region: mappedRegion,
-                projectId: this.options.project,
-                authClient: authClient,
-            });
+            this.anthropicClient = new AnthropicVertex(this.getAnthropicVertexClientOptions(mappedRegion, authClient));
         }
         return this.anthropicClient;
     }
@@ -796,15 +825,18 @@ function createFetchClient({
     project,
     apiEndpoint,
     apiVersion = 'v1',
+    fetchImpl,
 }: {
     region: string;
     project: string;
     apiEndpoint?: string;
     apiVersion?: string;
+    fetchImpl?: FETCH_FN;
 }) {
     const vertexBaseEndpoint = apiEndpoint ?? `${region}-${API_BASE_PATH}`;
     return new FetchClient(
         `https://${vertexBaseEndpoint}/${apiVersion}/projects/${project}/locations/${region}`,
+        fetchImpl,
     ).withHeaders({
         'Content-Type': 'application/json',
     });

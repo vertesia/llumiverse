@@ -74,7 +74,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         options: ExecutionOptions,
     ): Promise<Completion> {
         const { region, options: resolvedOptions } = resolveVertexAIModelPath(options);
-        const client = await driver.getAnthropicClient(region);
+        const client = await driver.getAnthropicClient(region, resolvedOptions.httpTimeout);
         const model_options = resolvedOptions.model_options as VertexAIClaudeOptions | undefined;
         if (
             model_options?._option_id !== undefined &&
@@ -92,7 +92,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         options: ExecutionOptions,
     ): Promise<AsyncIterable<CompletionChunkObject>> {
         const { region, options: resolvedOptions } = resolveVertexAIModelPath(options);
-        const client = await driver.getAnthropicClient(region);
+        const client = await driver.getAnthropicClient(region, resolvedOptions.httpTimeout);
         const model_options = resolvedOptions.model_options as VertexAIClaudeOptions | undefined;
         if (
             model_options?._option_id !== undefined &&

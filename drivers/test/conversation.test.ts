@@ -186,7 +186,8 @@ function getTextOptions(model: string): ExecutionOptions {
         model_options: isReasoningModel
             ? {
                   _option_id: 'openai-thinking',
-                  max_tokens: 1024,
+                  max_tokens: 3000,
+                  effort: 'low',
               }
             : {
                   _option_id: 'text-fallback',
@@ -616,7 +617,9 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)(
 
         test(
             `${name}: STREAMING conversation preserves context after JSON serialization`,
-            { timeout: TIMEOUT },
+            {
+                timeout: TIMEOUT,
+            },
             async () => {
                 const options = getTextOptions(textModel);
 
@@ -664,7 +667,9 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)(
 
         test(
             `${name}: STREAMING vs non-streaming produce consistent conversation context`,
-            { timeout: TIMEOUT },
+            {
+                timeout: TIMEOUT,
+            },
             async () => {
                 const options = getTextOptions(textModel);
 

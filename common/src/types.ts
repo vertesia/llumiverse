@@ -512,8 +512,41 @@ export interface Logger {
     error<T>(obj: T, msg?: T extends string ? never : string, ...args: (string | number | boolean)[]): void;
 }
 
+/**
+ * HTTP timeouts applied to a driver's upstream LLM-provider calls.
+ *
+ * All values are in milliseconds. Drivers should map these onto whatever
+ * HTTP client their SDK uses; the defaults applied in
+ * `@llumiverse/core/createDriverHttpAgent` are:
+ *   - headersTimeout:   60_000
+ *   - bodyTimeout:      60_000
+ *   - connectTimeout:   10_000
+ *   - keepAliveTimeout: 30_000
+ *
+ * The defaults are deliberately tighter than Node's undici default
+ * (5 minutes for headers/body) so a hung upstream surfaces quickly. Bump
+ * `bodyTimeout` for streaming flows that have legitimate silent gaps
+ * (e.g. tool-using agents).
+ */
+export interface HttpTimeoutOptions {
+    /** Time (ms) to wait for the first response byte after the request is sent. */
+    headersTimeout?: number;
+    /** Time (ms) between body chunks once streaming has started. */
+    bodyTimeout?: number;
+    /** TCP/TLS connect timeout (ms). */
+    connectTimeout?: number;
+    /** Idle socket reuse timeout (ms). */
+    keepAliveTimeout?: number;
+}
+
 export interface DriverOptions {
     logger?: Logger | 'console';
+    /**
+     * Optional HTTP timeouts applied to the driver's upstream LLM-provider
+     * calls. Drivers that don't make HTTP calls (e.g. the in-process test
+     * driver) ignore this. See {@link HttpTimeoutOptions} for defaults.
+     */
+    httpTimeout?: HttpTimeoutOptions;
 }
 
 export type JSONSchemaTypeName =
@@ -580,6 +613,12 @@ export interface StatelessExecutionOptions extends PromptOptions {
      */
     include_original_response?: boolean;
     model_options?: ModelOptions;
+
+    /**
+     * Per-call HTTP timeouts for upstream LLM-provider calls. These override
+     * the driver's default `DriverOptions.httpTimeout` for this execution only.
+     */
+    httpTimeout?: HttpTimeoutOptions;
 
     /**
      * @deprecated This is deprecated. Use CompletionResult.type information instead.
