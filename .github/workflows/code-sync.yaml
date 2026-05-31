@@ -187,6 +187,97 @@ jobs:
 
           git push origin main
 
+  fast_forward_failure:
+    name: Open PR when fast-forward is not possible
+    needs:
+      - sync
+      - push
+    if: ${{ always() && needs.sync.outputs.is_merged == 'true' && needs.push.result == 'failure' }}
+    runs-on: ubuntu-latest
+    # Scopes the cross-repo dispatch token to a dedicated environment.
+    environment: build
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          fetch-tags: false
+          persist-credentials: false
+
+      - name: Create PR for fast-forward failure
+        id: create_pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEEDS_SYNC_OUTPUTS_SYNC_REF: ${{ needs.sync.outputs.sync_ref }}
+        run: |
+          TEMP_BRANCH="${NEEDS_SYNC_OUTPUTS_SYNC_REF}"
+
+          body=$(cat << EOF
+          The code sync from \`${FROM_BRANCH}\` to \`main\` succeeded, but \`main\` could not be fast-forwarded with \`${TEMP_BRANCH}\` (see [GitHub Actions run](https://github.com/vertesia/llumiverse/actions/runs/${GITHUB_RUN_ID:-0})). This usually means \`main\` moved after the sync branch was created.
+
+          Please review and merge this PR manually. If GitHub reports conflicts, resolve them on \`${TEMP_BRANCH}\` and push the result before merging.
+          EOF
+          )
+
+          existing_pr=$(gh pr list \
+            --head "$TEMP_BRANCH" \
+            --base main \
+            --state open \
+            --limit 1 \
+            --json number,url \
+            --jq 'if length > 0 then "\(.[0].number)::\(.[0].url)" else "" end' || true)
+
+          if [ -n "$existing_pr" ]; then
+            pr_number="${existing_pr%%::*}"
+            pr_url="${existing_pr#*::}"
+
+            gh pr edit "$pr_number" \
+              --title "Merge branch \`${FROM_BRANCH}\` (${TEMP_BRANCH#sync-}) to \`main\` [fast-forward failed]" \
+              --body "$body" \
+              --add-label "workflow:code-sync"
+          else
+            pr_url=$(gh pr create \
+              --title "Merge branch \`${FROM_BRANCH}\` (${TEMP_BRANCH#sync-}) to \`main\` [fast-forward failed]" \
+              --body "$body" \
+              --base main \
+              --head "$TEMP_BRANCH" \
+              --label "workflow:code-sync")
+            pr_number=$(echo "$pr_url" | grep -oP '(?<=pull/)\d+')
+          fi
+
+          echo "PR_NUMBER=${pr_number}" >> $GITHUB_OUTPUT
+          echo "PR_URL=${pr_url}" >> $GITHUB_OUTPUT
+
+      - name: Assign PR to author
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STEPS_CREATE_PR_OUTPUTS_PR_NUMBER: ${{ steps.create_pr.outputs.PR_NUMBER }}
+        run: |
+          if [ "${GITHUB_ACTOR}" != "github-actions[bot]" ]; then
+            gh pr edit "${STEPS_CREATE_PR_OUTPUTS_PR_NUMBER}" --add-assignee "${GITHUB_ACTOR}"
+          fi
+
+      - name: Notify studio for Slack notification
+        if: ${{ github.actor != 'github-actions[bot]' }}
+        env:
+          STUDIO_DISPATCH_TOKEN: ${{ secrets.STUDIO_DISPATCH_TOKEN }}
+          STEPS_CREATE_PR_OUTPUTS_PR_URL: ${{ steps.create_pr.outputs.PR_URL }}
+        run: |
+          curl -L \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${STUDIO_DISPATCH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --fail-with-body \
+            https://api.github.com/repos/vertesia/studio/dispatches \
+            -d "$(jq -nc \
+              --arg actor "${GITHUB_ACTOR}" \
+              --arg url "${STEPS_CREATE_PR_OUTPUTS_PR_URL}" \
+              '{event_type: "developer-notification", client_payload: {github_login: $actor, message: ("Your changes from `preview` synced cleanly in vertesia/llumiverse, but `main` could not be fast-forwarded. Please review this PR: " + $url)}}')"
+
   notify:
     name: Notify developer of successful sync
     runs-on: ubuntu-latest
@@ -245,7 +336,7 @@ jobs:
       - sync
       - push
     # Always run cleanup except when there is a conflict PR that needs the branch to stay alive.
-    if: ${{ always() && needs.sync.outputs.should_cleanup != 'false' }}
+    if: ${{ always() && needs.sync.outputs.should_cleanup != 'false' && needs.push.result == 'success' }}
     permissions:
       contents: write # required for deleting the temporary sync branch
     steps:
