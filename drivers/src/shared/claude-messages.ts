@@ -65,6 +65,13 @@ import { resolveClaudeThinking } from './claude-thinking.js';
 // Types
 // ============================================================================
 
+// Conversation text-trim policy (applied only when the caller requests text
+// trimming via stripTextMaxTokens). Keep the last N messages fully intact (the
+// active working set) and cap large text in older messages at the token ceiling
+// below — so long agent conversations don't balloon context.
+const KEEP_RECENT_MESSAGES = 12;
+const OLD_MESSAGE_TEXT_MAX_TOKENS = 2000;
+
 export interface ClaudePrompt {
     messages: MessageParam[];
     system?: TextBlockParam[];
@@ -682,10 +689,18 @@ export function buildClaudeStreamingConversation(
 
     conversation = incrementConversationTurn(conversation) as ClaudePrompt;
     const currentTurn = getConversationMeta(conversation).turnNumber;
+    // When text trimming is requested, keep the agent's active working set (the
+    // most recent messages — the file it just read/wrote, latest diagnostics)
+    // fully intact, and aggressively shrink large text only in OLDER messages.
+    // Clamp the effective cap so a lax caller value (e.g. 10000) still bites on
+    // stale blocks; long agent conversations otherwise balloon context and
+    // trigger frequent expensive checkpoints.
+    const requestedTextMax = options.stripTextMaxTokens;
     const stripOptions = {
         keepForTurns: options.stripImagesAfterTurns ?? Infinity,
         currentTurn,
-        textMaxTokens: options.stripTextMaxTokens,
+        textMaxTokens: requestedTextMax ? Math.min(requestedTextMax, OLD_MESSAGE_TEXT_MAX_TOKENS) : undefined,
+        keepRecentMessages: requestedTextMax ? KEEP_RECENT_MESSAGES : undefined,
     };
     let processed = stripBase64ImagesFromConversation(conversation, stripOptions);
     processed = truncateLargeTextInConversation(processed, stripOptions);
