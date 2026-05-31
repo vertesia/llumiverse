@@ -1,7 +1,7 @@
 import { LlumiverseError } from '@llumiverse/core';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { BedrockDriver } from './index.js';
 import { exposePrivate } from '../../test/__helpers__/test-utils.js';
+import { BedrockDriver } from './index.js';
 
 type BedrockDriverInternals = {
     isBedrockErrorRetryable: (

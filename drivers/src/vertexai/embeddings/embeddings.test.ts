@@ -12,8 +12,8 @@ import { helpers } from '@google-cloud/aiplatform';
 import { Base64DataSource, URLDataSource } from '@llumiverse/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { VertexAIDriver } from '../index.js';
-import { generateLegacyMultimodalEmbeddings } from './embed-legacy-multimodal.js';
 import { generateVertexAiEmbeddings } from './embed.js';
+import { generateLegacyMultimodalEmbeddings } from './embed-legacy-multimodal.js';
 
 // ── Live-mode toggle ──────────────────────────────────────────────────────────
 /** Set to true to run tests against the real Vertex AI API instead of mocks. */

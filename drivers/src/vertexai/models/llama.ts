@@ -9,10 +9,10 @@ import {
     type PromptSegment,
     type TextFallbackOptions,
 } from '@llumiverse/core';
-import type { VertexAIDriver } from '../index.js';
-import type { ModelDefinition } from '../models.js';
 import { transformSSEStream } from '@llumiverse/core/async';
 import type { ServerSentEvent } from '@vertesia/api-fetch-client';
+import type { VertexAIDriver } from '../index.js';
+import type { ModelDefinition } from '../models.js';
 
 interface LLamaMessage {
     role: string;
