@@ -60,5 +60,19 @@ if ! git diff --quiet -- "${staged_files[@]}"; then
     exit 1
 fi
 
+# Run Biome, but don't let a nonzero exit (unfixable error-level diagnostics)
+# abort the script before we re-stage. Biome applies its safe --write fixes to
+# the working tree even when it also reports an unfixable error, so we must
+# always re-stage those fixes; otherwise they'd be lost and the next commit
+# attempt would trip the partial-staging guard above.
+set +e
 "${BIOME_CMD[@]}" check --write --staged --no-errors-on-unmatched --files-ignore-unknown=true --diagnostic-level=error
+biome_status=$?
+set -e
+
+# Re-stage whatever Biome fixed, regardless of its exit status.
 git add -- "${staged_files[@]}"
+
+# Surface remaining unfixable errors by failing the commit (fixes are now staged,
+# so the user can address the error and re-commit without losing formatting work).
+exit "$biome_status"
