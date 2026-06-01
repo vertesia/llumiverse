@@ -529,10 +529,11 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         // Reconstruct full conversation: prior history + current-turn messages + assistant reply.
         // NOTE: prompt.messages only contains the current-turn messages; options.conversation
         // holds the accumulated prior history (same pattern as buildClaudeStreamingConversation).
-        const existingMessages = (options.conversation as OpenAIPrompt)?.messages;
+        const existingMessages = (options.conversation as OpenAIPrompt | undefined)?.messages;
+        const priorMessages = Array.isArray(existingMessages) ? existingMessages : [];
         return {
             _is_openai_compat: true,
-            messages: [...existingMessages, ...prompt.messages, assistantMessage],
+            messages: [...priorMessages, ...prompt.messages, assistantMessage],
         };
     }
 

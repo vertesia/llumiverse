@@ -137,4 +137,22 @@ describe('OpenAICompatibleModelDefinition', () => {
             'https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/endpoints/openapi/chat/completions',
         );
     });
+
+    it('builds streaming conversation when there is no prior OpenAI-compatible conversation', () => {
+        const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }))) as unknown as typeof fetch;
+        const driver = new TestVertexAIDriver(fetchMock);
+        const prompt: OpenAIPrompt = { _is_openai_compat: true, messages: [{ role: 'user', content: 'Hello' }] };
+
+        const conversation = driver.buildStreamingConversation(
+            prompt,
+            [{ type: 'text', value: 'Hi there' }],
+            undefined,
+            { model: 'publishers/xai/models/grok-4.1' },
+        ) as OpenAIPrompt;
+
+        expect(conversation.messages).toEqual([
+            { role: 'user', content: 'Hello' },
+            { role: 'assistant', content: 'Hi there' },
+        ]);
+    });
 });
