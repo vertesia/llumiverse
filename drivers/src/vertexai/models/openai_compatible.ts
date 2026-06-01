@@ -609,10 +609,10 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
         const effectiveRegion = this.options.region || undefined;
         const client = effectiveRegion ? driver.getFetchClientForRegion(effectiveRegion) : driver.getFetchClient();
         const endpoint = this.options.endpointPath || 'endpoints/openapi/chat/completions';
-        const responseStream = await client.post<ReadableStream>(endpoint, {
+        const responseStream = (await client.post(endpoint, {
             payload,
             reader: 'sse',
-        });
+        })) as ReadableStream;
 
         return transformSSEStream(responseStream, (data: string) => {
             const json = JSON.parse(data) as OpenAIStreamResponse;
