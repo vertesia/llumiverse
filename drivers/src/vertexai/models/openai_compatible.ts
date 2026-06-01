@@ -80,6 +80,7 @@ type OpenAIChatCompletionPayload = {
     stream: boolean;
     tools?: OpenAIToolDefinition[];
 };
+type StreamingOpenAIToolUse = ToolUse<unknown> & { _actual_id?: string };
 
 /**
  * Prompt structure for OpenAI-compatible chat completions.
@@ -615,26 +616,29 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
             if (delta?.tool_calls && delta.tool_calls.length > 0) {
                 const tc = delta.tool_calls[0];
 
-                // In streaming mode, tool call arguments come as incremental JSON fragments
-                // The id may only be present in the first chunk, so we use a fallback
+                // In streaming mode, tool call arguments come as incremental JSON fragments.
+                // OpenAI sends the real id only on the first chunk, so use the stable index
+                // as the accumulation key and let CompletionStream restore the real id later.
                 const toolCallIndex = tc.index ?? 0;
-                const toolCallId = tc.id ?? `tool_${toolCallIndex}`;
+                const toolCallId = `tool_${toolCallIndex}`;
                 const toolName = tc.function?.name ?? '';
                 const toolArgs = tc.function?.arguments ?? '';
 
                 // Pass raw string arguments — CompletionStream accumulates string chunks and
                 // parses them at the end. Parsing here would break accumulation.
+                const toolUse: StreamingOpenAIToolUse = {
+                    id: toolCallId,
+                    tool_name: toolName,
+                    // Pass raw string — CompletionStream will accumulate and parse
+                    tool_input: typeof toolArgs === 'string' && toolArgs.length > 0 ? toolArgs : {},
+                };
+                if (tc.id) {
+                    toolUse._actual_id = tc.id;
+                }
 
                 return {
                     result: [],
-                    tool_use: [
-                        {
-                            id: toolCallId,
-                            tool_name: toolName,
-                            // Pass raw string — CompletionStream will accumulate and parse
-                            tool_input: typeof toolArgs === 'string' && toolArgs.length > 0 ? toolArgs : {},
-                        },
-                    ],
+                    tool_use: [toolUse],
                 } satisfies CompletionChunkObject;
             }
 

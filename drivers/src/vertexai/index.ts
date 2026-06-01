@@ -207,6 +207,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             client = createFetchClient({
                 region: region,
                 project: this.options.project,
+                fetchImpl: this.getDriverFetch(),
             }).withAuthCallback(async () => {
                 const token = await this.googleAuth.getAccessToken();
                 return `Bearer ${token}`;
