@@ -79,6 +79,14 @@ type OpenAIChatCompletionPayload = {
     stop?: string | string[];
     stream: boolean;
     tools?: OpenAIToolDefinition[];
+    response_format?: {
+        type: 'json_schema';
+        json_schema: {
+            name: string;
+            strict: boolean;
+            schema: unknown;
+        };
+    };
 };
 type StreamingOpenAIToolUse = ToolUse<unknown> & { _actual_id?: string };
 
@@ -269,17 +277,12 @@ function convertToOpenAIMessages(messages: OpenAIMessage[]): Array<{
             result.tool_calls = msg.tool_calls;
         }
 
-        if (typeof msg.content === 'string') {
-            if (msg.content) {
-                result.content = msg.content;
-            } else if (!msg.tool_calls?.length) {
-                // Empty content with no tool_calls: use null rather than ''
-                // (Grok and OpenAI reject empty string content)
-                result.content = null;
-            }
-            // If tool_calls present and content is empty, omit content (per OpenAI spec)
-        } else if (msg.content === undefined && !msg.tool_calls?.length) {
-            // No content and no tool_calls: use null
+        if (msg.content === null) {
+            result.content = null;
+        } else if (typeof msg.content === 'string') {
+            // Empty string is rejected by Grok/OpenAI — normalize to null
+            result.content = msg.content || null;
+        } else if (msg.content === undefined) {
             result.content = null;
         }
 
@@ -474,16 +477,6 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
             }
         }
 
-        // Add JSON schema instruction if needed
-        if (_options.result_schema) {
-            messages.push({
-                role: 'user',
-                content:
-                    'The answer must be a JSON object using the following JSON Schema:\n' +
-                    JSON.stringify(_options.result_schema),
-            });
-        }
-
         return {
             _is_openai_compat: true,
             messages,
@@ -515,6 +508,13 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
         const toolsPayload = convertToolsToOpenAIFormat(options.tools);
         if (toolsPayload && toolsPayload.length > 0) {
             payload.tools = toolsPayload;
+        }
+
+        if (options.result_schema) {
+            payload.response_format = {
+                type: 'json_schema',
+                json_schema: { name: 'output', strict: false, schema: options.result_schema },
+            };
         }
 
         // Make POST request to the OpenAI-compatible endpoint via Vertex AI
@@ -597,6 +597,13 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
             payload.tools = toolsPayload;
         }
 
+        if (options.result_schema) {
+            payload.response_format = {
+                type: 'json_schema',
+                json_schema: { name: 'output', strict: false, schema: options.result_schema },
+            };
+        }
+
         // Make POST request to the OpenAI-compatible endpoint via Vertex AI
         // Use region override if specified (e.g., "global" for xAI models)
         const effectiveRegion = this.options.region || undefined;
@@ -614,31 +621,30 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
 
             // Handle tool calls in streaming mode with proper accumulation
             if (delta?.tool_calls && delta.tool_calls.length > 0) {
-                const tc = delta.tool_calls[0];
-
                 // In streaming mode, tool call arguments come as incremental JSON fragments.
-                // OpenAI sends the real id only on the first chunk, so use the stable index
-                // as the accumulation key and let CompletionStream restore the real id later.
-                const toolCallIndex = tc.index ?? 0;
-                const toolCallId = `tool_${toolCallIndex}`;
-                const toolName = tc.function?.name ?? '';
-                const toolArgs = tc.function?.arguments ?? '';
-
-                // Pass raw string arguments — CompletionStream accumulates string chunks and
-                // parses them at the end. Parsing here would break accumulation.
-                const toolUse: StreamingOpenAIToolUse = {
-                    id: toolCallId,
-                    tool_name: toolName,
-                    // Pass raw string — CompletionStream will accumulate and parse
-                    tool_input: typeof toolArgs === 'string' && toolArgs.length > 0 ? toolArgs : {},
-                };
-                if (tc.id) {
-                    toolUse._actual_id = tc.id;
-                }
+                // OpenAI sends the real id only on the first chunk per tool call, so use the
+                // stable index as the accumulation key and let CompletionStream restore the
+                // real id later. Loop over all items — each chunk typically carries one but
+                // the spec allows multiple.
+                const toolUseChunks: StreamingOpenAIToolUse[] = delta.tool_calls.map((tc) => {
+                    const toolUse: StreamingOpenAIToolUse = {
+                        id: `tool_${tc.index ?? 0}`,
+                        tool_name: tc.function?.name ?? '',
+                        // Pass raw string — CompletionStream will accumulate and parse
+                        tool_input:
+                            typeof tc.function?.arguments === 'string' && tc.function.arguments.length > 0
+                                ? tc.function.arguments
+                                : {},
+                    };
+                    if (tc.id) {
+                        toolUse._actual_id = tc.id;
+                    }
+                    return toolUse;
+                });
 
                 return {
                     result: [],
-                    tool_use: [toolUse],
+                    tool_use: toolUseChunks,
                 } satisfies CompletionChunkObject;
             }
 

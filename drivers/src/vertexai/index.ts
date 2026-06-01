@@ -531,10 +531,25 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         // holds the accumulated prior history (same pattern as buildClaudeStreamingConversation).
         const existingMessages = (options.conversation as OpenAIPrompt | undefined)?.messages;
         const priorMessages = Array.isArray(existingMessages) ? existingMessages : [];
-        return {
+        let conversation: OpenAIPrompt = {
             _is_openai_compat: true,
             messages: [...priorMessages, ...prompt.messages, assistantMessage],
         };
+
+        conversation = incrementConversationTurn(conversation) as OpenAIPrompt;
+        const currentTurn = getConversationMeta(conversation).turnNumber;
+        const stripOptions = {
+            keepForTurns: options.stripImagesAfterTurns ?? Infinity,
+            currentTurn,
+            textMaxTokens: options.stripTextMaxTokens,
+        };
+        let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions) as OpenAIPrompt;
+        processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions) as OpenAIPrompt;
+        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
+            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+            currentTurn,
+        }) as OpenAIPrompt;
+        return processedConversation;
     }
 
     /**
