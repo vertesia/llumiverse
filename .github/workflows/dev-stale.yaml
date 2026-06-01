@@ -22,12 +22,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
+      actions: write # required to manage the stale action's state cache
       issues: write # required to label PRs because PR labels are issue labels
       contents: write # for delete-branch option
       pull-requests: write # required to mark and close stale PRs
     steps:
       - uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10.3.0
         with:
+          # Raise the per-run budget (default 30) so all stale PRs are
+          # processed in a single run instead of spilling into the next one.
+          operations-per-run: 100
+
           # Only process pull requests, not issues
           days-before-issue-stale: -1
           days-before-issue-close: -1
