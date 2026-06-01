@@ -1,6 +1,13 @@
-import { AIModel, DriverOptions, ModelType, Providers, getModelCapabilities, modelModalitiesToArray } from "@llumiverse/core";
-import OpenAI from "openai";
-import { BaseOpenAIDriver } from "./index.js";
+import {
+    type AIModel,
+    type DriverOptions,
+    getModelCapabilities,
+    ModelType,
+    modelModalitiesToArray,
+    Providers,
+} from '@llumiverse/core';
+import OpenAI from 'openai';
+import { BaseOpenAIDriver } from './index.js';
 
 export interface OpenAICompatibleDriverOptions extends DriverOptions {
     /**
@@ -34,17 +41,18 @@ export class OpenAICompatibleDriver extends BaseOpenAIDriver {
         super(opts);
 
         if (!opts.apiKey) {
-            throw new Error("apiKey is required");
+            throw new Error('apiKey is required');
         }
 
         if (!opts.endpoint) {
-            throw new Error("endpoint is required for OpenAI-compatible driver");
+            throw new Error('endpoint is required for OpenAI-compatible driver');
         }
 
         this.service = new OpenAI({
             apiKey: opts.apiKey,
             baseURL: opts.endpoint,
             defaultHeaders: opts.default_headers,
+            fetch: this.getDriverFetch(),
         });
     }
 
@@ -52,29 +60,31 @@ export class OpenAICompatibleDriver extends BaseOpenAIDriver {
         try {
             const result = (await this.service.models.list()).data;
 
-            const models = result.map((m) => {
-                const modelCapability = getModelCapabilities(m.id, "openai");
-                let owner = m.owned_by;
-                if (owner === "system") {
-                    owner = "unknown";
-                }
-                return {
-                    id: m.id,
-                    name: m.id,
-                    provider: this.provider,
-                    owner: owner,
-                    type: ModelType.Text,
-                    can_stream: true,
-                    is_multimodal: false,
-                    input_modalities: modelModalitiesToArray(modelCapability.input),
-                    output_modalities: modelModalitiesToArray(modelCapability.output),
-                    tool_support: modelCapability.tool_support,
-                } satisfies AIModel<string>;
-            }).sort((a, b) => a.id.localeCompare(b.id));
+            const models = result
+                .map((m) => {
+                    const modelCapability = getModelCapabilities(m.id, 'openai');
+                    let owner = m.owned_by;
+                    if (owner === 'system') {
+                        owner = 'unknown';
+                    }
+                    return {
+                        id: m.id,
+                        name: m.id,
+                        provider: this.provider,
+                        owner: owner,
+                        type: ModelType.Text,
+                        can_stream: true,
+                        is_multimodal: false,
+                        input_modalities: modelModalitiesToArray(modelCapability.input),
+                        output_modalities: modelModalitiesToArray(modelCapability.output),
+                        tool_support: modelCapability.tool_support,
+                    } satisfies AIModel<string>;
+                })
+                .sort((a, b) => a.id.localeCompare(b.id));
 
             return models;
         } catch (error) {
-            this.logger.warn({ error }, "[OpenAICompatible] Failed to list models, returning empty list");
+            this.logger.warn({ error }, '[OpenAICompatible] Failed to list models, returning empty list');
             return [];
         }
     }

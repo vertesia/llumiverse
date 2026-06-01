@@ -1,19 +1,26 @@
 import {
-    type AIModel, type Completion, type CompletionChunkObject, type ExecutionOptions, ModelType,
-    type PromptOptions, PromptRole, type PromptSegment,
+    type AIModel,
+    type Completion,
+    type CompletionChunkObject,
+    type ExecutionOptions,
+    type JSONObject,
+    ModelType,
+    type PromptOptions,
+    PromptRole,
+    type PromptSegment,
     readStreamAsBase64,
     type TextFallbackOptions,
     type ToolDefinition,
-    type ToolUse
-} from "@llumiverse/core";
-import { transformSSEStream } from "@llumiverse/core/async";
-import type { VertexAIDriver } from "../index.js";
-import type { ModelDefinition } from "../models.js";
+    type ToolUse,
+} from '@llumiverse/core';
+import { transformSSEStream } from '@llumiverse/core/async';
+import type { VertexAIDriver } from '../index.js';
+import type { ModelDefinition } from '../models.js';
 
 /**
  * Message format for OpenAI-compatible chat completions API.
  */
-interface OpenAIMessage {
+export interface OpenAIMessage {
     role: string;
     content?: string | null | Array<TextPart | ImageUrlPart>;
     /**
@@ -35,14 +42,44 @@ interface OpenAIMessage {
 }
 
 interface TextPart {
-    type: "text";
+    type: 'text';
     text: string;
 }
 
 interface ImageUrlPart {
-    type: "image_url";
-    image_url: { url: string; detail?: "low" | "high" | "auto" };
+    type: 'image_url';
+    image_url: { url: string; detail?: 'low' | 'high' | 'auto' };
 }
+
+type StreamChunk = string | Uint8Array;
+type ReadableAsyncStream = AsyncIterable<StreamChunk>;
+type OpenAIToolCall = NonNullable<OpenAIResponseChoice['message']['tool_calls']>[number];
+type OpenAIContentPart = TextPart | ImageUrlPart;
+type OpenAIRequestMessage = {
+    role: string;
+    content?: string | null | OpenAIContentPart[];
+    tool_call_id?: string;
+    tool_calls?: OpenAIToolCall[];
+};
+type OpenAIToolDefinition = {
+    type: 'function';
+    function: {
+        name: string;
+        description?: string;
+        parameters: ToolDefinition['input_schema'];
+    };
+};
+type OpenAIChatCompletionPayload = {
+    model: string;
+    messages: OpenAIRequestMessage[];
+    max_tokens?: number;
+    temperature?: number;
+    top_p?: number;
+    n: number;
+    stop?: string | string[];
+    stream: boolean;
+    tools?: OpenAIToolDefinition[];
+};
 
 /**
  * Prompt structure for OpenAI-compatible chat completions.
@@ -141,7 +178,7 @@ export interface OpenAICompatibleOptions {
 /**
  * Convert a stream to a string.
  */
-async function streamToString(stream: any): Promise<string> {
+async function streamToString(stream: ReadableAsyncStream): Promise<string> {
     const chunks: Buffer[] = [];
     for await (const chunk of stream) {
         chunks.push(Buffer.from(chunk));
@@ -152,10 +189,7 @@ async function streamToString(stream: any): Promise<string> {
 /**
  * Update the conversation messages with new prompt messages.
  */
-function updateConversation(
-    conversation: OpenAIPrompt | undefined | null,
-    prompt: OpenAIPrompt
-): OpenAIPrompt {
+function updateConversation(conversation: OpenAIPrompt | undefined | null, prompt: OpenAIPrompt): OpenAIPrompt {
     const baseMessages = conversation ? conversation.messages : [];
     return {
         _is_openai_compat: true,
@@ -166,25 +200,24 @@ function updateConversation(
 /**
  * Parse tool calls from OpenAI-style function call format.
  */
-function parseToolCalls(
-    toolCalls: OpenAIResponseChoice['message']['tool_calls']
-): ToolUse[] | undefined {
+function parseToolCalls(toolCalls: OpenAIResponseChoice['message']['tool_calls']): ToolUse[] | undefined {
     if (!toolCalls || toolCalls.length === 0) {
         return undefined;
     }
-    return toolCalls.map(tc => ({
+    return toolCalls.map((tc) => ({
         id: tc.id ?? '',
         tool_name: tc.function?.name ?? '',
         tool_input: safeJsonParse(tc.function?.arguments),
     }));
 }
 
-function safeJsonParse(value: string | undefined): any {
+function safeJsonParse(value: string | undefined): JSONObject {
     if (typeof value !== 'string') {
         return {};
     }
     try {
-        return JSON.parse(value);
+        const parsed = JSON.parse(value) as unknown;
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as JSONObject) : {};
     } catch {
         return {};
     }
@@ -193,19 +226,12 @@ function safeJsonParse(value: string | undefined): any {
 /**
  * Convert tool definitions from ExecutionOptions to OpenAI tools format.
  */
-function convertToolsToOpenAIFormat(tools: ToolDefinition[] | undefined): Array<{
-    type: string;
-    function: {
-        name: string;
-        description?: string;
-        parameters: Record<string, any>;
-    };
-}> | undefined {
+function convertToolsToOpenAIFormat(tools: ToolDefinition[] | undefined): OpenAIToolDefinition[] | undefined {
     if (!tools || tools.length === 0) {
         return undefined;
     }
 
-    return tools.map(tool => ({
+    return tools.map((tool) => ({
         type: 'function',
         function: {
             name: tool.name,
@@ -220,13 +246,21 @@ function convertToolsToOpenAIFormat(tools: ToolDefinition[] | undefined): Array<
  * Handles content arrays with text and image parts.
  * Preserves tool_call_id for tool role messages.
  */
-function convertToOpenAIMessages(
-    messages: OpenAIMessage[]
-): Array<{ role: string; content?: string | null | any[]; tool_call_id?: string; tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }> }> {
-    return messages.map(msg => {
+function convertToOpenAIMessages(messages: OpenAIMessage[]): Array<{
+    role: string;
+    content?: string | null | OpenAIContentPart[];
+    tool_call_id?: string;
+    tool_calls?: OpenAIToolCall[];
+}> {
+    return messages.map((msg) => {
         // Preserve tool_call_id for tool role messages - this is required by OpenAI API
-        const result: { role: string; content?: string | null | any[]; tool_call_id?: string; tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }> } = {
-            role: msg.role
+        const result: {
+            role: string;
+            content?: string | null | OpenAIContentPart[];
+            tool_call_id?: string;
+            tool_calls?: OpenAIToolCall[];
+        } = {
+            role: msg.role,
         };
 
         // Handle tool_calls for assistant messages
@@ -237,13 +271,13 @@ function convertToOpenAIMessages(
         if (typeof msg.content === 'string') {
             if (msg.content) {
                 result.content = msg.content;
-            } else if (!(msg.tool_calls?.length)) {
+            } else if (!msg.tool_calls?.length) {
                 // Empty content with no tool_calls: use null rather than ''
                 // (Grok and OpenAI reject empty string content)
                 result.content = null;
             }
             // If tool_calls present and content is empty, omit content (per OpenAI spec)
-        } else if (msg.content === undefined && !(msg.tool_calls?.length)) {
+        } else if (msg.content === undefined && !msg.tool_calls?.length) {
             // No content and no tool_calls: use null
             result.content = null;
         }
@@ -261,7 +295,7 @@ function convertToOpenAIMessages(
                 }
             }
 
-            const content: Array<{ type: string; text?: string; image_url?: { url: string } }> = [];
+            const content: OpenAIContentPart[] = [];
             if (textParts.length > 0) {
                 content.push({ type: 'text', text: textParts.join('\n') });
             }
@@ -289,27 +323,26 @@ function convertToOpenAIMessages(
 
 /**
  * Generic OpenAI-compatible model definition for Vertex AI's OpenAPI endpoint.
- * 
+ *
  * This implementation supports any model that exposes an OpenAI-compatible API
  * through Vertex AI's `/endpoints/openapi/chat/completions` endpoint.
- * 
+ *
  * The correct endpoint format is documented at:
  * https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/call-open-model-apis
- * 
+ *
  * URL pattern: `https://${REGION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${REGION}/endpoints/openapi/chat/completions`
- * 
+ *
  * @example
  * // For xAI Grok models
  * new OpenAICompatibleModelDefinition({ modelName: "xai/grok-4.20-reasoning" })
- * 
+ *
  * @example
  * // For Meta Llama models (via Vertex AI MaaS)
  * new OpenAICompatibleModelDefinition({ modelName: "meta/llama-4-scout" })
  */
 export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPrompt> {
-
-    model: AIModel
-    private options: OpenAICompatibleOptions
+    model: AIModel;
+    private options: OpenAICompatibleOptions;
 
     constructor(options: OpenAICompatibleOptions) {
         this.options = options;
@@ -323,14 +356,18 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
         } as AIModel;
     }
 
-    async createPrompt(_driver: VertexAIDriver, segments: PromptSegment[], _options: PromptOptions): Promise<OpenAIPrompt> {
+    async createPrompt(
+        _driver: VertexAIDriver,
+        segments: PromptSegment[],
+        _options: PromptOptions,
+    ): Promise<OpenAIPrompt> {
         const messages: OpenAIMessage[] = [];
 
         // Extract system message if present
         let systemContent = '';
         for (const segment of segments) {
             if (segment.role === PromptRole.system && segment.content) {
-                systemContent += segment.content + '\n';
+                systemContent += `${segment.content}\n`;
             }
         }
 
@@ -348,7 +385,7 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
             if (segment.role === PromptRole.tool) {
                 // Validate that tool_use_id is present - this is required by OpenAI API
                 if (!segment.tool_use_id) {
-                    throw new Error("Tool prompt segment must have a tool_use_id to reference the original tool call");
+                    throw new Error('Tool prompt segment must have a tool_use_id to reference the original tool call');
                 }
 
                 // Build content array for tool response
@@ -370,8 +407,8 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
                                 type: 'image_url',
                                 image_url: {
                                     url: `data:${file.mime_type};base64,${data}`,
-                                    detail: 'auto'
-                                }
+                                    detail: 'auto',
+                                },
                             } as ImageUrlPart);
                         } else if (file.mime_type?.startsWith('text/')) {
                             const fileStream = await file.getStream();
@@ -385,9 +422,10 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
                 const toolMessage: OpenAIMessage = {
                     role: 'tool',
                     tool_call_id: segment.tool_use_id,
-                    content: content.length === 1 && content[0]?.type === 'text'
-                        ? content[0].text
-                        : (content as Array<TextPart | ImageUrlPart>)
+                    content:
+                        content.length === 1 && content[0]?.type === 'text'
+                            ? content[0].text
+                            : (content as Array<TextPart | ImageUrlPart>),
                 };
                 messages.push(toolMessage);
             } else {
@@ -412,8 +450,8 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
                                 type: 'image_url',
                                 image_url: {
                                     url: `data:${file.mime_type};base64,${data}`,
-                                    detail: 'auto'
-                                }
+                                    detail: 'auto',
+                                },
                             });
                         } else if (file.mime_type?.startsWith('text/')) {
                             const fileStream = await file.getStream();
@@ -430,7 +468,7 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
                 const role = segment.role === PromptRole.assistant ? 'assistant' : 'user';
                 messages.push({
                     role,
-                    content
+                    content,
                 });
             }
         }
@@ -439,7 +477,9 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
         if (_options.result_schema) {
             messages.push({
                 role: 'user',
-                content: "The answer must be a JSON object using the following JSON Schema:\n" + JSON.stringify(_options.result_schema)
+                content:
+                    'The answer must be a JSON object using the following JSON Schema:\n' +
+                    JSON.stringify(_options.result_schema),
             });
         }
 
@@ -449,13 +489,17 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
         };
     }
 
-    async requestTextCompletion(driver: VertexAIDriver, prompt: OpenAIPrompt, options: ExecutionOptions): Promise<Completion> {
+    async requestTextCompletion(
+        driver: VertexAIDriver,
+        prompt: OpenAIPrompt,
+        options: ExecutionOptions,
+    ): Promise<Completion> {
         let conversation = updateConversation(options.conversation as OpenAIPrompt, prompt);
 
         const modelOptions = options.model_options as TextFallbackOptions;
 
         // Build the request payload following OpenAI chat completions format
-        const payload: Record<string, any> = {
+        const payload: OpenAIChatCompletionPayload = {
             model: this.options.modelName,
             messages: convertToOpenAIMessages(conversation.messages),
             max_tokens: modelOptions?.max_tokens,
@@ -475,13 +519,11 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
         // Make POST request to the OpenAI-compatible endpoint via Vertex AI
         // Use region override if specified (e.g., "global" for xAI models)
         const effectiveRegion = this.options.region || undefined;
-        const client = effectiveRegion
-            ? driver.getFetchClientForRegion(effectiveRegion)
-            : driver.getFetchClient();
+        const client = effectiveRegion ? driver.getFetchClientForRegion(effectiveRegion) : driver.getFetchClient();
         const endpoint = this.options.endpointPath || 'endpoints/openapi/chat/completions';
-        const result = await client.post(endpoint, {
-            payload
-        }) as OpenAIResponse;
+        const result = (await client.post(endpoint, {
+            payload,
+        })) as OpenAIResponse;
 
         // Extract response data
         const choice = result?.choices?.[0];
@@ -498,40 +540,46 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
 
         // If there are tool calls, store them in the assistant message with proper OpenAI format
         if (tool_use && tool_use.length > 0 && message?.tool_calls) {
-            assistantMessage.tool_calls = message.tool_calls.map(tc => ({
+            assistantMessage.tool_calls = message.tool_calls.map((tc) => ({
                 id: tc.id,
                 type: tc.type,
                 function: {
                     name: tc.function.name,
-                    arguments: tc.function.arguments
-                }
+                    arguments: tc.function.arguments,
+                },
             }));
         }
 
         conversation = updateConversation(conversation, {
-            messages: [assistantMessage]
+            messages: [assistantMessage],
         });
 
         return {
-            result: text ? [{ type: "text", value: text }] : [{ type: "text", value: '' }],
+            result: text ? [{ type: 'text', value: text }] : [{ type: 'text', value: '' }],
             tool_use,
-            token_usage: result.usage ? {
-                prompt: result.usage.prompt_tokens,
-                result: result.usage.completion_tokens,
-                total: result.usage.total_tokens
-            } : undefined,
+            token_usage: result.usage
+                ? {
+                      prompt: result.usage.prompt_tokens,
+                      result: result.usage.completion_tokens,
+                      total: result.usage.total_tokens,
+                  }
+                : undefined,
             finish_reason: choice?.finish_reason || undefined,
-            conversation
+            conversation,
         };
     }
 
-    async requestTextCompletionStream(driver: VertexAIDriver, prompt: OpenAIPrompt, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+    async requestTextCompletionStream(
+        driver: VertexAIDriver,
+        prompt: OpenAIPrompt,
+        options: ExecutionOptions,
+    ): Promise<AsyncIterable<CompletionChunkObject>> {
         const conversation = updateConversation(options.conversation as OpenAIPrompt, prompt);
 
         const modelOptions = options.model_options as TextFallbackOptions;
 
         // Build the request payload following OpenAI chat completions format
-        const payload: Record<string, any> = {
+        const payload: OpenAIChatCompletionPayload = {
             model: this.options.modelName,
             messages: convertToOpenAIMessages(conversation.messages),
             max_tokens: modelOptions?.max_tokens,
@@ -551,13 +599,11 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
         // Make POST request to the OpenAI-compatible endpoint via Vertex AI
         // Use region override if specified (e.g., "global" for xAI models)
         const effectiveRegion = this.options.region || undefined;
-        const client = effectiveRegion
-            ? driver.getFetchClientForRegion(effectiveRegion)
-            : driver.getFetchClient();
+        const client = effectiveRegion ? driver.getFetchClientForRegion(effectiveRegion) : driver.getFetchClient();
         const endpoint = this.options.endpointPath || 'endpoints/openapi/chat/completions';
-        const responseStream = await client.post(endpoint, {
+        const responseStream = await client.post<ReadableStream>(endpoint, {
             payload,
-            reader: 'sse'
+            reader: 'sse',
         });
 
         return transformSSEStream(responseStream, (data: string) => {
@@ -571,7 +617,7 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
 
                 // In streaming mode, tool call arguments come as incremental JSON fragments
                 // The id may only be present in the first chunk, so we use a fallback
-                const toolCallIndex = (tc as any).index ?? 0;
+                const toolCallIndex = tc.index ?? 0;
                 const toolCallId = tc.id ?? `tool_${toolCallIndex}`;
                 const toolName = tc.function?.name ?? '';
                 const toolArgs = tc.function?.arguments ?? '';
@@ -581,25 +627,29 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
 
                 return {
                     result: [],
-                    tool_use: [{
-                        id: toolCallId,
-                        tool_name: toolName,
-                        // Pass raw string — CompletionStream will accumulate and parse
-                        tool_input: (typeof toolArgs === 'string' && toolArgs.length > 0 ? toolArgs : {}) as any,
-                    }]
+                    tool_use: [
+                        {
+                            id: toolCallId,
+                            tool_name: toolName,
+                            // Pass raw string — CompletionStream will accumulate and parse
+                            tool_input: typeof toolArgs === 'string' && toolArgs.length > 0 ? toolArgs : {},
+                        },
+                    ],
                 } satisfies CompletionChunkObject;
             }
 
             // Handle text content
             const content = delta?.content ?? '';
             return {
-                result: content ? [{ type: "text", value: content }] : [],
+                result: content ? [{ type: 'text', value: content }] : [],
                 finish_reason: choice?.finish_reason || undefined,
-                token_usage: json.usage ? {
-                    prompt: json.usage.prompt_tokens,
-                    result: json.usage.completion_tokens,
-                    total: json.usage.total_tokens,
-                } : undefined
+                token_usage: json.usage
+                    ? {
+                          prompt: json.usage.prompt_tokens,
+                          result: json.usage.completion_tokens,
+                          total: json.usage.total_tokens,
+                      }
+                    : undefined,
             } satisfies CompletionChunkObject;
         });
     }

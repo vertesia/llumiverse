@@ -1,73 +1,96 @@
-import type { ApiError } from "@google/genai";
+import type { ApiError } from '@google/genai';
 import {
-    type Content, FinishReason, FunctionCallingConfigMode, type FunctionDeclaration, type GenerateContentConfig, type GenerateContentParameters,
+    type Content,
+    FinishReason,
+    FunctionCallingConfigMode,
+    type FunctionDeclaration,
+    type GenerateContentConfig,
+    type GenerateContentParameters,
     type GenerateContentResponseUsageMetadata,
-    HarmBlockThreshold, HarmCategory, Modality, type Part,
+    HarmBlockThreshold,
+    HarmCategory,
+    Modality,
+    type Part,
     ProminentPeople,
-    type SafetySetting, type ThinkingConfig,
+    type SafetySetting,
+    type ThinkingConfig,
     ThinkingLevel,
-    type Tool
-} from "@google/genai";
+    type Tool,
+} from '@google/genai';
 import {
-    type AIModel, type Completion, type CompletionChunkObject, type CompletionResult, type ExecutionOptions,
+    type AIModel,
+    type Completion,
+    type CompletionChunkObject,
+    type CompletionResult,
+    type ExecutionOptions,
     type ExecutionTokenUsage,
     getConversationMeta,
     getGeminiModelVersion,
     incrementConversationTurn,
     isGeminiModelVersionGte,
-    type JSONObject, LlumiverseError, type LlumiverseErrorContext, ModelType, type PromptOptions, PromptRole,
-    type PromptSegment, readStreamAsBase64, type StatelessExecutionOptions,
+    type JSONObject,
+    LlumiverseError,
+    type LlumiverseErrorContext,
+    ModelType,
+    type PromptOptions,
+    PromptRole,
+    type PromptSegment,
+    readStreamAsBase64,
+    type StatelessExecutionOptions,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
-    type ToolDefinition, type ToolUse,
+    type ToolDefinition,
+    type ToolUse,
     truncateLargeTextInConversation,
     unwrapConversationArray,
-    type VertexAIGeminiOptions
-} from "@llumiverse/core";
-import { asyncMap } from "@llumiverse/core/async";
-import type { GenerateContentPrompt, VertexAIDriver } from "../index.js";
-import type { ModelDefinition } from "../models.js";
+    type VertexAIGeminiOptions,
+} from '@llumiverse/core';
+import { asyncMap } from '@llumiverse/core/async';
+import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
+import type { ModelDefinition } from '../models.js';
 
 function supportsStructuredOutput(options: PromptOptions): boolean {
     // Gemini 1.0 Ultra does not support JSON output, 1.0 Pro does.
-    return !!options.result_schema && !options.model.includes("ultra");
+    return !!options.result_schema && !options.model.includes('ultra');
 }
 
 const geminiSafetySettings: SafetySetting[] = [
     {
         category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
     },
     {
         category: HarmCategory.HARM_CATEGORY_HARASSMENT,
-        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
     },
     {
         category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
     },
     {
         category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
     },
     {
         category: HarmCategory.HARM_CATEGORY_UNSPECIFIED,
-        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
     },
     {
         category: HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY,
-        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH
-    }
+        threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+    },
 ];
 
 // We do the mapping here rather than in common to avoid bringing the SDK into the common package.
-function getProminentPeopleOption(prominentPeople?: "PROMINENT_PEOPLE_UNSPECIFIED" | "ALLOW_PROMINENT_PEOPLE" | "BLOCK_PROMINENT_PEOPLE") {
+function getProminentPeopleOption(
+    prominentPeople?: 'PROMINENT_PEOPLE_UNSPECIFIED' | 'ALLOW_PROMINENT_PEOPLE' | 'BLOCK_PROMINENT_PEOPLE',
+) {
     switch (prominentPeople) {
-        case "ALLOW_PROMINENT_PEOPLE":
+        case 'ALLOW_PROMINENT_PEOPLE':
             return ProminentPeople.ALLOW_PROMINENT_PEOPLE;
-        case "BLOCK_PROMINENT_PEOPLE":
+        case 'BLOCK_PROMINENT_PEOPLE':
             return ProminentPeople.BLOCK_PROMINENT_PEOPLE;
-        case "PROMINENT_PEOPLE_UNSPECIFIED":
+        case 'PROMINENT_PEOPLE_UNSPECIFIED':
             return ProminentPeople.PROMINENT_PEOPLE_UNSPECIFIED;
         default:
             return undefined;
@@ -83,9 +106,7 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
     // Use a local variable to avoid mutating the caller's conversation object.
     let payloadContents = prompt.contents;
     if (!tools && payloadContents) {
-        const hasToolParts = payloadContents.some(c =>
-            c.parts?.some(p => p.functionCall || p.functionResponse)
-        );
+        const hasToolParts = payloadContents.some((c) => c.parts?.some((p) => p.functionCall || p.functionResponse));
         if (hasToolParts) {
             payloadContents = convertGeminiFunctionPartsToText(payloadContents);
         }
@@ -112,21 +133,23 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
             prominentPeople: getProminentPeopleOption(model_options?.prominent_people),
             outputMimeType: model_options?.output_mime_type,
             outputCompressionQuality: model_options?.output_compression_quality,
-        }
-    }
+        },
+    };
 
     const config: GenerateContentConfig = {
         systemInstruction: prompt.system,
         safetySettings: geminiSafetySettings,
         tools: tools ? [tools] : undefined,
-        toolConfig: tools ? {
-            functionCallingConfig: {
-                mode: FunctionCallingConfigMode.AUTO,
-            }
-        } : undefined,
+        toolConfig: tools
+            ? {
+                  functionCallingConfig: {
+                      mode: FunctionCallingConfigMode.AUTO,
+                  },
+              }
+            : undefined,
         candidateCount: 1,
         //JSON/Structured output
-        responseMimeType: useStructuredOutput ? "application/json" : undefined,
+        responseMimeType: useStructuredOutput ? 'application/json' : undefined,
         responseJsonSchema: useStructuredOutput ? options.result_schema : undefined,
         //Model options
         temperature: model_options?.temperature,
@@ -139,12 +162,12 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
         seed: model_options?.seed,
         thinkingConfig: geminiThinkingConfig(options),
         labels: options.labels,
-    }
+    };
 
     return {
         model: options.model,
         contents: payloadContents,
-        config: options.model.toLowerCase().includes("image") ? configNanoBanana : config,
+        config: options.model.toLowerCase().includes('image') ? configNanoBanana : config,
     };
 }
 
@@ -159,16 +182,16 @@ function extractCompletionResults(content: Content): CompletionResult[] {
         for (const part of parts) {
             if (part.text) {
                 results.push({
-                    type: "text",
-                    value: part.text
+                    type: 'text',
+                    value: part.text,
                 });
             } else if (part.inlineData) {
-                const base64ImageBytes: string = part.inlineData.data ?? "";
-                const mimeType = part.inlineData.mimeType ?? "image/png";
+                const base64ImageBytes: string = part.inlineData.data ?? '';
+                const mimeType = part.inlineData.mimeType ?? 'image/png';
                 const imageUrl = `data:${mimeType};base64,${base64ImageBytes}`;
                 results.push({
-                    type: "image",
-                    value: imageUrl
+                    type: 'image',
+                    value: imageUrl,
                 });
             }
         }
@@ -200,8 +223,8 @@ function collectToolUseParts(content: Content): ToolUse[] | undefined {
 export function mergeConsecutiveRole(contents: Content[] | undefined): Content[] {
     if (!contents || contents.length === 0) return [];
 
-    const needsMerging = contents.some((content, i) =>
-        i < contents.length - 1 && content.role === contents[i + 1].role
+    const needsMerging = contents.some(
+        (content, i) => i < contents.length - 1 && content.role === contents[i + 1].role,
     );
     // If no merging needed, return original array
     if (!needsMerging) {
@@ -230,15 +253,14 @@ const supportedFinishReasons: FinishReason[] = [
     FinishReason.MAX_TOKENS,
     FinishReason.STOP,
     FinishReason.FINISH_REASON_UNSPECIFIED,
-]
+];
 
 // Finish reasons that indicate tool call issues but should be recovered gracefully
 // instead of throwing an error. The tool_use is still extracted and returned
 // so the workflow can generate a proper toolError response.
 const recoverableToolCallReasons = [
     'UNEXPECTED_TOOL_CALL', // Model called an undeclared tool
-]
-
+];
 
 function geminiThinkingBudget(option: StatelessExecutionOptions) {
     const model_options = option.model_options as VertexAIGeminiOptions | undefined;
@@ -252,7 +274,7 @@ function geminiThinkingBudget(option: StatelessExecutionOptions) {
     // Set minimum thinking level by default.
     // Docs: https://ai.google.dev/gemini-api/docs/thinking#set-budget
     if (getGeminiModelVersion(option.model) === '2.5') {
-        if (option.model.includes("pro")) {
+        if (option.model.includes('pro')) {
             return 128;
         }
         return 0;
@@ -260,37 +282,40 @@ function geminiThinkingBudget(option: StatelessExecutionOptions) {
     return undefined;
 }
 
-function geminiThinkingLevelForEffort(model: string, effort: VertexAIGeminiOptions["effort"]): ThinkingLevel | undefined {
-    if (model.includes("gemini-3-pro-image")) {
+function geminiThinkingLevelForEffort(
+    model: string,
+    effort: VertexAIGeminiOptions['effort'],
+): ThinkingLevel | undefined {
+    if (model.includes('gemini-3-pro-image')) {
         return ThinkingLevel.HIGH;
     }
-    if (model.includes("gemini-3.1-flash-image")) {
-        return effort === "low" ? ThinkingLevel.MINIMAL : ThinkingLevel.HIGH;
+    if (model.includes('gemini-3.1-flash-image')) {
+        return effort === 'low' ? ThinkingLevel.MINIMAL : ThinkingLevel.HIGH;
     }
     switch (effort) {
-        case "low":
+        case 'low':
             return ThinkingLevel.LOW;
-        case "medium":
+        case 'medium':
             return ThinkingLevel.MEDIUM;
-        case "high":
+        case 'high':
             return ThinkingLevel.HIGH;
         default:
             return undefined;
     }
 }
 
-function geminiBudgetForEffort(model: string, effort: NonNullable<VertexAIGeminiOptions["effort"]>): number {
-    const isFlashLite = model.includes("flash-lite");
-    const isFlash = model.includes("flash") && !isFlashLite;
-    const isPro = model.includes("pro");
+function geminiBudgetForEffort(model: string, effort: NonNullable<VertexAIGeminiOptions['effort']>): number {
+    const isFlashLite = model.includes('flash-lite');
+    const isFlash = model.includes('flash') && !isFlashLite;
+    const isPro = model.includes('pro');
 
-    if (effort === "low") {
+    if (effort === 'low') {
         if (isPro) return 128;
         if (isFlashLite) return 512;
         if (isFlash) return 1;
         return 1024;
     }
-    if (effort === "medium") {
+    if (effort === 'medium') {
         return 8192;
     }
     if (isPro) return 32768;
@@ -329,21 +354,20 @@ function geminiThinkingConfig(option: StatelessExecutionOptions): ThinkingConfig
     if (isGeminiModelVersionGte(option.model, '3.0')) {
         return {
             includeThoughts: include_thoughts,
-            thinkingLevel: option.model.includes("gemini-3-pro-image") ? ThinkingLevel.HIGH : ThinkingLevel.LOW
+            thinkingLevel: option.model.includes('gemini-3-pro-image') ? ThinkingLevel.HIGH : ThinkingLevel.LOW,
         };
     }
     if (isGeminiModelVersionGte(option.model, '2.5')) {
         const thinking_budget_tokens = geminiThinkingBudget(option) ?? 0;
         return {
             includeThoughts: include_thoughts,
-            thinkingBudget: thinking_budget_tokens
+            thinkingBudget: thinking_budget_tokens,
         };
     }
 }
 
 export class GeminiModelDefinition implements ModelDefinition<GenerateContentPrompt> {
-
-    model: AIModel
+    model: AIModel;
 
     constructor(modelId: string) {
         this.model = {
@@ -351,18 +375,22 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             name: modelId,
             provider: 'vertexai',
             type: ModelType.Text,
-            can_stream: true
+            can_stream: true,
         } satisfies AIModel;
     }
 
-    async createPrompt(_driver: VertexAIDriver, segments: PromptSegment[], options: ExecutionOptions): Promise<GenerateContentPrompt> {
-        const splits = options.model.split("/");
+    async createPrompt(
+        _driver: VertexAIDriver,
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+    ): Promise<GenerateContentPrompt> {
+        const splits = options.model.split('/');
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
 
         const schema = options.result_schema;
         let contents: Content[] = [];
-        let system: Content | undefined = { role: "user", parts: [] }; // Single content block for system messages
+        let system: Content | undefined = { role: 'user', parts: [] }; // Single content block for system messages
 
         const safety: Content[] = [];
 
@@ -371,17 +399,19 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             if (msg.role === PromptRole.system) {
                 // Text only for system messages
                 if (msg.files && msg.files.length > 0) {
-                    throw new Error("Gemini does not support files/images etc. in system messages. Only text content is allowed.");
+                    throw new Error(
+                        'Gemini does not support files/images etc. in system messages. Only text content is allowed.',
+                    );
                 }
 
                 if (msg.content) {
                     system.parts?.push({
-                        text: msg.content
+                        text: msg.content,
                     });
                 }
             } else if (msg.role === PromptRole.tool) {
                 if (!msg.tool_use_id) {
-                    throw new Error("Tool response missing tool_use_id");
+                    throw new Error('Tool response missing tool_use_id');
                 }
                 // Build functionResponse part with optional thought_signature for Gemini thinking models
                 const functionResponsePart: Part = {
@@ -394,9 +424,10 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 };
                 contents.push({
                     role: 'user',
-                    parts: [functionResponsePart]
+                    parts: [functionResponsePart],
                 });
-            } else {    // PromptRole.user, PromptRole.assistant, PromptRole.safety
+            } else {
+                // PromptRole.user, PromptRole.assistant, PromptRole.safety
                 const parts: Part[] = [];
                 // Text content handling
                 if (msg.content) {
@@ -409,14 +440,15 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 if (msg.files) {
                     for (const f of msg.files) {
                         const fileUrl = await f.getURL();
-                        const isGsUrl = fileUrl.startsWith('gs://') || fileUrl.startsWith('https://storage.googleapis.com/');
+                        const isGsUrl =
+                            fileUrl.startsWith('gs://') || fileUrl.startsWith('https://storage.googleapis.com/');
 
                         if (isGsUrl) {
                             parts.push({
                                 fileData: {
                                     fileUri: fileUrl,
-                                    mimeType: f.mime_type
-                                }
+                                    mimeType: f.mime_type,
+                                },
                             });
                         } else {
                             // Inline data handling
@@ -425,8 +457,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                             parts.push({
                                 inlineData: {
                                     data,
-                                    mimeType: f.mime_type
-                                }
+                                    mimeType: f.mime_type,
+                                },
                             });
                         }
                     }
@@ -453,15 +485,17 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             if (supportsStructuredOutput(options) && !options.tools) {
                 // Gemini structured output is unnecessarily sparse. Adding encouragement to fill the fields.
                 // Putting JSON in prompt is not recommended by Google, when using structured output.
-                system.parts?.push({ text: "Fill all appropriate fields in the JSON output." });
+                system.parts?.push({ text: 'Fill all appropriate fields in the JSON output.' });
             } else {
                 // Fallback to putting the schema in the system instructions, if not using structured output.
                 if (options.tools) {
                     system.parts?.push({
-                        text: "When not calling tools, the output must be a JSON object using the following JSON Schema:\n" + JSON.stringify(schema)
+                        text: `When not calling tools, the output must be a JSON object using the following JSON Schema:\n${JSON.stringify(schema)}`,
                     });
                 } else {
-                    system.parts?.push({ text: "The output must be a JSON object using the following JSON Schema:\n" + JSON.stringify(schema) });
+                    system.parts?.push({
+                        text: `The output must be a JSON object using the following JSON Schema:\n${JSON.stringify(schema)}`,
+                    });
                 }
             }
         }
@@ -482,8 +516,11 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         return { contents, system };
     }
 
-    usageMetadataToTokenUsage(usageMetadata: GenerateContentResponseUsageMetadata | undefined): ExecutionTokenUsage {
-        if (!usageMetadata || !usageMetadata.totalTokenCount) {
+    usageMetadataToTokenUsage(
+        driver: VertexAIDriver,
+        usageMetadata: GenerateContentResponseUsageMetadata | undefined,
+    ): ExecutionTokenUsage {
+        if (!usageMetadata?.totalTokenCount) {
             return {};
         }
         const tokenUsage: ExecutionTokenUsage = {
@@ -494,16 +531,20 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         };
 
         //Output/Response side
-        tokenUsage.result = (usageMetadata.candidatesTokenCount ?? 0)
-            + (usageMetadata.thoughtsTokenCount ?? 0)
-            + (usageMetadata.toolUsePromptTokenCount ?? 0);
+        tokenUsage.result =
+            (usageMetadata.candidatesTokenCount ?? 0) +
+            (usageMetadata.thoughtsTokenCount ?? 0) +
+            (usageMetadata.toolUsePromptTokenCount ?? 0);
 
         if ((tokenUsage.total ?? 0) !== (tokenUsage.prompt ?? 0) + tokenUsage.result) {
-            console.warn("[VertexAI] Gemini token usage mismatch: total does not equal prompt + result", {
-                total: tokenUsage.total,
-                prompt: tokenUsage.prompt,
-                result: tokenUsage.result
-            });
+            // Token-accounting mismatch: warn-level diagnostic (the call still
+            // returns the best-effort tokenUsage). Use the driver's structured
+            // logger so we don't promote stderr writes to ERROR in serverless
+            // log aggregators — see the recoverable-tool-call sites below.
+            driver.logger.warn(
+                { total: tokenUsage.total, prompt: tokenUsage.prompt, result: tokenUsage.result },
+                '[VertexAI] Gemini token usage mismatch: total does not equal prompt + result',
+            );
         }
 
         if (!tokenUsage.result) {
@@ -513,10 +554,14 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         return tokenUsage;
     }
 
-    async requestTextCompletion(driver: VertexAIDriver, prompt: GenerateContentPrompt, options: ExecutionOptions): Promise<Completion> {
-        const splits = options.model.split("/");
-        let region: string | undefined = undefined;
-        if (splits[0] === "locations" && splits.length >= 2) {
+    async requestTextCompletion(
+        driver: VertexAIDriver,
+        prompt: GenerateContentPrompt,
+        options: ExecutionOptions,
+    ): Promise<Completion> {
+        const splits = options.model.split('/');
+        let region: string | undefined;
+        if (splits[0] === 'locations' && splits.length >= 2) {
             region = splits[1];
         }
         const modelName = splits[splits.length - 1];
@@ -535,45 +580,61 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         prompt.contents = conversation;
 
         // TODO: Remove hack, use global endpoint manually if needed.
-        if (options.model.includes("gemini-2.5-flash-image")) {
-            region = "global"; // Gemini Flash Image only available in global region, this is for nano-banana model
+        if (options.model.includes('gemini-2.5-flash-image')) {
+            region = 'global'; // Gemini Flash Image only available in global region, this is for nano-banana model
         }
 
         const model_options = options.model_options as VertexAIGeminiOptions | undefined;
-        const client = driver.getGoogleGenAIClient(region, model_options?.flex ?? false);
+        const client = driver.getGoogleGenAIClient(region, model_options?.flex ?? false, options.httpTimeout);
 
         const payload = getGeminiPayload(options, prompt);
         const response = await client.models.generateContent(payload);
 
-        const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(response.usageMetadata);
+        const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(driver, response.usageMetadata);
 
         let tool_use: ToolUse[] | undefined;
-        let finish_reason: string | undefined, result: any;
-        const candidate = response.candidates && response.candidates[0];
+        let finish_reason: string | undefined, result: CompletionResult[] | undefined;
+        const candidate = response.candidates?.[0];
         if (candidate) {
             switch (candidate.finishReason) {
-                case FinishReason.MAX_TOKENS: finish_reason = "length"; break;
-                case FinishReason.STOP: finish_reason = "stop"; break;
-                default: finish_reason = candidate.finishReason;
+                case FinishReason.MAX_TOKENS:
+                    finish_reason = 'length';
+                    break;
+                case FinishReason.STOP:
+                    finish_reason = 'stop';
+                    break;
+                default:
+                    finish_reason = candidate.finishReason;
             }
             const content = candidate.content;
 
             // Check for unsupported finish reasons, but allow recoverable tool call issues
             const isRecoverableToolCall = recoverableToolCallReasons.includes(candidate.finishReason as string);
-            if (candidate.finishReason && !supportedFinishReasons.includes(candidate.finishReason) && !isRecoverableToolCall) {
-                throw new Error(`Unsupported finish reason: ${candidate.finishReason}, `
-                    + `finish message: ${candidate.finishMessage}, `
-                    + `content: ${JSON.stringify(content, null, 2)}, safety: ${JSON.stringify(candidate.safetyRatings, null, 2)}`);
+            if (
+                candidate.finishReason &&
+                !supportedFinishReasons.includes(candidate.finishReason) &&
+                !isRecoverableToolCall
+            ) {
+                throw new Error(
+                    `Unsupported finish reason: ${candidate.finishReason}, ` +
+                        `finish message: ${candidate.finishMessage}, ` +
+                        `content: ${JSON.stringify(content, null, 2)}, safety: ${JSON.stringify(candidate.safetyRatings, null, 2)}`,
+                );
             }
 
             if (content) {
                 tool_use = collectToolUseParts(content);
 
                 // For recoverable tool call issues, log warning but continue processing
-                // The workflow will handle the invalid tool call gracefully
+                // The workflow will handle the invalid tool call gracefully.
+                // Route through the driver's structured logger instead of `console.warn`
+                // so downstream runtimes (e.g. Cloud Run) don't promote stderr writes
+                // to ERROR severity for what is, by definition, a recoverable event.
                 if (isRecoverableToolCall && tool_use && tool_use.length > 0) {
-                    console.warn(`[Gemini] Recoverable tool call issue (${candidate.finishReason}): ` +
-                        `Model tried to call undeclared tool(s): ${tool_use.map(t => t.tool_name).join(', ')}`);
+                    driver.logger.warn(
+                        `[Gemini] Recoverable tool call issue (${candidate.finishReason}): ` +
+                            `Model tried to call undeclared tool(s): ${tool_use.map((t) => t.tool_name).join(', ')}`,
+                    );
                 }
 
                 result = extractCompletionResults(content);
@@ -581,10 +642,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             }
         }
 
-
-
         if (tool_use) {
-            finish_reason = "tool_use";
+            finish_reason = 'tool_use';
         }
 
         // Increment turn counter for deferred stripping
@@ -595,7 +654,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const stripOptions = {
             keepForTurns: options.stripImagesAfterTurns ?? Infinity,
             currentTurn,
-            textMaxTokens: options.stripTextMaxTokens
+            textMaxTokens: options.stripTextMaxTokens,
         };
         let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions);
 
@@ -612,19 +671,23 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const finalConversation = storeSystemInConversation(processedConversation, prompt.system);
 
         return {
-            result: result && result.length > 0 ? result : [{ type: "text" as const, value: '' }],
+            result: result && result.length > 0 ? result : [{ type: 'text' as const, value: '' }],
             token_usage: token_usage,
             finish_reason: finish_reason,
             original_response: options.include_original_response ? response : undefined,
             conversation: finalConversation,
-            tool_use
+            tool_use,
         } satisfies Completion;
     }
 
-    async requestTextCompletionStream(driver: VertexAIDriver, prompt: GenerateContentPrompt, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
-        const splits = options.model.split("/");
-        let region: string | undefined = undefined;
-        if (splits[0] === "locations" && splits.length >= 2) {
+    async requestTextCompletionStream(
+        driver: VertexAIDriver,
+        prompt: GenerateContentPrompt,
+        options: ExecutionOptions,
+    ): Promise<AsyncIterable<CompletionChunkObject>> {
+        const splits = options.model.split('/');
+        let region: string | undefined;
+        if (splits[0] === 'locations' && splits.length >= 2) {
             region = splits[1];
         }
         const modelName = splits[splits.length - 1];
@@ -643,44 +706,60 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const conversation = updateConversation(options.conversation, prompt.contents);
         prompt.contents = conversation;
 
-        if (options.model.includes("gemini-2.5-flash-image")) {
-            region = "global"; // Gemini Flash Image only available in global region, this is for nano-banana model
+        if (options.model.includes('gemini-2.5-flash-image')) {
+            region = 'global'; // Gemini Flash Image only available in global region, this is for nano-banana model
         }
 
         const model_options = options.model_options as VertexAIGeminiOptions | undefined;
-        const client = driver.getGoogleGenAIClient(region, model_options?.flex ?? false);
+        const client = driver.getGoogleGenAIClient(region, model_options?.flex ?? false, options.httpTimeout);
 
         const payload = getGeminiPayload(options, prompt);
         const response = await client.models.generateContentStream(payload);
 
         const stream = asyncMap(response, async (item) => {
-            const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(item.usageMetadata);
+            const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(driver, item.usageMetadata);
             if (item.candidates && item.candidates.length > 0) {
                 for (const candidate of item.candidates) {
                     let tool_use: ToolUse[] | undefined;
                     let finish_reason: string | undefined;
                     switch (candidate.finishReason) {
-                        case FinishReason.MAX_TOKENS: finish_reason = "length"; break;
-                        case FinishReason.STOP: finish_reason = "stop"; break;
-                        default: finish_reason = candidate.finishReason;
+                        case FinishReason.MAX_TOKENS:
+                            finish_reason = 'length';
+                            break;
+                        case FinishReason.STOP:
+                            finish_reason = 'stop';
+                            break;
+                        default:
+                            finish_reason = candidate.finishReason;
                     }
                     // Check for unsupported finish reasons, but allow recoverable tool call issues
                     const isRecoverableToolCall = recoverableToolCallReasons.includes(candidate.finishReason as string);
-                    if (candidate.finishReason && !supportedFinishReasons.includes(candidate.finishReason) && !isRecoverableToolCall) {
-                        throw new Error(`Unsupported finish reason: ${candidate.finishReason}, `
-                            + `finish message: ${candidate.finishMessage}, `
-                            + `content: ${JSON.stringify(candidate.content, null, 2)}, safety: ${JSON.stringify(candidate.safetyRatings, null, 2)}`);
+                    if (
+                        candidate.finishReason &&
+                        !supportedFinishReasons.includes(candidate.finishReason) &&
+                        !isRecoverableToolCall
+                    ) {
+                        throw new Error(
+                            `Unsupported finish reason: ${candidate.finishReason}, ` +
+                                `finish message: ${candidate.finishMessage}, ` +
+                                `content: ${JSON.stringify(candidate.content, null, 2)}, safety: ${JSON.stringify(candidate.safetyRatings, null, 2)}`,
+                        );
                     }
                     if (candidate.content?.role === 'model') {
                         // Collect all parts in order (text and images)
                         const combinedResults = extractCompletionResults(candidate.content);
                         tool_use = collectToolUseParts(candidate.content);
                         if (tool_use) {
-                            finish_reason = "tool_use";
-                            // Log warning for recoverable tool call issues
+                            finish_reason = 'tool_use';
+                            // Log warning for recoverable tool call issues — see the
+                            // matching site in `requestTextCompletion` above for why
+                            // we route through the driver's logger instead of
+                            // `console.warn`.
                             if (isRecoverableToolCall) {
-                                console.warn(`[Gemini] Recoverable tool call issue (${candidate.finishReason}): ` +
-                                    `Model tried to call undeclared tool(s): ${tool_use.map(t => t.tool_name).join(', ')}`);
+                                driver.logger.warn(
+                                    `[Gemini] Recoverable tool call issue (${candidate.finishReason}): ` +
+                                        `Model tried to call undeclared tool(s): ${tool_use.map((t) => t.tool_name).join(', ')}`,
+                                );
                             }
                         }
                         return {
@@ -694,8 +773,10 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             }
             //No normal output, returning block reason if it exists.
             return {
-                result: item.promptFeedback?.blockReasonMessage ? [{ type: "text" as const, value: item.promptFeedback.blockReasonMessage }] : [],
-                finish_reason: item.promptFeedback?.blockReason ?? "",
+                result: item.promptFeedback?.blockReasonMessage
+                    ? [{ type: 'text' as const, value: item.promptFeedback.blockReasonMessage }]
+                    : [],
+                finish_reason: item.promptFeedback?.blockReason ?? '',
                 token_usage: token_usage,
             };
         });
@@ -705,11 +786,11 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
     /**
      * Format Google API errors into LlumiverseError with proper status codes and retryability.
-     * 
+     *
      * Google API errors follow AIP-193 standard:
      * - ApiError.status: HTTP status code
      * - ApiError.message: Error message
-     * 
+     *
      * Common error codes:
      * - 400 (INVALID_ARGUMENT): Invalid request parameters
      * - 401 (UNAUTHENTICATED): Authentication required
@@ -719,15 +800,11 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
      * - 500 (INTERNAL): Internal server error
      * - 503 (UNAVAILABLE): Service temporarily unavailable
      * - 504 (DEADLINE_EXCEEDED): Request timeout
-     * 
+     *
      * @see https://google.aip.dev/193
      * @see https://docs.cloud.google.com/vertex-ai/generative-ai/docs/model-reference/api-errors
      */
-    formatLlumiverseError(
-        _driver: VertexAIDriver,
-        error: unknown,
-        context: LlumiverseErrorContext
-    ): LlumiverseError {
+    formatLlumiverseError(_driver: VertexAIDriver, error: unknown, context: LlumiverseErrorContext): LlumiverseError {
         // Check if it's a Google API error with status code
         const isApiError = this.isGoogleApiError(error);
 
@@ -752,7 +829,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         }
 
         // Determine retryability based on Google error codes
-        const retryable = this.isGeminiErrorRetryable(httpStatusCode);
+        const retryable = this.isGeminiErrorRetryable(httpStatusCode, message);
 
         // Extract error name/type from message if present
         const errorName = this.extractErrorName(message);
@@ -763,7 +840,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             context,
             error,
             httpStatusCode,
-            errorName
+            errorName,
         );
     }
 
@@ -775,14 +852,14 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             error !== null &&
             typeof error === 'object' &&
             'status' in error &&
-            typeof (error as any).status === 'number' &&
+            typeof (error as { status?: unknown }).status === 'number' &&
             'message' in error
         );
     }
 
     /**
      * Determine if a Google API error is retryable based on HTTP status code.
-     * 
+     *
      * Retryable errors (per Google AIP-194):
      * - 408 (REQUEST_TIMEOUT): Request timeout
      * - 429 (RESOURCE_EXHAUSTED): Rate limit exceeded, quota exhausted
@@ -790,7 +867,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
      * - 502 (BAD_GATEWAY): Bad gateway
      * - 503 (UNAVAILABLE): Service temporarily unavailable
      * - 504 (DEADLINE_EXCEEDED): Gateway timeout
-     * 
+     *
      * Non-retryable errors:
      * - 400 (INVALID_ARGUMENT): Invalid request parameters
      * - 401 (UNAUTHENTICATED): Authentication required
@@ -798,11 +875,18 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
      * - 404 (NOT_FOUND): Resource not found
      * - 409 (CONFLICT): Resource conflict
      * - Other 4xx client errors
-     * 
+     *
+     * Exception: certain 400s from Vertex AI's inline URL fetcher (used when
+     * passing a file by URL to multimodal models) surface as INVALID_ARGUMENT
+     * but are actually transient throttling/rate-limit signals on the
+     * fetcher, not a bad request. Detect those by message substring and
+     * treat them as retryable.
+     *
      * @param httpStatusCode - The HTTP status code from the API error
+     * @param message - The error message (used to detect transient 400 sub-cases)
      * @returns True if retryable, false if not retryable, undefined if unknown
      */
-    private isGeminiErrorRetryable(httpStatusCode: number): boolean | undefined {
+    private isGeminiErrorRetryable(httpStatusCode: number, message?: string): boolean | undefined {
         // Retryable status codes
         if (httpStatusCode === 408) return true; // Request timeout
         if (httpStatusCode === 429) return true; // Rate limit/quota
@@ -810,6 +894,17 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         if (httpStatusCode === 503) return true; // Service unavailable
         if (httpStatusCode === 504) return true; // Gateway timeout
         if (httpStatusCode >= 500 && httpStatusCode < 600) return true; // Other 5xx server errors
+
+        // Vertex AI URL fetcher transient throttling, surfaced as 400 INVALID_ARGUMENT
+        // but really a Google-side rate limit on the inline-content fetcher.
+        if (httpStatusCode === 400 && message) {
+            if (
+                message.includes('URL_REJECTED-REJECTED_CLIENT_THROTTLED') ||
+                message.includes('URL_REJECTED-REJECTED_RATE_LIMITED')
+            ) {
+                return true;
+            }
+        }
 
         // Non-retryable 4xx client errors
         if (httpStatusCode >= 400 && httpStatusCode < 500) return false;
@@ -826,9 +921,9 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
     private extractErrorName(message: string): string | undefined {
         // Common Google error patterns
         const patterns = [
-            /^([A-Z_]+):/,  // "ERROR_NAME: message"
+            /^([A-Z_]+):/, // "ERROR_NAME: message"
             /\[([A-Z_]+)\]/, // "[ERROR_NAME] message"
-            /^(\w+Error):/,  // "ErrorTypeError: message"
+            /^(\w+Error):/, // "ErrorTypeError: message"
         ];
 
         for (const pattern of patterns) {
@@ -840,9 +935,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         return undefined;
     }
-
 }
-
 
 /**
  * Converts functionCall and functionResponse parts to text parts in Gemini Content[].
@@ -850,21 +943,22 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
  * tools/toolConfig to be defined in the API request.
  */
 export function convertGeminiFunctionPartsToText(contents: Content[]): Content[] {
-    return contents.map(content => {
+    return contents.map((content) => {
         if (!content.parts) return content;
-        const hasFunctionParts = content.parts.some(p => p.functionCall || p.functionResponse);
+        const hasFunctionParts = content.parts.some((p) => p.functionCall || p.functionResponse);
         if (!hasFunctionParts) return content;
 
-        const newParts = content.parts.map(part => {
+        const newParts = content.parts.map((part) => {
             if (part.functionCall) {
                 const argsStr = part.functionCall.args ? JSON.stringify(part.functionCall.args) : '';
-                const truncated = argsStr.length > 500 ? argsStr.substring(0, 500) + '...' : argsStr;
+                const truncated = argsStr.length > 500 ? `${argsStr.substring(0, 500)}...` : argsStr;
                 return { text: `[Tool call: ${part.functionCall.name}(${truncated})]` };
             }
             if (part.functionResponse) {
                 const respStr = part.functionResponse.response
-                    ? JSON.stringify(part.functionResponse.response) : 'No response';
-                const truncated = respStr.length > 500 ? respStr.substring(0, 500) + '...' : respStr;
+                    ? JSON.stringify(part.functionResponse.response)
+                    : 'No response';
+                const truncated = respStr.length > 500 ? `${respStr.substring(0, 500)}...` : respStr;
                 return { text: `[Tool result for ${part.functionResponse.name}: ${truncated}]` };
             }
             return part;
@@ -881,7 +975,7 @@ function getToolDefinitions(tools: ToolDefinition[] | undefined | null): Tool | 
     // For multiple tools, we have multiple functions in one tool.
     return {
         functionDeclarations: tools.map(getToolFunction),
-    }
+    };
 }
 
 function getToolFunction(tool: ToolDefinition): FunctionDeclaration {
@@ -904,7 +998,7 @@ function getToolFunction(tool: ToolDefinition): FunctionDeclaration {
 function updateConversation(conversation: unknown, prompt: Content[]): Content[] {
     // Unwrap array if wrapped, otherwise treat as array
     const unwrapped = unwrapConversationArray<Content>(conversation);
-    const convArray = unwrapped ?? (conversation as Content[] || []);
+    const convArray = unwrapped ?? ((conversation as Content[]) || []);
     return convArray.concat(prompt);
 }
 
@@ -933,7 +1027,7 @@ function extractSystemFromConversation(conversation: unknown): Content | undefin
 function storeSystemInConversation(conversation: unknown, system: Content | undefined): unknown {
     if (!system) return conversation;
     if (typeof conversation === 'object' && conversation !== null) {
-        return { ...conversation as object, [SYSTEM_KEY]: system };
+        return { ...(conversation as object), [SYSTEM_KEY]: system };
     }
     return conversation;
 }
@@ -951,10 +1045,10 @@ function storeSystemInConversation(conversation: unknown, system: Content | unde
  */
 function formatFunctionResponse(response: string): JSONObject {
     response = response.trim();
-    if (response.startsWith("{") && response.endsWith("}")) {
+    if (response.startsWith('{') && response.endsWith('}')) {
         try {
             return JSON.parse(response);
-        } catch (e) {
+        } catch {
             return { output: response };
         }
     } else {

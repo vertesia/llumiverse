@@ -1,19 +1,60 @@
-import { DefaultAzureCredential, getBearerTokenProvider, TokenCredential } from "@azure/identity";
-import { AbstractDriver, AIModel, Completion, CompletionChunkObject, DriverOptions, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions, getModelCapabilities, modelModalitiesToArray, Providers } from "@llumiverse/core";
-import { AIProjectClient, DeploymentUnion, ModelDeployment } from '@azure/ai-projects';
-import { isUnexpected } from "@azure-rest/ai-inference";
-import type OpenAI from "openai";
+import { AIProjectClient, type DeploymentUnion, type ModelDeployment } from '@azure/ai-projects';
+import { createSseStream, type NodeJSReadableStream } from '@azure/core-sse';
+import { DefaultAzureCredential, getBearerTokenProvider, type TokenCredential } from '@azure/identity';
 import type {
+    ModelClient as AzureInferenceClient,
     ChatCompletionsOutput,
     ChatCompletionsToolCall,
     ChatRequestMessage,
-} from "@azure-rest/ai-inference";
-import { AzureOpenAIDriver } from "../openai/azure_openai.js";
-import { createSseStream, NodeJSReadableStream } from "@azure/core-sse";
-import { formatOpenAILikeMultimodalPrompt } from "../openai/openai_format.js";
+} from '@azure-rest/ai-inference';
+import ModelClient, { isUnexpected } from '@azure-rest/ai-inference';
+import {
+    type AIModel,
+    type Completion,
+    type CompletionChunkObject,
+    type DriverOptions,
+    dataSourceToBase64,
+    type EmbeddingResultItem,
+    type EmbeddingsOptions,
+    type EmbeddingsResult,
+    type ExecutionOptions,
+    getModelCapabilities,
+    type ImageEmbeddingInput,
+    LlumiverseError,
+    modelModalitiesToArray,
+    normalizeEmbeddingsOptions,
+    Providers,
+    type TextEmbeddingInput,
+    type TextFallbackOptions,
+} from '@llumiverse/core';
+import { AbstractDriver } from '@llumiverse/core/driver';
+import type OpenAI from 'openai';
+import { BaseOpenAIDriver } from '../openai/index.js';
+import { formatOpenAILikeMultimodalPrompt } from '../openai/openai_format.js';
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
+type SSEMessage = { data?: string };
+type ErrorWithStatus = Error & { status?: unknown };
+
+class AzureFoundryOpenAIProtocolDriver extends BaseOpenAIDriver {
+    service: OpenAI;
+    readonly provider = Providers.azure_foundry;
+
+    constructor(service: OpenAI) {
+        super({});
+        this.service = service;
+    }
+
+    async listModels(): Promise<AIModel[]> {
+        return [];
+    }
+}
+
+function hasNumericStatus(error: unknown): boolean {
+    return error instanceof Error && typeof (error as ErrorWithStatus).status === 'number';
+}
+
 export interface AzureFoundryDriverOptions extends DriverOptions {
     /**
      * The credentials to use to access Azure AI Foundry
@@ -30,17 +71,18 @@ export interface AzureFoundryInferencePrompt {
 }
 
 export interface AzureFoundryOpenAIPrompt {
-    messages: ResponseInputItem[]
+    messages: ResponseInputItem[];
 }
 
-export type AzureFoundryPrompt = AzureFoundryInferencePrompt | AzureFoundryOpenAIPrompt
+export type AzureFoundryPrompt = AzureFoundryInferencePrompt | AzureFoundryOpenAIPrompt;
 
 export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions, ResponseInputItem[]> {
     service: AIProjectClient;
+    private readonly inferenceClient: AzureInferenceClient;
     readonly provider = Providers.azure_foundry;
 
-    OPENAI_API_VERSION = "2025-01-01-preview";
-    INFERENCE_API_VERSION = "2024-05-01-preview";
+    OPENAI_API_VERSION = '2025-01-01-preview';
+    INFERENCE_API_VERSION = '2024-05-01-preview';
 
     constructor(opts: AzureFoundryDriverOptions) {
         super(opts);
@@ -48,7 +90,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         this.formatPrompt = formatOpenAILikeMultimodalPrompt;
 
         if (!opts.endpoint) {
-            throw new Error("Azure AI Foundry endpoint is required");
+            throw new Error('Azure AI Foundry endpoint is required');
         }
 
         try {
@@ -57,28 +99,27 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                 opts.azureADTokenProvider = new DefaultAzureCredential();
             }
         } catch (error) {
-            this.logger.error({ error }, "Failed to initialize Azure AD token provider:");
-            throw new Error("Failed to initialize Azure AD token provider");
+            this.logger.error({ error }, 'Failed to initialize Azure AD token provider:');
+            throw new Error('Failed to initialize Azure AD token provider');
         }
-
-        // Initialize AI Projects client which provides access to inference operations
-        this.service = new AIProjectClient(
-            opts.endpoint,
-            opts.azureADTokenProvider
-        );
 
         if (opts.apiVersion) {
             this.OPENAI_API_VERSION = opts.apiVersion;
             this.INFERENCE_API_VERSION = opts.apiVersion;
             this.logger.info(`[Azure Foundry] Overriding default API version, using API version: ${opts.apiVersion}`);
         }
+
+        this.service = new AIProjectClient(opts.endpoint, opts.azureADTokenProvider);
+        this.inferenceClient = ModelClient(opts.endpoint, opts.azureADTokenProvider, {
+            apiVersion: this.INFERENCE_API_VERSION,
+        });
     }
 
     /**
      * Get default authentication for Azure AI Foundry API
      */
     getDefaultAIFoundryAuth() {
-        const scope = "https://ai.azure.com/.default";
+        const scope = 'https://ai.azure.com/.default';
         const azureADTokenProvider = getBearerTokenProvider(new DefaultAzureCredential(), scope);
         return azureADTokenProvider;
     }
@@ -86,16 +127,16 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     async isOpenAIDeployment(model: string): Promise<boolean> {
         const { deploymentName } = parseAzureFoundryModelId(model);
 
-        let deployment = undefined;
+        let deployment: ModelDeployment | undefined;
         // First, verify the deployment exists
         try {
-            deployment = await this.service.deployments.get(deploymentName);
+            deployment = (await this.service.deployments.get(deploymentName)) as ModelDeployment;
             this.logger.debug(`[Azure Foundry] Deployment ${deploymentName} found`);
         } catch (deploymentError) {
             this.logger.error({ deploymentError }, `[Azure Foundry] Deployment ${deploymentName} not found:`);
         }
 
-        return (deployment as ModelDeployment).modelPublisher == "OpenAI";
+        return deployment?.modelPublisher === 'OpenAI';
     }
 
     protected canStream(_options: ExecutionOptions): Promise<boolean> {
@@ -104,61 +145,21 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
     async requestTextCompletion(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<Completion> {
         const { deploymentName } = parseAzureFoundryModelId(options.model);
-        const model_options = options.model_options as any;
+        const model_options = options.model_options as TextFallbackOptions | undefined;
         const isOpenAI = await this.isOpenAIDeployment(options.model);
 
-        let response;
         if (isOpenAI) {
             // Use the Azure OpenAI client for OpenAI models
-            const azureOpenAI = await this.service.inference.azureOpenAI({ apiVersion: this.OPENAI_API_VERSION });
-            const subDriver = new AzureOpenAIDriver(azureOpenAI);
+            const openAI = this.service.getOpenAIClient();
+            const subDriver = new AzureFoundryOpenAIProtocolDriver(openAI);
             // Use deployment name for API calls
             const modifiedOptions = { ...options, model: deploymentName };
-            const response = await subDriver.requestTextCompletion(prompt, modifiedOptions);
-            return response;
-
+            return subDriver.requestTextCompletion(prompt, modifiedOptions);
         } else {
             // Use the chat completions client from the inference operations
             // Convert ResponseInputItem[] to ChatRequestMessage[] for non-OpenAI inference
             const messages = convertToInferenceMessages(prompt);
-            const chatClient = this.service.inference.chatCompletions({ apiVersion: this.INFERENCE_API_VERSION });
-            response = await chatClient.post({
-                body: {
-                    messages,
-                    max_tokens: model_options?.max_tokens,
-                    model: deploymentName,
-                    stream: true,
-                    temperature: model_options?.temperature,
-                    top_p: model_options?.top_p,
-                    frequency_penalty: model_options?.frequency_penalty,
-                    presence_penalty: model_options?.presence_penalty,
-                    stop: model_options?.stop_sequence,
-                }
-            });
-            if (response.status !== "200") {
-                this.logger.error({ response }, `[Azure Foundry] Chat completion request failed:`);
-                throw new Error(`Chat completion request failed with status ${response.status}: ${response.body}`);
-            }
-
-            return this.extractDataFromResponse(response.body as ChatCompletionsOutput);
-        }
-    }
-
-    async requestTextCompletionStream(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
-        const { deploymentName } = parseAzureFoundryModelId(options.model);
-        const model_options = options.model_options as any;
-        const isOpenAI = await this.isOpenAIDeployment(options.model);
-
-        if (isOpenAI) {
-            const azureOpenAI = await this.service.inference.azureOpenAI({ apiVersion: this.OPENAI_API_VERSION });
-            const subDriver = new AzureOpenAIDriver(azureOpenAI);
-            const modifiedOptions = { ...options, model: deploymentName };
-            const stream = await subDriver.requestTextCompletionStream(prompt, modifiedOptions);
-            return stream;
-        } else {
-            // Convert ResponseInputItem[] to ChatRequestMessage[] for non-OpenAI inference
-            const messages = convertToInferenceMessages(prompt);
-            const chatClient = this.service.inference.chatCompletions({ apiVersion: this.INFERENCE_API_VERSION });
+            const chatClient = this.inferenceClient.path('/chat/completions');
             const response = await chatClient.post({
                 body: {
                     messages,
@@ -170,17 +171,59 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                     frequency_penalty: model_options?.frequency_penalty,
                     presence_penalty: model_options?.presence_penalty,
                     stop: model_options?.stop_sequence,
-                }
-            }).asNodeStream();
+                },
+            });
+            if (response.status !== '200') {
+                this.logger.error({ response }, `[Azure Foundry] Chat completion request failed:`);
+                throw new Error(`Chat completion request failed with status ${response.status}: ${response.body}`);
+            }
+
+            return this.extractDataFromResponse(response.body as ChatCompletionsOutput);
+        }
+    }
+
+    async requestTextCompletionStream(
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+    ): Promise<AsyncIterable<CompletionChunkObject>> {
+        const { deploymentName } = parseAzureFoundryModelId(options.model);
+        const model_options = options.model_options as TextFallbackOptions | undefined;
+        const isOpenAI = await this.isOpenAIDeployment(options.model);
+
+        if (isOpenAI) {
+            const openAI = this.service.getOpenAIClient();
+            const subDriver = new AzureFoundryOpenAIProtocolDriver(openAI);
+            const modifiedOptions = { ...options, model: deploymentName };
+            const stream = await subDriver.requestTextCompletionStream(prompt, modifiedOptions);
+            return stream;
+        } else {
+            // Convert ResponseInputItem[] to ChatRequestMessage[] for non-OpenAI inference
+            const messages = convertToInferenceMessages(prompt);
+            const chatClient = this.inferenceClient.path('/chat/completions');
+            const response = await chatClient
+                .post({
+                    body: {
+                        messages,
+                        max_tokens: model_options?.max_tokens,
+                        model: deploymentName,
+                        stream: true,
+                        temperature: model_options?.temperature,
+                        top_p: model_options?.top_p,
+                        frequency_penalty: model_options?.frequency_penalty,
+                        presence_penalty: model_options?.presence_penalty,
+                        stop: model_options?.stop_sequence,
+                    },
+                })
+                .asNodeStream();
 
             // We type assert from NodeJS.ReadableStream to NodeJSReadableStream
             // The Azure Examples, expect a .destroy() method on the stream
             const stream = response.body as NodeJSReadableStream;
             if (!stream) {
-                throw new Error("The response stream is undefined");
+                throw new Error('The response stream is undefined');
             }
 
-            if (response.status !== "200") {
+            if (response.status !== '200') {
                 stream.destroy();
                 throw new Error(`Failed to get chat completions, http operation failed with ${response.status} code`);
             }
@@ -191,10 +234,10 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         }
     }
 
-    private async *processStreamResponse(sseStream: any): AsyncIterable<CompletionChunkObject> {
+    private async *processStreamResponse(sseStream: AsyncIterable<SSEMessage>): AsyncIterable<CompletionChunkObject> {
         try {
             for await (const event of sseStream) {
-                if (event.data === "[DONE]") {
+                if (!event.data || event.data === '[DONE]') {
                     break;
                 }
 
@@ -209,7 +252,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                         continue;
                     }
                     const chunk: CompletionChunkObject = {
-                        result: choice.delta?.content || "",
+                        result: choice.delta?.content || '',
                         finish_reason: this.convertFinishReason(choice.finish_reason),
                         token_usage: {
                             prompt: data.usage?.prompt_tokens,
@@ -221,7 +264,6 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                     yield chunk;
                 } catch (parseError) {
                     this.logger.warn({ parseError }, `[Azure Foundry] Failed to parse streaming response:`);
-                    continue;
                 }
             }
         } catch (error) {
@@ -229,7 +271,6 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             throw error;
         }
     }
-
 
     private extractDataFromResponse(result: ChatCompletionsOutput): Completion {
         const tokenInfo = {
@@ -240,20 +281,20 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
         const choice = result.choices?.[0];
         if (!choice) {
-            this.logger.error({ result }, "[Azure Foundry] No choices in response");
-            throw new Error("No choices in response");
+            this.logger.error({ result }, '[Azure Foundry] No choices in response');
+            throw new Error('No choices in response');
         }
 
         const data = choice.message?.content;
         const toolCalls = choice.message?.tool_calls;
 
         if (!data && !toolCalls) {
-            this.logger.error({ result }, "[Azure Foundry] Response is not valid");
-            throw new Error("Response is not valid: no content or tool calls");
+            this.logger.error({ result }, '[Azure Foundry] Response is not valid');
+            throw new Error('Response is not valid: no content or tool calls');
         }
 
         const completion: Completion = {
-            result: data ? [{ type: "text", value: data }] : [],
+            result: data ? [{ type: 'text', value: data }] : [],
             token_usage: tokenInfo,
             finish_reason: this.convertFinishReason(choice.finish_reason),
         };
@@ -262,7 +303,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             completion.tool_use = toolCalls.map((call: ChatCompletionsToolCall) => ({
                 id: call.id,
                 tool_name: call.function?.name,
-                tool_input: call.function?.arguments ? JSON.parse(call.function.arguments) : {}
+                tool_input: call.function?.arguments ? JSON.parse(call.function.arguments) : {},
             }));
         }
 
@@ -273,10 +314,14 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         if (!reason) return undefined;
         // Map Azure AI finish reasons to standard format
         switch (reason) {
-            case 'stop': return 'stop';
-            case 'length': return 'length';
-            case 'tool_calls': return 'tool_use';
-            default: return reason;
+            case 'stop':
+                return 'stop';
+            case 'length':
+                return 'length';
+            case 'tool_calls':
+                return 'tool_use';
+            default:
+                return reason;
         }
     }
 
@@ -293,99 +338,93 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             }
 
             if (!hasDeployments) {
-                this.logger.warn("[Azure Foundry] No deployments found in the project");
+                this.logger.warn('[Azure Foundry] No deployments found in the project');
             }
 
             return true;
         } catch (error) {
-            this.logger.error({ error }, "Azure Foundry connection validation failed:");
+            this.logger.error({ error }, 'Azure Foundry connection validation failed:');
             return false;
         }
     }
 
     async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
-        if (!options.model) {
-            throw new Error("Default embedding model selection not supported for Azure Foundry. Please specify a model.");
+        const normalized = normalizeEmbeddingsOptions(options);
+        if (!normalized.model) {
+            throw new Error(
+                'Default embedding model selection not supported for Azure Foundry. Please specify a model.',
+            );
         }
 
-        if (options.text) {
-            return this.generateTextEmbeddings(options);
-        } else if (options.image) {
-            return this.generateImageEmbeddings(options);
-        } else {
-            throw new Error("No text or images provided for embeddings");
+        const textInputs: { index: number; input: TextEmbeddingInput }[] = [];
+        const imageInputs: { index: number; input: ImageEmbeddingInput }[] = [];
+        normalized.inputs.forEach((input, index) => {
+            if (input.type === 'text') textInputs.push({ index, input });
+            else if (input.type === 'image') imageInputs.push({ index, input });
+            else {
+                throw new Error(`Provider 'azure_foundry' does not support '${input.type}' embeddings.`);
+            }
+        });
+
+        const items = new Array<EmbeddingResultItem>(normalized.inputs.length);
+
+        if (textInputs.length > 0) {
+            const vectors = await this.callAzureEmbeddings(
+                textInputs.map((t) => t.input.text),
+                normalized.model,
+                'text',
+            );
+            textInputs.forEach((entry, i) => {
+                items[entry.index] = { outputs: [{ values: vectors[i], modality: 'text' }] };
+            });
         }
+
+        if (imageInputs.length > 0) {
+            const base64Images = await Promise.all(imageInputs.map((entry) => dataSourceToBase64(entry.input.source)));
+            const vectors = await this.callAzureEmbeddings(base64Images, normalized.model, 'image');
+            imageInputs.forEach((entry, i) => {
+                items[entry.index] = { outputs: [{ values: vectors[i], modality: 'image' }] };
+            });
+        }
+
+        return { model: normalized.model, results: items };
     }
 
-    async generateTextEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
-        if (!options.text) {
-            throw new Error("No text provided for text embeddings");
-        }
-
-        const { deploymentName } = parseAzureFoundryModelId(options.model || "");
-
-        let response;
+    private async callAzureEmbeddings(input: string[], model: string, kind: 'text' | 'image'): Promise<number[][]> {
+        const { deploymentName } = parseAzureFoundryModelId(model);
         try {
-            // Use the embeddings client from the inference operations
-            const embeddingsClient = this.service.inference.embeddings({ apiVersion: this.INFERENCE_API_VERSION });
-            response = await embeddingsClient.post({
-                body: {
-                    input: Array.isArray(options.text) ? options.text : [options.text],
-                    model: deploymentName
+            const embeddingsClient = this.inferenceClient.path('/embeddings');
+            const response = await embeddingsClient.post({ body: { input, model: deploymentName } });
+            if (isUnexpected(response)) {
+                throw new Error(
+                    `${kind} embeddings request failed: ${response.status} ${response.body?.error?.message || 'Unknown error'}`,
+                );
+            }
+
+            const data = response.body.data;
+            if (!Array.isArray(data) || data.length === 0) {
+                throw new Error(`No embeddings found in Azure Foundry ${kind} response`);
+            }
+            const ordered = [...data].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+            return ordered.map((entry) => {
+                const embedding = entry.embedding;
+                if (!Array.isArray(embedding) || embedding.length === 0) {
+                    throw new Error(
+                        `Empty or non-array embedding in Azure Foundry ${kind} response (got ${typeof embedding})`,
+                    );
                 }
+                return embedding;
             });
         } catch (error) {
-            this.logger.error({ error }, "Azure Foundry text embeddings error:");
-            throw error;
-        }
-
-        if (isUnexpected(response)) {
-            throw new Error(`Text embeddings request failed: ${response.status} ${response.body?.error?.message || 'Unknown error'}`);
-        }
-
-        const embeddings = response.body.data?.[0]?.embedding;
-        if (!embeddings || !Array.isArray(embeddings) || embeddings.length === 0) {
-            throw new Error("No valid embedding array found in response");
-        }
-
-        return {
-            values: embeddings,
-            model: options.model ?? ""
-        };
-    }
-
-    async generateImageEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
-        if (!options.image) {
-            throw new Error("No images provided for image embeddings");
-        }
-
-        const { deploymentName } = parseAzureFoundryModelId(options.model || "");
-
-        let response;
-        try {
-            // Use the embeddings client from the inference operations
-            const embeddingsClient = this.service.inference.embeddings({ apiVersion: this.INFERENCE_API_VERSION });
-            response = await embeddingsClient.post({
-                body: {
-                    input: Array.isArray(options.image) ? options.image : [options.image],
-                    model: deploymentName
-                }
+            if (LlumiverseError.isLlumiverseError(error)) throw error;
+            if (error instanceof Error && !hasNumericStatus(error)) throw error;
+            this.logger.error({ error }, `Azure Foundry ${kind} embeddings error:`);
+            throw this.formatLlumiverseError(error, {
+                provider: this.provider,
+                model,
+                operation: 'execute',
             });
-        } catch (error) {
-            this.logger.error({ error }, "Azure Foundry image embeddings error:");
-            throw error;
         }
-        if (isUnexpected(response)) {
-            throw new Error(`Image embeddings request failed: ${response.status} ${response.body?.error?.message || 'Unknown error'}`);
-        }
-        const embeddings = response.body.data?.[0]?.embedding;
-        if (!embeddings || !Array.isArray(embeddings) || embeddings.length === 0) {
-            throw new Error("No valid embedding array found in response");
-        }
-        return {
-            values: embeddings,
-            model: options.model ?? ""
-        };
     }
 
     async listModels(): Promise<AIModel[]> {
@@ -397,13 +436,13 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     }
 
     async _listModels(filter?: (m: ModelDeployment) => boolean): Promise<AIModel[]> {
-        let deploymentsIterable;
+        let deploymentsIterable: ReturnType<typeof this.service.deployments.list>;
         try {
             // List all deployments in the Azure AI Foundry project
             deploymentsIterable = this.service.deployments.list();
         } catch (error) {
-            this.logger.error({ error }, "Failed to list deployments:");
-            throw new Error("Failed to list deployments in Azure AI Foundry project");
+            this.logger.error({ error }, 'Failed to list deployments:');
+            throw new Error('Failed to list deployments in Azure AI Foundry project');
         }
         const deployments: DeploymentUnion[] = [];
 
@@ -414,30 +453,32 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         }
 
         let modelDeployments: ModelDeployment[] = deployments.filter((d): d is ModelDeployment => {
-            return d.type === "ModelDeployment";
+            return d.type === 'ModelDeployment';
         });
 
         if (filter) {
             modelDeployments = modelDeployments.filter(filter);
         }
 
-        const aiModels = modelDeployments.map((model) => {
-            // Create composite ID: deployment_name::base_model
-            const compositeId = `${model.name}::${model.modelName}`;
+        const aiModels = modelDeployments
+            .map((model) => {
+                // Create composite ID: deployment_name::base_model
+                const compositeId = `${model.name}::${model.modelName}`;
 
-            const modelCapability = getModelCapabilities(model.modelName, Providers.azure_foundry);
-            return {
-                id: compositeId,
-                name: model.name,
-                description: `${model.modelName} - ${model.modelVersion}`,
-                version: model.modelVersion,
-                provider: this.provider,
-                owner: model.modelPublisher,
-                input_modalities: modelModalitiesToArray(modelCapability.input),
-                output_modalities: modelModalitiesToArray(modelCapability.output),
-                tool_support: modelCapability.tool_support,
-            } satisfies AIModel<string>;
-        }).sort((modelA, modelB) => modelA.id.localeCompare(modelB.id));
+                const modelCapability = getModelCapabilities(model.modelName, Providers.azure_foundry);
+                return {
+                    id: compositeId,
+                    name: model.name,
+                    description: `${model.modelName} - ${model.modelVersion}`,
+                    version: model.modelVersion,
+                    provider: this.provider,
+                    owner: model.modelPublisher,
+                    input_modalities: modelModalitiesToArray(modelCapability.input),
+                    output_modalities: modelModalitiesToArray(modelCapability.output),
+                    tool_support: modelCapability.tool_support,
+                } satisfies AIModel<string>;
+            })
+            .sort((modelA, modelB) => modelA.id.localeCompare(modelB.id));
 
         return aiModels;
     }
@@ -449,14 +490,14 @@ export function parseAzureFoundryModelId(compositeId: string): { deploymentName:
     if (parts.length === 2) {
         return {
             deploymentName: parts[0],
-            baseModel: parts[1]
+            baseModel: parts[1],
         };
     }
 
     // Backwards compatibility: if no delimiter found, treat as deployment name
     return {
         deploymentName: compositeId,
-        baseModel: compositeId
+        baseModel: compositeId,
     };
 }
 
@@ -481,7 +522,7 @@ function convertToInferenceMessages(items: ResponseInputItem[]): ChatRequestMess
                 // Extract text from content array
                 content = msg.content
                     .filter((part): part is OpenAI.Responses.ResponseInputText => part.type === 'input_text')
-                    .map(part => part.text)
+                    .map((part) => part.text)
                     .join('\n');
             } else {
                 content = '';
@@ -489,7 +530,7 @@ function convertToInferenceMessages(items: ResponseInputItem[]): ChatRequestMess
 
             messages.push({
                 role: msg.role as 'system' | 'user' | 'assistant',
-                content
+                content,
             });
         }
         // Handle function_call_output

@@ -1,70 +1,133 @@
 import {
-    Bedrock, CreateModelCustomizationJobCommand, type FoundationModelSummary, GetModelCustomizationJobCommand,
-    type GetModelCustomizationJobCommandOutput, ModelCustomizationJobStatus, ModelModality, StopModelCustomizationJobCommand
-} from "@aws-sdk/client-bedrock";
-import { BedrockRuntime, type ContentBlock, type ConverseRequest, type ConverseResponse, type ConverseStreamOutput, type InferenceConfiguration, type Message, type Tool } from "@aws-sdk/client-bedrock-runtime";
-import { S3Client } from "@aws-sdk/client-s3";
-import type { AwsCredentialIdentity, Provider } from "@aws-sdk/types";
+    Bedrock,
+    CreateModelCustomizationJobCommand,
+    type FoundationModelSummary,
+    GetModelCustomizationJobCommand,
+    type GetModelCustomizationJobCommandOutput,
+    ModelCustomizationJobStatus,
+    ModelModality,
+    StopModelCustomizationJobCommand,
+} from '@aws-sdk/client-bedrock';
 import {
-    AbstractDriver, type AIModel,
+    BedrockRuntime,
+    type ContentBlock,
+    type ConverseRequest,
+    type ConverseResponse,
+    type ConverseStreamOutput,
+    type InferenceConfiguration,
+    type InvokeModelCommandOutput,
+    type Message,
+    type Tool,
+} from '@aws-sdk/client-bedrock-runtime';
+import { S3Client } from '@aws-sdk/client-s3';
+import type { AwsCredentialIdentity, Provider } from '@aws-sdk/types';
+import {
+    type AIModel,
     type BedrockClaudeOptions,
     type BedrockGptOssOptions,
     type BedrockPalmyraOptions,
-    type Completion, type CompletionChunkObject,
+    type Completion,
+    type CompletionChunkObject,
     type CompletionResult,
     type DataSource,
-    deserializeBinaryFromStorage,
     type DriverOptions,
-    type EmbeddingsOptions, type EmbeddingsResult,
-    type ExecutionOptions, type ExecutionTokenUsage,
+    deserializeBinaryFromStorage,
+    type EmbeddingsOptions,
+    type EmbeddingsResult,
+    type ExecutionOptions,
+    type ExecutionTokenUsage,
     getConversationMeta,
     getMaxTokensLimitBedrock,
     getModelCapabilities,
+    type HttpTimeoutOptions,
     incrementConversationTurn,
     isClaudeVersionGTE,
-    LlumiverseError, type LlumiverseErrorContext,
-    modelModalitiesToArray,
+    LlumiverseError,
+    type LlumiverseErrorContext,
     type ModelOptions,
+    modelModalitiesToArray,
     type NovaCanvasOptions,
     type PromptSegment,
     type StatelessExecutionOptions,
     stripBinaryFromConversation,
     stripHeartbeatsFromConversation,
-    type TextFallbackOptions, type ToolDefinition, type ToolUse, type TrainingJob, TrainingJobStatus, type TrainingOptions,
-    truncateLargeTextInConversation
-} from "@llumiverse/core";
-import { transformAsyncIterator } from "@llumiverse/core/async";
-import { formatNovaPrompt, type NovaMessagesPrompt } from "@llumiverse/core/formatters";
-import { LRUCache } from "mnemonist";
-import { resolveClaudeThinking } from "../shared/claude-thinking.js";
-import { converseConcatMessages, converseJSONprefill, converseSystemToMessages, formatConversePrompt } from "./converse.js";
-import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from "./nova-image-payload.js";
-import { forceUploadFile } from "./s3.js";
+    type TextFallbackOptions,
+    type ToolDefinition,
+    type ToolUse,
+    type TrainingJob,
+    TrainingJobStatus,
+    type TrainingOptions,
+    truncateLargeTextInConversation,
+} from '@llumiverse/core';
+import { transformAsyncIterator } from '@llumiverse/core/async';
+import { AbstractDriver } from '@llumiverse/core/driver';
+import { formatNovaPrompt, type NovaMessagesPrompt } from '@llumiverse/core/formatters';
+import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
+import { LRUCache } from 'mnemonist';
+import { resolveClaudeThinking } from '../shared/claude-thinking.js';
 import {
-    formatTwelvelabsPegasusPrompt,
-    type TwelvelabsMarengoRequest,
-    type TwelvelabsMarengoResponse,
-    type TwelvelabsPegasusRequest
-} from "./twelvelabs.js";
+    converseConcatMessages,
+    converseJSONprefill,
+    converseSystemToMessages,
+    formatConversePrompt,
+} from './converse.js';
+import { generateBedrockEmbeddings } from './embeddings.js';
+import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from './nova-image-payload.js';
+import { forceUploadFile } from './s3.js';
+import { formatTwelvelabsPegasusPrompt, type TwelvelabsPegasusRequest } from './twelvelabs.js';
 
 const supportStreamingCache = new LRUCache<string, boolean>(4096);
 
-enum BedrockModelType {
-    FoundationModel = "foundation-model",
-    InferenceProfile = "inference-profile",
-    CustomModel = "custom-model",
-    Unknown = "unknown",
+type AwsSdkError = {
+    name?: string;
+    message?: string;
+    $metadata?: {
+        httpStatusCode?: number;
+        requestId?: string;
+    };
+    $fault?: string;
 };
+type ReasoningBlockStart = {
+    reasoningContent?: {
+        redactedContent?: Uint8Array;
+    };
+};
+type BedrockRuntimeExecutorScope = {
+    executor: BedrockRuntime;
+    close(): void;
+};
+
+enum BedrockModelType {
+    FoundationModel = 'foundation-model',
+    InferenceProfile = 'inference-profile',
+    CustomModel = 'custom-model',
+    Unknown = 'unknown',
+}
 
 function converseFinishReason(reason: string | undefined) {
     //Possible values:
     //end_turn | tool_use | max_tokens | stop_sequence | guardrail_intervened | content_filtered
     if (!reason) return undefined;
     switch (reason) {
-        case 'end_turn': return "stop";
-        case 'max_tokens': return "length";
-        default: return reason;
+        case 'end_turn':
+            return 'stop';
+        case 'max_tokens':
+            return 'length';
+        default:
+            return reason;
     }
+}
+
+function withBedrockRuntimeScope<T>(iterable: AsyncIterable<T>, scope: BedrockRuntimeExecutorScope): AsyncIterable<T> {
+    return {
+        async *[Symbol.asyncIterator]() {
+            try {
+                yield* iterable;
+            } finally {
+                scope.close();
+            }
+        },
+    };
 }
 
 export interface BedrockModelCapabilities {
@@ -92,13 +155,12 @@ export interface BedrockDriverOptions extends DriverOptions {
      * The credentials to use to access AWS (IAM access key + secret)
      */
     credentials?: AwsCredentialIdentity | Provider<AwsCredentialIdentity>;
-
 }
 
 //Used to get a max_token value when not specified in the model options. Claude requires it to be set.
 function maxTokenFallbackClaude(option: StatelessExecutionOptions): number {
     const modelOptions = option.model_options as BedrockClaudeOptions | undefined;
-    if (modelOptions && typeof modelOptions.max_tokens === "number") {
+    if (modelOptions && typeof modelOptions.max_tokens === 'number') {
         return modelOptions.max_tokens;
     } else {
         let maxSupportedTokens = getMaxTokensLimitBedrock(option.model) ?? 8192; // Should always return a number for claude, 8192 is to satisfy the TypeScript type checker;
@@ -116,8 +178,7 @@ type BedrockSystemBlock = NonNullable<ConverseRequest['system']>[number];
 type BedrockToolEntry = NonNullable<NonNullable<ConverseRequest['toolConfig']>['tools']>[number];
 
 export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockPrompt> {
-
-    static PROVIDER = "bedrock";
+    static PROVIDER = 'bedrock';
 
     provider = BedrockDriver.PROVIDER;
 
@@ -132,14 +193,55 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
     }
 
-    getExecutor() {
+    /**
+     * Build a Smithy `requestHandler` config from the driver's
+     * `httpTimeout` so AWS SDK calls fail fast on hung upstream Bedrock
+     * endpoints instead of using the AWS default (no request timeout).
+     * Returns a partial config the SDK merges into its default handler.
+     */
+    private getBedrockRequestHandlerConfig(httpTimeout?: HttpTimeoutOptions) {
+        const timeouts = resolveDriverHttpTimeouts(
+            mergeDriverHttpTimeoutOptions(this.options.httpTimeout, httpTimeout),
+        );
+        return {
+            requestTimeout: timeouts.headersTimeout,
+            throwOnRequestTimeout: true,
+            connectionTimeout: timeouts.connectTimeout,
+            socketTimeout: timeouts.bodyTimeout,
+        };
+    }
+
+    private createExecutor(httpTimeout?: HttpTimeoutOptions) {
+        return new BedrockRuntime({
+            region: this.options.region,
+            credentials: this.options.credentials,
+            requestHandler: this.getBedrockRequestHandlerConfig(httpTimeout),
+        });
+    }
+
+    getExecutor(httpTimeout?: HttpTimeoutOptions) {
+        if (httpTimeout) {
+            return this.createExecutor(httpTimeout);
+        }
         if (!this._executor) {
-            this._executor = new BedrockRuntime({
-                region: this.options.region,
-                credentials: this.options.credentials,
-            });
+            this._executor = this.createExecutor();
         }
         return this._executor;
+    }
+
+    private getScopedExecutor(options: Pick<ExecutionOptions, 'httpTimeout'>): BedrockRuntimeExecutorScope {
+        if (!options.httpTimeout) {
+            return {
+                executor: this.getExecutor(),
+                close: () => undefined,
+            };
+        }
+
+        const executor = this.getExecutor(options.httpTimeout);
+        return {
+            executor,
+            close: () => executor.destroy(),
+        };
     }
 
     getService(region: string = this.options.region) {
@@ -147,6 +249,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             this._service = new Bedrock({
                 region: region,
                 credentials: this.options.credentials,
+                requestHandler: this.getBedrockRequestHandlerConfig(),
             });
             this._service_region = region;
         }
@@ -154,10 +257,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     protected async formatPrompt(segments: PromptSegment[], opts: ExecutionOptions): Promise<BedrockPrompt> {
-        if (opts.model.includes("canvas")) {
+        if (opts.model.includes('canvas')) {
             return await formatNovaPrompt(segments, opts.result_schema);
         }
-        if (opts.model.includes("twelvelabs.pegasus")) {
+        if (opts.model.includes('twelvelabs.pegasus')) {
             return await formatTwelvelabsPegasusPrompt(segments, opts);
         }
         return await formatConversePrompt(segments, opts);
@@ -165,23 +268,20 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
     /**
      * Format AWS Bedrock errors into LlumiverseError with proper status codes and retryability.
-     * 
+     *
      * AWS SDK errors provide:
      * - error.name: The exception type (e.g., "ThrottlingException")
      * - error.$metadata.httpStatusCode: The HTTP status code
      * - error.$metadata.requestId: The AWS request ID for tracking
      * - error.$fault: "client" or "server" indicating error category
-     * 
+     *
      * @param error - The AWS SDK error
      * @param context - Context about where the error occurred
      * @returns A standardized LlumiverseError
      */
-    public formatLlumiverseError(
-        error: unknown,
-        context: LlumiverseErrorContext
-    ): LlumiverseError {
+    public formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
         // Check if it's an AWS SDK error with $metadata
-        const awsError = error as any;
+        const awsError = error as AwsSdkError;
         const hasMetadata = awsError?.$metadata !== undefined;
 
         if (!hasMetadata) {
@@ -232,13 +332,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             context,
             error,
             httpStatusCode, // Only set code if we have numeric status code
-            errorName       // Preserve AWS error name
+            errorName, // Preserve AWS error name
         );
     }
 
     /**
      * Determine if a Bedrock error is retryable based on error type and status.
-     * 
+     *
      * Retryable errors:
      * - ThrottlingException: Rate limit exceeded, retry with backoff
      * - ServiceUnavailableException: Service temporarily down
@@ -246,7 +346,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
      * - ServiceQuotaExceededException: Quota exhausted, may recover
      * - 5xx status codes: Server errors
      * - 429, 408 status codes: Rate limit, timeout
-     * 
+     *
      * Non-retryable errors:
      * - ValidationException: Invalid request parameters
      * - AccessDeniedException: Authentication/authorization failure
@@ -254,7 +354,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
      * - ConflictException: Resource state conflict
      * - ResourceInUseException: Resource locked by another operation
      * - 4xx status codes (except 429, 408): Client errors
-     * 
+     *
      * @param errorName - The AWS error name (e.g., "ThrottlingException")
      * @param httpStatusCode - The HTTP status code if available
      * @param fault - The fault type ("client" or "server")
@@ -263,7 +363,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     private isBedrockErrorRetryable(
         errorName: string,
         httpStatusCode: number | undefined,
-        fault: string | undefined
+        fault: string | undefined,
     ): boolean | undefined {
         // Check specific AWS error types first
         switch (errorName) {
@@ -300,9 +400,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return undefined;
     }
 
-    getExtractedExecution(result: ConverseResponse, _prompt?: BedrockPrompt, options?: ExecutionOptions): CompletionChunkObject {
-        let resultText = "";
-        let reasoning = "";
+    getExtractedExecution(
+        result: ConverseResponse,
+        _prompt?: BedrockPrompt,
+        options?: ExecutionOptions,
+    ): CompletionChunkObject {
+        let resultText = '';
+        let reasoning = '';
 
         if (result.output?.message?.content) {
             for (const content of result.output.message.content) {
@@ -323,14 +427,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                             reasoning += `[Redacted thinking: ${redactedData}]`;
                         }
                     } else {
-                        this.logger.info("[Bedrock] Not outputting reasoning content as include_thoughts is false");
+                        this.logger.info('[Bedrock] Not outputting reasoning content as include_thoughts is false');
                     }
                 } else {
                     // Get content block type
                     const type = Object.keys(content).find(
-                        key => key !== '$unknown' && content[key as keyof typeof content] !== undefined
+                        (key) => key !== '$unknown' && content[key as keyof typeof content] !== undefined,
                     );
-                    this.logger.info({ type }, "[Bedrock] Unsupported content response type:");
+                    this.logger.info({ type }, '[Bedrock] Unsupported content response type:');
                 }
             }
 
@@ -341,14 +445,18 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
 
         const completionResult: CompletionChunkObject = {
-            result: reasoning + resultText ? [{ type: "text", value: reasoning + resultText }] : [],
+            result: reasoning + resultText ? [{ type: 'text', value: reasoning + resultText }] : [],
             token_usage: {
                 // Bedrock's inputTokens already excludes cache-read tokens,
                 // so prompt_new is inputTokens directly (no subtraction needed).
                 // prompt is the total including cached + cache_write for consistency
                 // with the Vertex Claude driver.
                 prompt_new: result.usage?.inputTokens,
-                prompt: result.usage ? (result.usage.inputTokens ?? 0) + (result.usage.cacheReadInputTokens ?? 0) + (result.usage.cacheWriteInputTokens ?? 0) : undefined,
+                prompt: result.usage
+                    ? (result.usage.inputTokens ?? 0) +
+                      (result.usage.cacheReadInputTokens ?? 0) +
+                      (result.usage.cacheWriteInputTokens ?? 0)
+                    : undefined,
                 result: result.usage?.outputTokens,
                 total: result.usage?.totalTokens,
                 prompt_cached: result.usage?.cacheReadInputTokens ?? undefined,
@@ -358,32 +466,46 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         };
 
         return completionResult;
-    };
+    }
 
-    getExtractedStream(result: ConverseStreamOutput, _prompt?: BedrockPrompt, options?: ExecutionOptions, streamingToolBlocks?: Map<number, { id: string; name: string }>): CompletionChunkObject {
-        let output: string = "";
-        let reasoning: string = "";
-        let stop_reason = "";
+    getExtractedStream(
+        result: ConverseStreamOutput,
+        _prompt?: BedrockPrompt,
+        options?: ExecutionOptions,
+        streamingToolBlocks?: Map<number, { id: string; name: string }>,
+    ): CompletionChunkObject {
+        let output: string = '';
+        let reasoning: string = '';
+        let stop_reason = '';
         let token_usage: ExecutionTokenUsage | undefined;
-        let tool_use: ToolUse[] | undefined;
+        let tool_use: ToolUse<unknown>[] | undefined;
 
         // Check if we should include thoughts (always true for reasoning-only models like DeepSeek R1)
         const isReasoningModel = options?.model?.includes('deepseek') && options?.model?.includes('r1');
-        const shouldIncludeThoughts = isReasoningModel || (options && (options.model_options as BedrockClaudeOptions)?.include_thoughts);
+        const shouldIncludeThoughts =
+            isReasoningModel || (options && (options.model_options as BedrockClaudeOptions)?.include_thoughts);
 
         // Handle content block start events (for reasoning blocks and tool use)
         if (result.contentBlockStart) {
-            if (result.contentBlockStart.start && 'toolUse' in result.contentBlockStart.start && result.contentBlockStart.start.toolUse) {
+            if (
+                result.contentBlockStart.start &&
+                'toolUse' in result.contentBlockStart.start &&
+                result.contentBlockStart.start.toolUse
+            ) {
                 // Register new tool call block and emit an initial chunk so the accumulator can track it by id
                 const toolUseStart = result.contentBlockStart.start.toolUse;
                 const blockIndex = result.contentBlockStart.contentBlockIndex ?? -1;
                 const id = toolUseStart.toolUseId ?? '';
                 const name = toolUseStart.name ?? '';
                 streamingToolBlocks?.set(blockIndex, { id, name });
-                tool_use = [{ id, tool_name: name, tool_input: '' as any }];
-            } else if (result.contentBlockStart.start && 'reasoningContent' in result.contentBlockStart.start && shouldIncludeThoughts) {
+                tool_use = [{ id, tool_name: name, tool_input: '' }];
+            } else if (
+                result.contentBlockStart.start &&
+                'reasoningContent' in result.contentBlockStart.start &&
+                shouldIncludeThoughts
+            ) {
                 // Handle redacted content at block start
-                const reasoningStart = result.contentBlockStart.start as any;
+                const reasoningStart = result.contentBlockStart.start as ReasoningBlockStart;
                 if (reasoningStart.reasoningContent?.redactedContent) {
                     const redactedData = new TextDecoder().decode(reasoningStart.reasoningContent.redactedContent);
                     reasoning = `[Redacted thinking: ${redactedData}]`;
@@ -399,7 +521,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 const blockIndex = result.contentBlockDelta.contentBlockIndex ?? -1;
                 const toolBlock = streamingToolBlocks?.get(blockIndex);
                 if (toolBlock && delta.toolUse.input !== undefined) {
-                    tool_use = [{ id: toolBlock.id, tool_name: '', tool_input: delta.toolUse.input as any }];
+                    tool_use = [{ id: toolBlock.id, tool_name: '', tool_input: delta.toolUse.input }];
                 }
             } else if (delta?.text) {
                 output = delta.text;
@@ -411,16 +533,16 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     reasoning = `[Redacted thinking: ${redactedData}]`;
                 } else if (delta.reasoningContent.signature) {
                     // Handle signature updates for reasoning content - end of thinking
-                    reasoning = "\n\n";
+                    reasoning = '\n\n';
                     // Putting logging here so it only triggers once.
-                    this.logger.info("[Bedrock] Not outputting reasoning content as include_thoughts is false");
+                    this.logger.info('[Bedrock] Not outputting reasoning content as include_thoughts is false');
                 }
             } else if (delta) {
                 // Get content block type
                 const type = Object.keys(delta).find(
-                    key => key !== '$unknown' && (delta as any)[key] !== undefined
+                    (key) => key !== '$unknown' && (delta as unknown as Record<string, unknown>)[key] !== undefined,
                 );
-                this.logger.info({ type }, "[Bedrock] Unsupported content response type:");
+                this.logger.info({ type }, '[Bedrock] Unsupported content response type:');
             }
         }
 
@@ -436,29 +558,33 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
 
         if (result.messageStop) {
-            stop_reason = result.messageStop.stopReason ?? "";
+            stop_reason = result.messageStop.stopReason ?? '';
         }
 
         if (result.metadata) {
             token_usage = {
                 prompt_new: result.metadata.usage?.inputTokens,
-                prompt: result.metadata.usage ? (result.metadata.usage.inputTokens ?? 0) + (result.metadata.usage.cacheReadInputTokens ?? 0) + (result.metadata.usage.cacheWriteInputTokens ?? 0) : undefined,
+                prompt: result.metadata.usage
+                    ? (result.metadata.usage.inputTokens ?? 0) +
+                      (result.metadata.usage.cacheReadInputTokens ?? 0) +
+                      (result.metadata.usage.cacheWriteInputTokens ?? 0)
+                    : undefined,
                 result: result.metadata.usage?.outputTokens,
                 total: result.metadata.usage?.totalTokens,
                 prompt_cached: result.metadata.usage?.cacheReadInputTokens ?? undefined,
                 prompt_cache_write: result.metadata.usage?.cacheWriteInputTokens ?? undefined,
-            }
+            };
         }
 
         const completionResult: CompletionChunkObject = {
-            result: reasoning + output ? [{ type: "text", value: reasoning + output }] : [],
+            result: reasoning + output ? [{ type: 'text', value: reasoning + output }] : [],
             token_usage: token_usage,
             finish_reason: converseFinishReason(stop_reason),
             tool_use,
         };
 
         return completionResult;
-    };
+    }
 
     extractRegion(modelString: string, defaultRegion: string): string {
         // Match region in full ARN pattern
@@ -468,7 +594,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
 
         // Match common AWS regions directly in string
-        const regionMatch = modelString.match(/(?:us|eu|ap|sa|ca|me|af)[-](east|west|central|south|north|southeast|southwest|northeast|northwest)[-][1-9]/);
+        const regionMatch = modelString.match(
+            /(?:us|eu|ap|sa|ca|me|af)[-](east|west|central|south|north|southeast|southwest|northeast|northwest)[-][1-9]/,
+        );
         if (regionMatch) {
             return regionMatch[0];
         }
@@ -478,12 +606,12 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
     private async getCanStream(model: string, type: BedrockModelType): Promise<boolean> {
         let canStream: boolean = false;
-        let error: any = null;
+        let error: unknown = null;
         const region = this.extractRegion(model, this.options.region);
         if (type === BedrockModelType.FoundationModel || type === BedrockModelType.Unknown) {
             try {
                 const response = await this.getService(region).getFoundationModel({
-                    modelIdentifier: model
+                    modelIdentifier: model,
                 });
                 canStream = response.modelDetails?.responseStreamingSupported ?? false;
                 return canStream;
@@ -494,9 +622,12 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if (type === BedrockModelType.InferenceProfile || type === BedrockModelType.Unknown) {
             try {
                 const response = await this.getService(region).getInferenceProfile({
-                    inferenceProfileIdentifier: model
+                    inferenceProfileIdentifier: model,
                 });
-                canStream = await this.getCanStream(response.models?.[0].modelArn ?? "", BedrockModelType.FoundationModel);
+                canStream = await this.getCanStream(
+                    response.models?.[0].modelArn ?? '',
+                    BedrockModelType.FoundationModel,
+                );
                 return canStream;
             } catch (e) {
                 error = e;
@@ -505,16 +636,16 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if (type === BedrockModelType.CustomModel || type === BedrockModelType.Unknown) {
             try {
                 const response = await this.getService(region).getCustomModel({
-                    modelIdentifier: model
+                    modelIdentifier: model,
                 });
-                canStream = await this.getCanStream(response.baseModelArn ?? "", BedrockModelType.FoundationModel);
+                canStream = await this.getCanStream(response.baseModelArn ?? '', BedrockModelType.FoundationModel);
                 return canStream;
             } catch (e) {
                 error = e;
             }
         }
         if (error) {
-            console.warn("Error on canStream check for model: " + model + " region detected: " + region, error);
+            console.warn(`Error on canStream check for model: ${model} region detected: ${region}`, error);
         }
         return canStream;
     }
@@ -528,11 +659,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         let canStream = supportStreamingCache.get(options.model);
         if (canStream == null) {
             let type = BedrockModelType.Unknown;
-            if (options.model.includes("foundation-model")) {
+            if (options.model.includes('foundation-model')) {
                 type = BedrockModelType.FoundationModel;
-            } else if (options.model.includes("inference-profile")) {
+            } else if (options.model.includes('inference-profile')) {
                 type = BedrockModelType.InferenceProfile;
-            } else if (options.model.includes("custom-model")) {
+            } else if (options.model.includes('custom-model')) {
                 type = BedrockModelType.CustomModel;
             }
             canStream = await this.getCanStream(options.model, type);
@@ -549,10 +680,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         prompt: BedrockPrompt,
         result: unknown[],
         toolUse: unknown[] | undefined,
-        options: ExecutionOptions
+        options: ExecutionOptions,
     ): ConverseRequest | undefined {
         // Only handle ConverseRequest prompts (not NovaMessagesPrompt or TwelvelabsPegasusRequest)
-        if (options.model.includes("canvas") || options.model.includes("twelvelabs.pegasus")) {
+        if (options.model.includes('canvas') || options.model.includes('twelvelabs.pegasus')) {
             return undefined;
         }
 
@@ -561,7 +692,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         // Convert accumulated results to text content for assistant message
         const textContent = completionResults
-            .map(r => {
+            .map((r) => {
                 switch (r.type) {
                     case 'text':
                         return r.value;
@@ -570,8 +701,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     case 'image':
                         // Skip images in conversation - they're in the result
                         return '';
-                    default:
-                        return String((r as any).value || '');
+                    default: {
+                        const _exhaustive: never = r;
+                        return String(_exhaustive);
+                    }
                 }
             })
             .join('');
@@ -583,7 +716,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         let conversation = updateConversation(incomingConversation, conversePrompt);
 
         // Build assistant message content
-        const messageContent: any[] = [];
+        const messageContent: ContentBlock[] = [];
         if (textContent) {
             messageContent.push({ text: textContent });
         }
@@ -595,17 +728,19 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                         toolUseId: tool.id,
                         name: tool.tool_name,
                         input: tool.tool_input,
-                    }
+                    },
                 });
             }
         }
 
         // Add assistant message
         const assistantMessage: ConverseRequest = {
-            messages: [{
-                content: messageContent.length > 0 ? messageContent : [{ text: '' }],
-                role: "assistant"
-            }],
+            messages: [
+                {
+                    content: messageContent.length > 0 ? messageContent : [{ text: '' }],
+                    role: 'assistant',
+                },
+            ],
             modelId: conversePrompt.modelId,
         };
         conversation = updateConversation(conversation, assistantMessage);
@@ -618,7 +753,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const stripOptions = {
             keepForTurns: options.stripImagesAfterTurns ?? Infinity,
             currentTurn,
-            textMaxTokens: options.stripTextMaxTokens
+            textMaxTokens: options.stripTextMaxTokens,
         };
         let processedConversation = stripBinaryFromConversation(conversation, stripOptions);
         processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
@@ -632,7 +767,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
     async requestTextCompletion(prompt: BedrockPrompt, options: ExecutionOptions): Promise<Completion> {
         // Handle Twelvelabs Pegasus models
-        if (options.model.includes("twelvelabs.pegasus")) {
+        if (options.model.includes('twelvelabs.pegasus')) {
             return this.requestTwelvelabsPegasusCompletion(prompt as TwelvelabsPegasusRequest, options);
         }
 
@@ -644,17 +779,22 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         let conversation = updateConversation(incomingConversation, conversePrompt);
 
         const payload = this.preparePayload(conversation, options);
-        const executor = this.getExecutor();
+        const executorScope = this.getScopedExecutor(options);
 
-        const res = await executor.converse({
-            ...payload,
-        });
+        let res: ConverseResponse;
+        try {
+            res = await executorScope.executor.converse({
+                ...payload,
+            });
+        } finally {
+            executorScope.close();
+        }
 
         // Strip reasoningContent from assistant messages before storing in conversation
         // (DeepSeek R1 returns reasoning blocks but rejects them in subsequent user turns)
-        const assistantMsg = res.output?.message ?? { content: [{ text: "" }], role: "assistant" };
+        const assistantMsg = res.output?.message ?? { content: [{ text: '' }], role: 'assistant' };
         if (assistantMsg.content) {
-            assistantMsg.content = assistantMsg.content.filter((c: any) => !c.reasoningContent);
+            assistantMsg.content = assistantMsg.content.filter((c) => !('reasoningContent' in c));
         }
 
         conversation = updateConversation(conversation, {
@@ -665,15 +805,15 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         // Increment turn counter for deferred stripping
         conversation = incrementConversationTurn(conversation) as ConverseRequest;
 
-        let tool_use: ToolUse[] | undefined = undefined;
+        let tool_use: ToolUse<unknown>[] | undefined;
         //Get tool requests, we check tool use regardless of finish reason, as you can hit length and still get a valid response.
-        tool_use = res.output?.message?.content?.reduce((tools: ToolUse[], c) => {
+        tool_use = res.output?.message?.content?.reduce((tools: ToolUse<unknown>[], c) => {
             if (c.toolUse) {
                 tools.push({
-                    tool_name: c.toolUse.name ?? "",
-                    tool_input: c.toolUse.input as any,
-                    id: c.toolUse.toolUseId ?? "",
-                } satisfies ToolUse);
+                    tool_name: c.toolUse.name ?? '',
+                    tool_input: c.toolUse.input,
+                    id: c.toolUse.toolUseId ?? '',
+                } satisfies ToolUse<unknown>);
             }
             return tools;
         }, []);
@@ -687,7 +827,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const stripOptions = {
             keepForTurns: options.stripImagesAfterTurns ?? Infinity,
             currentTurn,
-            textMaxTokens: options.stripTextMaxTokens
+            textMaxTokens: options.stripTextMaxTokens,
         };
         let processedConversation = stripBinaryFromConversation(conversation, stripOptions);
 
@@ -710,15 +850,23 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return completion;
     }
 
-    private async requestTwelvelabsPegasusCompletion(prompt: TwelvelabsPegasusRequest, options: ExecutionOptions): Promise<Completion> {
-        const executor = this.getExecutor();
+    private async requestTwelvelabsPegasusCompletion(
+        prompt: TwelvelabsPegasusRequest,
+        options: ExecutionOptions,
+    ): Promise<Completion> {
+        const executorScope = this.getScopedExecutor(options);
 
-        const res = await executor.invokeModel({
-            modelId: options.model,
-            contentType: "application/json",
-            accept: "application/json",
-            body: JSON.stringify(prompt),
-        });
+        let res: InvokeModelCommandOutput;
+        try {
+            res = await executorScope.executor.invokeModel({
+                modelId: options.model,
+                contentType: 'application/json',
+                accept: 'application/json',
+                body: JSON.stringify(prompt),
+            });
+        } finally {
+            executorScope.close();
+        }
 
         const decoder = new TextDecoder();
         const body = decoder.decode(res.body);
@@ -727,81 +875,96 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         // Extract the response according to TwelveLabs Pegasus format
         let finishReason: string | undefined;
         switch (result.finishReason) {
-            case "stop":
-                finishReason = "stop";
+            case 'stop':
+                finishReason = 'stop';
                 break;
-            case "length":
-                finishReason = "length";
+            case 'length':
+                finishReason = 'length';
                 break;
             default:
                 finishReason = result.finishReason;
         }
 
         return {
-            result: result.message ? [{ type: "text" as const, value: result.message }] : [],
+            result: result.message ? [{ type: 'text' as const, value: result.message }] : [],
             finish_reason: finishReason,
             original_response: options.include_original_response ? result : undefined,
         };
     }
 
-    private async requestTwelvelabsPegasusCompletionStream(prompt: TwelvelabsPegasusRequest, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
-        const executor = this.getExecutor();
+    private async requestTwelvelabsPegasusCompletionStream(
+        prompt: TwelvelabsPegasusRequest,
+        options: ExecutionOptions,
+    ): Promise<AsyncIterable<CompletionChunkObject>> {
+        const executorScope = this.getScopedExecutor(options);
 
-        const res = await executor.invokeModelWithResponseStream({
-            modelId: options.model,
-            contentType: "application/json",
-            accept: "application/json",
-            body: JSON.stringify(prompt),
-        });
+        try {
+            const res = await executorScope.executor.invokeModelWithResponseStream({
+                modelId: options.model,
+                contentType: 'application/json',
+                accept: 'application/json',
+                body: JSON.stringify(prompt),
+            });
 
-        if (!res.body) {
-            throw new Error("[Bedrock] Stream not found in response");
-        }
-
-        return transformAsyncIterator(res.body, (chunk: any) => {
-            if (chunk.chunk?.bytes) {
-                const decoder = new TextDecoder();
-                const body = decoder.decode(chunk.chunk.bytes);
-
-                try {
-                    const result = JSON.parse(body);
-
-                    // Extract streaming response according to TwelveLabs Pegasus format
-                    let finishReason: string | undefined;
-                    if (result.finishReason) {
-                        switch (result.finishReason) {
-                            case "stop":
-                                finishReason = "stop";
-                                break;
-                            case "length":
-                                finishReason = "length";
-                                break;
-                            default:
-                                finishReason = result.finishReason;
-                        }
-                    }
-
-                    return {
-                        result: result.delta || result.message ? [{ type: "text" as const, value: result.delta || result.message || "" }] : [],
-                        finish_reason: finishReason,
-                    } satisfies CompletionChunkObject;
-                } catch (error) {
-                    // If JSON parsing fails, return empty chunk
-                    return {
-                        result: [],
-                    } satisfies CompletionChunkObject;
-                }
+            if (!res.body) {
+                throw new Error('[Bedrock] Stream not found in response');
             }
 
-            return {
-                result: [],
-            } satisfies CompletionChunkObject;
-        });
+            const stream = transformAsyncIterator(res.body, (chunk) => {
+                if (chunk.chunk?.bytes) {
+                    const decoder = new TextDecoder();
+                    const body = decoder.decode(chunk.chunk.bytes);
+
+                    try {
+                        const result = JSON.parse(body);
+
+                        // Extract streaming response according to TwelveLabs Pegasus format
+                        let finishReason: string | undefined;
+                        if (result.finishReason) {
+                            switch (result.finishReason) {
+                                case 'stop':
+                                    finishReason = 'stop';
+                                    break;
+                                case 'length':
+                                    finishReason = 'length';
+                                    break;
+                                default:
+                                    finishReason = result.finishReason;
+                            }
+                        }
+
+                        return {
+                            result:
+                                result.delta || result.message
+                                    ? [{ type: 'text' as const, value: result.delta || result.message || '' }]
+                                    : [],
+                            finish_reason: finishReason,
+                        } satisfies CompletionChunkObject;
+                    } catch {
+                        // If JSON parsing fails, return empty chunk
+                        return {
+                            result: [],
+                        } satisfies CompletionChunkObject;
+                    }
+                }
+
+                return {
+                    result: [],
+                } satisfies CompletionChunkObject;
+            });
+            return withBedrockRuntimeScope(stream, executorScope);
+        } catch (err) {
+            executorScope.close();
+            throw err;
+        }
     }
 
-    async requestTextCompletionStream(prompt: BedrockPrompt, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+    async requestTextCompletionStream(
+        prompt: BedrockPrompt,
+        options: ExecutionOptions,
+    ): Promise<AsyncIterable<CompletionChunkObject>> {
         // Handle Twelvelabs Pegasus models
-        if (options.model.includes("twelvelabs.pegasus")) {
+        if (options.model.includes('twelvelabs.pegasus')) {
             return this.requestTwelvelabsPegasusCompletionStream(prompt as TwelvelabsPegasusRequest, options);
         }
 
@@ -814,49 +977,58 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const conversation = updateConversation(incomingConversation, conversePrompt);
 
         const payload = this.preparePayload(conversation, options);
-        const executor = this.getExecutor();
-        return executor.converseStream({
-            ...payload,
-        }).then((res) => {
-            const stream = res.stream;
+        const executorScope = this.getScopedExecutor(options);
+        return executorScope.executor
+            .converseStream({
+                ...payload,
+            })
+            .then((res) => {
+                const stream = res.stream;
 
-            if (!stream) {
-                throw new Error("[Bedrock] Stream not found in response");
-            }
+                if (!stream) {
+                    throw new Error('[Bedrock] Stream not found in response');
+                }
 
-            const streamingToolBlocks = new Map<number, { id: string; name: string }>();
-            return transformAsyncIterator(stream, (streamSegment: ConverseStreamOutput) => {
-                return this.getExtractedStream(streamSegment, conversePrompt, options, streamingToolBlocks);
+                const streamingToolBlocks = new Map<number, { id: string; name: string }>();
+                const transformedStream = transformAsyncIterator(stream, (streamSegment: ConverseStreamOutput) => {
+                    return this.getExtractedStream(streamSegment, conversePrompt, options, streamingToolBlocks);
+                });
+                return withBedrockRuntimeScope(transformedStream, executorScope);
+            })
+            .catch((err) => {
+                executorScope.close();
+                this.logger.error({ error: err }, '[Bedrock] Failed to stream');
+                throw err;
             });
-
-        }).catch((err) => {
-            this.logger.error({ error: err }, "[Bedrock] Failed to stream");
-            throw err;
-        });
     }
 
     preparePayload(prompt: ConverseRequest, options: ExecutionOptions) {
-        const model_options: TextFallbackOptions = options.model_options as TextFallbackOptions ?? { _option_id: "text-fallback" };
+        const model_options: TextFallbackOptions = (options.model_options as TextFallbackOptions) ?? {
+            _option_id: 'text-fallback',
+        };
 
-        let additionalField = {};
+        let additionalField: Record<string, unknown> = {};
         let supportsJSONPrefill = false;
 
         // Resolve thinking, effort, and sampling restrictions using shared Claude helper
-        const claudeThinking = resolveClaudeThinking(options.model, options.model_options as BedrockClaudeOptions | undefined);
+        const claudeThinking = resolveClaudeThinking(
+            options.model,
+            options.model_options as BedrockClaudeOptions | undefined,
+        );
         const hasSamplingRestriction = claudeThinking.hasSamplingRestriction;
 
-        if (options.model.includes("amazon")) {
+        if (options.model.includes('amazon')) {
             supportsJSONPrefill = true;
             //Titan models also exists but does not support any additional options
-            if (options.model.includes("nova")) {
+            if (options.model.includes('nova')) {
                 additionalField = { inferenceConfig: { topK: model_options.top_k } };
             }
-        } else if (options.model.includes("claude")) {
+        } else if (options.model.includes('claude')) {
             const claude_options = model_options as ModelOptions as BedrockClaudeOptions;
             // Thinking is active when extended (budget set) or adaptive (effort set) thinking is enabled.
             // JSON prefill is incompatible with active thinking.
-            const thinkingActive = claudeThinking.thinking != null && claudeThinking.thinking.type !== "disabled";
-            supportsJSONPrefill = !thinkingActive
+            const thinkingActive = claudeThinking.thinking != null && claudeThinking.thinking.type !== 'disabled';
+            supportsJSONPrefill = !thinkingActive;
 
             // Claude 3.7+ supports thinking — use shared helper for reasoning_config
             if (claudeThinking.supportsThinking) {
@@ -867,12 +1039,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     };
                 }
                 // For Claude 3.7 with extended thinking + high output, add beta header
-                if (claudeThinking.thinking?.type === "enabled" &&
-                    options.model.includes("claude-3-7-sonnet") &&
-                    ((claude_options.max_tokens ?? 0) > 64000 || (claude_options.thinking_budget_tokens ?? 0) > 64000)) {
+                if (
+                    claudeThinking.thinking?.type === 'enabled' &&
+                    options.model.includes('claude-3-7-sonnet') &&
+                    ((claude_options.max_tokens ?? 0) > 64000 || (claude_options.thinking_budget_tokens ?? 0) > 64000)
+                ) {
                     additionalField = {
                         ...additionalField,
-                        anthropic_beta: ["output-128k-2025-02-19"]
+                        anthropic_beta: ['output-128k-2025-02-19'],
                     };
                 }
             }
@@ -880,7 +1054,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             if (claudeThinking.outputConfig) {
                 additionalField = {
                     ...additionalField,
-                    output_config: claudeThinking.outputConfig
+                    output_config: claudeThinking.outputConfig,
                 };
             }
             // Claude 4.6 and later versions don't support JSON prefill
@@ -895,11 +1069,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             if (!hasSamplingRestriction) {
                 additionalField = { ...additionalField, top_k: model_options.top_k };
             }
-        } else if (options.model.includes("meta")) {
+        } else if (options.model.includes('meta')) {
             //LLaMA models support no additional options
-        } else if (options.model.includes("mistral")) {
+        } else if (options.model.includes('mistral')) {
             //7B instruct and 8x7B instruct
-            if (options.model.includes("7b")) {
+            if (options.model.includes('7b')) {
                 additionalField = { top_k: model_options.top_k };
                 //Does not support system messages
                 if (prompt.system && prompt.system?.length !== 0) {
@@ -911,10 +1085,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 //Other models such as Mistral Small,Large and Large 2
                 //Support no additional fields.
             }
-        } else if (options.model.includes("ai21")) {
+        } else if (options.model.includes('ai21')) {
             //Jamba models support no additional options
             //Jurassic 2 models do.
-            if (options.model.includes("j2")) {
+            if (options.model.includes('j2')) {
                 additionalField = {
                     presencePenalty: { scale: model_options.presence_penalty },
                     frequencyPenalty: { scale: model_options.frequency_penalty },
@@ -926,10 +1100,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     prompt.messages = converseConcatMessages(prompt.messages);
                 }
             }
-        } else if (options.model.includes("cohere.command")) {
+        } else if (options.model.includes('cohere.command')) {
             // If last message is "```json", remove it.
             //Command R and R plus
-            if (options.model.includes("cohere.command-r")) {
+            if (options.model.includes('cohere.command-r')) {
                 additionalField = {
                     k: model_options.top_k,
                     frequency_penalty: model_options.frequency_penalty,
@@ -945,19 +1119,19 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     prompt.messages = converseConcatMessages(prompt.messages);
                 }
             }
-        } else if (options.model.includes("palmyra")) {
+        } else if (options.model.includes('palmyra')) {
             const palmyraOptions = model_options as ModelOptions as BedrockPalmyraOptions;
             additionalField = {
                 seed: palmyraOptions?.seed,
                 presence_penalty: palmyraOptions?.presence_penalty,
                 frequency_penalty: palmyraOptions?.frequency_penalty,
                 min_tokens: palmyraOptions?.min_tokens,
-            }
-        } else if (options.model.includes("deepseek")) {
+            };
+        } else if (options.model.includes('deepseek')) {
             // DeepSeek models: no additional options, no stopSequences, only one of temperature/top_p
             model_options.stop_sequence = undefined;
             model_options.top_p = undefined;
-        } else if (options.model.includes("gpt-oss")) {
+        } else if (options.model.includes('gpt-oss')) {
             const gptOssOptions = model_options as ModelOptions as BedrockGptOssOptions;
             additionalField = {
                 reasoning_effort: gptOssOptions?.reasoning_effort,
@@ -966,12 +1140,12 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         //If last message is "```json", add corresponding ``` as a stop sequence.
         if (prompt.messages && prompt.messages.length > 0) {
-            if (prompt.messages[prompt.messages.length - 1].content?.[0].text === "```json") {
+            if (prompt.messages[prompt.messages.length - 1].content?.[0].text === '```json') {
                 const stopSeq = model_options.stop_sequence;
                 if (!stopSeq) {
-                    model_options.stop_sequence = ["```"];
-                } else if (!stopSeq.includes("```")) {
-                    stopSeq.push("```");
+                    model_options.stop_sequence = ['```'];
+                } else if (!stopSeq.includes('```')) {
+                    stopSeq.push('```');
                     model_options.stop_sequence = stopSeq;
                 }
             }
@@ -990,10 +1164,12 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         // Models with sampling parameter restrictions don't support temperature/top_p - exclude them from inference config
         const cleanedModelOptions = removeUndefinedValues({
             maxTokens: model_options.max_tokens,
-            ...(hasSamplingRestriction ? {} : {
-                temperature: model_options.temperature,
-                topP: model_options.temperature != null ? undefined : model_options.top_p,
-            }),
+            ...(hasSamplingRestriction
+                ? {}
+                : {
+                      temperature: model_options.temperature,
+                      topP: model_options.temperature != null ? undefined : model_options.top_p,
+                  }),
             stopSequences: model_options.stop_sequence,
         } satisfies InferenceConfiguration);
 
@@ -1012,17 +1188,18 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
 
         if (Object.keys(cleanedModelOptions).length > 0) {
-            request.inferenceConfig = cleanedModelOptions
+            request.inferenceConfig = cleanedModelOptions;
         }
 
         if (Object.keys(cleanedAdditionalFields).length > 0) {
-            request.additionalModelRequestFields = cleanedAdditionalFields;
+            request.additionalModelRequestFields =
+                cleanedAdditionalFields as unknown as ConverseRequest['additionalModelRequestFields'];
         }
 
         if (tool_defs?.length) {
             request.toolConfig = {
                 tools: tool_defs,
-            }
+            };
         } else if (request.messages && messagesContainToolBlocks(request.messages)) {
             // Bedrock requires toolConfig when conversation contains toolUse/toolResult blocks.
             // When no tools are provided (e.g. checkpoint summary calls), convert tool blocks
@@ -1075,37 +1252,51 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return request;
     }
 
-
     protected isImageModel(model: string): boolean {
-        return model.includes("titan-image") || model.includes("stable-diffusion") || model.includes("nova-canvas");
+        return model.includes('titan-image') || model.includes('stable-diffusion') || model.includes('nova-canvas');
     }
 
     async requestImageGeneration(prompt: NovaMessagesPrompt, options: ExecutionOptions): Promise<Completion> {
-        if (options.model_options?._option_id !== "bedrock-nova-canvas") {
-            this.logger.warn({ options: options.model_options }, "Invalid model options");
+        if (
+            options.model_options?._option_id !== undefined &&
+            options.model_options?._option_id !== 'bedrock-nova-canvas'
+        ) {
+            this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
         const model_options = options.model_options as NovaCanvasOptions;
 
-        const executor = this.getExecutor();
         const taskType = model_options.taskType ?? NovaImageGenerationTaskType.TEXT_IMAGE;
 
-        this.logger.info("Task type: " + taskType);
+        this.logger.info(`Task type: ${taskType}`);
 
-        if (typeof prompt === "string") {
-            throw new Error("Bad prompt format");
+        if (typeof prompt === 'string') {
+            throw new Error('Bad prompt format');
         }
 
         const payload = await formatNovaImageGenerationPayload(taskType, prompt, options);
+        const executorScope = this.getScopedExecutor(options);
 
-        const res = await executor.invokeModel({
-            modelId: options.model,
-            contentType: "application/json",
-            accept: "application/json",
-            body: JSON.stringify(payload),
-        },
-            {
-                requestTimeout: 60000 * 5
-            });
+        let res: InvokeModelCommandOutput;
+        try {
+            const requestTimeout = options.httpTimeout
+                ? resolveDriverHttpTimeouts(
+                      mergeDriverHttpTimeoutOptions(this.options.httpTimeout, options.httpTimeout),
+                  ).headersTimeout
+                : (this.options.httpTimeout?.headersTimeout ?? 60_000 * 5);
+            res = await executorScope.executor.invokeModel(
+                {
+                    modelId: options.model,
+                    contentType: 'application/json',
+                    accept: 'application/json',
+                    body: JSON.stringify(payload),
+                },
+                {
+                    requestTimeout,
+                },
+            );
+        } finally {
+            executorScope.close();
+        }
 
         const decoder = new TextDecoder();
         const body = decoder.decode(res.body);
@@ -1113,15 +1304,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         return {
             error: bedrockResult.error,
-            result: bedrockResult.images.map((image: any) => ({
-                type: "image" as const,
-                value: image
-            }))
-        }
+            result: bedrockResult.images.map((image: string) => ({
+                type: 'image' as const,
+                value: image,
+            })),
+        };
     }
 
     async startTraining(dataset: DataSource, options: TrainingOptions): Promise<TrainingJob> {
-
         //convert options.params to Record<string, string>
         const params: Record<string, string> = {};
         for (const [key, value] of Object.entries(options.params || {})) {
@@ -1129,7 +1319,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
 
         if (!this.options.training_bucket) {
-            throw new Error("Training cannot nbe used since the 'training_bucket' property was not specified in driver options")
+            throw new Error(
+                "Training cannot nbe used since the 'training_bucket' property was not specified in driver options",
+            );
         }
 
         const s3 = new S3Client({ region: this.options.region, credentials: this.options.credentials });
@@ -1137,45 +1329,56 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const upload = await forceUploadFile(s3, stream, this.options.training_bucket, dataset.name);
 
         const service = this.getService();
-        const response = await service.send(new CreateModelCustomizationJobCommand({
-            jobName: options.name + "-job",
-            customModelName: options.name,
-            roleArn: this.options.training_role_arn || undefined,
-            baseModelIdentifier: options.model,
-            clientRequestToken: "llumiverse-" + Date.now(),
-            trainingDataConfig: {
-                s3Uri: `s3://${upload.Bucket}/${upload.Key}`,
-            },
-            outputDataConfig: undefined,
-            hyperParameters: params,
-            //TODO not supported?
-            //customizationType: "FINE_TUNING",
-        }));
+        const response = await service.send(
+            new CreateModelCustomizationJobCommand({
+                jobName: `${options.name}-job`,
+                customModelName: options.name,
+                roleArn: this.options.training_role_arn || undefined,
+                baseModelIdentifier: options.model,
+                clientRequestToken: `llumiverse-${Date.now()}`,
+                trainingDataConfig: {
+                    s3Uri: `s3://${upload.Bucket}/${upload.Key}`,
+                },
+                outputDataConfig: undefined,
+                hyperParameters: params,
+                //TODO not supported?
+                //customizationType: "FINE_TUNING",
+            }),
+        );
 
-        const job = await service.send(new GetModelCustomizationJobCommand({
-            jobIdentifier: response.jobArn
-        }));
+        const job = await service.send(
+            new GetModelCustomizationJobCommand({
+                jobIdentifier: response.jobArn,
+            }),
+        );
 
+        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
         return jobInfo(job, response.jobArn!);
     }
 
     async cancelTraining(jobId: string): Promise<TrainingJob> {
         const service = this.getService();
-        await service.send(new StopModelCustomizationJobCommand({
-            jobIdentifier: jobId
-        }));
-        const job = await service.send(new GetModelCustomizationJobCommand({
-            jobIdentifier: jobId
-        }));
+        await service.send(
+            new StopModelCustomizationJobCommand({
+                jobIdentifier: jobId,
+            }),
+        );
+        const job = await service.send(
+            new GetModelCustomizationJobCommand({
+                jobIdentifier: jobId,
+            }),
+        );
 
         return jobInfo(job, jobId);
     }
 
     async getTrainingJob(jobId: string): Promise<TrainingJob> {
         const service = this.getService();
-        const job = await service.send(new GetModelCustomizationJobCommand({
-            jobIdentifier: jobId
-        }));
+        const job = await service.send(
+            new GetModelCustomizationJobCommand({
+                jobIdentifier: jobId,
+            }),
+        );
 
         return jobInfo(job, jobId);
     }
@@ -1184,22 +1387,24 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
     async validateConnection(): Promise<boolean> {
         const service = this.getService();
-        this.logger.debug("[Bedrock] validating connection", service.config.credentials.name);
+        this.logger.debug('[Bedrock] validating connection', service.config.credentials.name);
         //return true as if the client has been initialized, it means the connection is valid
         return true;
     }
 
-
     async listTrainableModels(): Promise<AIModel<string>[]> {
-        this.logger.debug("[Bedrock] listing trainable models");
-        return this._listModels(m => m.customizationsSupported ? m.customizationsSupported.includes("FINE_TUNING") : false);
+        this.logger.debug('[Bedrock] listing trainable models');
+        return this._listModels((m) =>
+            m.customizationsSupported ? m.customizationsSupported.includes('FINE_TUNING') : false,
+        );
     }
 
     async listModels(): Promise<AIModel[]> {
-        this.logger.debug("[Bedrock] listing models");
+        this.logger.debug('[Bedrock] listing models');
         // exclude trainable models since they are not executable
         // exclude embedding models, not to be used for typical completions.
-        const filter = (m: FoundationModelSummary) => (m.inferenceTypesSupported?.includes("ON_DEMAND") && !m.outputModalities?.includes("EMBEDDING")) ?? false;
+        const filter = (m: FoundationModelSummary) =>
+            (m.inferenceTypesSupported?.includes('ON_DEMAND') && !m.outputModalities?.includes('EMBEDDING')) ?? false;
         return this._listModels(filter);
     }
 
@@ -1207,21 +1412,25 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const service = this.getService();
         const [foundationModelsList, customModelsList, inferenceProfilesList] = await Promise.all([
             service.listFoundationModels({}).catch(() => {
-                this.logger.warn("[Bedrock] Can't list foundation models. Check if the user has the right permissions.");
-                return undefined
+                this.logger.warn(
+                    "[Bedrock] Can't list foundation models. Check if the user has the right permissions.",
+                );
+                return undefined;
             }),
             service.listCustomModels({}).catch(() => {
                 this.logger.warn("[Bedrock] Can't list custom models. Check if the user has the right permissions.");
-                return undefined
+                return undefined;
             }),
             service.listInferenceProfiles({}).catch(() => {
-                this.logger.warn("[Bedrock] Can't list inference profiles. Check if the user has the right permissions.");
-                return undefined
+                this.logger.warn(
+                    "[Bedrock] Can't list inference profiles. Check if the user has the right permissions.",
+                );
+                return undefined;
             }),
         ]);
 
         if (!foundationModelsList?.modelSummaries) {
-            throw new Error("Foundation models not found");
+            throw new Error('Foundation models not found');
         }
 
         let foundationModels = foundationModelsList.modelSummaries || [];
@@ -1229,20 +1438,30 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             foundationModels = foundationModels.filter(foundationFilter);
         }
 
-        const supportedPublishers = ["amazon", "anthropic", "cohere", "ai21",
-            "mistral", "meta", "deepseek", "writer",
-            "openai", "twelvelabs", "qwen"];
+        const supportedPublishers = [
+            'amazon',
+            'anthropic',
+            'cohere',
+            'ai21',
+            'mistral',
+            'meta',
+            'deepseek',
+            'writer',
+            'openai',
+            'twelvelabs',
+            'qwen',
+        ];
         const unsupportedModelsByPublisher = {
-            amazon: ["titan-image-generator", "nova-reel", "nova-sonic", "rerank"],
+            amazon: ['titan-image-generator', 'nova-reel', 'nova-sonic', 'rerank'],
             anthropic: [],
-            cohere: ["rerank", "embed"],
+            cohere: ['rerank', 'embed'],
             ai21: [],
             mistral: [],
             meta: [],
             deepseek: [],
             writer: [],
             openai: [],
-            twelvelabs: ["marengo"],
+            twelvelabs: ['marengo'],
             qwen: [],
         };
 
@@ -1253,33 +1472,27 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             const normalizedProvider = providerName.toLowerCase();
 
             // Check if provider is supported
-            const isProviderSupported = supportedPublishers.some(provider =>
-                normalizedProvider.includes(provider)
-            );
+            const isProviderSupported = supportedPublishers.some((provider) => normalizedProvider.includes(provider));
 
             if (!isProviderSupported) return false;
 
             // Check if model is in the unsupported list for its provider
             for (const provider of supportedPublishers) {
                 if (normalizedProvider.includes(provider)) {
-                    const unsupportedModels = unsupportedModelsByPublisher[provider as keyof typeof unsupportedModelsByPublisher] || [];
-                    return !unsupportedModels.some(unsupported =>
-                        modelId.toLowerCase().includes(unsupported)
-                    );
+                    const unsupportedModels =
+                        unsupportedModelsByPublisher[provider as keyof typeof unsupportedModelsByPublisher] || [];
+                    return !unsupportedModels.some((unsupported) => modelId.toLowerCase().includes(unsupported));
                 }
             }
 
             return true;
         };
 
-        foundationModels = foundationModels.filter(m =>
-            shouldIncludeModel(m.modelId, m.providerName)
-        );
+        foundationModels = foundationModels.filter((m) => shouldIncludeModel(m.modelId, m.providerName));
 
         const aiModels: AIModel[] = foundationModels.map((m) => {
-
             if (!m.modelId) {
-                throw new Error("modelId not found");
+                throw new Error('modelId not found');
             }
 
             const modelCapability = getModelCapabilities(m.modelArn ?? m.modelId, this.provider);
@@ -1290,8 +1503,12 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 provider: this.provider,
                 owner: m.providerName,
                 can_stream: m.responseStreamingSupported ?? false,
-                input_modalities: m.inputModalities ? formatAmazonModalities(m.inputModalities) : modelModalitiesToArray(modelCapability.input),
-                output_modalities: m.outputModalities ? formatAmazonModalities(m.outputModalities) : modelModalitiesToArray(modelCapability.input),
+                input_modalities: m.inputModalities
+                    ? formatAmazonModalities(m.inputModalities)
+                    : modelModalitiesToArray(modelCapability.input),
+                output_modalities: m.outputModalities
+                    ? formatAmazonModalities(m.outputModalities)
+                    : modelModalitiesToArray(modelCapability.input),
                 tool_support: modelCapability.tool_support,
             };
 
@@ -1301,9 +1518,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         //add custom models
         if (customModelsList?.modelSummaries) {
             customModelsList.modelSummaries.forEach((m) => {
-
                 if (!m.modelArn) {
-                    throw new Error("Model ID not found");
+                    throw new Error('Model ID not found');
                 }
 
                 const modelCapability = getModelCapabilities(m.modelArn, this.provider);
@@ -1312,7 +1528,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     id: m.modelArn,
                     name: m.modelName ?? m.modelArn,
                     provider: this.provider,
-                    owner: "custom",
+                    owner: 'custom',
                     description: `Custom model from ${m.baseModelName}`,
                     is_custom: true,
                     input_modalities: modelModalitiesToArray(modelCapability.input),
@@ -1321,7 +1537,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 };
 
                 aiModels.push(model);
-                this.validateConnection;
             });
         }
 
@@ -1329,15 +1544,15 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if (inferenceProfilesList?.inferenceProfileSummaries) {
             inferenceProfilesList.inferenceProfileSummaries.forEach((p) => {
                 if (!p.inferenceProfileArn) {
-                    throw new Error("Profile ARN not found");
+                    throw new Error('Profile ARN not found');
                 }
 
                 // Apply the same filtering logic to inference profiles based on their name
-                const profileId = p.inferenceProfileId || "";
-                const profileName = p.inferenceProfileName || "";
+                const profileId = p.inferenceProfileId || '';
+                const profileName = p.inferenceProfileName || '';
 
                 // Extract provider name from profile name or ID
-                let providerName = "";
+                let providerName = '';
                 for (const provider of supportedPublishers) {
                     if (profileName.toLowerCase().includes(provider) || profileId.toLowerCase().includes(provider)) {
                         providerName = provider;
@@ -1345,7 +1560,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     }
                 }
 
-                const modelCapability = getModelCapabilities(p.inferenceProfileArn ?? p.inferenceProfileId, this.provider);
+                const modelCapability = getModelCapabilities(
+                    p.inferenceProfileArn ?? p.inferenceProfileId,
+                    this.provider,
+                );
 
                 if (providerName && shouldIncludeModel(profileId, providerName)) {
                     const model: AIModel = {
@@ -1366,92 +1584,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return aiModels;
     }
 
-    async generateEmbeddings({ text, image, model }: EmbeddingsOptions): Promise<EmbeddingsResult> {
-
-        this.logger.info("[Bedrock] Generating embeddings with model " + model);
-
-        // Handle TwelveLabs Marengo models
-        if (model?.includes("twelvelabs.marengo")) {
-            return this.generateTwelvelabsMarengoEmbeddings({ text, image, model });
-        }
-
-        // Handle other Bedrock embedding models
-        const defaultModel = image ? "amazon.titan-embed-image-v1" : "amazon.titan-embed-text-v2:0";
-        const modelID = model ?? defaultModel;
-
-        const invokeBody = {
-            inputText: text,
-            inputImage: image
-        }
-
-        const executor = this.getExecutor();
-        const res = await executor.invokeModel(
-            {
-                modelId: modelID,
-                contentType: "application/json",
-                body: JSON.stringify(invokeBody),
-            }
-        );
-
-        const decoder = new TextDecoder();
-        const body = decoder.decode(res.body);
-
-        const result = JSON.parse(body);
-
-        if (!result.embedding) {
-            throw new Error("Embeddings not found");
-        }
-
-        return {
-            values: result.embedding,
-            model: modelID,
-            token_count: result.inputTextTokenCount
-        };
-    }
-
-    private async generateTwelvelabsMarengoEmbeddings({ text, image, model }: EmbeddingsOptions): Promise<EmbeddingsResult> {
-        const executor = this.getExecutor();
-
-        // Prepare the request payload for TwelveLabs Marengo
-        const invokeBody: TwelvelabsMarengoRequest = {
-            inputType: "text"
-        };
-
-        if (text) {
-            invokeBody.inputText = text;
-            invokeBody.inputType = "text";
-        }
-
-        if (image) {
-            // For the embeddings interface, image is expected to be base64
-            invokeBody.mediaSource = {
-                base64String: image
-            };
-            invokeBody.inputType = "image";
-        }
-
-        const res = await executor.invokeModel({
-            modelId: model!,
-            contentType: "application/json",
-            accept: "application/json",
-            body: JSON.stringify(invokeBody),
-        });
-
-        const decoder = new TextDecoder();
-        const body = decoder.decode(res.body);
-        const result: TwelvelabsMarengoResponse = JSON.parse(body);
-
-        // TwelveLabs Marengo returns embedding data
-        if (!result.embedding) {
-            throw new Error("Embeddings not found in TwelveLabs Marengo response");
-        }
-
-        return {
-            values: result.embedding,
-            model: model!,
-            // TwelveLabs Marengo doesn't return token count in the same way
-            token_count: undefined
-        };
+    async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
+        return generateBedrockEmbeddings(this, options);
     }
 
     /**
@@ -1460,6 +1594,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     destroy(): void {
         this._executor?.destroy();
         this._service?.destroy();
+        this._executor = undefined;
+        this._service = undefined;
+        super.destroy();
     }
 }
 
@@ -1471,20 +1608,19 @@ function jobInfo(job: GetModelCustomizationJobCommandOutput, jobId: string): Tra
         status = TrainingJobStatus.succeeded;
     } else if (jobStatus === ModelCustomizationJobStatus.FAILED) {
         status = TrainingJobStatus.failed;
-        details = job.failureMessage || "error";
+        details = job.failureMessage || 'error';
     } else if (jobStatus === ModelCustomizationJobStatus.STOPPED) {
         status = TrainingJobStatus.cancelled;
     } else {
         status = TrainingJobStatus.running;
         details = jobStatus;
     }
-    job.baseModelArn
     return {
         id: jobId,
         model: job.outputModelArn,
         status,
-        details
-    }
+        details,
+    };
 }
 
 function getToolDefinitions(tools?: ToolDefinition[]): Tool[] | undefined {
@@ -1497,10 +1633,10 @@ function getToolDefinition(tool: ToolDefinition): Tool.ToolSpecMember {
             name: tool.name,
             description: tool.description,
             inputSchema: {
-                json: tool.input_schema as any,
-            }
-        }
-    }
+                json: tool.input_schema,
+            } as NonNullable<NonNullable<Tool.ToolSpecMember['toolSpec']>['inputSchema']>,
+        },
+    };
 }
 
 /**
@@ -1510,8 +1646,7 @@ export function messagesContainToolBlocks(messages: Message[]): boolean {
     for (const msg of messages) {
         if (!msg.content) continue;
         for (const block of msg.content) {
-            if ((block as ContentBlock.ToolUseMember).toolUse ||
-                (block as ContentBlock.ToolResultMember).toolResult) {
+            if ((block as ContentBlock.ToolUseMember).toolUse || (block as ContentBlock.ToolResultMember).toolResult) {
                 return true;
             }
         }
@@ -1528,12 +1663,11 @@ export function messagesContainToolBlocks(messages: Message[]): boolean {
  * conversation history contains tool interactions from prior turns.
  */
 export function convertToolBlocksToText(messages: Message[]): Message[] {
-    return messages.map(msg => {
+    return messages.map((msg) => {
         if (!msg.content) return msg;
         let hasToolBlocks = false;
         for (const block of msg.content) {
-            if ((block as ContentBlock.ToolUseMember).toolUse ||
-                (block as ContentBlock.ToolResultMember).toolResult) {
+            if ((block as ContentBlock.ToolUseMember).toolUse || (block as ContentBlock.ToolResultMember).toolResult) {
                 hasToolBlocks = true;
                 break;
             }
@@ -1546,7 +1680,7 @@ export function convertToolBlocksToText(messages: Message[]): Message[] {
             const toolResult = (block as ContentBlock.ToolResultMember).toolResult;
             if (toolUse) {
                 const inputStr = toolUse.input ? JSON.stringify(toolUse.input) : '';
-                const truncatedInput = inputStr.length > 500 ? inputStr.substring(0, 500) + '...' : inputStr;
+                const truncatedInput = inputStr.length > 500 ? `${inputStr.substring(0, 500)}...` : inputStr;
                 newContent.push({
                     text: `[Tool call: ${toolUse.name}(${truncatedInput})]`,
                 } as ContentBlock.TextMember);
@@ -1554,9 +1688,9 @@ export function convertToolBlocksToText(messages: Message[]): Message[] {
                 const resultTexts: string[] = [];
                 if (toolResult.content) {
                     for (const c of toolResult.content) {
-                        if ((c as any).text) {
-                            const text = (c as any).text as string;
-                            resultTexts.push(text.length > 500 ? text.substring(0, 500) + '...' : text);
+                        if ('text' in c && typeof c.text === 'string') {
+                            const text = c.text;
+                            resultTexts.push(text.length > 500 ? `${text.substring(0, 500)}...` : text);
                         }
                     }
                 }
@@ -1577,16 +1711,16 @@ export function convertToolBlocksToText(messages: Message[]): Message[] {
  * AWS Bedrock's additionalModelRequestFields must be valid JSON, and undefined is not valid JSON.
  * Any unrecognized parameters will cause an exception.
  */
-function removeUndefinedValues<T extends Record<string, any>>(obj: T): Partial<T> {
+function removeUndefinedValues(obj: Record<string, unknown>): Record<string, unknown> {
     if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) {
         return obj;
     }
 
-    const cleaned: any = {};
+    const cleaned: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj)) {
         if (value !== undefined) {
             if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-                const cleanedNested = removeUndefinedValues(value);
+                const cleanedNested = removeUndefinedValues(value as Record<string, unknown>);
                 // Only include nested objects if they have properties after cleaning
                 if (Object.keys(cleanedNested).length > 0) {
                     cleaned[key] = cleanedNested;
@@ -1620,20 +1754,24 @@ function updateConversation(conversation: ConverseRequest, prompt: ConverseReque
 }
 
 function stripClaudeCachePoints(messages: Message[]): Message[] {
-    return messages.map(message => ({
+    return messages.map((message) => ({
         ...message,
-        content: message.content?.filter(block => !('cachePoint' in block)),
+        content: message.content?.filter((block) => !('cachePoint' in block)),
     }));
 }
 
 function stripClaudeCachePointsFromSystem(system?: ConverseRequest['system']): ConverseRequest['system'] | undefined {
-    return (system?.filter(block => !('cachePoint' in (block as object))) ?? undefined) as ConverseRequest['system'] | undefined;
+    return (system?.filter((block) => !('cachePoint' in (block as object))) ?? undefined) as
+        | ConverseRequest['system']
+        | undefined;
 }
 
 function stripClaudeCachePointsFromTools(
-    tools?: NonNullable<NonNullable<ConverseRequest['toolConfig']>['tools']>
+    tools?: NonNullable<NonNullable<ConverseRequest['toolConfig']>['tools']>,
 ): NonNullable<NonNullable<ConverseRequest['toolConfig']>['tools']> | undefined {
-    return (tools?.filter(tool => !('cachePoint' in (tool as object))) ?? undefined) as NonNullable<NonNullable<ConverseRequest['toolConfig']>['tools']> | undefined;
+    return (tools?.filter((tool) => !('cachePoint' in (tool as object))) ?? undefined) as
+        | NonNullable<NonNullable<ConverseRequest['toolConfig']>['tools']>
+        | undefined;
 }
 
 /**
@@ -1663,7 +1801,7 @@ export function fixOrphanedToolUse(messages: Message[]): Message[] {
                 if (block.toolUse?.toolUseId) {
                     toolUseBlocks.push({
                         toolUseId: block.toolUse.toolUseId,
-                        name: block.toolUse.name ?? 'unknown'
+                        name: block.toolUse.name ?? 'unknown',
                     });
                 }
             }
@@ -1682,23 +1820,25 @@ export function fixOrphanedToolUse(messages: Message[]): Message[] {
                     }
 
                     // Find orphaned toolUse blocks (no matching toolResult)
-                    const orphanedToolUse = toolUseBlocks.filter(tu => !toolResultIds.has(tu.toolUseId));
+                    const orphanedToolUse = toolUseBlocks.filter((tu) => !toolResultIds.has(tu.toolUseId));
 
                     if (orphanedToolUse.length > 0) {
                         // Inject synthetic toolResults for orphaned toolUse
-                        const syntheticResults: ContentBlock[] = orphanedToolUse.map(tu => ({
+                        const syntheticResults: ContentBlock[] = orphanedToolUse.map((tu) => ({
                             toolResult: {
                                 toolUseId: tu.toolUseId,
-                                content: [{
-                                    text: `[Tool interrupted: The user stopped the operation before "${tu.name}" could execute.]`
-                                }]
-                            }
+                                content: [
+                                    {
+                                        text: `[Tool interrupted: The user stopped the operation before "${tu.name}" could execute.]`,
+                                    },
+                                ],
+                            },
                         }));
 
                         // Prepend synthetic results to the next user message
                         const updatedNextMessage: Message = {
                             ...nextMessage,
-                            content: [...syntheticResults, ...nextMessage.content]
+                            content: [...syntheticResults, ...nextMessage.content],
                         };
 
                         // Replace the next message in our iteration
@@ -1707,18 +1847,20 @@ export function fixOrphanedToolUse(messages: Message[]): Message[] {
                 } else if (nextMessage && nextMessage.role === 'user' && !nextMessage.content) {
                     // Next message is a user message but has no content
                     // We need to add toolResults
-                    const syntheticResults: ContentBlock[] = toolUseBlocks.map(tu => ({
+                    const syntheticResults: ContentBlock[] = toolUseBlocks.map((tu) => ({
                         toolResult: {
                             toolUseId: tu.toolUseId,
-                            content: [{
-                                text: `[Tool interrupted: The user stopped the operation before "${tu.name}" could execute.]`
-                            }]
-                        }
+                            content: [
+                                {
+                                    text: `[Tool interrupted: The user stopped the operation before "${tu.name}" could execute.]`,
+                                },
+                            ],
+                        },
                     }));
 
                     const updatedNextMessage: Message = {
                         role: 'user',
-                        content: syntheticResults
+                        content: syntheticResults,
                     };
 
                     messages[i + 1] = updatedNextMessage;
@@ -1736,15 +1878,15 @@ function formatAmazonModalities(modalities: ModelModality[]): string[] {
     const standardizedModalities: string[] = [];
     for (const modality of modalities) {
         if (modality === ModelModality.TEXT) {
-            standardizedModalities.push("text");
+            standardizedModalities.push('text');
         } else if (modality === ModelModality.IMAGE) {
-            standardizedModalities.push("image");
+            standardizedModalities.push('image');
         } else if (modality === ModelModality.EMBEDDING) {
-            standardizedModalities.push("embedding");
-        } else if (modality === "SPEECH") {
-            standardizedModalities.push("audio");
-        } else if (modality === "VIDEO") {
-            standardizedModalities.push("video");
+            standardizedModalities.push('embedding');
+        } else if (modality === 'SPEECH') {
+            standardizedModalities.push('audio');
+        } else if (modality === 'VIDEO') {
+            standardizedModalities.push('video');
         } else {
             // Handle other modalities as needed
             standardizedModalities.push((modality as string).toString().toLowerCase());

@@ -12,18 +12,18 @@
  * - OpenAI: "No tool output found for function call <id>"
  */
 
+import type { MessageParam } from '@anthropic-ai/sdk/resources/index.js';
+import type { Message } from '@aws-sdk/client-bedrock-runtime';
+import type OpenAI from 'openai';
 import { describe, expect, test } from 'vitest';
-import { fixOrphanedToolUse as fixOrphanedToolUseClaude } from '../src/vertexai/models/claude.js';
 import { fixOrphanedToolUse as fixOrphanedToolUseBedrock } from '../src/bedrock/index.js';
 import { fixOrphanedToolUse as fixOrphanedToolUseOpenAI } from '../src/openai/index.js';
-import { MessageParam } from '@anthropic-ai/sdk/resources/index.js';
-import { Message } from '@aws-sdk/client-bedrock-runtime';
-import type OpenAI from 'openai';
+import { fixOrphanedToolUse as fixOrphanedToolUseClaude } from '../src/shared/claude-messages.js';
+import type { Tree } from './__helpers__/test-utils.js';
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 
 describe('fixOrphanedToolUse - Claude', () => {
-
     test('returns empty array for empty input', () => {
         const result = fixOrphanedToolUseClaude([]);
         expect(result).toEqual([]);
@@ -36,11 +36,11 @@ describe('fixOrphanedToolUse - Claude', () => {
                 content: [
                     { type: 'text', text: 'Using a tool...' },
                     { type: 'tool_use', id: 'tool_1', name: 'search', input: { query: 'test' } },
-                ]
+                ],
             },
             {
                 role: 'user',
-                content: [{ type: 'tool_result', tool_use_id: 'tool_1', content: 'Search result' }]
+                content: [{ type: 'tool_result', tool_use_id: 'tool_1', content: 'Search result' }],
             },
         ];
 
@@ -55,11 +55,11 @@ describe('fixOrphanedToolUse - Claude', () => {
                 content: [
                     { type: 'text', text: 'Using a tool...' },
                     { type: 'tool_use', id: 'tool_1', name: 'search', input: { query: 'test' } },
-                ]
+                ],
             },
             {
                 role: 'user',
-                content: [{ type: 'text', text: 'Actually, stop that and do something else' }]
+                content: [{ type: 'text', text: 'Actually, stop that and do something else' }],
             },
         ];
 
@@ -70,7 +70,12 @@ describe('fixOrphanedToolUse - Claude', () => {
         expect(result[1].role).toBe('user');
 
         // The user message should have synthetic tool_result prepended
-        const userContent = result[1].content as Array<{ type: string; tool_use_id?: string; content?: string; text?: string }>;
+        const userContent = result[1].content as Array<{
+            type: string;
+            tool_use_id?: string;
+            content?: string;
+            text?: string;
+        }>;
         expect(userContent).toHaveLength(2);
         expect(userContent[0].type).toBe('tool_result');
         expect(userContent[0].tool_use_id).toBe('tool_1');
@@ -89,11 +94,11 @@ describe('fixOrphanedToolUse - Claude', () => {
                     { type: 'tool_use', id: 'tool_1', name: 'search', input: {} },
                     { type: 'tool_use', id: 'tool_2', name: 'fetch', input: {} },
                     { type: 'tool_use', id: 'tool_3', name: 'process', input: {} },
-                ]
+                ],
             },
             {
                 role: 'user',
-                content: [{ type: 'text', text: 'Stop!' }]
+                content: [{ type: 'text', text: 'Stop!' }],
             },
         ];
 
@@ -119,14 +124,14 @@ describe('fixOrphanedToolUse - Claude', () => {
                 content: [
                     { type: 'tool_use', id: 'tool_1', name: 'search', input: {} },
                     { type: 'tool_use', id: 'tool_2', name: 'fetch', input: {} },
-                ]
+                ],
             },
             {
                 role: 'user',
                 content: [
                     { type: 'tool_result', tool_use_id: 'tool_1', content: 'Search completed' },
                     { type: 'text', text: 'Continue with this result' },
-                ]
+                ],
             },
         ];
 
@@ -147,13 +152,11 @@ describe('fixOrphanedToolUse - Claude', () => {
         const messages: MessageParam[] = [
             {
                 role: 'assistant',
-                content: [
-                    { type: 'tool_use', id: 'tool_1', name: 'search', input: {} },
-                ]
+                content: [{ type: 'tool_use', id: 'tool_1', name: 'search', input: {} }],
             },
             {
                 role: 'user',
-                content: 'Stop and do something else'
+                content: 'Stop and do something else',
             },
         ];
 
@@ -173,7 +176,7 @@ describe('fixOrphanedToolUse - Claude', () => {
             { role: 'user', content: [{ type: 'text', text: 'Search for documents' }] },
             {
                 role: 'assistant',
-                content: [{ type: 'text', text: 'I will search for documents.' }]
+                content: [{ type: 'text', text: 'I will search for documents.' }],
             },
             { role: 'user', content: [{ type: 'text', text: 'Yes, proceed' }] },
             // Assistant starts tool execution but user stops it
@@ -181,9 +184,14 @@ describe('fixOrphanedToolUse - Claude', () => {
                 role: 'assistant',
                 content: [
                     { type: 'text', text: 'Searching...' },
-                    { type: 'tool_use', id: 'toolu_search', name: 'search_documents', input: { query: 'important docs' } },
+                    {
+                        type: 'tool_use',
+                        id: 'toolu_search',
+                        name: 'search_documents',
+                        input: { query: 'important docs' },
+                    },
                     { type: 'tool_use', id: 'toolu_analyze', name: 'analyze_results', input: {} },
-                ]
+                ],
             },
             // User sends new message (agent was stopped, no tool_results)
             { role: 'user', content: [{ type: 'text', text: 'Never mind, do something else instead' }] },
@@ -210,7 +218,6 @@ describe('fixOrphanedToolUse - Claude', () => {
 });
 
 describe('fixOrphanedToolUse - Bedrock', () => {
-
     test('returns empty array for empty input', () => {
         const result = fixOrphanedToolUseBedrock([]);
         expect(result).toEqual([]);
@@ -223,11 +230,11 @@ describe('fixOrphanedToolUse - Bedrock', () => {
                 content: [
                     { text: 'Using a tool...' },
                     { toolUse: { toolUseId: 'tool_1', name: 'search', input: { query: 'test' } } },
-                ]
+                ],
             },
             {
                 role: 'user',
-                content: [{ toolResult: { toolUseId: 'tool_1', content: [{ text: 'Search result' }] } }]
+                content: [{ toolResult: { toolUseId: 'tool_1', content: [{ text: 'Search result' }] } }],
             },
         ];
 
@@ -242,11 +249,11 @@ describe('fixOrphanedToolUse - Bedrock', () => {
                 content: [
                     { text: 'Using a tool...' },
                     { toolUse: { toolUseId: 'tool_1', name: 'search', input: { query: 'test' } } },
-                ]
+                ],
             },
             {
                 role: 'user',
-                content: [{ text: 'Actually, stop that and do something else' }]
+                content: [{ text: 'Actually, stop that and do something else' }],
             },
         ];
 
@@ -257,12 +264,13 @@ describe('fixOrphanedToolUse - Bedrock', () => {
         expect(result[1].role).toBe('user');
 
         // The user message should have synthetic toolResult prepended
+        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
         const userContent = result[1].content!;
         expect(userContent).toHaveLength(2);
         expect(userContent[0].toolResult).toBeDefined();
-        expect(userContent[0].toolResult!.toolUseId).toBe('tool_1');
-        expect(userContent[0].toolResult!.content![0].text).toContain('Tool interrupted');
-        expect(userContent[0].toolResult!.content![0].text).toContain('search');
+        expect(userContent[0].toolResult?.toolUseId).toBe('tool_1');
+        expect(userContent[0].toolResult?.content?.[0].text).toContain('Tool interrupted');
+        expect(userContent[0].toolResult?.content?.[0].text).toContain('search');
         expect(userContent[1].text).toBe('Actually, stop that and do something else');
     });
 
@@ -275,16 +283,17 @@ describe('fixOrphanedToolUse - Bedrock', () => {
                     { toolUse: { toolUseId: 'tool_1', name: 'search', input: {} } },
                     { toolUse: { toolUseId: 'tool_2', name: 'fetch', input: {} } },
                     { toolUse: { toolUseId: 'tool_3', name: 'process', input: {} } },
-                ]
+                ],
             },
             {
                 role: 'user',
-                content: [{ text: 'Stop!' }]
+                content: [{ text: 'Stop!' }],
             },
         ];
 
         const result = fixOrphanedToolUseBedrock(messages);
 
+        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
         const userContent = result[1].content!;
         expect(userContent).toHaveLength(4); // 3 synthetic toolResults + 1 text
 
@@ -302,19 +311,20 @@ describe('fixOrphanedToolUse - Bedrock', () => {
                 content: [
                     { toolUse: { toolUseId: 'tool_1', name: 'search', input: {} } },
                     { toolUse: { toolUseId: 'tool_2', name: 'fetch', input: {} } },
-                ]
+                ],
             },
             {
                 role: 'user',
                 content: [
                     { toolResult: { toolUseId: 'tool_1', content: [{ text: 'Search completed' }] } },
                     { text: 'Continue with this result' },
-                ]
+                ],
             },
         ];
 
         const result = fixOrphanedToolUseBedrock(messages);
 
+        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
         const userContent = result[1].content!;
         expect(userContent).toHaveLength(3); // 1 synthetic + 1 real toolResult + 1 text
 
@@ -335,9 +345,15 @@ describe('fixOrphanedToolUse - Bedrock', () => {
                 role: 'assistant',
                 content: [
                     { text: 'Searching...' },
-                    { toolUse: { toolUseId: 'toolu_search', name: 'search_documents', input: { query: 'important docs' } } },
+                    {
+                        toolUse: {
+                            toolUseId: 'toolu_search',
+                            name: 'search_documents',
+                            input: { query: 'important docs' },
+                        },
+                    },
                     { toolUse: { toolUseId: 'toolu_analyze', name: 'analyze_results', input: {} } },
-                ]
+                ],
             },
             // User sends new message (agent was stopped, no toolResults)
             { role: 'user', content: [{ text: 'Never mind, do something else instead' }] },
@@ -348,30 +364,28 @@ describe('fixOrphanedToolUse - Bedrock', () => {
         expect(result).toHaveLength(5);
 
         // Check that the last user message has synthetic toolResults
+        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
         const lastUserContent = result[4].content!;
         expect(lastUserContent).toHaveLength(3); // 2 synthetic + 1 text
 
         expect(lastUserContent[0].toolResult?.toolUseId).toBe('toolu_search');
-        expect(lastUserContent[0].toolResult?.content![0].text).toContain('user stopped');
+        expect(lastUserContent[0].toolResult?.content?.[0].text).toContain('user stopped');
 
         expect(lastUserContent[1].toolResult?.toolUseId).toBe('toolu_analyze');
-        expect(lastUserContent[1].toolResult?.content![0].text).toContain('user stopped');
+        expect(lastUserContent[1].toolResult?.content?.[0].text).toContain('user stopped');
 
         expect(lastUserContent[2].text).toBe('Never mind, do something else instead');
     });
 });
 
 describe('fixOrphanedToolUse - OpenAI', () => {
-
     test('returns empty array for empty input', () => {
         const result = fixOrphanedToolUseOpenAI([]);
         expect(result).toEqual([]);
     });
 
     test('returns single item unchanged', () => {
-        const items: ResponseInputItem[] = [
-            { role: 'user', content: 'Hello' },
-        ];
+        const items: ResponseInputItem[] = [{ role: 'user', content: 'Hello' }];
         const result = fixOrphanedToolUseOpenAI(items);
         expect(result).toEqual(items);
     });
@@ -380,7 +394,12 @@ describe('fixOrphanedToolUse - OpenAI', () => {
         const items: ResponseInputItem[] = [
             { role: 'user', content: 'Search for something' },
             { role: 'assistant', content: 'I will search.' },
-            { type: 'function_call', call_id: 'fc_1', name: 'search', arguments: '{"query":"test"}' } as ResponseInputItem,
+            {
+                type: 'function_call',
+                call_id: 'fc_1',
+                name: 'search',
+                arguments: '{"query":"test"}',
+            } as ResponseInputItem,
             { type: 'function_call_output', call_id: 'fc_1', output: 'Search result' } as ResponseInputItem,
             { role: 'assistant', content: 'Here are the results.' },
         ];
@@ -392,7 +411,12 @@ describe('fixOrphanedToolUse - OpenAI', () => {
     test('injects synthetic function_call_output for orphaned function_call followed by user message', () => {
         const items: ResponseInputItem[] = [
             { role: 'assistant', content: 'Using a tool...' },
-            { type: 'function_call', call_id: 'fc_1', name: 'ask_user', arguments: '{"question":"What?"}' } as ResponseInputItem,
+            {
+                type: 'function_call',
+                call_id: 'fc_1',
+                name: 'ask_user',
+                arguments: '{"question":"What?"}',
+            } as ResponseInputItem,
             { role: 'user', content: 'Actually, stop that' },
         ];
 
@@ -400,7 +424,12 @@ describe('fixOrphanedToolUse - OpenAI', () => {
 
         expect(result).toHaveLength(4);
         expect(result[0]).toEqual({ role: 'assistant', content: 'Using a tool...' });
-        expect(result[1]).toEqual({ type: 'function_call', call_id: 'fc_1', name: 'ask_user', arguments: '{"question":"What?"}' });
+        expect(result[1]).toEqual({
+            type: 'function_call',
+            call_id: 'fc_1',
+            name: 'ask_user',
+            arguments: '{"question":"What?"}',
+        });
 
         // Synthetic function_call_output should be injected before user message
         const synthetic = result[2] as OpenAI.Responses.ResponseInputItem.FunctionCallOutput;
@@ -425,19 +454,19 @@ describe('fixOrphanedToolUse - OpenAI', () => {
         // 3 function_calls + 3 synthetic outputs + 1 user message
         expect(result).toHaveLength(7);
 
-        expect((result[0] as any).type).toBe('function_call');
-        expect((result[1] as any).type).toBe('function_call');
-        expect((result[2] as any).type).toBe('function_call');
+        expect((result[0] as unknown as Tree).type).toBe('function_call');
+        expect((result[1] as unknown as Tree).type).toBe('function_call');
+        expect((result[2] as unknown as Tree).type).toBe('function_call');
 
         // 3 synthetic outputs
-        expect((result[3] as any).type).toBe('function_call_output');
-        expect((result[3] as any).call_id).toBe('fc_1');
-        expect((result[4] as any).type).toBe('function_call_output');
-        expect((result[4] as any).call_id).toBe('fc_2');
-        expect((result[5] as any).type).toBe('function_call_output');
-        expect((result[5] as any).call_id).toBe('fc_3');
+        expect((result[3] as unknown as Tree).type).toBe('function_call_output');
+        expect((result[3] as unknown as Tree).call_id).toBe('fc_1');
+        expect((result[4] as unknown as Tree).type).toBe('function_call_output');
+        expect((result[4] as unknown as Tree).call_id).toBe('fc_2');
+        expect((result[5] as unknown as Tree).type).toBe('function_call_output');
+        expect((result[5] as unknown as Tree).call_id).toBe('fc_3');
 
-        expect((result[6] as any).role).toBe('user');
+        expect((result[6] as unknown as Tree).role).toBe('user');
     });
 
     test('handles partial outputs - only injects for missing ones', () => {
@@ -453,33 +482,38 @@ describe('fixOrphanedToolUse - OpenAI', () => {
         // fc_1 has output, fc_2 is orphaned
         expect(result).toHaveLength(5);
 
-        expect((result[0] as any).type).toBe('function_call');
-        expect((result[1] as any).type).toBe('function_call');
-        expect((result[2] as any).type).toBe('function_call_output');
-        expect((result[2] as any).call_id).toBe('fc_1');
+        expect((result[0] as unknown as Tree).type).toBe('function_call');
+        expect((result[1] as unknown as Tree).type).toBe('function_call');
+        expect((result[2] as unknown as Tree).type).toBe('function_call_output');
+        expect((result[2] as unknown as Tree).call_id).toBe('fc_1');
 
         // Synthetic output for fc_2 injected before user message
-        expect((result[3] as any).type).toBe('function_call_output');
-        expect((result[3] as any).call_id).toBe('fc_2');
-        expect((result[3] as any).output).toContain('Tool interrupted');
+        expect((result[3] as unknown as Tree).type).toBe('function_call_output');
+        expect((result[3] as unknown as Tree).call_id).toBe('fc_2');
+        expect((result[3] as unknown as Tree).output).toContain('Tool interrupted');
 
-        expect((result[4] as any).role).toBe('user');
+        expect((result[4] as unknown as Tree).role).toBe('user');
     });
 
     test('handles trailing orphan at end of conversation', () => {
         const items: ResponseInputItem[] = [
             { role: 'user', content: 'Do something' },
             { role: 'assistant', content: 'I will use a tool.' },
-            { type: 'function_call', call_id: 'fc_1', name: 'ask_user', arguments: '{"question":"What?"}' } as ResponseInputItem,
+            {
+                type: 'function_call',
+                call_id: 'fc_1',
+                name: 'ask_user',
+                arguments: '{"question":"What?"}',
+            } as ResponseInputItem,
         ];
 
         const result = fixOrphanedToolUseOpenAI(items);
 
         // Trailing orphan should get a synthetic output appended
         expect(result).toHaveLength(4);
-        expect((result[2] as any).type).toBe('function_call');
-        expect((result[3] as any).type).toBe('function_call_output');
-        expect((result[3] as any).call_id).toBe('fc_1');
+        expect((result[2] as unknown as Tree).type).toBe('function_call');
+        expect((result[3] as unknown as Tree).type).toBe('function_call_output');
+        expect((result[3] as unknown as Tree).call_id).toBe('fc_1');
     });
 
     test('real-world scenario: user stops agent mid-execution (ask_user)', () => {
@@ -490,7 +524,12 @@ describe('fixOrphanedToolUse - OpenAI', () => {
             // User sends new message
             { role: 'user', content: [{ type: 'input_text', text: 'go berserk' }] },
             // Model calls ask_user to clarify
-            { type: 'function_call', call_id: 'fc_ask_user', name: 'ask_user', arguments: '{"questions":["What do you mean?"]}' } as ResponseInputItem,
+            {
+                type: 'function_call',
+                call_id: 'fc_ask_user',
+                name: 'ask_user',
+                arguments: '{"questions":["What do you mean?"]}',
+            } as ResponseInputItem,
             // User sends another message (agent was stopped, no function_call_output)
             { role: 'user', content: [{ type: 'input_text', text: 'launch 10 workstreams' }] },
         ];
@@ -507,7 +546,7 @@ describe('fixOrphanedToolUse - OpenAI', () => {
         expect(synthetic.output).toContain('ask_user');
 
         // Last user message is preserved
-        expect((result[5] as any).role).toBe('user');
+        expect((result[5] as unknown as Tree).role).toBe('user');
     });
 
     test('does not inject when function_call_output exists later in the array', () => {

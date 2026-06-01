@@ -1,17 +1,37 @@
-import { AIModel, Completion, CompletionChunkObject, ExecutionOptions, LlumiverseError, LlumiverseErrorContext, PromptSegment } from "@llumiverse/core";
-import { VertexAIDriver, trimModelName } from "./index.js";
-import { ClaudeModelDefinition } from "./models/claude.js";
-import { GeminiModelDefinition } from "./models/gemini.js";
-import { LLamaModelDefinition } from "./models/llama.js";
-import { OpenAICompatibleModelDefinition } from "./models/openai_compatible.js";
+import type {
+    AIModel,
+    Completion,
+    CompletionChunkObject,
+    ExecutionOptions,
+    LlumiverseError,
+    LlumiverseErrorContext,
+    PromptSegment,
+} from '@llumiverse/core';
+import type { VertexAIDriver, VertexAIPrompt } from './index.js';
+import { ClaudeModelDefinition } from './models/claude.js';
+import { GeminiModelDefinition } from './models/gemini.js';
+import { LLamaModelDefinition } from './models/llama.js';
+import { OpenAICompatibleModelDefinition } from './models/openai_compatible.js';
 
-export interface ModelDefinition<PromptT = any> {
+export function trimModelName(model: string): string {
+    const i = model.lastIndexOf('@');
+    return i > -1 ? model.substring(0, i) : model;
+}
+
+export interface ModelDefinition<PromptT = VertexAIPrompt> {
     model: AIModel;
     versions?: string[]; // the versions of the model that are available. ex: ['001', '002']
-    createPrompt: (driver: VertexAIDriver, segments: PromptSegment[], options: ExecutionOptions) => Promise<PromptT>;
-    requestTextCompletion: (driver: VertexAIDriver, prompt: PromptT, options: ExecutionOptions) => Promise<Completion>;
-    requestTextCompletionStream: (driver: VertexAIDriver, prompt: PromptT, options: ExecutionOptions) => Promise<AsyncIterable<CompletionChunkObject>>;
-    preValidationProcessing?(result: Completion, options: ExecutionOptions): { result: Completion, options: ExecutionOptions };
+    createPrompt(driver: VertexAIDriver, segments: PromptSegment[], options: ExecutionOptions): Promise<PromptT>;
+    requestTextCompletion(driver: VertexAIDriver, prompt: PromptT, options: ExecutionOptions): Promise<Completion>;
+    requestTextCompletionStream(
+        driver: VertexAIDriver,
+        prompt: PromptT,
+        options: ExecutionOptions,
+    ): Promise<AsyncIterable<CompletionChunkObject>>;
+    preValidationProcessing?(
+        result: Completion,
+        options: ExecutionOptions,
+    ): { result: Completion; options: ExecutionOptions };
     /**
      * Format provider-specific errors into standardized LlumiverseError.
      * Optional - if not provided, VertexAIDriver will use default error handling.
@@ -20,13 +40,13 @@ export interface ModelDefinition<PromptT = any> {
 }
 
 export function getModelDefinition(model: string): ModelDefinition {
-    const splits = model.split("/");
+    const splits = model.split('/');
 
     // Handle both formats: "publishers/anthropic/models/..." and "locations/.../publishers/anthropic/models/..."
     let publisher: string | undefined;
     let modelName: string;
 
-    const publisherIndex = splits.indexOf("publishers");
+    const publisherIndex = splits.indexOf('publishers');
     if (publisherIndex !== -1 && publisherIndex + 1 < splits.length) {
         publisher = splits[publisherIndex + 1];
         modelName = trimModelName(splits[splits.length - 1]);
@@ -36,15 +56,15 @@ export function getModelDefinition(model: string): ModelDefinition {
         modelName = trimModelName(splits[splits.length - 1]);
     }
 
-    if (publisher?.includes("anthropic")) {
+    if (publisher?.includes('anthropic')) {
         return new ClaudeModelDefinition(modelName);
-    } else if (publisher?.includes("xai")) {
+    } else if (publisher?.includes('xai')) {
         // Use OpenAI-compatible endpoint for xAI Grok models via Vertex AI's openapi endpoint
         // xAI/Grok models only exist in the "global" region, not regional endpoints
-        return new OpenAICompatibleModelDefinition({ modelName: `xai/${modelName}`, region: "global" });
-    } else if (publisher?.includes("google")) {
+        return new OpenAICompatibleModelDefinition({ modelName: `xai/${modelName}`, region: 'global' });
+    } else if (publisher?.includes('google')) {
         return new GeminiModelDefinition(modelName);
-    } else if (publisher?.includes("meta")) {
+    } else if (publisher?.includes('meta')) {
         return new LLamaModelDefinition(modelName);
     }
 

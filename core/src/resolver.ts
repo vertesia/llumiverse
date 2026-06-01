@@ -6,31 +6,34 @@
  * @param name the name of the property.
  * @returns the property value
  */
-function _prop(object: any, name: string) {
-    if (object === undefined) {
+function _prop(object: unknown, name: string): unknown {
+    if (object === undefined || object === null) {
         return undefined;
     }
     if (Array.isArray(object)) {
         const index = +name;
-        if (isNaN(index)) {
+        if (Number.isNaN(index)) {
             // map array to property
-            return object.map(item => item[name]);
+            return object.map((item) =>
+                item && typeof item === 'object' ? (item as Record<string, unknown>)[name] : undefined,
+            );
         } else {
             return object[index];
         }
+    } else if (typeof object === 'object') {
+        return (object as Record<string, unknown>)[name];
     } else {
-        return object[name];
+        return undefined;
     }
-
 }
 
-export function resolveField(object: any, path: string[]) {
-    let p = object as any;
+export function resolveField(object: unknown, path: string[]): unknown {
+    let p: unknown = object;
     if (!p) return p;
     if (!path.length) return p;
     const last = path.length - 1;
     for (let i = 0; i < last; i++) {
-        p = _prop(p, path[i])
+        p = _prop(p, path[i]);
         if (!p) {
             return undefined;
         }

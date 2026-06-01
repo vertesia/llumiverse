@@ -1,7 +1,12 @@
 import { LlumiverseError } from '@llumiverse/core';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { exposePrivate, getProp } from '../../../test/__helpers__/test-utils.js';
 import { VertexAIDriver } from '../index.js';
 import { GeminiModelDefinition } from './gemini.js';
+
+type GeminiModelInternals = {
+    isGeminiErrorRetryable: (httpStatusCode: number, message?: string) => boolean | undefined;
+};
 
 describe('GeminiModelDefinition Error Handling', () => {
     let driver: VertexAIDriver;
@@ -202,7 +207,7 @@ describe('GeminiModelDefinition Error Handling', () => {
             });
 
             expect(error.originalError).toBe(googleError);
-            expect((error.originalError as any).status).toBe(429);
+            expect(getProp<number>(error.originalError, 'status')).toBe(429);
         });
 
         it('should throw for non-Google API errors', () => {
@@ -247,6 +252,29 @@ describe('GeminiModelDefinition Error Handling', () => {
             expect(error.name).toBe('ValidationError');
         });
 
+        it('should mark URL_REJECTED-REJECTED_CLIENT_THROTTLED 400s as retryable', () => {
+            // Reproduces a real Vertex AI failure: passing an audio file by URL
+            // (sys:AnalyzeAudio) sometimes 400s with INVALID_ARGUMENT whose
+            // message contains URL_REJECTED-REJECTED_CLIENT_THROTTLED — that's
+            // really a transient throttle on Google's URL fetcher.
+            const googleError = {
+                status: 400,
+                message:
+                    'Cannot fetch content from the provided URL. Please ensure the URL is valid ' +
+                    'and accessible by Vertex AI. Vertex AI respects robots.txt rules, so confirm ' +
+                    'the URL is allowed to be crawled. Status: URL_REJECTED-REJECTED_CLIENT_THROTTLED',
+            };
+
+            const error = modelDef.formatLlumiverseError(driver, googleError, {
+                provider: 'vertexai',
+                model: 'gemini-2.5-flash',
+                operation: 'execute',
+            });
+
+            expect(error.code).toBe(400);
+            expect(error.retryable).toBe(true);
+        });
+
         it('should handle errors without extractable name', () => {
             const googleError = {
                 status: 500,
@@ -270,7 +298,7 @@ describe('GeminiModelDefinition Error Handling', () => {
             const retryableStatusCodes = [408, 429, 500, 502, 503, 504];
 
             retryableStatusCodes.forEach((statusCode) => {
-                const result = (modelDef as any).isGeminiErrorRetryable(statusCode);
+                const result = exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(statusCode);
                 expect(result, `Status code ${statusCode} should be retryable`).toBe(true);
             });
         });
@@ -279,21 +307,44 @@ describe('GeminiModelDefinition Error Handling', () => {
             const nonRetryableStatusCodes = [400, 401, 403, 404, 409];
 
             nonRetryableStatusCodes.forEach((statusCode) => {
-                const result = (modelDef as any).isGeminiErrorRetryable(statusCode);
+                const result = exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(statusCode);
                 expect(result, `Status code ${statusCode} should not be retryable`).toBe(false);
             });
         });
 
         it('should classify other 5xx errors as retryable', () => {
-            expect((modelDef as any).isGeminiErrorRetryable(501)).toBe(true);
-            expect((modelDef as any).isGeminiErrorRetryable(505)).toBe(true);
-            expect((modelDef as any).isGeminiErrorRetryable(599)).toBe(true);
+            expect(exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(501)).toBe(true);
+            expect(exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(505)).toBe(true);
+            expect(exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(599)).toBe(true);
         });
 
         it('should classify other 4xx errors as non-retryable', () => {
-            expect((modelDef as any).isGeminiErrorRetryable(402)).toBe(false);
-            expect((modelDef as any).isGeminiErrorRetryable(405)).toBe(false);
-            expect((modelDef as any).isGeminiErrorRetryable(499)).toBe(false);
+            expect(exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(402)).toBe(false);
+            expect(exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(405)).toBe(false);
+            expect(exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(499)).toBe(false);
+        });
+
+        it('should treat 400 URL_REJECTED-REJECTED_CLIENT_THROTTLED as retryable', () => {
+            // Vertex AI surfaces inline-URL-fetcher throttling as 400 INVALID_ARGUMENT.
+            // The status is misleading — it's a transient Google-side throttle.
+            const message =
+                'Cannot fetch content from the provided URL. ' + 'Status: URL_REJECTED-REJECTED_CLIENT_THROTTLED';
+            expect(exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(400, message)).toBe(true);
+        });
+
+        it('should treat 400 URL_REJECTED-REJECTED_RATE_LIMITED as retryable', () => {
+            const message =
+                'Cannot fetch content from the provided URL. ' + 'Status: URL_REJECTED-REJECTED_RATE_LIMITED';
+            expect(exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(400, message)).toBe(true);
+        });
+
+        it('should still treat plain 400 INVALID_ARGUMENT as non-retryable', () => {
+            expect(
+                exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(
+                    400,
+                    'INVALID_ARGUMENT: bad input',
+                ),
+            ).toBe(false);
         });
     });
 

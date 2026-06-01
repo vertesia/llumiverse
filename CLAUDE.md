@@ -27,6 +27,8 @@ The main abstractions are:
 - **Run all tests**: `pnpm -r test`
 - **Run specific tests**: `cd drivers && pnpm test -- -t "pattern"`
 - **Run linting**: `pnpm lint`
+- **Format files**: `pnpm format`
+- **Check formatting**: `pnpm format:check`
 
 ## Code Style
 
@@ -35,11 +37,11 @@ The main abstractions are:
 - Use async/await with proper error handling (no floating promises)
 - Objects: use shorthand notation
 - Unused variables prefix: `_` (e.g., `_unused`)
-- Line length: 120 characters, single quotes
+- Line length: 120 characters, 4-space indentation, single quotes
 - Component patterns: follow existing naming, directory structure and import patterns
 - Always use proper typing - avoid `any` when possible
 - Error handling: use proper error types and propagation, especially with async code
-- Formatting: follows Prettier configuration
+- Formatting: follows `biome.json` in this repository
 
 ## Multi-Turn Conversations
 

@@ -1,24 +1,26 @@
-import { JSONSchema } from "@llumiverse/common";
-import { PromptRole, PromptSegment } from "@llumiverse/common";
-import { getJSONSafetyNotice } from "./commons.js";
+import type { JSONSchema } from '@llumiverse/common';
+import { PromptRole, type PromptSegment } from '@llumiverse/common';
+import { getJSONSafetyNotice } from './commons.js';
 
 interface Labels {
-    user: string,
-    system: string,
-    assistant: string,
-    safety: string,
-    instruction: string
+    user: string;
+    system: string;
+    assistant: string;
+    safety: string;
+    instruction: string;
 }
 
-export function createTextPromptFormatter(labels: Labels = {
-    user: "USER",
-    system: "CONTEXT",
-    assistant: "ASSISTANT",
-    safety: "IMPORTANT",
-    instruction: "INSTRUCTION"
-}) {
+export function createTextPromptFormatter(
+    labels: Labels = {
+        user: 'USER',
+        system: 'CONTEXT',
+        assistant: 'ASSISTANT',
+        safety: 'IMPORTANT',
+        instruction: 'INSTRUCTION',
+    },
+) {
     return function genericTextPrompt(segments: PromptSegment[], schema?: JSONSchema): string {
-        const isChat = segments.find(m => m.role === PromptRole.assistant);
+        const isChat = segments.find((m) => m.role === PromptRole.assistant);
         const context: string[] = [];
         const content: string[] = [];
         const safety: string[] = [];
@@ -59,8 +61,9 @@ export function createTextPromptFormatter(labels: Labels = {
             out.push(`${labels.safety}: ${safety.join('\n')}`);
         }
         return out.join('\n');
-    }
+    };
 }
 
 const formatTextPrompt = createTextPromptFormatter();
+
 export { formatTextPrompt };
