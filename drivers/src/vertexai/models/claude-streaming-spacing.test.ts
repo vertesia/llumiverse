@@ -1,6 +1,6 @@
 import type { CompletionChunkObject, ExecutionOptions } from '@llumiverse/core';
 import type { ServerSentEvent } from '@vertesia/api-fetch-client';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ClaudePrompt } from '../../shared/claude-messages.js';
 import type { VertexAIDriver } from '../index.js';
 import { ClaudeModelDefinition } from './claude.js';
@@ -27,31 +27,33 @@ async function collectChunks(stream: AsyncIterable<CompletionChunkObject>): Prom
 describe('ClaudeModelDefinition streaming spacing', () => {
     it('does not leak deferred spacing when tool use follows thinking', async () => {
         const modelDef = new ClaudeModelDefinition('claude-sonnet-4-5');
+        const streamVertexModel = vi.fn(async () =>
+            createSseStream([
+                {
+                    type: 'content_block_delta',
+                    delta: { type: 'thinking_delta', thinking: 'Thinking...' },
+                },
+                {
+                    type: 'content_block_delta',
+                    delta: { type: 'signature_delta' },
+                },
+                {
+                    type: 'content_block_start',
+                    content_block: { type: 'tool_use', id: 'tool-1', name: 'get_weather' },
+                },
+                {
+                    type: 'content_block_delta',
+                    delta: { type: 'input_json_delta', partial_json: '{"city":"Paris"}' },
+                },
+                {
+                    type: 'content_block_stop',
+                },
+            ]),
+        );
         const driver = {
             logger: { warn: () => {}, info: () => {}, error: () => {} },
             options: { region: 'us-central1' },
-            streamVertexModel: async () =>
-                createSseStream([
-                    {
-                        type: 'content_block_delta',
-                        delta: { type: 'thinking_delta', thinking: 'Thinking...' },
-                    },
-                    {
-                        type: 'content_block_delta',
-                        delta: { type: 'signature_delta' },
-                    },
-                    {
-                        type: 'content_block_start',
-                        content_block: { type: 'tool_use', id: 'tool-1', name: 'get_weather' },
-                    },
-                    {
-                        type: 'content_block_delta',
-                        delta: { type: 'input_json_delta', partial_json: '{"city":"Paris"}' },
-                    },
-                    {
-                        type: 'content_block_stop',
-                    },
-                ]),
+            streamVertexModel,
         } as unknown as VertexAIDriver;
 
         const prompt = {
@@ -79,6 +81,17 @@ describe('ClaudeModelDefinition streaming spacing', () => {
         expect(toolChunks).toHaveLength(2);
         expect(toolChunks[0]).toMatchObject({ id: 'tool-1', tool_name: 'get_weather', tool_input: '' });
         expect(toolChunks[1]).toMatchObject({ id: 'tool-1', tool_name: '', tool_input: '{"city":"Paris"}' });
+        expect(streamVertexModel).toHaveBeenCalledWith(
+            'publishers/anthropic/models/claude-sonnet-4-5',
+            'streamRawPredict',
+            expect.objectContaining({
+                anthropic_version: 'vertex-2023-10-16',
+                stream: true,
+            }),
+            expect.objectContaining({
+                region: 'us-east5',
+            }),
+        );
     });
 
     it('flushes deferred spacing into the first text delta after thinking', async () => {
@@ -172,5 +185,66 @@ describe('ClaudeModelDefinition streaming spacing', () => {
 
         const textParts = chunks.flatMap((chunk) => chunk.result ?? []).map((part) => part.value);
         expect(textParts).toEqual(['Thinking...', 'Answer after tool']);
+    });
+
+    it('requestTextCompletion uses streamRawPredict and aggregates the final completion', async () => {
+        const modelDef = new ClaudeModelDefinition('claude-sonnet-4-5');
+        const streamVertexModel = vi.fn(async () =>
+            createSseStream([
+                {
+                    type: 'message_start',
+                    message: {
+                        usage: { input_tokens: 7, output_tokens: 0 },
+                    },
+                },
+                {
+                    type: 'content_block_delta',
+                    delta: { type: 'text_delta', text: 'Hello' },
+                },
+                {
+                    type: 'content_block_delta',
+                    delta: { type: 'text_delta', text: ' there' },
+                },
+                {
+                    type: 'message_delta',
+                    delta: { stop_reason: 'end_turn' },
+                    usage: { output_tokens: 3 },
+                },
+            ]),
+        );
+        const driver = {
+            logger: { warn: () => {}, info: () => {}, error: () => {}, debug: () => {} },
+            options: { region: 'us-central1' },
+            streamVertexModel,
+        } as unknown as VertexAIDriver;
+
+        const prompt = {
+            messages: [{ role: 'user', content: [{ type: 'text', text: 'Question?' }] }],
+        } as unknown as ClaudePrompt;
+
+        const options = {
+            model: 'publishers/anthropic/models/claude-sonnet-4-5',
+            model_options: {
+                _option_id: 'vertexai-claude',
+            },
+        } as ExecutionOptions;
+
+        const completion = await modelDef.requestTextCompletion(driver, prompt, options);
+
+        expect(completion.result).toEqual([{ type: 'text', value: 'Hello there' }]);
+        expect(completion.finish_reason).toBe('stop');
+        expect(completion.token_usage).toEqual({ prompt: 7, prompt_new: 7, result: 3, total: 10 });
+        expect(completion.conversation).toBeDefined();
+        expect(streamVertexModel).toHaveBeenCalledWith(
+            'publishers/anthropic/models/claude-sonnet-4-5',
+            'streamRawPredict',
+            expect.objectContaining({
+                anthropic_version: 'vertex-2023-10-16',
+                stream: true,
+            }),
+            expect.objectContaining({
+                region: 'us-east5',
+            }),
+        );
     });
 });
