@@ -30,6 +30,8 @@ jobs:
         with:
           node-version: 24.16.0
           cache: pnpm
+      - name: Validate Renovate config
+        run: pnpm run ci:renovate
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
       - name: Check codebase
