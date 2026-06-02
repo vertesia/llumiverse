@@ -8,6 +8,7 @@
     "files": {
         "ignoreUnknown": true,
         "includes": [
+            "**/package.json",
             "**/*.{js,cjs,mjs,jsx,ts,tsx}",
             "!**/dist/**",
             "!**/lib/**",

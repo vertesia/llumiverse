@@ -8,6 +8,9 @@
     {
       // Renovate PRs should wait until new releases have aged enough to reduce
       // exposure to accidental bad publishes and supply-chain compromise.
+      "matchPackageNames": [
+        "*"
+      ],
       "minimumReleaseAge": "7 days"
     },
     {

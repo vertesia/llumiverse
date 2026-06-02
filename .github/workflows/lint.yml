@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   lint:
-    name: Lint codebase
+    name: Check codebase
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -30,7 +30,9 @@ jobs:
         with:
           node-version: 24.16.0
           cache: pnpm
+      - name: Validate Renovate config
+        run: pnpm run ci:renovate
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
-      - name: Lint codebase
-        run: pnpm lint
+      - name: Check codebase
+        run: pnpm check

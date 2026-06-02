@@ -13,8 +13,8 @@
  * Fix: use a local `payloadContents` variable so the caller's conversation is never mutated.
  */
 
-import type { ExecutionOptions } from '@llumiverse/core';
 import { FinishReason } from '@google/genai';
+import type { ExecutionOptions } from '@llumiverse/core';
 import { describe, expect, it } from 'vitest';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
 import { convertGeminiFunctionPartsToText, GeminiModelDefinition } from './gemini.js';

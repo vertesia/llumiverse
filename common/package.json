@@ -1,82 +1,82 @@
 {
-  "name": "@llumiverse/common",
-  "version": "1.3.0",
-  "type": "module",
-  "description": "Public types, enums and options used by Llumiverse API.",
-  "files": [
-    "lib",
-    "src"
-  ],
-  "keywords": [
-    "llm",
-    "ai",
-    "prompt",
-    "prompt engineering",
-    "ml",
-    "machine learning",
-    "embeddings",
-    "training",
-    "model",
-    "universal",
-    "api",
-    "chatgpt",
-    "openai",
-    "vertexai",
-    "bedrock",
-    "replicate",
-    "huggingface",
-    "togetherai"
-  ],
-  "types": "./lib/types/index.d.ts",
-  "typesVersions": {
-    "*": {
-      "async": [
-        "./lib/types/async.d.ts"
-      ],
-      "formatters": [
-        "./lib/types/formatters/index.d.ts"
-      ]
-    }
-  },
-  "exports": {
-    ".": {
-      "types": "./lib/types/index.d.ts",
-      "import": "./lib/esm/index.js",
-      "require": "./lib/cjs/index.js"
+    "name": "@llumiverse/common",
+    "version": "1.3.0",
+    "type": "module",
+    "description": "Public types, enums and options used by Llumiverse API.",
+    "files": [
+        "lib",
+        "src"
+    ],
+    "keywords": [
+        "llm",
+        "ai",
+        "prompt",
+        "prompt engineering",
+        "ml",
+        "machine learning",
+        "embeddings",
+        "training",
+        "model",
+        "universal",
+        "api",
+        "chatgpt",
+        "openai",
+        "vertexai",
+        "bedrock",
+        "replicate",
+        "huggingface",
+        "togetherai"
+    ],
+    "types": "./lib/types/index.d.ts",
+    "typesVersions": {
+        "*": {
+            "async": [
+                "./lib/types/async.d.ts"
+            ],
+            "formatters": [
+                "./lib/types/formatters/index.d.ts"
+            ]
+        }
     },
-    "./async": {
-      "types": "./lib/types/async.d.ts",
-      "import": "./lib/esm/async.js",
-      "require": "./lib/cjs/async.js"
+    "exports": {
+        ".": {
+            "types": "./lib/types/index.d.ts",
+            "import": "./lib/esm/index.js",
+            "require": "./lib/cjs/index.js"
+        },
+        "./async": {
+            "types": "./lib/types/async.d.ts",
+            "import": "./lib/esm/async.js",
+            "require": "./lib/cjs/async.js"
+        },
+        "./formatters": {
+            "types": "./lib/types/formatters/index.d.ts",
+            "import": "./lib/esm/formatters/index.js",
+            "require": "./lib/cjs/formatters/index.js"
+        }
     },
-    "./formatters": {
-      "types": "./lib/types/formatters/index.d.ts",
-      "import": "./lib/esm/formatters/index.js",
-      "require": "./lib/cjs/formatters/index.js"
+    "scripts": {
+        "lint": "biome lint src",
+        "test": "vitest run",
+        "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
+        "build": "pnpm exec tsmod build",
+        "clean": "rimraf ./lib tsconfig.tsbuildinfo"
+    },
+    "author": "Llumiverse",
+    "license": "Apache-2.0",
+    "homepage": "https://github.com/vertesia/llumiverse",
+    "repository": {
+        "type": "git",
+        "url": "git+ssh://git@github.com/vertesia/llumiverse.git"
+    },
+    "devDependencies": {
+        "@types/node": "^24.12.4",
+        "rimraf": "^6.1.3",
+        "ts-dual-module": "^0.6.3",
+        "typescript": "^6.0.3",
+        "vitest": "^4.1.7"
+    },
+    "ts_dual_module": {
+        "outDir": "lib"
     }
-  },
-  "scripts": {
-    "lint": "biome lint src",
-    "test": "vitest run",
-    "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
-    "build": "pnpm exec tsmod build",
-    "clean": "rimraf ./lib tsconfig.tsbuildinfo"
-  },
-  "author": "Llumiverse",
-  "license": "Apache-2.0",
-  "homepage": "https://github.com/vertesia/llumiverse",
-  "repository": {
-    "type": "git",
-    "url": "git+ssh://git@github.com/vertesia/llumiverse.git"
-  },
-  "devDependencies": {
-    "@types/node": "^24.12.4",
-    "rimraf": "^6.1.3",
-    "ts-dual-module": "^0.6.3",
-    "typescript": "^6.0.3",
-    "vitest": "^4.1.7"
-  },
-  "ts_dual_module": {
-    "outDir": "lib"
-  }
 }
