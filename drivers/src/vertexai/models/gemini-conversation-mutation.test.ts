@@ -13,9 +13,9 @@
  * Fix: use a local `payloadContents` variable so the caller's conversation is never mutated.
  */
 
-import { ExecutionOptions } from '@llumiverse/core';
+import { ExecutionOptions, PromptRole, type DataSource, type PromptSegment } from '@llumiverse/core';
 import { FinishReason } from '@google/genai';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { VertexAIDriver } from '../index.js';
 import { convertGeminiFunctionPartsToText, GeminiModelDefinition } from './gemini.js';
 
@@ -136,6 +136,31 @@ const mockStreamingChunk = {
 };
 
 describe('GeminiModelDefinition - no conversation mutation', () => {
+    it('createPrompt uses DataSource URIs directly for Gemini file data', async () => {
+        const modelDef = new GeminiModelDefinition('gemini-2.0-flash');
+        const file: DataSource = {
+            mime_type: 'application/pdf',
+            getURI: vi.fn().mockResolvedValue('gs://test-bucket/doc.pdf'),
+            getStream: vi.fn().mockResolvedValue(new ReadableStream()),
+        };
+        const segments: PromptSegment[] = [{
+            role: PromptRole.user,
+            files: [file],
+        } as PromptSegment];
+        const options: ExecutionOptions = { model: 'publishers/google/models/gemini-2.0-flash' };
+
+        const prompt = await modelDef.createPrompt({} as VertexAIDriver, segments, options);
+
+        expect(file.getURI).toHaveBeenCalledTimes(1);
+        expect(file.getStream).not.toHaveBeenCalled();
+        expect(prompt.contents[0].parts![0]).toEqual({
+            fileData: {
+                fileUri: 'gs://test-bucket/doc.pdf',
+                mimeType: 'application/pdf',
+            },
+        });
+    });
+
     it('requestTextCompletion: does not mutate prompt.contents when tools=[] and conversation has function parts', async () => {
         const modelDef = new GeminiModelDefinition('gemini-2.0-flash');
         const originalContents = makeContentsWithFunctionParts();

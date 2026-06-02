@@ -151,7 +151,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
         const job = await this.service.trainings.create(owner, model, version, {
             destination: options.name as any,
             input: {
-                train_data: await dataset.getURL(),
+                train_data: await dataset.getURI(),
             },
         })
         return jobInfo(job, options.name);

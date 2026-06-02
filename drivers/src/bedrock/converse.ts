@@ -161,7 +161,7 @@ async function processFile<T extends FileProcessingMode>(
     }
     //Video file - "mov | mkv | mp4 | webm | flv | mpeg | mpg | wmv | three_gp"
     else if (f.mime_type && f.mime_type.startsWith("video")) {
-        let url_string = (await f.getURL()).toLowerCase();
+        let url_string = (await f.getURI()).toLowerCase();
         let url_format = new URL(url_string);
         if (url_format.hostname.endsWith("amazonaws.com") &&
             (url_format.hostname.startsWith("s3.") || url_format.hostname.includes(".s3."))) {
