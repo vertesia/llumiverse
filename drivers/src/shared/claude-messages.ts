@@ -1,10 +1,9 @@
 /**
- * Shared utilities for Anthropic SDK-based drivers.
+ * Shared utilities for Anthropic Messages-compatible drivers.
  *
- * Used by both the native AnthropicDriver (drivers/src/anthropic/) and the
- * VertexAI Claude pathway (drivers/src/vertexai/models/claude.ts).  Both use
- * the same Anthropic Messages API surface — the only difference is the client
- * (Anthropic vs AnthropicVertex) and how auth is wired up.
+ * Used by both the native AnthropicDriver (drivers/src/anthropic/) and
+ * Vertex AI Claude rawPredict. Both use the same Anthropic Messages API
+ * payload/response surface; only transport and auth differ.
  */
 
 import type Anthropic from '@anthropic-ai/sdk';
@@ -35,7 +34,6 @@ import type {
 } from '@anthropic-ai/sdk/resources/index.js';
 import type { MessageStreamParams } from '@anthropic-ai/sdk/resources/index.mjs';
 import type { MessageCreateParamsBase, RawMessageStreamEvent } from '@anthropic-ai/sdk/resources/messages.js';
-import type AnthropicVertex from '@anthropic-ai/vertex-sdk';
 import { getClaudeMaxTokensLimit } from '@llumiverse/common';
 import {
     type Completion,
@@ -551,6 +549,7 @@ function stripClaudeCacheControlFromTools(
 export function getClaudePayload(
     options: ExecutionOptions,
     prompt: ClaudePrompt,
+    stream = true,
 ): { payload: MessageCreateParamsBase; requestOptions: RequestOptions | undefined } {
     const modelName = options.model;
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
@@ -639,7 +638,7 @@ export function getClaudePayload(
         top_k: hasSamplingRestriction ? undefined : model_options?.top_k,
         stop_sequences: model_options?.stop_sequence,
         thinking,
-        stream: true,
+        stream,
         ...(outputConfig && { output_config: outputConfig }),
     };
 
@@ -701,35 +700,28 @@ export function buildClaudeStreamingConversation(
 // ============================================================================
 
 /**
- * Execute a non-streaming Claude completion.
- * Works with any Anthropic-compatible client (Anthropic or AnthropicVertex).
+ * Convert a completed Claude Messages API response into a normalized completion
+ * and updated stored conversation.
  */
-export async function executeClaudeCompletion(
-    client: Anthropic | AnthropicVertex,
-    prompt: ClaudePrompt,
+export function completionFromClaudeMessage(
+    result: Message,
+    conversation: ClaudePrompt,
     options: ExecutionOptions,
-): Promise<Completion> {
+): Completion {
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
-
-    let conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
-
-    const { payload, requestOptions } = getClaudePayload(options, conversation);
-
-    const result: Message = await client.messages.stream(payload, requestOptions).finalMessage();
-
     const includeThoughts = model_options?.include_thoughts ?? false;
     const text = collectAllTextContent(result.content, includeThoughts);
     const tool_use = collectClaudeTools(result.content);
 
-    conversation = updateClaudeConversation(conversation, createPromptFromResponse(result));
-    conversation = incrementConversationTurn(conversation) as ClaudePrompt;
-    const currentTurn = getConversationMeta(conversation).turnNumber;
+    let updatedConversation = updateClaudeConversation(conversation, createPromptFromResponse(result));
+    updatedConversation = incrementConversationTurn(updatedConversation) as ClaudePrompt;
+    const currentTurn = getConversationMeta(updatedConversation).turnNumber;
     const stripOpts = {
         keepForTurns: options.stripImagesAfterTurns ?? Infinity,
         currentTurn,
         textMaxTokens: options.stripTextMaxTokens,
     };
-    let processedConversation = stripBase64ImagesFromConversation(conversation, stripOpts);
+    let processedConversation = stripBase64ImagesFromConversation(updatedConversation, stripOpts);
     processedConversation = truncateLargeTextInConversation(processedConversation, stripOpts);
     processedConversation = stripHeartbeatsFromConversation(processedConversation, {
         keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
@@ -746,26 +738,32 @@ export async function executeClaudeCompletion(
 }
 
 /**
- * Execute a streaming Claude completion.
- * Works with any Anthropic-compatible client (Anthropic or AnthropicVertex).
+ * Execute a non-streaming Claude completion.
+ * Works with the native Anthropic SDK client.
  */
-export async function streamClaudeCompletion(
-    client: Anthropic | AnthropicVertex,
+export async function executeClaudeCompletion(
+    client: Anthropic,
     prompt: ClaudePrompt,
     options: ExecutionOptions,
-): Promise<AsyncIterable<CompletionChunkObject>> {
-    const model_options = options.model_options as ClaudeBaseOptions | undefined;
+): Promise<Completion> {
     const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
 
     const { payload, requestOptions } = getClaudePayload(options, conversation);
-    const streamingPayload: MessageStreamParams = { ...payload, stream: true };
 
-    const response_stream = await client.messages.stream(streamingPayload, requestOptions);
+    const result: Message = await client.messages.stream(payload, requestOptions).finalMessage();
+    return completionFromClaudeMessage(result, conversation, options);
+}
 
+/**
+ * Create a stateful mapper for Claude streaming events. The mapper is shared by
+ * the native Anthropic SDK path and Vertex AI rawPredict SSE.
+ */
+export function createClaudeStreamEventMapper(options: ExecutionOptions) {
+    const model_options = options.model_options as ClaudeBaseOptions | undefined;
     let currentToolUse: { id: string; name: string; inputJson: string } | null = null;
     let pendingSpacing = false;
 
-    const stream = asyncMap(response_stream, async (streamEvent: RawMessageStreamEvent) => {
+    return (streamEvent: RawMessageStreamEvent): CompletionChunkObject => {
         switch (streamEvent.type) {
             case 'message_start':
                 return {
@@ -852,7 +850,27 @@ export async function streamClaudeCompletion(
         }
 
         return { result: [] } satisfies CompletionChunkObject;
-    });
+    };
+}
+
+/**
+ * Execute a streaming Claude completion.
+ * Works with the native Anthropic SDK client.
+ */
+export async function streamClaudeCompletion(
+    client: Anthropic,
+    prompt: ClaudePrompt,
+    options: ExecutionOptions,
+): Promise<AsyncIterable<CompletionChunkObject>> {
+    const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
+
+    const { payload, requestOptions } = getClaudePayload(options, conversation);
+    const streamingPayload: MessageStreamParams = { ...payload, stream: true };
+
+    const response_stream = await client.messages.stream(streamingPayload, requestOptions);
+    const mapper = createClaudeStreamEventMapper(options);
+
+    const stream = asyncMap(response_stream, async (streamEvent: RawMessageStreamEvent) => mapper(streamEvent));
 
     return stream;
 }

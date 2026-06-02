@@ -29,7 +29,7 @@ if (!vertex) {
         test('placeholder', () => undefined);
     });
 } else {
-    describe('VertexAI text embedding model coverage via @google/genai', () => {
+    describe('VertexAI text embedding model coverage via REST', () => {
         for (const model of VERTEX_TEXT_MODELS) {
             test(
                 `${model} — text-only single input`,

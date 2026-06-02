@@ -1,5 +1,3 @@
-// Import the helper module for converting arbitrary protobuf.Value objects
-import { helpers, type protos } from '@google-cloud/aiplatform';
 import {
     type AIModel,
     type Completion,
@@ -96,6 +94,12 @@ export interface ImagenPrompt {
     referenceImages?: ImagenMessage[];
     subjectDescription?: string; //Used for image customization to describe in the reference image
     negativePrompt?: string; //Used for negative prompts
+}
+
+interface ImagenPredictResponse {
+    predictions?: Array<{
+        bytesBase64Encoded?: string;
+    }>;
 }
 
 function getImagenParameters(taskType: string, options: ImagenOptions) {
@@ -376,41 +380,29 @@ export class ImagenModelDefinition {
 
         const modelName = options.model.split('/').pop() ?? '';
 
-        // Configure the parent resource
-        // TODO: make location configurable, fixed to us-central1 for now
-        const endpoint = `projects/${driver.options.project}/locations/us-central1/publishers/google/models/${modelName}`;
-
-        const instanceValue = helpers.toValue(prompt);
-        if (!instanceValue) {
-            throw new Error('No instance value found');
-        }
-        const instances = [instanceValue];
-
         let parameter = getImagenParameters(
             taskType,
             options.model_options ?? { _option_id: 'vertexai-imagen' },
         ) as ReturnType<typeof getImagenParameters> & { negativePrompt?: string };
         parameter.negativePrompt = prompt.negativePrompt ?? undefined;
 
-        const numberOfImages = options.model_options?.number_of_images ?? 1;
-
         // Remove all undefined values
         parameter = Object.fromEntries(
             Object.entries(parameter).filter(([_, v]) => v !== undefined),
         ) as typeof parameter;
 
-        const parameters = helpers.toValue(parameter);
-
-        const request: protos.google.cloud.aiplatform.v1.IPredictRequest = {
-            endpoint,
-            instances,
-            parameters,
-        };
-
-        const client = await driver.getImagenClient();
-
-        // Predict request
-        const [response] = await client.predict(request, { timeout: 120000 * numberOfImages }); //Extended timeout for image generation
+        const response = await driver.postVertexModel<ImagenPredictResponse>(
+            modelName,
+            'predict',
+            {
+                instances: [prompt],
+                parameters: parameter,
+            },
+            {
+                // TODO: make location configurable, fixed to us-central1 for now
+                region: 'us-central1',
+            },
+        );
         const predictions = response.predictions;
 
         if (!predictions) {
@@ -418,9 +410,7 @@ export class ImagenModelDefinition {
         }
 
         // Extract base64 encoded images from predictions
-        const images: string[] = predictions.map(
-            (prediction) => prediction.structValue?.fields?.bytesBase64Encoded?.stringValue ?? '',
-        );
+        const images: string[] = predictions.map((prediction) => prediction.bytesBase64Encoded ?? '');
 
         return {
             result: images.map((image) => ({

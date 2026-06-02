@@ -1,6 +1,3 @@
-import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
-import { type Content, GoogleGenAI, type Model } from '@google/genai';
-import { PredictionServiceClient, v1beta1 } from '@google-cloud/aiplatform';
 import {
     type AIModel,
     type Completion,
@@ -12,7 +9,6 @@ import {
     type ExecutionOptions,
     getConversationMeta,
     getModelCapabilities,
-    type HttpTimeoutOptions,
     incrementConversationTurn,
     type LlumiverseError,
     type LlumiverseErrorContext,
@@ -25,15 +21,17 @@ import {
     truncateLargeTextInConversation,
 } from '@llumiverse/core';
 import { AbstractDriver } from '@llumiverse/core/driver';
-import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
-import { type FETCH_FN, FetchClient } from '@vertesia/api-fetch-client';
-import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from 'google-auth-library';
+import { type FETCH_FN, FetchClient, type ServerSentEvent } from '@vertesia/api-fetch-client';
+import { GoogleAuth, type GoogleAuthOptions } from 'google-auth-library';
 import type { ClaudePrompt } from '../shared/claude-messages.js';
 import { generateVertexAiEmbeddings } from './embeddings/embed.js';
-import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
+import { NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
 import { ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
 import type { LLamaPrompt } from './models/llama.js';
 import { getModelDefinition, trimModelName } from './models.js';
+import type { GenerateContentPrompt, VertexContent, VertexListedModel, VertexListModelsResponse } from './types.js';
+
+export type { GenerateContentPrompt } from './types.js';
 
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
@@ -41,10 +39,6 @@ export interface VertexAIDriverOptions extends DriverOptions {
     googleAuthOptions?: GoogleAuthOptions;
 }
 
-export interface GenerateContentPrompt {
-    contents: Content[];
-    system?: Content;
-}
 type ClaudeStreamingPrompt = { messages: unknown[]; system?: unknown[] };
 type ConversationWrapper = { messages?: unknown[]; system?: unknown[] };
 
@@ -66,230 +60,117 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     static PROVIDER = 'vertexai';
     provider = VertexAIDriver.PROVIDER;
 
-    aiplatform: v1beta1.ModelServiceClient | undefined;
-    anthropicClient: AnthropicVertex | undefined;
-    fetchClient: FetchClient | undefined;
-    googleGenAI: GoogleGenAI | undefined;
-    googleGenAIRegion: string | undefined;
-    googleGenAIFlex: boolean | undefined;
-    llamaClient: (FetchClient & { region?: string }) | undefined;
-    modelGarden: v1beta1.ModelGardenServiceClient | undefined;
-    imagenClient: PredictionServiceClient | undefined;
-    predictionClient: PredictionServiceClient | undefined;
-
-    googleAuth: GoogleAuth<AuthClient>;
-    private authClientPromise: Promise<AuthClient> | undefined;
+    googleAuth: GoogleAuth;
+    private fetchClients = new Map<string, FetchClient>();
 
     constructor(options: VertexAIDriverOptions) {
         super(options);
 
-        this.aiplatform = undefined;
-        this.anthropicClient = undefined;
-        this.fetchClient = undefined;
-        this.googleGenAI = undefined;
-        this.googleGenAIRegion = undefined;
-        this.googleGenAIFlex = undefined;
-        this.modelGarden = undefined;
-        this.llamaClient = undefined;
-        this.imagenClient = undefined;
-        this.predictionClient = undefined;
-
         this.googleAuth = new GoogleAuth(options.googleAuthOptions);
-        this.authClientPromise = undefined;
     }
 
     /**
-     * Cleanup Google Cloud clients when the driver is evicted from the cache.
+     * Cleanup HTTP resources when the driver is evicted from the cache.
      * `super.destroy()` releases the HTTP agent socket pool created by
      * {@link AbstractDriver.getHttpAgent} / {@link AbstractDriver.getDriverFetch}.
      */
     destroy(): void {
-        this.aiplatform?.close();
-        this.modelGarden?.close();
-        this.imagenClient?.close();
-        this.predictionClient?.close();
         super.destroy();
     }
 
-    private async getAuthClient(): Promise<AuthClient> {
-        if (!this.authClientPromise) {
-            this.authClientPromise = this.googleAuth.getClient();
+    private async getAuthorizationHeader(): Promise<string> {
+        const token = await this.googleAuth.getAccessToken();
+        if (!token) {
+            throw new Error('Google Application Default Credentials did not return an access token');
         }
-        return this.authClientPromise;
+        return `Bearer ${token}`;
     }
 
-    private getSdkRequestTimeoutMs(httpTimeout?: HttpTimeoutOptions): number {
-        const timeouts = resolveDriverHttpTimeouts(
-            mergeDriverHttpTimeoutOptions(this.options.httpTimeout, httpTimeout),
-        );
-        return Math.max(timeouts.headersTimeout, timeouts.bodyTimeout);
-    }
-
-    private getGoogleGenAIHttpOptions(flex: boolean, httpTimeout?: HttpTimeoutOptions) {
-        return {
-            timeout: this.getSdkRequestTimeoutMs(httpTimeout),
-            ...(flex
-                ? {
-                      headers: {
-                          'X-Vertex-AI-LLM-Request-Type': 'shared',
-                          'X-Vertex-AI-LLM-Shared-Request-Type': 'flex',
-                      },
-                  }
-                : {}),
-        };
-    }
-
-    private getAnthropicVertexClientOptions(region: string, authClient: AuthClient, httpTimeout?: HttpTimeoutOptions) {
-        return {
-            timeout: this.getSdkRequestTimeoutMs(httpTimeout),
-            region,
-            projectId: this.options.project,
-            authClient: authClient,
-            fetch: this.getDriverFetch(),
-        };
-    }
-
-    public getGoogleGenAIClient(
-        region: string = this.options.region,
-        flex: boolean = false,
-        httpTimeout?: HttpTimeoutOptions,
-    ): GoogleGenAI {
-        if (httpTimeout) {
-            return this.buildGoogleGenAIClient(region, flex, httpTimeout);
+    public getFetchClient(region: string = this.options.region, apiVersion: string = 'v1'): FetchClient {
+        const key = `${apiVersion}:${region}`;
+        const existing = this.fetchClients.get(key);
+        if (existing) {
+            return existing;
         }
-        if (this.googleGenAI && this.googleGenAIRegion === region && this.googleGenAIFlex === flex) {
-            // Return existing client if region and flex settings match
-            return this.googleGenAI;
-        }
-        this.googleGenAI = this.buildGoogleGenAIClient(region, flex);
-        this.googleGenAIRegion = region;
-        this.googleGenAIFlex = flex;
-        return this.googleGenAI;
-    }
 
-    private buildGoogleGenAIClient(region: string, flex: boolean, httpTimeout?: HttpTimeoutOptions): GoogleGenAI {
-        return new GoogleGenAI({
+        const client = createFetchClient({
+            region: region,
             project: this.options.project,
-            location: region,
-            vertexai: true,
-            googleAuthOptions: this.options.googleAuthOptions || {
-                scopes: ['https://www.googleapis.com/auth/cloud-platform'],
-            },
-            httpOptions: this.getGoogleGenAIHttpOptions(flex, httpTimeout),
+            apiVersion,
+            fetchImpl: this.getDriverFetch(),
+        }).withAuthCallback(async () => {
+            return this.getAuthorizationHeader();
         });
-    }
 
-    public getFetchClient(region: string = this.options.region): FetchClient {
-        //Lazy initialization
-        if (!this.fetchClient) {
-            this.fetchClient = createFetchClient({
-                region: region,
-                project: this.options.project,
-                fetchImpl: this.getDriverFetch(),
-            }).withAuthCallback(async () => {
-                const token = await this.googleAuth.getAccessToken();
-                return `Bearer ${token}`;
-            });
-        }
-        return this.fetchClient;
+        this.fetchClients.set(key, client);
+        return client;
     }
 
     public getLLamaClient(region: string = 'us-central1'): FetchClient {
-        //Lazy initialization
-        if (!this.llamaClient || this.llamaClient.region !== region) {
-            this.llamaClient = createFetchClient({
-                region: region,
-                project: this.options.project,
-                apiVersion: 'v1beta1',
-                fetchImpl: this.getDriverFetch(),
-            }).withAuthCallback(async () => {
-                const token = await this.googleAuth.getAccessToken();
-                return `Bearer ${token}`;
-            });
-            // Store the region for potential client reuse
-            this.llamaClient.region = region;
-        }
-        return this.llamaClient;
+        return this.getFetchClient(region, 'v1beta1');
     }
 
-    public async getAnthropicClient(
-        region: string = this.options.region,
-        httpTimeout?: HttpTimeoutOptions,
-    ): Promise<AnthropicVertex> {
-        // Extract region prefix and map if it exists in ANTHROPIC_REGIONS, otherwise use as-is
-        const getRegionPrefix = (r: string) => r.split('-')[0];
-        const regionPrefix = getRegionPrefix(region);
-        const mappedRegion = ANTHROPIC_REGIONS[regionPrefix] || region;
+    public resolveVertexModelPath(model: string, regionOverride?: string) {
+        let region = regionOverride ?? this.options.region;
+        let modelPath = model;
 
-        const defaultRegionPrefix = getRegionPrefix(this.options.region);
-        const defaultMappedRegion = ANTHROPIC_REGIONS[defaultRegionPrefix] || this.options.region;
-
-        // Get auth client to avoid version mismatch with GoogleAuth generic types
-        const authClient = await this.getAuthClient();
-
-        // If mapped region is different from default mapped region, create one-off client
-        if (httpTimeout || mappedRegion !== defaultMappedRegion) {
-            return new AnthropicVertex(this.getAnthropicVertexClientOptions(mappedRegion, authClient, httpTimeout));
+        const splits = model.split('/');
+        if (splits[0] === 'locations' && splits.length >= 3) {
+            region = regionOverride ?? splits[1];
+            modelPath = splits.slice(2).join('/');
         }
 
-        //Lazy initialization for default region
-        if (!this.anthropicClient) {
-            this.anthropicClient = new AnthropicVertex(this.getAnthropicVertexClientOptions(mappedRegion, authClient));
+        if (!modelPath.includes('publishers/')) {
+            const modelName = trimModelName(modelPath.split('/').pop() ?? modelPath);
+            const publisher = modelName.includes('claude') || modelName.includes('anthropic') ? 'anthropic' : 'google';
+            modelPath = `publishers/${publisher}/models/${modelName}`;
         }
-        return this.anthropicClient;
+
+        return { region, modelPath };
     }
 
-    public async getAIPlatformClient(): Promise<v1beta1.ModelServiceClient> {
-        //Lazy initialization
-        if (!this.aiplatform) {
-            const authClient = await this.getAuthClient();
-            this.aiplatform = new v1beta1.ModelServiceClient({
-                projectId: this.options.project,
-                apiEndpoint: `${this.options.region}-${API_BASE_PATH}`,
-                authClient,
-            });
-        }
-        return this.aiplatform;
+    public vertexModelPath(model: string, method: string, regionOverride?: string): { region: string; path: string } {
+        const { region, modelPath } = this.resolveVertexModelPath(model, regionOverride);
+        return { region, path: `${modelPath}:${method}` };
     }
 
-    public async getModelGardenClient(): Promise<v1beta1.ModelGardenServiceClient> {
-        //Lazy initialization
-        if (!this.modelGarden) {
-            const authClient = await this.getAuthClient();
-            this.modelGarden = new v1beta1.ModelGardenServiceClient({
-                projectId: this.options.project,
-                apiEndpoint: `${this.options.region}-${API_BASE_PATH}`,
-                authClient,
-            });
-        }
-        return this.modelGarden;
+    public async postVertexModel<T>(
+        model: string,
+        method: string,
+        payload: object,
+        options?: {
+            region?: string;
+            apiVersion?: string;
+            headers?: Record<string, string>;
+            query?: Record<string, string | number | boolean>;
+        },
+    ): Promise<T> {
+        const endpoint = this.vertexModelPath(model, method, options?.region);
+        return this.getFetchClient(endpoint.region, options?.apiVersion).post(endpoint.path, {
+            payload,
+            headers: options?.headers,
+            query: options?.query,
+        }) as Promise<T>;
     }
 
-    public async getImagenClient(): Promise<PredictionServiceClient> {
-        //Lazy initialization
-        if (!this.imagenClient) {
-            // TODO: make location configurable, fixed to us-central1 for now
-            const authClient = await this.getAuthClient();
-            this.imagenClient = new PredictionServiceClient({
-                projectId: this.options.project,
-                apiEndpoint: `us-central1-${API_BASE_PATH}`,
-                authClient,
-            });
-        }
-        return this.imagenClient;
-    }
-
-    public async getPredictionServiceClient(): Promise<PredictionServiceClient> {
-        //Lazy initialization using the driver's configured region
-        if (!this.predictionClient) {
-            const authClient = await this.getAuthClient();
-            this.predictionClient = new PredictionServiceClient({
-                projectId: this.options.project,
-                apiEndpoint: `${this.options.region}-${API_BASE_PATH}`,
-                authClient,
-            });
-        }
-        return this.predictionClient;
+    public async streamVertexModel(
+        model: string,
+        method: string,
+        payload: object,
+        options?: {
+            region?: string;
+            apiVersion?: string;
+            headers?: Record<string, string>;
+            query?: Record<string, string | number | boolean>;
+        },
+    ): Promise<ReadableStream<ServerSentEvent>> {
+        const endpoint = this.vertexModelPath(model, method, options?.region);
+        return this.getFetchClient(endpoint.region, options?.apiVersion).post(endpoint.path, {
+            payload,
+            headers: options?.headers,
+            query: options?.query,
+            reader: 'sse',
+        }) as Promise<ReadableStream<ServerSentEvent>>;
     }
 
     validateResult(result: Completion, options: ExecutionOptions) {
@@ -342,7 +223,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         result: unknown[],
         toolUse: unknown[] | undefined,
         options: ExecutionOptions,
-    ): Content[] | unknown | undefined {
+    ): VertexContent[] | unknown | undefined {
         // Handle Claude-style prompts (has 'messages' array)
         if (isClaudeStreamingPrompt(prompt)) {
             return this.buildClaudeStreamingConversation(prompt, result, toolUse, options);
@@ -400,19 +281,19 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         // prompt.contents already includes the conversation history
         // (merged in requestTextCompletionStream via updateConversation),
         // so we use it directly — do NOT prepend options.conversation again.
-        let conversation: Content[] = [...prompt.contents];
+        let conversation: VertexContent[] = [...prompt.contents];
 
         // Only add assistant message if there's actual content
         // (Empty text parts can cause API errors)
         if (parts.length > 0) {
             conversation.push({
                 role: 'model',
-                parts: parts as Content['parts'],
+                parts: parts as VertexContent['parts'],
             });
         }
 
         // Increment turn counter
-        conversation = incrementConversationTurn(conversation) as Content[];
+        conversation = incrementConversationTurn(conversation) as VertexContent[];
 
         // Apply stripping based on options
         const currentTurn = getConversationMeta(conversation).turnNumber;
@@ -547,25 +428,29 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return new ImagenModelDefinition(modelName).requestImageGeneration(this, _prompt, _options);
     }
 
-    async getGenAIModelsArray(client: GoogleGenAI): Promise<Model[]> {
-        const models: Model[] = [];
-        const pager = await client.models.list();
-        for await (const item of pager) {
-            models.push(item);
-        }
+    private async listVertexModels(path: string, query?: Record<string, string | number | boolean>) {
+        const models: VertexListedModel[] = [];
+        let pageToken: string | undefined;
+
+        do {
+            const response = (await this.getFetchClient().get(path, {
+                query: {
+                    ...(query ?? {}),
+                    ...(pageToken ? { pageToken } : {}),
+                },
+            })) as VertexListModelsResponse;
+            models.push(...(response.publisherModels ?? response.models ?? []));
+            pageToken = response.nextPageToken;
+        } while (pageToken);
+
         return models;
     }
 
-    async listModels(_params?: ModelSearchPayload): Promise<AIModel<string>[]> {
-        // Get clients
-        const modelGarden = await this.getModelGardenClient();
-        const aiplatform = await this.getAIPlatformClient();
-        const globalGenAiClient = this.getGoogleGenAIClient('global');
-
+    async listModels(params?: ModelSearchPayload): Promise<AIModel<string>[]> {
         let models: AIModel<string>[] = [];
 
         //Model Garden Publisher models - Pretrained models
-        const publishers = ['google', 'anthropic', 'meta'];
+        const publishers = ['google', 'anthropic', 'meta'] as const;
         // Meta "maas" models are LLama Models-As-A-Service. Non-maas models are not pre-deployed.
         const supportedModels = { google: ['gemini', 'imagen'], anthropic: ['claude'], meta: ['maas'] };
         // Additional models not in the listings, but we want to include
@@ -599,51 +484,27 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             meta: [],
         };
 
-        // Start all network requests in parallel
-        const aiplatformPromise = aiplatform.listModels({
-            parent: `projects/${this.options.project}/locations/${this.options.region}`,
-        });
-        const publisherPromises = publishers.map(async (publisher) => {
-            const [response] = await modelGarden.listPublisherModels({
-                parent: `publishers/${publisher}`,
+        const publisherPromises = publishers.map(async (publisher) => ({
+            publisher,
+            response: await this.listVertexModels(`publishers/${publisher}/models`, {
                 orderBy: 'name',
                 listAllVersions: true,
-            });
-            return { publisher, response };
-        });
+                pageSize: 1000,
+            }),
+        }));
 
-        const globalGooglePromise = this.getGenAIModelsArray(globalGenAiClient);
-        // Await all network requests
-        const [aiplatformResult, globalGoogleResult, ...publisherResults] = await Promise.all([
-            aiplatformPromise,
-            globalGooglePromise,
+        const [projectModels, ...publisherResults] = await Promise.all([
+            this.listVertexModels('models', { pageSize: 1000 }),
             ...publisherPromises,
         ]);
 
         // Process aiplatform models, project specific models
-        const [response] = aiplatformResult;
         models = models.concat(
-            response.map((model) => ({
+            projectModels.map((model) => ({
                 id: model.name?.split('/').pop() ?? '',
                 name: model.displayName ?? '',
                 provider: 'vertexai',
             })),
-        );
-
-        // Process global google models from GenAI
-        models = models.concat(
-            globalGoogleResult.map((model) => {
-                const modelCapability = getModelCapabilities(model.name ?? '', 'vertexai');
-                return {
-                    id: `locations/global/${model.name}`,
-                    name: `Global ${model.name?.split('/').pop()}`,
-                    provider: 'vertexai',
-                    owner: 'google',
-                    input_modalities: modelModalitiesToArray(modelCapability.input),
-                    output_modalities: modelModalitiesToArray(modelCapability.output),
-                    tool_support: modelCapability.tool_support,
-                };
-            }),
         );
 
         // Process publisher models
@@ -772,6 +633,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             }
         }
 
+        const text = params?.text?.toLowerCase();
+        if (text) {
+            models = models.filter((model) => {
+                return model.id.toLowerCase().includes(text) || model.name.toLowerCase().includes(text);
+            });
+        }
+
         //Remove duplicates
         const uniqueModels = Array.from(new Set(models.map((a) => a.id)))
             .map((id) => {
@@ -782,8 +650,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return uniqueModels;
     }
 
-    validateConnection(): Promise<boolean> {
-        throw new Error('Method not implemented.');
+    async validateConnection(): Promise<boolean> {
+        await this.getAuthorizationHeader();
+        return true;
     }
 
     async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
@@ -793,9 +662,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     /**
      * Format VertexAI errors by routing to model-specific error handlers.
      * Each model definition (Gemini, Claude, Llama) can provide custom error parsing
-     * based on their specific SDK error structures.
+     * based on their specific REST error structures.
      *
-     * @param error - The error from the VertexAI/model SDK
+     * @param error - The error from the VertexAI/model endpoint
      * @param context - Context about where the error occurred
      * @returns A standardized LlumiverseError
      */
@@ -818,7 +687,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 }
 
-//'us-central1-aiplatform.googleapis.com',
 const API_BASE_PATH = 'aiplatform.googleapis.com';
 function createFetchClient({
     region,
@@ -833,7 +701,7 @@ function createFetchClient({
     apiVersion?: string;
     fetchImpl?: FETCH_FN;
 }) {
-    const vertexBaseEndpoint = apiEndpoint ?? `${region}-${API_BASE_PATH}`;
+    const vertexBaseEndpoint = apiEndpoint ?? (region === 'global' ? API_BASE_PATH : `${region}-${API_BASE_PATH}`);
     return new FetchClient(
         `https://${vertexBaseEndpoint}/${apiVersion}/projects/${project}/locations/${region}`,
         fetchImpl,

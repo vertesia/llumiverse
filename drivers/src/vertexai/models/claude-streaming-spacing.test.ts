@@ -1,15 +1,19 @@
 import type { CompletionChunkObject, ExecutionOptions } from '@llumiverse/core';
+import type { ServerSentEvent } from '@vertesia/api-fetch-client';
 import { describe, expect, it } from 'vitest';
 import type { ClaudePrompt } from '../../shared/claude-messages.js';
 import type { VertexAIDriver } from '../index.js';
 import { ClaudeModelDefinition } from './claude.js';
 
-function createAsyncStream(events: unknown[]): AsyncIterable<unknown> {
-    return (async function* () {
-        for (const event of events) {
-            yield event;
-        }
-    })();
+function createSseStream(events: unknown[]): ReadableStream<ServerSentEvent> {
+    return new ReadableStream<ServerSentEvent>({
+        start(controller) {
+            for (const event of events) {
+                controller.enqueue({ type: 'event', data: JSON.stringify(event) });
+            }
+            controller.close();
+        },
+    });
 }
 
 async function collectChunks(stream: AsyncIterable<CompletionChunkObject>): Promise<CompletionChunkObject[]> {
@@ -25,32 +29,29 @@ describe('ClaudeModelDefinition streaming spacing', () => {
         const modelDef = new ClaudeModelDefinition('claude-sonnet-4-5');
         const driver = {
             logger: { warn: () => {}, info: () => {}, error: () => {} },
-            getAnthropicClient: async () => ({
-                messages: {
-                    stream: async () =>
-                        createAsyncStream([
-                            {
-                                type: 'content_block_delta',
-                                delta: { type: 'thinking_delta', thinking: 'Thinking...' },
-                            },
-                            {
-                                type: 'content_block_delta',
-                                delta: { type: 'signature_delta' },
-                            },
-                            {
-                                type: 'content_block_start',
-                                content_block: { type: 'tool_use', id: 'tool-1', name: 'get_weather' },
-                            },
-                            {
-                                type: 'content_block_delta',
-                                delta: { type: 'input_json_delta', partial_json: '{"city":"Paris"}' },
-                            },
-                            {
-                                type: 'content_block_stop',
-                            },
-                        ]),
-                },
-            }),
+            options: { region: 'us-central1' },
+            streamVertexModel: async () =>
+                createSseStream([
+                    {
+                        type: 'content_block_delta',
+                        delta: { type: 'thinking_delta', thinking: 'Thinking...' },
+                    },
+                    {
+                        type: 'content_block_delta',
+                        delta: { type: 'signature_delta' },
+                    },
+                    {
+                        type: 'content_block_start',
+                        content_block: { type: 'tool_use', id: 'tool-1', name: 'get_weather' },
+                    },
+                    {
+                        type: 'content_block_delta',
+                        delta: { type: 'input_json_delta', partial_json: '{"city":"Paris"}' },
+                    },
+                    {
+                        type: 'content_block_stop',
+                    },
+                ]),
         } as unknown as VertexAIDriver;
 
         const prompt = {
@@ -84,25 +85,22 @@ describe('ClaudeModelDefinition streaming spacing', () => {
         const modelDef = new ClaudeModelDefinition('claude-sonnet-4-5');
         const driver = {
             logger: { warn: () => {}, info: () => {}, error: () => {} },
-            getAnthropicClient: async () => ({
-                messages: {
-                    stream: async () =>
-                        createAsyncStream([
-                            {
-                                type: 'content_block_delta',
-                                delta: { type: 'thinking_delta', thinking: 'Thinking...' },
-                            },
-                            {
-                                type: 'content_block_delta',
-                                delta: { type: 'signature_delta' },
-                            },
-                            {
-                                type: 'content_block_delta',
-                                delta: { type: 'text_delta', text: 'Answer' },
-                            },
-                        ]),
-                },
-            }),
+            options: { region: 'us-central1' },
+            streamVertexModel: async () =>
+                createSseStream([
+                    {
+                        type: 'content_block_delta',
+                        delta: { type: 'thinking_delta', thinking: 'Thinking...' },
+                    },
+                    {
+                        type: 'content_block_delta',
+                        delta: { type: 'signature_delta' },
+                    },
+                    {
+                        type: 'content_block_delta',
+                        delta: { type: 'text_delta', text: 'Answer' },
+                    },
+                ]),
         } as unknown as VertexAIDriver;
 
         const prompt = {
@@ -128,36 +126,33 @@ describe('ClaudeModelDefinition streaming spacing', () => {
         const modelDef = new ClaudeModelDefinition('claude-sonnet-4-5');
         const driver = {
             logger: { warn: () => {}, info: () => {}, error: () => {} },
-            getAnthropicClient: async () => ({
-                messages: {
-                    stream: async () =>
-                        createAsyncStream([
-                            {
-                                type: 'content_block_delta',
-                                delta: { type: 'thinking_delta', thinking: 'Thinking...' },
-                            },
-                            {
-                                type: 'content_block_delta',
-                                delta: { type: 'signature_delta' },
-                            },
-                            {
-                                type: 'content_block_start',
-                                content_block: { type: 'tool_use', id: 'tool-1', name: 'get_weather' },
-                            },
-                            {
-                                type: 'content_block_delta',
-                                delta: { type: 'input_json_delta', partial_json: '{"city":"Paris"}' },
-                            },
-                            {
-                                type: 'content_block_stop',
-                            },
-                            {
-                                type: 'content_block_delta',
-                                delta: { type: 'text_delta', text: 'Answer after tool' },
-                            },
-                        ]),
-                },
-            }),
+            options: { region: 'us-central1' },
+            streamVertexModel: async () =>
+                createSseStream([
+                    {
+                        type: 'content_block_delta',
+                        delta: { type: 'thinking_delta', thinking: 'Thinking...' },
+                    },
+                    {
+                        type: 'content_block_delta',
+                        delta: { type: 'signature_delta' },
+                    },
+                    {
+                        type: 'content_block_start',
+                        content_block: { type: 'tool_use', id: 'tool-1', name: 'get_weather' },
+                    },
+                    {
+                        type: 'content_block_delta',
+                        delta: { type: 'input_json_delta', partial_json: '{"city":"Paris"}' },
+                    },
+                    {
+                        type: 'content_block_stop',
+                    },
+                    {
+                        type: 'content_block_delta',
+                        delta: { type: 'text_delta', text: 'Answer after tool' },
+                    },
+                ]),
         } as unknown as VertexAIDriver;
 
         const prompt = {

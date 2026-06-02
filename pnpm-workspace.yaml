@@ -5,9 +5,7 @@ packages:
   - ./examples
 verifyDepsBeforeRun: false
 allowBuilds:
-  '@google/genai': true
   esbuild: true
-  protobufjs: true
 blockExoticSubdeps: true
 minimumReleaseAge: 4320 # 3 days in minutes, minimumReleaseAge protects against supply chain attacks.
 minimumReleaseAgeStrict: true
@@ -39,11 +37,9 @@ overrides:
   'flatted@<3.4.2': '^3.4.2'
   'picomatch@>=4.0.0 <4.0.4': '^4.0.4'
   'brace-expansion@<5.0.6': '^5.0.6'
-  'protobufjs@<=7.5.7': '^8.4.2'
   'postcss@<8.5.10': '^8.5.15'
   'fast-xml-builder@<=1.1.6': '^1.2.0'
   'fast-uri@<=3.1.1': '^3.1.2'
   'fast-xml-parser@<5.7.0': '^5.8.0'
-  '@protobufjs/utf8@<=1.1.0': '^1.1.1'
   'ws@>=8.0.0 <8.20.1': '^8.21.0'
   'uuid@<11.1.1': '^14.0.0'

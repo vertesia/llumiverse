@@ -133,7 +133,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     /**
      * Fetch-compatible function backed by the driver's HTTP agent.
      * Pass to any SDK that accepts a custom `fetch` option (OpenAI,
-     * Anthropic, `@google/genai`, Bedrock via Smithy, …) or use as a
+     * Anthropic, Bedrock via Smithy, ...), or use as a
      * drop-in replacement for the global `fetch` in drivers that make
      * raw HTTP calls.
      */

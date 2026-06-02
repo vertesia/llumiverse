@@ -1,4 +1,3 @@
-import { helpers, type protos } from '@google-cloud/aiplatform';
 import {
     type AudioEmbeddingInput,
     buildEmbeddingsResult,
@@ -100,18 +99,12 @@ function hasPredictionEmbeddings(prediction: MultimodalPrediction): boolean {
     return Boolean(prediction.textEmbedding || prediction.imageEmbedding || prediction.videoEmbeddings?.length);
 }
 
-function decodePredictionValue(
-    value: protos.google.protobuf.IValue,
-    index: number,
-    model: string,
-): MultimodalPrediction {
-    type HelperValue = Parameters<typeof helpers.fromValue>[0];
-    const decoded = helpers.fromValue(value as unknown as HelperValue);
-    if (!decoded || typeof decoded !== 'object') {
+function decodePredictionValue(value: unknown, index: number, model: string): MultimodalPrediction {
+    if (!value || typeof value !== 'object') {
         throw new Error(`Vertex predict returned an empty prediction for input ${index} (model ${model})`);
     }
 
-    const prediction = decoded as MultimodalPrediction;
+    const prediction = value as MultimodalPrediction;
     if (!hasPredictionEmbeddings(prediction)) {
         throw new Error(`Vertex predict returned no embeddings for input ${index} (model ${model})`);
     }
@@ -149,9 +142,8 @@ function predictionToOutputs(prediction: MultimodalPrediction, modality: Modalit
 }
 
 /**
- * Embed via the legacy multimodalembedding@001 API using the typed
- * @google-cloud/aiplatform PredictionServiceClient. Returns one result item
- * per input; video/audio segments expand into multiple outputs.
+ * Embed via the legacy multimodalembedding@001 predict API. Returns one result
+ * item per input; video/audio segments expand into multiple outputs.
  */
 export async function generateLegacyMultimodalEmbeddings(
     driver: VertexAIDriver,
@@ -161,24 +153,14 @@ export async function generateLegacyMultimodalEmbeddings(
     const built = await Promise.all(options.inputs.map(buildLegacyInstance));
     const modalities = built.map((b) => b.modality);
 
-    const instances = built
-        .map((b) => helpers.toValue(b.instance))
-        .filter((v): v is NonNullable<typeof v> => v != null);
+    const instances = built.map((b) => b.instance);
+    const parameters = options.dimensions !== undefined ? { dimension: options.dimensions } : undefined;
 
-    if (instances.length !== built.length) {
-        throw new Error('Failed to encode one or more multimodal embedding instances');
-    }
-
-    const parameters =
-        options.dimensions !== undefined ? helpers.toValue({ dimension: options.dimensions }) : undefined;
-
-    const endpoint = `projects/${driver.options.project}/locations/${driver.options.region}/publishers/google/models/${model}`;
-
-    const request: protos.google.cloud.aiplatform.v1.IPredictRequest = { endpoint, instances, parameters };
-
-    const client = await driver.getPredictionServiceClient();
     try {
-        const [response] = await client.predict(request);
+        const response = await driver.postVertexModel<{ predictions?: unknown[] }>(model, 'predict', {
+            instances,
+            parameters,
+        });
         const predictions = response.predictions ?? [];
         if (predictions.length !== built.length) {
             throw new Error(
@@ -194,14 +176,7 @@ export async function generateLegacyMultimodalEmbeddings(
         return buildEmbeddingsResult(model, items);
     } catch (error) {
         if (LlumiverseError.isLlumiverseError(error)) throw error;
-        // @google-cloud/aiplatform uses gRPC, which surfaces errors with a numeric `code`
-        // field rather than `status`. Check both to avoid wrapping plain programming errors.
-        if (
-            error instanceof Error &&
-            typeof (error as { status?: unknown }).status !== 'number' &&
-            typeof (error as { code?: unknown }).code !== 'number'
-        )
-            throw error;
+        if (error instanceof Error && typeof (error as { status?: unknown }).status !== 'number') throw error;
         throw driver.formatLlumiverseError(error, {
             provider: 'vertexai',
             model,

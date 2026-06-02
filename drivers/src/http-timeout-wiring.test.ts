@@ -177,7 +177,7 @@ describe('driver HTTP timeout wiring', () => {
         driver.destroy();
     });
 
-    it('maps Vertex AI single-timeout SDK clients from DriverOptions.httpTimeout', () => {
+    it('caches Vertex AI REST clients by API version and region', async () => {
         const driver = new VertexAIDriver({
             project: 'project',
             region: 'us-central1',
@@ -187,76 +187,23 @@ describe('driver HTTP timeout wiring', () => {
             },
         });
 
-        const internals = exposePrivate<{
-            getGoogleGenAIHttpOptions: (
-                flex: boolean,
-                httpTimeout?: HttpTimeoutOptions,
-            ) => {
-                timeout: number;
-                headers?: Record<string, string>;
-            };
-            getAnthropicVertexClientOptions: (
-                region: string,
-                authClient: unknown,
-                httpTimeout?: HttpTimeoutOptions,
-            ) => {
-                timeout: number;
-                region: string;
-                projectId: string;
-                fetch: typeof fetch;
-            };
-        }>(driver);
+        const defaultClient = driver.getFetchClient();
+        expect(driver.getFetchClient()).toBe(defaultClient);
 
-        expect(internals.getGoogleGenAIHttpOptions(false)).toEqual({
-            timeout: 3_000,
-        });
-        expect(internals.getGoogleGenAIHttpOptions(true)).toEqual({
-            timeout: 3_000,
-            headers: {
-                'X-Vertex-AI-LLM-Request-Type': 'shared',
-                'X-Vertex-AI-LLM-Shared-Request-Type': 'flex',
-            },
-        });
-        expect(
-            internals.getGoogleGenAIHttpOptions(false, {
-                headersTimeout: 10_000,
-                bodyTimeout: 20_000,
-            }),
-        ).toEqual({
-            timeout: 20_000,
-        });
+        const globalClient = driver.getFetchClient('global');
+        expect(globalClient).not.toBe(defaultClient);
+        expect(globalClient.getUrl('publishers/google/models')).toBe(
+            'https://aiplatform.googleapis.com/v1/projects/project/locations/global/publishers/google/models',
+        );
 
-        const anthropicOptions = internals.getAnthropicVertexClientOptions('global', {});
-        expect(anthropicOptions).toEqual({
-            timeout: 3_000,
-            region: 'global',
-            projectId: 'project',
-            authClient: {},
-            fetch: driverFetch(driver),
-        });
-        expect(
-            internals.getAnthropicVertexClientOptions(
-                'global',
-                {},
-                {
-                    headersTimeout: 10_000,
-                    bodyTimeout: 20_000,
-                },
-            ),
-        ).toEqual({
-            timeout: 20_000,
-            region: 'global',
-            projectId: 'project',
-            authClient: {},
-            fetch: driverFetch(driver),
-        });
+        const llamaClient = driver.getLLamaClient('us-east5');
+        expect(llamaClient.getUrl('endpoints/openapi/chat/completions')).toBe(
+            'https://us-east5-aiplatform.googleapis.com/v1beta1/projects/project/locations/us-east5/endpoints/openapi/chat/completions',
+        );
 
-        const defaultGoogleClient = driver.getGoogleGenAIClient();
-        const overrideGoogleClient = driver.getGoogleGenAIClient('us-central1', false, {
-            headersTimeout: 10_000,
-        });
-        expect(overrideGoogleClient).not.toBe(defaultGoogleClient);
-        expect(driver.getGoogleGenAIClient()).toBe(defaultGoogleClient);
+        await expectFetchClientUsesDriverFetch(driver, defaultClient);
+        await expectFetchClientUsesDriverFetch(driver, globalClient);
+        await expectFetchClientUsesDriverFetch(driver, llamaClient);
 
         driver.destroy();
     });

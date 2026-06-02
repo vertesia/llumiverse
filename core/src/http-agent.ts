@@ -52,8 +52,8 @@ export function mergeDriverHttpTimeoutOptions(
  * and close it on `destroy()`.
  *
  * Node-only. `@llumiverse/drivers` is itself Node-only in practice
- * because vertexai/bedrock pull `@google-cloud/*` / `@aws-sdk/*`, so
- * depending on undici from core is acceptable.
+ * because drivers such as Bedrock pull Node-oriented SDKs, so depending
+ * on undici from core is acceptable.
  */
 export function createDriverHttpAgent(opts?: HttpTimeoutOptions): Agent {
     const timeouts = resolveDriverHttpTimeouts(opts);
@@ -69,7 +69,7 @@ export function createDriverHttpAgent(opts?: HttpTimeoutOptions): Agent {
  * Wrap the global `fetch` so every request routes through the given Agent.
  * The returned function is type-compatible with global `fetch`, so it
  * can be passed directly to SDKs that accept a `fetch` option (OpenAI,
- * Anthropic, `@google/genai`, Bedrock via Smithy, …) or used as a
+ * Anthropic, Bedrock via Smithy, ...), or used as a
  * drop-in replacement for global `fetch` in drivers that make raw HTTP
  * calls.
  *

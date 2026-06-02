@@ -1,22 +1,3 @@
-import type { ApiError } from '@google/genai';
-import {
-    type Content,
-    FinishReason,
-    FunctionCallingConfigMode,
-    type FunctionDeclaration,
-    type GenerateContentConfig,
-    type GenerateContentParameters,
-    type GenerateContentResponseUsageMetadata,
-    HarmBlockThreshold,
-    HarmCategory,
-    Modality,
-    type Part,
-    ProminentPeople,
-    type SafetySetting,
-    type ThinkingConfig,
-    ThinkingLevel,
-    type Tool,
-} from '@google/genai';
 import {
     type AIModel,
     type Completion,
@@ -45,9 +26,65 @@ import {
     unwrapConversationArray,
     type VertexAIGeminiOptions,
 } from '@llumiverse/core';
-import { asyncMap } from '@llumiverse/core/async';
+import { transformSSEStream } from '@llumiverse/core/async';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
 import type { ModelDefinition } from '../models.js';
+import type {
+    VertexContent as Content,
+    VertexFunctionDeclaration as FunctionDeclaration,
+    VertexGenerateContentConfig as GenerateContentConfig,
+    VertexGenerateContentPayload as GenerateContentParameters,
+    VertexGenerateContentUsageMetadata as GenerateContentResponseUsageMetadata,
+    VertexPart as Part,
+    VertexSafetySetting as SafetySetting,
+    VertexThinkingConfig as ThinkingConfig,
+    VertexTool as Tool,
+    VertexGenerateContentResponse,
+} from '../types.js';
+
+interface ApiError {
+    status: number;
+    message: string;
+}
+
+const FinishReason = {
+    MAX_TOKENS: 'MAX_TOKENS',
+    STOP: 'STOP',
+    FINISH_REASON_UNSPECIFIED: 'FINISH_REASON_UNSPECIFIED',
+} as const;
+
+type FinishReason = (typeof FinishReason)[keyof typeof FinishReason];
+
+const FunctionCallingConfigMode = {
+    AUTO: 'AUTO',
+} as const;
+
+const HarmBlockThreshold = {
+    BLOCK_ONLY_HIGH: 'BLOCK_ONLY_HIGH',
+} as const;
+
+const HarmCategory = {
+    HARM_CATEGORY_DANGEROUS_CONTENT: 'HARM_CATEGORY_DANGEROUS_CONTENT',
+    HARM_CATEGORY_HARASSMENT: 'HARM_CATEGORY_HARASSMENT',
+    HARM_CATEGORY_SEXUALLY_EXPLICIT: 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+    HARM_CATEGORY_HATE_SPEECH: 'HARM_CATEGORY_HATE_SPEECH',
+    HARM_CATEGORY_UNSPECIFIED: 'HARM_CATEGORY_UNSPECIFIED',
+    HARM_CATEGORY_CIVIC_INTEGRITY: 'HARM_CATEGORY_CIVIC_INTEGRITY',
+} as const;
+
+const Modality = {
+    TEXT: 'TEXT',
+    IMAGE: 'IMAGE',
+} as const;
+
+const ThinkingLevel = {
+    HIGH: 'HIGH',
+    MEDIUM: 'MEDIUM',
+    LOW: 'LOW',
+    MINIMAL: 'MINIMAL',
+} as const;
+
+type ThinkingLevel = (typeof ThinkingLevel)[keyof typeof ThinkingLevel];
 
 function supportsStructuredOutput(options: PromptOptions): boolean {
     // Gemini 1.0 Ultra does not support JSON output, 1.0 Pro does.
@@ -81,20 +118,10 @@ const geminiSafetySettings: SafetySetting[] = [
     },
 ];
 
-// We do the mapping here rather than in common to avoid bringing the SDK into the common package.
 function getProminentPeopleOption(
     prominentPeople?: 'PROMINENT_PEOPLE_UNSPECIFIED' | 'ALLOW_PROMINENT_PEOPLE' | 'BLOCK_PROMINENT_PEOPLE',
 ) {
-    switch (prominentPeople) {
-        case 'ALLOW_PROMINENT_PEOPLE':
-            return ProminentPeople.ALLOW_PROMINENT_PEOPLE;
-        case 'BLOCK_PROMINENT_PEOPLE':
-            return ProminentPeople.BLOCK_PROMINENT_PEOPLE;
-        case 'PROMINENT_PEOPLE_UNSPECIFIED':
-            return ProminentPeople.PROMINENT_PEOPLE_UNSPECIFIED;
-        default:
-            return undefined;
-    }
+    return prominentPeople;
 }
 
 function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentPrompt): GenerateContentParameters {
@@ -115,8 +142,6 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
     const useStructuredOutput = supportsStructuredOutput(options) && !tools;
 
     const configNanoBanana: GenerateContentConfig = {
-        systemInstruction: prompt.system,
-        safetySettings: geminiSafetySettings,
         responseModalities: [Modality.TEXT, Modality.IMAGE], // This is an error if only Text, and Only Image just gets blank responses.
         candidateCount: 1,
         //Model options
@@ -125,7 +150,6 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
         maxOutputTokens: model_options?.max_tokens,
         stopSequences: model_options?.stop_sequence,
         thinkingConfig: geminiThinkingConfig(options),
-        labels: options.labels,
         imageConfig: {
             imageSize: model_options?.image_size,
             aspectRatio: model_options?.image_aspect_ratio,
@@ -137,16 +161,6 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
     };
 
     const config: GenerateContentConfig = {
-        systemInstruction: prompt.system,
-        safetySettings: geminiSafetySettings,
-        tools: tools ? [tools] : undefined,
-        toolConfig: tools
-            ? {
-                  functionCallingConfig: {
-                      mode: FunctionCallingConfigMode.AUTO,
-                  },
-              }
-            : undefined,
         candidateCount: 1,
         //JSON/Structured output
         responseMimeType: useStructuredOutput ? 'application/json' : undefined,
@@ -161,13 +175,22 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
         frequencyPenalty: model_options?.frequency_penalty,
         seed: model_options?.seed,
         thinkingConfig: geminiThinkingConfig(options),
-        labels: options.labels,
     };
 
     return {
-        model: options.model,
         contents: payloadContents,
-        config: options.model.toLowerCase().includes('image') ? configNanoBanana : config,
+        systemInstruction: prompt.system,
+        safetySettings: geminiSafetySettings,
+        generationConfig: options.model.toLowerCase().includes('image') ? configNanoBanana : config,
+        labels: options.labels,
+        tools: tools ? [tools] : undefined,
+        toolConfig: tools
+            ? {
+                  functionCallingConfig: {
+                      mode: FunctionCallingConfigMode.AUTO,
+                  },
+              }
+            : undefined,
     };
 }
 
@@ -261,6 +284,16 @@ const supportedFinishReasons: FinishReason[] = [
 const recoverableToolCallReasons = [
     'UNEXPECTED_TOOL_CALL', // Model called an undeclared tool
 ];
+
+function geminiFlexHeaders(flex: boolean | undefined): Record<string, string> | undefined {
+    if (!flex) {
+        return undefined;
+    }
+    return {
+        'X-Vertex-AI-LLM-Request-Type': 'shared',
+        'X-Vertex-AI-LLM-Shared-Request-Type': 'flex',
+    };
+}
 
 function geminiThinkingBudget(option: StatelessExecutionOptions) {
     const model_options = option.model_options as VertexAIGeminiOptions | undefined;
@@ -584,11 +617,17 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             region = 'global'; // Gemini Flash Image only available in global region, this is for nano-banana model
         }
 
-        const model_options = options.model_options as VertexAIGeminiOptions | undefined;
-        const client = driver.getGoogleGenAIClient(region, model_options?.flex ?? false, options.httpTimeout);
-
         const payload = getGeminiPayload(options, prompt);
-        const response = await client.models.generateContent(payload);
+        const model_options = options.model_options as VertexAIGeminiOptions | undefined;
+        const response = await driver.postVertexModel<VertexGenerateContentResponse>(
+            options.model,
+            'generateContent',
+            payload,
+            {
+                region,
+                headers: geminiFlexHeaders(model_options?.flex),
+            },
+        );
 
         const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(driver, response.usageMetadata);
 
@@ -612,7 +651,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             const isRecoverableToolCall = recoverableToolCallReasons.includes(candidate.finishReason as string);
             if (
                 candidate.finishReason &&
-                !supportedFinishReasons.includes(candidate.finishReason) &&
+                !supportedFinishReasons.includes(candidate.finishReason as FinishReason) &&
                 !isRecoverableToolCall
             ) {
                 throw new Error(
@@ -710,13 +749,16 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             region = 'global'; // Gemini Flash Image only available in global region, this is for nano-banana model
         }
 
-        const model_options = options.model_options as VertexAIGeminiOptions | undefined;
-        const client = driver.getGoogleGenAIClient(region, model_options?.flex ?? false, options.httpTimeout);
-
         const payload = getGeminiPayload(options, prompt);
-        const response = await client.models.generateContentStream(payload);
+        const model_options = options.model_options as VertexAIGeminiOptions | undefined;
+        const response = await driver.streamVertexModel(options.model, 'streamGenerateContent', payload, {
+            region,
+            headers: geminiFlexHeaders(model_options?.flex),
+            query: { alt: 'sse' },
+        });
 
-        const stream = asyncMap(response, async (item) => {
+        const stream = transformSSEStream(response, (data) => {
+            const item = JSON.parse(data) as VertexGenerateContentResponse;
             const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(driver, item.usageMetadata);
             if (item.candidates && item.candidates.length > 0) {
                 for (const candidate of item.candidates) {
@@ -736,7 +778,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                     const isRecoverableToolCall = recoverableToolCallReasons.includes(candidate.finishReason as string);
                     if (
                         candidate.finishReason &&
-                        !supportedFinishReasons.includes(candidate.finishReason) &&
+                        !supportedFinishReasons.includes(candidate.finishReason as FinishReason) &&
                         !isRecoverableToolCall
                     ) {
                         throw new Error(

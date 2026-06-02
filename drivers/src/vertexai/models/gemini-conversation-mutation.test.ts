@@ -13,8 +13,8 @@
  * Fix: use a local `payloadContents` variable so the caller's conversation is never mutated.
  */
 
-import { FinishReason } from '@google/genai';
 import type { ExecutionOptions } from '@llumiverse/core';
+import type { ServerSentEvent } from '@vertesia/api-fetch-client';
 import { describe, expect, it } from 'vitest';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
 import { convertGeminiFunctionPartsToText, GeminiModelDefinition } from './gemini.js';
@@ -107,16 +107,19 @@ function makeContentsWithFunctionParts() {
 
 function makeDriver(overrides: {
     generateContent?: () => Promise<unknown>;
-    generateContentStream?: () => Promise<AsyncIterable<unknown>>;
+    generateContentStream?: () => Promise<ReadableStream<ServerSentEvent>>;
 }) {
     return {
         logger: { warn: () => {}, info: () => {}, error: () => {} },
-        getGoogleGenAIClient: () => ({
-            models: {
-                generateContent: overrides.generateContent ?? (async () => ({})),
-                generateContentStream: overrides.generateContentStream ?? (async () => (async function* () {})()),
-            },
-        }),
+        postVertexModel: overrides.generateContent ?? (async () => ({})),
+        streamVertexModel:
+            overrides.generateContentStream ??
+            (async () =>
+                new ReadableStream<ServerSentEvent>({
+                    start(controller) {
+                        controller.close();
+                    },
+                })),
     } as unknown as VertexAIDriver;
 }
 
@@ -124,7 +127,7 @@ const mockNonStreamingResponse = {
     usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15 },
     candidates: [
         {
-            finishReason: FinishReason.STOP,
+            finishReason: 'STOP',
             content: { role: 'model', parts: [{ text: 'Summary.' }] },
             safetyRatings: [],
         },
@@ -135,7 +138,7 @@ const mockStreamingChunk = {
     usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15 },
     candidates: [
         {
-            finishReason: FinishReason.STOP,
+            finishReason: 'STOP',
             content: { role: 'model', parts: [{ text: 'Summary.' }] },
             safetyRatings: [],
         },
@@ -166,9 +169,12 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
 
         const driver = makeDriver({
             generateContentStream: async () =>
-                (async function* () {
-                    yield mockStreamingChunk;
-                })(),
+                new ReadableStream<ServerSentEvent>({
+                    start(controller) {
+                        controller.enqueue({ type: 'event', data: JSON.stringify(mockStreamingChunk) });
+                        controller.close();
+                    },
+                }),
         });
         const prompt = { contents: originalContents, system: undefined } as unknown as GenerateContentPrompt;
         const options: ExecutionOptions = { model: 'publishers/google/models/gemini-2.0-flash', tools: [] };

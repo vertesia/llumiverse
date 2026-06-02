@@ -10,7 +10,6 @@
 
 import type { MessageParam } from '@anthropic-ai/sdk/resources/index.js';
 import type { ConverseRequest, Message } from '@aws-sdk/client-bedrock-runtime';
-import type { Content } from '@google/genai';
 import type { ExecutionOptions } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import { describe, expect, test } from 'vitest';
@@ -22,6 +21,7 @@ import { convertOpenAIFunctionItemsToText } from '../src/openai/index.js';
 import { claudeMessagesContainToolBlocks, convertClaudeToolBlocksToText } from '../src/shared/claude-messages.js';
 // VertexAI Gemini
 import { convertGeminiFunctionPartsToText } from '../src/vertexai/models/gemini.js';
+import type { VertexContent as Content } from '../src/vertexai/types.js';
 import type { Tree } from './__helpers__/test-utils.js';
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;

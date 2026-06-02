@@ -1,3 +1,5 @@
+import type { Message } from '@anthropic-ai/sdk/resources/index.js';
+import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources/messages.js';
 import {
     type AIModel,
     type Completion,
@@ -9,17 +11,23 @@ import {
     type PromptSegment,
     type VertexAIClaudeOptions,
 } from '@llumiverse/core';
-import type { ClaudePrompt } from '../../shared/claude-messages.js';
+import { transformSSEStream } from '@llumiverse/core/async';
+import type { ServerSentEvent } from '@vertesia/api-fetch-client';
 import {
-    executeClaudeCompletion,
+    type ClaudePrompt,
+    completionFromClaudeMessage,
+    createClaudeStreamEventMapper,
     formatAnthropicLlumiverseError,
     formatClaudePrompt,
+    getClaudePayload,
     isClaudeErrorRetryable,
-    streamClaudeCompletion,
+    updateClaudeConversation,
 } from '../../shared/claude-messages.js';
 
 import type { VertexAIDriver } from '../index.js';
 import type { ModelDefinition } from '../models.js';
+
+const VERTEX_ANTHROPIC_VERSION = 'vertex-2023-10-16';
 
 export const ANTHROPIC_REGIONS: Record<string, string> = {
     us: 'us-east5',
@@ -45,6 +53,22 @@ function resolveVertexAIModelPath(options: ExecutionOptions): {
     }
     const modelName = splits[splits.length - 1];
     return { modelName, region, options: { ...options, model: modelName } };
+}
+
+function mapAnthropicRegion(region: string): string {
+    const regionPrefix = region.split('-')[0];
+    return ANTHROPIC_REGIONS[regionPrefix] || region;
+}
+
+function vertexClaudePayload(prompt: ClaudePrompt, options: ExecutionOptions, stream: boolean) {
+    const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
+    const { payload, requestOptions } = getClaudePayload(options, conversation, stream);
+    const vertexPayload = {
+        ...payload,
+        anthropic_version: VERTEX_ANTHROPIC_VERSION,
+    } as Record<string, unknown>;
+    delete vertexPayload.model;
+    return { conversation, payload: vertexPayload, headers: requestOptions?.headers };
 }
 
 export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
@@ -74,7 +98,6 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         options: ExecutionOptions,
     ): Promise<Completion> {
         const { region, options: resolvedOptions } = resolveVertexAIModelPath(options);
-        const client = await driver.getAnthropicClient(region, resolvedOptions.httpTimeout);
         const model_options = resolvedOptions.model_options as VertexAIClaudeOptions | undefined;
         if (
             model_options?._option_id !== undefined &&
@@ -83,7 +106,12 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         ) {
             driver.logger.debug({ options: resolvedOptions.model_options }, 'Unexpected option id');
         }
-        return executeClaudeCompletion(client, prompt, resolvedOptions);
+        const { conversation, payload, headers } = vertexClaudePayload(prompt, resolvedOptions, false);
+        const result = await driver.postVertexModel<Message>(options.model, 'rawPredict', payload, {
+            region: mapAnthropicRegion(region ?? driver.options.region),
+            headers,
+        });
+        return completionFromClaudeMessage(result, conversation, resolvedOptions);
     }
 
     async requestTextCompletionStream(
@@ -92,7 +120,6 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         options: ExecutionOptions,
     ): Promise<AsyncIterable<CompletionChunkObject>> {
         const { region, options: resolvedOptions } = resolveVertexAIModelPath(options);
-        const client = await driver.getAnthropicClient(region, resolvedOptions.httpTimeout);
         const model_options = resolvedOptions.model_options as VertexAIClaudeOptions | undefined;
         if (
             model_options?._option_id !== undefined &&
@@ -101,7 +128,16 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         ) {
             driver.logger.debug({ options: resolvedOptions.model_options }, 'Unexpected option id');
         }
-        return streamClaudeCompletion(client, prompt, resolvedOptions);
+        const { payload, headers } = vertexClaudePayload(prompt, resolvedOptions, true);
+        const stream = await driver.streamVertexModel(options.model, 'rawPredict', payload, {
+            region: mapAnthropicRegion(region ?? driver.options.region),
+            headers,
+            query: { alt: 'sse' },
+        });
+        const mapper = createClaudeStreamEventMapper(resolvedOptions);
+        return transformSSEStream(stream as ReadableStream<ServerSentEvent>, (data) => {
+            return mapper(JSON.parse(data) as RawMessageStreamEvent);
+        });
     }
 
     isClaudeErrorRetryable(
