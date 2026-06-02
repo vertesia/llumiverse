@@ -96,8 +96,8 @@ importers:
         version: 3.13.2
     devDependencies:
       '@vertesia/api-fetch-client':
-        specifier: ^1.2.0
-        version: 1.2.0
+        specifier: ^1.3.0
+        version: 1.3.0
       rimraf:
         specifier: ^6.1.2
         version: 6.1.2
@@ -156,11 +156,11 @@ importers:
         specifier: 2.0.0
         version: 2.0.0
       '@google-cloud/aiplatform':
-        specifier: ^6.5.0
-        version: 6.5.0
+        specifier: ^6.8.1
+        version: 6.8.1
       '@google/genai':
-        specifier: 2.1.0
-        version: 2.1.0
+        specifier: 2.7.0
+        version: 2.7.0
       '@huggingface/inference':
         specifier: 4.13.11
         version: 4.13.11
@@ -171,8 +171,8 @@ importers:
         specifier: workspace:*
         version: link:../core
       '@vertesia/api-fetch-client':
-        specifier: ^1.2.0
-        version: 1.2.0
+        specifier: ^1.3.0
+        version: 1.3.0
       eventsource:
         specifier: ^4.1.0
         version: 4.1.0
@@ -758,12 +758,12 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@google-cloud/aiplatform@6.5.0':
-    resolution: {integrity: sha512-UZaeXg4Xt+/2LQLWw2nZ7ipbFdUIm9Xo3edAu2xpP/GMmHQIFk3nJmCI7Y3bFUrcr7kK4mw1gPJ374LQKpOO3w==}
+  '@google-cloud/aiplatform@6.8.1':
+    resolution: {integrity: sha512-8O64485bzBzQQ1VlgEhaLJcOvVlfC/V8MB5nQ5y2Dcl8UAfGXW5LkXK1CEfZ7c6IZYxpkJ9U818ldc8pg7eteg==}
     engines: {node: '>=18'}
 
-  '@google/genai@2.1.0':
-    resolution: {integrity: sha512-2tF/P5LMkiV31slQpTA92EqP7SRHB8VM1IXWdtC9jWzpp8J5j4TakywSqpB/R0K1aPLlpMt3PgB2O1c/+wJPXQ==}
+  '@google/genai@2.7.0':
+    resolution: {integrity: sha512-tv0DRtcndt2oEhBYy+5mA0TaXH98+L1Gt0AP9unBfH7DP20KhB7+O3QqAN1Lz+laMARGTHS7BFQSNpLbl4gm1g==}
     engines: {node: '>=20.0.0'}
     peerDependencies:
       '@modelcontextprotocol/sdk': ^1.25.2
@@ -1232,8 +1232,8 @@ packages:
     resolution: {integrity: sha512-SnbaqayTVFEA6/tYumdF0UmybY0KHyKwGPBXnyckFlrrKdhWFrL3a2HIPXHjht5ZOElKGcXfD2D63P36btb+ww==}
     engines: {node: '>=20.0.0'}
 
-  '@vertesia/api-fetch-client@1.2.0':
-    resolution: {integrity: sha512-r0iifNyzTmeGVgZHH2T9wEBp5GUjfKJ27b5i2N1KXefKn0ClrBMebGwN7/5bRwymeB0x+yqKYY5wEH1yLXs6BQ==}
+  '@vertesia/api-fetch-client@1.3.0':
+    resolution: {integrity: sha512-ZiA0HLA+Rlc0KmM4cdsYRgbZx7nBuraY/ElrnxXf+ypl/iwrEf1eYV8tCxmv5eem6loUqEqAcFmbZxnXPXYXfw==}
 
   '@vitest/expect@4.1.4':
     resolution: {integrity: sha512-iPBpra+VDuXmBFI3FMKHSFXp3Gx5HfmSCE8X67Dn+bwephCnQCaB7qWK2ldHa+8ncN8hJU8VTMcxjPpyMkUjww==}
@@ -3199,13 +3199,13 @@ snapshots:
   '@esbuild/win32-x64@0.25.6':
     optional: true
 
-  '@google-cloud/aiplatform@6.5.0':
+  '@google-cloud/aiplatform@6.8.1':
     dependencies:
       google-gax: 5.0.4
     transitivePeerDependencies:
       - supports-color
 
-  '@google/genai@2.1.0':
+  '@google/genai@2.7.0':
     dependencies:
       google-auth-library: 10.6.2
       p-retry: 4.6.2
@@ -3738,7 +3738,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@vertesia/api-fetch-client@1.2.0':
+  '@vertesia/api-fetch-client@1.3.0':
     dependencies:
       eventsource-parser: 1.1.2
 
