@@ -247,4 +247,77 @@ describe('ClaudeModelDefinition streaming spacing', () => {
             }),
         );
     });
+
+    it('keeps streamed assistant text as content blocks for prompt cache markers', async () => {
+        const modelDef = new ClaudeModelDefinition('claude-sonnet-4-5');
+        const streamVertexModel = vi.fn(async () =>
+            createSseStream([
+                {
+                    type: 'message_start',
+                    message: {
+                        usage: { input_tokens: 7, output_tokens: 0 },
+                    },
+                },
+                {
+                    type: 'content_block_delta',
+                    delta: { type: 'text_delta', text: 'OK' },
+                },
+                {
+                    type: 'message_delta',
+                    delta: { stop_reason: 'end_turn' },
+                    usage: { output_tokens: 1 },
+                },
+            ]),
+        );
+        const driver = {
+            logger: { warn: () => {}, info: () => {}, error: () => {}, debug: () => {} },
+            options: { region: 'us-central1' },
+            streamVertexModel,
+        } as unknown as VertexAIDriver;
+
+        const options = {
+            model: 'publishers/anthropic/models/claude-sonnet-4-5',
+            model_options: {
+                _option_id: 'vertexai-claude',
+                cache_enabled: true,
+            },
+        } as ExecutionOptions;
+
+        const first = await modelDef.requestTextCompletion(
+            driver,
+            {
+                messages: [{ role: 'user', content: [{ type: 'text', text: 'First prompt' }] }],
+                system: [{ type: 'text', text: 'System prompt' }],
+            } as unknown as ClaudePrompt,
+            options,
+        );
+        const firstConversation = first.conversation as ClaudePrompt;
+        expect(firstConversation.messages[1]?.content).toEqual([{ type: 'text', text: 'OK' }]);
+
+        const second = await modelDef.requestTextCompletion(
+            driver,
+            { messages: [{ role: 'user', content: [{ type: 'text', text: 'Second prompt' }] }] } as ClaudePrompt,
+            { ...options, conversation: firstConversation },
+        );
+        await modelDef.requestTextCompletion(
+            driver,
+            { messages: [{ role: 'user', content: [{ type: 'text', text: 'Third prompt' }] }] } as ClaudePrompt,
+            { ...options, conversation: second.conversation },
+        );
+
+        const streamCalls = streamVertexModel.mock.calls as unknown as Array<
+            [string, string, { messages: ClaudePrompt['messages'] }]
+        >;
+        const thirdPayload = streamCalls[2]?.[2];
+        expect(thirdPayload).toBeDefined();
+        if (!thirdPayload) {
+            throw new Error('Expected third Vertex Claude request payload');
+        }
+
+        const pivotMessage = thirdPayload.messages[thirdPayload.messages.length - 2];
+        expect(Array.isArray(pivotMessage.content)).toBe(true);
+
+        const pivotContent = pivotMessage.content as Array<{ cache_control?: unknown }>;
+        expect(pivotContent[pivotContent.length - 1]?.cache_control).toEqual({ type: 'ephemeral' });
+    });
 });

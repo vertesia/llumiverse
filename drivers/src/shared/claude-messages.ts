@@ -662,10 +662,10 @@ export function buildClaudeStreamingConversation(
         .join('');
 
     let conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
+    const assistantContent: ContentBlockParam[] = [];
 
     if (text) {
-        const assistantMsg: MessageParam = { role: 'assistant', content: text };
-        conversation = updateClaudeConversation(conversation, { messages: [assistantMsg] });
+        assistantContent.push({ type: 'text', text });
     }
 
     if (toolUse && toolUse.length > 0) {
@@ -675,8 +675,12 @@ export function buildClaudeStreamingConversation(
             name: t.tool_name,
             input: t.tool_input ?? {},
         }));
-        const assistantToolMsg: MessageParam = { role: 'assistant', content: toolBlocks };
-        conversation = updateClaudeConversation(conversation, { messages: [assistantToolMsg] });
+        assistantContent.push(...toolBlocks);
+    }
+
+    if (assistantContent.length > 0) {
+        const assistantMsg: MessageParam = { role: 'assistant', content: assistantContent };
+        conversation = updateClaudeConversation(conversation, { messages: [assistantMsg] });
     }
 
     conversation = incrementConversationTurn(conversation) as ClaudePrompt;

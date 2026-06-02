@@ -446,6 +446,26 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return models;
     }
 
+    private async listPublisherModels(publisher: string, query?: Record<string, string | number | boolean>) {
+        const models: VertexListedModel[] = [];
+        let pageToken: string | undefined;
+        const client = this.getFetchClient(this.options.region, 'v1beta1');
+        const path = `${vertexApiBaseUrl(this.options.region, 'v1beta1')}/publishers/${publisher}/models`;
+
+        do {
+            const response = (await client.get(path, {
+                query: {
+                    ...(query ?? {}),
+                    ...(pageToken ? { pageToken } : {}),
+                },
+            })) as VertexListModelsResponse;
+            models.push(...(response.publisherModels ?? response.models ?? []));
+            pageToken = response.nextPageToken;
+        } while (pageToken);
+
+        return models;
+    }
+
     async listModels(params?: ModelSearchPayload): Promise<AIModel<string>[]> {
         let models: AIModel<string>[] = [];
 
@@ -486,15 +506,15 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
         const publisherPromises = publishers.map(async (publisher) => ({
             publisher,
-            response: await this.listVertexModels(`publishers/${publisher}/models`, {
+            response: await this.listPublisherModels(publisher, {
                 orderBy: 'name',
                 listAllVersions: true,
-                pageSize: 1000,
+                pageSize: 100,
             }),
         }));
 
         const [projectModels, ...publisherResults] = await Promise.all([
-            this.listVertexModels('models', { pageSize: 1000 }),
+            this.listVertexModels('models', { pageSize: 100 }),
             ...publisherPromises,
         ]);
 
@@ -688,6 +708,11 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 }
 
 const API_BASE_PATH = 'aiplatform.googleapis.com';
+function vertexApiBaseUrl(region: string, apiVersion: string) {
+    const vertexBaseEndpoint = region === 'global' ? API_BASE_PATH : `${region}-${API_BASE_PATH}`;
+    return `https://${vertexBaseEndpoint}/${apiVersion}`;
+}
+
 function createFetchClient({
     region,
     project,
@@ -707,5 +732,6 @@ function createFetchClient({
         fetchImpl,
     ).withHeaders({
         'Content-Type': 'application/json',
+        'x-goog-user-project': project,
     });
 }
