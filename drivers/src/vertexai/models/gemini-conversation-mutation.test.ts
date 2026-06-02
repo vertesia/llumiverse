@@ -141,6 +141,7 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
         const file: DataSource = {
             mime_type: 'application/pdf',
             getURI: vi.fn().mockResolvedValue('gs://test-bucket/doc.pdf'),
+            getURL: vi.fn().mockResolvedValue('https://signed.example/doc.pdf'),
             getStream: vi.fn().mockResolvedValue(new ReadableStream()),
         };
         const segments: PromptSegment[] = [{
@@ -152,6 +153,7 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
         const prompt = await modelDef.createPrompt({} as VertexAIDriver, segments, options);
 
         expect(file.getURI).toHaveBeenCalledTimes(1);
+        expect(file.getURL).not.toHaveBeenCalled();
         expect(file.getStream).not.toHaveBeenCalled();
         expect(prompt.contents[0].parts![0]).toEqual({
             fileData: {

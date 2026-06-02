@@ -374,7 +374,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     }
 
     async startTraining(dataset: DataSource, options: TrainingOptions): Promise<TrainingJob> {
-        const url = await dataset.getURI();
+        const url = await dataset.getURL();
         const file = await this.service.files.create({
             file: await fetch(url),
             purpose: "fine-tune",

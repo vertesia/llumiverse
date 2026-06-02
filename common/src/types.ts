@@ -791,6 +791,7 @@ export interface DataSource {
     name: string;
     mime_type: string;
     getStream(): Promise<ReadableStream<Uint8Array | string>>;
+    getURL(): Promise<string>;
     getURI(): Promise<string>;
 }
 

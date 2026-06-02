@@ -87,7 +87,7 @@ export async function formatTwelvelabsPegasusPrompt(
 
     try {
         // Try to get S3 URL first
-        const url = await videoFile.getURI();
+        const url = await videoFile.getURL();
         const parsedUrl = new URL(url);
 
         if (parsedUrl.hostname.endsWith("amazonaws.com") &&
