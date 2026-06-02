@@ -452,16 +452,23 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         const client = this.getFetchClient(this.options.region, 'v1beta1');
         const path = `${vertexApiBaseUrl(this.options.region, 'v1beta1')}/publishers/${publisher}/models`;
 
-        do {
-            const response = (await client.get(path, {
-                query: {
-                    ...(query ?? {}),
-                    ...(pageToken ? { pageToken } : {}),
-                },
-            })) as VertexListModelsResponse;
-            models.push(...(response.publisherModels ?? response.models ?? []));
-            pageToken = response.nextPageToken;
-        } while (pageToken);
+        try {
+            do {
+                const response = (await client.get(path, {
+                    query: {
+                        ...(query ?? {}),
+                        ...(pageToken ? { pageToken } : {}),
+                    },
+                })) as VertexListModelsResponse;
+                models.push(...(response.publisherModels ?? response.models ?? []));
+                pageToken = response.nextPageToken;
+            } while (pageToken);
+        } catch (err: unknown) {
+            if (isRequestStatus(err, 403) || isRequestStatus(err, 404)) {
+                return [];
+            }
+            throw err;
+        }
 
         return models;
     }
@@ -732,6 +739,9 @@ function createFetchClient({
         fetchImpl,
     ).withHeaders({
         'Content-Type': 'application/json',
-        'x-goog-user-project': project,
     });
+}
+
+function isRequestStatus(err: unknown, status: number) {
+    return err !== null && typeof err === 'object' && 'status' in err && err.status === status;
 }
