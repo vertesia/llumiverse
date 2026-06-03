@@ -10,7 +10,7 @@ import type {
 } from "@azure-rest/ai-inference";
 import { AzureOpenAIDriver } from "../openai/azure_openai.js";
 import { createSseStream, NodeJSReadableStream } from "@azure/core-sse";
-import { formatOpenAILikeMultimodalPrompt } from "../openai/openai_format.js";
+import { formatOpenAIDebugPrompt, formatOpenAILikeMultimodalPrompt } from "../openai/openai_format.js";
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
@@ -100,6 +100,10 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
     protected canStream(_options: ExecutionOptions): Promise<boolean> {
         return Promise.resolve(true);
+    }
+
+    public formatDebugPrompt(prompt: ResponseInputItem[]): ResponseInputItem[] {
+        return formatOpenAIDebugPrompt(prompt);
     }
 
     async requestTextCompletion(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<Completion> {
