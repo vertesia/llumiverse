@@ -196,20 +196,24 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
             }
 
             const execution_time = Date.now() - start;
-            return { ...result, prompt, execution_time };
+            return { ...result, prompt: this.formatDebugPrompt(prompt), execution_time };
         } catch (error) {
             // Don't wrap if already a LlumiverseError
             if (LlumiverseError.isLlumiverseError(error)) {
                 throw error;
             }
             // Log the original error for debugging
-            this.logger.error({ err: error, data: { provider: this.provider, model: options.model, operation: 'execute', prompt } }, `Error during execution in provider ${this.provider}:`);
+            this.logger.error({ err: error, data: { provider: this.provider, model: options.model, operation: 'execute', prompt: this.formatDebugPrompt(prompt) } }, `Error during execution in provider ${this.provider}:`);
             throw this.formatLlumiverseError(error, {
                 provider: this.provider,
                 model: options.model,
                 operation: 'execute',
             });
         }
+    }
+
+    public formatDebugPrompt(prompt: PromptT): PromptT {
+        return prompt;
     }
 
     protected isImageModel(_model: string): boolean {
