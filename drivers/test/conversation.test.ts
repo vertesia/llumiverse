@@ -126,8 +126,11 @@ class ImageUrlSource implements DataSource {
         return this.url.split('/').pop() || 'image';
     }
 
-    async getURL(): Promise<string> {
+    async getURI(): Promise<string> {
         // Return the original URL - driver will fetch it
+        return this.url;
+    }
+    async getURL(): Promise<string> {
         return this.url;
     }
 
@@ -163,9 +166,12 @@ class Base64ImageSource implements DataSource {
         return this.imageName;
     }
 
-    async getURL(): Promise<string> {
+    async getURI(): Promise<string> {
         // Return as data URL
         return `data:${this.mime_type};base64,${this.base64Data}`;
+    }
+    async getURL(): Promise<string> {
+        return this.getURI();
     }
 
     async getStream(): Promise<ReadableStream<string | Uint8Array>> {

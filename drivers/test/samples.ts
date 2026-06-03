@@ -36,8 +36,11 @@ class ImageSource implements DataSource {
     get name() {
         return basename(this.file);
     }
-    async getURL(): Promise<string> {
+    async getURI(): Promise<string> {
         return `file://${this.file}`;
+    }
+    async getURL(): Promise<string> {
+        return this.getURI();
     }
     async getStream(): Promise<ReadableStream<string | Uint8Array>> {
         const stream = createReadStream(this.file);
@@ -50,6 +53,9 @@ class ImageUrlSource implements DataSource {
     }
     get name() {
         return basename(this.url);
+    }
+    async getURI(): Promise<string> {
+        return this.url;
     }
     async getURL(): Promise<string> {
         return this.url;

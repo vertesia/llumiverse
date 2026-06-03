@@ -13,7 +13,7 @@ minimumReleaseAgeStrict: true
 minimumReleaseAgeExclude:
   - '@vertesia/*'
   - '@llumiverse/*'
-  - '@anthropic-ai/sdk@0.96.0'
+  - '@google-cloud/aiplatform@6.8.1'
 patchedDependencies:
   'ts-dual-module@0.6.3': patches/ts-dual-module@0.6.3.patch
 overrides:
