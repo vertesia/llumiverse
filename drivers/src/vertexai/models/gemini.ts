@@ -25,6 +25,7 @@ import {
     type VertexAIGeminiOptions
 } from "@llumiverse/core";
 import { asyncMap } from "@llumiverse/core/async";
+import { truncateBinaryForDebug } from "../../shared/debug-prompt.js";
 import type { GenerateContentPrompt, VertexAIDriver } from "../index.js";
 import type { ModelDefinition } from "../models.js";
 
@@ -59,6 +60,32 @@ const geminiSafetySettings: SafetySetting[] = [
         threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH
     }
 ];
+
+function formatGeminiContentForDebug(content: Content): Content {
+    return {
+        ...content,
+        parts: content.parts?.map(part => {
+            if (!part.inlineData?.data) {
+                return part;
+            }
+            return {
+                ...part,
+                inlineData: {
+                    ...part.inlineData,
+                    data: truncateBinaryForDebug(part.inlineData.data),
+                },
+            } satisfies Part;
+        }),
+    };
+}
+
+export function formatGeminiDebugPrompt(prompt: GenerateContentPrompt): GenerateContentPrompt {
+    return {
+        ...prompt,
+        contents: prompt.contents.map(formatGeminiContentForDebug),
+        system: prompt.system ? formatGeminiContentForDebug(prompt.system) : undefined,
+    };
+}
 
 // We do the mapping here rather than in common to avoid bringing the SDK into the common package.
 function getProminentPeopleOption(prominentPeople?: "PROMINENT_PEOPLE_UNSPECIFIED" | "ALLOW_PROMINENT_PEOPLE" | "BLOCK_PROMINENT_PEOPLE") {

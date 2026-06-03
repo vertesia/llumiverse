@@ -2,6 +2,7 @@ import {
     AIModel, Completion, ExecutionOptions,
     ModelType, PromptRole, PromptSegment, readStreamAsBase64, ImagenOptions
 } from "@llumiverse/core";
+import { truncateBinaryForDebug } from "../../shared/debug-prompt.js";
 import { VertexAIDriver } from "../index.js";
 
 // Import the helper module for converting arbitrary protobuf.Value objects
@@ -81,6 +82,24 @@ export interface ImagenPrompt {
     referenceImages?: ImagenMessage[];
     subjectDescription?: string; //Used for image customization to describe in the reference image
     negativePrompt?: string; //Used for negative prompts
+}
+
+export function formatImagenDebugPrompt(prompt: ImagenPrompt): ImagenPrompt {
+    return {
+        ...prompt,
+        referenceImages: prompt.referenceImages?.map(reference => {
+            if (!reference.referenceImage?.bytesBase64Encoded) {
+                return reference;
+            }
+            return {
+                ...reference,
+                referenceImage: {
+                    ...reference.referenceImage,
+                    bytesBase64Encoded: truncateBinaryForDebug(reference.referenceImage.bytesBase64Encoded),
+                },
+            };
+        }),
+    };
 }
 
 function getImagenParameters(taskType: string, options: ImagenOptions) {

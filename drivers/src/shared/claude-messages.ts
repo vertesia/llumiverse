@@ -63,6 +63,7 @@ import {
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
 import { resolveClaudeThinking } from './claude-thinking.js';
+import { truncateBinaryForDebug } from './debug-prompt.js';
 
 // ============================================================================
 // Types
@@ -71,6 +72,40 @@ import { resolveClaudeThinking } from './claude-thinking.js';
 export interface ClaudePrompt {
     messages: MessageParam[];
     system?: TextBlockParam[];
+}
+
+function formatClaudeContentBlockForDebug(block: ContentBlockParam): ContentBlockParam {
+    if (block.type === 'image' && block.source.type === 'base64') {
+        return {
+            ...block,
+            source: {
+                ...block.source,
+                data: truncateBinaryForDebug(block.source.data),
+            },
+        };
+    }
+    if (block.type === 'document' && block.source.type === 'base64') {
+        return {
+            ...block,
+            source: {
+                ...block.source,
+                data: truncateBinaryForDebug(block.source.data),
+            },
+        };
+    }
+    return block;
+}
+
+export function formatClaudeDebugPrompt(prompt: ClaudePrompt): ClaudePrompt {
+    return {
+        ...prompt,
+        messages: prompt.messages.map(message => ({
+            ...message,
+            content: Array.isArray(message.content)
+                ? message.content.map(formatClaudeContentBlockForDebug)
+                : message.content,
+        })),
+    };
 }
 
 export interface AnthropicUsageLike {

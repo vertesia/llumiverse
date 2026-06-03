@@ -25,11 +25,13 @@ import {
 } from "@llumiverse/core";
 import { FetchClient } from "@vertesia/api-fetch-client";
 import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from "google-auth-library";
+import { type ClaudePrompt, formatClaudeDebugPrompt } from "../shared/claude-messages.js";
 import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
 import { type TextEmbeddingsOptions, getEmbeddingsForText } from "./embeddings/embeddings-text.js";
 import { getModelDefinition } from "./models.js";
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from "./models/claude.js";
-import { ImagenModelDefinition, type ImagenPrompt } from "./models/imagen.js";
+import { formatGeminiDebugPrompt } from "./models/gemini.js";
+import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from "./models/imagen.js";
 
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
@@ -43,7 +45,7 @@ export interface GenerateContentPrompt {
 }
 
 //General Prompt type for VertexAI
-export type VertexAIPrompt = ImagenPrompt | GenerateContentPrompt;
+export type VertexAIPrompt = ClaudePrompt | ImagenPrompt | GenerateContentPrompt;
 
 export function trimModelName(model: string) {
     const i = model.lastIndexOf("@");
@@ -256,6 +258,16 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             return new ImagenModelDefinition(options.model).createPrompt(this, segments, options);
         }
         return getModelDefinition(options.model).createPrompt(this, segments, options);
+    }
+
+    public formatDebugPrompt(prompt: VertexAIPrompt): VertexAIPrompt {
+        if ('messages' in prompt) {
+            return formatClaudeDebugPrompt(prompt);
+        }
+        if ('contents' in prompt) {
+            return formatGeminiDebugPrompt(prompt);
+        }
+        return formatImagenDebugPrompt(prompt);
     }
 
     async requestTextCompletion(prompt: VertexAIPrompt, options: ExecutionOptions): Promise<Completion> {
