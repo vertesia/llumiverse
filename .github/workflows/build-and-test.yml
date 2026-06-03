@@ -52,7 +52,7 @@ jobs:
           workload_identity_provider: "projects/265888598630/locations/global/workloadIdentityPools/composable-cloud/providers/github"
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@d979d5b3a71173a29b74b5b88418bfda9437d885 # v6.1.1
+        uses: aws-actions/configure-aws-credentials@acca2b1b2070338fb9fd1ca27ecee81d687e58e5 # v6.1.2
         with:
           audience: sts.amazonaws.com
           role-to-assume: arn:aws:iam::716085231028:role/ComposablePromptExecutor
