@@ -50,7 +50,7 @@ import {
     RateLimitError,
     UnprocessableEntityError,
 } from 'openai/error';
-import { formatOpenAILikeMultimodalPrompt } from "./openai_format.js";
+import { formatOpenAIDebugPrompt, formatOpenAILikeMultimodalPrompt } from "./openai_format.js";
 
 // Response API types
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
@@ -106,6 +106,10 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<
     constructor(opts: BaseOpenAIDriverOptions) {
         super(opts);
         this.formatPrompt = formatOpenAILikeMultimodalPrompt;
+    }
+
+    public formatDebugPrompt(prompt: ResponseInputItem[]): ResponseInputItem[] {
+        return formatOpenAIDebugPrompt(prompt);
     }
 
     extractDataFromResponse(

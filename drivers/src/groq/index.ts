@@ -5,6 +5,7 @@ import type { ChatCompletionMessageParam, ChatCompletionTool } from "groq-sdk/re
 import type { FunctionParameters } from "groq-sdk/resources/shared";
 import type OpenAI from "openai";
 import { formatOpenAILikeMultimodalPrompt } from "../openai/openai_format.js";
+import { truncateDataUrlForDebug } from "../shared/debug-prompt.js";
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
@@ -12,6 +13,30 @@ type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
 interface GroqDriverOptions extends DriverOptions {
     apiKey: string;
     endpoint_url?: string;
+}
+
+type GroqTextContentPart = { type: 'text', text: string };
+type GroqImageContentPart = { type: 'image_url', image_url: { url: string, detail?: 'auto' | 'low' | 'high' } };
+type GroqContentPart = GroqTextContentPart | GroqImageContentPart;
+type GroqUserMessageWithArrayContent = Extract<ChatCompletionMessageParam, { role: 'user' }> & {
+    content: GroqContentPart[];
+};
+
+function hasGroqArrayContent(message: ChatCompletionMessageParam): message is GroqUserMessageWithArrayContent {
+    return message.role === 'user' && Array.isArray(message.content);
+}
+
+function formatGroqContentPartForDebug(part: GroqContentPart): GroqContentPart {
+    if (part.type !== 'image_url') {
+        return part;
+    }
+    return {
+        ...part,
+        image_url: {
+            ...part.image_url,
+            url: truncateDataUrlForDebug(part.image_url.url),
+        },
+    };
 }
 
 export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletionMessageParam[]> {
@@ -59,6 +84,18 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
 
         // Convert ResponseInputItem[] to Groq ChatCompletionMessageParam[]
         return convertResponseItemsToGroqMessages(responseItems);
+    }
+
+    public formatDebugPrompt(messages: ChatCompletionMessageParam[]): ChatCompletionMessageParam[] {
+        return messages.map(message => {
+            if (!hasGroqArrayContent(message)) {
+                return message;
+            }
+            return {
+                ...message,
+                content: message.content.map(formatGroqContentPartForDebug),
+            };
+        });
     }
 
     private getToolDefinitions(tools: ToolDefinition[] | undefined): ChatCompletionTool[] | undefined {

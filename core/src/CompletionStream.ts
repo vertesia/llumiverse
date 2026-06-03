@@ -217,7 +217,7 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
 
         this.completion = {
             result: accumulatedResults, // Return the accumulated CompletionResult[] instead of text
-            prompt: this.prompt,
+            prompt: this.driver.formatDebugPrompt(this.prompt),
             execution_time: Date.now() - start,
             token_usage: tokens,
             finish_reason: finish_reason,
