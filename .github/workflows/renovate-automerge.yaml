@@ -125,9 +125,11 @@ jobs:
             exit 0
           fi
 
-          disallowed_files="$(gh pr diff "$pr_url" --repo "$REPO" --name-only | grep -vE '(^|/)(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$' || true)"
+          # npm manifests/lockfiles, plus GitHub Actions workflow/composite-action
+          # files (the github-actions manager pins action SHAs in these).
+          disallowed_files="$(gh pr diff "$pr_url" --repo "$REPO" --name-only | grep -vE '(^|/)(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$|(^|/)\.github/(workflows/[^/]+|actions/[^/]+/action)\.ya?ml$' || true)"
           if [[ -n "$disallowed_files" ]]; then
-            echo "Skipping PR #$pr_number: PR changes files outside supported dependency manifests/lockfiles."
+            echo "Skipping PR #$pr_number: PR changes files outside supported dependency manifests/lockfiles/workflows."
             echo "$disallowed_files"
             exit 0
           fi

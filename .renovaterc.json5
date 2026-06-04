@@ -31,6 +31,16 @@
       "rangeStrategy": "bump"
     },
     {
+      // Mark gh-actions patch/minor/digest updates eligible for scoped bot
+      // automerge (the renovate-automerge.yaml workflow merges them once CI
+      // passes). Major action updates are intentionally left unlabeled so they
+      // require a manual merge — Renovate's default separateMajorMinor already
+      // splits majors into their own PR.
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["patch", "minor", "digest"],
+      "addLabels": ["renovate-automerge"]
+    },
+    {
       "groupName": "node deps",
       "matchManagers": ["npm", "nvm", "nodenv"],
       "rangeStrategy": "bump"
