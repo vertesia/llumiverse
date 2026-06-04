@@ -31,6 +31,10 @@ export class Base64DataSource implements DataSource {
         return `data:${this.mime_type};base64,${this.base64}`;
     }
 
+    async getURI(): Promise<string> {
+        return this.getURL();
+    }
+
     /** Convenience accessor that avoids re-encoding via getStream. */
     getBase64(): string {
         return this.base64;
@@ -61,6 +65,10 @@ export class URLDataSource implements DataSource {
     }
 
     async getURL(): Promise<string> {
+        return this.url;
+    }
+
+    async getURI(): Promise<string> {
         return this.url;
     }
 }

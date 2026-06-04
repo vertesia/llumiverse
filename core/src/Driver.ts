@@ -250,6 +250,10 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         }
     }
 
+    public formatDebugPrompt(prompt: PromptT): PromptT {
+        return prompt;
+    }
+
     protected isImageModel(_model: string): boolean {
         return false;
     }
