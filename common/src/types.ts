@@ -894,6 +894,7 @@ export interface DataSource {
     mime_type: string;
     getStream(): Promise<ReadableStream<Uint8Array | string>>;
     getURL(): Promise<string>;
+    getURI(): Promise<string>;
 }
 
 export interface TrainingOptions {

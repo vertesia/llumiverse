@@ -28,10 +28,11 @@ import { AbstractDriver } from '@llumiverse/core/driver';
 import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
 import { type FETCH_FN, FetchClient } from '@vertesia/api-fetch-client';
 import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from 'google-auth-library';
-import type { ClaudePrompt } from '../shared/claude-messages.js';
+import { type ClaudePrompt, formatClaudeDebugPrompt } from '../shared/claude-messages.js';
 import { generateVertexAiEmbeddings } from './embeddings/embed.js';
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
-import { ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
+import { formatGeminiDebugPrompt } from './models/gemini.js';
+import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
 import type { LLamaPrompt } from './models/llama.js';
 import { getModelDefinition, trimModelName } from './models.js';
 
@@ -47,6 +48,13 @@ export interface GenerateContentPrompt {
 }
 type ClaudeStreamingPrompt = { messages: unknown[]; system?: unknown[] };
 type ConversationWrapper = { messages?: unknown[]; system?: unknown[] };
+
+function isClaudePrompt(prompt: VertexAIPrompt): prompt is ClaudePrompt {
+    return (
+        'messages' in prompt &&
+        ('system' in prompt || prompt.messages.some((message) => Array.isArray(message.content)))
+    );
+}
 
 function isClaudeStreamingPrompt(prompt: unknown): prompt is ClaudeStreamingPrompt {
     return (
@@ -320,6 +328,19 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             return new ImagenModelDefinition(options.model).createPrompt(this, segments, options);
         }
         return getModelDefinition(options.model).createPrompt(this, segments, options);
+    }
+
+    public formatDebugPrompt(prompt: VertexAIPrompt): VertexAIPrompt {
+        if (isClaudePrompt(prompt)) {
+            return formatClaudeDebugPrompt(prompt);
+        }
+        if ('contents' in prompt) {
+            return formatGeminiDebugPrompt(prompt);
+        }
+        if ('messages' in prompt) {
+            return prompt;
+        }
+        return formatImagenDebugPrompt(prompt);
     }
 
     async requestTextCompletion(prompt: VertexAIPrompt, options: ExecutionOptions): Promise<Completion> {

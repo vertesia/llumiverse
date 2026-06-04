@@ -14,8 +14,8 @@
  */
 
 import { FinishReason } from '@google/genai';
-import type { ExecutionOptions } from '@llumiverse/core';
-import { describe, expect, it } from 'vitest';
+import { type DataSource, type ExecutionOptions, PromptRole, type PromptSegment } from '@llumiverse/core';
+import { describe, expect, it, vi } from 'vitest';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
 import { convertGeminiFunctionPartsToText, GeminiModelDefinition } from './gemini.js';
 
@@ -143,6 +143,36 @@ const mockStreamingChunk = {
 };
 
 describe('GeminiModelDefinition - no conversation mutation', () => {
+    it('createPrompt uses DataSource URIs directly for Gemini file data', async () => {
+        const modelDef = new GeminiModelDefinition('gemini-2.0-flash');
+        const file: DataSource = {
+            name: 'doc.pdf',
+            mime_type: 'application/pdf',
+            getURI: vi.fn().mockResolvedValue('gs://test-bucket/doc.pdf'),
+            getURL: vi.fn().mockResolvedValue('https://signed.example/doc.pdf'),
+            getStream: vi.fn().mockResolvedValue(new ReadableStream()),
+        };
+        const segments: PromptSegment[] = [
+            {
+                role: PromptRole.user,
+                files: [file],
+            } as PromptSegment,
+        ];
+        const options: ExecutionOptions = { model: 'publishers/google/models/gemini-2.0-flash' };
+
+        const prompt = await modelDef.createPrompt({} as VertexAIDriver, segments, options);
+
+        expect(file.getURI).toHaveBeenCalledTimes(1);
+        expect(file.getURL).not.toHaveBeenCalled();
+        expect(file.getStream).not.toHaveBeenCalled();
+        expect(prompt.contents[0].parts?.[0]).toEqual({
+            fileData: {
+                fileUri: 'gs://test-bucket/doc.pdf',
+                mimeType: 'application/pdf',
+            },
+        });
+    });
+
     it('requestTextCompletion: does not mutate prompt.contents when tools=[] and conversation has function parts', async () => {
         const modelDef = new GeminiModelDefinition('gemini-2.0-flash');
         const originalContents = makeContentsWithFunctionParts();
