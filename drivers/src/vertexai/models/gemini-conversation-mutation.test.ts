@@ -13,10 +13,10 @@
  * Fix: use a local `payloadContents` variable so the caller's conversation is never mutated.
  */
 
-import { ExecutionOptions, PromptRole, type DataSource, type PromptSegment } from '@llumiverse/core';
 import { FinishReason } from '@google/genai';
+import { type DataSource, type ExecutionOptions, PromptRole, type PromptSegment } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
-import { VertexAIDriver } from '../index.js';
+import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
 import { convertGeminiFunctionPartsToText, GeminiModelDefinition } from './gemini.js';
 
 // ---------------------------------------------------------------------------
@@ -35,8 +35,8 @@ describe('convertGeminiFunctionPartsToText', () => {
                 parts: [{ functionResponse: { name: 'plan', response: { output: 'done' } } }],
             },
         ];
-        const originalItemRefs = original.map(c => c);
-        const originalPartRefs = original.map(c => c.parts[0]);
+        const originalItemRefs = original.map((c) => c);
+        const originalPartRefs = original.map((c) => c.parts[0]);
 
         const result = convertGeminiFunctionPartsToText(original);
 
@@ -64,7 +64,7 @@ describe('convertGeminiFunctionPartsToText', () => {
 
         const result = convertGeminiFunctionPartsToText(contents);
 
-        expect(result[0].parts![0]).toEqual({
+        expect(result[0].parts?.[0]).toEqual({
             text: '[Tool call: get_weather({"location":"Paris"})]',
         });
     });
@@ -79,7 +79,7 @@ describe('convertGeminiFunctionPartsToText', () => {
 
         const result = convertGeminiFunctionPartsToText(contents);
 
-        expect(result[0].parts![0]).toEqual({
+        expect(result[0].parts?.[0]).toEqual({
             text: '[Tool result for get_weather: {"temperature":"15°C"}]',
         });
     });
@@ -90,7 +90,7 @@ describe('convertGeminiFunctionPartsToText', () => {
 
         const result = convertGeminiFunctionPartsToText(contents);
 
-        expect(result[0].parts![0]).toBe(textPart);
+        expect(result[0].parts?.[0]).toBe(textPart);
     });
 });
 
@@ -105,7 +105,10 @@ function makeContentsWithFunctionParts() {
     ];
 }
 
-function makeDriver(overrides: { generateContent?: () => Promise<any>; generateContentStream?: () => Promise<AsyncIterable<any>> }) {
+function makeDriver(overrides: {
+    generateContent?: () => Promise<unknown>;
+    generateContentStream?: () => Promise<AsyncIterable<unknown>>;
+}) {
     return {
         logger: { warn: () => {}, info: () => {}, error: () => {} },
         getGoogleGenAIClient: () => ({
@@ -119,35 +122,42 @@ function makeDriver(overrides: { generateContent?: () => Promise<any>; generateC
 
 const mockNonStreamingResponse = {
     usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15 },
-    candidates: [{
-        finishReason: FinishReason.STOP,
-        content: { role: 'model', parts: [{ text: 'Summary.' }] },
-        safetyRatings: [],
-    }],
+    candidates: [
+        {
+            finishReason: FinishReason.STOP,
+            content: { role: 'model', parts: [{ text: 'Summary.' }] },
+            safetyRatings: [],
+        },
+    ],
 };
 
 const mockStreamingChunk = {
     usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15 },
-    candidates: [{
-        finishReason: FinishReason.STOP,
-        content: { role: 'model', parts: [{ text: 'Summary.' }] },
-        safetyRatings: [],
-    }],
+    candidates: [
+        {
+            finishReason: FinishReason.STOP,
+            content: { role: 'model', parts: [{ text: 'Summary.' }] },
+            safetyRatings: [],
+        },
+    ],
 };
 
 describe('GeminiModelDefinition - no conversation mutation', () => {
     it('createPrompt uses DataSource URIs directly for Gemini file data', async () => {
         const modelDef = new GeminiModelDefinition('gemini-2.0-flash');
         const file: DataSource = {
+            name: 'doc.pdf',
             mime_type: 'application/pdf',
             getURI: vi.fn().mockResolvedValue('gs://test-bucket/doc.pdf'),
             getURL: vi.fn().mockResolvedValue('https://signed.example/doc.pdf'),
             getStream: vi.fn().mockResolvedValue(new ReadableStream()),
         };
-        const segments: PromptSegment[] = [{
-            role: PromptRole.user,
-            files: [file],
-        } as PromptSegment];
+        const segments: PromptSegment[] = [
+            {
+                role: PromptRole.user,
+                files: [file],
+            } as PromptSegment,
+        ];
         const options: ExecutionOptions = { model: 'publishers/google/models/gemini-2.0-flash' };
 
         const prompt = await modelDef.createPrompt({} as VertexAIDriver, segments, options);
@@ -155,7 +165,7 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
         expect(file.getURI).toHaveBeenCalledTimes(1);
         expect(file.getURL).not.toHaveBeenCalled();
         expect(file.getStream).not.toHaveBeenCalled();
-        expect(prompt.contents[0].parts![0]).toEqual({
+        expect(prompt.contents[0].parts?.[0]).toEqual({
             fileData: {
                 fileUri: 'gs://test-bucket/doc.pdf',
                 mimeType: 'application/pdf',
@@ -169,7 +179,7 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
         const contentsSnapshot = JSON.stringify(originalContents);
 
         const driver = makeDriver({ generateContent: async () => mockNonStreamingResponse });
-        const prompt = { contents: originalContents, system: undefined } as any;
+        const prompt = { contents: originalContents, system: undefined } as unknown as GenerateContentPrompt;
         const options: ExecutionOptions = { model: 'publishers/google/models/gemini-2.0-flash', tools: [] };
 
         await modelDef.requestTextCompletion(driver, prompt, options);
@@ -185,14 +195,19 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
         const contentsSnapshot = JSON.stringify(originalContents);
 
         const driver = makeDriver({
-            generateContentStream: async () => (async function* () { yield mockStreamingChunk; })(),
+            generateContentStream: async () =>
+                (async function* () {
+                    yield mockStreamingChunk;
+                })(),
         });
-        const prompt = { contents: originalContents, system: undefined } as any;
+        const prompt = { contents: originalContents, system: undefined } as unknown as GenerateContentPrompt;
         const options: ExecutionOptions = { model: 'publishers/google/models/gemini-2.0-flash', tools: [] };
 
         const stream = await modelDef.requestTextCompletionStream(driver, prompt, options);
         // Drain the stream to trigger all processing
-        for await (const _chunk of stream) { /* noop */ }
+        for await (const _chunk of stream) {
+            /* noop */
+        }
 
         expect(JSON.stringify(originalContents)).toBe(contentsSnapshot);
         expect(originalContents[0].parts[0]).toHaveProperty('functionCall');

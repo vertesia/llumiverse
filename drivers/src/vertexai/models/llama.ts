@@ -1,18 +1,25 @@
 import {
-    AIModel, Completion, CompletionChunkObject, ExecutionOptions, ModelType,
-    PromptOptions, PromptRole, PromptSegment,
-    TextFallbackOptions
-} from "@llumiverse/core";
-import { VertexAIDriver } from "../index.js";
-import { ModelDefinition } from "../models.js";
-import { transformSSEStream } from "@llumiverse/core/async";
+    type AIModel,
+    type Completion,
+    type CompletionChunkObject,
+    type ExecutionOptions,
+    ModelType,
+    type PromptOptions,
+    PromptRole,
+    type PromptSegment,
+    type TextFallbackOptions,
+} from '@llumiverse/core';
+import { transformSSEStream } from '@llumiverse/core/async';
+import type { ServerSentEvent } from '@vertesia/api-fetch-client';
+import type { VertexAIDriver } from '../index.js';
+import type { ModelDefinition } from '../models.js';
 
 interface LLamaMessage {
     role: string;
     content: string;
 }
 
-interface LLamaPrompt {
+export interface LLamaPrompt {
     messages: LLamaMessage[];
 }
 
@@ -61,7 +68,7 @@ interface LLamaStreamResponse {
 /**
  * Convert a stream to a string
  */
-async function streamToString(stream: any): Promise<string> {
+async function streamToString(stream: AsyncIterable<Uint8Array | Buffer | string>): Promise<string> {
     const chunks: Buffer[] = [];
     for await (const chunk of stream) {
         chunks.push(Buffer.from(chunk));
@@ -84,8 +91,7 @@ function updateConversation(conversation: LLamaPrompt | undefined | null, prompt
 }
 
 export class LLamaModelDefinition implements ModelDefinition<LLamaPrompt> {
-
-    model: AIModel
+    model: AIModel;
 
     constructor(modelId: string) {
         this.model = {
@@ -107,7 +113,11 @@ export class LLamaModelDefinition implements ModelDefinition<LLamaPrompt> {
         }
     }
 
-    async createPrompt(_driver: VertexAIDriver, segments: PromptSegment[], options: PromptOptions): Promise<LLamaPrompt> {
+    async createPrompt(
+        _driver: VertexAIDriver,
+        segments: PromptSegment[],
+        options: PromptOptions,
+    ): Promise<LLamaPrompt> {
         const messages: LLamaMessage[] = [];
 
         // Process segments and convert them to the Llama MaaS format
@@ -120,7 +130,7 @@ export class LLamaModelDefinition implements ModelDefinition<LLamaPrompt> {
 
             if (segment.files && segment.files.length > 0) {
                 for (const file of segment.files) {
-                    if (file.mime_type?.startsWith("text/")) {
+                    if (file.mime_type?.startsWith('text/')) {
                         const fileStream = await file.getStream();
                         const fileContent = await streamToString(fileStream);
                         messageContent += `\n\nFile content:\n${fileContent}`;
@@ -130,14 +140,14 @@ export class LLamaModelDefinition implements ModelDefinition<LLamaPrompt> {
 
             messages.push({
                 role: role,
-                content: messageContent
+                content: messageContent,
             });
         }
 
         if (options.result_schema) {
             messages.push({
                 role: 'user',
-                content: "The answer must be a JSON object using the following JSON Schema:\n" + JSON.stringify(options.result_schema)
+                content: `The answer must be a JSON object using the following JSON Schema:\n${JSON.stringify(options.result_schema)}`,
             });
         }
 
@@ -147,15 +157,19 @@ export class LLamaModelDefinition implements ModelDefinition<LLamaPrompt> {
         };
     }
 
-    async requestTextCompletion(driver: VertexAIDriver, prompt: LLamaPrompt, options: ExecutionOptions): Promise<Completion> {
-        const splits = options.model.split("/");
+    async requestTextCompletion(
+        driver: VertexAIDriver,
+        prompt: LLamaPrompt,
+        options: ExecutionOptions,
+    ): Promise<Completion> {
+        const splits = options.model.split('/');
         const modelName = splits[splits.length - 1];
 
         let conversation = updateConversation(options.conversation as LLamaPrompt, prompt);
 
         const modelOptions = options.model_options as TextFallbackOptions;
 
-        const payload: Record<string, any> = {
+        const payload: Record<string, unknown> = {
             model: `meta/${modelName}`,
             messages: conversation.messages,
             stream: false,
@@ -168,19 +182,19 @@ export class LLamaModelDefinition implements ModelDefinition<LLamaPrompt> {
                 google: {
                     model_safety_settings: {
                         enabled: false,
-                        llama_guard_settings: {}
-                    }
-                }
-            }
+                        llama_guard_settings: {},
+                    },
+                },
+            },
         };
 
         // Make POST request to the Llama MaaS API
         const region = this.getLlamaModelRegion(modelName);
         const client = driver.getLLamaClient(region);
         const openaiEndpoint = `endpoints/openapi/chat/completions`;
-        const result = await client.post(openaiEndpoint, {
-            payload
-        }) as LLamaResponse;
+        const result = (await client.post(openaiEndpoint, {
+            payload,
+        })) as LLamaResponse;
 
         // Extract response data
         const assistantMessage = result?.choices[0]?.message;
@@ -188,33 +202,39 @@ export class LLamaModelDefinition implements ModelDefinition<LLamaPrompt> {
 
         // Update conversation with the response
         conversation = updateConversation(conversation, {
-            messages: [{
-                role: assistantMessage?.role,
-                content: text
-            }],
+            messages: [
+                {
+                    role: assistantMessage?.role,
+                    content: text,
+                },
+            ],
         });
 
         return {
-            result: [{ type: "text", value: text }],
+            result: [{ type: 'text', value: text }],
             token_usage: {
                 prompt: result.usage.prompt_tokens,
                 result: result.usage.completion_tokens,
-                total: result.usage.total_tokens
+                total: result.usage.total_tokens,
             },
             finish_reason: result.choices[0].finish_reason,
-            conversation
+            conversation,
         };
     }
 
-    async requestTextCompletionStream(driver: VertexAIDriver, prompt: LLamaPrompt, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
-        const splits = options.model.split("/");
+    async requestTextCompletionStream(
+        driver: VertexAIDriver,
+        prompt: LLamaPrompt,
+        options: ExecutionOptions,
+    ): Promise<AsyncIterable<CompletionChunkObject>> {
+        const splits = options.model.split('/');
         const modelName = splits[splits.length - 1];
 
         const conversation = updateConversation(options.conversation as LLamaPrompt, prompt);
 
         const modelOptions = options.model_options as TextFallbackOptions;
 
-        const payload: Record<string, any> = {
+        const payload: Record<string, unknown> = {
             model: `meta/${modelName}`,
             messages: conversation.messages,
             stream: true,
@@ -227,10 +247,10 @@ export class LLamaModelDefinition implements ModelDefinition<LLamaPrompt> {
                 google: {
                     model_safety_settings: {
                         enabled: false,
-                        llama_guard_settings: {}
-                    }
-                }
-            }
+                        llama_guard_settings: {},
+                    },
+                },
+            },
         };
 
         // Make POST request to the Llama MaaS API
@@ -239,23 +259,25 @@ export class LLamaModelDefinition implements ModelDefinition<LLamaPrompt> {
         const region = this.getLlamaModelRegion(modelName);
         const client = driver.getLLamaClient(region);
         const openaiEndpoint = `endpoints/openapi/chat/completions`;
-        const stream = await client.post(openaiEndpoint, {
+        const stream = (await client.post(openaiEndpoint, {
             payload,
-            reader: 'sse'
-        });
+            reader: 'sse',
+        })) as ReadableStream<ServerSentEvent>;
 
         return transformSSEStream(stream, (data: string): CompletionChunkObject => {
             const json = JSON.parse(data) as LLamaStreamResponse;
             const choice = json.choices?.[0];
             const content = choice?.delta?.content ?? '';
             return {
-                result: content ? [{ type: "text", value: content }] : [],
+                result: content ? [{ type: 'text', value: content }] : [],
                 finish_reason: choice?.finish_reason,
-                token_usage: json.usage ? {
-                    prompt: json.usage.prompt_tokens,
-                    result: json.usage.completion_tokens,
-                    total: json.usage.total_tokens,
-                } : undefined
+                token_usage: json.usage
+                    ? {
+                          prompt: json.usage.prompt_tokens,
+                          result: json.usage.completion_tokens,
+                          total: json.usage.total_tokens,
+                      }
+                    : undefined,
             };
         });
     }

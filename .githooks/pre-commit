@@ -1,8 +1,78 @@
 #!/usr/bin/env bash
 # Pre-commit hook:
-# - Runs the repository lint command
+# - Runs biome check --write on staged files only.
+# - Re-stages Biome fixes so the commit contains the checked content.
+# - Standalone clone or local `pnpm install`: biome is reachable via pnpm exec.
+# - Submodule mode (no local node_modules): walks up to the first parent
+#   workspace with a biome binary while still using this repo as the working directory.
 
 set -euo pipefail
 
-echo "Running lint..."
-pnpm run lint --diagnostic-level=error
+hook_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$hook_dir/.." && pwd)"
+cd "$repo_root"
+
+BIOME_CMD=()
+
+if [ -d node_modules ]; then
+    BIOME_CMD=(pnpm exec biome)
+else
+    find_parent_biome() {
+        local dir="$repo_root"
+        while [ "$dir" != "/" ]; do
+            dir="$(dirname "$dir")"
+            if [ -x "$dir/node_modules/.bin/biome" ]; then
+                echo "$dir/node_modules/.bin/biome"
+                return 0
+            fi
+        done
+        return 1
+    }
+
+    if PARENT_BIOME="$(find_parent_biome)"; then
+        echo "[pre-commit] biome not installed locally - falling back to $PARENT_BIOME"
+        BIOME_CMD=("$PARENT_BIOME")
+    else
+        echo "Error: biome not found in this workspace or any ancestor."
+        echo "Run 'pnpm install' from inside llumiverse to install local devDeps,"
+        echo "or commit with --no-verify to skip this check."
+        exit 1
+    fi
+fi
+
+staged_files=()
+while IFS= read -r -d '' file; do
+    case "$file" in
+        package.json | */package.json | \
+        *.js | *.cjs | *.mjs | *.jsx | *.ts | *.tsx)
+            staged_files+=("$file")
+            ;;
+    esac
+done < <(git diff --cached --name-only --diff-filter=ACMR -z)
+
+if (( ${#staged_files[@]} == 0 )); then
+    exit 0
+fi
+
+if ! git diff --quiet -- "${staged_files[@]}"; then
+    echo "Error: cannot run biome --write with partially staged files."
+    echo "Stage or stash unstaged changes in the files being committed, then try again."
+    exit 1
+fi
+
+# Run Biome, but don't let a nonzero exit (unfixable error-level diagnostics)
+# abort the script before we re-stage. Biome applies its safe --write fixes to
+# the working tree even when it also reports an unfixable error, so we must
+# always re-stage those fixes; otherwise they'd be lost and the next commit
+# attempt would trip the partial-staging guard above.
+set +e
+"${BIOME_CMD[@]}" check --write --staged --no-errors-on-unmatched --files-ignore-unknown=true --diagnostic-level=error
+biome_status=$?
+set -e
+
+# Re-stage whatever Biome fixed, regardless of its exit status.
+git add -- "${staged_files[@]}"
+
+# Surface remaining unfixable errors by failing the commit (fixes are now staged,
+# so the user can address the error and re-commit without losing formatting work).
+exit "$biome_status"

@@ -1,6 +1,30 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  // Default label applied to every Renovate PR (matches studio/composableai).
+  // The automerge workflow's eligibility gate requires this label.
+  "labels": ["dependencies"],
+  // Bypass the 7-day minimum release age for security fixes.
+  "vulnerabilityAlerts": {
+    "minimumReleaseAge": "0 days"
+  },
   "packageRules": [
+    {
+      // Renovate PRs should wait until new releases have aged enough to reduce
+      // exposure to accidental bad publishes and supply-chain compromise.
+      "matchPackageNames": [
+        "*"
+      ],
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      // Mark npm patch/minor updates eligible for scoped bot automerge
+      // (the renovate-automerge.yaml workflow merges them once CI passes).
+      // node/npm/pnpm are excluded so runtime/package-manager bumps stay manual.
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "addLabels": ["renovate-automerge"],
+      "matchPackageNames": ["!npm", "!pnpm", "!node"]
+    },
     {
       "groupName": "gh-actions deps",
       "matchManagers": ["github-actions"],
@@ -49,6 +73,35 @@
         "npm",
         "pnpm"
       ],
+      "rangeStrategy": "bump"
+    },
+    {
+      "description": "Keep Node.js-related updates on v24 until the runtime is upgraded deliberately.",
+      "matchManagers": [
+        "npm",
+        "nvm",
+        "nodenv"
+      ],
+      "matchPackageNames": [
+        "node",
+        "@types/node"
+      ],
+      "allowedVersions": "<25",
+      "rangeStrategy": "bump"
+    },
+    {
+      // The undici Agent is passed as a dispatcher to Node's built-in global
+      // fetch (see core/src/http-agent.ts). undici v8 renamed the dispatch
+      // handler interface (onRequestStart), so a v8 Agent is rejected by the
+      // v7 fetch bundled in Node 24 ("invalid onRequestStart method"). Keep
+      // undici aligned with Node's bundled major until the runtime ships v8.
+      "matchManagers": [
+        "npm"
+      ],
+      "matchPackageNames": [
+        "undici"
+      ],
+      "allowedVersions": "<8",
       "rangeStrategy": "bump"
     },
     // Overrides go at the bottom, highest precedence

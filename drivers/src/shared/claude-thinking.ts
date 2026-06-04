@@ -1,9 +1,5 @@
-import type { OutputConfig, ThinkingConfigParam } from "@anthropic-ai/sdk/resources/messages.js";
-import {
-    hasSamplingParameterRestriction,
-    isClaudeVersionGTE,
-    supportsAdaptiveThinking,
-} from "@llumiverse/core";
+import type { OutputConfig, ThinkingConfigParam } from '@anthropic-ai/sdk/resources/messages.js';
+import { hasSamplingParameterRestriction, isClaudeVersionGTE, supportsAdaptiveThinking } from '@llumiverse/core';
 
 /**
  * Common Claude model options relevant to thinking/effort configuration.
@@ -59,25 +55,23 @@ export function resolveClaudeThinking(model: string, options?: ClaudeThinkingInp
         // Explicit budget — use extended thinking regardless of adaptive support.
         // On adaptive models this uses the deprecated path, but user input takes priority.
         thinking = {
-            type: "enabled" as const,
+            type: 'enabled' as const,
             budget_tokens: budgetTokens,
         };
     } else if (supportsAdaptive) {
         // Adaptive models: enable when effort is set, omit otherwise (thinking is OFF by default).
         // display controls whether thinking blocks are returned; defaults to omitted.
         thinking = adaptiveEnabled
-            ? { type: "adaptive" as const, display: options?.include_thoughts ? "summarized" : "omitted" }
+            ? { type: 'adaptive' as const, display: options?.include_thoughts ? 'summarized' : 'omitted' }
             : undefined;
     } else {
         // Older thinking models (3.7, 4.5): no adaptive support, thinking is always disabled
         // unless an explicit budget is provided (handled above).
-        thinking = { type: "disabled" as const };
+        thinking = { type: 'disabled' as const };
     }
 
     // Output config for effort parameter (Opus 4.5+, Sonnet 4.6+, all 4.7+)
-    const outputConfig: OutputConfig | undefined = options?.effort
-        ? { effort: options.effort }
-        : undefined;
+    const outputConfig: OutputConfig | undefined = options?.effort ? { effort: options.effort } : undefined;
 
     return {
         thinking,

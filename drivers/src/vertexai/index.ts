@@ -1,9 +1,8 @@
-import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
-import { PredictionServiceClient, v1beta1 } from "@google-cloud/aiplatform";
-import { type Content, GoogleGenAI, type Model } from "@google/genai";
+import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
+import { type Content, GoogleGenAI, type Model } from '@google/genai';
+import { PredictionServiceClient, v1beta1 } from '@google-cloud/aiplatform';
 import {
     type AIModel,
-    AbstractDriver,
     type Completion,
     type CompletionChunkObject,
     type CompletionResult,
@@ -11,27 +10,31 @@ import {
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
+    getConversationMeta,
+    getModelCapabilities,
+    type HttpTimeoutOptions,
+    incrementConversationTurn,
     type LlumiverseError,
     type LlumiverseErrorContext,
     type ModelSearchPayload,
-    type PromptSegment,
-    getConversationMeta,
-    getModelCapabilities,
-    incrementConversationTurn,
     modelModalitiesToArray,
+    type PromptSegment,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
+    type ToolUse,
     truncateLargeTextInConversation,
-} from "@llumiverse/core";
-import { FetchClient } from "@vertesia/api-fetch-client";
-import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from "google-auth-library";
-import { type ClaudePrompt, formatClaudeDebugPrompt } from "../shared/claude-messages.js";
-import { getEmbeddingsForImages } from "./embeddings/embeddings-image.js";
-import { type TextEmbeddingsOptions, getEmbeddingsForText } from "./embeddings/embeddings-text.js";
-import { getModelDefinition } from "./models.js";
-import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from "./models/claude.js";
-import { formatGeminiDebugPrompt } from "./models/gemini.js";
-import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from "./models/imagen.js";
+} from '@llumiverse/core';
+import { AbstractDriver } from '@llumiverse/core/driver';
+import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
+import { type FETCH_FN, FetchClient } from '@vertesia/api-fetch-client';
+import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from 'google-auth-library';
+import { type ClaudePrompt, formatClaudeDebugPrompt } from '../shared/claude-messages.js';
+import { generateVertexAiEmbeddings } from './embeddings/embed.js';
+import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
+import { formatGeminiDebugPrompt } from './models/gemini.js';
+import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
+import type { LLamaPrompt } from './models/llama.js';
+import { getModelDefinition, trimModelName } from './models.js';
 
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
@@ -43,17 +46,32 @@ export interface GenerateContentPrompt {
     contents: Content[];
     system?: Content;
 }
+type ClaudeStreamingPrompt = { messages: unknown[]; system?: unknown[] };
+type ConversationWrapper = { messages?: unknown[]; system?: unknown[] };
 
-//General Prompt type for VertexAI
-export type VertexAIPrompt = ClaudePrompt | ImagenPrompt | GenerateContentPrompt;
-
-export function trimModelName(model: string) {
-    const i = model.lastIndexOf("@");
-    return i > -1 ? model.substring(0, i) : model;
+function isClaudePrompt(prompt: VertexAIPrompt): prompt is ClaudePrompt {
+    return (
+        'messages' in prompt &&
+        ('system' in prompt || prompt.messages.some((message) => Array.isArray(message.content)))
+    );
 }
 
+function isClaudeStreamingPrompt(prompt: unknown): prompt is ClaudeStreamingPrompt {
+    return (
+        prompt !== null &&
+        typeof prompt === 'object' &&
+        'messages' in prompt &&
+        Array.isArray((prompt as ConversationWrapper).messages)
+    );
+}
+
+//General Prompt type for VertexAI
+export type VertexAIPrompt = ImagenPrompt | GenerateContentPrompt | ClaudePrompt | LLamaPrompt;
+
+export { trimModelName };
+
 export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, VertexAIPrompt> {
-    static PROVIDER = "vertexai";
+    static PROVIDER = 'vertexai';
     provider = VertexAIDriver.PROVIDER;
 
     aiplatform: v1beta1.ModelServiceClient | undefined;
@@ -62,11 +80,12 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     googleGenAI: GoogleGenAI | undefined;
     googleGenAIRegion: string | undefined;
     googleGenAIFlex: boolean | undefined;
-    llamaClient: FetchClient & { region?: string } | undefined;
+    llamaClient: (FetchClient & { region?: string }) | undefined;
     modelGarden: v1beta1.ModelGardenServiceClient | undefined;
     imagenClient: PredictionServiceClient | undefined;
+    predictionClient: PredictionServiceClient | undefined;
 
-    googleAuth: GoogleAuth<any>;
+    googleAuth: GoogleAuth<AuthClient>;
     private authClientPromise: Promise<AuthClient> | undefined;
 
     constructor(options: VertexAIDriverOptions) {
@@ -74,16 +93,30 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
         this.aiplatform = undefined;
         this.anthropicClient = undefined;
-        this.fetchClient = undefined
+        this.fetchClient = undefined;
         this.googleGenAI = undefined;
         this.googleGenAIRegion = undefined;
         this.googleGenAIFlex = undefined;
         this.modelGarden = undefined;
         this.llamaClient = undefined;
         this.imagenClient = undefined;
+        this.predictionClient = undefined;
 
-        this.googleAuth = new GoogleAuth(options.googleAuthOptions) as GoogleAuth<any>;
+        this.googleAuth = new GoogleAuth(options.googleAuthOptions);
         this.authClientPromise = undefined;
+    }
+
+    /**
+     * Cleanup Google Cloud clients when the driver is evicted from the cache.
+     * `super.destroy()` releases the HTTP agent socket pool created by
+     * {@link AbstractDriver.getHttpAgent} / {@link AbstractDriver.getDriverFetch}.
+     */
+    destroy(): void {
+        this.aiplatform?.close();
+        this.modelGarden?.close();
+        this.imagenClient?.close();
+        this.predictionClient?.close();
+        super.destroy();
     }
 
     private async getAuthClient(): Promise<AuthClient> {
@@ -93,10 +126,46 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return this.authClientPromise;
     }
 
-    public getGoogleGenAIClient(region: string = this.options.region, flex: boolean = false): GoogleGenAI {
-        if (this.googleGenAI && 
-            this.googleGenAIRegion === region && 
-            this.googleGenAIFlex === flex) {
+    private getSdkRequestTimeoutMs(httpTimeout?: HttpTimeoutOptions): number {
+        const timeouts = resolveDriverHttpTimeouts(
+            mergeDriverHttpTimeoutOptions(this.options.httpTimeout, httpTimeout),
+        );
+        return Math.max(timeouts.headersTimeout, timeouts.bodyTimeout);
+    }
+
+    private getGoogleGenAIHttpOptions(flex: boolean, httpTimeout?: HttpTimeoutOptions) {
+        return {
+            timeout: this.getSdkRequestTimeoutMs(httpTimeout),
+            ...(flex
+                ? {
+                      headers: {
+                          'X-Vertex-AI-LLM-Request-Type': 'shared',
+                          'X-Vertex-AI-LLM-Shared-Request-Type': 'flex',
+                      },
+                  }
+                : {}),
+        };
+    }
+
+    private getAnthropicVertexClientOptions(region: string, authClient: AuthClient, httpTimeout?: HttpTimeoutOptions) {
+        return {
+            timeout: this.getSdkRequestTimeoutMs(httpTimeout),
+            region,
+            projectId: this.options.project,
+            authClient: authClient,
+            fetch: this.getDriverFetch(),
+        };
+    }
+
+    public getGoogleGenAIClient(
+        region: string = this.options.region,
+        flex: boolean = false,
+        httpTimeout?: HttpTimeoutOptions,
+    ): GoogleGenAI {
+        if (httpTimeout) {
+            return this.buildGoogleGenAIClient(region, flex, httpTimeout);
+        }
+        if (this.googleGenAI && this.googleGenAIRegion === region && this.googleGenAIFlex === flex) {
             // Return existing client if region and flex settings match
             return this.googleGenAI;
         }
@@ -106,31 +175,25 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return this.googleGenAI;
     }
 
-    private buildGoogleGenAIClient(region: string, flex: boolean): GoogleGenAI {
+    private buildGoogleGenAIClient(region: string, flex: boolean, httpTimeout?: HttpTimeoutOptions): GoogleGenAI {
         return new GoogleGenAI({
             project: this.options.project,
             location: region,
             vertexai: true,
             googleAuthOptions: this.options.googleAuthOptions || {
-                scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+                scopes: ['https://www.googleapis.com/auth/cloud-platform'],
             },
-            ...(flex ? {
-                httpOptions: {
-                    headers: {
-                        "X-Vertex-AI-LLM-Request-Type": "shared",
-                        "X-Vertex-AI-LLM-Shared-Request-Type": "flex",
-                    }
-                }
-            } : {}),
+            httpOptions: this.getGoogleGenAIHttpOptions(flex, httpTimeout),
         });
     }
 
-    public getFetchClient(): FetchClient {
+    public getFetchClient(region: string = this.options.region): FetchClient {
         //Lazy initialization
         if (!this.fetchClient) {
             this.fetchClient = createFetchClient({
-                region: this.options.region,
+                region: region,
                 project: this.options.project,
+                fetchImpl: this.getDriverFetch(),
             }).withAuthCallback(async () => {
                 const token = await this.googleAuth.getAccessToken();
                 return `Bearer ${token}`;
@@ -139,24 +202,28 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return this.fetchClient;
     }
 
-    public getLLamaClient(region: string = "us-central1"): FetchClient {
+    public getLLamaClient(region: string = 'us-central1'): FetchClient {
         //Lazy initialization
-        if (!this.llamaClient || this.llamaClient["region"] !== region) {
+        if (!this.llamaClient || this.llamaClient.region !== region) {
             this.llamaClient = createFetchClient({
                 region: region,
                 project: this.options.project,
-                apiVersion: "v1beta1",
+                apiVersion: 'v1beta1',
+                fetchImpl: this.getDriverFetch(),
             }).withAuthCallback(async () => {
                 const token = await this.googleAuth.getAccessToken();
                 return `Bearer ${token}`;
             });
             // Store the region for potential client reuse
-            this.llamaClient["region"] = region;
+            this.llamaClient.region = region;
         }
         return this.llamaClient;
     }
 
-    public async getAnthropicClient(region: string = this.options.region): Promise<AnthropicVertex> {
+    public async getAnthropicClient(
+        region: string = this.options.region,
+        httpTimeout?: HttpTimeoutOptions,
+    ): Promise<AnthropicVertex> {
         // Extract region prefix and map if it exists in ANTHROPIC_REGIONS, otherwise use as-is
         const getRegionPrefix = (r: string) => r.split('-')[0];
         const regionPrefix = getRegionPrefix(region);
@@ -169,23 +236,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         const authClient = await this.getAuthClient();
 
         // If mapped region is different from default mapped region, create one-off client
-        if (mappedRegion !== defaultMappedRegion) {
-            return new AnthropicVertex({
-                timeout: 20 * 60 * 10000, // Set to 20 minutes, 10 minute default, setting this disables long request error: https://github.com/anthropics/anthropic-sdk-typescript?#long-requests
-                region: mappedRegion,
-                projectId: this.options.project,
-                authClient: authClient,
-            });
+        if (httpTimeout || mappedRegion !== defaultMappedRegion) {
+            return new AnthropicVertex(this.getAnthropicVertexClientOptions(mappedRegion, authClient, httpTimeout));
         }
 
         //Lazy initialization for default region
         if (!this.anthropicClient) {
-            this.anthropicClient = new AnthropicVertex({
-                timeout: 20 * 60 * 10000, // Set to 20 minutes, 10 minute default, setting this disables long request error: https://github.com/anthropics/anthropic-sdk-typescript?#long-requests
-                region: mappedRegion,
-                projectId: this.options.project,
-                authClient: authClient,
-            });
+            this.anthropicClient = new AnthropicVertex(this.getAnthropicVertexClientOptions(mappedRegion, authClient));
         }
         return this.anthropicClient;
     }
@@ -230,10 +287,23 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return this.imagenClient;
     }
 
+    public async getPredictionServiceClient(): Promise<PredictionServiceClient> {
+        //Lazy initialization using the driver's configured region
+        if (!this.predictionClient) {
+            const authClient = await this.getAuthClient();
+            this.predictionClient = new PredictionServiceClient({
+                projectId: this.options.project,
+                apiEndpoint: `${this.options.region}-${API_BASE_PATH}`,
+                authClient,
+            });
+        }
+        return this.predictionClient;
+    }
+
     validateResult(result: Completion, options: ExecutionOptions) {
         // Optionally preprocess the result before validation
         const modelDef = getModelDefinition(options.model);
-        if (typeof modelDef.preValidationProcessing === "function") {
+        if (typeof modelDef.preValidationProcessing === 'function') {
             const processed = modelDef.preValidationProcessing(result, options);
             result = processed.result;
             options = processed.options;
@@ -250,7 +320,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     protected isImageModel(model: string): boolean {
-        return model.includes("imagen");
+        return model.includes('imagen');
     }
 
     public createPrompt(segments: PromptSegment[], options: ExecutionOptions): Promise<VertexAIPrompt> {
@@ -261,11 +331,14 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     public formatDebugPrompt(prompt: VertexAIPrompt): VertexAIPrompt {
-        if ('messages' in prompt) {
+        if (isClaudePrompt(prompt)) {
             return formatClaudeDebugPrompt(prompt);
         }
         if ('contents' in prompt) {
             return formatGeminiDebugPrompt(prompt);
+        }
+        if ('messages' in prompt) {
+            return prompt;
         }
         return formatImagenDebugPrompt(prompt);
     }
@@ -289,11 +362,11 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         prompt: VertexAIPrompt,
         result: unknown[],
         toolUse: unknown[] | undefined,
-        options: ExecutionOptions
+        options: ExecutionOptions,
     ): Content[] | unknown | undefined {
         // Handle Claude-style prompts (has 'messages' array)
-        if ('messages' in prompt && Array.isArray((prompt as any).messages)) {
-            return this.buildClaudeStreamingConversation(prompt as any, result, toolUse, options);
+        if (isClaudeStreamingPrompt(prompt)) {
+            return this.buildClaudeStreamingConversation(prompt, result, toolUse, options);
         }
 
         // Only handle Gemini-style prompts with contents array
@@ -305,7 +378,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
         // Convert accumulated results to text content for assistant message
         const textContent = completionResults
-            .map(r => {
+            .map((r) => {
                 switch (r.type) {
                     case 'text':
                         return r.value;
@@ -314,25 +387,27 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                     case 'image':
                         // Skip images in conversation - they're in the result
                         return '';
-                    default:
-                        return String((r as any).value || '');
+                    default: {
+                        const _exhaustive: never = r;
+                        return String(_exhaustive);
+                    }
                 }
             })
             .join('');
 
         // Build parts array for assistant message
-        const parts: any[] = [];
+        const parts: unknown[] = [];
         if (textContent) {
             parts.push({ text: textContent });
         }
         // Add function calls if present (Gemini format)
         if (toolUse && toolUse.length > 0) {
-            for (const tool of toolUse as any[]) {
-                const functionCallPart: any = {
+            for (const tool of toolUse as ToolUse<unknown>[]) {
+                const functionCallPart: Record<string, unknown> = {
                     functionCall: {
                         name: tool.tool_name,
                         args: tool.tool_input,
-                    }
+                    },
                 };
                 // Include thought_signature for Gemini thinking models (2.5+/3.0+)
                 // This must be preserved in the conversation for subsequent API calls
@@ -346,16 +421,14 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         // prompt.contents already includes the conversation history
         // (merged in requestTextCompletionStream via updateConversation),
         // so we use it directly — do NOT prepend options.conversation again.
-        let conversation: Content[] = [
-            ...prompt.contents,
-        ];
+        let conversation: Content[] = [...prompt.contents];
 
         // Only add assistant message if there's actual content
         // (Empty text parts can cause API errors)
         if (parts.length > 0) {
             conversation.push({
                 role: 'model',
-                parts: parts
+                parts: parts as Content['parts'],
             });
         }
 
@@ -367,7 +440,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         const stripOptions = {
             keepForTurns: options.stripImagesAfterTurns ?? Infinity,
             currentTurn,
-            textMaxTokens: options.stripTextMaxTokens
+            textMaxTokens: options.stripTextMaxTokens,
         };
         let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions);
         processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
@@ -382,7 +455,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         const geminiPrompt = prompt as GenerateContentPrompt;
         if (geminiPrompt.system) {
             if (typeof processedConversation === 'object' && processedConversation !== null) {
-                processedConversation = { ...processedConversation as object, _llumiverse_system: geminiPrompt.system };
+                processedConversation = {
+                    ...(processedConversation as object),
+                    _llumiverse_system: geminiPrompt.system,
+                };
             }
         }
 
@@ -397,13 +473,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         prompt: { messages: unknown[]; system?: unknown[] },
         result: unknown[],
         toolUse: unknown[] | undefined,
-        options: ExecutionOptions
+        options: ExecutionOptions,
     ): unknown {
         const completionResults = result as CompletionResult[];
 
         // Convert accumulated results to text content
         const textContent = completionResults
-            .map(r => {
+            .map((r) => {
                 switch (r.type) {
                     case 'text':
                         return r.value;
@@ -411,8 +487,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                         return typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
                     case 'image':
                         return '';
-                    default:
-                        return String((r as any).value || '');
+                    default: {
+                        const _exhaustive: never = r;
+                        return String(_exhaustive);
+                    }
                 }
             })
             .join('');
@@ -424,46 +502,44 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         if (textContent) {
             content.push({
                 type: 'text',
-                text: textContent
+                text: textContent,
             });
         }
 
         // Add tool_use blocks in Claude format
         if (toolUse && toolUse.length > 0) {
-            for (const tool of toolUse as any[]) {
+            for (const tool of toolUse as ToolUse<unknown>[]) {
                 content.push({
                     type: 'tool_use',
                     id: tool.id,
                     name: tool.tool_name,
-                    input: tool.tool_input ?? {}
+                    input: tool.tool_input ?? {},
                 });
             }
         }
 
         // Claude's requestTextCompletionStream does NOT mutate prompt.messages
         // to include history, so we must prepend options.conversation here.
-        const existingMessages = (options.conversation as any)?.messages ?? [];
-        const existingSystem = (options.conversation as any)?.system ?? prompt.system;
+        const existingConversation = options.conversation as ConversationWrapper | undefined;
+        const existingMessages = existingConversation?.messages ?? [];
+        const existingSystem = existingConversation?.system ?? prompt.system;
 
         // Build the new messages array
-        const newMessages = [
-            ...existingMessages,
-            ...prompt.messages,
-        ];
+        const newMessages = [...existingMessages, ...prompt.messages];
 
         // Only add assistant message if there's actual content
         // (Claude API rejects empty text content blocks)
         if (content.length > 0) {
             newMessages.push({
                 role: 'assistant',
-                content: content
+                content: content,
             });
         }
 
         // Build the new conversation in ClaudePrompt format
         const conversation = {
             messages: newMessages,
-            system: existingSystem
+            system: existingSystem,
         };
 
         // Increment turn counter
@@ -474,7 +550,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         const stripOptions = {
             keepForTurns: options.stripImagesAfterTurns ?? Infinity,
             currentTurn,
-            textMaxTokens: options.stripTextMaxTokens
+            textMaxTokens: options.stripTextMaxTokens,
         };
         let processedConversation = stripBase64ImagesFromConversation(withTurn, stripOptions);
         processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
@@ -486,11 +562,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return processedConversation;
     }
 
-    async requestImageGeneration(
-        _prompt: ImagenPrompt,
-        _options: ExecutionOptions,
-    ): Promise<Completion> {
-        const splits = _options.model.split("/");
+    async requestImageGeneration(_prompt: ImagenPrompt, _options: ExecutionOptions): Promise<Completion> {
+        const splits = _options.model.split('/');
         const modelName = trimModelName(splits[splits.length - 1]);
         return new ImagenModelDefinition(modelName).requestImageGeneration(this, _prompt, _options);
     }
@@ -508,36 +581,41 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         // Get clients
         const modelGarden = await this.getModelGardenClient();
         const aiplatform = await this.getAIPlatformClient();
-        const globalGenAiClient = this.getGoogleGenAIClient("global");
+        const globalGenAiClient = this.getGoogleGenAIClient('global');
 
         let models: AIModel<string>[] = [];
 
         //Model Garden Publisher models - Pretrained models
-        const publishers = ["google", "anthropic", "meta"];
+        const publishers = ['google', 'anthropic', 'meta'];
         // Meta "maas" models are LLama Models-As-A-Service. Non-maas models are not pre-deployed.
-        const supportedModels = { google: ["gemini", "imagen"], anthropic: ["claude"], meta: ["maas"] };
+        const supportedModels = { google: ['gemini', 'imagen'], anthropic: ['claude'], meta: ['maas'] };
         // Additional models not in the listings, but we want to include
         // TODO: Remove once the models are available in the listing API, or no longer needed
         const additionalModels = {
-            google: [
-                "imagen-3.0-fast-generate-001",
-            ],
+            google: ['imagen-3.0-fast-generate-001'],
             anthropic: [],
             meta: [
-                "llama-4-maverick-17b-128e-instruct-maas",
-                "llama-4-scout-17b-16e-instruct-maas",
-                "llama-3.3-70b-instruct-maas",
-                "llama-3.2-90b-vision-instruct-maas",
-                "llama-3.1-405b-instruct-maas",
-                "llama-3.1-70b-instruct-maas",
-                "llama-3.1-8b-instruct-maas",
+                'llama-4-maverick-17b-128e-instruct-maas',
+                'llama-4-scout-17b-16e-instruct-maas',
+                'llama-3.3-70b-instruct-maas',
+                'llama-3.2-90b-vision-instruct-maas',
+                'llama-3.1-405b-instruct-maas',
+                'llama-3.1-70b-instruct-maas',
+                'llama-3.1-8b-instruct-maas',
             ],
-        }
+        };
 
         //Used to exclude retired models that are still in the listing API but not available for use.
         //Or models we do not support yet
         const unsupportedModelsByPublisher = {
-            google: ["gemini-pro", "gemini-ultra", "imagen-product-recontext-preview", "embedding", "gemini-live-2.5-flash-preview-native-audio", "computer-use-preview"],
+            google: [
+                'gemini-pro',
+                'gemini-ultra',
+                'imagen-product-recontext-preview',
+                'embedding',
+                'gemini-live-2.5-flash-preview-native-audio',
+                'computer-use-preview',
+            ],
             anthropic: [],
             meta: [],
         };
@@ -549,7 +627,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         const publisherPromises = publishers.map(async (publisher) => {
             const [response] = await modelGarden.listPublisherModels({
                 parent: `publishers/${publisher}`,
-                orderBy: "name",
+                orderBy: 'name',
                 listAllVersions: true,
             });
             return { publisher, response };
@@ -567,26 +645,26 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         const [response] = aiplatformResult;
         models = models.concat(
             response.map((model) => ({
-                id: model.name?.split("/").pop() ?? "",
-                name: model.displayName ?? "",
-                provider: "vertexai"
-            }))
+                id: model.name?.split('/').pop() ?? '',
+                name: model.displayName ?? '',
+                provider: 'vertexai',
+            })),
         );
 
         // Process global google models from GenAI
         models = models.concat(
             globalGoogleResult.map((model) => {
-                const modelCapability = getModelCapabilities(model.name ?? '', "vertexai");
+                const modelCapability = getModelCapabilities(model.name ?? '', 'vertexai');
                 return {
-                    id: "locations/global/" + model.name,
-                    name: "Global " + model.name?.split('/').pop(),
-                    provider: "vertexai",
-                    owner: "google",
+                    id: `locations/global/${model.name}`,
+                    name: `Global ${model.name?.split('/').pop()}`,
+                    provider: 'vertexai',
+                    owner: 'google',
                     input_modalities: modelModalitiesToArray(modelCapability.input),
                     output_modalities: modelModalitiesToArray(modelCapability.output),
                     tool_support: modelCapability.tool_support,
                 };
-            })
+            }),
         );
 
         // Process publisher models
@@ -595,96 +673,106 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             const modelFamily = supportedModels[publisher as keyof typeof supportedModels];
             const retiredModels = unsupportedModelsByPublisher[publisher as keyof typeof unsupportedModelsByPublisher];
 
-            models = models.concat(response.filter((model) => {
-                const modelName = model.name ?? "";
-                // Exclude retired models
-                if (retiredModels.some(retiredModel => modelName.includes(retiredModel))) {
-                    return false;
-                }
-                // Check if the model belongs to the supported model families
-                if (modelFamily.some(family => modelName.includes(family))) {
-                    return true;
-                }
-                return false;
-            }).map(model => {
-                const modelCapability = getModelCapabilities(model.name ?? '', "vertexai");
-                return {
-                    id: model.name ?? '',
-                    name: model.name?.split('/').pop() ?? '',
-                    provider: 'vertexai',
-                    owner: publisher,
-                    input_modalities: modelModalitiesToArray(modelCapability.input),
-                    output_modalities: modelModalitiesToArray(modelCapability.output),
-                    tool_support: modelCapability.tool_support,
-                } satisfies AIModel<string>;
-            }));
+            models = models.concat(
+                response
+                    .filter((model) => {
+                        const modelName = model.name ?? '';
+                        // Exclude retired models
+                        if (retiredModels.some((retiredModel) => modelName.includes(retiredModel))) {
+                            return false;
+                        }
+                        // Check if the model belongs to the supported model families
+                        if (modelFamily.some((family) => modelName.includes(family))) {
+                            return true;
+                        }
+                        return false;
+                    })
+                    .map((model) => {
+                        const modelCapability = getModelCapabilities(model.name ?? '', 'vertexai');
+                        return {
+                            id: model.name ?? '',
+                            name: model.name?.split('/').pop() ?? '',
+                            provider: 'vertexai',
+                            owner: publisher,
+                            input_modalities: modelModalitiesToArray(modelCapability.input),
+                            output_modalities: modelModalitiesToArray(modelCapability.output),
+                            tool_support: modelCapability.tool_support,
+                        } satisfies AIModel<string>;
+                    }),
+            );
 
             // Create global google gemini models for Gemini 2.5 and later, if missing from GenAI listing
             if (publisher === 'google') {
-                const globalGeminiModels = response.filter((model) => {
-                    const modelName = model.name ?? "";
-                    if (retiredModels.some(retiredModel => modelName.includes(retiredModel))) {
-                        return false;
-                    }
-                    if (modelFamily.some(family => modelName.includes(family))) {
-                        const versionMatch = modelName.match(/gemini-(\d+(?:\.\d+)?)/);
-                        if (versionMatch) {
-                            const version = parseFloat(versionMatch[1]);
-                            if (version >= 2.5) {
-                                // Check if already present
-                                const shortName = modelName.split('/').pop();
-                                const globalName = "Global " + shortName;
-                                if (models.some(m => m.name === globalName)) {
-                                    return false;
+                const globalGeminiModels = response
+                    .filter((model) => {
+                        const modelName = model.name ?? '';
+                        if (retiredModels.some((retiredModel) => modelName.includes(retiredModel))) {
+                            return false;
+                        }
+                        if (modelFamily.some((family) => modelName.includes(family))) {
+                            const versionMatch = modelName.match(/gemini-(\d+(?:\.\d+)?)/);
+                            if (versionMatch) {
+                                const version = parseFloat(versionMatch[1]);
+                                if (version >= 2.5) {
+                                    // Check if already present
+                                    const shortName = modelName.split('/').pop();
+                                    const globalName = `Global ${shortName}`;
+                                    if (models.some((m) => m.name === globalName)) {
+                                        return false;
+                                    }
+                                    return true;
                                 }
-                                return true;
                             }
+                            return false;
                         }
                         return false;
-                    }
-                    return false;
-                }).map(model => {
-                    const modelCapability = getModelCapabilities(model.name ?? '', "vertexai");
-                    return {
-                        id: "locations/global/" + model.name,
-                        name: "Global " + model.name?.split('/').pop(),
-                        provider: 'vertexai',
-                        owner: publisher,
-                        input_modalities: modelModalitiesToArray(modelCapability.input),
-                        output_modalities: modelModalitiesToArray(modelCapability.output),
-                        tool_support: modelCapability.tool_support,
-                    } satisfies AIModel<string>;
-                });
+                    })
+                    .map((model) => {
+                        const modelCapability = getModelCapabilities(model.name ?? '', 'vertexai');
+                        return {
+                            id: `locations/global/${model.name}`,
+                            name: `Global ${model.name?.split('/').pop()}`,
+                            provider: 'vertexai',
+                            owner: publisher,
+                            input_modalities: modelModalitiesToArray(modelCapability.input),
+                            output_modalities: modelModalitiesToArray(modelCapability.output),
+                            tool_support: modelCapability.tool_support,
+                        } satisfies AIModel<string>;
+                    });
 
                 models = models.concat(globalGeminiModels);
             }
 
             // Create global anthropic models for those not in NON_GLOBAL_ANTHROPIC_MODELS
             if (publisher === 'anthropic') {
-                const globalAnthropicModels = response.filter((model) => {
-                    const modelName = model.name ?? "";
-                    if (retiredModels.some(retiredModel => modelName.includes(retiredModel))) {
-                        return false;
-                    }
-                    if (modelFamily.some(family => modelName.includes(family))) {
-                        if (modelName.includes("claude-3-7")) {
-                            return true;
+                const globalAnthropicModels = response
+                    .filter((model) => {
+                        const modelName = model.name ?? '';
+                        if (retiredModels.some((retiredModel) => modelName.includes(retiredModel))) {
+                            return false;
                         }
-                        return !NON_GLOBAL_ANTHROPIC_MODELS.some(nonGlobalModel => modelName.includes(nonGlobalModel));
-                    }
-                    return false;
-                }).map(model => {
-                    const modelCapability = getModelCapabilities(model.name ?? '', "vertexai");
-                    return {
-                        id: "locations/global/" + model.name,
-                        name: "Global " + model.name?.split('/').pop(),
-                        provider: 'vertexai',
-                        owner: publisher,
-                        input_modalities: modelModalitiesToArray(modelCapability.input),
-                        output_modalities: modelModalitiesToArray(modelCapability.output),
-                        tool_support: modelCapability.tool_support,
-                    } satisfies AIModel<string>;
-                });
+                        if (modelFamily.some((family) => modelName.includes(family))) {
+                            if (modelName.includes('claude-3-7')) {
+                                return true;
+                            }
+                            return !NON_GLOBAL_ANTHROPIC_MODELS.some((nonGlobalModel) =>
+                                modelName.includes(nonGlobalModel),
+                            );
+                        }
+                        return false;
+                    })
+                    .map((model) => {
+                        const modelCapability = getModelCapabilities(model.name ?? '', 'vertexai');
+                        return {
+                            id: `locations/global/${model.name}`,
+                            name: `Global ${model.name?.split('/').pop()}`,
+                            provider: 'vertexai',
+                            owner: publisher,
+                            input_modalities: modelModalitiesToArray(modelCapability.input),
+                            output_modalities: modelModalitiesToArray(modelCapability.output),
+                            tool_support: modelCapability.tool_support,
+                        } satisfies AIModel<string>;
+                    });
 
                 models = models.concat(globalAnthropicModels);
             }
@@ -692,7 +780,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             // Add additional models that are not in the listing
             for (const additionalModel of additionalModels[publisher as keyof typeof additionalModels]) {
                 const publisherModelName = `publishers/${publisher}/models/${additionalModel}`;
-                const modelCapability = getModelCapabilities(additionalModel, "vertexai");
+                const modelCapability = getModelCapabilities(additionalModel, 'vertexai');
                 models.push({
                     id: publisherModelName,
                     name: additionalModel,
@@ -706,54 +794,33 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         }
 
         //Remove duplicates
-        const uniqueModels = Array.from(new Set(models.map(a => a.id)))
-            .map(id => {
-                return models.find(a => a.id === id) ?? {} as AIModel<string>;
-            }).sort((a, b) => a.id.localeCompare(b.id));
+        const uniqueModels = Array.from(new Set(models.map((a) => a.id)))
+            .map((id) => {
+                return models.find((a) => a.id === id) ?? ({} as AIModel<string>);
+            })
+            .sort((a, b) => a.id.localeCompare(b.id));
 
         return uniqueModels;
     }
 
     validateConnection(): Promise<boolean> {
-        throw new Error("Method not implemented.");
+        throw new Error('Method not implemented.');
     }
 
     async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
-        if (options.image || options.model?.includes("multimodal")) {
-            if (options.text && options.image) {
-                throw new Error("Text and Image simultaneous embedding not implemented. Submit separately");
-            }
-            return getEmbeddingsForImages(this, options);
-        }
-        const text_options: TextEmbeddingsOptions = {
-            content: options.text ?? "",
-            model: options.model,
-        };
-        return getEmbeddingsForText(this, text_options);
-    }
-
-    /**
-     * Cleanup Google Cloud clients when the driver is evicted from the cache.
-     */
-    destroy(): void {
-        this.aiplatform?.close();
-        this.modelGarden?.close();
-        this.imagenClient?.close();
+        return generateVertexAiEmbeddings(this, options);
     }
 
     /**
      * Format VertexAI errors by routing to model-specific error handlers.
      * Each model definition (Gemini, Claude, Llama) can provide custom error parsing
      * based on their specific SDK error structures.
-     * 
+     *
      * @param error - The error from the VertexAI/model SDK
      * @param context - Context about where the error occurred
      * @returns A standardized LlumiverseError
      */
-    public formatLlumiverseError(
-        error: unknown,
-        context: LlumiverseErrorContext
-    ): LlumiverseError {
+    public formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
         // Get the model definition for this request
         const modelDef = getModelDefinition(context.model);
 
@@ -761,7 +828,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         if (modelDef.formatLlumiverseError) {
             try {
                 return modelDef.formatLlumiverseError(this, error, context);
-            } catch (formattingError) {
+            } catch {
                 // If model-specific handler throws, fall through to default handling
                 // This allows model handlers to explicitly opt out for certain errors
             }
@@ -773,22 +840,25 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 }
 
 //'us-central1-aiplatform.googleapis.com',
-const API_BASE_PATH = "aiplatform.googleapis.com";
+const API_BASE_PATH = 'aiplatform.googleapis.com';
 function createFetchClient({
     region,
     project,
     apiEndpoint,
-    apiVersion = "v1",
+    apiVersion = 'v1',
+    fetchImpl,
 }: {
     region: string;
     project: string;
     apiEndpoint?: string;
     apiVersion?: string;
+    fetchImpl?: FETCH_FN;
 }) {
     const vertexBaseEndpoint = apiEndpoint ?? `${region}-${API_BASE_PATH}`;
     return new FetchClient(
         `https://${vertexBaseEndpoint}/${apiVersion}/projects/${project}/locations/${region}`,
+        fetchImpl,
     ).withHeaders({
-        "Content-Type": "application/json",
+        'Content-Type': 'application/json',
     });
 }

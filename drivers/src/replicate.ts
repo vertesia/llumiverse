@@ -1,33 +1,49 @@
 import {
-    AbstractDriver,
-    AIModel,
-    Completion,
-    CompletionChunkObject,
-    DataSource,
-    DriverOptions,
-    EmbeddingsResult,
-    ExecutionOptions,
-    ModelSearchPayload,
-    TextFallbackOptions,
-    TrainingJob,
+    type AIModel,
+    type Completion,
+    type CompletionChunkObject,
+    type DataSource,
+    type DriverOptions,
+    type EmbeddingsResult,
+    type ExecutionOptions,
+    type ModelSearchPayload,
+    type TextFallbackOptions,
+    type TrainingJob,
     TrainingJobStatus,
-    TrainingOptions,
-} from "@llumiverse/core";
-import { EventStream } from "@llumiverse/core/async";
-import { EventSource } from "eventsource";
-import Replicate, { Prediction, Training } from "replicate";
+    type TrainingOptions,
+} from '@llumiverse/core';
+import { EventStream } from '@llumiverse/core/async';
+import { AbstractDriver } from '@llumiverse/core/driver';
+import { EventSource } from 'eventsource';
+import Replicate, { type Prediction, type Training } from 'replicate';
 
 let cachedTrainableModels: AIModel[] | undefined;
 let cachedTrainableModelsTimestamp: number = 0;
+type ReplicateEvent = { data: string };
+type ReplicateModelVersion = {
+    id: string;
+    cog_version: string;
+};
+type ReplicateVersionsResponse = {
+    results?: ReplicateModelVersion[];
+};
+type ReplicateSearchModel = {
+    name: string;
+    username: string;
+    description?: string;
+};
+type ReplicateSearchResponse = {
+    models: ReplicateSearchModel[];
+};
 
 const supportFineTunning = new Set([
-    "meta/llama-2-70b-chat",
-    "meta/llama-2-13b-chat",
-    "meta/llama-2-7b-chat",
-    "meta/llama-2-7b",
-    "meta/llama-2-70b",
-    "meta/llama-2-13b",
-    "mistralai/mistral-7b-v0.1"
+    'meta/llama-2-70b-chat',
+    'meta/llama-2-13b-chat',
+    'meta/llama-2-7b-chat',
+    'meta/llama-2-7b',
+    'meta/llama-2-70b',
+    'meta/llama-2-13b',
+    'mistralai/mistral-7b-v0.1',
 ]);
 
 export interface ReplicateDriverOptions extends DriverOptions {
@@ -35,38 +51,44 @@ export interface ReplicateDriverOptions extends DriverOptions {
 }
 
 export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
-    static PROVIDER = "replicate";
+    static PROVIDER = 'replicate';
     provider = ReplicateDriver.PROVIDER;
     service: Replicate;
 
     static parseModelId(modelId: string) {
-        const [owner, modelPart] = modelId.split("/");
+        const [owner, modelPart] = modelId.split('/');
         const i = modelPart.indexOf(':');
         if (i === -1) {
-            throw new Error("Invalid model id. Expected format: owner/model:version");
+            throw new Error('Invalid model id. Expected format: owner/model:version');
         }
         return {
-            owner, model: modelPart.slice(0, i), version: modelPart.slice(i + 1)
-        }
+            owner,
+            model: modelPart.slice(0, i),
+            version: modelPart.slice(i + 1),
+        };
     }
 
     constructor(options: ReplicateDriverOptions) {
         super(options);
         this.service = new Replicate({
             auth: options.apiKey,
+            fetch: this.getDriverFetch(),
         });
     }
 
     extractDataFromResponse(response: Prediction): Completion {
-        const text = response.output.join("");
+        const text = response.output.join('');
         return {
             result: text,
         };
     }
 
-    async requestTextCompletionStream(prompt: string, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
-        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "text-fallback") {
-            this.logger.debug({ options: options.model_options }, "Unexpected option id");
+    async requestTextCompletionStream(
+        prompt: string,
+        options: ExecutionOptions,
+    ): Promise<AsyncIterable<CompletionChunkObject>> {
+        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== 'text-fallback') {
+            this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
@@ -81,27 +103,27 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
             stream: true, //streaming described here https://replicate.com/blog/streaming
         };
 
-        const prediction =
-            await this.service.predictions.create(predictionData);
+        const prediction = await this.service.predictions.create(predictionData);
 
         const stream = new EventStream<CompletionChunkObject>();
 
+        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
         const source = new EventSource(prediction.urls.stream!);
-        source.addEventListener("output", (e: any) => {
-            stream.push({ result: [{ type: "text", value: e.data }] });
+        source.addEventListener('output', (e: ReplicateEvent) => {
+            stream.push({ result: [{ type: 'text', value: e.data }] });
         });
-        source.addEventListener("error", (e: any) => {
-            let error: any;
+        source.addEventListener('error', (e: ReplicateEvent) => {
+            let error: unknown;
             try {
                 error = JSON.parse(e.data);
-            } catch (error) {
+            } catch {
                 error = JSON.stringify(e);
             }
-            this.logger.error({ e, error }, "Error in SSE stream");
+            this.logger.error({ e, error }, 'Error in SSE stream');
         });
-        source.addEventListener("done", () => {
+        source.addEventListener('done', () => {
             try {
-                stream.close(""); // not using e.data which is {}
+                stream.close(''); // not using e.data which is {}
             } finally {
                 source.close();
             }
@@ -110,8 +132,8 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
     }
 
     async requestTextCompletion(prompt: string, options: ExecutionOptions) {
-        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "text-fallback") {
-            this.logger.debug({ options: options.model_options }, "Unexpected option id");
+        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== 'text-fallback') {
+            this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
         options.model_options = options.model_options as TextFallbackOptions;
         const model = ReplicateDriver.parseModelId(options.model);
@@ -126,8 +148,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
             //stream: stream,     //streaming described here https://replicate.com/blog/streaming
         };
 
-        const prediction =
-            await this.service.predictions.create(predictionData);
+        const prediction = await this.service.predictions.create(predictionData);
 
         //TODO stream
         //if we're streaming, return right away for the stream handler to handle
@@ -136,24 +157,24 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
         //not streaming, wait for the result
         const res = await this.service.wait(prediction, {});
 
-        const text: string = res.output.join("");
+        const text: string = res.output.join('');
         return {
-            result: [{ type: "text" as const, value: text }],
+            result: [{ type: 'text' as const, value: text }],
             original_response: options.include_original_response ? res : undefined,
         };
     }
 
     async startTraining(dataset: DataSource, options: TrainingOptions): Promise<TrainingJob> {
-        if (options.name.indexOf("/") === -1) {
-            throw new Error("Invalid target model name. Expected format: owner/model");
+        if (options.name.indexOf('/') === -1) {
+            throw new Error('Invalid target model name. Expected format: owner/model');
         }
         const { owner, model, version } = ReplicateDriver.parseModelId(options.model);
         const job = await this.service.trainings.create(owner, model, version, {
-            destination: options.name as any,
+            destination: options.name as `${string}/${string}`,
             input: {
                 train_data: await dataset.getURL(),
             },
-        })
+        });
         return jobInfo(job, options.name);
     }
 
@@ -185,33 +206,36 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
         try {
             await this.service.predictions.list();
             return true;
-        } catch (error) {
+        } catch {
             return false;
         }
     }
 
     async _listTrainableModels(): Promise<AIModel[]> {
-        const promises = Array.from(supportFineTunning).map(id => {
+        const promises = Array.from(supportFineTunning).map((id) => {
             const [owner, model] = id.split('/');
-            return this.service.models.get(owner, model)
+            return this.service.models.get(owner, model);
         });
         const results = await Promise.all(promises);
-        return results.filter(m => !!m.latest_version).map(m => {
-            const fullName = m.owner + '/' + m.name;
-            const v = m.latest_version!;
-            return {
-                id: fullName + ':' + v.id,
-                name:
-                    fullName + "@" + v.cog_version + ":" + v.id.slice(0, 6),
-                provider: this.provider,
-                owner: m.owner,
-                description: m.description,
-            } as AIModel;
-        });
+        return results
+            .filter((m) => !!m.latest_version)
+            .map((m) => {
+                const fullName = `${m.owner}/${m.name}`;
+                // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
+                const v = m.latest_version!;
+                return {
+                    id: `${fullName}:${v.id}`,
+                    name: `${fullName}@${v.cog_version}:${v.id.slice(0, 6)}`,
+                    provider: this.provider,
+                    owner: m.owner,
+                    description: m.description,
+                } as AIModel;
+            });
     }
 
     async listTrainableModels(): Promise<AIModel[]> {
-        if (!cachedTrainableModels || Date.now() > cachedTrainableModelsTimestamp + 12 * 3600 * 1000) { // 12 hours
+        if (!cachedTrainableModels || Date.now() > cachedTrainableModelsTimestamp + 12 * 3600 * 1000) {
+            // 12 hours
             cachedTrainableModels = await this._listTrainableModels();
             cachedTrainableModelsTimestamp = Date.now();
         }
@@ -222,9 +246,9 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
         if (!params.text) {
             return this.listTrainableModels();
         }
-        const [owner, model] = params.text.split("/");
+        const [owner, model] = params.text.split('/');
         if (!owner || !model) {
-            throw new Error("Invalid model name. Expected format: owner/model");
+            throw new Error('Invalid model name. Expected format: owner/model');
         }
 
         return this.listModelVersions(owner, model);
@@ -236,16 +260,16 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
             this.service.models.versions.list(owner, model),
         ]);
 
-        if (!rModel || !versions || (versions as any).results?.length === 0) {
-            throw new Error("Model not found or no versions available");
+        const versionResults = (versions as ReplicateVersionsResponse).results ?? [];
+        if (!rModel || !versions || versionResults.length === 0) {
+            throw new Error('Model not found or no versions available');
         }
 
-        const models: AIModel[] = (versions as any).results.map((v: any) => {
-            const fullName = rModel.owner + '/' + rModel.name;
+        const models: AIModel[] = versionResults.map((v) => {
+            const fullName = `${rModel.owner}/${rModel.name}`;
             return {
-                id: fullName + ':' + v.id,
-                name:
-                    fullName + "@" + v.cog_version + ":" + v.id.slice(0, 6),
+                id: `${fullName}:${v.id}`,
+                name: `${fullName}@${v.cog_version}:${v.id.slice(0, 6)}`,
                 provider: this.provider,
                 owner: rModel.owner,
                 description: rModel.description,
@@ -261,15 +285,15 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
     }
 
     async searchModels(params: ModelSearchPayload): Promise<AIModel[]> {
-        const res = await this.service.request("models/search", {
+        const res = await this.service.request('models/search', {
             params: {
                 query: params.text,
             },
         });
 
-        const rModels = ((await res.json()) as any).models;
+        const rModels = ((await res.json()) as ReplicateSearchResponse).models;
 
-        const models: AIModel[] = rModels.map((v: any) => {
+        const models: AIModel[] = rModels.map((v) => {
             return {
                 id: v.name,
                 name: v.name,
@@ -284,9 +308,8 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
     }
 
     async generateEmbeddings(): Promise<EmbeddingsResult> {
-        throw new Error("Method not implemented.");
+        throw new Error('Method not implemented.');
     }
-
 }
 
 function jobInfo(job: Prediction | Training, modelName?: string): TrainingJob {
@@ -298,7 +321,7 @@ function jobInfo(job: Prediction | Training, modelName?: string): TrainingJob {
         status = TrainingJobStatus.succeeded;
     } else if (jobStatus === 'failed') {
         status = TrainingJobStatus.failed;
-        const error = job.error as any;
+        const error = job.error as unknown;
         if (typeof error === 'string') {
             details = error;
         } else {
@@ -315,7 +338,6 @@ function jobInfo(job: Prediction | Training, modelName?: string): TrainingJob {
         id: job.id,
         status,
         details,
-        model: modelName ? modelName + ':' + job.version : job.version
+        model: modelName ? `${modelName}:${job.version}` : job.version,
     } as TrainingJob;
-
 }
