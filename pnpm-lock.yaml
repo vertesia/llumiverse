@@ -185,8 +185,8 @@ importers:
         specifier: 10.6.2
         version: 10.6.2
       groq-sdk:
-        specifier: ^1.2.0
-        version: 1.2.0
+        specifier: ^1.2.1
+        version: 1.2.1
       mnemonist:
         specifier: ^0.40.4
         version: 0.40.4
@@ -1261,8 +1261,8 @@ packages:
     resolution: {integrity: sha512-eAmLkjDjAFCVXg7A1unxHsLf961m6y17QFqXqAXGj/gVkKFrEICfStRfwUlGNfeCEjNRa32JEWOUTlYXPyyKvA==}
     engines: {node: '>=14'}
 
-  groq-sdk@1.2.0:
-    resolution: {integrity: sha512-pMhSYXWcjiqvbOeKdv2zjci1BYjGdp04a40hnmQmJpKJyB6oa+gRndAqE128gwR0NLgYO+Wt1fIF46KNHcplsw==}
+  groq-sdk@1.2.1:
+    resolution: {integrity: sha512-dsDSWJRJf+n2dPiCv7zU3IsJbrh7jfSPqi6vc1q0TTK1oUF6bn+wv4P2VFdynkHpuJ0TTJ57vlpT87judPgVPA==}
     hasBin: true
 
   http-proxy-agent@5.0.0:
@@ -2982,7 +2982,7 @@ snapshots:
 
   google-logging-utils@1.1.3: {}
 
-  groq-sdk@1.2.0: {}
+  groq-sdk@1.2.1: {}
 
   http-proxy-agent@5.0.0:
     dependencies:
