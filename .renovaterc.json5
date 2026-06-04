@@ -1,5 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  // Default label applied to every Renovate PR (matches studio/composableai).
+  // The automerge workflow's eligibility gate requires this label.
+  "labels": ["dependencies"],
   // Bypass the 7-day minimum release age for security fixes.
   "vulnerabilityAlerts": {
     "minimumReleaseAge": "0 days"
@@ -12,6 +15,15 @@
         "*"
       ],
       "minimumReleaseAge": "7 days"
+    },
+    {
+      // Mark npm patch/minor updates eligible for scoped bot automerge
+      // (the renovate-automerge.yaml workflow merges them once CI passes).
+      // node/npm/pnpm are excluded so runtime/package-manager bumps stay manual.
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "addLabels": ["renovate-automerge"],
+      "matchPackageNames": ["!npm", "!pnpm", "!node"]
     },
     {
       "groupName": "gh-actions deps",
