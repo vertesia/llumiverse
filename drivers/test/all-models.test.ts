@@ -274,7 +274,10 @@ describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => 
 
     test.each(models)(
         `${name}: execute prompt with streaming and schema on %s`,
-        { timeout: TIMEOUT, retry: 2 },
+        {
+            timeout: TIMEOUT,
+            retry: 2,
+        },
         async (model) => {
             const r = await driver.stream(testPrompt_color, {
                 ...getTestOptions(model),
@@ -287,7 +290,10 @@ describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => 
 
     test.each(models)(
         `${name}: max_tokens at documented limit on %s`,
-        { timeout: TIMEOUT, retry: 1 },
+        {
+            timeout: TIMEOUT,
+            retry: 1,
+        },
         async (model) => {
             // Resolve the documented max_tokens limit: prefer provider-specific, fallback to provider-agnostic
             let limit: number | undefined;
@@ -319,7 +325,10 @@ describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => 
 
     test.each(models)(
         `${name}: multimodal test - describe image with %s`,
-        { timeout: TIMEOUT, retry: 2 },
+        {
+            timeout: TIMEOUT,
+            retry: 2,
+        },
         async (model) => {
             if (!fetchedModels) {
                 fetchedModels = await driver.listModels();
