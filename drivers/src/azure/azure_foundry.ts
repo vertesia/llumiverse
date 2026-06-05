@@ -154,7 +154,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
         if (isOpenAI) {
             // Use the Azure OpenAI client for OpenAI models
-            const openAI = this.service.getOpenAIClient() as unknown as OpenAI;
+            const openAI = this.service.getOpenAIClient();
             const subDriver = new AzureFoundryOpenAIProtocolDriver(openAI);
             // Use deployment name for API calls
             const modifiedOptions = { ...options, model: deploymentName };
@@ -195,7 +195,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         const isOpenAI = await this.isOpenAIDeployment(options.model);
 
         if (isOpenAI) {
-            const openAI = this.service.getOpenAIClient() as unknown as OpenAI;
+            const openAI = this.service.getOpenAIClient();
             const subDriver = new AzureFoundryOpenAIProtocolDriver(openAI);
             const modifiedOptions = { ...options, model: deploymentName };
             const stream = await subDriver.requestTextCompletionStream(prompt, modifiedOptions);

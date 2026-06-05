@@ -146,8 +146,8 @@ importers:
         specifier: 1.0.0-beta.6
         version: 1.0.0-beta.6
       '@azure/ai-projects':
-        specifier: 2.1.1
-        version: 2.1.1(ws@8.21.0)
+        specifier: 2.2.0
+        version: 2.2.0(ws@8.21.0)
       '@azure/core-auth':
         specifier: ^1.10.1
         version: 1.10.1
@@ -431,8 +431,8 @@ packages:
     resolution: {integrity: sha512-nBrLsEWm4J2u5LpAPjxADTlq3trDgVZZXHNKabeXZtpq3d3AbN/KGO82R87rdDz5/lYB024rtEf10/q0urNgsA==}
     engines: {node: '>=18.0.0'}
 
-  '@azure/ai-projects@2.1.1':
-    resolution: {integrity: sha512-mHV0SvdP8F3vif4FuuGzuIOi+tqZgJveB8HWxBJExGHkEfwMPkQnTUufISSqfI8WmXJ4hgt+Xw/PAZ22VI1Zhw==}
+  '@azure/ai-projects@2.2.0':
+    resolution: {integrity: sha512-pxdEYMK8DI8BxaFhroqoT+1wwHmELn0v+fEWQanQNG2wNI9LdWTrUSChNcUY0l8T8D5Gjxf/irSEEaWCvqHwQQ==}
     engines: {node: '>=20.0.0'}
 
   '@azure/core-auth@1.10.1':
@@ -1422,18 +1422,6 @@ packages:
     resolution: {integrity: sha512-mnkeQ1qP5Ue2wd+aivTD3NHd/lZ96Lu0jgf0pwktLPtx6cTZiH7tyeGRRHs0zX0rbrahXPnXlUnbeXyaBBuIaw==}
     engines: {node: '>=18'}
 
-  openai@6.39.0:
-    resolution: {integrity: sha512-O61LIsimY3acVabwvomwFhwrnN36yvHY2quIfy9keEcFytGgWeV35yLHQ6NVMLSBxRpHmcg2yuhCnlu2HT4pLQ==}
-    hasBin: true
-    peerDependencies:
-      ws: ^8.21.0
-      zod: ^3.25 || ^4.0
-    peerDependenciesMeta:
-      ws:
-        optional: true
-      zod:
-        optional: true
-
   openai@6.41.0:
     resolution: {integrity: sha512-IGWPopZq6Rjoynjfb3NSLf/z2MTw7UiOsm9TAjPGAjUESH7Uq41Trg4QWehBEn58p74i+m7uoRPV2vXcpPXhyA==}
     peerDependencies:
@@ -2189,7 +2177,7 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@azure/ai-projects@2.1.1(ws@8.21.0)':
+  '@azure/ai-projects@2.2.0(ws@8.21.0)':
     dependencies:
       '@azure-rest/core-client': 2.3.4
       '@azure/abort-controller': 2.1.2
@@ -2203,7 +2191,7 @@ snapshots:
       '@azure/identity': 4.13.1
       '@azure/logger': 1.1.4
       '@azure/storage-blob': 12.27.0
-      openai: 6.39.0(ws@8.21.0)
+      openai: 6.41.0(ws@8.21.0)
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
@@ -3153,10 +3141,6 @@ snapshots:
       define-lazy-prop: 3.0.0
       is-inside-container: 1.0.0
       is-wsl: 3.1.0
-
-  openai@6.39.0(ws@8.21.0):
-    optionalDependencies:
-      ws: 8.21.0
 
   openai@6.41.0(ws@8.21.0):
     optionalDependencies:
