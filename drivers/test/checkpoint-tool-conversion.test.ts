@@ -96,7 +96,10 @@ function getToolOptions(model: string): ExecutionOptions {
 describe.concurrent.each(drivers)('Driver $name - checkpoint tool conversion', ({ name, driver, models }) => {
     test.each(models)(
         `${name}: tools=[] with tool blocks in conversation for %s`,
-        { timeout: TIMEOUT, retry: 1 },
+        {
+            timeout: TIMEOUT,
+            retry: 1,
+        },
         async (model) => {
             // Step 1: Execute a tool call to get a conversation with tool blocks
             const toolOptions = getToolOptions(model);
