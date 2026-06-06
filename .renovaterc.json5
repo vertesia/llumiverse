@@ -83,7 +83,8 @@
         "npm",
         "pnpm"
       ],
-      "rangeStrategy": "bump"
+      "rangeStrategy": "bump",
+      "schedule": "* * * * 2" // Tuesday
     },
     {
       "description": "Keep Node.js-related updates on v24 until the runtime is upgraded deliberately.",
