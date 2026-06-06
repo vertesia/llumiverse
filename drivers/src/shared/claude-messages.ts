@@ -142,6 +142,25 @@ interface RequestOptions {
 }
 
 type ClaudeTool = NonNullable<MessageCreateParamsBase['tools']>[number];
+type ClaudeMessageStream = AsyncIterable<RawMessageStreamEvent> & {
+    finalMessage(): Promise<Message>;
+};
+type ClaudeMessagesStreamClient = {
+    messages: {
+        stream(body: MessageStreamParams, options?: RequestOptions): ClaudeMessageStream;
+    };
+};
+
+function streamClaudeMessages(
+    client: Anthropic | AnthropicVertex,
+    payload: MessageStreamParams,
+    requestOptions: RequestOptions | undefined,
+): Promise<ClaudeMessageStream> {
+    // AnthropicVertex intentionally wraps the Anthropic Messages API, but it depends on its
+    // own @anthropic-ai/sdk copy. Cast at the boundary so the implementation can call the
+    // shared runtime-compatible stream API without TS trying to call a union of SDK versions.
+    return Promise.resolve((client as unknown as ClaudeMessagesStreamClient).messages.stream(payload, requestOptions));
+}
 
 // ============================================================================
 // Token usage
@@ -765,7 +784,8 @@ export async function executeClaudeCompletion(
 
     const { payload, requestOptions } = getClaudePayload(options, conversation);
 
-    const result: Message = await client.messages.stream(payload, requestOptions).finalMessage();
+    const responseStream = await streamClaudeMessages(client, payload as MessageStreamParams, requestOptions);
+    const result = await responseStream.finalMessage();
 
     const includeThoughts = model_options?.include_thoughts ?? false;
     const text = collectAllTextContent(result.content, includeThoughts);
@@ -810,7 +830,7 @@ export async function streamClaudeCompletion(
     const { payload, requestOptions } = getClaudePayload(options, conversation);
     const streamingPayload: MessageStreamParams = { ...payload, stream: true };
 
-    const response_stream = await client.messages.stream(streamingPayload, requestOptions);
+    const response_stream = await streamClaudeMessages(client, streamingPayload, requestOptions);
 
     let currentToolUse: { id: string; name: string; inputJson: string } | null = null;
     let pendingSpacing = false;
