@@ -125,19 +125,19 @@ importers:
         specifier: ^0.16.1
         version: 0.16.1
       '@aws-sdk/client-bedrock':
-        specifier: ^3.1056.0
+        specifier: ^3.1057.0
         version: 3.1057.0
       '@aws-sdk/client-bedrock-runtime':
-        specifier: ^3.1056.0
+        specifier: ^3.1057.0
         version: 3.1057.0
       '@aws-sdk/client-s3':
-        specifier: ^3.1056.0
+        specifier: ^3.1057.0
         version: 3.1057.0
       '@aws-sdk/credential-providers':
-        specifier: ^3.1056.0
+        specifier: ^3.1057.0
         version: 3.1057.0
       '@aws-sdk/lib-storage':
-        specifier: ^3.1056.0
+        specifier: ^3.1057.0
         version: 3.1057.0(@aws-sdk/client-s3@3.1057.0)
       '@aws-sdk/types':
         specifier: ^3.973.9
