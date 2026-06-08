@@ -7,9 +7,9 @@ import {
 import 'dotenv/config';
 import fs from 'node:fs';
 import { describe, expect, test } from 'vitest';
-import { BedrockDriver } from '../src';
-import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from '../src/bedrock/nova-image-payload';
-import { testPrompt_imageVariations, testPrompt_textToImage, testPrompt_textToImageGuidance } from './samples';
+import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from '../src/bedrock/nova-image-payload.js';
+import { BedrockDriver } from '../src/index.js';
+import { testPrompt_imageVariations, testPrompt_textToImage, testPrompt_textToImageGuidance } from './samples.js';
 
 interface TestDriver {
     driver: AbstractDriver;

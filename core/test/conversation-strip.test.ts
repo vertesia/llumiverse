@@ -8,9 +8,9 @@ import {
     stripBinaryFromConversation,
     stripHeartbeatsFromConversation,
     truncateLargeTextInConversation,
-} from '../src/conversation-utils';
+} from '../src/conversation-utils.js';
 
-import type { Tree } from './__helpers__/test-utils';
+import type { Tree } from './__helpers__/test-utils.js';
 
 const IMAGE_PLACEHOLDER = '[Image removed from conversation history]';
 const DOCUMENT_PLACEHOLDER = '[Document removed from conversation history]';
