@@ -15,8 +15,6 @@ minimumReleaseAgeExclude:
   - '@vertesia/*'
   - '@llumiverse/*'
   - '@google-cloud/aiplatform@6.8.1'
-patchedDependencies:
-  'ts-dual-module@0.6.3': patches/ts-dual-module@0.6.3.patch
 overrides:
   rollup: '^4.60.4'
   cross-spawn: '$cross-spawn'

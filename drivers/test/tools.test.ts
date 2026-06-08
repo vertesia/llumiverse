@@ -9,8 +9,8 @@ import {
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from 'vitest';
-import { BedrockDriver, OpenAIDriver, VertexAIDriver } from '../src';
-import { completionResultToString } from './utils';
+import { BedrockDriver, OpenAIDriver, VertexAIDriver } from '../src/index.js';
+import { completionResultToString } from './utils.js';
 
 const TIMEOUT = 90 * 1000;
 

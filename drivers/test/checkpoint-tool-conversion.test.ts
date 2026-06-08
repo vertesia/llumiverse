@@ -17,7 +17,7 @@ import { type AbstractDriver, type ExecutionOptions, PromptRole, type PromptSegm
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from 'vitest';
-import { BedrockDriver, OpenAIDriver, VertexAIDriver } from '../src';
+import { BedrockDriver, OpenAIDriver, VertexAIDriver } from '../src/index.js';
 
 const TIMEOUT = 90_000;
 

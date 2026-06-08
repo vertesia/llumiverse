@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { readStreamAsBase64, readStreamAsString, readStreamAsUint8Array } from '../src/stream';
+import { readStreamAsBase64, readStreamAsString, readStreamAsUint8Array } from '../src/stream.js';
 
 function createStreamFromString(text: string): ReadableStream {
     return new ReadableStream({

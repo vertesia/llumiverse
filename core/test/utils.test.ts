@@ -1,9 +1,9 @@
 import fs, { readFileSync } from 'node:fs';
 import type { JSONArray, JSONObject, JsonResult } from '@llumiverse/common';
 import { describe, expect, test } from 'vitest';
-import { extractAndParseJSON, parseJSON } from '../src/json';
-import { ValidationError, validateResult } from '../src/validation';
-import { readDataFile } from './utils';
+import { extractAndParseJSON, parseJSON } from '../src/json.js';
+import { ValidationError, validateResult } from '../src/validation.js';
+import { readDataFile } from './utils.js';
 
 describe('Core Utilities', () => {
     test('extractAndParseJSON', () => {

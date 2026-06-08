@@ -24,9 +24,14 @@ import {
     VertexAIDriver,
     WatsonxDriver,
     xAIDriver,
-} from '../src';
-import { assertCompletionOk, assertStreamingCompletionOk } from './assertions';
-import { testPrompt_color, testPrompt_describeImage, testSchema_animalDescription, testSchema_color } from './samples';
+} from '../src/index.js';
+import { assertCompletionOk, assertStreamingCompletionOk } from './assertions.js';
+import {
+    testPrompt_color,
+    testPrompt_describeImage,
+    testSchema_animalDescription,
+    testSchema_color,
+} from './samples.js';
 
 const TIMEOUT = 90 * 1000;
 

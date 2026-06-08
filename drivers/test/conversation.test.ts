@@ -18,8 +18,8 @@ import {
 } from '@llumiverse/core';
 import 'dotenv/config';
 import { describe, expect, test } from 'vitest';
-import { AnthropicDriver, BedrockDriver, OpenAIDriver, VertexAIDriver, xAIDriver } from '../src';
-import { completionResultToString } from './utils';
+import { AnthropicDriver, BedrockDriver, OpenAIDriver, VertexAIDriver, xAIDriver } from '../src/index.js';
+import { completionResultToString } from './utils.js';
 
 const TIMEOUT = 120 * 1000;
 
