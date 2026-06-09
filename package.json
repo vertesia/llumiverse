@@ -20,7 +20,7 @@
         "typecheck:test": "pnpm -r typecheck:test"
     },
     "devDependencies": {
-        "@biomejs/biome": "2.4.16",
+        "@biomejs/biome": "2.4.4",
         "cross-spawn": "^7.0.6",
         "npm-ws-tools": "^0.3.0",
         "rollup": "^4.61.0",
