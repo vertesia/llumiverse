@@ -48,6 +48,17 @@
       "schedule": "* * * * 3" // Wednesday
     },
     {
+      "groupName": "biome",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchPackageNames": [
+        "@biomejs/**"
+      ],
+      "rangeStrategy": "bump",
+      "schedule": "* * * * 3" // Wednesday
+    },
+    {
       "groupName": "Model Provider Client libraries",
       "matchManagers": [
         "npm"

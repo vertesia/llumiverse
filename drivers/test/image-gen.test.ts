@@ -1,9 +1,4 @@
-import {
-    type AbstractDriver,
-    type ExecutionOptions,
-    // biome-ignore lint/suspicious/noDeprecatedImports: exercising deprecated output_modality path until that API is removed
-    Modalities,
-} from '@llumiverse/core';
+import { type AbstractDriver, type ExecutionOptions, Modalities } from '@llumiverse/core';
 import 'dotenv/config';
 import fs from 'node:fs';
 import { describe, expect, test } from 'vitest';

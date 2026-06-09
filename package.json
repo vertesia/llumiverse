@@ -23,9 +23,9 @@
         "@biomejs/biome": "2.4.4",
         "cross-spawn": "^7.0.6",
         "npm-ws-tools": "^0.3.0",
-        "rollup": "^4.60.4",
+        "rollup": "^4.61.0",
         "typescript": "^6.0.3",
-        "vitest": "^4.1.7"
+        "vitest": "^4.1.8"
     },
     "packageManager": "pnpm@11.5.0"
 }
