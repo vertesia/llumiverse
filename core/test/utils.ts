@@ -6,4 +6,5 @@ const dataFile = (file: string) => join(dataDir, file);
 const readDataFile = (file: string, enc: BufferEncoding = 'utf-8') => {
     return readFileSync(dataFile(file), enc);
 };
+
 export { dataDir, dataFile, readDataFile };

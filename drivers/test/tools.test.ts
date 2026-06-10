@@ -1,10 +1,4 @@
-import {
-    type AbstractDriver,
-    type ExecutionOptions,
-    Modalities,
-    PromptRole,
-    type PromptSegment,
-} from '@llumiverse/core';
+import { type AbstractDriver, type ExecutionOptions, PromptRole, type PromptSegment } from '@llumiverse/core';
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from 'vitest';
@@ -189,7 +183,6 @@ function getTestOptions(model: string): ExecutionOptions {
             frequency_penalty: -0.1,
             stop_sequence: ['Haemoglobin'],
         },
-        output_modality: Modalities.text,
         tools: [
             {
                 name: 'get_weather',

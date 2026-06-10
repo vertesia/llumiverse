@@ -20,10 +20,13 @@
       // Mark npm patch/minor updates eligible for scoped bot automerge
       // (the renovate-automerge.yaml workflow merges them once CI passes).
       // node/npm/pnpm are excluded so runtime/package-manager bumps stay manual.
+      // @biomejs is excluded because it is a native binary that ships per-arch:
+      // CI runs on amd64 but developers are typically on arm64 (Apple Silicon),
+      // so biome bumps need a manual look before merging.
       "matchManagers": ["npm"],
       "matchUpdateTypes": ["patch", "minor"],
       "addLabels": ["renovate-automerge"],
-      "matchPackageNames": ["!npm", "!pnpm", "!node"]
+      "matchPackageNames": ["!npm", "!pnpm", "!node", "!@biomejs/**"]
     },
     {
       "groupName": "gh-actions deps",

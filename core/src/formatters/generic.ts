@@ -65,4 +65,5 @@ export function createTextPromptFormatter(
 }
 
 const formatTextPrompt = createTextPromptFormatter();
+
 export { formatTextPrompt };
