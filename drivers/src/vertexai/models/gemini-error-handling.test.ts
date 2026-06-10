@@ -93,6 +93,24 @@ describe('GeminiModelDefinition Error Handling', () => {
             expect(error.name).toBe('NOT_FOUND');
         });
 
+        it('should mark a client-closed/aborted request (499) as retryable despite the 4xx status', () => {
+            const error = modelDef.formatLlumiverseError(
+                driver,
+                { status: 499, message: 'This operation was aborted' },
+                { provider: 'vertexai', model: 'gemini-2.0-flash', operation: 'execute' },
+            );
+            expect(error.retryable).toBe(true);
+        });
+
+        it('should mark DEADLINE_EXCEEDED as retryable even under a 4xx status', () => {
+            const error = modelDef.formatLlumiverseError(
+                driver,
+                { status: 400, message: 'DEADLINE_EXCEEDED: Deadline expired before operation could complete' },
+                { provider: 'vertexai', model: 'gemini-2.0-flash', operation: 'execute' },
+            );
+            expect(error.retryable).toBe(true);
+        });
+
         it('should handle RESOURCE_EXHAUSTED error (429) as retryable', () => {
             const googleError = {
                 status: 429,

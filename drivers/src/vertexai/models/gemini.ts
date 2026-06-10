@@ -938,6 +938,14 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             }
         }
 
+        // A transport-level abort (request-timeout / dropped connection, sometimes reported
+        // as 499 client-closed) or a deadline-exceeded is transient and should be retried,
+        // even though it carries a 4xx status. Honor it before the 4xx → non-retryable rule.
+        if (message) {
+            const lower = message.toLowerCase();
+            if (lower.includes('aborted') || lower.includes('deadline')) return true;
+        }
+
         // Non-retryable 4xx client errors
         if (httpStatusCode >= 400 && httpStatusCode < 500) return false;
 
