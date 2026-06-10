@@ -65,7 +65,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         segments: PromptSegment[],
         options: ExecutionOptions,
     ): Promise<ClaudePrompt> {
-        return formatClaudePrompt(segments, options);
+        return formatClaudePrompt(segments, options, _driver.logger);
     }
 
     async requestTextCompletion(
