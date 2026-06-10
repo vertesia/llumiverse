@@ -399,6 +399,11 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         if (lowerMessage.includes('429')) return true;
         if (lowerMessage.includes('529')) return true;
 
+        // Explicit auth failures should never be retried even when they arrive without
+        // a numeric status code (for example, google-auth-library invalid_grant errors).
+        if (lowerMessage.includes('invalid_grant')) return false;
+        if (lowerMessage.includes("credential's issuer")) return false;
+
         // Numeric status codes
         if (statusCode !== undefined) {
             if (statusCode === 429 || statusCode === 408) return true; // Rate limit, timeout

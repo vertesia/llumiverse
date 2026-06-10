@@ -50,6 +50,8 @@ import { truncateBinaryForDebug } from '../../shared/debug-prompt.js';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
 import type { ModelDefinition } from '../models.js';
 
+type GoogleApiErrorLike = Pick<ApiError, 'status' | 'message'>;
+
 function supportsStructuredOutput(options: PromptOptions): boolean {
     // Gemini 1.0 Ultra does not support JSON output, 1.0 Pro does.
     return !!options.result_schema && !options.model.includes('ultra');
@@ -841,11 +843,11 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             throw error;
         }
 
-        const apiError = error as ApiError;
+        const apiError = error;
         const httpStatusCode = apiError.status;
 
         // Extract error message
-        const message = apiError.message || String(error);
+        const message = apiError.message;
 
         // Build user-facing message with status code
         let userMessage = message;
@@ -874,13 +876,14 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
     /**
      * Type guard to check if error is a Google API error.
      */
-    private isGoogleApiError(error: unknown): error is ApiError {
+    private isGoogleApiError(error: unknown): error is GoogleApiErrorLike {
         return (
             error !== null &&
             typeof error === 'object' &&
             'status' in error &&
             typeof (error as { status?: unknown }).status === 'number' &&
-            'message' in error
+            'message' in error &&
+            typeof (error as { message?: unknown }).message === 'string'
         );
     }
 
@@ -914,6 +917,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
      * @returns True if retryable, false if not retryable, undefined if unknown
      */
     private isGeminiErrorRetryable(httpStatusCode: number, message?: string): boolean | undefined {
+        if (message && this.isNonRetryableAuthError(message)) return false;
+
         // Retryable status codes
         if (httpStatusCode === 408) return true; // Request timeout
         if (httpStatusCode === 429) return true; // Rate limit/quota
@@ -940,6 +945,11 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         return undefined;
     }
 
+    private isNonRetryableAuthError(message: string): boolean {
+        const lowerMessage = message.toLowerCase();
+        return lowerMessage.includes('invalid_grant') || lowerMessage.includes("credential's issuer");
+    }
+
     /**
      * Extract error type name from error message.
      * Google errors often include the error type in the message.
@@ -948,6 +958,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
     private extractErrorName(message: string): string | undefined {
         // Common Google error patterns
         const patterns = [
+            /^Error code ([a-zA-Z0-9_-]+):/, // "Error code invalid_grant: message"
             /^([A-Z_]+):/, // "ERROR_NAME: message"
             /\[([A-Z_]+)\]/, // "[ERROR_NAME] message"
             /^(\w+Error):/, // "ErrorTypeError: message"

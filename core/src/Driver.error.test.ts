@@ -143,6 +143,15 @@ describe('AbstractDriver Error Formatting', () => {
                 expect(driver.isRetryableError(undefined, 'HTTP 529 error')).toBe(true);
             });
 
+            it('should classify invalid_grant credential issuer failures as non-retryable', () => {
+                expect(
+                    driver.isRetryableError(
+                        undefined,
+                        "Error code invalid_grant: Error connecting to the given credential's issuer.",
+                    ),
+                ).toBe(false);
+            });
+
             it('should mark unknown messages as undefined (let consumer decide)', () => {
                 expect(driver.isRetryableError(undefined, 'Invalid API key')).toBeUndefined();
                 expect(driver.isRetryableError(undefined, 'Bad request')).toBeUndefined();
