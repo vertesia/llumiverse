@@ -291,6 +291,36 @@ describe('GeminiModelDefinition Error Handling', () => {
             expect(error.name).toBe('LlumiverseError');
             expect(error.code).toBe(500);
         });
+
+        it('should treat invalid_grant credential issuer failures as non-retryable', () => {
+            const authError = new Error("Error code invalid_grant: Error connecting to the given credential's issuer.");
+
+            const error = driver.formatLlumiverseError(authError, {
+                provider: 'vertexai',
+                model: 'gemini-2.5-flash',
+                operation: 'execute',
+            });
+
+            expect(error.retryable).toBe(false);
+            expect(error.code).toBeUndefined();
+        });
+
+        it('should preserve invalid_grant from Google API errors', () => {
+            const googleError = {
+                status: 400,
+                message: "Error code invalid_grant: Error connecting to the given credential's issuer.",
+            };
+
+            const error = modelDef.formatLlumiverseError(driver, googleError, {
+                provider: 'vertexai',
+                model: 'locations/global/publishers/google/models/gemini-2.5-flash',
+                operation: 'execute',
+            });
+
+            expect(error.retryable).toBe(false);
+            expect(error.code).toBe(400);
+            expect(error.name).toBe('invalid_grant');
+        });
     });
 
     describe('isGeminiErrorRetryable', () => {
@@ -343,6 +373,15 @@ describe('GeminiModelDefinition Error Handling', () => {
                 exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(
                     400,
                     'INVALID_ARGUMENT: bad input',
+                ),
+            ).toBe(false);
+        });
+
+        it('should treat invalid_grant as non-retryable before status-based retry rules', () => {
+            expect(
+                exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(
+                    503,
+                    "Error code invalid_grant: Error connecting to the given credential's issuer.",
                 ),
             ).toBe(false);
         });
