@@ -73,6 +73,10 @@ import { truncateBinaryForDebug } from './debug-prompt.js';
 const KEEP_RECENT_MESSAGES = 12;
 const OLD_MESSAGE_TEXT_MAX_TOKENS = 2000;
 
+interface WarnLogger {
+    warn: (data: Record<string, unknown>, message: string) => void;
+}
+
 export interface ClaudePrompt {
     messages: MessageParam[];
     system?: TextBlockParam[];
@@ -261,11 +265,9 @@ export function claudeMaxTokens(option: StatelessExecutionOptions): number {
 
 async function collectFileBlocks(
     segment: PromptSegment,
-    restrictedTypes: true,
-): Promise<Array<TextBlockParam | ImageBlockParam>>;
-async function collectFileBlocks(segment: PromptSegment, restrictedTypes?: false): Promise<ContentBlockParam[]>;
-async function collectFileBlocks(segment: PromptSegment, restrictedTypes = false): Promise<ContentBlockParam[]> {
-    const contentBlocks: ContentBlockParam[] = [];
+    logger?: WarnLogger,
+): Promise<Array<TextBlockParam | ImageBlockParam | DocumentBlockParam>> {
+    const contentBlocks: Array<TextBlockParam | ImageBlockParam | DocumentBlockParam> = [];
 
     for (const file of segment.files || []) {
         if (file.mime_type?.startsWith('image/')) {
@@ -282,28 +284,34 @@ async function collectFileBlocks(segment: PromptSegment, restrictedTypes = false
                     media_type: mimeType,
                 },
             } satisfies ImageBlockParam);
-        } else if (!restrictedTypes) {
-            if (file.mime_type === 'application/pdf') {
-                contentBlocks.push({
-                    title: file.name,
-                    type: 'document',
-                    source: {
-                        type: 'base64',
-                        data: await readStreamAsBase64(await file.getStream()),
-                        media_type: 'application/pdf',
-                    },
-                } satisfies DocumentBlockParam);
-            } else if (file.mime_type?.startsWith('text/')) {
-                contentBlocks.push({
-                    title: file.name,
-                    type: 'document',
-                    source: {
-                        type: 'text',
-                        data: await readStreamAsString(await file.getStream()),
-                        media_type: 'text/plain',
-                    },
-                } satisfies DocumentBlockParam);
-            }
+        } else if (file.mime_type?.startsWith('video/')) {
+            logger?.warn(
+                {
+                    file_name: file.name,
+                    mime_type: file.mime_type,
+                },
+                '[Claude] Skipping unsupported video attachment',
+            );
+        } else if (file.mime_type === 'application/pdf') {
+            contentBlocks.push({
+                title: file.name,
+                type: 'document',
+                source: {
+                    type: 'base64',
+                    data: await readStreamAsBase64(await file.getStream()),
+                    media_type: 'application/pdf',
+                },
+            } satisfies DocumentBlockParam);
+        } else if (file.mime_type?.startsWith('text/')) {
+            contentBlocks.push({
+                title: file.name,
+                type: 'document',
+                source: {
+                    type: 'text',
+                    data: await readStreamAsString(await file.getStream()),
+                    media_type: 'text/plain',
+                },
+            } satisfies DocumentBlockParam);
         }
     }
 
@@ -314,7 +322,11 @@ async function collectFileBlocks(segment: PromptSegment, restrictedTypes = false
 // Prompt formatting (PromptSegment[] → ClaudePrompt)
 // ============================================================================
 
-export async function formatClaudePrompt(segments: PromptSegment[], options: ExecutionOptions): Promise<ClaudePrompt> {
+export async function formatClaudePrompt(
+    segments: PromptSegment[],
+    options: ExecutionOptions,
+    logger?: WarnLogger,
+): Promise<ClaudePrompt> {
     let system: TextBlockParam[] | undefined = segments
         .filter((s) => s.role === PromptRole.system)
         .map((s) => ({ text: s.content, type: 'text' as const }));
@@ -337,11 +349,11 @@ export async function formatClaudePrompt(segments: PromptSegment[], options: Exe
             if (!segment.tool_use_id) {
                 throw new Error('Tool prompt segment must have a tool use ID');
             }
-            const contentBlocks: Array<TextBlockParam | ImageBlockParam> = [];
+            const contentBlocks: Array<TextBlockParam | ImageBlockParam | DocumentBlockParam> = [];
             if (segment.content) {
                 contentBlocks.push({ type: 'text', text: segment.content } satisfies TextBlockParam);
             }
-            contentBlocks.push(...(await collectFileBlocks(segment, true)));
+            contentBlocks.push(...(await collectFileBlocks(segment, logger)));
             messages.push({
                 role: 'user',
                 content: [
@@ -357,7 +369,7 @@ export async function formatClaudePrompt(segments: PromptSegment[], options: Exe
             if (segment.content) {
                 contentBlocks.push({ type: 'text', text: segment.content } satisfies TextBlockParam);
             }
-            contentBlocks.push(...(await collectFileBlocks(segment, false)));
+            contentBlocks.push(...(await collectFileBlocks(segment, logger)));
             if (contentBlocks.length === 0) continue;
 
             const messageParam: MessageParam = {
