@@ -398,6 +398,12 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         if (lowerMessage.includes('throttl')) return true;
         if (lowerMessage.includes('429')) return true;
         if (lowerMessage.includes('529')) return true;
+        // A transport-level abort (request-timeout / dropped connection) or a
+        // deadline-exceeded is transient and should be retried — even when the provider
+        // surfaces it under a misleading 4xx status. A deliberate cancellation is raised
+        // as a Temporal CancelledFailure (not an LLM error), so it never reaches here.
+        if (lowerMessage.includes('aborted')) return true;
+        if (lowerMessage.includes('deadline')) return true;
 
         // Numeric status codes
         if (statusCode !== undefined) {
