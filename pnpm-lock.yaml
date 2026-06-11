@@ -5,6 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
+  openai: ^6.42.0
   rollup: ^4.61.0
   cross-spawn: ^7.0.6
   brace-expansion@>=3.0.0 <4.0.0: maintenance-v3
@@ -136,10 +137,10 @@ importers:
         specifier: ^3.973.10
         version: 3.973.11
       '@azure-rest/ai-inference':
-        specifier: 1.0.0-beta.6
+        specifier: ^1.0.0-beta.6
         version: 1.0.0-beta.6
       '@azure/ai-projects':
-        specifier: 2.2.0
+        specifier: ^2.2.0
         version: 2.2.0(ws@8.21.0)
       '@azure/core-auth':
         specifier: ^1.10.1
@@ -151,16 +152,16 @@ importers:
         specifier: ^4.13.1
         version: 4.13.1
       '@azure/openai':
-        specifier: 2.0.0
+        specifier: ^2.0.0
         version: 2.0.0
       '@google-cloud/aiplatform':
         specifier: ^6.8.1
         version: 6.8.1
       '@google/genai':
-        specifier: 2.8.0
+        specifier: ^2.8.0
         version: 2.8.0
       '@huggingface/inference':
-        specifier: 4.13.18
+        specifier: ^4.13.18
         version: 4.13.18
       '@llumiverse/common':
         specifier: workspace:*
@@ -1383,17 +1384,6 @@ packages:
     resolution: {integrity: sha512-mnkeQ1qP5Ue2wd+aivTD3NHd/lZ96Lu0jgf0pwktLPtx6cTZiH7tyeGRRHs0zX0rbrahXPnXlUnbeXyaBBuIaw==}
     engines: {node: '>=18'}
 
-  openai@6.41.0:
-    resolution: {integrity: sha512-IGWPopZq6Rjoynjfb3NSLf/z2MTw7UiOsm9TAjPGAjUESH7Uq41Trg4QWehBEn58p74i+m7uoRPV2vXcpPXhyA==}
-    peerDependencies:
-      ws: ^8.21.0
-      zod: ^3.25 || ^4.0
-    peerDependenciesMeta:
-      ws:
-        optional: true
-      zod:
-        optional: true
-
   openai@6.42.0:
     resolution: {integrity: sha512-1WFEt/uXMXOLhYRNkgJWo08Y2YNvNwpVU72K7ibrWgWpNOXd4VojXLbe6SQ4bLiUQ3Y8jz4IiyVkylJCL1DtZg==}
     peerDependencies:
@@ -2118,7 +2108,7 @@ snapshots:
       '@azure/identity': 4.13.1
       '@azure/logger': 1.1.4
       '@azure/storage-blob': 12.27.0
-      openai: 6.41.0(ws@8.21.0)
+      openai: 6.42.0(ws@8.21.0)
       tslib: 2.8.1
     transitivePeerDependencies:
       - supports-color
@@ -3065,10 +3055,6 @@ snapshots:
       define-lazy-prop: 3.0.0
       is-inside-container: 1.0.0
       is-wsl: 3.1.0
-
-  openai@6.41.0(ws@8.21.0):
-    optionalDependencies:
-      ws: 8.21.0
 
   openai@6.42.0(ws@8.21.0):
     optionalDependencies:
