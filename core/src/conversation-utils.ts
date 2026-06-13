@@ -598,7 +598,18 @@ function truncateLargeTextInternal(obj: unknown, maxChars: number): unknown {
             return obj;
         }
         if (obj.length > maxChars) {
-            return obj.substring(0, maxChars) + TEXT_TRUNCATED_MARKER;
+            // Don't cut through a surrogate pair: substring() slices at a UTF-16
+            // code-unit index, so a boundary that lands between the two halves of
+            // a non-BMP character (emoji, CJK-ext, …) leaves a lone high surrogate.
+            // That is invalid Unicode — it can't be UTF-8 encoded losslessly and
+            // strict JSON parsers (e.g. Vertex/Gemini) reject the request body as
+            // "The input data is not valid json". Step back one unit in that case.
+            let end = maxChars;
+            const lastUnit = obj.charCodeAt(end - 1);
+            if (lastUnit >= 0xd800 && lastUnit <= 0xdbff) {
+                end -= 1;
+            }
+            return obj.substring(0, end) + TEXT_TRUNCATED_MARKER;
         }
         return obj;
     }
