@@ -18,7 +18,10 @@ import type OpenAI from 'openai';
 import { describe, expect, test } from 'vitest';
 import { fixOrphanedToolUse as fixOrphanedToolUseBedrock } from '../src/bedrock/index.js';
 import { fixOrphanedToolUse as fixOrphanedToolUseOpenAI } from '../src/openai/index.js';
-import { fixOrphanedToolUse as fixOrphanedToolUseClaude } from '../src/shared/claude-messages.js';
+import {
+    fixOrphanedToolResults,
+    fixOrphanedToolUse as fixOrphanedToolUseClaude,
+} from '../src/shared/claude-messages.js';
 import type { Tree } from './__helpers__/test-utils.js';
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
@@ -214,6 +217,116 @@ describe('fixOrphanedToolUse - Claude', () => {
         expect(lastUserContent[1].content).toContain('user stopped');
 
         expect(lastUserContent[2].type).toBe('text');
+    });
+});
+
+describe('fixOrphanedToolResults - Claude', () => {
+    test('returns empty array for empty input', () => {
+        expect(fixOrphanedToolResults([])).toEqual([]);
+    });
+
+    test('keeps tool_result that has a matching tool_use in the previous message', () => {
+        const messages: MessageParam[] = [
+            { role: 'assistant', content: [{ type: 'tool_use', id: 'tool_1', name: 'search', input: {} }] },
+            { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tool_1', content: 'ok' }] },
+        ];
+        expect(fixOrphanedToolResults(messages)).toEqual(messages);
+    });
+
+    test('keeps all results of a parallel batch when both tool_uses are present', () => {
+        const messages: MessageParam[] = [
+            {
+                role: 'assistant',
+                content: [
+                    { type: 'tool_use', id: 'tool_1', name: 'a', input: {} },
+                    { type: 'tool_use', id: 'tool_2', name: 'b', input: {} },
+                ],
+            },
+            {
+                role: 'user',
+                content: [
+                    { type: 'tool_result', tool_use_id: 'tool_1', content: 'r1' },
+                    { type: 'tool_result', tool_use_id: 'tool_2', content: 'r2' },
+                ],
+            },
+        ];
+        expect(fixOrphanedToolResults(messages)).toEqual(messages);
+    });
+
+    test('drops a tool_result whose tool_use is absent from the previous message', () => {
+        // Compaction kept the result for tool_2 but dropped the assistant tool_use for it.
+        const messages: MessageParam[] = [
+            { role: 'assistant', content: [{ type: 'tool_use', id: 'tool_1', name: 'a', input: {} }] },
+            {
+                role: 'user',
+                content: [
+                    { type: 'tool_result', tool_use_id: 'tool_1', content: 'r1' },
+                    { type: 'tool_result', tool_use_id: 'tool_2', content: 'orphan' },
+                ],
+            },
+        ];
+
+        const result = fixOrphanedToolResults(messages);
+        const userContent = result[1].content as Array<{ type: string; tool_use_id?: string }>;
+        expect(userContent).toHaveLength(1);
+        expect(userContent[0].tool_use_id).toBe('tool_1');
+    });
+
+    test('drops a tool_result whose previous message is not an assistant tool_use turn', () => {
+        // e.g. a compaction summary user message precedes a surviving tool_result.
+        const messages: MessageParam[] = [
+            { role: 'user', content: [{ type: 'text', text: 'Here is the summary of prior work...' }] },
+            { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'gone', content: 'orphan' }] },
+        ];
+
+        const result = fixOrphanedToolResults(messages);
+        // The orphaned tool_result message is dropped entirely; the summary text remains.
+        expect(result).toHaveLength(1);
+        expect(result[0].role).toBe('user');
+        const remaining = result[0].content as Array<{ type: string }>;
+        expect(remaining[0].type).toBe('text');
+    });
+
+    test('preserves non-tool_result blocks while dropping the orphan', () => {
+        const messages: MessageParam[] = [
+            { role: 'assistant', content: [{ type: 'text', text: 'thinking out loud' }] },
+            {
+                role: 'user',
+                content: [
+                    { type: 'tool_result', tool_use_id: 'orphan', content: 'x' },
+                    { type: 'text', text: 'continue please' },
+                ],
+            },
+        ];
+
+        const result = fixOrphanedToolResults(messages);
+        const userContent = result[1].content as Array<{ type: string; text?: string }>;
+        expect(userContent).toHaveLength(1);
+        expect(userContent[0].type).toBe('text');
+        expect(userContent[0].text).toBe('continue please');
+    });
+
+    test('regression: split parallel results recombined by merge are all retained', () => {
+        // After mergeConsecutiveUserMessages, both results sit in one user message
+        // whose previous assistant turn declared both tool_uses — none are orphans.
+        const messages: MessageParam[] = [
+            {
+                role: 'assistant',
+                content: [
+                    { type: 'tool_use', id: 'get_project', name: 'get_project', input: {} },
+                    { type: 'tool_use', id: 'learn_ops', name: 'learn_artifact_operations', input: {} },
+                ],
+            },
+            {
+                role: 'user',
+                content: [
+                    { type: 'tool_result', tool_use_id: 'get_project', content: 'p' },
+                    { type: 'tool_result', tool_use_id: 'learn_ops', content: 'o' },
+                ],
+            },
+        ];
+        const result = fixOrphanedToolResults(messages);
+        expect((result[1].content as unknown[]).length).toBe(2);
     });
 });
 

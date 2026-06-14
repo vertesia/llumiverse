@@ -501,6 +501,58 @@ export function fixOrphanedToolUse(messages: MessageParam[]): MessageParam[] {
     return result;
 }
 
+/**
+ * Drop tool_result blocks whose tool_use_id has no matching tool_use in the
+ * immediately preceding assistant message. This is the mirror of
+ * {@link fixOrphanedToolUse}: that function synthesizes results for tool_uses
+ * left unanswered (e.g. a cancelled run); this one removes results left dangling
+ * after their tool_use was dropped (e.g. by conversation compaction/trimming, or
+ * a parallel tool batch whose results were split across messages that cannot be
+ * re-paired).
+ *
+ * Without this, the Anthropic / Vertex-Anthropic API rejects the request with a
+ * non-retryable 400: "unexpected `tool_use_id` found in `tool_result` blocks ...
+ * Each `tool_result` block must have a corresponding `tool_use` block in the
+ * previous message." — which terminates the conversation.
+ *
+ * Must run AFTER mergeConsecutiveUserMessages so that parallel tool results which
+ * were split across separate user messages are first combined into the single
+ * user turn that follows the assistant tool_use message (otherwise valid results
+ * whose "previous message" is another user message would be wrongly dropped).
+ */
+export function fixOrphanedToolResults(messages: MessageParam[]): MessageParam[] {
+    if (messages.length === 0) return messages;
+    const result: MessageParam[] = [];
+    for (let i = 0; i < messages.length; i++) {
+        const message = messages[i];
+        if (message.role !== 'user' || !Array.isArray(message.content)) {
+            result.push(message);
+            continue;
+        }
+        const hasToolResult = message.content.some((block) => block.type === 'tool_result');
+        if (!hasToolResult) {
+            result.push(message);
+            continue;
+        }
+        // Collect the tool_use ids declared by the immediately preceding assistant message.
+        const prev = messages[i - 1];
+        const allowedIds = new Set<string>();
+        if (prev && prev.role === 'assistant' && Array.isArray(prev.content)) {
+            for (const block of prev.content) {
+                if (block.type === 'tool_use') allowedIds.add(block.id);
+            }
+        }
+        const filtered = message.content.filter((block) =>
+            block.type === 'tool_result' ? allowedIds.has(block.tool_use_id) : true,
+        );
+        // If every block was an orphaned tool_result, drop the message rather than
+        // emit an empty (and invalid) content array.
+        if (filtered.length === 0) continue;
+        result.push(filtered.length === message.content.length ? message : { ...message, content: filtered });
+    }
+    return result;
+}
+
 export function updateClaudeConversation(
     conversation: ClaudePrompt | undefined | null,
     prompt: ClaudePrompt,
@@ -636,7 +688,12 @@ export function getClaudePayload(
         requestOptions = { headers: { 'anthropic-beta': 'output-128k-2025-02-19' } };
     }
 
-    const fixedMessages = fixOrphanedToolUse(prompt.messages);
+    // Merge first so parallel tool results split across user messages are recombined
+    // into the single user turn after their assistant tool_use message; then fix both
+    // orphan directions (tool_use without result, and result without tool_use) so the
+    // request can never trip Anthropic/Vertex's tool_use/tool_result pairing validation.
+    const mergedMessages = mergeConsecutiveUserMessages(prompt.messages);
+    const fixedMessages = fixOrphanedToolResults(fixOrphanedToolUse(mergedMessages));
     let sanitizedMessages = sanitizeMessages(fixedMessages);
 
     if (options.tools) {
