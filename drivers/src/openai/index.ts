@@ -1399,12 +1399,12 @@ export function fixOrphanedToolResults(items: ResponseInputItem[]): ResponseInpu
     const callIds = new Set<string>();
     for (const item of items) {
         if ('type' in item && item.type === 'function_call') {
-            callIds.add((item as OpenAI.Responses.ResponseFunctionToolCall).call_id);
+            callIds.add(item.call_id);
         }
     }
     return items.filter((item) => {
         if ('type' in item && item.type === 'function_call_output') {
-            return callIds.has((item as OpenAI.Responses.ResponseInputItem.FunctionCallOutput).call_id);
+            return callIds.has(item.call_id);
         }
         return true;
     });

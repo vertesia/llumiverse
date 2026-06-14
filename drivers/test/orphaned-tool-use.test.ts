@@ -583,8 +583,8 @@ describe('fixOrphanedToolUse - OpenAI', () => {
                 call_id: 'fc_1',
                 name: 'search',
                 arguments: '{"query":"test"}',
-            } as ResponseInputItem,
-            { type: 'function_call_output', call_id: 'fc_1', output: 'Search result' } as ResponseInputItem,
+            } satisfies ResponseInputItem,
+            { type: 'function_call_output', call_id: 'fc_1', output: 'Search result' } satisfies ResponseInputItem,
             { role: 'assistant', content: 'Here are the results.' },
         ];
 
@@ -600,7 +600,7 @@ describe('fixOrphanedToolUse - OpenAI', () => {
                 call_id: 'fc_1',
                 name: 'ask_user',
                 arguments: '{"question":"What?"}',
-            } as ResponseInputItem,
+            } satisfies ResponseInputItem,
             { role: 'user', content: 'Actually, stop that' },
         ];
 
@@ -627,9 +627,9 @@ describe('fixOrphanedToolUse - OpenAI', () => {
 
     test('handles multiple orphaned function_calls', () => {
         const items: ResponseInputItem[] = [
-            { type: 'function_call', call_id: 'fc_1', name: 'search', arguments: '{}' } as ResponseInputItem,
-            { type: 'function_call', call_id: 'fc_2', name: 'fetch', arguments: '{}' } as ResponseInputItem,
-            { type: 'function_call', call_id: 'fc_3', name: 'process', arguments: '{}' } as ResponseInputItem,
+            { type: 'function_call', call_id: 'fc_1', name: 'search', arguments: '{}' } satisfies ResponseInputItem,
+            { type: 'function_call', call_id: 'fc_2', name: 'fetch', arguments: '{}' } satisfies ResponseInputItem,
+            { type: 'function_call', call_id: 'fc_3', name: 'process', arguments: '{}' } satisfies ResponseInputItem,
             { role: 'user', content: 'Stop!' },
         ];
 
@@ -655,9 +655,9 @@ describe('fixOrphanedToolUse - OpenAI', () => {
 
     test('handles partial outputs - only injects for missing ones', () => {
         const items: ResponseInputItem[] = [
-            { type: 'function_call', call_id: 'fc_1', name: 'search', arguments: '{}' } as ResponseInputItem,
-            { type: 'function_call', call_id: 'fc_2', name: 'fetch', arguments: '{}' } as ResponseInputItem,
-            { type: 'function_call_output', call_id: 'fc_1', output: 'Search completed' } as ResponseInputItem,
+            { type: 'function_call', call_id: 'fc_1', name: 'search', arguments: '{}' } satisfies ResponseInputItem,
+            { type: 'function_call', call_id: 'fc_2', name: 'fetch', arguments: '{}' } satisfies ResponseInputItem,
+            { type: 'function_call_output', call_id: 'fc_1', output: 'Search completed' } satisfies ResponseInputItem,
             { role: 'user', content: 'Continue' },
         ];
 
@@ -688,7 +688,7 @@ describe('fixOrphanedToolUse - OpenAI', () => {
                 call_id: 'fc_1',
                 name: 'ask_user',
                 arguments: '{"question":"What?"}',
-            } as ResponseInputItem,
+            } satisfies ResponseInputItem,
         ];
 
         const result = fixOrphanedToolUseOpenAI(items);
@@ -713,7 +713,7 @@ describe('fixOrphanedToolUse - OpenAI', () => {
                 call_id: 'fc_ask_user',
                 name: 'ask_user',
                 arguments: '{"questions":["What do you mean?"]}',
-            } as ResponseInputItem,
+            } satisfies ResponseInputItem,
             // User sends another message (agent was stopped, no function_call_output)
             { role: 'user', content: [{ type: 'input_text', text: 'launch 10 workstreams' }] },
         ];
@@ -736,11 +736,11 @@ describe('fixOrphanedToolUse - OpenAI', () => {
     test('does not inject when function_call_output exists later in the array', () => {
         const items: ResponseInputItem[] = [
             { role: 'user', content: 'Search for something' },
-            { type: 'function_call', call_id: 'fc_1', name: 'search', arguments: '{}' } as ResponseInputItem,
-            { type: 'function_call_output', call_id: 'fc_1', output: 'Results found' } as ResponseInputItem,
+            { type: 'function_call', call_id: 'fc_1', name: 'search', arguments: '{}' } satisfies ResponseInputItem,
+            { type: 'function_call_output', call_id: 'fc_1', output: 'Results found' } satisfies ResponseInputItem,
             { role: 'assistant', content: 'Found results.' },
-            { type: 'function_call', call_id: 'fc_2', name: 'analyze', arguments: '{}' } as ResponseInputItem,
-            { type: 'function_call_output', call_id: 'fc_2', output: 'Analysis complete' } as ResponseInputItem,
+            { type: 'function_call', call_id: 'fc_2', name: 'analyze', arguments: '{}' } satisfies ResponseInputItem,
+            { type: 'function_call_output', call_id: 'fc_2', output: 'Analysis complete' } satisfies ResponseInputItem,
         ];
 
         const result = fixOrphanedToolUseOpenAI(items);
@@ -757,18 +757,18 @@ describe('fixOrphanedToolResults - OpenAI', () => {
 
     test('keeps a function_call_output that has a matching function_call', () => {
         const items: ResponseInputItem[] = [
-            { type: 'function_call', call_id: 'fc_1', name: 'search', arguments: '{}' } as ResponseInputItem,
-            { type: 'function_call_output', call_id: 'fc_1', output: 'ok' } as ResponseInputItem,
+            { type: 'function_call', call_id: 'fc_1', name: 'search', arguments: '{}' } satisfies ResponseInputItem,
+            { type: 'function_call_output', call_id: 'fc_1', output: 'ok' } satisfies ResponseInputItem,
         ];
         expect(fixOrphanedToolResultsOpenAI(items)).toEqual(items);
     });
 
     test('drops a function_call_output whose call_id has no function_call', () => {
         const items: ResponseInputItem[] = [
-            { type: 'function_call', call_id: 'fc_1', name: 'search', arguments: '{}' } as ResponseInputItem,
-            { type: 'function_call_output', call_id: 'fc_1', output: 'r1' } as ResponseInputItem,
+            { type: 'function_call', call_id: 'fc_1', name: 'search', arguments: '{}' } satisfies ResponseInputItem,
+            { type: 'function_call_output', call_id: 'fc_1', output: 'r1' } satisfies ResponseInputItem,
             // Orphan: its function_call was compacted away.
-            { type: 'function_call_output', call_id: 'fc_gone', output: 'orphan' } as ResponseInputItem,
+            { type: 'function_call_output', call_id: 'fc_gone', output: 'orphan' } satisfies ResponseInputItem,
             { role: 'assistant', content: 'done' },
         ];
 
@@ -780,10 +780,10 @@ describe('fixOrphanedToolResults - OpenAI', () => {
 
     test('retains parallel outputs that all have matching calls', () => {
         const items: ResponseInputItem[] = [
-            { type: 'function_call', call_id: 'fc_1', name: 'a', arguments: '{}' } as ResponseInputItem,
-            { type: 'function_call', call_id: 'fc_2', name: 'b', arguments: '{}' } as ResponseInputItem,
-            { type: 'function_call_output', call_id: 'fc_2', output: 'r2' } as ResponseInputItem,
-            { type: 'function_call_output', call_id: 'fc_1', output: 'r1' } as ResponseInputItem,
+            { type: 'function_call', call_id: 'fc_1', name: 'a', arguments: '{}' } satisfies ResponseInputItem,
+            { type: 'function_call', call_id: 'fc_2', name: 'b', arguments: '{}' } satisfies ResponseInputItem,
+            { type: 'function_call_output', call_id: 'fc_2', output: 'r2' } satisfies ResponseInputItem,
+            { type: 'function_call_output', call_id: 'fc_1', output: 'r1' } satisfies ResponseInputItem,
         ];
         expect(fixOrphanedToolResultsOpenAI(items)).toEqual(items);
     });
