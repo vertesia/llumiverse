@@ -126,14 +126,14 @@ function getProminentPeopleOption(
     }
 }
 
-function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentPrompt): GenerateContentParameters {
+export function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentPrompt): GenerateContentParameters {
     const model_options = options.model_options as VertexAIGeminiOptions | undefined;
     const tools = getToolDefinitions(options.tools);
 
     // When no tools are provided but conversation contains functionCall/functionResponse parts
     // (e.g. checkpoint summary calls), convert them to text to avoid API errors.
     // Use a local variable to avoid mutating the caller's conversation object.
-    let payloadContents = prompt.contents;
+    let payloadContents = mergeConsecutiveRole(prompt.contents);
     if (!tools && payloadContents) {
         const hasToolParts = payloadContents.some((c) => c.parts?.some((p) => p.functionCall || p.functionResponse));
         if (hasToolParts) {

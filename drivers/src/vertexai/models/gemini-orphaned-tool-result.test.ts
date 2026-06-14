@@ -9,8 +9,23 @@
  */
 
 import type { Content } from '@google/genai';
+import type { ExecutionOptions } from '@llumiverse/core';
 import { describe, expect, test } from 'vitest';
-import { fixOrphanedToolResults } from './gemini.js';
+import { fixOrphanedToolResults, getGeminiPayload } from './gemini.js';
+
+const OPTIONS_WITH_TOOLS = {
+    model: 'gemini-2.5-flash',
+    tools: [
+        { name: 'a', description: '', input_schema: { type: 'object', properties: {} } },
+        { name: 'b', description: '', input_schema: { type: 'object', properties: {} } },
+    ],
+} as unknown as ExecutionOptions;
+
+function functionResponseNames(contents: Content[]): string[] {
+    return contents.flatMap((content) =>
+        (content.parts ?? []).flatMap((part) => (part.functionResponse?.name ? [part.functionResponse.name] : [])),
+    );
+}
 
 describe('fixOrphanedToolResults - Gemini', () => {
     test('returns empty array for empty input', () => {
@@ -82,5 +97,22 @@ describe('fixOrphanedToolResults - Gemini', () => {
         const result = fixOrphanedToolResults(contents);
         expect(result[1].parts).toHaveLength(1);
         expect(result[1].parts?.[0].text).toBe('continue please');
+    });
+});
+
+describe('getGeminiPayload - orphaned tool results', () => {
+    test('retains split parallel functionResponses by merging consecutive user contents before cleanup', () => {
+        const contents: Content[] = [
+            {
+                role: 'model',
+                parts: [{ functionCall: { name: 'a', args: {} } }, { functionCall: { name: 'b', args: {} } }],
+            },
+            { role: 'user', parts: [{ functionResponse: { name: 'a', response: { ok: true } } }] },
+            { role: 'user', parts: [{ functionResponse: { name: 'b', response: { ok: true } } }] },
+        ];
+
+        const payload = getGeminiPayload(OPTIONS_WITH_TOOLS, { contents });
+
+        expect(functionResponseNames(payload.contents as Content[])).toEqual(['a', 'b']);
     });
 });
