@@ -140,6 +140,11 @@ function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentProm
             payloadContents = convertGeminiFunctionPartsToText(payloadContents);
         }
     }
+    // Drop functionResponse parts whose functionCall was lost (e.g. compaction),
+    // which would otherwise trip Gemini's functionCall/functionResponse pairing.
+    if (payloadContents) {
+        payloadContents = fixOrphanedToolResults(payloadContents);
+    }
 
     const useStructuredOutput = supportsStructuredOutput(options) && !tools;
 
@@ -275,6 +280,49 @@ export function mergeConsecutiveRole(contents: Content[] | undefined): Content[]
     }
 
     result.push(currentContent);
+    return result;
+}
+
+/**
+ * Drop functionResponse parts whose name has no matching functionCall in the
+ * immediately-preceding `model` content. Gemini pairs a functionResponse to its
+ * functionCall by name; a response left dangling after its call was dropped
+ * (e.g. by conversation compaction/trimming, or an unmergeable parallel batch)
+ * causes the API to reject the request. Mirrors the same guard added to the
+ * Claude, Bedrock, and OpenAI drivers.
+ *
+ * Run after mergeConsecutiveRole so parallel responses that were split across
+ * user contents are first recombined under the model turn that issued the calls,
+ * and are therefore not mistaken for orphans.
+ */
+export function fixOrphanedToolResults(contents: Content[]): Content[] {
+    if (contents.length === 0) return contents;
+    const result: Content[] = [];
+    for (let i = 0; i < contents.length; i++) {
+        const content = contents[i];
+        if (content.role !== 'user' || !content.parts) {
+            result.push(content);
+            continue;
+        }
+        const hasFunctionResponse = content.parts.some((part) => part.functionResponse);
+        if (!hasFunctionResponse) {
+            result.push(content);
+            continue;
+        }
+        const prev = contents[i - 1];
+        const allowedNames = new Set<string>();
+        if (prev && prev.role === 'model' && prev.parts) {
+            for (const part of prev.parts) {
+                if (part.functionCall?.name) allowedNames.add(part.functionCall.name);
+            }
+        }
+        const filtered = content.parts.filter((part) =>
+            part.functionResponse ? allowedNames.has(part.functionResponse.name ?? '') : true,
+        );
+        // Drop the content if every part was an orphaned functionResponse.
+        if (filtered.length === 0) continue;
+        result.push(filtered.length === content.parts.length ? content : { ...content, parts: filtered });
+    }
     return result;
 }
 
