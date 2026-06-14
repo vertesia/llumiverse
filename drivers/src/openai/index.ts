@@ -169,7 +169,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
 
         // Include conversation history (same as non-streaming)
         // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
-        let conversation = fixOrphanedToolUse(updateConversation(options.conversation, prompt));
+        let conversation = fixOrphanedToolResults(fixOrphanedToolUse(updateConversation(options.conversation, prompt)));
 
         const toolDefs = getToolDefinitions(options.tools);
         const useTools: boolean = toolDefs ? supportsToolUse(options.model, this.provider, true) : false;
@@ -243,7 +243,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
         const useTools: boolean = toolDefs ? supportsToolUse(options.model, this.provider) : false;
 
         // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
-        let conversation = fixOrphanedToolUse(updateConversation(options.conversation, prompt));
+        let conversation = fixOrphanedToolResults(fixOrphanedToolUse(updateConversation(options.conversation, prompt)));
 
         // When no tools are provided but conversation contains function_call/function_call_output
         // items (e.g. checkpoint summary calls), convert them to text to avoid API errors
@@ -1384,6 +1384,30 @@ export function fixOrphanedToolUse(items: ResponseInputItem[]): ResponseInputIte
     }
 
     return result;
+}
+
+/**
+ * Drop function_call_output items whose call_id has no matching function_call
+ * item anywhere in the input. Mirror of {@link fixOrphanedToolUse}: that
+ * synthesizes outputs for calls left unanswered (e.g. a cancelled run); this
+ * removes outputs left dangling after their function_call was dropped (e.g. by
+ * conversation compaction/trimming). The OpenAI Responses API requires every
+ * function_call_output to reference a prior function_call's call_id.
+ */
+export function fixOrphanedToolResults(items: ResponseInputItem[]): ResponseInputItem[] {
+    if (items.length === 0) return items;
+    const callIds = new Set<string>();
+    for (const item of items) {
+        if ('type' in item && item.type === 'function_call') {
+            callIds.add((item as OpenAI.Responses.ResponseFunctionToolCall).call_id);
+        }
+    }
+    return items.filter((item) => {
+        if ('type' in item && item.type === 'function_call_output') {
+            return callIds.has((item as OpenAI.Responses.ResponseInputItem.FunctionCallOutput).call_id);
+        }
+        return true;
+    });
 }
 
 function safeJsonParse(value: unknown): unknown {

@@ -16,8 +16,14 @@ import type { MessageParam } from '@anthropic-ai/sdk/resources/index.js';
 import type { Message } from '@aws-sdk/client-bedrock-runtime';
 import type OpenAI from 'openai';
 import { describe, expect, test } from 'vitest';
-import { fixOrphanedToolUse as fixOrphanedToolUseBedrock } from '../src/bedrock/index.js';
-import { fixOrphanedToolUse as fixOrphanedToolUseOpenAI } from '../src/openai/index.js';
+import {
+    fixOrphanedToolResults as fixOrphanedToolResultsBedrock,
+    fixOrphanedToolUse as fixOrphanedToolUseBedrock,
+} from '../src/bedrock/index.js';
+import {
+    fixOrphanedToolResults as fixOrphanedToolResultsOpenAI,
+    fixOrphanedToolUse as fixOrphanedToolUseOpenAI,
+} from '../src/openai/index.js';
 import {
     fixOrphanedToolResults,
     fixOrphanedToolUse as fixOrphanedToolUseClaude,
@@ -491,6 +497,71 @@ describe('fixOrphanedToolUse - Bedrock', () => {
     });
 });
 
+describe('fixOrphanedToolResults - Bedrock', () => {
+    test('returns empty array for empty input', () => {
+        expect(fixOrphanedToolResultsBedrock([])).toEqual([]);
+    });
+
+    test('keeps a toolResult that has a matching toolUse in the previous message', () => {
+        const messages: Message[] = [
+            { role: 'assistant', content: [{ toolUse: { toolUseId: 'tool_1', name: 'search', input: {} } }] },
+            { role: 'user', content: [{ toolResult: { toolUseId: 'tool_1', content: [{ text: 'ok' }] } }] },
+        ];
+        expect(fixOrphanedToolResultsBedrock(messages)).toEqual(messages);
+    });
+
+    test('drops a toolResult whose toolUse is absent from the previous message', () => {
+        const messages: Message[] = [
+            { role: 'assistant', content: [{ toolUse: { toolUseId: 'tool_1', name: 'search', input: {} } }] },
+            {
+                role: 'user',
+                content: [
+                    { toolResult: { toolUseId: 'tool_1', content: [{ text: 'r1' }] } },
+                    { toolResult: { toolUseId: 'tool_2', content: [{ text: 'orphan' }] } },
+                ],
+            },
+        ];
+
+        const result = fixOrphanedToolResultsBedrock(messages);
+        // biome-ignore lint/style/noNonNullAssertion: content is set above
+        const userContent = result[1].content!;
+        expect(userContent).toHaveLength(1);
+        expect(userContent[0].toolResult?.toolUseId).toBe('tool_1');
+    });
+
+    test('drops a user message that becomes empty after removing orphaned toolResults', () => {
+        // Compaction left a toolResult whose assistant toolUse turn was summarized away.
+        const messages: Message[] = [
+            { role: 'user', content: [{ text: '[summary of prior work]' }] },
+            { role: 'user', content: [{ toolResult: { toolUseId: 'gone', content: [{ text: 'orphan' }] } }] },
+        ];
+
+        const result = fixOrphanedToolResultsBedrock(messages);
+        expect(result).toHaveLength(1);
+        // biome-ignore lint/style/noNonNullAssertion: content is set above
+        expect(result[0].content![0].text).toBe('[summary of prior work]');
+    });
+
+    test('preserves non-toolResult blocks while dropping the orphan', () => {
+        const messages: Message[] = [
+            { role: 'assistant', content: [{ text: 'thinking' }] },
+            {
+                role: 'user',
+                content: [
+                    { toolResult: { toolUseId: 'orphan', content: [{ text: 'x' }] } },
+                    { text: 'continue please' },
+                ],
+            },
+        ];
+
+        const result = fixOrphanedToolResultsBedrock(messages);
+        // biome-ignore lint/style/noNonNullAssertion: content is set above
+        const userContent = result[1].content!;
+        expect(userContent).toHaveLength(1);
+        expect(userContent[0].text).toBe('continue please');
+    });
+});
+
 describe('fixOrphanedToolUse - OpenAI', () => {
     test('returns empty array for empty input', () => {
         const result = fixOrphanedToolUseOpenAI([]);
@@ -676,5 +747,52 @@ describe('fixOrphanedToolUse - OpenAI', () => {
 
         // No changes - all function_calls have matching outputs
         expect(result).toEqual(items);
+    });
+});
+
+describe('fixOrphanedToolResults - OpenAI', () => {
+    test('returns empty array for empty input', () => {
+        expect(fixOrphanedToolResultsOpenAI([])).toEqual([]);
+    });
+
+    test('keeps a function_call_output that has a matching function_call', () => {
+        const items: ResponseInputItem[] = [
+            { type: 'function_call', call_id: 'fc_1', name: 'search', arguments: '{}' } as ResponseInputItem,
+            { type: 'function_call_output', call_id: 'fc_1', output: 'ok' } as ResponseInputItem,
+        ];
+        expect(fixOrphanedToolResultsOpenAI(items)).toEqual(items);
+    });
+
+    test('drops a function_call_output whose call_id has no function_call', () => {
+        const items: ResponseInputItem[] = [
+            { type: 'function_call', call_id: 'fc_1', name: 'search', arguments: '{}' } as ResponseInputItem,
+            { type: 'function_call_output', call_id: 'fc_1', output: 'r1' } as ResponseInputItem,
+            // Orphan: its function_call was compacted away.
+            { type: 'function_call_output', call_id: 'fc_gone', output: 'orphan' } as ResponseInputItem,
+            { role: 'assistant', content: 'done' },
+        ];
+
+        const result = fixOrphanedToolResultsOpenAI(items);
+        expect(result).toHaveLength(3);
+        expect(result.some((i) => 'call_id' in i && i.call_id === 'fc_gone')).toBe(false);
+        expect(result.some((i) => 'call_id' in i && i.call_id === 'fc_1')).toBe(true);
+    });
+
+    test('retains parallel outputs that all have matching calls', () => {
+        const items: ResponseInputItem[] = [
+            { type: 'function_call', call_id: 'fc_1', name: 'a', arguments: '{}' } as ResponseInputItem,
+            { type: 'function_call', call_id: 'fc_2', name: 'b', arguments: '{}' } as ResponseInputItem,
+            { type: 'function_call_output', call_id: 'fc_2', output: 'r2' } as ResponseInputItem,
+            { type: 'function_call_output', call_id: 'fc_1', output: 'r1' } as ResponseInputItem,
+        ];
+        expect(fixOrphanedToolResultsOpenAI(items)).toEqual(items);
+    });
+
+    test('leaves non-function items untouched', () => {
+        const items: ResponseInputItem[] = [
+            { role: 'user', content: 'hello' },
+            { role: 'assistant', content: 'hi' },
+        ];
+        expect(fixOrphanedToolResultsOpenAI(items)).toEqual(items);
     });
 });

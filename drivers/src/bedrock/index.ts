@@ -1920,8 +1920,11 @@ function updateConversation(conversation: ConverseRequest, prompt: ConverseReque
     const combinedMessages = [...(conversation?.messages || []), ...(prompt.messages || [])];
     const combinedSystem = prompt.system || conversation?.system;
 
-    // Fix orphaned toolUse blocks before returning
-    const fixedMessages = fixOrphanedToolUse(combinedMessages);
+    // Fix both orphan directions before returning: a toolUse with no result
+    // (interrupted run) gets a synthetic result; a toolResult with no matching
+    // toolUse in the previous message (e.g. compaction-trimmed) is dropped. Either
+    // would otherwise trip the Converse API's toolUse/toolResult pairing check.
+    const fixedMessages = fixOrphanedToolResults(fixOrphanedToolUse(combinedMessages));
 
     return {
         modelId: prompt?.modelId || conversation?.modelId,
@@ -2048,6 +2051,50 @@ export function fixOrphanedToolUse(messages: Message[]): Message[] {
         }
     }
 
+    return result;
+}
+
+/**
+ * Drop toolResult blocks whose toolUseId has no matching toolUse in the
+ * immediately-preceding assistant message. Mirror of {@link fixOrphanedToolUse}:
+ * that function synthesizes results for an unanswered toolUse (e.g. a cancelled
+ * run); this one removes results left dangling after their toolUse was dropped
+ * (e.g. by conversation compaction/trimming).
+ *
+ * Without this, the AWS Converse API rejects the request because every
+ * toolResult must correspond to a toolUse in the previous message. Bedrock
+ * conversations are already role-alternating, so a compaction that drops an
+ * assistant toolUse turn leaves an orphaned toolResult (and a user/user
+ * adjacency); dropping the orphan — and the now-empty message — repairs both.
+ */
+export function fixOrphanedToolResults(messages: Message[]): Message[] {
+    if (messages.length === 0) return messages;
+    const result: Message[] = [];
+    for (let i = 0; i < messages.length; i++) {
+        const message = messages[i];
+        if (message.role !== 'user' || !message.content) {
+            result.push(message);
+            continue;
+        }
+        const hasToolResult = message.content.some((block) => block.toolResult);
+        if (!hasToolResult) {
+            result.push(message);
+            continue;
+        }
+        const prev = messages[i - 1];
+        const allowedIds = new Set<string>();
+        if (prev && prev.role === 'assistant' && prev.content) {
+            for (const block of prev.content) {
+                if (block.toolUse?.toolUseId) allowedIds.add(block.toolUse.toolUseId);
+            }
+        }
+        const filtered = message.content.filter((block) =>
+            block.toolResult ? allowedIds.has(block.toolResult.toolUseId ?? '') : true,
+        );
+        // Drop the message if every block was an orphaned toolResult.
+        if (filtered.length === 0) continue;
+        result.push(filtered.length === message.content.length ? message : { ...message, content: filtered });
+    }
     return result;
 }
 
