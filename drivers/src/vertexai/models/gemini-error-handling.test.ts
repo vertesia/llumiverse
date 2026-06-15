@@ -102,6 +102,15 @@ describe('GeminiModelDefinition Error Handling', () => {
             expect(error.retryable).toBe(true);
         });
 
+        it('should mark a client-closed/cancelled request (499) as retryable despite the 4xx status', () => {
+            const error = modelDef.formatLlumiverseError(
+                driver,
+                { status: 499, message: 'Client Closed Request: The operation was cancelled.' },
+                { provider: 'vertexai', model: 'gemini-2.0-flash', operation: 'execute' },
+            );
+            expect(error.retryable).toBe(true);
+        });
+
         it('should mark DEADLINE_EXCEEDED as retryable even under a 4xx status', () => {
             const error = modelDef.formatLlumiverseError(
                 driver,
@@ -343,7 +352,7 @@ describe('GeminiModelDefinition Error Handling', () => {
 
     describe('isGeminiErrorRetryable', () => {
         it('should classify retryable status codes correctly', () => {
-            const retryableStatusCodes = [408, 429, 500, 502, 503, 504];
+            const retryableStatusCodes = [408, 429, 499, 500, 502, 503, 504];
 
             retryableStatusCodes.forEach((statusCode) => {
                 const result = exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(statusCode);
@@ -369,7 +378,6 @@ describe('GeminiModelDefinition Error Handling', () => {
         it('should classify other 4xx errors as non-retryable', () => {
             expect(exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(402)).toBe(false);
             expect(exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(405)).toBe(false);
-            expect(exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(499)).toBe(false);
         });
 
         it('should treat 400 URL_REJECTED-REJECTED_CLIENT_THROTTLED as retryable', () => {
