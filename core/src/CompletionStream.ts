@@ -25,7 +25,7 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
         this.completion = undefined;
         this.chunks = 0;
         const accumulatedResults: any[] = []; // Accumulate CompletionResult[] from chunks
-        const accumulatedToolUse: Map<string, ToolUse> = new Map(); // Accumulate tool_use by id
+        const accumulatedToolUse: Map<string, ToolUse<unknown>> = new Map(); // Accumulate tool_use by id
 
         this.driver.logger.debug(
             `[${this.driver.provider}] Streaming Execution of ${this.options.model} with prompt`,

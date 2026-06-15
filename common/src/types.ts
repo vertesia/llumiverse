@@ -346,8 +346,10 @@ export interface CompletionChunkObject {
     /**
      * Tool calls returned by the model during streaming.
      * Each chunk may contain partial tool call information that needs to be aggregated.
+     * Typed with `unknown` params because streamed chunks carry partial (often string)
+     * tool_input that is only parsed into a JSONObject once fully accumulated.
      */
-    tool_use?: ToolUse[];
+    tool_use?: ToolUse<unknown>[];
 }
 
 /**
@@ -389,7 +391,7 @@ export interface Completion {
     /**
      * Contains the tools from which the model awaits information.
      */
-    tool_use?: ToolUse[];
+    tool_use?: ToolUse<unknown>[];
     /**
      * The finish reason as reported by the model: stop | length or other model specific values
      */
