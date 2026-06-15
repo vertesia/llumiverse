@@ -33,6 +33,9 @@
       "async": [
         "./lib/types/async.d.ts"
       ],
+      "driver": [
+        "./lib/types/Driver.d.ts"
+      ],
       "formatters": [
         "./lib/types/formatters/index.d.ts"
       ]
@@ -48,6 +51,11 @@
       "types": "./lib/types/async.d.ts",
       "import": "./lib/esm/async.js",
       "require": "./lib/cjs/async.js"
+    },
+    "./driver": {
+      "types": "./lib/types/Driver.d.ts",
+      "import": "./lib/esm/Driver.js",
+      "require": "./lib/cjs/Driver.js"
     },
     "./formatters": {
       "types": "./lib/types/formatters/index.d.ts",
@@ -86,6 +94,7 @@
     "outDir": "lib",
     "exports": {
       "async": "async.js",
+      "driver": "Driver.js",
       "formatters": "formatters/index.js"
     }
   }

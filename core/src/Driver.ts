@@ -220,6 +220,15 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         return false;
     }
 
+    /**
+     * Return the fetch implementation that driver SDK clients should use.
+     * The default simply returns the global fetch. Drivers may override this
+     * to inject custom networking (e.g. proxies, agents).
+     */
+    protected getDriverFetch(): typeof fetch {
+        return fetch;
+    }
+
     // by default no stream is supported. we block and we return all at once
     async stream(segments: PromptSegment[], options: ExecutionOptions): Promise<CompletionStream<PromptT>> {
         this.logger.debug(options, `Executing prompt with provider ${this.provider} with options: ${JSON.stringify(options)}`);
