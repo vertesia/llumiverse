@@ -15,8 +15,8 @@ minimumReleaseAgeExclude:
   - '@vertesia/*'
   - '@llumiverse/*'
   - '@google-cloud/aiplatform@6.8.1'
-  # Renovate security update: esbuild@<=0.24.2@0.28.1
-  - esbuild@<=0.24.2@0.28.1
+  # Renovate security update: esbuild@0.28.1
+  - esbuild@0.28.1
 overrides:
   openai: '^6.42.0'
   rollup: '^4.61.0'
