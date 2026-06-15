@@ -13,6 +13,58 @@
         ".": {
             "types": "./lib/index.d.ts",
             "default": "./lib/index.js"
+        },
+        "./openai": {
+            "types": "./lib/openai/drivers.d.ts",
+            "default": "./lib/openai/drivers.js"
+        },
+        "./azure": {
+            "types": "./lib/azure/azure_foundry.d.ts",
+            "default": "./lib/azure/azure_foundry.js"
+        },
+        "./anthropic": {
+            "types": "./lib/anthropic/index.d.ts",
+            "default": "./lib/anthropic/index.js"
+        },
+        "./bedrock": {
+            "types": "./lib/bedrock/index.d.ts",
+            "default": "./lib/bedrock/index.js"
+        },
+        "./vertexai": {
+            "types": "./lib/vertexai/index.d.ts",
+            "default": "./lib/vertexai/index.js"
+        },
+        "./groq": {
+            "types": "./lib/groq/index.d.ts",
+            "default": "./lib/groq/index.js"
+        },
+        "./mistral": {
+            "types": "./lib/mistral/index.d.ts",
+            "default": "./lib/mistral/index.js"
+        },
+        "./watsonx": {
+            "types": "./lib/watsonx/index.d.ts",
+            "default": "./lib/watsonx/index.js"
+        },
+        "./togetherai": {
+            "types": "./lib/togetherai/index.d.ts",
+            "default": "./lib/togetherai/index.js"
+        },
+        "./xai": {
+            "types": "./lib/xai/index.d.ts",
+            "default": "./lib/xai/index.js"
+        },
+        "./replicate": {
+            "types": "./lib/replicate.d.ts",
+            "default": "./lib/replicate.js"
+        },
+        "./huggingface": {
+            "types": "./lib/huggingface_ie.d.ts",
+            "default": "./lib/huggingface_ie.js"
+        },
+        "./test-driver": {
+            "types": "./lib/test-driver/index.d.ts",
+            "default": "./lib/test-driver/index.js"
         }
     },
     "scripts": {
