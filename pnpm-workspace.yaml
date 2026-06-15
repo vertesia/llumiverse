@@ -17,6 +17,7 @@ minimumReleaseAgeExclude:
 patchedDependencies:
   'ts-dual-module@0.6.3': patches/ts-dual-module@0.6.3.patch
 overrides:
+  openai: '^6.42.0'
   rollup: '^4.59.0'
   cross-spawn: '$cross-spawn'
   'brace-expansion@>=2.0.0 <3.0.0': '^2.0.2'

@@ -5,6 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
+  openai: ^6.42.0
   rollup: ^4.59.0
   cross-spawn: ^7.0.6
   brace-expansion@>=2.0.0 <3.0.0: ^2.0.2
@@ -138,11 +139,11 @@ importers:
         specifier: ^3.973.8
         version: 3.973.8
       '@azure-rest/ai-inference':
-        specifier: 1.0.0-beta.6
+        specifier: ^1.0.0-beta.6
         version: 1.0.0-beta.6
       '@azure/ai-projects':
-        specifier: 1.0.0-beta.10
-        version: 1.0.0-beta.10(ws@8.18.2)
+        specifier: ^2.2.0
+        version: 2.2.0(ws@8.18.2)
       '@azure/core-auth':
         specifier: ^1.10.1
         version: 1.10.1
@@ -150,10 +151,10 @@ importers:
         specifier: ^2.3.0
         version: 2.3.0
       '@azure/identity':
-        specifier: ^4.13.0
-        version: 4.13.0
+        specifier: ^4.13.1
+        version: 4.13.1
       '@azure/openai':
-        specifier: 2.0.0
+        specifier: ^2.0.0
         version: 2.0.0
       '@google-cloud/aiplatform':
         specifier: ^6.8.1
@@ -189,8 +190,8 @@ importers:
         specifier: ^0.2.1
         version: 0.2.1
       openai:
-        specifier: ^6.33.0
-        version: 6.33.0(ws@8.18.2)
+        specifier: ^6.42.0
+        version: 6.42.0(ws@8.18.2)
       replicate:
         specifier: ^1.4.0
         version: 1.4.0
@@ -457,12 +458,8 @@ packages:
     resolution: {integrity: sha512-nBrLsEWm4J2u5LpAPjxADTlq3trDgVZZXHNKabeXZtpq3d3AbN/KGO82R87rdDz5/lYB024rtEf10/q0urNgsA==}
     engines: {node: '>=18.0.0'}
 
-  '@azure/ai-agents@1.0.0':
-    resolution: {integrity: sha512-8/MZ/Ls7kv2NmwQ0wGzSaFbMST24Apcoorjs9ndGL6uJQ/KGaGCY4haNKzts1wv2oGSI+gBdjbYb0Q+P702pow==}
-    engines: {node: '>=20.0.0'}
-
-  '@azure/ai-projects@1.0.0-beta.10':
-    resolution: {integrity: sha512-y46Ewm7Y0FECWDij05nWmYBtFuX+3+k7A6MEBti7XClX/4KPM2AJMhxWPQAlnrXQMLjKnfPGRymgqTCKMyE3QQ==}
+  '@azure/ai-projects@2.2.0':
+    resolution: {integrity: sha512-pxdEYMK8DI8BxaFhroqoT+1wwHmELn0v+fEWQanQNG2wNI9LdWTrUSChNcUY0l8T8D5Gjxf/irSEEaWCvqHwQQ==}
     engines: {node: '>=20.0.0'}
 
   '@azure/core-auth@1.10.1':
@@ -509,29 +506,25 @@ packages:
     resolution: {integrity: sha512-gT4H8mTaSXRz7eGTuQyq1aIJnJqeXzpOe9Ay7Z3FrCouer14CbV3VzjnJrNrQfbBpGBLO9oy8BmrY75A0p53cA==}
     engines: {node: '>=18.0.0'}
 
-  '@azure/identity@4.13.0':
-    resolution: {integrity: sha512-uWC0fssc+hs1TGGVkkghiaFkkS7NkTxfnCH+Hdg+yTehTpMcehpok4PgUKKdyCH+9ldu6FhiHRv84Ntqj1vVcw==}
+  '@azure/identity@4.13.1':
+    resolution: {integrity: sha512-5C/2WD5Vb1lHnZS16dNQRPMjN6oV/Upba+C9nBIs15PmOi6A3ZGs4Lr2u60zw4S04gi+u3cEXiqTVP7M4Pz3kw==}
     engines: {node: '>=20.0.0'}
 
   '@azure/logger@1.1.4':
     resolution: {integrity: sha512-4IXXzcCdLdlXuCG+8UKEwLA1T1NHqUfanhXYHiQTn+6sfWCZXduqbtXDGceg3Ce5QxTGo7EqmbV6Bi+aqKuClQ==}
     engines: {node: '>=18.0.0'}
 
-  '@azure/msal-browser@4.8.0':
-    resolution: {integrity: sha512-z7kJlMW3IAETyq82LDKJqr++IeOvU728q9lkuTFjEIPUWxnB1OlmuPCF32fYurxOnOnJeFEZxjbEzq8xyP0aag==}
+  '@azure/msal-browser@5.13.0':
+    resolution: {integrity: sha512-Ea23x0U8XNFY+qJ9T44zO2BbY+AHdb+WdjmYnx36OhJ/KO+PGU5pmsNHf1DCElYX+6wyVRJz1HFeCPC/cHbRug==}
     engines: {node: '>=0.8.0'}
 
-  '@azure/msal-common@15.3.0':
-    resolution: {integrity: sha512-lh+eZfibGwtQxFnx+mj6cYWn0pwA8tDnn8CBs9P21nC7Uw5YWRwfXaXdVQSMENZ5ojRqR+NzRaucEo4qUvs3pA==}
+  '@azure/msal-common@16.8.0':
+    resolution: {integrity: sha512-5S4RHOcInL2Nu2U217tDZbWGI6StMfcWCrA7TWvWdJmXQ+cYrrIqr84AsN62fGh2MDBysiBJPt6CfWceJfloEA==}
     engines: {node: '>=0.8.0'}
 
-  '@azure/msal-common@15.6.0':
-    resolution: {integrity: sha512-EotmBz42apYGjqiIV9rDUdptaMptpTn4TdGf3JfjLvFvinSe9BJ6ywU92K9ky+t/b0ghbeTSe9RfqlgLh8f2jA==}
-    engines: {node: '>=0.8.0'}
-
-  '@azure/msal-node@3.5.3':
-    resolution: {integrity: sha512-c5mifzHX5mwm5JqMIlURUyp6LEEdKF1a8lmcNRLBo0lD7zpSYPHupa4jHyhJyg9ccLwszLguZJdk2h3ngnXwNw==}
-    engines: {node: '>=16'}
+  '@azure/msal-node@5.2.4':
+    resolution: {integrity: sha512-rpBUg9dA8UpC2WiFt3KeDKVQmmmVrfxdRnW+F1ebgou/jX/0tAvYuonaq5RUo8OaqzOrj4x/HaI8DmY56RXZ2Q==}
+    engines: {node: '>=20'}
 
   '@azure/openai@2.0.0':
     resolution: {integrity: sha512-zSNhwarYbqg3P048uKMjEjbge41OnAgmiiE1elCHVsuCCXRyz2BXnHMJkW6WR6ZKQy5NHswJNUNSWsuqancqFA==}
@@ -1811,21 +1804,8 @@ packages:
     resolution: {integrity: sha512-mnkeQ1qP5Ue2wd+aivTD3NHd/lZ96Lu0jgf0pwktLPtx6cTZiH7tyeGRRHs0zX0rbrahXPnXlUnbeXyaBBuIaw==}
     engines: {node: '>=18'}
 
-  openai@4.104.0:
-    resolution: {integrity: sha512-p99EFNsA/yX6UhVO93f5kJsDRLAg+CTA2RBqdHK4RtK8u5IJw32Hyb2dTGKbnnFmnuoBv5r7Z2CURI9sGZpSuA==}
-    hasBin: true
-    peerDependencies:
-      ws: ^8.18.0
-      zod: ^3.23.8
-    peerDependenciesMeta:
-      ws:
-        optional: true
-      zod:
-        optional: true
-
-  openai@6.33.0:
-    resolution: {integrity: sha512-xAYN1W3YsDXJWA5F277135YfkEk6H7D3D6vWwRhJ3OEkzRgcyK8z/P5P9Gyi/wB4N8kK9kM5ZjprfvyHagKmpw==}
-    hasBin: true
+  openai@6.42.0:
+    resolution: {integrity: sha512-1WFEt/uXMXOLhYRNkgJWo08Y2YNvNwpVU72K7ibrWgWpNOXd4VojXLbe6SQ4bLiUQ3Y8jz4IiyVkylJCL1DtZg==}
     peerDependencies:
       ws: ^8.18.0
       zod: ^3.25 || ^4.0
@@ -2041,11 +2021,6 @@ packages:
 
   util-deprecate@1.0.2:
     resolution: {integrity: sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw==}
-
-  uuid@8.3.2:
-    resolution: {integrity: sha512-+NYs2QeMWy+GWFOEm9xnn6HCDp0l7QBD7ml8zLUmJ+93Q5NF0NocErnwkTkXVFNiX3/fpC6afS8Dhb/gz7R7eg==}
-    deprecated: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
-    hasBin: true
 
   vite@6.4.2:
     resolution: {integrity: sha512-2N/55r4JDJ4gdrCvGgINMy+HH3iRpNIz8K6SFwVsA+JbQScLiC+clmAxBgwiSPgcG9U15QmvqCGWzMbqda5zGQ==}
@@ -2903,7 +2878,7 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@azure/ai-agents@1.0.0':
+  '@azure/ai-projects@2.2.0(ws@8.18.2)':
     dependencies:
       '@azure-rest/core-client': 2.3.4
       '@azure/abort-controller': 2.1.2
@@ -2914,30 +2889,12 @@ snapshots:
       '@azure/core-sse': 2.3.0
       '@azure/core-tracing': 1.2.0
       '@azure/core-util': 1.13.1
-      '@azure/logger': 1.1.4
-      tslib: 2.8.1
-    transitivePeerDependencies:
-      - supports-color
-
-  '@azure/ai-projects@1.0.0-beta.10(ws@8.18.2)':
-    dependencies:
-      '@azure-rest/ai-inference': 1.0.0-beta.6
-      '@azure-rest/core-client': 2.3.4
-      '@azure/abort-controller': 2.1.2
-      '@azure/ai-agents': 1.0.0
-      '@azure/core-auth': 1.10.1
-      '@azure/core-lro': 3.2.0
-      '@azure/core-paging': 1.6.2
-      '@azure/core-rest-pipeline': 1.21.0
-      '@azure/core-sse': 2.3.0
-      '@azure/core-tracing': 1.2.0
-      '@azure/core-util': 1.13.1
+      '@azure/identity': 4.13.1
       '@azure/logger': 1.1.4
       '@azure/storage-blob': 12.27.0
-      openai: 4.104.0(ws@8.18.2)
+      openai: 6.42.0(ws@8.18.2)
       tslib: 2.8.1
     transitivePeerDependencies:
-      - encoding
       - supports-color
       - ws
       - zod
@@ -3025,7 +2982,7 @@ snapshots:
       fast-xml-parser: 5.7.3
       tslib: 2.8.1
 
-  '@azure/identity@4.13.0':
+  '@azure/identity@4.13.1':
     dependencies:
       '@azure/abort-controller': 2.1.2
       '@azure/core-auth': 1.10.1
@@ -3034,8 +2991,8 @@ snapshots:
       '@azure/core-tracing': 1.2.0
       '@azure/core-util': 1.13.1
       '@azure/logger': 1.1.4
-      '@azure/msal-browser': 4.8.0
-      '@azure/msal-node': 3.5.3
+      '@azure/msal-browser': 5.13.0
+      '@azure/msal-node': 5.2.4
       open: 10.1.0
       tslib: 2.8.1
     transitivePeerDependencies:
@@ -3045,19 +3002,16 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@azure/msal-browser@4.8.0':
+  '@azure/msal-browser@5.13.0':
     dependencies:
-      '@azure/msal-common': 15.3.0
+      '@azure/msal-common': 16.8.0
 
-  '@azure/msal-common@15.3.0': {}
+  '@azure/msal-common@16.8.0': {}
 
-  '@azure/msal-common@15.6.0': {}
-
-  '@azure/msal-node@3.5.3':
+  '@azure/msal-node@5.2.4':
     dependencies:
-      '@azure/msal-common': 15.6.0
+      '@azure/msal-common': 16.8.0
       jsonwebtoken: 9.0.2
-      uuid: 8.3.2
 
   '@azure/openai@2.0.0':
     dependencies:
@@ -4364,21 +4318,7 @@ snapshots:
       is-inside-container: 1.0.0
       is-wsl: 3.1.0
 
-  openai@4.104.0(ws@8.18.2):
-    dependencies:
-      '@types/node': 18.19.86
-      '@types/node-fetch': 2.6.12
-      abort-controller: 3.0.0
-      agentkeepalive: 4.6.0
-      form-data-encoder: 1.7.2
-      formdata-node: 4.4.1
-      node-fetch: 2.7.0
-    optionalDependencies:
-      ws: 8.18.2
-    transitivePeerDependencies:
-      - encoding
-
-  openai@6.33.0(ws@8.18.2):
+  openai@6.42.0(ws@8.18.2):
     optionalDependencies:
       ws: 8.18.2
 
@@ -4608,8 +4548,6 @@ snapshots:
   undici-types@7.16.0: {}
 
   util-deprecate@1.0.2: {}
-
-  uuid@8.3.2: {}
 
   vite@6.4.2(@types/node@24.12.2):
     dependencies:
