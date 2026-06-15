@@ -940,6 +940,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
      *
      * Retryable errors (per Google AIP-194):
      * - 408 (REQUEST_TIMEOUT): Request timeout
+     * - 499 (CANCELLED / Client Closed Request): Transport cancellation
      * - 429 (RESOURCE_EXHAUSTED): Rate limit exceeded, quota exhausted
      * - 500 (INTERNAL): Internal server error
      * - 502 (BAD_GATEWAY): Bad gateway
@@ -970,6 +971,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         // Retryable status codes
         if (httpStatusCode === 408) return true; // Request timeout
         if (httpStatusCode === 429) return true; // Rate limit/quota
+        if (httpStatusCode === 499) return true; // Client closed / operation cancelled
         if (httpStatusCode === 502) return true; // Bad gateway
         if (httpStatusCode === 503) return true; // Service unavailable
         if (httpStatusCode === 504) return true; // Gateway timeout
@@ -986,12 +988,12 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             }
         }
 
-        // A transport-level abort (request-timeout / dropped connection, sometimes reported
+        // A transport-level abort/cancel (request-timeout / dropped connection, sometimes reported
         // as 499 client-closed) or a deadline-exceeded is transient and should be retried,
-        // even though it carries a 4xx status. Honor it before the 4xx → non-retryable rule.
+        // even though it carries a 4xx status. Honor it before the 4xx -> non-retryable rule.
         if (message) {
             const lower = message.toLowerCase();
-            if (lower.includes('aborted') || lower.includes('deadline')) return true;
+            if (lower.includes('aborted') || lower.includes('cancelled') || lower.includes('deadline')) return true;
         }
 
         // Non-retryable 4xx client errors
