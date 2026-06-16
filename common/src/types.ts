@@ -391,7 +391,7 @@ export interface Completion {
     /**
      * Contains the tools from which the model awaits information.
      */
-    tool_use?: ToolUse<unknown>[];
+    tool_use?: ToolUse[];
     /**
      * The finish reason as reported by the model: stop | length or other model specific values
      */

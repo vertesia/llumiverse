@@ -12,6 +12,7 @@ import {
     getConversationMeta,
     getModelCapabilities,
     incrementConversationTurn,
+    type JSONObject,
     type JSONSchema,
     LlumiverseError,
     type LlumiverseErrorContext,
@@ -1135,12 +1136,12 @@ function updateConversation(conversation: unknown, items: ResponseInputItem[]): 
     return [...convArray, ...items];
 }
 
-export function collectTools(output?: OpenAI.Responses.ResponseOutputItem[]): ToolUse<unknown>[] | undefined {
+export function collectTools(output?: OpenAI.Responses.ResponseOutputItem[]): ToolUse<JSONObject>[] | undefined {
     if (!output) {
         return undefined;
     }
 
-    const tools: ToolUse<unknown>[] = [];
+    const tools: ToolUse<JSONObject>[] = [];
     for (const item of output) {
         if (item.type === 'function_call') {
             const id = item.call_id || item.id;
@@ -1150,7 +1151,7 @@ export function collectTools(output?: OpenAI.Responses.ResponseOutputItem[]): To
             tools.push({
                 id,
                 tool_name: item.name ?? '',
-                tool_input: safeJsonParse(item.arguments),
+                tool_input: safeJsonParse(item.arguments) as JSONObject | null,
             });
         }
     }
@@ -1287,7 +1288,7 @@ function openAISchemaFormat(schema: JSONSchema, nesting: number = 0): JSONSchema
 
 function responseFinishReason(
     response: OpenAI.Responses.Response,
-    tools?: ToolUse<unknown>[] | undefined,
+    tools?: ToolUse<JSONObject>[] | undefined,
 ): string | undefined {
     if (tools && tools.length > 0) {
         return 'tool_use';

@@ -4,6 +4,7 @@ import {
     ExecutionOptions,
     ExecutionResponse,
     ExecutionTokenUsage,
+    type JSONObject,
     ToolUse,
     LlumiverseError
 } from "@llumiverse/common";
@@ -222,7 +223,7 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
             token_usage: tokens,
             finish_reason: finish_reason,
             chunks: this.chunks,
-            tool_use: toolUseArray,
+            tool_use: toolUseArray as ToolUse<JSONObject>[] | undefined,
         }
 
         // Build conversation context for multi-turn support
