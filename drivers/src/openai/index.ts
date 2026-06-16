@@ -938,6 +938,7 @@ export function mapResponseStream(
 
     return {
         async *[Symbol.asyncIterator]() {
+            let hasTextDeltas = false;
             for await (const event of stream) {
                 if (event.type === 'response.output_item.added' && event.item.type === 'function_call') {
                     const syntheticId = `tool_${event.output_index}`;
@@ -986,13 +987,20 @@ export function mapResponseStream(
                         toolCallMetadata.set(event.item_id, { syntheticId, callId: metadata?.callId, name: tool_name });
                     }
                 } else if (event.type === 'response.output_text.delta') {
+                    hasTextDeltas = true;
                     yield {
                         result: textToCompletionResult(event.delta),
                     } satisfies CompletionChunkObject;
-                }
-                // Note: We don't emit response.output_text.done because the text was already
-                // streamed via delta events. Emitting it again would duplicate the content.
-                else if (
+                } else if (event.type === 'response.output_text.done') {
+                    // Fallback: some models (e.g. gpt-5 with json_schema structured output) buffer
+                    // the entire output and never emit delta events — only the done event with the
+                    // full text. Emit it here only when no deltas arrived to avoid duplication.
+                    if (!hasTextDeltas && event.text) {
+                        yield {
+                            result: textToCompletionResult(event.text),
+                        } satisfies CompletionChunkObject;
+                    }
+                } else if (
                     event.type === 'response.completed' ||
                     event.type === 'response.incomplete' ||
                     event.type === 'response.failed'
