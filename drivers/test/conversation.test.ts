@@ -673,7 +673,7 @@ describe.concurrent.skipIf(!hasDrivers).each(drivers)("Driver $name - Multi-turn
 
         const prompt3: PromptSegment[] = [{
             role: PromptRole.user,
-            content: "What were the numbers in that code?"
+            content: "Repeat only the numeric digits from that code, no delimiters, no spaces."
         }];
 
         const result3 = await driver.execute(prompt3, { ...options, conversation: storedConversation2 });
