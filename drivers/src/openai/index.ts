@@ -15,8 +15,8 @@ import {
     type JSONSchema,
     LlumiverseError,
     type LlumiverseErrorContext,
-    ModelType,
     modelModalitiesToArray,
+    ModelType,
     type OpenAiDalleOptions,
     type OpenAiGptImageOptions,
     type Providers,
@@ -115,7 +115,7 @@ const supportFineTunning = new Set([
     'gpt-4-0613',
 ]);
 
-export interface BaseOpenAIDriverOptions extends DriverOptions {}
+export interface BaseOpenAIDriverOptions extends DriverOptions { }
 
 export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOptions, ResponseInputItem[]> {
     abstract provider:
@@ -209,13 +209,13 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
             tools: useTools ? toolDefs : undefined,
             text: parsedSchema
                 ? {
-                      format: {
-                          type: 'json_schema',
-                          name: 'format_output',
-                          schema: parsedSchema,
-                          strict: strictMode,
-                      },
-                  }
+                    format: {
+                        type: 'json_schema',
+                        name: 'format_output',
+                        schema: parsedSchema,
+                        strict: strictMode,
+                    },
+                }
                 : undefined,
         });
 
@@ -275,13 +275,13 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
             tools: useTools ? toolDefs : undefined,
             text: parsedSchema
                 ? {
-                      format: {
-                          type: 'json_schema',
-                          name: 'format_output',
-                          schema: parsedSchema,
-                          strict: strictMode,
-                      },
-                  }
+                    format: {
+                        type: 'json_schema',
+                        name: 'format_output',
+                        schema: parsedSchema,
+                        strict: strictMode,
+                    },
+                }
                 : undefined,
         });
 
