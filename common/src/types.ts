@@ -85,7 +85,7 @@ export const ProviderList: Record<Providers, ProviderParams> = {
     togetherai: {
         id: Providers.togetherai,
         name: 'Together AI',
-        requiresApiKey: false,
+        requiresApiKey: true,
         requiresEndpointUrl: false,
         supportSearch: false,
     },

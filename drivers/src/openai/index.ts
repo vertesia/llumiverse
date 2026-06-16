@@ -66,6 +66,12 @@ type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
     reasoning_effort?: string;
 };
 type OpenAIErrorWithStatus = Error & { status?: unknown };
+type OpenAIUsageWithProviderDetails = OpenAI.Responses.ResponseUsage & {
+    cached_tokens?: number | null;
+    prompt_tokens_details?: {
+        cached_tokens?: number | null;
+    } | null;
+};
 type MutableRoleItem = { role: 'user' | 'developer' | 'system' | 'assistant' };
 type MutableInputImagePart = { type: string; detail?: string };
 type OpenAIFunctionItem = ResponseInputItem & {
@@ -126,6 +132,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
         | Providers.azure_openai
         | Providers.xai
         | Providers.azure_foundry
+        | Providers.togetherai
         | Providers.openai_compatible;
     abstract service: OpenAI | AzureOpenAI;
 
@@ -187,7 +194,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
 
         let parsedSchema: JSONSchema | undefined;
         let strictMode = false;
-        if (options.result_schema && supportsSchema(options.model)) {
+        if (options.result_schema && supportsSchema(options.model, this.provider)) {
             try {
                 parsedSchema = openAISchemaFormat(options.result_schema);
                 strictMode = true;
@@ -229,7 +236,8 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
         if (
             options.model_options?._option_id !== undefined &&
             options.model_options?._option_id !== 'openai-text' &&
-            options.model_options?._option_id !== 'openai-thinking'
+            options.model_options?._option_id !== 'openai-thinking' &&
+            options.model_options?._option_id !== 'text-fallback'
         ) {
             this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
@@ -253,7 +261,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
 
         let parsedSchema: JSONSchema | undefined;
         let strictMode = false;
-        if (options.result_schema && supportsSchema(options.model)) {
+        if (options.result_schema && supportsSchema(options.model, this.provider)) {
             try {
                 parsedSchema = openAISchemaFormat(options.result_schema);
                 strictMode = true;
@@ -480,7 +488,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
         const models = filter ? result.filter(filter) : result;
         const aiModels = models
             .map((m) => {
-                const modelCapability = getModelCapabilities(m.id, 'openai');
+                const modelCapability = getModelCapabilities(m.id, this.provider);
                 let owner = m.owned_by;
                 if (owner === 'system') {
                     owner = 'openai';
@@ -882,16 +890,18 @@ function jobInfo(job: OpenAI.FineTuning.Jobs.FineTuningJob): TrainingJob {
     };
 }
 
-function mapUsage(usage?: OpenAI.Responses.ResponseUsage | null): ExecutionTokenUsage | undefined {
+function mapUsage(usage?: OpenAIUsageWithProviderDetails | null): ExecutionTokenUsage | undefined {
     if (!usage) {
         return undefined;
     }
+    const cachedTokens =
+        usage.input_tokens_details?.cached_tokens ?? usage.prompt_tokens_details?.cached_tokens ?? usage.cached_tokens;
     return {
         prompt: usage.input_tokens,
         result: usage.output_tokens,
         total: usage.total_tokens,
-        prompt_cached: usage.input_tokens_details?.cached_tokens ?? undefined,
-        prompt_new: usage.input_tokens - (usage.input_tokens_details?.cached_tokens ?? 0),
+        prompt_cached: cachedTokens ?? undefined,
+        prompt_new: usage.input_tokens - (cachedTokens ?? 0),
     };
 }
 
@@ -1068,12 +1078,12 @@ function convertRoles(items: ResponseInputItem[], model: string): ResponseInputI
 
 //Structured output support is typically aligned with tool use support
 //Not true for realtime models, which do not support structured output, but do support tool use.
-function supportsSchema(model: string): boolean {
+function supportsSchema(model: string, provider: string | Providers): boolean {
     const realtimeModel = model.includes('realtime');
     if (realtimeModel) {
         return false;
     }
-    return supportsToolUse(model, 'openai');
+    return supportsToolUse(model, provider);
 }
 
 /**
