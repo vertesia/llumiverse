@@ -123,6 +123,7 @@ export async function formatOpenAILikeMultimodalPrompt(
             );
             const textContent = textParts.length === 1 && !msg.files ? textParts[0].text : textParts;
             const systemMsg: EasyInputMessage = {
+                type: 'message',
                 role: 'system',
                 content: textContent,
             };
@@ -147,6 +148,7 @@ export async function formatOpenAILikeMultimodalPrompt(
                 (part): part is OpenAI.Responses.ResponseInputText => part.type === 'input_text',
             );
             const safetyMsg: EasyInputMessage = {
+                type: 'message',
                 role: 'system',
                 content: textParts,
             };
@@ -170,6 +172,7 @@ export async function formatOpenAILikeMultimodalPrompt(
             others.push(toolOutputMsg);
         } else if (msg.role !== PromptRole.negative && msg.role !== PromptRole.mask) {
             const inputMsg: EasyInputMessage = {
+                type: 'message',
                 role: msg.role === 'assistant' ? 'assistant' : 'user',
                 content: parts,
             };
@@ -179,6 +182,7 @@ export async function formatOpenAILikeMultimodalPrompt(
 
     if (opts.result_schema && !opts.useToolForFormatting) {
         const schemaMsg: EasyInputMessage = {
+            type: 'message',
             role: 'system',
             content: [
                 {
