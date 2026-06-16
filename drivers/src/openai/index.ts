@@ -358,6 +358,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
         // Add assistant message as EasyInputMessage
         if (textContent) {
             const assistantMessage: EasyInputMessage = {
+                type: 'message',
                 role: 'assistant',
                 content: textContent,
             };
@@ -909,6 +910,7 @@ function createAssistantMessageFromCompletion(completion: Completion): ResponseI
     // Add assistant text message if present
     if (textContent) {
         const assistantMessage: EasyInputMessage = {
+            type: 'message',
             role: 'assistant',
             content: textContent,
         };
@@ -939,7 +941,6 @@ export function mapResponseStream(
     return {
         async *[Symbol.asyncIterator]() {
             let hasTextDeltas = false;
-            let refusalText = '';
             for await (const event of stream) {
                 if (event.type === 'response.output_item.added' && event.item.type === 'function_call') {
                     const syntheticId = `tool_${event.output_index}`;
@@ -1002,8 +1003,7 @@ export function mapResponseStream(
                         } satisfies CompletionChunkObject;
                     }
                 } else if (event.type === 'response.refusal.delta') {
-                    // Accumulate refusal text; emit as content so the consumer sees it
-                    refusalText += event.delta;
+                    // Emit refusal text as content so the consumer sees it
                     yield {
                         result: textToCompletionResult(event.delta),
                     } satisfies CompletionChunkObject;
