@@ -4,6 +4,7 @@ import {
     ExecutionOptions,
     ExecutionResponse,
     ExecutionTokenUsage,
+    type JSONObject,
     ToolUse,
     LlumiverseError
 } from "@llumiverse/common";
@@ -25,7 +26,7 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
         this.completion = undefined;
         this.chunks = 0;
         const accumulatedResults: any[] = []; // Accumulate CompletionResult[] from chunks
-        const accumulatedToolUse: Map<string, ToolUse> = new Map(); // Accumulate tool_use by id
+        const accumulatedToolUse: Map<string, ToolUse<unknown>> = new Map(); // Accumulate tool_use by id
 
         this.driver.logger.debug(
             `[${this.driver.provider}] Streaming Execution of ${this.options.model} with prompt`,
@@ -222,7 +223,7 @@ export class DefaultCompletionStream<PromptT = any> implements CompletionStream<
             token_usage: tokens,
             finish_reason: finish_reason,
             chunks: this.chunks,
-            tool_use: toolUseArray,
+            tool_use: toolUseArray as ToolUse<JSONObject>[] | undefined,
         }
 
         // Build conversation context for multi-turn support
