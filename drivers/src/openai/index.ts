@@ -939,6 +939,7 @@ export function mapResponseStream(
     return {
         async *[Symbol.asyncIterator]() {
             let hasTextDeltas = false;
+            let refusalText = '';
             for await (const event of stream) {
                 if (event.type === 'response.output_item.added' && event.item.type === 'function_call') {
                     const syntheticId = `tool_${event.output_index}`;
@@ -1000,6 +1001,15 @@ export function mapResponseStream(
                             result: textToCompletionResult(event.text),
                         } satisfies CompletionChunkObject;
                     }
+                } else if (event.type === 'response.refusal.delta') {
+                    // Accumulate refusal text; emit as content so the consumer sees it
+                    refusalText += event.delta;
+                    yield {
+                        result: textToCompletionResult(event.delta),
+                    } satisfies CompletionChunkObject;
+                } else if ((event as { type: string }).type === 'response.error') {
+                    const errEvent = event as unknown as { message: string; code?: string | null };
+                    throw new Error(`[OpenAI Responses API] ${errEvent.message}${errEvent.code ? ` (${errEvent.code})` : ''}`);
                 } else if (
                     event.type === 'response.completed' ||
                     event.type === 'response.incomplete' ||
