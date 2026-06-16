@@ -4,22 +4,29 @@
     "private": true,
     "type": "module",
     "scripts": {
+        "build": "pnpm -r build",
         "bump": "pnpm exec wst bump minor",
-        "lint": "pnpm exec biome lint",
-        "lint:fix": "pnpm exec biome lint --write",
+        "check": "pnpm exec biome check .",
+        "check:write": "pnpm exec biome check --write .",
+        "ci:local": "pnpm run ci:renovate && pnpm run check && pnpm run build && pnpm run typecheck:test && pnpm run test",
+        "ci:renovate": "npx --yes --package renovate -- renovate-config-validator --strict",
         "format": "pnpm exec biome format --write .",
         "format:check": "pnpm exec biome format .",
-        "release": "pnpm -r publish --access public",
+        "lint": "pnpm exec biome lint",
+        "lint:actions": "scripts/run-actionlint.sh",
+        "lint:fix": "pnpm exec biome lint --write",
         "prepare": "cp ./README.md ./core/ && cp ./README.md ./drivers/ && git config core.hooksPath .githooks 2>/dev/null || true",
-        "build": "pnpm -r build"
+        "release": "pnpm -r publish --access public",
+        "test": "pnpm -r test",
+        "typecheck:test": "pnpm -r typecheck:test"
     },
     "devDependencies": {
-        "@biomejs/biome": "^2.4.4",
+        "@biomejs/biome": "2.4.11",
         "cross-spawn": "^7.0.6",
         "npm-ws-tools": "^0.3.0",
-        "rollup": "^4.59.0",
-        "typescript": "^6.0.2",
-        "vitest": "^4.1.4"
+        "rollup": "^4.61.0",
+        "typescript": "^6.0.3",
+        "vitest": "^4.1.8"
     },
-    "packageManager": "pnpm@11.1.2"
+    "packageManager": "pnpm@11.5.0"
 }

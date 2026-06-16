@@ -1,16 +1,17 @@
 import {
-    AIModel,
-    Completion,
-    CompletionChunkObject,
-    DriverOptions,
-    EmbeddingsOptions,
-    EmbeddingsResult,
-    ExecutionOptions,
-    LlumiverseErrorContext,
-    ModelSearchPayload,
+    type AIModel,
+    type Completion,
+    type CompletionChunkObject,
+    type DriverOptions,
+    type EmbeddingsOptions,
+    type EmbeddingsResult,
+    type ExecutionOptions,
     LlumiverseError,
+    type LlumiverseErrorContext,
+    type ModelSearchPayload,
 } from '@llumiverse/common';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { errorWith, getProp } from '../test/__helpers__/test-utils.js';
 import { AbstractDriver } from './Driver.js';
 
 // Simple test driver implementation
@@ -21,7 +22,10 @@ class TestDriver extends AbstractDriver<DriverOptions, string> {
         throw new Error('Not implemented');
     }
 
-    async requestTextCompletionStream(_prompt: string, _options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+    async requestTextCompletionStream(
+        _prompt: string,
+        _options: ExecutionOptions,
+    ): Promise<AsyncIterable<CompletionChunkObject>> {
         throw new Error('Not implemented');
     }
 
@@ -35,6 +39,11 @@ class TestDriver extends AbstractDriver<DriverOptions, string> {
 
     async generateEmbeddings(_options: EmbeddingsOptions): Promise<EmbeddingsResult> {
         throw new Error('Not implemented');
+    }
+
+    // Re-exposed for tests — base class declares this as protected
+    isRetryableError(statusCode: number | undefined, message: string): boolean | undefined {
+        return super.isRetryableError(statusCode, message);
     }
 }
 
@@ -53,90 +62,118 @@ describe('AbstractDriver Error Formatting', () => {
     describe('isRetryableError', () => {
         describe('HTTP status codes', () => {
             it('should mark 429 as retryable (rate limit)', () => {
-                expect(driver['isRetryableError'](429, 'Rate limit exceeded')).toBe(true);
+                expect(driver.isRetryableError(429, 'Rate limit exceeded')).toBe(true);
             });
 
             it('should mark 408 as retryable (timeout)', () => {
-                expect(driver['isRetryableError'](408, 'Request timeout')).toBe(true);
+                expect(driver.isRetryableError(408, 'Request timeout')).toBe(true);
             });
 
             it('should mark 529 as retryable (overloaded)', () => {
-                expect(driver['isRetryableError'](529, 'Service overloaded')).toBe(true);
+                expect(driver.isRetryableError(529, 'Service overloaded')).toBe(true);
             });
 
             it('should mark 5xx as retryable (server errors)', () => {
-                expect(driver['isRetryableError'](500, 'Internal server error')).toBe(true);
-                expect(driver['isRetryableError'](502, 'Bad gateway')).toBe(true);
-                expect(driver['isRetryableError'](503, 'Service unavailable')).toBe(true);
-                expect(driver['isRetryableError'](504, 'Gateway timeout')).toBe(true);
+                expect(driver.isRetryableError(500, 'Internal server error')).toBe(true);
+                expect(driver.isRetryableError(502, 'Bad gateway')).toBe(true);
+                expect(driver.isRetryableError(503, 'Service unavailable')).toBe(true);
+                expect(driver.isRetryableError(504, 'Gateway timeout')).toBe(true);
             });
 
             it('should mark 4xx as not retryable (except 429, 408)', () => {
-                expect(driver['isRetryableError'](400, 'Bad request')).toBe(false);
-                expect(driver['isRetryableError'](401, 'Unauthorized')).toBe(false);
-                expect(driver['isRetryableError'](403, 'Forbidden')).toBe(false);
-                expect(driver['isRetryableError'](404, 'Not found')).toBe(false);
+                expect(driver.isRetryableError(400, 'Bad request')).toBe(false);
+                expect(driver.isRetryableError(401, 'Unauthorized')).toBe(false);
+                expect(driver.isRetryableError(403, 'Forbidden')).toBe(false);
+                expect(driver.isRetryableError(404, 'Not found')).toBe(false);
+            });
+
+            it('should honor transient provider messages before non-retryable 4xx status codes', () => {
+                expect(
+                    driver.isRetryableError(400, 'Unable to fetch URL. Status: URL_REJECTED-REJECTED_CLIENT_THROTTLED'),
+                ).toBe(true);
+                expect(
+                    driver.isRetryableError(400, 'Unable to fetch URL. Status: URL_REJECTED-REJECTED_RATE_LIMITED'),
+                ).toBe(true);
+                expect(driver.isRetryableError(400, 'Request throttled by upstream host')).toBe(true);
+                expect(driver.isRetryableError(400, 'Please retry with a valid model id')).toBe(false);
+            });
+
+            it('should mark transport aborts and deadline-exceeded as retryable even under a 4xx status', () => {
+                expect(driver.isRetryableError(undefined, 'This operation was aborted')).toBe(true);
+                expect(driver.isRetryableError(499, 'This operation was aborted')).toBe(true);
+                expect(driver.isRetryableError(400, 'Deadline expired before operation could complete')).toBe(true);
+                expect(driver.isRetryableError(504, '[504] DEADLINE_EXCEEDED')).toBe(true);
+                // a genuine non-transient 4xx without an abort/deadline signal stays non-retryable
+                expect(driver.isRetryableError(400, 'Invalid argument')).toBe(false);
             });
 
             it('should mark 2xx and 3xx as not retryable', () => {
-                expect(driver['isRetryableError'](200, 'OK')).toBe(false);
-                expect(driver['isRetryableError'](301, 'Moved permanently')).toBe(false);
+                expect(driver.isRetryableError(200, 'OK')).toBe(false);
+                expect(driver.isRetryableError(301, 'Moved permanently')).toBe(false);
             });
         });
 
         describe('message-based detection', () => {
             it('should detect rate limit in message', () => {
-                expect(driver['isRetryableError'](undefined, 'Rate limit exceeded')).toBe(true);
-                expect(driver['isRetryableError'](undefined, 'You have hit the rate limit')).toBe(true);
-                expect(driver['isRetryableError'](undefined, 'RATE_LIMIT_EXCEEDED')).toBe(true);
+                expect(driver.isRetryableError(undefined, 'Rate limit exceeded')).toBe(true);
+                expect(driver.isRetryableError(undefined, 'You have hit the rate limit')).toBe(true);
+                expect(driver.isRetryableError(undefined, 'RATE_LIMIT_EXCEEDED')).toBe(true);
             });
 
             it('should detect timeout in message', () => {
-                expect(driver['isRetryableError'](undefined, 'Request timeout')).toBe(true);
-                expect(driver['isRetryableError'](undefined, 'Connection timed out')).toBe(true);
-                expect(driver['isRetryableError'](undefined, 'TIMEOUT_ERROR')).toBe(true);
+                expect(driver.isRetryableError(undefined, 'Request timeout')).toBe(true);
+                expect(driver.isRetryableError(undefined, 'Connection timed out')).toBe(true);
+                expect(driver.isRetryableError(undefined, 'TIMEOUT_ERROR')).toBe(true);
             });
 
             it('should detect retry in message', () => {
-                expect(driver['isRetryableError'](undefined, 'Please retry later')).toBe(true);
-                expect(driver['isRetryableError'](undefined, 'Retry the request')).toBe(true);
+                expect(driver.isRetryableError(undefined, 'Please retry later')).toBe(true);
+                expect(driver.isRetryableError(undefined, 'Retry the request')).toBe(true);
             });
 
             it('should detect overload in message', () => {
-                expect(driver['isRetryableError'](undefined, 'Service overloaded')).toBe(true);
-                expect(driver['isRetryableError'](undefined, 'Server is overload')).toBe(true);
-                expect(driver['isRetryableError'](undefined, 'System overloaded')).toBe(true);
+                expect(driver.isRetryableError(undefined, 'Service overloaded')).toBe(true);
+                expect(driver.isRetryableError(undefined, 'Server is overload')).toBe(true);
+                expect(driver.isRetryableError(undefined, 'System overloaded')).toBe(true);
             });
 
             it('should detect resource exhausted in message', () => {
-                expect(driver['isRetryableError'](undefined, 'Resource exhausted')).toBe(true);
-                expect(driver['isRetryableError'](undefined, 'Resources exhausted')).toBe(true);
+                expect(driver.isRetryableError(undefined, 'Resource exhausted')).toBe(true);
+                expect(driver.isRetryableError(undefined, 'Resources exhausted')).toBe(true);
             });
 
             it('should detect throttle in message', () => {
-                expect(driver['isRetryableError'](undefined, 'Request throttled')).toBe(true);
-                expect(driver['isRetryableError'](undefined, 'Throttling exception')).toBe(true);
+                expect(driver.isRetryableError(undefined, 'Request throttled')).toBe(true);
+                expect(driver.isRetryableError(undefined, 'Throttling exception')).toBe(true);
             });
 
             it('should detect status codes in message', () => {
-                expect(driver['isRetryableError'](undefined, 'Error 429: Too many requests')).toBe(true);
-                expect(driver['isRetryableError'](undefined, 'HTTP 529 error')).toBe(true);
+                expect(driver.isRetryableError(undefined, 'Error 429: Too many requests')).toBe(true);
+                expect(driver.isRetryableError(undefined, 'HTTP 529 error')).toBe(true);
+            });
+
+            it('should classify invalid_grant credential issuer failures as non-retryable', () => {
+                expect(
+                    driver.isRetryableError(
+                        undefined,
+                        "Error code invalid_grant: Error connecting to the given credential's issuer.",
+                    ),
+                ).toBe(false);
             });
 
             it('should mark unknown messages as undefined (let consumer decide)', () => {
-                expect(driver['isRetryableError'](undefined, 'Invalid API key')).toBeUndefined();
-                expect(driver['isRetryableError'](undefined, 'Bad request')).toBeUndefined();
-                expect(driver['isRetryableError'](undefined, 'Model not found')).toBeUndefined();
+                expect(driver.isRetryableError(undefined, 'Invalid API key')).toBeUndefined();
+                expect(driver.isRetryableError(undefined, 'Bad request')).toBeUndefined();
+                expect(driver.isRetryableError(undefined, 'Model not found')).toBeUndefined();
             });
         });
     });
 
     describe('formatLlumiverseError', () => {
         it('should format error with status code', () => {
-            const originalError = new Error('Rate limit exceeded');
-            (originalError as any).status = 429;
+            const originalError = errorWith('Rate limit exceeded', { status: 429 });
 
-            const formatted = driver['formatLlumiverseError'](originalError, mockContext);
+            const formatted = driver.formatLlumiverseError(originalError, mockContext);
 
             expect(formatted).toBeInstanceOf(LlumiverseError);
             expect(formatted.code).toBe(429);
@@ -148,20 +185,18 @@ describe('AbstractDriver Error Formatting', () => {
         });
 
         it('should extract status from statusCode property', () => {
-            const originalError = new Error('Server error');
-            (originalError as any).statusCode = 500;
+            const originalError = errorWith('Server error', { statusCode: 500 });
 
-            const formatted = driver['formatLlumiverseError'](originalError, mockContext);
+            const formatted = driver.formatLlumiverseError(originalError, mockContext);
 
             expect(formatted.code).toBe(500);
             expect(formatted.retryable).toBe(true);
         });
 
         it('should extract status from code property', () => {
-            const originalError = new Error('Timeout');
-            (originalError as any).code = 408;
+            const originalError = errorWith('Timeout', { code: 408 });
 
-            const formatted = driver['formatLlumiverseError'](originalError, mockContext);
+            const formatted = driver.formatLlumiverseError(originalError, mockContext);
 
             expect(formatted.code).toBe(408);
             expect(formatted.retryable).toBe(true);
@@ -170,7 +205,7 @@ describe('AbstractDriver Error Formatting', () => {
         it('should use undefined when no status code found', () => {
             const originalError = new Error('Generic error');
 
-            const formatted = driver['formatLlumiverseError'](originalError, mockContext);
+            const formatted = driver.formatLlumiverseError(originalError, mockContext);
 
             expect(formatted.code).toBeUndefined();
             expect(formatted.retryable).toBeUndefined(); // Unknown retryability
@@ -179,7 +214,7 @@ describe('AbstractDriver Error Formatting', () => {
         it('should handle non-Error objects', () => {
             const originalError = 'String error message';
 
-            const formatted = driver['formatLlumiverseError'](originalError, mockContext);
+            const formatted = driver.formatLlumiverseError(originalError, mockContext);
 
             expect(formatted.message).toContain('String error message');
             expect(formatted.originalError).toBe(originalError);
@@ -188,46 +223,41 @@ describe('AbstractDriver Error Formatting', () => {
         it('should preserve provider in message', () => {
             const error = new Error('Test error');
 
-            const formatted = driver['formatLlumiverseError'](error, mockContext);
+            const formatted = driver.formatLlumiverseError(error, mockContext);
 
             expect(formatted.message).toMatch(/^\[test-provider\]/);
         });
 
         it('should determine retryability based on status and message', () => {
             // Retryable by status
-            const retryableError = new Error('Error');
-            (retryableError as any).status = 429;
-            const formatted1 = driver['formatLlumiverseError'](retryableError, mockContext);
+            const retryableError = errorWith('Error', { status: 429 });
+            const formatted1 = driver.formatLlumiverseError(retryableError, mockContext);
             expect(formatted1.retryable).toBe(true);
 
             // Not retryable by status
-            const nonRetryableError = new Error('Error');
-            (nonRetryableError as any).status = 400;
-            const formatted2 = driver['formatLlumiverseError'](nonRetryableError, mockContext);
+            const nonRetryableError = errorWith('Error', { status: 400 });
+            const formatted2 = driver.formatLlumiverseError(nonRetryableError, mockContext);
             expect(formatted2.retryable).toBe(false);
 
             // Retryable by message
             const messageRetryable = new Error('Rate limit exceeded');
-            const formatted3 = driver['formatLlumiverseError'](messageRetryable, mockContext);
+            const formatted3 = driver.formatLlumiverseError(messageRetryable, mockContext);
             expect(formatted3.retryable).toBe(true);
         });
     });
 
     describe('driver override capability', () => {
         class CustomDriver extends TestDriver {
-            public formatLlumiverseError(
-                error: unknown,
-                context: LlumiverseErrorContext
-            ): LlumiverseError {
+            public formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
                 // Custom logic: check for specific error type
-                if ((error as any).type === 'custom_retryable') {
+                if (getProp(error, 'type') === 'custom_retryable') {
                     return new LlumiverseError(
                         `[${this.provider}] Custom retryable error`,
                         true,
                         context,
                         error,
                         undefined,
-                        'CUSTOM_ERROR'
+                        'CUSTOM_ERROR',
                     );
                 }
                 // Fall back to default
@@ -239,7 +269,7 @@ describe('AbstractDriver Error Formatting', () => {
             const customDriver = new CustomDriver({});
             const customError = { type: 'custom_retryable', message: 'Custom error' };
 
-            const formatted = customDriver['formatLlumiverseError'](customError, mockContext);
+            const formatted = customDriver.formatLlumiverseError(customError, mockContext);
 
             expect(formatted.name).toBe('CUSTOM_ERROR');
             expect(formatted.code).toBeUndefined();
@@ -249,10 +279,9 @@ describe('AbstractDriver Error Formatting', () => {
 
         it('should fall back to default for non-custom errors', () => {
             const customDriver = new CustomDriver({});
-            const regularError = new Error('Regular error');
-            (regularError as any).status = 500;
+            const regularError = errorWith('Regular error', { status: 500 });
 
-            const formatted = customDriver['formatLlumiverseError'](regularError, mockContext);
+            const formatted = customDriver.formatLlumiverseError(regularError, mockContext);
 
             expect(formatted.code).toBe(500);
             expect(formatted.retryable).toBe(true);

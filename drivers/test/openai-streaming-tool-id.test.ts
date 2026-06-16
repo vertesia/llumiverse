@@ -1,6 +1,7 @@
-import { describe, expect, test } from 'vitest';
 import type OpenAI from 'openai';
+import { describe, expect, test } from 'vitest';
 import { mapResponseStream } from '../src/openai/index.js';
+import type { Tree } from './__helpers__/test-utils.js';
 
 type ResponseStreamEvent = OpenAI.Responses.ResponseStreamEvent;
 
@@ -49,10 +50,10 @@ describe('OpenAI Responses streaming tool ids', () => {
             chunks.push(chunk);
         }
 
-        const tools = chunks.flatMap(chunk => chunk.tool_use ?? []);
+        const tools = chunks.flatMap((chunk) => chunk.tool_use ?? []);
         expect(tools).toHaveLength(3);
         expect(tools[0]).toMatchObject({ id: 'tool_0', tool_name: 'plan' });
-        expect(tools.map(tool => (tool as any)._actual_id)).toEqual([
+        expect(tools.map((tool) => (tool as unknown as Tree as Tree)._actual_id)).toEqual([
             'call_plan_tool',
             'call_plan_tool',
             'call_plan_tool',
@@ -84,8 +85,8 @@ describe('OpenAI Responses streaming tool ids', () => {
             chunks.push(chunk);
         }
 
-        const tools = chunks.flatMap(chunk => chunk.tool_use ?? []);
-        expect((tools[0] as any)._actual_id).toBe('fc_response_item');
-        expect((tools[1] as any)._actual_id).toBe('fc_response_item');
+        const tools = chunks.flatMap((chunk) => chunk.tool_use ?? []);
+        expect((tools[0] as unknown as Tree)._actual_id).toBe('fc_response_item');
+        expect((tools[1] as unknown as Tree)._actual_id).toBe('fc_response_item');
     });
 });

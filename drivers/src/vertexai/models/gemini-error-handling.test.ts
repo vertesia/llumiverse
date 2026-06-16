@@ -1,7 +1,12 @@
 import { LlumiverseError } from '@llumiverse/core';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { exposePrivate, getProp } from '../../../test/__helpers__/test-utils.js';
 import { VertexAIDriver } from '../index.js';
 import { GeminiModelDefinition } from './gemini.js';
+
+type GeminiModelInternals = {
+    isGeminiErrorRetryable: (httpStatusCode: number, message?: string) => boolean | undefined;
+};
 
 describe('GeminiModelDefinition Error Handling', () => {
     let driver: VertexAIDriver;
@@ -86,6 +91,33 @@ describe('GeminiModelDefinition Error Handling', () => {
             expect(error.retryable).toBe(false);
             expect(error.code).toBe(404);
             expect(error.name).toBe('NOT_FOUND');
+        });
+
+        it('should mark a client-closed/aborted request (499) as retryable despite the 4xx status', () => {
+            const error = modelDef.formatLlumiverseError(
+                driver,
+                { status: 499, message: 'This operation was aborted' },
+                { provider: 'vertexai', model: 'gemini-2.0-flash', operation: 'execute' },
+            );
+            expect(error.retryable).toBe(true);
+        });
+
+        it('should mark a client-closed/cancelled request (499) as retryable despite the 4xx status', () => {
+            const error = modelDef.formatLlumiverseError(
+                driver,
+                { status: 499, message: 'Client Closed Request: The operation was cancelled.' },
+                { provider: 'vertexai', model: 'gemini-2.0-flash', operation: 'execute' },
+            );
+            expect(error.retryable).toBe(true);
+        });
+
+        it('should mark DEADLINE_EXCEEDED as retryable even under a 4xx status', () => {
+            const error = modelDef.formatLlumiverseError(
+                driver,
+                { status: 400, message: 'DEADLINE_EXCEEDED: Deadline expired before operation could complete' },
+                { provider: 'vertexai', model: 'gemini-2.0-flash', operation: 'execute' },
+            );
+            expect(error.retryable).toBe(true);
         });
 
         it('should handle RESOURCE_EXHAUSTED error (429) as retryable', () => {
@@ -202,7 +234,7 @@ describe('GeminiModelDefinition Error Handling', () => {
             });
 
             expect(error.originalError).toBe(googleError);
-            expect((error.originalError as any).status).toBe(429);
+            expect(getProp<number>(error.originalError, 'status')).toBe(429);
         });
 
         it('should throw for non-Google API errors', () => {
@@ -286,14 +318,44 @@ describe('GeminiModelDefinition Error Handling', () => {
             expect(error.name).toBe('LlumiverseError');
             expect(error.code).toBe(500);
         });
+
+        it('should treat invalid_grant credential issuer failures as non-retryable', () => {
+            const authError = new Error("Error code invalid_grant: Error connecting to the given credential's issuer.");
+
+            const error = driver.formatLlumiverseError(authError, {
+                provider: 'vertexai',
+                model: 'gemini-2.5-flash',
+                operation: 'execute',
+            });
+
+            expect(error.retryable).toBe(false);
+            expect(error.code).toBeUndefined();
+        });
+
+        it('should preserve invalid_grant from Google API errors', () => {
+            const googleError = {
+                status: 400,
+                message: "Error code invalid_grant: Error connecting to the given credential's issuer.",
+            };
+
+            const error = modelDef.formatLlumiverseError(driver, googleError, {
+                provider: 'vertexai',
+                model: 'locations/global/publishers/google/models/gemini-2.5-flash',
+                operation: 'execute',
+            });
+
+            expect(error.retryable).toBe(false);
+            expect(error.code).toBe(400);
+            expect(error.name).toBe('invalid_grant');
+        });
     });
 
     describe('isGeminiErrorRetryable', () => {
         it('should classify retryable status codes correctly', () => {
-            const retryableStatusCodes = [408, 429, 500, 502, 503, 504];
+            const retryableStatusCodes = [408, 429, 499, 500, 502, 503, 504];
 
             retryableStatusCodes.forEach((statusCode) => {
-                const result = (modelDef as any).isGeminiErrorRetryable(statusCode);
+                const result = exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(statusCode);
                 expect(result, `Status code ${statusCode} should be retryable`).toBe(true);
             });
         });
@@ -302,41 +364,52 @@ describe('GeminiModelDefinition Error Handling', () => {
             const nonRetryableStatusCodes = [400, 401, 403, 404, 409];
 
             nonRetryableStatusCodes.forEach((statusCode) => {
-                const result = (modelDef as any).isGeminiErrorRetryable(statusCode);
+                const result = exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(statusCode);
                 expect(result, `Status code ${statusCode} should not be retryable`).toBe(false);
             });
         });
 
         it('should classify other 5xx errors as retryable', () => {
-            expect((modelDef as any).isGeminiErrorRetryable(501)).toBe(true);
-            expect((modelDef as any).isGeminiErrorRetryable(505)).toBe(true);
-            expect((modelDef as any).isGeminiErrorRetryable(599)).toBe(true);
+            expect(exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(501)).toBe(true);
+            expect(exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(505)).toBe(true);
+            expect(exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(599)).toBe(true);
         });
 
         it('should classify other 4xx errors as non-retryable', () => {
-            expect((modelDef as any).isGeminiErrorRetryable(402)).toBe(false);
-            expect((modelDef as any).isGeminiErrorRetryable(405)).toBe(false);
-            expect((modelDef as any).isGeminiErrorRetryable(499)).toBe(false);
+            expect(exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(402)).toBe(false);
+            expect(exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(405)).toBe(false);
         });
 
         it('should treat 400 URL_REJECTED-REJECTED_CLIENT_THROTTLED as retryable', () => {
             // Vertex AI surfaces inline-URL-fetcher throttling as 400 INVALID_ARGUMENT.
             // The status is misleading — it's a transient Google-side throttle.
             const message =
-                'Cannot fetch content from the provided URL. ' +
-                'Status: URL_REJECTED-REJECTED_CLIENT_THROTTLED';
-            expect((modelDef as any).isGeminiErrorRetryable(400, message)).toBe(true);
+                'Cannot fetch content from the provided URL. ' + 'Status: URL_REJECTED-REJECTED_CLIENT_THROTTLED';
+            expect(exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(400, message)).toBe(true);
         });
 
         it('should treat 400 URL_REJECTED-REJECTED_RATE_LIMITED as retryable', () => {
             const message =
-                'Cannot fetch content from the provided URL. ' +
-                'Status: URL_REJECTED-REJECTED_RATE_LIMITED';
-            expect((modelDef as any).isGeminiErrorRetryable(400, message)).toBe(true);
+                'Cannot fetch content from the provided URL. ' + 'Status: URL_REJECTED-REJECTED_RATE_LIMITED';
+            expect(exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(400, message)).toBe(true);
         });
 
         it('should still treat plain 400 INVALID_ARGUMENT as non-retryable', () => {
-            expect((modelDef as any).isGeminiErrorRetryable(400, 'INVALID_ARGUMENT: bad input')).toBe(false);
+            expect(
+                exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(
+                    400,
+                    'INVALID_ARGUMENT: bad input',
+                ),
+            ).toBe(false);
+        });
+
+        it('should treat invalid_grant as non-retryable before status-based retry rules', () => {
+            expect(
+                exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(
+                    503,
+                    "Error code invalid_grant: Error connecting to the given credential's issuer.",
+                ),
+            ).toBe(false);
         });
     });
 

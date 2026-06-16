@@ -1,86 +1,93 @@
 import {
-    ContentBlock,
+    type ContentBlock,
     ConversationRole,
-    ConverseRequest,
-    Message,
-    SystemContentBlock,
-    ToolResultContentBlock,
-} from "@aws-sdk/client-bedrock-runtime";
-import { DataSource, ExecutionOptions, PromptRole, PromptSegment, readStreamAsString, readStreamAsUint8Array } from "@llumiverse/core";
-import { parseS3UrlToUri } from "./s3.js";
+    type ConverseRequest,
+    type Message,
+    type SystemContentBlock,
+    type ToolResultContentBlock,
+} from '@aws-sdk/client-bedrock-runtime';
+import {
+    type DataSource,
+    type ExecutionOptions,
+    PromptRole,
+    type PromptSegment,
+    readStreamAsString,
+    readStreamAsUint8Array,
+} from '@llumiverse/core';
+import { isAmazonS3Hostname, parseS3UrlToUri } from './s3.js';
 
 function roleConversion(role: PromptRole): ConversationRole {
     return role === PromptRole.assistant ? ConversationRole.ASSISTANT : ConversationRole.USER;
 }
 
-type BedrockImageFormat = "png" | "jpeg" | "gif" | "webp";
-const BEDROCK_IMAGE_FORMATS = new Set<string>(["png", "jpeg", "gif", "webp"]);
+type BedrockImageFormat = 'png' | 'jpeg' | 'gif' | 'webp';
+const BEDROCK_IMAGE_FORMATS = new Set<string>(['png', 'jpeg', 'gif', 'webp']);
 const mimeToImageMap: Record<string, BedrockImageFormat> = {
-    "image/png": "png",
-    "image/jpeg": "jpeg",
-    "image/gif": "gif",
-    "image/webp": "webp",
+    'image/png': 'png',
+    'image/jpeg': 'jpeg',
+    'image/gif': 'gif',
+    'image/webp': 'webp',
 };
 function mimeToImageType(mime: string): BedrockImageFormat {
     const mapped = mimeToImageMap[mime];
     if (mapped) return mapped;
-    if (mime.startsWith("image/")) {
-        const subtype = mime.split("/")[1];
+    if (mime.startsWith('image/')) {
+        const subtype = mime.split('/')[1];
         if (subtype && BEDROCK_IMAGE_FORMATS.has(subtype)) {
             return subtype as BedrockImageFormat;
         }
     }
-    return "png";
+    return 'png';
 }
 
-type BedrockDocFormat = "pdf" | "csv" | "doc" | "docx" | "xls" | "xlsx" | "html" | "txt" | "md";
-const BEDROCK_DOC_FORMATS = new Set<string>(["pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md"]);
+type BedrockDocFormat = 'pdf' | 'csv' | 'doc' | 'docx' | 'xls' | 'xlsx' | 'html' | 'txt' | 'md';
+const BEDROCK_DOC_FORMATS = new Set<string>(['pdf', 'csv', 'doc', 'docx', 'xls', 'xlsx', 'html', 'txt', 'md']);
 const mimeToDocMap: Record<string, BedrockDocFormat> = {
-    "application/pdf": "pdf",
-    "text/csv": "csv",
-    "application/msword": "doc",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
-    "application/vnd.ms-excel": "xls",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
-    "text/html": "html",
-    "text/plain": "txt",
-    "text/markdown": "md",
+    'application/pdf': 'pdf',
+    'text/csv': 'csv',
+    'application/msword': 'doc',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+    'application/vnd.ms-excel': 'xls',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+    'text/html': 'html',
+    'text/plain': 'txt',
+    'text/markdown': 'md',
 };
 function mimeToDocType(mime: string): BedrockDocFormat {
     // 1. Exact map lookup (handles complex MIME types like vnd.openxmlformats-*)
     const mapped = mimeToDocMap[mime];
     if (mapped) return mapped;
     // 2. Fallback: extract subtype for simple application/ or text/ MIME types
-    if (mime.startsWith("application/") || mime.startsWith("text/")) {
-        const subtype = mime.split("/")[1];
+    if (mime.startsWith('application/') || mime.startsWith('text/')) {
+        const subtype = mime.split('/')[1];
         if (subtype && BEDROCK_DOC_FORMATS.has(subtype)) {
             return subtype as BedrockDocFormat;
         }
     }
-    return "txt";
+    return 'txt';
 }
-type BedrockVideoFormat = "mov" | "mkv" | "mp4" | "webm" | "flv" | "mpeg" | "mpg" | "wmv" | "three_gp";
-const BEDROCK_VIDEO_FORMATS = new Set<string>(["mov", "mkv", "mp4", "webm", "flv", "mpeg", "mpg", "wmv", "three_gp"]);
+type BedrockVideoFormat = 'mov' | 'mkv' | 'mp4' | 'webm' | 'flv' | 'mpeg' | 'mpg' | 'wmv' | 'three_gp';
+const BEDROCK_VIDEO_FORMATS = new Set<string>(['mov', 'mkv', 'mp4', 'webm', 'flv', 'mpeg', 'mpg', 'wmv', 'three_gp']);
 const mimeToVideoMap: Record<string, BedrockVideoFormat> = {
-    "video/quicktime": "mov",
-    "video/x-matroska": "mkv",
-    "video/mp4": "mp4",
-    "video/webm": "webm",
-    "video/x-flv": "flv",
-    "video/mpeg": "mpeg",
-    "video/x-ms-wmv": "wmv",
-    "video/3gpp": "three_gp",
+    'video/quicktime': 'mov',
+    'video/x-matroska': 'mkv',
+    'video/mp4': 'mp4',
+    'video/webm': 'webm',
+    'video/x-flv': 'flv',
+    'video/mpeg': 'mpeg',
+    'video/x-ms-wmv': 'wmv',
+    'video/3gpp': 'three_gp',
 };
 function mimeToVideoType(mime: string): BedrockVideoFormat {
     const mapped = mimeToVideoMap[mime];
     if (mapped) return mapped;
-    if (mime.startsWith("video/")) {
-        const subtype = mime.split("/")[1];
+    if (mime.startsWith('video/')) {
+        const subtype = mime.split('/')[1];
         if (subtype && BEDROCK_VIDEO_FORMATS.has(subtype)) {
             return subtype as BedrockVideoFormat;
         }
     }
-    return "mp4";
+    return 'mp4';
 }
 
 /**
@@ -100,8 +107,8 @@ function cleanBedrockFilename(name: string | undefined): string | undefined {
     }
 
     return name
-        .replace(/[^\w\s\-()[\]]/g, " ") // Replace invalid characters with space
-        .replace(/\s+/g, " ") // Collapse consecutive whitespaces
+        .replace(/[^\w\s\-()[\]]/g, ' ') // Replace invalid characters with space
+        .replace(/\s+/g, ' ') // Collapse consecutive whitespaces
         .trim();
 }
 
@@ -109,17 +116,17 @@ type FileProcessingMode = 'content' | 'tool';
 
 async function processFile<T extends FileProcessingMode>(
     f: DataSource,
-    mode: T
+    mode: T,
 ): Promise<T extends 'content' ? ContentBlock : ToolResultContentBlock> {
     const source = await f.getStream();
 
     //Image file - "png" | "jpeg" | "gif" | "webp"
-    if (f.mime_type && f.mime_type.startsWith("image")) {
+    if (f.mime_type?.startsWith('image')) {
         const imageBlock = {
             image: {
                 format: mimeToImageType(f.mime_type),
                 source: { bytes: await readStreamAsUint8Array(source) },
-            }
+            },
         };
 
         return mode === 'content'
@@ -127,19 +134,21 @@ async function processFile<T extends FileProcessingMode>(
             : (imageBlock satisfies ToolResultContentBlock.ImageMember);
     }
     //Document file - "pdf | csv | doc | docx | xls | xlsx | html | txt | md"
-    else if (f.mime_type && (f.mime_type.startsWith("text") || f.mime_type?.startsWith("application"))) {
+    else if (f.mime_type && (f.mime_type.startsWith('text') || f.mime_type?.startsWith('application'))) {
         // Handle JSON files specially
-        if (f.mime_type === "application/json" || (f.name && f.name.endsWith('.json'))) {
+        if (f.mime_type === 'application/json' || f.name?.endsWith('.json')) {
             const jsonContent = await readStreamAsString(source);
             try {
                 const parsedJson = JSON.parse(jsonContent);
                 if (mode === 'tool') {
-                    return { json: parsedJson } satisfies ToolResultContentBlock.JsonMember as T extends 'content' ? ContentBlock : ToolResultContentBlock;
+                    return { json: parsedJson } satisfies ToolResultContentBlock.JsonMember as T extends 'content'
+                        ? ContentBlock
+                        : ToolResultContentBlock;
                 } else {
                     // ContentBlock doesn't support JSON, so treat as text
                     return { text: jsonContent } satisfies ContentBlock.TextMember;
                 }
-            } catch (error) {
+            } catch {
                 const textBlock = { text: jsonContent };
                 return mode === 'content'
                     ? (textBlock satisfies ContentBlock.TextMember)
@@ -160,33 +169,35 @@ async function processFile<T extends FileProcessingMode>(
         }
     }
     //Video file - "mov | mkv | mp4 | webm | flv | mpeg | mpg | wmv | three_gp"
-    else if (f.mime_type && f.mime_type.startsWith("video")) {
-        let url_string = (await f.getURL()).toLowerCase();
+    else if (f.mime_type?.startsWith('video')) {
+        let url_string = await f.getURL();
         let url_format = new URL(url_string);
-        if (url_format.hostname.endsWith("amazonaws.com") &&
-            (url_format.hostname.startsWith("s3.") || url_format.hostname.includes(".s3."))) {
+        if (isAmazonS3Hostname(url_format.hostname)) {
             //Convert to s3:// format
             const parsedUrl = parseS3UrlToUri(new URL(url_string));
             url_string = parsedUrl;
             url_format = new URL(parsedUrl);
         }
 
-        const videoBlock = url_format.protocol === "s3:" ? {
-            video: {
-                format: mimeToVideoType(f.mime_type),
-                source: {
-                    s3Location: {
-                        uri: url_string, //S3 URL
-                        //bucketOwner:  We don't have this additional information.
-                    }
-                },
-            },
-        } : {
-            video: {
-                format: mimeToVideoType(f.mime_type),
-                source: { bytes: await readStreamAsUint8Array(source) },
-            },
-        };
+        const videoBlock =
+            url_format.protocol === 's3:'
+                ? {
+                      video: {
+                          format: mimeToVideoType(f.mime_type),
+                          source: {
+                              s3Location: {
+                                  uri: url_string, //S3 URL
+                                  //bucketOwner:  We don't have this additional information.
+                              },
+                          },
+                      },
+                  }
+                : {
+                      video: {
+                          format: mimeToVideoType(f.mime_type),
+                          source: { bytes: await readStreamAsUint8Array(source) },
+                      },
+                  };
 
         return mode === 'content'
             ? (videoBlock satisfies ContentBlock.VideoMember)
@@ -205,24 +216,27 @@ async function processFileToContentBlock(f: DataSource): Promise<ContentBlock> {
     try {
         return processFile(f, 'content');
     } catch (error) {
-        throw new Error(`Failed to process file ${f.name} for prompt: ${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(
+            `Failed to process file ${f.name} for prompt: ${error instanceof Error ? error.message : String(error)}`,
+        );
     }
 }
 
 async function processFileToToolContentBlock(f: DataSource): Promise<ToolResultContentBlock> {
     try {
         return processFile(f, 'tool');
-    }
-    catch (error) {
-        throw new Error(`Failed to process file ${f.name} for tool response: ${error instanceof Error ? error.message : String(error)}`);
+    } catch (error) {
+        throw new Error(
+            `Failed to process file ${f.name} for tool response: ${error instanceof Error ? error.message : String(error)}`,
+        );
     }
 }
 
 export function converseConcatMessages(messages: Message[] | undefined): Message[] {
     if (!messages || messages.length === 0) return [];
 
-    const needsMerging = messages.some((message, i) =>
-        i < messages.length - 1 && message.role === messages[i + 1].role
+    const needsMerging = messages.some(
+        (message, i) => i < messages.length - 1 && message.role === messages[i + 1].role,
     );
     // If no merging needed, return original array
     if (!needsMerging) {
@@ -248,15 +262,22 @@ export function converseConcatMessages(messages: Message[] | undefined): Message
 
 export function converseSystemToMessages(system: SystemContentBlock[]): Message {
     return {
-        content: [{ text: system.map(system => system.text).join('\n').trim() }],
-        role: ConversationRole.USER
+        content: [
+            {
+                text: system
+                    .map((system) => system.text)
+                    .join('\n')
+                    .trim(),
+            },
+        ],
+        role: ConversationRole.USER,
     };
 }
 
 export function converseRemoveJSONprefill(messages: Message[] | undefined): Message[] {
     //Remove the "```json" stop message
     if (messages && messages.length > 0) {
-        if (messages[messages.length - 1].content?.[0].text === "```json") {
+        if (messages[messages.length - 1].content?.[0].text === '```json') {
             messages.pop();
         }
     }
@@ -270,19 +291,19 @@ export function converseJSONprefill(messages: Message[] | undefined): Message[] 
 
     //prefill the json
     messages.push({
-        content: [{ text: "```json" }],
+        content: [{ text: '```json' }],
         role: ConversationRole.ASSISTANT,
     });
     return messages;
 }
 
 // Used to ignore unsupported roles. Typically these are things like image specific roles.
-const unsupportedRoles = [
-    PromptRole.negative,
-    PromptRole.mask,
-];
+const unsupportedRoles = [PromptRole.negative, PromptRole.mask];
 
-export async function formatConversePrompt(segments: PromptSegment[], options: ExecutionOptions): Promise<ConverseRequest> {
+export async function formatConversePrompt(
+    segments: PromptSegment[],
+    options: ExecutionOptions,
+): Promise<ConverseRequest> {
     //Non-const for concat
     let system: SystemContentBlock.TextMember[] | undefined = [];
     const safety: Message[] = [];
@@ -294,7 +315,7 @@ export async function formatConversePrompt(segments: PromptSegment[], options: E
             system.push({ text: segment.content });
         } else if (segment.role === PromptRole.tool) {
             if (!segment.tool_use_id) {
-                throw new Error("Tool use ID is required for tool segments");
+                throw new Error('Tool use ID is required for tool segments');
             }
             //Tool use results (i.e. the model has requested a tool and this it the answer to that request)
             const toolContentBlocks: ToolResultContentBlock[] = [];
@@ -311,13 +332,15 @@ export async function formatConversePrompt(segments: PromptSegment[], options: E
                 toolContentBlocks.push({ text: '[No output]' });
             }
             messages.push({
-                content: [{
-                    toolResult: {
-                        toolUseId: segment.tool_use_id,
-                        content: toolContentBlocks,
-                    }
-                }],
-                role: ConversationRole.USER
+                content: [
+                    {
+                        toolResult: {
+                            toolUseId: segment.tool_use_id,
+                            content: toolContentBlocks,
+                        },
+                    },
+                ],
+                role: ConversationRole.USER,
             });
         } else if (!unsupportedRoles.includes(segment.role)) {
             //User, Assistant or safety roles
@@ -334,7 +357,7 @@ export async function formatConversePrompt(segments: PromptSegment[], options: E
             if (contentBlocks.length !== 0) {
                 const message = { content: contentBlocks, role: roleConversion(segment.role) };
                 if (segment.role === PromptRole.safety) {
-                    safety.push(message)
+                    safety.push(message);
                 } else {
                     messages.push(message);
                 }
@@ -345,11 +368,11 @@ export async function formatConversePrompt(segments: PromptSegment[], options: E
     if (options.result_schema) {
         let schemaText: string;
         if (options.tools && options.tools.length > 0) {
-            schemaText = "When not calling tools, the answer must be a JSON object using the following JSON Schema:\n" + JSON.stringify(options.result_schema, undefined, 2);
+            schemaText = `When not calling tools, the answer must be a JSON object using the following JSON Schema:\n${JSON.stringify(options.result_schema, undefined, 2)}`;
         } else {
-            schemaText = "The answer must be a JSON object using the following JSON Schema:\n" + JSON.stringify(options.result_schema, undefined, 2);
+            schemaText = `The answer must be a JSON object using the following JSON Schema:\n${JSON.stringify(options.result_schema, undefined, 2)}`;
         }
-        system.push({ text: "IMPORTANT: " + schemaText });
+        system.push({ text: `IMPORTANT: ${schemaText}` });
     }
 
     // Safety messages are user messages that should be included at the end.
@@ -364,7 +387,7 @@ export async function formatConversePrompt(segments: PromptSegment[], options: E
         if (systemMessage?.content?.[0]?.text?.trim()) {
             messages.push(systemMessage);
         } else {
-            throw new Error("Prompt must contain at least one message");
+            throw new Error('Prompt must contain at least one message');
         }
         system = undefined;
     }

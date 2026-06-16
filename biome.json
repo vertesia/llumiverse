@@ -1,54 +1,83 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.4.15/schema.json",
-  "vcs": {
-    "enabled": true,
-    "clientKind": "git",
-    "useIgnoreFile": true
-  },
-  "files": {
-    "ignoreUnknown": true,
-    "includes": [
-      "**/*.{js,cjs,mjs,jsx,ts,tsx}",
-      "!**/dist/**",
-      "!**/lib/**",
-      "!**/node_modules/**",
-      "!**/build/**",
-      "!**/bin/**"
-    ]
-  },
-  "formatter": {
-    "enabled": true,
-    "indentStyle": "space",
-    "indentWidth": 4,
-    "lineWidth": 120
-  },
-  "linter": {
-    "enabled": true,
-    "rules": {
-      "recommended": false,
-      "correctness": {
-        "noUnusedFunctionParameters": "warn",
-        "noUnusedImports": "warn",
-        "noUnusedVariables": "warn"
-      },
-      "suspicious": {
-        "noExplicitAny": "warn",
-        "noImplicitAnyLet": "warn",
-        "noUnusedExpressions": "off"
-      }
-    }
-  },
-  "javascript": {
+    "$schema": "https://biomejs.dev/schemas/2.4.11/schema.json",
+    "vcs": {
+        "enabled": true,
+        "clientKind": "git",
+        "useIgnoreFile": true
+    },
+    "files": {
+        "ignoreUnknown": true,
+        "includes": [
+            "**/package.json",
+            "**/*.{js,cjs,mjs,jsx,ts,tsx}",
+            "!**/dist/**",
+            "!**/lib/**",
+            "!**/node_modules/**",
+            "!**/build/**",
+            "!**/bin/**"
+        ]
+    },
     "formatter": {
-      "quoteStyle": "single"
+        "enabled": true,
+        "indentStyle": "space",
+        "indentWidth": 4,
+        "lineWidth": 120
+    },
+    "linter": {
+        "enabled": true,
+        "rules": {
+            "recommended": true,
+            "correctness": {
+                "noEmptyPattern": "error",
+                "noUnreachable": "error",
+                "noUnusedFunctionParameters": "error",
+                "noUnusedImports": "error",
+                "noUnusedVariables": "error",
+                "noVoidTypeReturn": "error",
+                "useJsxKeyInIterable": "error",
+                "useParseIntRadix": "error"
+            },
+            "complexity": {
+                "useLiteralKeys": "error",
+                "useOptionalChain": "error"
+            },
+            "security": {
+                "noDangerouslySetInnerHtml": "error"
+            },
+            "style": {
+                "useImportType": "error",
+                "useNodejsImportProtocol": "error",
+                "useTemplate": "error"
+            },
+            "suspicious": {
+                "noControlCharactersInRegex": "error",
+                "noDeprecatedImports": "error",
+                "noDoubleEquals": "error",
+                "noExplicitAny": "error",
+                "noImplicitAnyLet": "error",
+                "noShadowRestrictedNames": "error",
+                "noTemplateCurlyInString": "off",
+                "noUnusedExpressions": "error",
+                "useBiomeIgnoreFolder": "off",
+                "useIterableCallbackReturn": "error",
+                "noImportCycles": "error"
+            },
+            "nursery": {
+                "noFloatingPromises": "error"
+            }
+        }
+    },
+    "javascript": {
+        "formatter": {
+            "quoteStyle": "single"
+        }
+    },
+    "assist": {
+        "enabled": true,
+        "actions": {
+            "source": {
+                "organizeImports": "on"
+            }
+        }
     }
-  },
-  "assist": {
-    "enabled": true,
-    "actions": {
-      "source": {
-        "organizeImports": "on"
-      }
-    }
-  }
 }

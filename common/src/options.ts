@@ -1,11 +1,11 @@
-import { getAnthropicOptions } from "./options/anthropic.js";
-import { getAzureFoundryOptions } from "./options/azure_foundry.js";
-import { getBedrockOptions } from "./options/bedrock.js";
-import { textOptionsFallback } from "./options/fallback.js";
-import { getGroqOptions } from "./options/groq.js";
-import { getOpenAiOptions } from "./options/openai.js";
-import { getVertexAiOptions } from "./options/vertexai.js";
-import { type ModelOptions, type ModelOptionsInfo, Providers } from "./types.js";
+import { getAnthropicOptions } from './options/anthropic.js';
+import { getAzureFoundryOptions } from './options/azure_foundry.js';
+import { getBedrockOptions } from './options/bedrock.js';
+import { textOptionsFallback } from './options/fallback.js';
+import { getGroqOptions } from './options/groq.js';
+import { getOpenAiOptions } from './options/openai.js';
+import { getVertexAiOptions } from './options/vertexai.js';
+import { type ModelOptions, type ModelOptionsInfo, Providers } from './types.js';
 
 export function getOptions(model: string, provider?: string | Providers, options?: ModelOptions): ModelOptionsInfo {
     if (!provider) {

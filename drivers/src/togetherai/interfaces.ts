@@ -1,5 +1,5 @@
 interface ModelInstanceConfig {
-    appearsIn: any[];
+    appearsIn: unknown[];
     order: number;
 }
 
@@ -90,14 +90,14 @@ export interface TogetherModelInfo {
 export interface TextCompletion {
     id: string;
     choices: {
-        text: string,
-        finish_reason: string, // stop | length ?
+        text: string;
+        finish_reason: string; // stop | length ?
     }[];
     usage: {
         prompt_tokens: number;
         completion_tokens: number;
         total_tokens: number;
-    }
+    };
     created: number;
     model: string;
     object: string;

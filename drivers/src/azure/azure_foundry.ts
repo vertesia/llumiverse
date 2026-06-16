@@ -13,13 +13,18 @@ import {
     type Completion,
     type CompletionChunkObject,
     type DriverOptions,
+    dataSourceToBase64,
+    type EmbeddingResultItem,
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
     getModelCapabilities,
+    type ImageEmbeddingInput,
     LlumiverseError,
     modelModalitiesToArray,
+    normalizeEmbeddingsOptions,
     Providers,
+    type TextEmbeddingInput,
     type TextFallbackOptions,
 } from '@llumiverse/core';
 import { AbstractDriver } from '@llumiverse/core/driver';
@@ -151,6 +156,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             // Use the Azure OpenAI client for OpenAI models
             const openAI = this.service.getOpenAIClient();
             const subDriver = new AzureFoundryOpenAIProtocolDriver(openAI);
+            // Use deployment name for API calls
             const modifiedOptions = { ...options, model: deploymentName };
             return subDriver.requestTextCompletion(prompt, modifiedOptions);
         } else {
@@ -346,25 +352,46 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         }
     }
 
-    async generateEmbeddings({ text, image, model }: EmbeddingsOptions): Promise<EmbeddingsResult> {
-        if (!model) {
+    async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
+        const normalized = normalizeEmbeddingsOptions(options);
+        if (!normalized.model) {
             throw new Error(
                 'Default embedding model selection not supported for Azure Foundry. Please specify a model.',
             );
         }
-        if (!text && !image) {
-            throw new Error("No text or image provided");
+
+        const textInputs: { index: number; input: TextEmbeddingInput }[] = [];
+        const imageInputs: { index: number; input: ImageEmbeddingInput }[] = [];
+        normalized.inputs.forEach((input, index) => {
+            if (input.type === 'text') textInputs.push({ index, input });
+            else if (input.type === 'image') imageInputs.push({ index, input });
+            else {
+                throw new Error(`Provider 'azure_foundry' does not support '${input.type}' embeddings.`);
+            }
+        });
+
+        const items = new Array<EmbeddingResultItem>(normalized.inputs.length);
+
+        if (textInputs.length > 0) {
+            const vectors = await this.callAzureEmbeddings(
+                textInputs.map((t) => t.input.text),
+                normalized.model,
+                'text',
+            );
+            textInputs.forEach((entry, i) => {
+                items[entry.index] = { outputs: [{ values: vectors[i], modality: 'text' }] };
+            });
         }
 
-        const kind: 'text' | 'image' = text ? 'text' : 'image';
-        const input = (text ?? image) as string;
-        const vectors = await this.callAzureEmbeddings([input], model, kind);
-        const values = vectors[0];
-        if (!values || values.length === 0) {
-            throw new Error("No embedding found");
+        if (imageInputs.length > 0) {
+            const base64Images = await Promise.all(imageInputs.map((entry) => dataSourceToBase64(entry.input.source)));
+            const vectors = await this.callAzureEmbeddings(base64Images, normalized.model, 'image');
+            imageInputs.forEach((entry, i) => {
+                items[entry.index] = { outputs: [{ values: vectors[i], modality: 'image' }] };
+            });
         }
 
-        return { values, model } satisfies EmbeddingsResult;
+        return { model: normalized.model, results: items };
     }
 
     private async callAzureEmbeddings(input: string[], model: string, kind: 'text' | 'image'): Promise<number[][]> {

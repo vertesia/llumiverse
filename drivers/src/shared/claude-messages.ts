@@ -34,10 +34,7 @@ import type {
     ToolResultBlockParam,
 } from '@anthropic-ai/sdk/resources/index.js';
 import type { MessageStreamParams } from '@anthropic-ai/sdk/resources/index.mjs';
-import type {
-    MessageCreateParamsBase,
-    RawMessageStreamEvent,
-} from '@anthropic-ai/sdk/resources/messages.js';
+import type { MessageCreateParamsBase, RawMessageStreamEvent } from '@anthropic-ai/sdk/resources/messages.js';
 import type AnthropicVertex from '@anthropic-ai/vertex-sdk';
 import { getClaudeMaxTokensLimit } from '@llumiverse/common';
 import {
@@ -69,6 +66,17 @@ import { truncateBinaryForDebug } from './debug-prompt.js';
 // Types
 // ============================================================================
 
+// Conversation text-trim policy (applied only when the caller requests text
+// trimming via stripTextMaxTokens). Keep the last N messages fully intact (the
+// active working set) and cap large text in older messages at the token ceiling
+// below — so long agent conversations don't balloon context.
+const KEEP_RECENT_MESSAGES = 12;
+const OLD_MESSAGE_TEXT_MAX_TOKENS = 2000;
+
+interface WarnLogger {
+    warn: (data: Record<string, unknown>, message: string) => void;
+}
+
 export interface ClaudePrompt {
     messages: MessageParam[];
     system?: TextBlockParam[];
@@ -99,7 +107,7 @@ function formatClaudeContentBlockForDebug(block: ContentBlockParam): ContentBloc
 export function formatClaudeDebugPrompt(prompt: ClaudePrompt): ClaudePrompt {
     return {
         ...prompt,
-        messages: prompt.messages.map(message => ({
+        messages: prompt.messages.map((message) => ({
             ...message,
             content: Array.isArray(message.content)
                 ? message.content.map(formatClaudeContentBlockForDebug)
@@ -138,6 +146,25 @@ interface RequestOptions {
 }
 
 type ClaudeTool = NonNullable<MessageCreateParamsBase['tools']>[number];
+type ClaudeMessageStream = AsyncIterable<RawMessageStreamEvent> & {
+    finalMessage(): Promise<Message>;
+};
+type ClaudeMessagesStreamClient = {
+    messages: {
+        stream(body: MessageStreamParams, options?: RequestOptions): ClaudeMessageStream;
+    };
+};
+
+function streamClaudeMessages(
+    client: Anthropic | AnthropicVertex,
+    payload: MessageStreamParams,
+    requestOptions: RequestOptions | undefined,
+): Promise<ClaudeMessageStream> {
+    // AnthropicVertex intentionally wraps the Anthropic Messages API, but it depends on its
+    // own @anthropic-ai/sdk copy. Cast at the boundary so the implementation can call the
+    // shared runtime-compatible stream API without TS trying to call a union of SDK versions.
+    return Promise.resolve((client as unknown as ClaudeMessagesStreamClient).messages.stream(payload, requestOptions));
+}
 
 // ============================================================================
 // Token usage
@@ -163,9 +190,12 @@ export function anthropicUsageToTokenUsage(usage: AnthropicUsageLike): Execution
 export function claudeFinishReason(reason: string | undefined): string | undefined {
     if (!reason) return undefined;
     switch (reason) {
-        case 'end_turn': return 'stop';
-        case 'max_tokens': return 'length';
-        default: return reason; // stop_sequence, tool_use
+        case 'end_turn':
+            return 'stop';
+        case 'max_tokens':
+            return 'length';
+        default:
+            return reason; // stop_sequence, tool_use
     }
 }
 
@@ -233,10 +263,11 @@ export function claudeMaxTokens(option: StatelessExecutionOptions): number {
 // File / multimodal block helpers
 // ============================================================================
 
-async function collectFileBlocks(segment: PromptSegment, restrictedTypes: true): Promise<Array<TextBlockParam | ImageBlockParam>>;
-async function collectFileBlocks(segment: PromptSegment, restrictedTypes?: false): Promise<ContentBlockParam[]>;
-async function collectFileBlocks(segment: PromptSegment, restrictedTypes = false): Promise<ContentBlockParam[]> {
-    const contentBlocks: ContentBlockParam[] = [];
+async function collectFileBlocks(
+    segment: PromptSegment,
+    logger?: WarnLogger,
+): Promise<Array<TextBlockParam | ImageBlockParam | DocumentBlockParam>> {
+    const contentBlocks: Array<TextBlockParam | ImageBlockParam | DocumentBlockParam> = [];
 
     for (const file of segment.files || []) {
         if (file.mime_type?.startsWith('image/')) {
@@ -253,28 +284,34 @@ async function collectFileBlocks(segment: PromptSegment, restrictedTypes = false
                     media_type: mimeType,
                 },
             } satisfies ImageBlockParam);
-        } else if (!restrictedTypes) {
-            if (file.mime_type === 'application/pdf') {
-                contentBlocks.push({
-                    title: file.name,
-                    type: 'document',
-                    source: {
-                        type: 'base64',
-                        data: await readStreamAsBase64(await file.getStream()),
-                        media_type: 'application/pdf',
-                    },
-                } satisfies DocumentBlockParam);
-            } else if (file.mime_type?.startsWith('text/')) {
-                contentBlocks.push({
-                    title: file.name,
-                    type: 'document',
-                    source: {
-                        type: 'text',
-                        data: await readStreamAsString(await file.getStream()),
-                        media_type: 'text/plain',
-                    },
-                } satisfies DocumentBlockParam);
-            }
+        } else if (file.mime_type?.startsWith('video/')) {
+            logger?.warn(
+                {
+                    file_name: file.name,
+                    mime_type: file.mime_type,
+                },
+                '[Claude] Skipping unsupported video attachment',
+            );
+        } else if (file.mime_type === 'application/pdf') {
+            contentBlocks.push({
+                title: file.name,
+                type: 'document',
+                source: {
+                    type: 'base64',
+                    data: await readStreamAsBase64(await file.getStream()),
+                    media_type: 'application/pdf',
+                },
+            } satisfies DocumentBlockParam);
+        } else if (file.mime_type?.startsWith('text/')) {
+            contentBlocks.push({
+                title: file.name,
+                type: 'document',
+                source: {
+                    type: 'text',
+                    data: await readStreamAsString(await file.getStream()),
+                    media_type: 'text/plain',
+                },
+            } satisfies DocumentBlockParam);
         }
     }
 
@@ -285,15 +322,20 @@ async function collectFileBlocks(segment: PromptSegment, restrictedTypes = false
 // Prompt formatting (PromptSegment[] → ClaudePrompt)
 // ============================================================================
 
-export async function formatClaudePrompt(segments: PromptSegment[], options: ExecutionOptions): Promise<ClaudePrompt> {
+export async function formatClaudePrompt(
+    segments: PromptSegment[],
+    options: ExecutionOptions,
+    logger?: WarnLogger,
+): Promise<ClaudePrompt> {
     let system: TextBlockParam[] | undefined = segments
         .filter((s) => s.role === PromptRole.system)
         .map((s) => ({ text: s.content, type: 'text' as const }));
 
     if (options.result_schema) {
-        const schemaText = options.tools && options.tools.length > 0
-            ? 'When not calling tools, the answer must be a JSON object using the following JSON Schema:\n' + JSON.stringify(options.result_schema)
-            : 'The answer must be a JSON object using the following JSON Schema:\n' + JSON.stringify(options.result_schema);
+        const schemaText =
+            options.tools && options.tools.length > 0
+                ? `When not calling tools, the answer must be a JSON object using the following JSON Schema:\n${JSON.stringify(options.result_schema)}`
+                : `The answer must be a JSON object using the following JSON Schema:\n${JSON.stringify(options.result_schema)}`;
         system.push({ text: schemaText, type: 'text' as const });
     }
 
@@ -307,25 +349,27 @@ export async function formatClaudePrompt(segments: PromptSegment[], options: Exe
             if (!segment.tool_use_id) {
                 throw new Error('Tool prompt segment must have a tool use ID');
             }
-            const contentBlocks: Array<TextBlockParam | ImageBlockParam> = [];
+            const contentBlocks: Array<TextBlockParam | ImageBlockParam | DocumentBlockParam> = [];
             if (segment.content) {
                 contentBlocks.push({ type: 'text', text: segment.content } satisfies TextBlockParam);
             }
-            contentBlocks.push(...(await collectFileBlocks(segment, true)));
+            contentBlocks.push(...(await collectFileBlocks(segment, logger)));
             messages.push({
                 role: 'user',
-                content: [{
-                    type: 'tool_result',
-                    tool_use_id: segment.tool_use_id,
-                    content: contentBlocks,
-                } satisfies ToolResultBlockParam],
+                content: [
+                    {
+                        type: 'tool_result',
+                        tool_use_id: segment.tool_use_id,
+                        content: contentBlocks,
+                    } satisfies ToolResultBlockParam,
+                ],
             });
         } else {
             const contentBlocks: ContentBlockParam[] = [];
             if (segment.content) {
                 contentBlocks.push({ type: 'text', text: segment.content } satisfies TextBlockParam);
             }
-            contentBlocks.push(...(await collectFileBlocks(segment, false)));
+            contentBlocks.push(...(await collectFileBlocks(segment, logger)));
             if (contentBlocks.length === 0) continue;
 
             const messageParam: MessageParam = {
@@ -361,8 +405,8 @@ export function createPromptFromResponse(response: Message): ClaudePrompt {
 export function mergeConsecutiveUserMessages(messages: MessageParam[]): MessageParam[] {
     if (messages.length === 0) return [];
 
-    const needsMerging = messages.some((msg, i) =>
-        i < messages.length - 1 && msg.role === 'user' && messages[i + 1].role === 'user'
+    const needsMerging = messages.some(
+        (msg, i) => i < messages.length - 1 && msg.role === 'user' && messages[i + 1].role === 'user',
     );
     if (!needsMerging) return messages;
 
@@ -418,7 +462,7 @@ export function fixOrphanedToolUse(messages: MessageParam[]): MessageParam[] {
         if (current.role === 'assistant' && Array.isArray(current.content)) {
             const toolUseBlocks = current.content.filter(
                 (block): block is ContentBlockParam & { type: 'tool_use'; id: string; name: string } =>
-                    block.type === 'tool_use'
+                    block.type === 'tool_use',
             );
 
             if (toolUseBlocks.length > 0) {
@@ -428,7 +472,7 @@ export function fixOrphanedToolUse(messages: MessageParam[]): MessageParam[] {
                     const toolResultIds = new Set(
                         nextMessage.content
                             .filter((block): block is ToolResultBlockParam => block.type === 'tool_result')
-                            .map((block) => block.tool_use_id)
+                            .map((block) => block.tool_use_id),
                     );
                     const orphaned = toolUseBlocks.filter((block) => !toolResultIds.has(block.id));
                     if (orphaned.length > 0) {
@@ -445,9 +489,10 @@ export function fixOrphanedToolUse(messages: MessageParam[]): MessageParam[] {
                         tool_use_id: block.id,
                         content: `[Tool interrupted: The user stopped the operation before "${block.name}" could execute.]`,
                     }));
-                    const textContent: TextBlockParam = typeof nextMessage.content === 'string'
-                        ? { type: 'text', text: nextMessage.content }
-                        : { type: 'text', text: '' };
+                    const textContent: TextBlockParam =
+                        typeof nextMessage.content === 'string'
+                            ? { type: 'text', text: nextMessage.content }
+                            : { type: 'text', text: '' };
                     messages[i + 1] = { role: 'user', content: [...syntheticResults, textContent] };
                 }
             }
@@ -456,7 +501,62 @@ export function fixOrphanedToolUse(messages: MessageParam[]): MessageParam[] {
     return result;
 }
 
-export function updateClaudeConversation(conversation: ClaudePrompt | undefined | null, prompt: ClaudePrompt): ClaudePrompt {
+/**
+ * Drop tool_result blocks whose tool_use_id has no matching tool_use in the
+ * immediately preceding assistant message. This is the mirror of
+ * {@link fixOrphanedToolUse}: that function synthesizes results for tool_uses
+ * left unanswered (e.g. a cancelled run); this one removes results left dangling
+ * after their tool_use was dropped (e.g. by conversation compaction/trimming, or
+ * a parallel tool batch whose results were split across messages that cannot be
+ * re-paired).
+ *
+ * Without this, the Anthropic / Vertex-Anthropic API rejects the request with a
+ * non-retryable 400: "unexpected `tool_use_id` found in `tool_result` blocks ...
+ * Each `tool_result` block must have a corresponding `tool_use` block in the
+ * previous message." — which terminates the conversation.
+ *
+ * Must run AFTER mergeConsecutiveUserMessages so that parallel tool results which
+ * were split across separate user messages are first combined into the single
+ * user turn that follows the assistant tool_use message (otherwise valid results
+ * whose "previous message" is another user message would be wrongly dropped).
+ */
+export function fixOrphanedToolResults(messages: MessageParam[]): MessageParam[] {
+    if (messages.length === 0) return messages;
+    const result: MessageParam[] = [];
+    for (let i = 0; i < messages.length; i++) {
+        const message = messages[i];
+        if (message.role !== 'user' || !Array.isArray(message.content)) {
+            result.push(message);
+            continue;
+        }
+        const hasToolResult = message.content.some((block) => block.type === 'tool_result');
+        if (!hasToolResult) {
+            result.push(message);
+            continue;
+        }
+        // Collect the tool_use ids declared by the immediately preceding assistant message.
+        const prev = messages[i - 1];
+        const allowedIds = new Set<string>();
+        if (prev && prev.role === 'assistant' && Array.isArray(prev.content)) {
+            for (const block of prev.content) {
+                if (block.type === 'tool_use') allowedIds.add(block.id);
+            }
+        }
+        const filtered = message.content.filter((block) =>
+            block.type === 'tool_result' ? allowedIds.has(block.tool_use_id) : true,
+        );
+        // If every block was an orphaned tool_result, drop the message rather than
+        // emit an empty (and invalid) content array.
+        if (filtered.length === 0) continue;
+        result.push(filtered.length === message.content.length ? message : { ...message, content: filtered });
+    }
+    return result;
+}
+
+export function updateClaudeConversation(
+    conversation: ClaudePrompt | undefined | null,
+    prompt: ClaudePrompt,
+): ClaudePrompt {
     const baseSystemMessages = conversation?.system || [];
     const baseMessages = conversation?.messages || [];
     const system = baseSystemMessages.concat(prompt.system || []);
@@ -485,8 +585,12 @@ export function convertClaudeToolBlocksToText(messages: MessageParam[]): Message
         if (!Array.isArray(msg.content)) return msg;
         let hasToolBlocks = false;
         for (const block of msg.content) {
-            if (typeof block === 'object' && block !== null && 'type' in block &&
-                (block.type === 'tool_use' || block.type === 'tool_result')) {
+            if (
+                typeof block === 'object' &&
+                block !== null &&
+                'type' in block &&
+                (block.type === 'tool_use' || block.type === 'tool_result')
+            ) {
                 hasToolBlocks = true;
                 break;
             }
@@ -495,22 +599,31 @@ export function convertClaudeToolBlocksToText(messages: MessageParam[]): Message
 
         const newContent: MessageParam['content'] = [];
         for (const block of msg.content) {
-            if (typeof block === 'string') { newContent.push(block); continue; }
+            if (typeof block === 'string') {
+                newContent.push(block);
+                continue;
+            }
             if (block.type === 'tool_use') {
                 const inputStr = block.input ? JSON.stringify(block.input) : '';
-                const truncated = inputStr.length > 500 ? inputStr.substring(0, 500) + '...' : inputStr;
-                (newContent as Array<{ type: 'text'; text: string }>).push({ type: 'text', text: `[Tool call: ${block.name}(${truncated})]` });
+                const truncated = inputStr.length > 500 ? `${inputStr.substring(0, 500)}...` : inputStr;
+                (newContent as Array<{ type: 'text'; text: string }>).push({
+                    type: 'text',
+                    text: `[Tool call: ${block.name}(${truncated})]`,
+                });
             } else if (block.type === 'tool_result') {
                 let resultStr = 'No content';
                 if (typeof block.content === 'string') {
-                    resultStr = block.content.length > 500 ? block.content.substring(0, 500) + '...' : block.content;
+                    resultStr = block.content.length > 500 ? `${block.content.substring(0, 500)}...` : block.content;
                 } else if (Array.isArray(block.content)) {
                     const texts = block.content
                         .filter((c): c is { type: 'text'; text: string } => c.type === 'text')
-                        .map((c) => (c.text.length > 500 ? c.text.substring(0, 500) + '...' : c.text));
+                        .map((c) => (c.text.length > 500 ? `${c.text.substring(0, 500)}...` : c.text));
                     resultStr = texts.join('\n') || 'No text content';
                 }
-                (newContent as Array<{ type: 'text'; text: string }>).push({ type: 'text', text: `[Tool result: ${resultStr}]` });
+                (newContent as Array<{ type: 'text'; text: string }>).push({
+                    type: 'text',
+                    text: `[Tool result: ${resultStr}]`,
+                });
             } else {
                 newContent.push(block as ContentBlockParam);
             }
@@ -544,7 +657,7 @@ function stripClaudeCacheControlFromSystem(system?: TextBlockParam[]): TextBlock
 }
 
 function stripClaudeCacheControlFromTools(
-    tools?: MessageCreateParamsBase['tools']
+    tools?: MessageCreateParamsBase['tools'],
 ): MessageCreateParamsBase['tools'] | undefined {
     if (!tools) return undefined;
     return tools.map((tool) => {
@@ -562,24 +675,33 @@ function stripClaudeCacheControlFromTools(
 
 export function getClaudePayload(
     options: ExecutionOptions,
-    prompt: ClaudePrompt
+    prompt: ClaudePrompt,
 ): { payload: MessageCreateParamsBase; requestOptions: RequestOptions | undefined } {
     const modelName = options.model;
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
 
     let requestOptions: RequestOptions | undefined;
-    if (modelName.includes('claude-3-7-sonnet') &&
-        ((model_options?.max_tokens ?? 0) > 64000 || (model_options?.thinking_budget_tokens ?? 0) > 64000)) {
+    if (
+        modelName.includes('claude-3-7-sonnet') &&
+        ((model_options?.max_tokens ?? 0) > 64000 || (model_options?.thinking_budget_tokens ?? 0) > 64000)
+    ) {
         requestOptions = { headers: { 'anthropic-beta': 'output-128k-2025-02-19' } };
     }
 
-    const fixedMessages = fixOrphanedToolUse(prompt.messages);
+    // Merge first so parallel tool results split across user messages are recombined
+    // into the single user turn after their assistant tool_use message; then fix both
+    // orphan directions (tool_use without result, and result without tool_use) so the
+    // request can never trip Anthropic/Vertex's tool_use/tool_result pairing validation.
+    const mergedMessages = mergeConsecutiveUserMessages(prompt.messages);
+    const fixedMessages = fixOrphanedToolResults(fixOrphanedToolUse(mergedMessages));
     let sanitizedMessages = sanitizeMessages(fixedMessages);
 
     if (options.tools) {
         for (const tool of options.tools) {
             if (tool.input_schema.type !== 'object') {
-                throw new Error(`Tool "${tool.name}" has invalid input_schema.type: expected "object", got "${tool.input_schema.type}"`);
+                throw new Error(
+                    `Tool "${tool.name}" has invalid input_schema.type: expected "object", got "${tool.input_schema.type}"`,
+                );
             }
         }
     }
@@ -601,7 +723,9 @@ export function getClaudePayload(
         const cacheControl = { type: 'ephemeral' as const, ...(cacheTtl && { ttl: cacheTtl }) };
 
         if (sanitizedSystem && sanitizedSystem.length > 0) {
-            const lastBlock = sanitizedSystem[sanitizedSystem.length - 1] as TextBlockParam & { cache_control?: unknown };
+            const lastBlock = sanitizedSystem[sanitizedSystem.length - 1] as TextBlockParam & {
+                cache_control?: unknown;
+            };
             lastBlock.cache_control = cacheControl;
         }
         if (sanitizedTools && sanitizedTools.length > 0) {
@@ -612,15 +736,23 @@ export function getClaudePayload(
             const pivotMsg = sanitizedMessages[sanitizedMessages.length - 2];
             if (Array.isArray(pivotMsg.content) && pivotMsg.content.length > 0) {
                 const lastBlock = pivotMsg.content[pivotMsg.content.length - 1];
-                if (typeof lastBlock === 'object' && lastBlock !== null && 'type' in lastBlock &&
-                    lastBlock.type !== 'thinking' && lastBlock.type !== 'redacted_thinking') {
+                if (
+                    typeof lastBlock === 'object' &&
+                    lastBlock !== null &&
+                    'type' in lastBlock &&
+                    lastBlock.type !== 'thinking' &&
+                    lastBlock.type !== 'redacted_thinking'
+                ) {
                     (lastBlock as TextBlockParam).cache_control = cacheControl;
                 }
             }
         }
     }
 
-    const { thinking, outputConfig, hasSamplingRestriction } = resolveClaudeThinking(modelName, model_options as Parameters<typeof resolveClaudeThinking>[1]);
+    const { thinking, outputConfig, hasSamplingRestriction } = resolveClaudeThinking(
+        modelName,
+        model_options as Parameters<typeof resolveClaudeThinking>[1],
+    );
 
     const payload: MessageCreateParamsBase = {
         messages: sanitizedMessages,
@@ -629,7 +761,11 @@ export function getClaudePayload(
         temperature: hasSamplingRestriction ? undefined : model_options?.temperature,
         model: modelName,
         max_tokens: claudeMaxTokens(options),
-        top_p: hasSamplingRestriction ? undefined : (model_options?.temperature != null ? undefined : model_options?.top_p),
+        top_p: hasSamplingRestriction
+            ? undefined
+            : model_options?.temperature != null
+              ? undefined
+              : model_options?.top_p,
         top_k: hasSamplingRestriction ? undefined : model_options?.top_k,
         stop_sequences: model_options?.stop_sequence,
         thinking,
@@ -648,7 +784,7 @@ export function buildClaudeStreamingConversation(
     prompt: ClaudePrompt,
     result: unknown[],
     toolUse: unknown[] | undefined,
-    options: ExecutionOptions
+    options: ExecutionOptions,
 ): ClaudePrompt {
     const completionResults = result as CompletionResult[];
     const text = completionResults
@@ -676,10 +812,18 @@ export function buildClaudeStreamingConversation(
 
     conversation = incrementConversationTurn(conversation) as ClaudePrompt;
     const currentTurn = getConversationMeta(conversation).turnNumber;
+    // When text trimming is requested, keep the agent's active working set (the
+    // most recent messages — the file it just read/wrote, latest diagnostics)
+    // fully intact, and aggressively shrink large text only in OLDER messages.
+    // Clamp the effective cap so a lax caller value (e.g. 10000) still bites on
+    // stale blocks; long agent conversations otherwise balloon context and
+    // trigger frequent expensive checkpoints.
+    const requestedTextMax = options.stripTextMaxTokens;
     const stripOptions = {
         keepForTurns: options.stripImagesAfterTurns ?? Infinity,
         currentTurn,
-        textMaxTokens: options.stripTextMaxTokens,
+        textMaxTokens: requestedTextMax ? Math.min(requestedTextMax, OLD_MESSAGE_TEXT_MAX_TOKENS) : undefined,
+        keepRecentMessages: requestedTextMax ? KEEP_RECENT_MESSAGES : undefined,
     };
     let processed = stripBase64ImagesFromConversation(conversation, stripOptions);
     processed = truncateLargeTextInConversation(processed, stripOptions);
@@ -709,7 +853,8 @@ export async function executeClaudeCompletion(
 
     const { payload, requestOptions } = getClaudePayload(options, conversation);
 
-    const result: Message = await client.messages.stream(payload, requestOptions).finalMessage();
+    const responseStream = await streamClaudeMessages(client, payload as MessageStreamParams, requestOptions);
+    const result = await responseStream.finalMessage();
 
     const includeThoughts = model_options?.include_thoughts ?? false;
     const text = collectAllTextContent(result.content, includeThoughts);
@@ -754,7 +899,7 @@ export async function streamClaudeCompletion(
     const { payload, requestOptions } = getClaudePayload(options, conversation);
     const streamingPayload: MessageStreamParams = { ...payload, stream: true };
 
-    const response_stream = await client.messages.stream(streamingPayload, requestOptions);
+    const response_stream = await streamClaudeMessages(client, streamingPayload, requestOptions);
 
     let currentToolUse: { id: string; name: string; inputJson: string } | null = null;
     let pendingSpacing = false;
@@ -774,14 +919,20 @@ export async function streamClaudeCompletion(
                 } satisfies CompletionChunkObject;
             case 'content_block_start':
                 if (streamEvent.content_block.type === 'tool_use') {
-                    currentToolUse = { id: streamEvent.content_block.id, name: streamEvent.content_block.name, inputJson: '' };
+                    currentToolUse = {
+                        id: streamEvent.content_block.id,
+                        name: streamEvent.content_block.name,
+                        inputJson: '',
+                    };
                     return {
                         result: [],
-                        tool_use: [{
-                            id: streamEvent.content_block.id,
-                            tool_name: streamEvent.content_block.name,
-                            tool_input: '' as unknown as JSONObject,
-                        }],
+                        tool_use: [
+                            {
+                                id: streamEvent.content_block.id,
+                                tool_name: streamEvent.content_block.name,
+                                tool_input: '' as unknown as JSONObject,
+                            },
+                        ],
                     } satisfies CompletionChunkObject;
                 }
                 if (streamEvent.content_block.type === 'redacted_thinking' && model_options?.include_thoughts) {
@@ -796,25 +947,31 @@ export async function streamClaudeCompletion(
                         const prefix = pendingSpacing ? '\n\n' : '';
                         pendingSpacing = false;
                         return {
-                            result: streamEvent.delta.text ? [{ type: 'text', value: prefix + streamEvent.delta.text }] : [],
+                            result: streamEvent.delta.text
+                                ? [{ type: 'text', value: prefix + streamEvent.delta.text }]
+                                : [],
                         } satisfies CompletionChunkObject;
                     }
                     case 'input_json_delta':
                         if (currentToolUse && streamEvent.delta.partial_json) {
                             return {
                                 result: [],
-                                tool_use: [{
-                                    id: currentToolUse.id,
-                                    tool_name: '',
-                                    tool_input: streamEvent.delta.partial_json as unknown as JSONObject,
-                                }],
+                                tool_use: [
+                                    {
+                                        id: currentToolUse.id,
+                                        tool_name: '',
+                                        tool_input: streamEvent.delta.partial_json as unknown as JSONObject,
+                                    },
+                                ],
                             } satisfies CompletionChunkObject;
                         }
                         break;
                     case 'thinking_delta':
                         if (model_options?.include_thoughts) {
                             return {
-                                result: streamEvent.delta.thinking ? [{ type: 'text', value: streamEvent.delta.thinking }] : [],
+                                result: streamEvent.delta.thinking
+                                    ? [{ type: 'text', value: streamEvent.delta.thinking }]
+                                    : [],
                             } satisfies CompletionChunkObject;
                         }
                         break;
@@ -848,7 +1005,14 @@ export function formatAnthropicLlumiverseError(error: unknown, context: Llumiver
         // Client-side SDK error (e.g. "Streaming is required for operations that may take longer than 10 minutes").
         // These are structural/configuration errors — retrying will never succeed.
         const errorName = error.constructor?.name || 'AnthropicError';
-        return new LlumiverseError(`[${context.provider}] ${error.message}`, false, context, error, undefined, errorName);
+        return new LlumiverseError(
+            `[${context.provider}] ${error.message}`,
+            false,
+            context,
+            error,
+            undefined,
+            errorName,
+        );
     }
     if (!(error instanceof APIError)) {
         // Not an Anthropic error — rethrow for default handling
@@ -862,11 +1026,11 @@ export function formatAnthropicLlumiverseError(error: unknown, context: Llumiver
 
     if (apiError.error && typeof apiError.error === 'object') {
         const nested = apiError.error as Record<string, unknown>;
-        if (nested['error'] && typeof nested['error'] === 'object') {
-            const innerError = nested['error'] as Record<string, unknown>;
-            errorType = innerError['type'] as string | undefined;
-            if (typeof innerError['message'] === 'string') {
-                message = innerError['message'];
+        if (nested.error && typeof nested.error === 'object') {
+            const innerError = nested.error as Record<string, unknown>;
+            errorType = innerError.type as string | undefined;
+            if (typeof innerError.message === 'string') {
+                message = innerError.message;
             }
         }
     }
@@ -879,7 +1043,14 @@ export function formatAnthropicLlumiverseError(error: unknown, context: Llumiver
     const retryable = isClaudeErrorRetryable(error, httpStatusCode, errorType, apiError.headers ?? undefined);
     const errorName = error.constructor?.name || 'AnthropicError';
 
-    return new LlumiverseError(`[${context.provider}] ${userMessage}`, retryable, context, error, httpStatusCode, errorName);
+    return new LlumiverseError(
+        `[${context.provider}] ${userMessage}`,
+        retryable,
+        context,
+        error,
+        httpStatusCode,
+        errorName,
+    );
 }
 
 export function isClaudeErrorRetryable(
@@ -901,7 +1072,7 @@ export function isClaudeErrorRetryable(
     if (error instanceof AuthenticationError) return false;
     if (error instanceof PermissionDeniedError) return false;
     if (error instanceof NotFoundError) return false;
-    if (error instanceof ConflictError) return true;  // SDK retries 409 (lock timeouts)
+    if (error instanceof ConflictError) return true; // SDK retries 409 (lock timeouts)
     if (error instanceof UnprocessableEntityError) return false;
     if (errorType === 'invalid_request_error') return false;
     if (httpStatusCode !== undefined) {
