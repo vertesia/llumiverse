@@ -809,7 +809,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
             if (errorCode === 'model_not_found') return false;
             if (errorCode === 'insufficient_quota') return false;
             if (errorCode === 'invalid_model') return false;
-            if (errorCode.includes('invalid_')) return false;
+            if (typeof errorCode === 'string' && errorCode.includes('invalid_')) return false;
         }
 
         // Check error type
