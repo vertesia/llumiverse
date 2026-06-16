@@ -151,8 +151,9 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             // Use the Azure OpenAI client for OpenAI models
             const openAI = this.service.getOpenAIClient();
             const subDriver = new AzureFoundryOpenAIProtocolDriver(openAI);
-            // Use deployment name for API calls
-            const modifiedOptions = { ...options, model: deploymentName };
+            // Strip result_schema: the formatter has already embedded it as a system message.
+            // Azure Foundry does not support text.format.json_schema on the Responses API endpoint.
+            const modifiedOptions = { ...options, model: deploymentName, result_schema: undefined };
             return subDriver.requestTextCompletion(prompt, modifiedOptions);
         } else {
             // Use the chat completions client from the inference operations
@@ -192,7 +193,9 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         if (isOpenAI) {
             const openAI = this.service.getOpenAIClient();
             const subDriver = new AzureFoundryOpenAIProtocolDriver(openAI);
-            const modifiedOptions = { ...options, model: deploymentName };
+            // Strip result_schema: the formatter has already embedded it as a system message.
+            // Azure Foundry does not support text.format.json_schema on the Responses API endpoint.
+            const modifiedOptions = { ...options, model: deploymentName, result_schema: undefined };
             const stream = await subDriver.requestTextCompletionStream(prompt, modifiedOptions);
             return stream;
         } else {
