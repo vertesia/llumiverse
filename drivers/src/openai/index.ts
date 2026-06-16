@@ -1198,7 +1198,7 @@ export function collectTools(output?: OpenAI.Responses.ResponseOutputItem[]): To
             tools.push({
                 id,
                 tool_name: item.name ?? '',
-                tool_input: safeJsonParse(item.arguments) as JSONObject | null,
+                tool_input: safeJsonParse(item.arguments),
             });
         }
     }
