@@ -13,7 +13,6 @@ import {
     getConversationMeta,
     getModelCapabilities,
     incrementConversationTurn,
-    type JSONObject,
     type JSONSchema,
     LlumiverseError,
     type LlumiverseErrorContext,
