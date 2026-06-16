@@ -39,6 +39,38 @@ class TestOpenAIDriver extends BaseOpenAIDriver {
     }
 }
 
+describe('BaseOpenAIDriver usage mapping', () => {
+    it('maps Together flat cached_tokens usage into prompt_cached', () => {
+        const driver = new TestOpenAIDriver();
+        const response = {
+            status: 'completed',
+            output: [
+                {
+                    type: 'message',
+                    role: 'assistant',
+                    content: [{ type: 'output_text', text: 'ok', annotations: [] }],
+                },
+            ],
+            usage: {
+                input_tokens: 100,
+                output_tokens: 20,
+                total_tokens: 120,
+                cached_tokens: 45,
+            },
+        } as unknown as OpenAI.Responses.Response;
+
+        const completion = driver.extractDataFromResponse({ model: 'test-model' }, response);
+
+        expect(completion.token_usage).toEqual({
+            prompt: 100,
+            result: 20,
+            total: 120,
+            prompt_cached: 45,
+            prompt_new: 55,
+        });
+    });
+});
+
 describe('BaseOpenAIDriver Error Handling', () => {
     let driver: TestOpenAIDriver;
 
