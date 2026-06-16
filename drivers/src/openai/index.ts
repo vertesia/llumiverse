@@ -941,6 +941,7 @@ export function mapResponseStream(
     return {
         async *[Symbol.asyncIterator]() {
             let hasTextDeltas = false;
+            let refusalText = '';
             for await (const event of stream) {
                 if (event.type === 'response.output_item.added' && event.item.type === 'function_call') {
                     const syntheticId = `tool_${event.output_index}`;
@@ -1003,10 +1004,9 @@ export function mapResponseStream(
                         } satisfies CompletionChunkObject;
                     }
                 } else if (event.type === 'response.refusal.delta') {
-                    // Emit refusal text as content so the consumer sees it
-                    yield {
-                        result: textToCompletionResult(event.delta),
-                    } satisfies CompletionChunkObject;
+                    refusalText += event.delta;
+                } else if (event.type === 'response.refusal.done') {
+                    throw new Error(`[OpenAI] Model refused: ${event.refusal || refusalText}`);
                 } else if ((event as { type: string }).type === 'response.error') {
                     const errEvent = event as unknown as { message: string; code?: string | null };
                     throw new Error(`[OpenAI Responses API] ${errEvent.message}${errEvent.code ? ` (${errEvent.code})` : ''}`);
