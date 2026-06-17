@@ -6,7 +6,7 @@ settings:
 
 overrides:
   openai: ^6.42.0
-  rollup: ^4.61.0
+  rollup: ^4.61.1
   cross-spawn: ^7.0.6
   brace-expansion@>=3.0.0 <4.0.0: maintenance-v3
   brace-expansion@>=2.0.0 <3.0.0: maintenance-v2
@@ -16,7 +16,7 @@ overrides:
   form-data@<2.5.4: ^4.0.5
   form-data@>=4.0.0 <4.0.4: ^4.0.5
   glob@>=10.2.0 <10.5.0: ^13.0.6
-  google-auth-library: 10.6.2
+  google-auth-library: 10.7.0
   js-yaml@>=4.0.0 <4.1.1: ^4.2.0
   jws@>=3.0.0 <3.2.3: ^4.0.1
   jws@>=4.0.0 <4.0.1: ^4.0.1
@@ -29,13 +29,13 @@ overrides:
   flatted@<3.4.2: ^3.4.2
   picomatch@>=4.0.0 <4.0.4: ^4.0.4
   brace-expansion@>=4.0.0 <5.0.6: ^5.0.6
-  protobufjs@<=7.5.7: ^8.5.0
+  protobufjs@<=7.5.7: ^8.6.2
   postcss@<8.5.10: ^8.5.15
   fast-xml-builder@<=1.1.6: ^1.2.0
   fast-uri@<=3.1.1: ^3.1.2
   fast-xml-parser@<5.7.0: ^5.8.0
   '@protobufjs/utf8@<=1.1.0': ^1.1.1
-  '@grpc/grpc-js@>=1.13.0 <1.13.5': ^1.13.5
+  '@grpc/grpc-js@>=1.13.0 <1.13.5': ^1.14.4
   ws@>=8.0.0 <8.20.1: ^8.21.0
   uuid@<11.1.1: ^14.0.0
 
@@ -53,20 +53,20 @@ importers:
         specifier: ^0.3.0
         version: 0.3.0
       rollup:
-        specifier: ^4.61.0
+        specifier: ^4.61.1
         version: 4.61.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
       vitest:
         specifier: ^4.1.8
-        version: 4.1.8(@types/node@24.12.4)(vite@6.4.2(@types/node@24.12.4))
+        version: 4.1.8(@types/node@24.13.2)(vite@6.4.2(@types/node@24.13.2))
 
   common:
     devDependencies:
       '@types/node':
-        specifier: ^24.12.4
-        version: 24.12.4
+        specifier: ^24.13.1
+        version: 24.13.2
       rimraf:
         specifier: ^6.1.3
         version: 6.1.3
@@ -75,7 +75,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^4.1.8
-        version: 4.1.8(@types/node@24.12.4)(vite@6.4.2(@types/node@24.12.4))
+        version: 4.1.8(@types/node@24.13.2)(vite@6.4.2(@types/node@24.13.2))
 
   core:
     dependencies:
@@ -83,8 +83,8 @@ importers:
         specifier: workspace:*
         version: link:../common
       '@types/node':
-        specifier: ^24.12.4
-        version: 24.12.4
+        specifier: ^24.13.1
+        version: 24.13.2
       ajv:
         specifier: ^8.20.0
         version: 8.20.0
@@ -95,8 +95,8 @@ importers:
         specifier: ^3.14.0
         version: 3.14.0
       undici:
-        specifier: ^7.27.0
-        version: 7.27.1
+        specifier: ^7.27.2
+        version: 7.27.2
     devDependencies:
       '@vertesia/api-fetch-client':
         specifier: ^1.3.0
@@ -109,7 +109,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^4.1.8
-        version: 4.1.8(@types/node@24.12.4)(vite@6.4.2(@types/node@24.12.4))
+        version: 4.1.8(@types/node@24.13.2)(vite@6.4.2(@types/node@24.13.2))
 
   drivers:
     dependencies:
@@ -177,8 +177,8 @@ importers:
         specifier: ^4.1.0
         version: 4.1.0
       google-auth-library:
-        specifier: 10.6.2
-        version: 10.6.2
+        specifier: 10.7.0
+        version: 10.7.0
       groq-sdk:
         specifier: ^1.2.1
         version: 1.2.1
@@ -206,7 +206,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^4.1.8
-        version: 4.1.8(@types/node@24.12.4)(vite@6.4.2(@types/node@24.12.4))
+        version: 4.1.8(@types/node@24.13.2)(vite@6.4.2(@types/node@24.13.2))
 
   examples:
     dependencies:
@@ -922,8 +922,8 @@ packages:
   '@types/estree@1.0.9':
     resolution: {integrity: sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==}
 
-  '@types/node@24.12.4':
-    resolution: {integrity: sha512-GUUEShf+PBCGW2KaXwcIt3Yk+e3pkKwWKb9GSyM9WQVE+ep2jzmHdGsHzu4wgcZy5fN9FBdVzjpBQsYlpfpgLA==}
+  '@types/node@24.13.2':
+    resolution: {integrity: sha512-fRa09kZTgu8o71KFcDjUFuc7F+dEbZYZmkI0mg5YBTRs0yMKjYHsq/c0urDKeDb+D5qVgXOdFcuu+DZPKOITwA==}
 
   '@types/retry@0.12.0':
     resolution: {integrity: sha512-wWKOClTTiizcZhXnPY4wikVAwmdYHp8q6DmC+EJUzAMsycb7HB32Kh9RN4+0gExjmPmZSAQjgURXIGATPegAvA==}
@@ -1199,8 +1199,8 @@ packages:
     resolution: {integrity: sha512-Wjlyrolmm8uDpm/ogGyXZXb1Z+Ca2B8NbJwqBVg0axK9GbBeoS7yGV6vjXnYdGm6X53iehEuxxbyiKp8QmN4Vw==}
     engines: {node: 18 || 20 || >=22}
 
-  google-auth-library@10.6.2:
-    resolution: {integrity: sha512-e27Z6EThmVNNvtYASwQxose/G57rkRuaRbQyxM2bvYLLX/GqWZ5chWq2EBoUchJbCc57eC9ArzO5wMsEmWftCw==}
+  google-auth-library@10.7.0:
+    resolution: {integrity: sha512-QpTAbNJ36TliZLx3TTtahR8HG0hN9RllL1e3FymOvQSIKK8JmgV58H924ub2wa2DsS3ANjjP1Aw1N+Ramc8hqQ==}
     engines: {node: '>=18'}
 
   google-gax@5.0.4:
@@ -1424,8 +1424,8 @@ packages:
     resolution: {integrity: sha512-iUi7jGLuECChuoUwtvf6eXBDcFXTHAt5GM6ckvtD3RqD+j2wW0GW6WndPOu9IWeUk7n933lzrskcNMHJy2tFSw==}
     engines: {node: '>=18'}
 
-  protobufjs@8.6.0:
-    resolution: {integrity: sha512-PIOO89BMGMXGz2333TVv/OqPNVWm7w30ll/4FtLbtLBaonzJMYwTbAZSSlobjIy9MoUgIAxSVUpK7aP7EpTtkg==}
+  protobufjs@8.6.3:
+    resolution: {integrity: sha512-alQyzT0j401LGBtwsqu6uprjR6pfNH1UJf9N6GBFMjIcd+HzTe0/HrjAbFCqun+zvnfLarrxAtMM2xvZ+kFZ5A==}
     engines: {node: '>=12.0.0'}
 
   readable-stream@3.6.2:
@@ -1558,11 +1558,11 @@ packages:
     engines: {node: '>=14.17'}
     hasBin: true
 
-  undici-types@7.16.0:
-    resolution: {integrity: sha512-Zz+aZWSj8LE6zoxD+xrjh4VfkIG8Ya6LvYkZqtUQGJPZjYl53ypCaUwWqo7eI0x66KBGeRo+mlBEkMSeSZ38Nw==}
+  undici-types@7.18.2:
+    resolution: {integrity: sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w==}
 
-  undici@7.27.1:
-    resolution: {integrity: sha512-UDdpiex+mzigiyrXrGbiUaF4HzTNhKbh2vRNFaTMzcqmLIPrZxaCtwo/1TMSuWoM1Xz3WiTo9KdgI3kRqYzJGg==}
+  undici@7.27.2:
+    resolution: {integrity: sha512-uZsKNuzQxDMUY6M3pIMvy5tvlGmtq8XJ2oLAkfRKGNu+1VQAIvLy2xIVG5ATZl5wDXl/tddByAWCizRbOme+TA==}
     engines: {node: '>=20.18.1'}
 
   util-deprecate@1.0.2:
@@ -1708,7 +1708,7 @@ snapshots:
   '@anthropic-ai/vertex-sdk@0.16.1':
     dependencies:
       '@anthropic-ai/sdk': 0.100.1
-      google-auth-library: 10.6.2
+      google-auth-library: 10.7.0
     transitivePeerDependencies:
       - supports-color
       - zod
@@ -2360,9 +2360,9 @@ snapshots:
 
   '@google/genai@2.8.0':
     dependencies:
-      google-auth-library: 10.6.2
+      google-auth-library: 10.7.0
       p-retry: 4.6.2
-      protobufjs: 8.6.0
+      protobufjs: 8.6.3
       ws: 8.21.0
     transitivePeerDependencies:
       - bufferutil
@@ -2378,7 +2378,7 @@ snapshots:
     dependencies:
       lodash.camelcase: 4.3.0
       long: 5.3.2
-      protobufjs: 8.6.0
+      protobufjs: 8.6.3
       yargs: 17.7.2
 
   '@huggingface/inference@4.13.18':
@@ -2533,9 +2533,9 @@ snapshots:
 
   '@types/estree@1.0.9': {}
 
-  '@types/node@24.12.4':
+  '@types/node@24.13.2':
     dependencies:
-      undici-types: 7.16.0
+      undici-types: 7.18.2
 
   '@types/retry@0.12.0': {}
 
@@ -2568,13 +2568,13 @@ snapshots:
       chai: 6.2.2
       tinyrainbow: 3.1.0
 
-  '@vitest/mocker@4.1.8(vite@6.4.2(@types/node@24.12.4))':
+  '@vitest/mocker@4.1.8(vite@6.4.2(@types/node@24.13.2))':
     dependencies:
       '@vitest/spy': 4.1.8
       estree-walker: 3.0.3
       magic-string: 0.30.21
     optionalDependencies:
-      vite: 6.4.2(@types/node@24.12.4)
+      vite: 6.4.2(@types/node@24.13.2)
 
   '@vitest/pretty-format@4.1.8':
     dependencies:
@@ -2839,7 +2839,7 @@ snapshots:
       minipass: 7.1.3
       path-scurry: 2.0.2
 
-  google-auth-library@10.6.2:
+  google-auth-library@10.7.0:
     dependencies:
       base64-js: 1.5.1
       ecdsa-sig-formatter: 1.0.11
@@ -2855,12 +2855,12 @@ snapshots:
       '@grpc/grpc-js': 1.14.4
       '@grpc/proto-loader': 0.8.0
       duplexify: 4.1.3
-      google-auth-library: 10.6.2
+      google-auth-library: 10.7.0
       google-logging-utils: 1.1.3
       node-fetch: 3.3.2
       object-hash: 3.0.0
       proto3-json-serializer: 3.0.3
-      protobufjs: 8.6.0
+      protobufjs: 8.6.3
       retry-request: 8.0.2
     transitivePeerDependencies:
       - supports-color
@@ -3065,9 +3065,9 @@ snapshots:
 
   proto3-json-serializer@3.0.3:
     dependencies:
-      protobufjs: 8.6.0
+      protobufjs: 8.6.3
 
-  protobufjs@8.6.0:
+  protobufjs@8.6.3:
     dependencies:
       long: 5.3.2
 
@@ -3219,13 +3219,13 @@ snapshots:
 
   typescript@6.0.3: {}
 
-  undici-types@7.16.0: {}
+  undici-types@7.18.2: {}
 
-  undici@7.27.1: {}
+  undici@7.27.2: {}
 
   util-deprecate@1.0.2: {}
 
-  vite@6.4.2(@types/node@24.12.4):
+  vite@6.4.2(@types/node@24.13.2):
     dependencies:
       esbuild: 0.28.1
       fdir: 6.5.0(picomatch@4.0.4)
@@ -3234,13 +3234,13 @@ snapshots:
       rollup: 4.61.1
       tinyglobby: 0.2.15
     optionalDependencies:
-      '@types/node': 24.12.4
+      '@types/node': 24.13.2
       fsevents: 2.3.3
 
-  vitest@4.1.8(@types/node@24.12.4)(vite@6.4.2(@types/node@24.12.4)):
+  vitest@4.1.8(@types/node@24.13.2)(vite@6.4.2(@types/node@24.13.2)):
     dependencies:
       '@vitest/expect': 4.1.8
-      '@vitest/mocker': 4.1.8(vite@6.4.2(@types/node@24.12.4))
+      '@vitest/mocker': 4.1.8(vite@6.4.2(@types/node@24.13.2))
       '@vitest/pretty-format': 4.1.8
       '@vitest/runner': 4.1.8
       '@vitest/snapshot': 4.1.8
@@ -3257,10 +3257,10 @@ snapshots:
       tinyexec: 1.1.2
       tinyglobby: 0.2.15
       tinyrainbow: 3.1.0
-      vite: 6.4.2(@types/node@24.12.4)
+      vite: 6.4.2(@types/node@24.13.2)
       why-is-node-running: 2.3.0
     optionalDependencies:
-      '@types/node': 24.12.4
+      '@types/node': 24.13.2
     transitivePeerDependencies:
       - msw
 
