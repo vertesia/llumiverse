@@ -93,6 +93,33 @@ describe('GeminiModelDefinition Error Handling', () => {
             expect(error.name).toBe('NOT_FOUND');
         });
 
+        it('should mark a client-closed/aborted request (499) as retryable despite the 4xx status', () => {
+            const error = modelDef.formatLlumiverseError(
+                driver,
+                { status: 499, message: 'This operation was aborted' },
+                { provider: 'vertexai', model: 'gemini-2.0-flash', operation: 'execute' },
+            );
+            expect(error.retryable).toBe(true);
+        });
+
+        it('should mark a client-closed/cancelled request (499) as retryable despite the 4xx status', () => {
+            const error = modelDef.formatLlumiverseError(
+                driver,
+                { status: 499, message: 'Client Closed Request: The operation was cancelled.' },
+                { provider: 'vertexai', model: 'gemini-2.0-flash', operation: 'execute' },
+            );
+            expect(error.retryable).toBe(true);
+        });
+
+        it('should mark DEADLINE_EXCEEDED as retryable even under a 4xx status', () => {
+            const error = modelDef.formatLlumiverseError(
+                driver,
+                { status: 400, message: 'DEADLINE_EXCEEDED: Deadline expired before operation could complete' },
+                { provider: 'vertexai', model: 'gemini-2.0-flash', operation: 'execute' },
+            );
+            expect(error.retryable).toBe(true);
+        });
+
         it('should handle RESOURCE_EXHAUSTED error (429) as retryable', () => {
             const googleError = {
                 status: 429,
@@ -291,11 +318,41 @@ describe('GeminiModelDefinition Error Handling', () => {
             expect(error.name).toBe('LlumiverseError');
             expect(error.code).toBe(500);
         });
+
+        it('should treat invalid_grant credential issuer failures as non-retryable', () => {
+            const authError = new Error("Error code invalid_grant: Error connecting to the given credential's issuer.");
+
+            const error = driver.formatLlumiverseError(authError, {
+                provider: 'vertexai',
+                model: 'gemini-2.5-flash',
+                operation: 'execute',
+            });
+
+            expect(error.retryable).toBe(false);
+            expect(error.code).toBeUndefined();
+        });
+
+        it('should preserve invalid_grant from Google API errors', () => {
+            const googleError = {
+                status: 400,
+                message: "Error code invalid_grant: Error connecting to the given credential's issuer.",
+            };
+
+            const error = modelDef.formatLlumiverseError(driver, googleError, {
+                provider: 'vertexai',
+                model: 'locations/global/publishers/google/models/gemini-2.5-flash',
+                operation: 'execute',
+            });
+
+            expect(error.retryable).toBe(false);
+            expect(error.code).toBe(400);
+            expect(error.name).toBe('invalid_grant');
+        });
     });
 
     describe('isGeminiErrorRetryable', () => {
         it('should classify retryable status codes correctly', () => {
-            const retryableStatusCodes = [408, 429, 500, 502, 503, 504];
+            const retryableStatusCodes = [408, 429, 499, 500, 502, 503, 504];
 
             retryableStatusCodes.forEach((statusCode) => {
                 const result = exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(statusCode);
@@ -321,7 +378,6 @@ describe('GeminiModelDefinition Error Handling', () => {
         it('should classify other 4xx errors as non-retryable', () => {
             expect(exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(402)).toBe(false);
             expect(exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(405)).toBe(false);
-            expect(exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(499)).toBe(false);
         });
 
         it('should treat 400 URL_REJECTED-REJECTED_CLIENT_THROTTLED as retryable', () => {
@@ -343,6 +399,15 @@ describe('GeminiModelDefinition Error Handling', () => {
                 exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(
                     400,
                     'INVALID_ARGUMENT: bad input',
+                ),
+            ).toBe(false);
+        });
+
+        it('should treat invalid_grant as non-retryable before status-based retry rules', () => {
+            expect(
+                exposePrivate<GeminiModelInternals>(modelDef).isGeminiErrorRetryable(
+                    503,
+                    "Error code invalid_grant: Error connecting to the given credential's issuer.",
                 ),
             ).toBe(false);
         });

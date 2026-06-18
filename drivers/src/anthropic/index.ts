@@ -48,7 +48,7 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
     }
 
     protected formatPrompt(segments: PromptSegment[], opts: ExecutionOptions): Promise<ClaudePrompt> {
-        return formatClaudePrompt(segments, opts);
+        return formatClaudePrompt(segments, opts, this.logger);
     }
 
     public formatDebugPrompt(prompt: ClaudePrompt): ClaudePrompt {

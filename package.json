@@ -13,6 +13,7 @@
         "format": "pnpm exec biome format --write .",
         "format:check": "pnpm exec biome format .",
         "lint": "pnpm exec biome lint",
+        "lint:actions": "scripts/run-actionlint.sh",
         "lint:fix": "pnpm exec biome lint --write",
         "prepare": "cp ./README.md ./core/ && cp ./README.md ./drivers/ && git config core.hooksPath .githooks 2>/dev/null || true",
         "release": "pnpm -r publish --access public",
@@ -23,7 +24,7 @@
         "@biomejs/biome": "2.5.0",
         "cross-spawn": "^7.0.6",
         "npm-ws-tools": "^0.3.0",
-        "rollup": "^4.61.0",
+        "rollup": "^4.61.1",
         "typescript": "^6.0.3",
         "vitest": "^4.1.8"
     },

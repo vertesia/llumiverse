@@ -703,7 +703,7 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)(
             const prompt3: PromptSegment[] = [
                 {
                     role: PromptRole.user,
-                    content: 'What were the numbers in that code?',
+                    content: 'Repeat only the numeric digits from that code, no delimiters, no spaces.',
                 },
             ];
 

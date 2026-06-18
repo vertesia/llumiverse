@@ -13,6 +13,71 @@ import type { AbstractDriver } from './Driver.js';
 
 type StreamingToolUse = ToolUse<unknown> & { _actual_id?: string };
 
+/**
+ * Merge a single streamed `tool_use` fragment into the accumulator map keyed by tool id.
+ *
+ * Providers stream a tool call across several chunks. Different fields arrive in
+ * different chunks and must be reassembled:
+ * - `tool_input` arrives as string pieces (concatenated) or partial objects (merged).
+ * - `tool_name` and the provider's real id (`_actual_id`) may only appear in a later chunk.
+ * - `thought_signature` (Gemini 2.5+/3.x thinking models) is an opaque base64 byte string
+ *   that must be passed back verbatim with the assistant turn on the next request.
+ *
+ * Before this helper existed, the inline accumulator merged `tool_input`/`tool_name`/`_actual_id`
+ * but silently dropped `thought_signature` for any chunk after the first for a given tool id.
+ * When a provider delivers the signature in pieces (large high-effort signatures are split
+ * across chunks) or only on a later chunk, the accumulated signature was left truncated or
+ * absent — producing an invalid base64 byte value that the provider rejects with a
+ * "Base64 decoding failed" (TYPE_BYTES) error when the assistant turn is threaded back.
+ *
+ * The signature is therefore reassembled by concatenating fragments in arrival order, exactly
+ * like `tool_input` string pieces. When the whole signature arrives in a single chunk there is
+ * only one fragment, so concatenation is a no-op and the value round-trips byte-identically.
+ *
+ * Exported for unit testing the round-trip in isolation (no network / no full driver).
+ */
+export function accumulateToolUseChunk(
+    accumulatedToolUse: Map<string, StreamingToolUse>,
+    tool: StreamingToolUse,
+): void {
+    const existing = accumulatedToolUse.get(tool.id);
+    if (!existing) {
+        // New tool call
+        accumulatedToolUse.set(tool.id, { ...tool });
+        return;
+    }
+    // Merge tool input (for streaming where arguments come as string pieces)
+    if (tool.tool_input !== null && tool.tool_input !== undefined) {
+        const existingInput = existing.tool_input as unknown;
+        const newInput = tool.tool_input as unknown;
+        if (typeof existingInput === 'string' && typeof newInput === 'string') {
+            // Concatenate string arguments
+            existing.tool_input = (existingInput + newInput) as typeof existing.tool_input;
+        } else if (existingInput && typeof existingInput === 'object' && newInput && typeof newInput === 'object') {
+            // Merge objects
+            existing.tool_input = {
+                ...(existingInput as Record<string, unknown>),
+                ...(newInput as Record<string, unknown>),
+            } as typeof existing.tool_input;
+        } else {
+            existing.tool_input = tool.tool_input;
+        }
+    }
+    // Update tool name if provided (might come in later chunk)
+    if (tool.tool_name) {
+        existing.tool_name = tool.tool_name;
+    }
+    // Reassemble the thought signature: concatenate fragments in arrival order so a
+    // signature split across chunks is restored byte-for-byte instead of being truncated.
+    if (tool.thought_signature) {
+        existing.thought_signature = (existing.thought_signature ?? '') + tool.thought_signature;
+    }
+    // Update actual ID if provided (OpenAI sends id only in first chunk)
+    if (tool._actual_id) {
+        existing._actual_id = tool._actual_id;
+    }
+}
+
 export class DefaultCompletionStream<PromptT = unknown> implements CompletionStream<PromptT> {
     chunks: number; // Counter for number of chunks instead of storing strings
     completion: ExecutionResponse<PromptT> | undefined;
@@ -83,43 +148,7 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
                         // Note: During streaming, tool_input comes as string chunks that need concatenation
                         if (chunk.tool_use && chunk.tool_use.length > 0) {
                             for (const tool of chunk.tool_use) {
-                                const existing = accumulatedToolUse.get(tool.id);
-                                if (existing) {
-                                    // Merge tool input (for streaming where arguments come as string pieces)
-                                    if (tool.tool_input !== null && tool.tool_input !== undefined) {
-                                        const existingInput = existing.tool_input as unknown;
-                                        const newInput = tool.tool_input as unknown;
-                                        if (typeof existingInput === 'string' && typeof newInput === 'string') {
-                                            // Concatenate string arguments
-                                            existing.tool_input = existingInput + newInput;
-                                        } else if (
-                                            existingInput &&
-                                            typeof existingInput === 'object' &&
-                                            newInput &&
-                                            typeof newInput === 'object'
-                                        ) {
-                                            // Merge objects
-                                            existing.tool_input = {
-                                                ...(existingInput as Record<string, unknown>),
-                                                ...(newInput as Record<string, unknown>),
-                                            };
-                                        } else {
-                                            existing.tool_input = tool.tool_input;
-                                        }
-                                    }
-                                    // Update tool name if provided (might come in later chunk)
-                                    if (tool.tool_name) {
-                                        existing.tool_name = tool.tool_name;
-                                    }
-                                    // Update actual ID if provided (OpenAI sends id only in first chunk)
-                                    const streamingTool = tool as StreamingToolUse;
-                                    if (streamingTool._actual_id) {
-                                        existing._actual_id = streamingTool._actual_id;
-                                    }
-                                } else {
-                                    // New tool call
-                                    accumulatedToolUse.set(tool.id, { ...tool });
-                                }
+                                accumulateToolUseChunk(accumulatedToolUse, tool as StreamingToolUse);
                             }
                         }
                         if (Array.isArray(chunk.result) && chunk.result.length > 0) {
