@@ -137,7 +137,8 @@
     {
       "groupName": "Package Overrides",
       "matchManagers": [
-        "npm"
+        "npm",
+        "pnpm"
       ],
       "matchDepTypes": [
         "overrides"
