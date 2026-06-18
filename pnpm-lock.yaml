@@ -86,8 +86,8 @@ importers:
         specifier: ^0.104.1
         version: 0.104.1
       '@anthropic-ai/vertex-sdk':
-        specifier: ^0.17.1
-        version: 0.17.1
+        specifier: ^0.18.0
+        version: 0.18.0
       '@aws-sdk/client-bedrock':
         specifier: ^3.1068.0
         version: 3.1068.0
@@ -198,15 +198,6 @@ importers:
 
 packages:
 
-  '@anthropic-ai/sdk@0.100.1':
-    resolution: {integrity: sha512-RANcEe7LpiLczkKGOwoXOTuFdPhuubS0i4xaAKOMpcqc55YO0mukgxppV7eygx3DXNjxWT6RYOLPyOy0aIAmwg==}
-    hasBin: true
-    peerDependencies:
-      zod: ^3.25.0 || ^4.0.0
-    peerDependenciesMeta:
-      zod:
-        optional: true
-
   '@anthropic-ai/sdk@0.104.1':
     resolution: {integrity: sha512-gGACa/+IaiXzRRmF96aOhamoBgapKRBiFWbmmTFP8aMkpaEcuStF+Q61bjo4vPxBM7gqWJNZqsngslRdnLHv0Q==}
     hasBin: true
@@ -216,8 +207,8 @@ packages:
       zod:
         optional: true
 
-  '@anthropic-ai/vertex-sdk@0.17.1':
-    resolution: {integrity: sha512-+am1LjqEpb7Qq/fKDdu0PTE2U9+XSPXSSr9Fa5dvJ8FtJ5L9XOroNBnr7iecT+6iGlbiV6BYgMIGkAwPuly/jA==}
+  '@anthropic-ai/vertex-sdk@0.18.0':
+    resolution: {integrity: sha512-o79bEmNwfRyq8Pv1X4P7zXfvOPmNBnzzg3TtchyWqy0mpxtTYQoEMJUHCJXQYEYdHyZKnt3bIGxbPCNiBcDY7Q==}
 
   '@aws-crypto/crc32@5.2.0':
     resolution: {integrity: sha512-nLbCWqQNgUiwwtFsen1AdzAtvuLRsQS8rYgMuxCrdKf9kOssamGLuPwyTY9wyYblNr9+1XM8v6zoDTPPSIeANg==}
@@ -1782,19 +1773,14 @@ packages:
 
 snapshots:
 
-  '@anthropic-ai/sdk@0.100.1':
-    dependencies:
-      json-schema-to-ts: 3.1.1
-      standardwebhooks: 1.0.0
-
   '@anthropic-ai/sdk@0.104.1':
     dependencies:
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.0.0
 
-  '@anthropic-ai/vertex-sdk@0.17.1':
+  '@anthropic-ai/vertex-sdk@0.18.0':
     dependencies:
-      '@anthropic-ai/sdk': 0.100.1
+      '@anthropic-ai/sdk': 0.104.1
       google-auth-library: 10.7.0
     transitivePeerDependencies:
       - supports-color

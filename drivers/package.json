@@ -109,7 +109,7 @@
     },
     "dependencies": {
         "@anthropic-ai/sdk": "^0.104.1",
-        "@anthropic-ai/vertex-sdk": "^0.17.1",
+        "@anthropic-ai/vertex-sdk": "^0.18.0",
         "@aws-sdk/client-bedrock": "^3.1068.0",
         "@aws-sdk/client-bedrock-runtime": "^3.1068.0",
         "@aws-sdk/client-s3": "^3.1068.0",
