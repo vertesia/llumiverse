@@ -55,8 +55,8 @@
       "matchManagers": [
         "npm"
       ],
-      "excludeDepTypes": [
-        "overrides"
+      "matchDepTypes": [
+        "!overrides"
       ],
       "matchPackageNames": [
         "@biomejs/**"
@@ -69,8 +69,8 @@
       "matchManagers": [
         "npm"
       ],
-      "excludeDepTypes": [
-        "overrides"
+      "matchDepTypes": [
+        "!overrides"
       ],
       "matchPackageNames": [
         "@azure/**",
@@ -91,8 +91,8 @@
       "matchManagers": [
         "npm"
       ],
-      "excludeDepTypes": [
-        "overrides"
+      "matchDepTypes": [
+        "!overrides"
       ],
       "matchPackageNames": [
         "@vertesia/**",
@@ -106,8 +106,8 @@
       "matchManagers": [
         "npm"
       ],
-      "excludeDepTypes": [
-        "overrides"
+      "matchDepTypes": [
+        "!overrides"
       ],
       "matchPackageNames": [
         "npm",
