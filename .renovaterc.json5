@@ -55,6 +55,9 @@
       "matchManagers": [
         "npm"
       ],
+      "excludeDepTypes": [
+        "overrides"
+      ],
       "matchPackageNames": [
         "@biomejs/**"
       ],
@@ -65,6 +68,9 @@
       "groupName": "Model Provider Client libraries",
       "matchManagers": [
         "npm"
+      ],
+      "excludeDepTypes": [
+        "overrides"
       ],
       "matchPackageNames": [
         "@azure/**",
@@ -85,6 +91,9 @@
       "matchManagers": [
         "npm"
       ],
+      "excludeDepTypes": [
+        "overrides"
+      ],
       "matchPackageNames": [
         "@vertesia/**",
         "ts-dual-module"
@@ -96,6 +105,9 @@
       "groupName": "package manager dependencies",
       "matchManagers": [
         "npm"
+      ],
+      "excludeDepTypes": [
+        "overrides"
       ],
       "matchPackageNames": [
         "npm",
@@ -144,7 +156,9 @@
         "overrides"
       ],
       "rangeStrategy": "bump",
-      "schedule": "* * * * 4" // Thursday
+      "schedule": "* * * * 4", // Thursday
+      "prCreation": "approval", // Branches still created automatically. This is to hide the group, do not merge.
+      "automerge": false
     }
   ]
 }
