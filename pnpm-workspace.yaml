@@ -14,7 +14,8 @@ minimumReleaseAgeStrict: true
 minimumReleaseAgeExclude:
   - '@vertesia/*'
   - '@llumiverse/*'
-
+  # Renovate security update: undici@7.28.0
+  - undici@7.28.0
   # Additional excludes, due to CVEs etc.
   # Nothing for now
 overrides:
@@ -28,7 +29,6 @@ overrides:
 
   # Single cross-spawn source, root package.json
   cross-spawn: '$cross-spawn'
- 
   # ============================
   # Standard CVE overrides
   # ============================
