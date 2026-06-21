@@ -42,6 +42,8 @@ function _getModelCapabilities(model: string, provider?: string | Providers): Mo
         case Providers.groq:
         case Providers.togetherai:
         case Providers.mistralai:
+        case Providers.cloudflare_ai_gateway:
+        case Providers.vercel_ai_gateway:
             // These providers host text models that generally support tool use
             return getModelCapabilitiesOpenAICompatible(model);
         case Providers.xai:

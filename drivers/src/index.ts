@@ -1,6 +1,7 @@
 export * from './anthropic/index.js';
 export * from './azure/azure_foundry.js';
 export * from './bedrock/index.js';
+export * from './cloudflare/index.js';
 export * from './groq/index.js';
 export * from './huggingface_ie.js';
 export * from './mistral/index.js';
@@ -10,6 +11,7 @@ export * from './openai/openai_compatible.js';
 export * from './replicate.js';
 export * from './test-driver/index.js';
 export * from './togetherai/index.js';
+export * from './vercel/index.js';
 export * from './vertexai/index.js';
 export * from './watsonx/index.js';
 export * from './xai/index.js';

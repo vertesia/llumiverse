@@ -30,6 +30,10 @@
             "types": "./lib/bedrock/index.d.ts",
             "default": "./lib/bedrock/index.js"
         },
+        "./cloudflare": {
+            "types": "./lib/cloudflare/index.d.ts",
+            "default": "./lib/cloudflare/index.js"
+        },
         "./vertexai": {
             "types": "./lib/vertexai/index.d.ts",
             "default": "./lib/vertexai/index.js"
@@ -49,6 +53,10 @@
         "./togetherai": {
             "types": "./lib/togetherai/index.d.ts",
             "default": "./lib/togetherai/index.js"
+        },
+        "./vercel": {
+            "types": "./lib/vercel/index.d.ts",
+            "default": "./lib/vercel/index.js"
         },
         "./xai": {
             "types": "./lib/xai/index.d.ts",
@@ -70,6 +78,7 @@
     "scripts": {
         "lint": "biome lint src",
         "test": "vitest run --retry 3 --passWithNoTests",
+        "test:live": "vitest run test/live-models.test.ts --passWithNoTests",
         "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
         "build": "pnpm exec rimraf ./lib ./tsconfig.tsbuildinfo && tsc",
         "clean": "rimraf ./lib tsconfig.tsbuildinfo"

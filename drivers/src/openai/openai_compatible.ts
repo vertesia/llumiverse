@@ -7,7 +7,7 @@ import {
     Providers,
 } from '@llumiverse/core';
 import OpenAI from 'openai';
-import { BaseOpenAIDriver } from './index.js';
+import { BaseOpenAIDriver, type OpenAIProtocolProvider } from './index.js';
 
 export interface OpenAICompatibleDriverOptions extends DriverOptions {
     /**
@@ -35,7 +35,7 @@ export interface OpenAICompatibleDriverOptions extends DriverOptions {
  */
 export class OpenAICompatibleDriver extends BaseOpenAIDriver {
     service: OpenAI;
-    readonly provider = Providers.openai_compatible;
+    readonly provider: OpenAIProtocolProvider = Providers.openai_compatible;
 
     constructor(opts: OpenAICompatibleDriverOptions) {
         super(opts);

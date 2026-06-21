@@ -126,14 +126,18 @@ const supportFineTunning = new Set([
 
 export interface BaseOpenAIDriverOptions extends DriverOptions {}
 
+export type OpenAIProtocolProvider =
+    | Providers.openai
+    | Providers.azure_openai
+    | Providers.xai
+    | Providers.azure_foundry
+    | Providers.togetherai
+    | Providers.cloudflare_ai_gateway
+    | Providers.vercel_ai_gateway
+    | Providers.openai_compatible;
+
 export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOptions, ResponseInputItem[]> {
-    abstract provider:
-        | Providers.openai
-        | Providers.azure_openai
-        | Providers.xai
-        | Providers.azure_foundry
-        | Providers.togetherai
-        | Providers.openai_compatible;
+    abstract provider: OpenAIProtocolProvider;
     abstract service: OpenAI | AzureOpenAI;
 
     constructor(opts: BaseOpenAIDriverOptions) {

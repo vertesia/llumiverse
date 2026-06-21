@@ -21,6 +21,8 @@ export enum Providers {
     watsonx = 'watsonx',
     xai = 'xai',
     anthropic = 'anthropic',
+    cloudflare_ai_gateway = 'cloudflare_ai_gateway',
+    vercel_ai_gateway = 'vercel_ai_gateway',
 }
 
 export interface ProviderParams {
@@ -128,6 +130,21 @@ export const ProviderList: Record<Providers, ProviderParams> = {
     anthropic: {
         id: Providers.anthropic,
         name: 'Anthropic',
+        requiresApiKey: true,
+        requiresEndpointUrl: false,
+        supportSearch: false,
+    },
+    cloudflare_ai_gateway: {
+        id: Providers.cloudflare_ai_gateway,
+        name: 'Cloudflare AI Gateway',
+        requiresApiKey: true,
+        requiresEndpointUrl: true,
+        endpointPlaceholder: 'https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/workers-ai/v1',
+        supportSearch: false,
+    },
+    vercel_ai_gateway: {
+        id: Providers.vercel_ai_gateway,
+        name: 'Vercel AI Gateway',
         requiresApiKey: true,
         requiresEndpointUrl: false,
         supportSearch: false,
