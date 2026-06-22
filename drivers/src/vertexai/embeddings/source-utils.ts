@@ -20,5 +20,10 @@ export async function dataSourceToVertexSourceData(ds: DataSource): Promise<Vert
     }
 
     const bytesBase64Encoded = ds instanceof Base64DataSource ? ds.getBase64() : await dataSourceToBase64(ds);
+    if (!bytesBase64Encoded) {
+        throw new Error(
+            `Data source conversion produced empty result — name=${ds.name}, mime=${ds.mime_type ?? 'unknown'}`,
+        );
+    }
     return { bytesBase64Encoded };
 }
