@@ -10,10 +10,13 @@ repos/vertesia/llumiverse/rulesets --input <file>`, dropping the export-only
 ## `release.json`
 
 Protects the `release/X.Y` release lines coordinated by the studio release process
-(see `docs/release-process.md` in `vertesia/studio`). It mirrors this repo's `main`
+(see `docs/release-process.md` in `vertesia/studio`). It builds on this repo's `main`
 ruleset (PR + 1 approval, no deletion / non-fast-forward) but targets
-`refs/heads/release/**` instead of the default branch. Like `main`, it does not
-include a CodeQL `code_scanning` rule.
+`refs/heads/release/**` instead of the default branch, and **adds a CodeQL
+`code_scanning` rule** that `main` does not have: `release/X.Y` is the production
+line, so CodeQL must gate it. CodeQL default setup already scans pull requests
+targeting protected branches, so protecting `release/**` makes those scans run
+automatically — no advanced-setup workflow is needed.
 
 Note: this is distinct from the existing `maintenance` ruleset, which targets bare
 `X.Y` branches (the older scheme); the coordinated release lines use the
