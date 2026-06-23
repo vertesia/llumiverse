@@ -613,6 +613,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 'gemini-ultra',
                 'imagen-product-recontext-preview',
                 'embedding',
+                'embed',
                 'gemini-live-2.5-flash-preview-native-audio',
                 'computer-use-preview',
             ],
@@ -652,33 +653,37 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         );
 
         // Process global google models from GenAI
+        // Exclude embedding, retired and or unsupported models
+        const excludedModels = unsupportedModelsByPublisher.google;
         models = models.concat(
-            globalGoogleResult.map((model) => {
-                const modelCapability = getModelCapabilities(model.name ?? '', 'vertexai');
-                return {
-                    id: `locations/global/${model.name}`,
-                    name: `Global ${model.name?.split('/').pop()}`,
-                    provider: 'vertexai',
-                    owner: 'google',
-                    input_modalities: modelModalitiesToArray(modelCapability.input),
-                    output_modalities: modelModalitiesToArray(modelCapability.output),
-                    tool_support: modelCapability.tool_support,
-                };
-            }),
+            globalGoogleResult
+                .filter((model) => !excludedModels.includes(model.name ?? ''))
+                .map((model) => {
+                    const modelCapability = getModelCapabilities(model.name ?? '', 'vertexai');
+                    return {
+                        id: `locations/global/${model.name}`,
+                        name: `Global ${model.name?.split('/').pop()}`,
+                        provider: 'vertexai',
+                        owner: 'google',
+                        input_modalities: modelModalitiesToArray(modelCapability.input),
+                        output_modalities: modelModalitiesToArray(modelCapability.output),
+                        tool_support: modelCapability.tool_support,
+                    };
+                }),
         );
 
         // Process publisher models
         for (const result of publisherResults) {
             const { publisher, response } = result;
             const modelFamily = supportedModels[publisher as keyof typeof supportedModels];
-            const retiredModels = unsupportedModelsByPublisher[publisher as keyof typeof unsupportedModelsByPublisher];
+            const excludedModels = unsupportedModelsByPublisher[publisher as keyof typeof unsupportedModelsByPublisher];
 
             models = models.concat(
                 response
                     .filter((model) => {
                         const modelName = model.name ?? '';
-                        // Exclude retired models
-                        if (retiredModels.some((retiredModel) => modelName.includes(retiredModel))) {
+                        // Exclude embedding, retired and or unsupported models
+                        if (excludedModels.some((retiredModel) => modelName.includes(retiredModel))) {
                             return false;
                         }
                         // Check if the model belongs to the supported model families
@@ -706,7 +711,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 const globalGeminiModels = response
                     .filter((model) => {
                         const modelName = model.name ?? '';
-                        if (retiredModels.some((retiredModel) => modelName.includes(retiredModel))) {
+                        if (excludedModels.some((retiredModel) => modelName.includes(retiredModel))) {
                             return false;
                         }
                         if (modelFamily.some((family) => modelName.includes(family))) {
@@ -748,7 +753,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 const globalAnthropicModels = response
                     .filter((model) => {
                         const modelName = model.name ?? '';
-                        if (retiredModels.some((retiredModel) => modelName.includes(retiredModel))) {
+                        if (excludedModels.some((retiredModel) => modelName.includes(retiredModel))) {
                             return false;
                         }
                         if (modelFamily.some((family) => modelName.includes(family))) {
