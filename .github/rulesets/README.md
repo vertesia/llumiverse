@@ -23,12 +23,15 @@ Note: this is distinct from the existing `maintenance` ruleset, which targets ba
 `release/X.Y` prefix.
 
 When importing, an admin must configure the **bypass actors** (left empty in the
-committed JSON, as for `main`) so the release automation can operate on `release/*`:
+committed JSON, as for `main`) so the release automation can operate on `release/*`.
+**Use bypass mode `Exempt`, not `Always`** — "Always" is an interactive break-glass
+prompt a non-interactive app token can't perform (so the rule stays enforced and the
+create 422s); `Exempt` silently skips evaluation. Add:
 
+- the **release-bot** app (`Exempt`) — studio's `release-cut.yaml` creates the
+  `release/X.Y` line as this app, and
 - the submodule-sync automerge app (so `(sync) Update Git submodule` PRs auto-merge
-  into `release/X.Y`), and
-- the actor used by studio's `release-cut.yaml` for `bump_via=push` to push the
-  version-bump commits past protection (the GitHub App that mints the cross-repo
-  token, or the same deploy-key/automation actor used on `main`). The `bump_via=pr`
-  fallback opens PRs instead and needs no push bypass — use it until the bypass is
-  configured.
+  into `release/X.Y`).
+
+The release-cut **never** bypasses `main`: version bumps to `main` arrive as PRs that
+the approve+merge automation lands.
