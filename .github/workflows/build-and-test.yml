@@ -73,7 +73,7 @@ jobs:
   notify-repo-composableai:
     name: Notify vertesia/composableai of new commit
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/preview' || startsWith(github.ref, 'refs/heads/repo-dispatch')
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/preview' || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/repo-dispatch')
     needs:
       - build-and-test
     # Scopes the cross-repo dispatch token to a dedicated environment.
