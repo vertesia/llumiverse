@@ -151,9 +151,9 @@
       // copies up to a patched release; they are not meant to track routine dependency updates.
       // matchFileNames is the reliable matcher: pnpm-workspace.yaml entries get depType values
       // such as "pnpm.overrides" or "pnpm-workspace.overrides", which matchDepTypes:["overrides"]
-      // does not catch. Keep them out of normal Renovate PRs, while vulnerabilityAlerts remains
-      // enabled above so security fix PRs can still update them.
-      "description": "Only update pnpm-workspace.yaml security-floor overrides for vulnerability alerts",
+      // does not catch. Disable normal Renovate PRs for these entries; vulnerabilityAlerts remains
+      // enabled above so advisory remediation can still run through Renovate's security flow.
+      "description": "Disable routine pnpm-workspace.yaml override updates; keep vulnerability alerts enabled",
       "matchFileNames": [
         "pnpm-workspace.yaml"
       ],
