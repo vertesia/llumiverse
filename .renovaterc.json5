@@ -159,6 +159,25 @@
       "schedule": "* * * * 4", // Thursday
       "prCreation": "approval", // Branches still created automatically. This is to hide the group, do not merge.
       "automerge": false
+    },
+    {
+      // Security-floor overrides (`pkg@<v: patchedVersion`) bump OLD, vulnerable transitive
+      // copies up to the patched release of the SAME major; they are not meant to upgrade
+      // the package. Renovate's "major" runs blindly retarget such floors across a major
+      // boundary (e.g. path-to-regexp 6→8, @babel/core 7→8, uuid 11→14), forcing transitive
+      // consumers onto an incompatible API and breaking the build. Disable major updates for
+      // every pnpm-workspace.yaml override; cross a major boundary manually if a CVE requires
+      // it. matchFileNames is the reliable matcher: pnpm-workspace.yaml entries get depType
+      // "pnpm.overrides", which the "Package Overrides" group's matchDepTypes:["overrides"]
+      // never matches, so they otherwise leak into the catch-all npm group's renovate/major-* PR.
+      "description": "Never major-bump pnpm-workspace.yaml security-floor overrides (breaks transitive consumers)",
+      "matchFileNames": [
+        "pnpm-workspace.yaml"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "enabled": false
     }
   ]
 }
