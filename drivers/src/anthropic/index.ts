@@ -21,6 +21,7 @@ import {
     type ClaudePrompt,
     executeClaudeCompletion,
     formatAnthropicLlumiverseError,
+    formatClaudeDebugPrompt,
     formatClaudePrompt,
     streamClaudeCompletion,
 } from '../shared/claude-messages.js';
@@ -47,7 +48,11 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
     }
 
     protected formatPrompt(segments: PromptSegment[], opts: ExecutionOptions): Promise<ClaudePrompt> {
-        return formatClaudePrompt(segments, opts);
+        return formatClaudePrompt(segments, opts, this.logger);
+    }
+
+    public formatDebugPrompt(prompt: ClaudePrompt): ClaudePrompt {
+        return formatClaudeDebugPrompt(prompt);
     }
 
     async requestTextCompletion(prompt: ClaudePrompt, options: ExecutionOptions): Promise<Completion> {

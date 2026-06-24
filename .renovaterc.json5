@@ -1,5 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  // Default label applied to every Renovate PR (matches studio/composableai).
+  // The automerge workflow's eligibility gate requires this label.
+  "labels": ["dependencies"],
   // Bypass the 7-day minimum release age for security fixes.
   "vulnerabilityAlerts": {
     "minimumReleaseAge": "0 days"
@@ -8,22 +11,66 @@
     {
       // Renovate PRs should wait until new releases have aged enough to reduce
       // exposure to accidental bad publishes and supply-chain compromise.
+      "matchPackageNames": [
+        "*"
+      ],
       "minimumReleaseAge": "7 days"
+    },
+    {
+      // Mark npm patch/minor updates eligible for scoped bot automerge
+      // (the renovate-automerge.yaml workflow merges them once CI passes).
+      // node/npm/pnpm are excluded so runtime/package-manager bumps stay manual.
+      // @biomejs is excluded because it is a native binary that ships per-arch:
+      // CI runs on amd64 but developers are typically on arm64 (Apple Silicon),
+      // so biome bumps need a manual look before merging.
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "addLabels": ["renovate-automerge"],
+      "matchPackageNames": ["!npm", "!pnpm", "!node", "!@biomejs/**"]
     },
     {
       "groupName": "gh-actions deps",
       "matchManagers": ["github-actions"],
-      "rangeStrategy": "bump"
+      "rangeStrategy": "bump",
+      "schedule": "* * * * 2" // Tuesday
+    },
+    {
+      // Mark gh-actions patch/minor/digest updates eligible for scoped bot
+      // automerge (the renovate-automerge.yaml workflow merges them once CI
+      // passes). Major action updates are intentionally left unlabeled so they
+      // require a manual merge — Renovate's default separateMajorMinor already
+      // splits majors into their own PR.
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["patch", "minor", "digest"],
+      "addLabels": ["renovate-automerge"]
     },
     {
       "groupName": "node deps",
       "matchManagers": ["npm", "nvm", "nodenv"],
-      "rangeStrategy": "bump"
+      "rangeStrategy": "bump",
+      "schedule": "* * * * 3" // Wednesday
+    },
+    {
+      "groupName": "biome",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchDepTypes": [
+        "!overrides"
+      ],
+      "matchPackageNames": [
+        "@biomejs/**"
+      ],
+      "rangeStrategy": "bump",
+      "schedule": "* * * * 3" // Wednesday
     },
     {
       "groupName": "Model Provider Client libraries",
       "matchManagers": [
         "npm"
+      ],
+      "matchDepTypes": [
+        "!overrides"
       ],
       "matchPackageNames": [
         "@azure/**",
@@ -36,29 +83,38 @@
         "@aws-sdk/**",
         "@anthropic-ai/**"
       ],
-      "rangeStrategy": "bump"
+      "rangeStrategy": "bump",
+      "schedule": "* * * * 4" // Thursday
     },
     {
       "groupName": "Vertesia libraries",
       "matchManagers": [
         "npm"
       ],
+      "matchDepTypes": [
+        "!overrides"
+      ],
       "matchPackageNames": [
         "@vertesia/**",
         "ts-dual-module"
       ],
-      "rangeStrategy": "bump"
+      "rangeStrategy": "bump",
+      "schedule": "* * * * 1" // Monday
     },
     {
       "groupName": "package manager dependencies",
       "matchManagers": [
         "npm"
       ],
+      "matchDepTypes": [
+        "!overrides"
+      ],
       "matchPackageNames": [
         "npm",
         "pnpm"
       ],
-      "rangeStrategy": "bump"
+      "rangeStrategy": "bump",
+      "schedule": "* * * * 2" // Tuesday
     },
     {
       "description": "Keep Node.js-related updates on v24 until the runtime is upgraded deliberately.",
@@ -74,17 +130,35 @@
       "allowedVersions": "<25",
       "rangeStrategy": "bump"
     },
+    {
+      // The undici Agent is passed as a dispatcher to Node's built-in global
+      // fetch (see core/src/http-agent.ts). undici v8 renamed the dispatch
+      // handler interface (onRequestStart), so a v8 Agent is rejected by the
+      // v7 fetch bundled in Node 24 ("invalid onRequestStart method"). Keep
+      // undici aligned with Node's bundled major until the runtime ships v8.
+      "matchManagers": [
+        "npm"
+      ],
+      "matchPackageNames": [
+        "undici"
+      ],
+      "allowedVersions": "<8",
+      "rangeStrategy": "bump"
+    },
     // Overrides go at the bottom, highest precedence
     {
       "groupName": "Package Overrides",
       "matchManagers": [
-        "npm"
+        "npm",
+        "pnpm"
       ],
       "matchDepTypes": [
         "overrides"
       ],
       "rangeStrategy": "bump",
-      "schedule": "* * * * 4" // Thursday
+      "schedule": "* * * * 4", // Thursday
+      "prCreation": "approval", // Branches still created automatically. This is to hide the group, do not merge.
+      "automerge": false
     }
   ]
 }

@@ -1,15 +1,11 @@
-import {
-    type AbstractDriver,
-    type ExecutionOptions,
-    // biome-ignore lint/suspicious/noDeprecatedImports: exercising deprecated output_modality path until that API is removed
-    Modalities,
-} from '@llumiverse/core';
+// biome-ignore lint/suspicious/noDeprecatedImports: Modalities.image is the supported way to request image output; the deprecation note refers to reading the result modality via CompletionResult.type
+import { type AbstractDriver, type ExecutionOptions, Modalities } from '@llumiverse/core';
 import 'dotenv/config';
 import fs from 'node:fs';
 import { describe, expect, test } from 'vitest';
-import { BedrockDriver } from '../src';
-import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from '../src/bedrock/nova-image-payload';
-import { testPrompt_imageVariations, testPrompt_textToImage, testPrompt_textToImageGuidance } from './samples';
+import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from '../src/bedrock/nova-image-payload.js';
+import { BedrockDriver } from '../src/index.js';
+import { testPrompt_imageVariations, testPrompt_textToImage, testPrompt_textToImageGuidance } from './samples.js';
 
 interface TestDriver {
     driver: AbstractDriver;

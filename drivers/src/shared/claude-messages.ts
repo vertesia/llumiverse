@@ -60,14 +60,60 @@ import {
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
 import { resolveClaudeThinking } from './claude-thinking.js';
+import { truncateBinaryForDebug } from './debug-prompt.js';
 
 // ============================================================================
 // Types
 // ============================================================================
 
+// Conversation text-trim policy (applied only when the caller requests text
+// trimming via stripTextMaxTokens). Keep the last N messages fully intact (the
+// active working set) and cap large text in older messages at the token ceiling
+// below — so long agent conversations don't balloon context.
+const KEEP_RECENT_MESSAGES = 12;
+const OLD_MESSAGE_TEXT_MAX_TOKENS = 2000;
+
+interface WarnLogger {
+    warn: (data: Record<string, unknown>, message: string) => void;
+}
+
 export interface ClaudePrompt {
     messages: MessageParam[];
     system?: TextBlockParam[];
+}
+
+function formatClaudeContentBlockForDebug(block: ContentBlockParam): ContentBlockParam {
+    if (block.type === 'image' && block.source.type === 'base64') {
+        return {
+            ...block,
+            source: {
+                ...block.source,
+                data: truncateBinaryForDebug(block.source.data),
+            },
+        };
+    }
+    if (block.type === 'document' && block.source.type === 'base64') {
+        return {
+            ...block,
+            source: {
+                ...block.source,
+                data: truncateBinaryForDebug(block.source.data),
+            },
+        };
+    }
+    return block;
+}
+
+export function formatClaudeDebugPrompt(prompt: ClaudePrompt): ClaudePrompt {
+    return {
+        ...prompt,
+        messages: prompt.messages.map((message) => ({
+            ...message,
+            content: Array.isArray(message.content)
+                ? message.content.map(formatClaudeContentBlockForDebug)
+                : message.content,
+        })),
+    };
 }
 
 export interface AnthropicUsageLike {
@@ -100,6 +146,25 @@ interface RequestOptions {
 }
 
 type ClaudeTool = NonNullable<MessageCreateParamsBase['tools']>[number];
+type ClaudeMessageStream = AsyncIterable<RawMessageStreamEvent> & {
+    finalMessage(): Promise<Message>;
+};
+type ClaudeMessagesStreamClient = {
+    messages: {
+        stream(body: MessageStreamParams, options?: RequestOptions): ClaudeMessageStream;
+    };
+};
+
+function streamClaudeMessages(
+    client: Anthropic | AnthropicVertex,
+    payload: MessageStreamParams,
+    requestOptions: RequestOptions | undefined,
+): Promise<ClaudeMessageStream> {
+    // AnthropicVertex intentionally wraps the Anthropic Messages API, but it depends on its
+    // own @anthropic-ai/sdk copy. Cast at the boundary so the implementation can call the
+    // shared runtime-compatible stream API without TS trying to call a union of SDK versions.
+    return Promise.resolve((client as unknown as ClaudeMessagesStreamClient).messages.stream(payload, requestOptions));
+}
 
 // ============================================================================
 // Token usage
@@ -200,11 +265,9 @@ export function claudeMaxTokens(option: StatelessExecutionOptions): number {
 
 async function collectFileBlocks(
     segment: PromptSegment,
-    restrictedTypes: true,
-): Promise<Array<TextBlockParam | ImageBlockParam>>;
-async function collectFileBlocks(segment: PromptSegment, restrictedTypes?: false): Promise<ContentBlockParam[]>;
-async function collectFileBlocks(segment: PromptSegment, restrictedTypes = false): Promise<ContentBlockParam[]> {
-    const contentBlocks: ContentBlockParam[] = [];
+    logger?: WarnLogger,
+): Promise<Array<TextBlockParam | ImageBlockParam | DocumentBlockParam>> {
+    const contentBlocks: Array<TextBlockParam | ImageBlockParam | DocumentBlockParam> = [];
 
     for (const file of segment.files || []) {
         if (file.mime_type?.startsWith('image/')) {
@@ -221,28 +284,34 @@ async function collectFileBlocks(segment: PromptSegment, restrictedTypes = false
                     media_type: mimeType,
                 },
             } satisfies ImageBlockParam);
-        } else if (!restrictedTypes) {
-            if (file.mime_type === 'application/pdf') {
-                contentBlocks.push({
-                    title: file.name,
-                    type: 'document',
-                    source: {
-                        type: 'base64',
-                        data: await readStreamAsBase64(await file.getStream()),
-                        media_type: 'application/pdf',
-                    },
-                } satisfies DocumentBlockParam);
-            } else if (file.mime_type?.startsWith('text/')) {
-                contentBlocks.push({
-                    title: file.name,
-                    type: 'document',
-                    source: {
-                        type: 'text',
-                        data: await readStreamAsString(await file.getStream()),
-                        media_type: 'text/plain',
-                    },
-                } satisfies DocumentBlockParam);
-            }
+        } else if (file.mime_type?.startsWith('video/')) {
+            logger?.warn(
+                {
+                    file_name: file.name,
+                    mime_type: file.mime_type,
+                },
+                '[Claude] Skipping unsupported video attachment',
+            );
+        } else if (file.mime_type === 'application/pdf') {
+            contentBlocks.push({
+                title: file.name,
+                type: 'document',
+                source: {
+                    type: 'base64',
+                    data: await readStreamAsBase64(await file.getStream()),
+                    media_type: 'application/pdf',
+                },
+            } satisfies DocumentBlockParam);
+        } else if (file.mime_type?.startsWith('text/')) {
+            contentBlocks.push({
+                title: file.name,
+                type: 'document',
+                source: {
+                    type: 'text',
+                    data: await readStreamAsString(await file.getStream()),
+                    media_type: 'text/plain',
+                },
+            } satisfies DocumentBlockParam);
         }
     }
 
@@ -253,7 +322,11 @@ async function collectFileBlocks(segment: PromptSegment, restrictedTypes = false
 // Prompt formatting (PromptSegment[] → ClaudePrompt)
 // ============================================================================
 
-export async function formatClaudePrompt(segments: PromptSegment[], options: ExecutionOptions): Promise<ClaudePrompt> {
+export async function formatClaudePrompt(
+    segments: PromptSegment[],
+    options: ExecutionOptions,
+    logger?: WarnLogger,
+): Promise<ClaudePrompt> {
     let system: TextBlockParam[] | undefined = segments
         .filter((s) => s.role === PromptRole.system)
         .map((s) => ({ text: s.content, type: 'text' as const }));
@@ -276,11 +349,11 @@ export async function formatClaudePrompt(segments: PromptSegment[], options: Exe
             if (!segment.tool_use_id) {
                 throw new Error('Tool prompt segment must have a tool use ID');
             }
-            const contentBlocks: Array<TextBlockParam | ImageBlockParam> = [];
+            const contentBlocks: Array<TextBlockParam | ImageBlockParam | DocumentBlockParam> = [];
             if (segment.content) {
                 contentBlocks.push({ type: 'text', text: segment.content } satisfies TextBlockParam);
             }
-            contentBlocks.push(...(await collectFileBlocks(segment, true)));
+            contentBlocks.push(...(await collectFileBlocks(segment, logger)));
             messages.push({
                 role: 'user',
                 content: [
@@ -296,7 +369,7 @@ export async function formatClaudePrompt(segments: PromptSegment[], options: Exe
             if (segment.content) {
                 contentBlocks.push({ type: 'text', text: segment.content } satisfies TextBlockParam);
             }
-            contentBlocks.push(...(await collectFileBlocks(segment, false)));
+            contentBlocks.push(...(await collectFileBlocks(segment, logger)));
             if (contentBlocks.length === 0) continue;
 
             const messageParam: MessageParam = {
@@ -424,6 +497,58 @@ export function fixOrphanedToolUse(messages: MessageParam[]): MessageParam[] {
                 }
             }
         }
+    }
+    return result;
+}
+
+/**
+ * Drop tool_result blocks whose tool_use_id has no matching tool_use in the
+ * immediately preceding assistant message. This is the mirror of
+ * {@link fixOrphanedToolUse}: that function synthesizes results for tool_uses
+ * left unanswered (e.g. a cancelled run); this one removes results left dangling
+ * after their tool_use was dropped (e.g. by conversation compaction/trimming, or
+ * a parallel tool batch whose results were split across messages that cannot be
+ * re-paired).
+ *
+ * Without this, the Anthropic / Vertex-Anthropic API rejects the request with a
+ * non-retryable 400: "unexpected `tool_use_id` found in `tool_result` blocks ...
+ * Each `tool_result` block must have a corresponding `tool_use` block in the
+ * previous message." — which terminates the conversation.
+ *
+ * Must run AFTER mergeConsecutiveUserMessages so that parallel tool results which
+ * were split across separate user messages are first combined into the single
+ * user turn that follows the assistant tool_use message (otherwise valid results
+ * whose "previous message" is another user message would be wrongly dropped).
+ */
+export function fixOrphanedToolResults(messages: MessageParam[]): MessageParam[] {
+    if (messages.length === 0) return messages;
+    const result: MessageParam[] = [];
+    for (let i = 0; i < messages.length; i++) {
+        const message = messages[i];
+        if (message.role !== 'user' || !Array.isArray(message.content)) {
+            result.push(message);
+            continue;
+        }
+        const hasToolResult = message.content.some((block) => block.type === 'tool_result');
+        if (!hasToolResult) {
+            result.push(message);
+            continue;
+        }
+        // Collect the tool_use ids declared by the immediately preceding assistant message.
+        const prev = messages[i - 1];
+        const allowedIds = new Set<string>();
+        if (prev && prev.role === 'assistant' && Array.isArray(prev.content)) {
+            for (const block of prev.content) {
+                if (block.type === 'tool_use') allowedIds.add(block.id);
+            }
+        }
+        const filtered = message.content.filter((block) =>
+            block.type === 'tool_result' ? allowedIds.has(block.tool_use_id) : true,
+        );
+        // If every block was an orphaned tool_result, drop the message rather than
+        // emit an empty (and invalid) content array.
+        if (filtered.length === 0) continue;
+        result.push(filtered.length === message.content.length ? message : { ...message, content: filtered });
     }
     return result;
 }
@@ -563,7 +688,12 @@ export function getClaudePayload(
         requestOptions = { headers: { 'anthropic-beta': 'output-128k-2025-02-19' } };
     }
 
-    const fixedMessages = fixOrphanedToolUse(prompt.messages);
+    // Merge first so parallel tool results split across user messages are recombined
+    // into the single user turn after their assistant tool_use message; then fix both
+    // orphan directions (tool_use without result, and result without tool_use) so the
+    // request can never trip Anthropic/Vertex's tool_use/tool_result pairing validation.
+    const mergedMessages = mergeConsecutiveUserMessages(prompt.messages);
+    const fixedMessages = fixOrphanedToolResults(fixOrphanedToolUse(mergedMessages));
     let sanitizedMessages = sanitizeMessages(fixedMessages);
 
     if (options.tools) {
@@ -682,10 +812,18 @@ export function buildClaudeStreamingConversation(
 
     conversation = incrementConversationTurn(conversation) as ClaudePrompt;
     const currentTurn = getConversationMeta(conversation).turnNumber;
+    // When text trimming is requested, keep the agent's active working set (the
+    // most recent messages — the file it just read/wrote, latest diagnostics)
+    // fully intact, and aggressively shrink large text only in OLDER messages.
+    // Clamp the effective cap so a lax caller value (e.g. 10000) still bites on
+    // stale blocks; long agent conversations otherwise balloon context and
+    // trigger frequent expensive checkpoints.
+    const requestedTextMax = options.stripTextMaxTokens;
     const stripOptions = {
         keepForTurns: options.stripImagesAfterTurns ?? Infinity,
         currentTurn,
-        textMaxTokens: options.stripTextMaxTokens,
+        textMaxTokens: requestedTextMax ? Math.min(requestedTextMax, OLD_MESSAGE_TEXT_MAX_TOKENS) : undefined,
+        keepRecentMessages: requestedTextMax ? KEEP_RECENT_MESSAGES : undefined,
     };
     let processed = stripBase64ImagesFromConversation(conversation, stripOptions);
     processed = truncateLargeTextInConversation(processed, stripOptions);
@@ -715,7 +853,8 @@ export async function executeClaudeCompletion(
 
     const { payload, requestOptions } = getClaudePayload(options, conversation);
 
-    const result: Message = await client.messages.stream(payload, requestOptions).finalMessage();
+    const responseStream = await streamClaudeMessages(client, payload as MessageStreamParams, requestOptions);
+    const result = await responseStream.finalMessage();
 
     const includeThoughts = model_options?.include_thoughts ?? false;
     const text = collectAllTextContent(result.content, includeThoughts);
@@ -760,7 +899,7 @@ export async function streamClaudeCompletion(
     const { payload, requestOptions } = getClaudePayload(options, conversation);
     const streamingPayload: MessageStreamParams = { ...payload, stream: true };
 
-    const response_stream = await client.messages.stream(streamingPayload, requestOptions);
+    const response_stream = await streamClaudeMessages(client, streamingPayload, requestOptions);
 
     let currentToolUse: { id: string; name: string; inputJson: string } | null = null;
     let pendingSpacing = false;

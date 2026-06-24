@@ -28,10 +28,11 @@ import { AbstractDriver } from '@llumiverse/core/driver';
 import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
 import { type FETCH_FN, FetchClient } from '@vertesia/api-fetch-client';
 import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from 'google-auth-library';
-import type { ClaudePrompt } from '../shared/claude-messages.js';
+import { type ClaudePrompt, formatClaudeDebugPrompt } from '../shared/claude-messages.js';
 import { generateVertexAiEmbeddings } from './embeddings/embed.js';
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
-import { ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
+import { formatGeminiDebugPrompt } from './models/gemini.js';
+import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
 import type { LLamaPrompt } from './models/llama.js';
 import type { OpenAIMessage, OpenAIPrompt } from './models/openai_compatible.js';
 import { getModelDefinition, trimModelName } from './models.js';
@@ -48,6 +49,13 @@ export interface GenerateContentPrompt {
 }
 type ClaudeStreamingPrompt = { messages: unknown[]; system?: unknown[] };
 type ConversationWrapper = { messages?: unknown[]; system?: unknown[] };
+
+function isClaudePrompt(prompt: VertexAIPrompt): prompt is ClaudePrompt {
+    return (
+        'messages' in prompt &&
+        ('system' in prompt || prompt.messages.some((message) => Array.isArray(message.content)))
+    );
+}
 
 function isClaudeStreamingPrompt(prompt: unknown): prompt is ClaudeStreamingPrompt {
     return (
@@ -343,6 +351,19 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             return new ImagenModelDefinition(options.model).createPrompt(this, segments, options);
         }
         return getModelDefinition(options.model).createPrompt(this, segments, options);
+    }
+
+    public formatDebugPrompt(prompt: VertexAIPrompt): VertexAIPrompt {
+        if (isClaudePrompt(prompt)) {
+            return formatClaudeDebugPrompt(prompt);
+        }
+        if ('contents' in prompt) {
+            return formatGeminiDebugPrompt(prompt);
+        }
+        if ('messages' in prompt) {
+            return prompt;
+        }
+        return formatImagenDebugPrompt(prompt);
     }
 
     async requestTextCompletion(prompt: VertexAIPrompt, options: ExecutionOptions): Promise<Completion> {
@@ -677,11 +698,12 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         const publisherConfig = {
             google: {
                 families: ['gemini', 'imagen'],
-                retired: [
+                excluded: [
                     'gemini-pro',
                     'gemini-ultra',
                     'imagen-product-recontext-preview',
                     'embedding',
+                    'embed',
                     'gemini-live-2.5-flash-preview-native-audio',
                     'computer-use-preview',
                 ],
@@ -691,12 +713,12 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             },
             anthropic: {
                 families: ['claude'],
-                retired: [],
+                excluded: [],
                 additional: [],
             },
             meta: {
                 families: ['maas'],
-                retired: [],
+                excluded: [],
                 additional: [
                     'llama-4-maverick-17b-128e-instruct-maas',
                     'llama-4-scout-17b-16e-instruct-maas',
@@ -709,7 +731,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             },
             xai: {
                 families: ['grok'],
-                retired: [],
+                excluded: [],
                 additional: [],
             },
         } as const;
@@ -749,19 +771,23 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         );
 
         // Process global google models from GenAI
+        // Exclude embedding, retired and or unsupported models
+        const excludedModels = unsupportedModelsByPublisher.google;
         models = models.concat(
-            globalGoogleResult.map((model) => {
-                const modelCapability = getModelCapabilities(model.name ?? '', 'vertexai');
-                return {
-                    id: `locations/global/${model.name}`,
-                    name: `Global ${model.name?.split('/').pop()}`,
-                    provider: 'vertexai',
-                    owner: 'google',
-                    input_modalities: modelModalitiesToArray(modelCapability.input),
-                    output_modalities: modelModalitiesToArray(modelCapability.output),
-                    tool_support: modelCapability.tool_support,
-                };
-            }),
+            globalGoogleResult
+                .filter((model) => !excludedModels.includes(model.name ?? ''))
+                .map((model) => {
+                    const modelCapability = getModelCapabilities(model.name ?? '', 'vertexai');
+                    return {
+                        id: `locations/global/${model.name}`,
+                        name: `Global ${model.name?.split('/').pop()}`,
+                        provider: 'vertexai',
+                        owner: 'google',
+                        input_modalities: modelModalitiesToArray(modelCapability.input),
+                        output_modalities: modelModalitiesToArray(modelCapability.output),
+                        tool_support: modelCapability.tool_support,
+                    };
+                }),
         );
 
         // Process publisher models
@@ -769,14 +795,14 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             const { publisher, response } = result as { publisher: string; response: Array<{ name?: string }> };
             const config = publisherConfig[publisher as Publisher];
             const modelFamily = config.families;
-            const retiredModels = config.retired;
+            const excludedModels = config.excluded;
 
             models = models.concat(
                 response
                     .filter((model) => {
                         const modelName = model.name ?? '';
-                        // Exclude retired models
-                        if (retiredModels.some((retiredModel) => modelName.includes(retiredModel))) {
+                        // Exclude embedding, retired and or unsupported models
+                        if (excludedModels.some((retiredModel) => modelName.includes(retiredModel))) {
                             return false;
                         }
                         // Check if the model belongs to the supported model families
@@ -804,7 +830,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 const globalGeminiModels = response
                     .filter((model) => {
                         const modelName = model.name ?? '';
-                        if (retiredModels.some((retiredModel) => modelName.includes(retiredModel))) {
+                        if (excludedModels.some((retiredModel) => modelName.includes(retiredModel))) {
                             return false;
                         }
                         if (modelFamily.some((family) => modelName.includes(family))) {
@@ -846,7 +872,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 const globalAnthropicModels = response
                     .filter((model) => {
                         const modelName = model.name ?? '';
-                        if (retiredModels.some((retiredModel) => modelName.includes(retiredModel))) {
+                        if (excludedModels.some((retiredModel) => modelName.includes(retiredModel))) {
                             return false;
                         }
                         if (modelFamily.some((family) => modelName.includes(family))) {

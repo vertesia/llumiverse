@@ -46,8 +46,11 @@ import {
     type VertexAIGeminiOptions,
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
+import { truncateBinaryForDebug } from '../../shared/debug-prompt.js';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
 import type { ModelDefinition } from '../models.js';
+
+type GoogleApiErrorLike = Pick<ApiError, 'status' | 'message'>;
 
 function supportsStructuredOutput(options: PromptOptions): boolean {
     // Gemini 1.0 Ultra does not support JSON output, 1.0 Pro does.
@@ -81,6 +84,32 @@ const geminiSafetySettings: SafetySetting[] = [
     },
 ];
 
+function formatGeminiContentForDebug(content: Content): Content {
+    return {
+        ...content,
+        parts: content.parts?.map((part) => {
+            if (!part.inlineData?.data) {
+                return part;
+            }
+            return {
+                ...part,
+                inlineData: {
+                    ...part.inlineData,
+                    data: truncateBinaryForDebug(part.inlineData.data),
+                },
+            } satisfies Part;
+        }),
+    };
+}
+
+export function formatGeminiDebugPrompt(prompt: GenerateContentPrompt): GenerateContentPrompt {
+    return {
+        ...prompt,
+        contents: prompt.contents.map(formatGeminiContentForDebug),
+        system: prompt.system ? formatGeminiContentForDebug(prompt.system) : undefined,
+    };
+}
+
 // We do the mapping here rather than in common to avoid bringing the SDK into the common package.
 function getProminentPeopleOption(
     prominentPeople?: 'PROMINENT_PEOPLE_UNSPECIFIED' | 'ALLOW_PROMINENT_PEOPLE' | 'BLOCK_PROMINENT_PEOPLE',
@@ -97,19 +126,24 @@ function getProminentPeopleOption(
     }
 }
 
-function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentPrompt): GenerateContentParameters {
+export function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentPrompt): GenerateContentParameters {
     const model_options = options.model_options as VertexAIGeminiOptions | undefined;
     const tools = getToolDefinitions(options.tools);
 
     // When no tools are provided but conversation contains functionCall/functionResponse parts
     // (e.g. checkpoint summary calls), convert them to text to avoid API errors.
     // Use a local variable to avoid mutating the caller's conversation object.
-    let payloadContents = prompt.contents;
+    let payloadContents = mergeConsecutiveRole(prompt.contents);
     if (!tools && payloadContents) {
         const hasToolParts = payloadContents.some((c) => c.parts?.some((p) => p.functionCall || p.functionResponse));
         if (hasToolParts) {
             payloadContents = convertGeminiFunctionPartsToText(payloadContents);
         }
+    }
+    // Drop functionResponse parts whose functionCall was lost (e.g. compaction),
+    // which would otherwise trip Gemini's functionCall/functionResponse pairing.
+    if (payloadContents) {
+        payloadContents = fixOrphanedToolResults(payloadContents);
     }
 
     const useStructuredOutput = supportsStructuredOutput(options) && !tools;
@@ -246,6 +280,49 @@ export function mergeConsecutiveRole(contents: Content[] | undefined): Content[]
     }
 
     result.push(currentContent);
+    return result;
+}
+
+/**
+ * Drop functionResponse parts whose name has no matching functionCall in the
+ * immediately-preceding `model` content. Gemini pairs a functionResponse to its
+ * functionCall by name; a response left dangling after its call was dropped
+ * (e.g. by conversation compaction/trimming, or an unmergeable parallel batch)
+ * causes the API to reject the request. Mirrors the same guard added to the
+ * Claude, Bedrock, and OpenAI drivers.
+ *
+ * Run after mergeConsecutiveRole so parallel responses that were split across
+ * user contents are first recombined under the model turn that issued the calls,
+ * and are therefore not mistaken for orphans.
+ */
+export function fixOrphanedToolResults(contents: Content[]): Content[] {
+    if (contents.length === 0) return contents;
+    const result: Content[] = [];
+    for (let i = 0; i < contents.length; i++) {
+        const content = contents[i];
+        if (content.role !== 'user' || !content.parts) {
+            result.push(content);
+            continue;
+        }
+        const hasFunctionResponse = content.parts.some((part) => part.functionResponse);
+        if (!hasFunctionResponse) {
+            result.push(content);
+            continue;
+        }
+        const prev = contents[i - 1];
+        const allowedNames = new Set<string>();
+        if (prev && prev.role === 'model' && prev.parts) {
+            for (const part of prev.parts) {
+                if (part.functionCall?.name) allowedNames.add(part.functionCall.name);
+            }
+        }
+        const filtered = content.parts.filter((part) =>
+            part.functionResponse ? allowedNames.has(part.functionResponse.name ?? '') : true,
+        );
+        // Drop the content if every part was an orphaned functionResponse.
+        if (filtered.length === 0) continue;
+        result.push(filtered.length === content.parts.length ? content : { ...content, parts: filtered });
+    }
     return result;
 }
 
@@ -439,14 +516,14 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 // File content handling
                 if (msg.files) {
                     for (const f of msg.files) {
-                        const fileUrl = await f.getURL();
-                        const isGsUrl =
-                            fileUrl.startsWith('gs://') || fileUrl.startsWith('https://storage.googleapis.com/');
+                        const fileUri = await f.getURI();
+                        const isGsUri =
+                            fileUri.startsWith('gs://') || fileUri.startsWith('https://storage.googleapis.com/');
 
-                        if (isGsUrl) {
+                        if (isGsUri) {
                             parts.push({
                                 fileData: {
-                                    fileUri: fileUrl,
+                                    fileUri,
                                     mimeType: f.mime_type,
                                 },
                             });
@@ -814,11 +891,11 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             throw error;
         }
 
-        const apiError = error as ApiError;
+        const apiError = error;
         const httpStatusCode = apiError.status;
 
         // Extract error message
-        const message = apiError.message || String(error);
+        const message = apiError.message;
 
         // Build user-facing message with status code
         let userMessage = message;
@@ -847,13 +924,14 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
     /**
      * Type guard to check if error is a Google API error.
      */
-    private isGoogleApiError(error: unknown): error is ApiError {
+    private isGoogleApiError(error: unknown): error is GoogleApiErrorLike {
         return (
             error !== null &&
             typeof error === 'object' &&
             'status' in error &&
             typeof (error as { status?: unknown }).status === 'number' &&
-            'message' in error
+            'message' in error &&
+            typeof (error as { message?: unknown }).message === 'string'
         );
     }
 
@@ -862,6 +940,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
      *
      * Retryable errors (per Google AIP-194):
      * - 408 (REQUEST_TIMEOUT): Request timeout
+     * - 499 (CANCELLED / Client Closed Request): Transport cancellation
      * - 429 (RESOURCE_EXHAUSTED): Rate limit exceeded, quota exhausted
      * - 500 (INTERNAL): Internal server error
      * - 502 (BAD_GATEWAY): Bad gateway
@@ -887,9 +966,12 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
      * @returns True if retryable, false if not retryable, undefined if unknown
      */
     private isGeminiErrorRetryable(httpStatusCode: number, message?: string): boolean | undefined {
+        if (message && this.isNonRetryableAuthError(message)) return false;
+
         // Retryable status codes
         if (httpStatusCode === 408) return true; // Request timeout
         if (httpStatusCode === 429) return true; // Rate limit/quota
+        if (httpStatusCode === 499) return true; // Client closed / operation cancelled
         if (httpStatusCode === 502) return true; // Bad gateway
         if (httpStatusCode === 503) return true; // Service unavailable
         if (httpStatusCode === 504) return true; // Gateway timeout
@@ -906,11 +988,24 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             }
         }
 
+        // A transport-level abort/cancel (request-timeout / dropped connection, sometimes reported
+        // as 499 client-closed) or a deadline-exceeded is transient and should be retried,
+        // even though it carries a 4xx status. Honor it before the 4xx -> non-retryable rule.
+        if (message) {
+            const lower = message.toLowerCase();
+            if (lower.includes('aborted') || lower.includes('cancelled') || lower.includes('deadline')) return true;
+        }
+
         // Non-retryable 4xx client errors
         if (httpStatusCode >= 400 && httpStatusCode < 500) return false;
 
         // Unknown status codes - let consumer decide retry strategy
         return undefined;
+    }
+
+    private isNonRetryableAuthError(message: string): boolean {
+        const lowerMessage = message.toLowerCase();
+        return lowerMessage.includes('invalid_grant') || lowerMessage.includes("credential's issuer");
     }
 
     /**
@@ -921,6 +1016,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
     private extractErrorName(message: string): string | undefined {
         // Common Google error patterns
         const patterns = [
+            /^Error code ([a-zA-Z0-9_-]+):/, // "Error code invalid_grant: message"
             /^([A-Z_]+):/, // "ERROR_NAME: message"
             /\[([A-Z_]+)\]/, // "[ERROR_NAME] message"
             /^(\w+Error):/, // "ErrorTypeError: message"

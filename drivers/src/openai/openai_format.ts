@@ -4,11 +4,54 @@
 import { type PromptOptions, PromptRole, type PromptSegment } from '@llumiverse/common';
 import { readStreamAsBase64 } from '@llumiverse/core';
 import type OpenAI from 'openai';
+import { truncateDataUrlForDebug } from '../shared/debug-prompt.js';
 
 // Types for Response API
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type ResponseInputContent = OpenAI.Responses.ResponseInputContent;
 type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
+
+function isResponseInputContent(value: unknown): value is ResponseInputContent {
+    return (
+        typeof value === 'object' &&
+        value !== null &&
+        'type' in value &&
+        (value.type === 'input_text' || value.type === 'input_image' || value.type === 'input_file')
+    );
+}
+
+function isEasyInputMessageWithInputContent(
+    item: ResponseInputItem,
+): item is EasyInputMessage & { content: ResponseInputContent[] } {
+    return 'content' in item && Array.isArray(item.content) && item.content.every(isResponseInputContent);
+}
+
+export function formatOpenAIDebugPrompt(prompt: ResponseInputItem[]): ResponseInputItem[] {
+    return prompt.map((item) => {
+        if (!isEasyInputMessageWithInputContent(item)) {
+            return item;
+        }
+        const content = item.content.map((content) => {
+            if (content.type === 'input_image' && 'image_url' in content && typeof content.image_url === 'string') {
+                return {
+                    ...content,
+                    image_url: truncateDataUrlForDebug(content.image_url),
+                } satisfies ResponseInputContent;
+            }
+            if (content.type === 'input_file' && 'file_data' in content && typeof content.file_data === 'string') {
+                return {
+                    ...content,
+                    file_data: truncateDataUrlForDebug(content.file_data),
+                } satisfies ResponseInputContent;
+            }
+            return content;
+        });
+        return {
+            ...item,
+            content,
+        } satisfies EasyInputMessage;
+    });
+}
 
 export interface OpenAITextMessage {
     content: string;
@@ -80,6 +123,7 @@ export async function formatOpenAILikeMultimodalPrompt(
             );
             const textContent = textParts.length === 1 && !msg.files ? textParts[0].text : textParts;
             const systemMsg: EasyInputMessage = {
+                type: 'message',
                 role: 'system',
                 content: textContent,
             };
@@ -104,6 +148,7 @@ export async function formatOpenAILikeMultimodalPrompt(
                 (part): part is OpenAI.Responses.ResponseInputText => part.type === 'input_text',
             );
             const safetyMsg: EasyInputMessage = {
+                type: 'message',
                 role: 'system',
                 content: textParts,
             };
@@ -127,6 +172,7 @@ export async function formatOpenAILikeMultimodalPrompt(
             others.push(toolOutputMsg);
         } else if (msg.role !== PromptRole.negative && msg.role !== PromptRole.mask) {
             const inputMsg: EasyInputMessage = {
+                type: 'message',
                 role: msg.role === 'assistant' ? 'assistant' : 'user',
                 content: parts,
             };
@@ -136,6 +182,7 @@ export async function formatOpenAILikeMultimodalPrompt(
 
     if (opts.result_schema && !opts.useToolForFormatting) {
         const schemaMsg: EasyInputMessage = {
+            type: 'message',
             role: 'system',
             content: [
                 {

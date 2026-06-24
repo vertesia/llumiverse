@@ -8,9 +8,9 @@ import {
     stripBinaryFromConversation,
     stripHeartbeatsFromConversation,
     truncateLargeTextInConversation,
-} from '../src/conversation-utils';
+} from '../src/conversation-utils.js';
 
-import type { Tree } from './__helpers__/test-utils';
+import type { Tree } from './__helpers__/test-utils.js';
 
 const IMAGE_PLACEHOLDER = '[Image removed from conversation history]';
 const DOCUMENT_PLACEHOLDER = '[Document removed from conversation history]';
@@ -931,6 +931,118 @@ describe('truncateLargeTextInConversation', () => {
         const result = truncateLargeTextInConversation(retainedConversation, { textMaxTokens: 5000 }) as Tree;
 
         expect(result.messages[0].content[0].source.data).toBe(originalData);
+    });
+
+    describe('keepRecentMessages (turn-aware truncation)', () => {
+        type TextMessage = { content: Array<{ text: string }> };
+        type TextConversation = { messages: TextMessage[] };
+
+        const isRecord = (value: unknown): value is Record<string, unknown> =>
+            typeof value === 'object' && value !== null;
+
+        const isTextMessage = (value: unknown): value is TextMessage => {
+            if (!isRecord(value) || !Array.isArray(value.content)) return false;
+            const firstContent = value.content[0];
+            return isRecord(firstContent) && typeof firstContent.text === 'string';
+        };
+
+        const expectTextMessages = (value: unknown): TextMessage[] => {
+            expect(Array.isArray(value)).toBe(true);
+            if (!Array.isArray(value)) {
+                throw new Error('Expected message array');
+            }
+
+            const allTextMessages = value.every(isTextMessage);
+            expect(allTextMessages).toBe(true);
+            if (!allTextMessages) {
+                throw new Error('Expected messages with text content');
+            }
+
+            return value;
+        };
+
+        const expectTextConversation = (value: unknown): TextConversation => {
+            expect(isRecord(value)).toBe(true);
+            if (!isRecord(value)) {
+                throw new Error('Expected conversation object');
+            }
+
+            return { messages: expectTextMessages(value.messages) };
+        };
+
+        const big = (c: string) => c.repeat(50000); // ~12.5k tokens, over any small cap
+        const makeMessages = (n: number) =>
+            Array.from({ length: n }, (_, i) => ({
+                role: i % 2 === 0 ? 'user' : 'assistant',
+                content: [{ type: 'text', text: big(String.fromCharCode(97 + (i % 26))) }],
+            }));
+
+        test('keeps the last N messages full and truncates older ones ({messages} shape)', () => {
+            const input = { messages: makeMessages(10) };
+
+            const result = expectTextConversation(
+                truncateLargeTextInConversation(input, {
+                    textMaxTokens: 1000,
+                    keepRecentMessages: 3,
+                }),
+            );
+
+            const msgs = result.messages;
+            // First 7 (older) truncated, last 3 (recent working set) untouched.
+            for (let i = 0; i < 7; i++) {
+                expect(msgs[i].content[0].text).toContain(TEXT_TRUNCATED_MARKER);
+                expect(msgs[i].content[0].text.length).toBeLessThan(50000);
+            }
+            for (let i = 7; i < 10; i++) {
+                expect(msgs[i].content[0].text.length).toBe(50000);
+                expect(msgs[i].content[0].text).not.toContain(TEXT_TRUNCATED_MARKER);
+            }
+        });
+
+        test('does not truncate when conversation is shorter than keepRecentMessages', () => {
+            const input = { messages: makeMessages(3) };
+
+            const result = expectTextConversation(
+                truncateLargeTextInConversation(input, {
+                    textMaxTokens: 1000,
+                    keepRecentMessages: 5,
+                }),
+            );
+
+            const msgs = result.messages;
+            for (const m of msgs) {
+                expect(m.content[0].text.length).toBe(50000);
+            }
+        });
+
+        test('supports a plain message array', () => {
+            const input = makeMessages(6);
+
+            const result = expectTextMessages(
+                truncateLargeTextInConversation(input, {
+                    textMaxTokens: 1000,
+                    keepRecentMessages: 2,
+                }),
+            );
+
+            for (let i = 0; i < 4; i++) {
+                expect(result[i].content[0].text).toContain(TEXT_TRUNCATED_MARKER);
+            }
+            for (let i = 4; i < 6; i++) {
+                expect(result[i].content[0].text.length).toBe(50000);
+            }
+        });
+
+        test('truncates every large string when keepRecentMessages is not set (legacy)', () => {
+            const input = { messages: makeMessages(6) };
+
+            const result = expectTextConversation(truncateLargeTextInConversation(input, { textMaxTokens: 1000 }));
+
+            const msgs = result.messages;
+            for (const m of msgs) {
+                expect(m.content[0].text).toContain(TEXT_TRUNCATED_MARKER);
+            }
+        });
     });
 });
 

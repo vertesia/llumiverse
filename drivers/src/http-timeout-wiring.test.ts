@@ -119,6 +119,10 @@ describe('driver HTTP timeout wiring', () => {
         expectSdkUsesDriverFetch(compatible, compatible.service);
         compatible.destroy();
 
+        const together = new TogetherAIDriver({ apiKey: 'test-key' });
+        expectSdkUsesDriverFetch(together, together.service);
+        together.destroy();
+
         const anthropic = new AnthropicDriver({ apiKey: 'test-key' });
         expectSdkUsesDriverFetch(anthropic, anthropic.client);
         anthropic.destroy();
@@ -140,10 +144,6 @@ describe('driver HTTP timeout wiring', () => {
         const mistral = new MistralAIDriver({ apiKey: 'test-key' });
         await expectFetchClientUsesDriverFetch(mistral, mistral.client);
         mistral.destroy();
-
-        const together = new TogetherAIDriver({ apiKey: 'test-key' });
-        await expectFetchClientUsesDriverFetch(together, together.fetchClient);
-        together.destroy();
 
         const watsonx = new WatsonxDriver({
             apiKey: 'test-key',

@@ -42,7 +42,7 @@ jobs:
       sync_ref: ${{ steps.sync.outputs.SYNC_REF }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0 # Fetch all because we need to access info from different branches
           fetch-tags: false
@@ -161,7 +161,7 @@ jobs:
       contents: write # required for fast-forwarding main with the synced branch
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0 # Fetch all because we need to access info from different branches
           fetch-tags: false
@@ -201,7 +201,7 @@ jobs:
       pull-requests: write # required for opening the fast-forward-failure PR
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0
           fetch-tags: false
@@ -341,7 +341,7 @@ jobs:
       contents: write # required for deleting the temporary sync branch
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0 # Fetch all because we need to access info from different branches
           fetch-tags: false

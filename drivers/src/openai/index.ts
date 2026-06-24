@@ -66,6 +66,12 @@ type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
     reasoning_effort?: string;
 };
 type OpenAIErrorWithStatus = Error & { status?: unknown };
+type OpenAIUsageWithProviderDetails = OpenAI.Responses.ResponseUsage & {
+    cached_tokens?: number | null;
+    prompt_tokens_details?: {
+        cached_tokens?: number | null;
+    } | null;
+};
 type MutableRoleItem = { role: 'user' | 'developer' | 'system' | 'assistant' };
 type MutableInputImagePart = { type: string; detail?: string };
 type OpenAIFunctionItem = ResponseInputItem & {
@@ -126,6 +132,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
         | Providers.azure_openai
         | Providers.xai
         | Providers.azure_foundry
+        | Providers.togetherai
         | Providers.openai_compatible;
     abstract service: OpenAI | AzureOpenAI;
 
@@ -169,7 +176,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
 
         // Include conversation history (same as non-streaming)
         // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
-        let conversation = fixOrphanedToolUse(updateConversation(options.conversation, prompt));
+        let conversation = fixOrphanedToolResults(fixOrphanedToolUse(updateConversation(options.conversation, prompt)));
 
         const toolDefs = getToolDefinitions(options.tools);
         const useTools: boolean = toolDefs ? supportsToolUse(options.model, this.provider, true) : false;
@@ -187,7 +194,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
 
         let parsedSchema: JSONSchema | undefined;
         let strictMode = false;
-        if (options.result_schema && supportsSchema(options.model)) {
+        if (options.result_schema && supportsSchema(options.model, this.provider)) {
             try {
                 parsedSchema = openAISchemaFormat(options.result_schema);
                 strictMode = true;
@@ -229,7 +236,8 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
         if (
             options.model_options?._option_id !== undefined &&
             options.model_options?._option_id !== 'openai-text' &&
-            options.model_options?._option_id !== 'openai-thinking'
+            options.model_options?._option_id !== 'openai-thinking' &&
+            options.model_options?._option_id !== 'text-fallback'
         ) {
             this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
@@ -243,7 +251,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
         const useTools: boolean = toolDefs ? supportsToolUse(options.model, this.provider) : false;
 
         // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
-        let conversation = fixOrphanedToolUse(updateConversation(options.conversation, prompt));
+        let conversation = fixOrphanedToolResults(fixOrphanedToolUse(updateConversation(options.conversation, prompt)));
 
         // When no tools are provided but conversation contains function_call/function_call_output
         // items (e.g. checkpoint summary calls), convert them to text to avoid API errors
@@ -253,7 +261,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
 
         let parsedSchema: JSONSchema | undefined;
         let strictMode = false;
-        if (options.result_schema && supportsSchema(options.model)) {
+        if (options.result_schema && supportsSchema(options.model, this.provider)) {
             try {
                 parsedSchema = openAISchemaFormat(options.result_schema);
                 strictMode = true;
@@ -360,6 +368,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
         // Add assistant message as EasyInputMessage
         if (textContent) {
             const assistantMessage: EasyInputMessage = {
+                type: 'message',
                 role: 'assistant',
                 content: textContent,
             };
@@ -480,7 +489,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
         const models = filter ? result.filter(filter) : result;
         const aiModels = models
             .map((m) => {
-                const modelCapability = getModelCapabilities(m.id, 'openai');
+                const modelCapability = getModelCapabilities(m.id, this.provider);
                 let owner = m.owned_by;
                 if (owner === 'system') {
                     owner = 'openai';
@@ -826,7 +835,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
             if (errorCode === 'model_not_found') return false;
             if (errorCode === 'insufficient_quota') return false;
             if (errorCode === 'invalid_model') return false;
-            if (errorCode.includes('invalid_')) return false;
+            if (typeof errorCode === 'string' && errorCode.includes('invalid_')) return false;
         }
 
         // Check error type
@@ -882,16 +891,18 @@ function jobInfo(job: OpenAI.FineTuning.Jobs.FineTuningJob): TrainingJob {
     };
 }
 
-function mapUsage(usage?: OpenAI.Responses.ResponseUsage | null): ExecutionTokenUsage | undefined {
+function mapUsage(usage?: OpenAIUsageWithProviderDetails | null): ExecutionTokenUsage | undefined {
     if (!usage) {
         return undefined;
     }
+    const cachedTokens =
+        usage.input_tokens_details?.cached_tokens ?? usage.prompt_tokens_details?.cached_tokens ?? usage.cached_tokens;
     return {
         prompt: usage.input_tokens,
         result: usage.output_tokens,
         total: usage.total_tokens,
-        prompt_cached: usage.input_tokens_details?.cached_tokens ?? undefined,
-        prompt_new: usage.input_tokens - (usage.input_tokens_details?.cached_tokens ?? 0),
+        prompt_cached: cachedTokens ?? undefined,
+        prompt_new: usage.input_tokens - (cachedTokens ?? 0),
     };
 }
 
@@ -925,6 +936,7 @@ function createAssistantMessageFromCompletion(completion: Completion): ResponseI
     // Add assistant text message if present
     if (textContent) {
         const assistantMessage: EasyInputMessage = {
+            type: 'message',
             role: 'assistant',
             content: textContent,
         };
@@ -954,6 +966,8 @@ export function mapResponseStream(
 
     return {
         async *[Symbol.asyncIterator]() {
+            let hasTextDeltas = false;
+            let refusalText = '';
             for await (const event of stream) {
                 if (event.type === 'response.output_item.added' && event.item.type === 'function_call') {
                     const syntheticId = `tool_${event.output_index}`;
@@ -1002,13 +1016,29 @@ export function mapResponseStream(
                         toolCallMetadata.set(event.item_id, { syntheticId, callId: metadata?.callId, name: tool_name });
                     }
                 } else if (event.type === 'response.output_text.delta') {
+                    hasTextDeltas = true;
                     yield {
                         result: textToCompletionResult(event.delta),
                     } satisfies CompletionChunkObject;
-                }
-                // Note: We don't emit response.output_text.done because the text was already
-                // streamed via delta events. Emitting it again would duplicate the content.
-                else if (
+                } else if (event.type === 'response.output_text.done') {
+                    // Fallback: some models (e.g. gpt-5 with json_schema structured output) buffer
+                    // the entire output and never emit delta events — only the done event with the
+                    // full text. Emit it here only when no deltas arrived to avoid duplication.
+                    if (!hasTextDeltas && event.text) {
+                        yield {
+                            result: textToCompletionResult(event.text),
+                        } satisfies CompletionChunkObject;
+                    }
+                } else if (event.type === 'response.refusal.delta') {
+                    refusalText += event.delta;
+                } else if (event.type === 'response.refusal.done') {
+                    throw new Error(`[OpenAI] Model refused: ${event.refusal || refusalText}`);
+                } else if ((event as { type: string }).type === 'response.error') {
+                    const errEvent = event as unknown as { message: string; code?: string | null };
+                    throw new Error(
+                        `[OpenAI Responses API] ${errEvent.message}${errEvent.code ? ` (${errEvent.code})` : ''}`,
+                    );
+                } else if (
                     event.type === 'response.completed' ||
                     event.type === 'response.incomplete' ||
                     event.type === 'response.failed'
@@ -1068,12 +1098,12 @@ function convertRoles(items: ResponseInputItem[], model: string): ResponseInputI
 
 //Structured output support is typically aligned with tool use support
 //Not true for realtime models, which do not support structured output, but do support tool use.
-function supportsSchema(model: string): boolean {
+function supportsSchema(model: string, provider: string | Providers): boolean {
     const realtimeModel = model.includes('realtime');
     if (realtimeModel) {
         return false;
     }
-    return supportsToolUse(model, 'openai');
+    return supportsToolUse(model, provider);
 }
 
 /**
@@ -1384,6 +1414,30 @@ export function fixOrphanedToolUse(items: ResponseInputItem[]): ResponseInputIte
     }
 
     return result;
+}
+
+/**
+ * Drop function_call_output items whose call_id has no matching function_call
+ * item anywhere in the input. Mirror of {@link fixOrphanedToolUse}: that
+ * synthesizes outputs for calls left unanswered (e.g. a cancelled run); this
+ * removes outputs left dangling after their function_call was dropped (e.g. by
+ * conversation compaction/trimming). The OpenAI Responses API requires every
+ * function_call_output to reference a prior function_call's call_id.
+ */
+export function fixOrphanedToolResults(items: ResponseInputItem[]): ResponseInputItem[] {
+    if (items.length === 0) return items;
+    const callIds = new Set<string>();
+    for (const item of items) {
+        if ('type' in item && item.type === 'function_call') {
+            callIds.add(item.call_id);
+        }
+    }
+    return items.filter((item) => {
+        if ('type' in item && item.type === 'function_call_output') {
+            return callIds.has(item.call_id);
+        }
+        return true;
+    });
 }
 
 function safeJsonParse(value: unknown): unknown {

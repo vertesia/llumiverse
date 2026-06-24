@@ -1,0 +1,326 @@
+name: (renovate) automerge eligible dependency updates
+
+on:
+  # zizmor: ignore[dangerous-triggers] This intentionally chains after successful Renovate branch workflows, then re-checks the exact head SHA before merging.
+  workflow_run:
+    workflows:
+      - "(test) Build and test"
+      - "(lint) Lint codebase"
+    types:
+      - completed
+    branches:
+      - "renovate/**"
+
+permissions:
+  actions: read # required to inspect workflow run status for the exact Renovate head SHA
+  contents: read # required for repository metadata access through gh
+  pull-requests: read # required to inspect PR metadata, labels, and changed files
+
+jobs:
+  approve-and-merge:
+    name: Approve and merge eligible Renovate PR
+    if: |
+      github.event.workflow_run.event == 'push' &&
+      startsWith(github.event.workflow_run.head_branch, 'renovate/')
+    runs-on: ubuntu-latest
+    environment: renovate-automerge
+    timeout-minutes: 5
+    concurrency:
+      group: renovate-automerge-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: false
+    steps:
+      - name: Check automerge eligibility
+        id: eligibility
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          {
+            echo "should_merge=false"
+            echo "should_repair_lock=false"
+            echo "pr_url="
+            echo "pr_number="
+          } >> "$GITHUB_OUTPUT"
+
+          prs_json="$(gh pr list \
+            --repo "$REPO" \
+            --head "$HEAD_BRANCH" \
+            --state open \
+            --json number,url,author,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository,labels,mergeStateStatus,files,commits \
+            --limit 10)"
+
+          pr_count="$(jq 'length' <<< "$prs_json")"
+          if [[ "$pr_count" == "0" ]]; then
+            echo "No open PR found for $HEAD_BRANCH."
+            exit 0
+          fi
+          if [[ "$pr_count" != "1" ]]; then
+            echo "Expected exactly one open PR for $HEAD_BRANCH, found $pr_count." >&2
+            exit 1
+          fi
+
+          pr_number="$(jq -r '.[0].number' <<< "$prs_json")"
+          pr_url="$(jq -r '.[0].url' <<< "$prs_json")"
+          author_login="$(jq -r '.[0].author.login // ""' <<< "$prs_json")"
+          base_ref="$(jq -r '.[0].baseRefName' <<< "$prs_json")"
+          head_ref="$(jq -r '.[0].headRefName' <<< "$prs_json")"
+          head_sha="$(jq -r '.[0].headRefOid' <<< "$prs_json")"
+          head_repo="$(jq -r '.[0].headRepository.nameWithOwner // ""' <<< "$prs_json")"
+          head_owner="$(jq -r '.[0].headRepositoryOwner.login // ""' <<< "$prs_json")"
+          is_cross_repo="$(jq -r '.[0].isCrossRepository' <<< "$prs_json")"
+          is_draft="$(jq -r '.[0].isDraft' <<< "$prs_json")"
+          merge_state="$(jq -r '.[0].mergeStateStatus // ""' <<< "$prs_json")"
+          repo_owner="${REPO%%/*}"
+
+          if [[ "$author_login" != "loopingz" ]]; then
+            echo "Skipping PR #$pr_number: author is $author_login, not loopingz."
+            exit 0
+          fi
+          if [[ "$head_ref" != "$HEAD_BRANCH" ]]; then
+            echo "Skipping PR #$pr_number: PR head branch $head_ref does not match workflow branch $HEAD_BRANCH."
+            exit 0
+          fi
+          if [[ "$is_cross_repo" != "false" ]]; then
+            echo "Skipping PR #$pr_number: PR is from a fork."
+            exit 0
+          fi
+          if [[ "$head_repo" != "$REPO" ]]; then
+            echo "Skipping PR #$pr_number: head repository is $head_repo, not $REPO."
+            exit 0
+          fi
+          if [[ "$head_owner" != "$repo_owner" ]]; then
+            echo "Skipping PR #$pr_number: head repository owner is $head_owner, not $repo_owner."
+            exit 0
+          fi
+          if [[ "$base_ref" != "main" ]]; then
+            echo "Skipping PR #$pr_number: base branch is $base_ref, not main."
+            exit 0
+          fi
+          if [[ "$is_draft" != "false" ]]; then
+            echo "Skipping PR #$pr_number: PR is draft."
+            exit 0
+          fi
+          if [[ "$head_sha" != "$HEAD_SHA" ]]; then
+            echo "Skipping PR #$pr_number: workflow SHA $HEAD_SHA does not match current PR head $head_sha."
+            exit 0
+          fi
+          if ! jq -e '.[0].labels | any(.name == "renovate-automerge")' <<< "$prs_json" >/dev/null; then
+            echo "Skipping PR #$pr_number: missing renovate-automerge label."
+            exit 0
+          fi
+          if ! jq -e '.[0].labels | any(.name == "dependencies")' <<< "$prs_json" >/dev/null; then
+            echo "Skipping PR #$pr_number: missing dependencies label."
+            exit 0
+          fi
+          if ! jq -e '.[0].files | all(.changeType == "MODIFIED")' <<< "$prs_json" >/dev/null; then
+            echo "Skipping PR #$pr_number: PR includes non-modified file changes."
+            jq -r '.[0].files[] | select(.changeType != "MODIFIED") | "- \(.changeType) \(.path)"' <<< "$prs_json"
+            exit 0
+          fi
+
+          # npm manifests/lockfiles, plus GitHub Actions workflow/composite-action
+          # files (the github-actions manager pins action SHAs in these).
+          disallowed_files="$(gh pr diff "$pr_url" --repo "$REPO" --name-only | grep -vE '(^|/)(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$|(^|/)\.github/(workflows/[^/]+|actions/[^/]+/action)\.ya?ml$' || true)"
+          if [[ -n "$disallowed_files" ]]; then
+            echo "Skipping PR #$pr_number: PR changes files outside supported dependency manifests/lockfiles/workflows."
+            echo "$disallowed_files"
+            exit 0
+          fi
+
+          if ! jq -e '
+            .[0].commits as $commits
+            | ($commits | length) > 0
+            and ($commits | all(
+              (
+                .authors | any(
+                  .login == "renovate-bot"
+                  or .email == "renovate@whitesourcesoftware.com"
+                )
+              )
+              or (
+                (.messageHeadline == "chore: update lockfile" or (.messageHeadline | startswith("Merge ")))
+                and (
+                  .authors | any(
+                    .login == "github-actions[bot]"
+                    or .email == "github-actions[bot]@users.noreply.github.com"
+                    or .name == "github-actions[bot]"
+                  )
+                )
+              )
+            ))
+          ' <<< "$prs_json" >/dev/null; then
+            echo "Skipping PR #$pr_number: PR contains commits not authored by Renovate or the lockfile repair workflow."
+            exit 0
+          fi
+
+          if [[ "$merge_state" == "DIRTY" ]]; then
+            echo "PR #$pr_number has merge conflicts; attempting pnpm-lock-only repair."
+            {
+              echo "should_repair_lock=true"
+              echo "pr_url=$pr_url"
+              echo "pr_number=$pr_number"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "PR #$pr_number by $author_login is eligible for automerge after workflow checks pass."
+
+          required_workflows=(
+            "build-and-test.yml"
+            "lint.yml"
+          )
+
+          for workflow in "${required_workflows[@]}"; do
+            runs_json="$(gh run list \
+              --repo "$REPO" \
+              --workflow "$workflow" \
+              --branch "$HEAD_BRANCH" \
+              --commit "$HEAD_SHA" \
+              --json databaseId,status,conclusion,event,headSha,url \
+              --limit 20)"
+            run_json="$(jq -c --arg sha "$HEAD_SHA" '[.[] | select(.headSha == $sha and .event == "push")] | sort_by(.databaseId) | last // empty' <<< "$runs_json")"
+
+            if [[ -z "$run_json" ]]; then
+              echo "Waiting for $workflow to run for $HEAD_SHA."
+              exit 0
+            fi
+
+            status="$(jq -r '.status' <<< "$run_json")"
+            conclusion="$(jq -r '.conclusion // ""' <<< "$run_json")"
+            url="$(jq -r '.url' <<< "$run_json")"
+
+            if [[ "$status" != "completed" ]]; then
+              echo "Waiting for $workflow to complete for $HEAD_SHA: $url"
+              exit 0
+            fi
+            if [[ "$conclusion" != "success" ]]; then
+              echo "Not merging PR #$pr_number: $workflow concluded '$conclusion': $url"
+              exit 0
+            fi
+
+            echo "$workflow passed for $HEAD_SHA: $url"
+          done
+
+          {
+            echo "should_merge=true"
+            echo "pr_url=$pr_url"
+            echo "pr_number=$pr_number"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Generate automerge token
+        if: steps.eligibility.outputs.should_merge == 'true' || steps.eligibility.outputs.should_repair_lock == 'true'
+        id: generate-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.APP_VERTESIA_RENOVATE_AUTOMERGE_ID }}
+          private-key: ${{ secrets.APP_VERTESIA_RENOVATE_AUTOMERGE_PEM }}
+          permission-actions: read
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Approve and merge eligible Renovate PR
+        if: steps.eligibility.outputs.should_merge == 'true'
+        id: merge
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          PR_URL: ${{ steps.eligibility.outputs.pr_url }}
+        run: |
+          set -euo pipefail
+
+          echo "should_repair_lock=false" >> "$GITHUB_OUTPUT"
+
+          gh pr review "$PR_URL" \
+            --approve \
+            --body "Auto-approved eligible Renovate dependency update after build/test and lint passed for ${HEAD_SHA}."
+
+          merge_log="$(mktemp)"
+          if gh pr merge "$PR_URL" \
+            --repo "$REPO" \
+            --squash \
+            --delete-branch \
+            --match-head-commit "$HEAD_SHA" >"$merge_log" 2>&1; then
+            cat "$merge_log"
+            exit 0
+          else
+            merge_status="$?"
+          fi
+
+          cat "$merge_log" >&2
+
+          current_head_sha=""
+          merge_state=""
+          for attempt in 1 2 3; do
+            pr_state="$(gh pr view "$PR_URL" --repo "$REPO" --json headRefOid,mergeStateStatus)"
+            current_head_sha="$(jq -r '.headRefOid' <<< "$pr_state")"
+            merge_state="$(jq -r '.mergeStateStatus // ""' <<< "$pr_state")"
+
+            if [[ "$current_head_sha" != "$HEAD_SHA" || "$merge_state" != "UNKNOWN" ]]; then
+              break
+            fi
+
+            echo "PR merge state is UNKNOWN after failed merge; waiting for GitHub to finish mergeability check (attempt $attempt/3)."
+            sleep 2
+          done
+
+          if [[ "$current_head_sha" == "$HEAD_SHA" && "$merge_state" == "DIRTY" ]]; then
+            echo "PR became dirty before merge; attempting pnpm-lock-only repair."
+            echo "should_repair_lock=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "PR is not eligible for lock repair after failed merge." >&2
+          echo "Current head: $current_head_sha; expected: $HEAD_SHA; merge state: $merge_state" >&2
+          exit "$merge_status"
+
+      - name: Checkout PR branch for pnpm lock repair
+        if: |
+          steps.eligibility.outputs.should_repair_lock == 'true' ||
+          steps.merge.outputs.should_repair_lock == 'true'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          token: ${{ steps.generate-token.outputs.token }}
+          ref: ${{ github.event.workflow_run.head_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install pnpm
+        if: |
+          steps.eligibility.outputs.should_repair_lock == 'true' ||
+          steps.merge.outputs.should_repair_lock == 'true'
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          run_install: false
+
+      - name: Install Node.js
+        if: |
+          steps.eligibility.outputs.should_repair_lock == 'true' ||
+          steps.merge.outputs.should_repair_lock == 'true'
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.16.0
+          cache: pnpm
+
+      - name: Repair pnpm lock conflict
+        if: |
+          steps.eligibility.outputs.should_repair_lock == 'true' ||
+          steps.merge.outputs.should_repair_lock == 'true'
+        env:
+          GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.eligibility.outputs.pr_number }}
+        run: |
+          set +e
+          bash .github/bin/update-pnpm-lock.sh
+          status="$?"
+          set -e
+          if [[ "$status" == "2" ]]; then
+            echo "PR conflict is not pnpm-lock.yaml-only; leaving it for manual resolution."
+            exit 0
+          fi
+          exit "$status"

@@ -98,6 +98,15 @@ describe('AbstractDriver Error Formatting', () => {
                 expect(driver.isRetryableError(400, 'Please retry with a valid model id')).toBe(false);
             });
 
+            it('should mark transport aborts and deadline-exceeded as retryable even under a 4xx status', () => {
+                expect(driver.isRetryableError(undefined, 'This operation was aborted')).toBe(true);
+                expect(driver.isRetryableError(499, 'This operation was aborted')).toBe(true);
+                expect(driver.isRetryableError(400, 'Deadline expired before operation could complete')).toBe(true);
+                expect(driver.isRetryableError(504, '[504] DEADLINE_EXCEEDED')).toBe(true);
+                // a genuine non-transient 4xx without an abort/deadline signal stays non-retryable
+                expect(driver.isRetryableError(400, 'Invalid argument')).toBe(false);
+            });
+
             it('should mark 2xx and 3xx as not retryable', () => {
                 expect(driver.isRetryableError(200, 'OK')).toBe(false);
                 expect(driver.isRetryableError(301, 'Moved permanently')).toBe(false);
@@ -141,6 +150,15 @@ describe('AbstractDriver Error Formatting', () => {
             it('should detect status codes in message', () => {
                 expect(driver.isRetryableError(undefined, 'Error 429: Too many requests')).toBe(true);
                 expect(driver.isRetryableError(undefined, 'HTTP 529 error')).toBe(true);
+            });
+
+            it('should classify invalid_grant credential issuer failures as non-retryable', () => {
+                expect(
+                    driver.isRetryableError(
+                        undefined,
+                        "Error code invalid_grant: Error connecting to the given credential's issuer.",
+                    ),
+                ).toBe(false);
             });
 
             it('should mark unknown messages as undefined (let consumer decide)', () => {

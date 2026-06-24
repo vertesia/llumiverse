@@ -14,36 +14,23 @@ minimumReleaseAgeStrict: true
 minimumReleaseAgeExclude:
   - '@vertesia/*'
   - '@llumiverse/*'
-  - '@anthropic-ai/sdk@0.96.0'
-patchedDependencies:
-  'ts-dual-module@0.6.3': patches/ts-dual-module@0.6.3.patch
+  # Renovate security update: undici@7.28.0
+  - undici@7.28.0
+  # Additional excludes, due to CVEs etc.
+  # Nothing for now
 overrides:
-  rollup: '^4.60.4'
+  # ============================
+  # Special Overrides
+  # ============================
+  # We have these for more than simple CVE fixes, but may also do that. Or have complex requirements to track.
+
+  # Pin single google-auth-library
+  google-auth-library: '10.7.0'
+
+  # Single cross-spawn source, root package.json
   cross-spawn: '$cross-spawn'
-  'brace-expansion@>=2.0.0 <3.0.0': '^5.0.6'
-  'esbuild@<=0.24.2': '^0.28.0'
-  'vite@>=6.0.0 <6.2.6': '^8.0.14'
-  'form-data@<2.5.4': '^4.0.5'
-  'form-data@>=4.0.0 <4.0.4': '^4.0.5'
-  'glob@>=10.2.0 <10.5.0': '^13.0.6'
-  google-auth-library: '10.6.2'
-  'js-yaml@>=4.0.0 <4.1.1': '^4.1.1'
-  'jws@>=3.0.0 <3.2.3': '^4.0.1'
-  'jws@>=4.0.0 <4.0.1': '^4.0.1'
-  '@isaacs/brace-expansion@>=5.0.0 <6.0.0': '^5.0.1'
-  'minimatch@>=3.0.0 <4.0.0': 'legacy-v3'
-  'minimatch@>=9.0.0 <10.0.0': 'legacy-v9'
-  'minimatch@>=10.0.0 <11.0.0': '^10.2.5'
-  '@tootallnate/once@<3.0.1': '^3.0.1'
-  'ajv@>=6.0.0 <6.14.0': '^8.20.0'
-  'flatted@<3.4.2': '^3.4.2'
-  'picomatch@>=4.0.0 <4.0.4': '^4.0.4'
-  'brace-expansion@<5.0.6': '^5.0.6'
-  'protobufjs@<=7.5.7': '^8.4.2'
-  'postcss@<8.5.10': '^8.5.15'
-  'fast-xml-builder@<=1.1.6': '^1.2.0'
-  'fast-uri@<=3.1.1': '^3.1.2'
-  'fast-xml-parser@<5.7.0': '^5.8.0'
-  '@protobufjs/utf8@<=1.1.0': '^1.1.1'
-  'ws@>=8.0.0 <8.20.1': '^8.21.0'
-  'uuid@<11.1.1': '^14.0.0'
+  # ============================
+  # Standard CVE overrides
+  # ============================
+  # Dependabot alerts #77/#78: Vite dev-server Windows path disclosure issues.
+  vite: 8.0.16

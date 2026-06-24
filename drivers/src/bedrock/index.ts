@@ -18,6 +18,7 @@ import {
     type InvokeModelCommandOutput,
     type Message,
     type Tool,
+    type ToolResultContentBlock,
 } from '@aws-sdk/client-bedrock-runtime';
 import { S3Client } from '@aws-sdk/client-s3';
 import type { AwsCredentialIdentity, Provider } from '@aws-sdk/types';
@@ -65,6 +66,7 @@ import { formatNovaPrompt, type NovaMessagesPrompt } from '@llumiverse/core/form
 import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
 import { LRUCache } from 'mnemonist';
 import { resolveClaudeThinking } from '../shared/claude-thinking.js';
+import { truncateBinaryForDebug, uint8ArrayToBase64ForDebug } from '../shared/debug-prompt.js';
 import {
     converseConcatMessages,
     converseJSONprefill,
@@ -177,6 +179,171 @@ export type BedrockPrompt = NovaMessagesPrompt | ConverseRequest | TwelvelabsPeg
 type BedrockSystemBlock = NonNullable<ConverseRequest['system']>[number];
 type BedrockToolEntry = NonNullable<NonNullable<ConverseRequest['toolConfig']>['tools']>[number];
 
+function formatBedrockBytes(bytes: Uint8Array | string | undefined): string | undefined {
+    if (bytes instanceof Uint8Array) {
+        return truncateBinaryForDebug(uint8ArrayToBase64ForDebug(bytes));
+    }
+    if (typeof bytes === 'string') {
+        return truncateBinaryForDebug(bytes);
+    }
+    return bytes;
+}
+
+function formatBedrockBytesForDebug(bytes: Uint8Array | string | undefined): Uint8Array {
+    // AWS SDK prompt types require Uint8Array here, but the debug prompt returned to
+    // Studio must be JSON-safe. Keep the mismatch contained to this conversion.
+    return formatBedrockBytes(bytes) as unknown as Uint8Array;
+}
+
+function formatBedrockContentBlockForDebug(block: ContentBlock): ContentBlock {
+    if (block.image?.source?.bytes) {
+        return {
+            ...block,
+            image: {
+                ...block.image,
+                source: {
+                    ...block.image.source,
+                    bytes: formatBedrockBytesForDebug(block.image.source.bytes),
+                },
+            },
+        };
+    }
+    if (block.document?.source?.bytes) {
+        return {
+            ...block,
+            document: {
+                ...block.document,
+                source: {
+                    ...block.document.source,
+                    bytes: formatBedrockBytesForDebug(block.document.source.bytes),
+                },
+            },
+        };
+    }
+    if (block.video?.source?.bytes) {
+        return {
+            ...block,
+            video: {
+                ...block.video,
+                source: {
+                    ...block.video.source,
+                    bytes: formatBedrockBytesForDebug(block.video.source.bytes),
+                },
+            },
+        };
+    }
+    if (block.toolResult?.content) {
+        return {
+            ...block,
+            toolResult: {
+                ...block.toolResult,
+                content: block.toolResult.content.map(formatBedrockToolResultContentBlockForDebug),
+            },
+        };
+    }
+    return block;
+}
+
+function formatBedrockToolResultContentBlockForDebug(block: ToolResultContentBlock): ToolResultContentBlock {
+    if (block.image?.source?.bytes) {
+        return {
+            ...block,
+            image: {
+                ...block.image,
+                source: {
+                    ...block.image.source,
+                    bytes: formatBedrockBytesForDebug(block.image.source.bytes),
+                },
+            },
+        };
+    }
+    if (block.document?.source?.bytes) {
+        return {
+            ...block,
+            document: {
+                ...block.document,
+                source: {
+                    ...block.document.source,
+                    bytes: formatBedrockBytesForDebug(block.document.source.bytes),
+                },
+            },
+        };
+    }
+    if (block.video?.source?.bytes) {
+        return {
+            ...block,
+            video: {
+                ...block.video,
+                source: {
+                    ...block.video.source,
+                    bytes: formatBedrockBytesForDebug(block.video.source.bytes),
+                },
+            },
+        };
+    }
+    return block;
+}
+
+function formatConversePromptForDebug(prompt: ConverseRequest): ConverseRequest {
+    return {
+        ...prompt,
+        messages: prompt.messages?.map((message) => ({
+            ...message,
+            content: message.content?.map(formatBedrockContentBlockForDebug),
+        })),
+    };
+}
+
+function formatNovaPromptForDebug(prompt: NovaMessagesPrompt): NovaMessagesPrompt {
+    return {
+        ...prompt,
+        messages: prompt.messages.map((message) => ({
+            ...message,
+            content: message.content.map((part) => {
+                if (!part.image?.source.bytes && !part.video?.source.bytes) {
+                    return part;
+                }
+                return {
+                    ...part,
+                    image: part.image
+                        ? {
+                              ...part.image,
+                              source: {
+                                  ...part.image.source,
+                                  bytes: truncateBinaryForDebug(part.image.source.bytes),
+                              },
+                          }
+                        : undefined,
+                    video: part.video
+                        ? {
+                              ...part.video,
+                              source: {
+                                  ...part.video.source,
+                                  bytes: part.video.source.bytes
+                                      ? truncateBinaryForDebug(part.video.source.bytes)
+                                      : undefined,
+                              },
+                          }
+                        : undefined,
+                };
+            }),
+        })),
+    };
+}
+
+function formatTwelvelabsPromptForDebug(prompt: TwelvelabsPegasusRequest): TwelvelabsPegasusRequest {
+    if (!prompt.mediaSource.base64String) {
+        return prompt;
+    }
+    return {
+        ...prompt,
+        mediaSource: {
+            ...prompt.mediaSource,
+            base64String: truncateBinaryForDebug(prompt.mediaSource.base64String),
+        },
+    };
+}
+
 export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockPrompt> {
     static PROVIDER = 'bedrock';
 
@@ -264,6 +431,16 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             return await formatTwelvelabsPegasusPrompt(segments, opts);
         }
         return await formatConversePrompt(segments, opts);
+    }
+
+    public formatDebugPrompt(prompt: BedrockPrompt): BedrockPrompt {
+        if ('mediaSource' in prompt) {
+            return formatTwelvelabsPromptForDebug(prompt);
+        }
+        if ('modelId' in prompt) {
+            return formatConversePromptForDebug(prompt);
+        }
+        return formatNovaPromptForDebug(prompt);
     }
 
     /**
@@ -1743,8 +1920,11 @@ function updateConversation(conversation: ConverseRequest, prompt: ConverseReque
     const combinedMessages = [...(conversation?.messages || []), ...(prompt.messages || [])];
     const combinedSystem = prompt.system || conversation?.system;
 
-    // Fix orphaned toolUse blocks before returning
-    const fixedMessages = fixOrphanedToolUse(combinedMessages);
+    // Fix both orphan directions before returning: a toolUse with no result
+    // (interrupted run) gets a synthetic result; a toolResult with no matching
+    // toolUse in the previous message (e.g. compaction-trimmed) is dropped. Either
+    // would otherwise trip the Converse API's toolUse/toolResult pairing check.
+    const fixedMessages = fixOrphanedToolResults(fixOrphanedToolUse(combinedMessages));
 
     return {
         modelId: prompt?.modelId || conversation?.modelId,
@@ -1871,6 +2051,50 @@ export function fixOrphanedToolUse(messages: Message[]): Message[] {
         }
     }
 
+    return result;
+}
+
+/**
+ * Drop toolResult blocks whose toolUseId has no matching toolUse in the
+ * immediately-preceding assistant message. Mirror of {@link fixOrphanedToolUse}:
+ * that function synthesizes results for an unanswered toolUse (e.g. a cancelled
+ * run); this one removes results left dangling after their toolUse was dropped
+ * (e.g. by conversation compaction/trimming).
+ *
+ * Without this, the AWS Converse API rejects the request because every
+ * toolResult must correspond to a toolUse in the previous message. Bedrock
+ * conversations are already role-alternating, so a compaction that drops an
+ * assistant toolUse turn leaves an orphaned toolResult (and a user/user
+ * adjacency); dropping the orphan — and the now-empty message — repairs both.
+ */
+export function fixOrphanedToolResults(messages: Message[]): Message[] {
+    if (messages.length === 0) return messages;
+    const result: Message[] = [];
+    for (let i = 0; i < messages.length; i++) {
+        const message = messages[i];
+        if (message.role !== 'user' || !message.content) {
+            result.push(message);
+            continue;
+        }
+        const hasToolResult = message.content.some((block) => block.toolResult);
+        if (!hasToolResult) {
+            result.push(message);
+            continue;
+        }
+        const prev = messages[i - 1];
+        const allowedIds = new Set<string>();
+        if (prev && prev.role === 'assistant' && prev.content) {
+            for (const block of prev.content) {
+                if (block.toolUse?.toolUseId) allowedIds.add(block.toolUse.toolUseId);
+            }
+        }
+        const filtered = message.content.filter((block) =>
+            block.toolResult ? allowedIds.has(block.toolResult.toolUseId ?? '') : true,
+        );
+        // Drop the message if every block was an orphaned toolResult.
+        if (filtered.length === 0) continue;
+        result.push(filtered.length === message.content.length ? message : { ...message, content: filtered });
+    }
     return result;
 }
 

@@ -11,15 +11,13 @@ import {
     type AbstractDriver,
     type DataSource,
     type ExecutionOptions,
-    // biome-ignore lint/suspicious/noDeprecatedImports: exercising deprecated output_modality path until that API is removed
-    Modalities,
     PromptRole,
     type PromptSegment,
 } from '@llumiverse/core';
 import 'dotenv/config';
 import { describe, expect, test } from 'vitest';
-import { AnthropicDriver, BedrockDriver, OpenAIDriver, VertexAIDriver, xAIDriver } from '../src';
-import { completionResultToString } from './utils';
+import { AnthropicDriver, BedrockDriver, OpenAIDriver, VertexAIDriver, xAIDriver } from '../src/index.js';
+import { completionResultToString } from './utils.js';
 
 const TIMEOUT = 120 * 1000;
 
@@ -140,9 +138,12 @@ class Base64ImageSource implements DataSource {
         return this.imageName;
     }
 
-    async getURL(): Promise<string> {
+    async getURI(): Promise<string> {
         // Return as data URL
         return `data:${this.mime_type};base64,${this.base64Data}`;
+    }
+    async getURL(): Promise<string> {
+        return this.getURI();
     }
 
     async getStream(): Promise<ReadableStream<string | Uint8Array>> {
@@ -194,7 +195,6 @@ function getTextOptions(model: string): ExecutionOptions {
                   max_tokens: 256,
                   temperature: 0.3,
               },
-        output_modality: Modalities.text,
     };
 }
 
@@ -208,7 +208,6 @@ function getClaudeOptionsWithCache(model: string, driverName: string): Execution
             max_tokens: 256,
             cache_enabled: true,
         },
-        output_modality: Modalities.text,
     };
 }
 
@@ -615,110 +614,102 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)(
             verifyConversationSerializable(stream3.completion?.conversation, name);
         });
 
-        test(
-            `${name}: STREAMING conversation preserves context after JSON serialization`,
-            {
-                timeout: TIMEOUT,
-            },
-            async () => {
-                const options = getTextOptions(textModel);
+        test(`${name}: STREAMING conversation preserves context after JSON serialization`, {
+            timeout: TIMEOUT,
+        }, async () => {
+            const options = getTextOptions(textModel);
 
-                // Helper to consume stream and get completion
-                async function streamToCompletion(stream: AsyncIterable<string>) {
-                    for await (const _chunk of stream) {
-                        // Just consume the stream
-                    }
+            // Helper to consume stream and get completion
+            async function streamToCompletion(stream: AsyncIterable<string>) {
+                for await (const _chunk of stream) {
+                    // Just consume the stream
                 }
+            }
 
-                // Turn 1: Establish context with streaming
-                const prompt1: PromptSegment[] = [
-                    {
-                        role: PromptRole.user,
-                        content: 'My name is TestUser123. Please greet me by name.',
-                    },
-                ];
+            // Turn 1: Establish context with streaming
+            const prompt1: PromptSegment[] = [
+                {
+                    role: PromptRole.user,
+                    content: 'My name is TestUser123. Please greet me by name.',
+                },
+            ];
 
-                const stream1 = await driver.stream(prompt1, options);
-                await streamToCompletion(stream1);
-                expect(stream1.completion?.conversation).toBeDefined();
+            const stream1 = await driver.stream(prompt1, options);
+            await streamToCompletion(stream1);
+            expect(stream1.completion?.conversation).toBeDefined();
 
-                // Critical: Simulate how Studio stores conversations (JSON serialize/deserialize)
-                const serialized = JSON.stringify(stream1.completion?.conversation);
-                const storedConversation = JSON.parse(serialized);
+            // Critical: Simulate how Studio stores conversations (JSON serialize/deserialize)
+            const serialized = JSON.stringify(stream1.completion?.conversation);
+            const storedConversation = JSON.parse(serialized);
 
-                // Turn 2: Verify context survives serialization in streaming mode
-                const prompt2: PromptSegment[] = [
-                    {
-                        role: PromptRole.user,
-                        content: 'What is my name?',
-                    },
-                ];
+            // Turn 2: Verify context survives serialization in streaming mode
+            const prompt2: PromptSegment[] = [
+                {
+                    role: PromptRole.user,
+                    content: 'What is my name?',
+                },
+            ];
 
-                const stream2 = await driver.stream(prompt2, { ...options, conversation: storedConversation });
-                await streamToCompletion(stream2);
+            const stream2 = await driver.stream(prompt2, { ...options, conversation: storedConversation });
+            await streamToCompletion(stream2);
 
-                // Get the result text from completion
-                const text2 = stream2.completion?.result.map(completionResultToString).join('') || '';
+            // Get the result text from completion
+            const text2 = stream2.completion?.result.map(completionResultToString).join('') || '';
 
-                // The model should remember "TestUser123" from the serialized conversation
-                expect(text2).toContain('TestUser123');
-            },
-        );
+            // The model should remember "TestUser123" from the serialized conversation
+            expect(text2).toContain('TestUser123');
+        });
 
-        test(
-            `${name}: STREAMING vs non-streaming produce consistent conversation context`,
-            {
-                timeout: TIMEOUT,
-            },
-            async () => {
-                const options = getTextOptions(textModel);
+        test(`${name}: STREAMING vs non-streaming produce consistent conversation context`, {
+            timeout: TIMEOUT,
+        }, async () => {
+            const options = getTextOptions(textModel);
 
-                // Helper to consume stream
-                async function streamToCompletion(stream: AsyncIterable<string>) {
-                    for await (const _chunk of stream) {
-                        // Just consume
-                    }
+            // Helper to consume stream
+            async function streamToCompletion(stream: AsyncIterable<string>) {
+                for await (const _chunk of stream) {
+                    // Just consume
                 }
+            }
 
-                // First turn with non-streaming
-                const prompt1: PromptSegment[] = [
-                    {
-                        role: PromptRole.user,
-                        content: 'Remember this code: ALPHA-7749',
-                    },
-                ];
+            // First turn with non-streaming
+            const prompt1: PromptSegment[] = [
+                {
+                    role: PromptRole.user,
+                    content: 'Remember this code: ALPHA-7749',
+                },
+            ];
 
-                const result1 = await driver.execute(prompt1, options);
-                const storedConversation1 = JSON.parse(JSON.stringify(result1.conversation));
+            const result1 = await driver.execute(prompt1, options);
+            const storedConversation1 = JSON.parse(JSON.stringify(result1.conversation));
 
-                // Second turn with streaming - should work with conversation from non-streaming
-                const prompt2: PromptSegment[] = [
-                    {
-                        role: PromptRole.user,
-                        content: 'What code did I tell you to remember?',
-                    },
-                ];
+            // Second turn with streaming - should work with conversation from non-streaming
+            const prompt2: PromptSegment[] = [
+                {
+                    role: PromptRole.user,
+                    content: 'What code did I tell you to remember?',
+                },
+            ];
 
-                const stream2 = await driver.stream(prompt2, { ...options, conversation: storedConversation1 });
-                await streamToCompletion(stream2);
+            const stream2 = await driver.stream(prompt2, { ...options, conversation: storedConversation1 });
+            await streamToCompletion(stream2);
 
-                const text2 = stream2.completion?.result.map(completionResultToString).join('') || '';
-                expect(text2).toContain('ALPHA-7749');
+            const text2 = stream2.completion?.result.map(completionResultToString).join('') || '';
+            expect(text2).toContain('ALPHA-7749');
 
-                // Third turn back to non-streaming - should work with conversation from streaming
-                const storedConversation2 = JSON.parse(JSON.stringify(stream2.completion?.conversation));
+            // Third turn back to non-streaming - should work with conversation from streaming
+            const storedConversation2 = JSON.parse(JSON.stringify(stream2.completion?.conversation));
 
-                const prompt3: PromptSegment[] = [
-                    {
-                        role: PromptRole.user,
-                        content: 'What were the numbers in that code?',
-                    },
-                ];
+            const prompt3: PromptSegment[] = [
+                {
+                    role: PromptRole.user,
+                    content: 'Repeat only the numeric digits from that code, no delimiters, no spaces.',
+                },
+            ];
 
-                const result3 = await driver.execute(prompt3, { ...options, conversation: storedConversation2 });
-                const text3 = result3.result.map(completionResultToString).join('');
-                expect(text3).toContain('7749');
-            },
-        );
+            const result3 = await driver.execute(prompt3, { ...options, conversation: storedConversation2 });
+            const text3 = result3.result.map(completionResultToString).join('');
+            expect(text3).toContain('7749');
+        });
     },
 );

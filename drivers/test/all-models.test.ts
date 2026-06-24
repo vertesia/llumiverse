@@ -5,8 +5,6 @@ import {
     getMaxOutputTokens,
     getMaxTokensLimitBedrock,
     getMaxTokensLimitVertexAi,
-    // biome-ignore lint/suspicious/noDeprecatedImports: exercising deprecated output_modality path until that API is removed
-    Modalities,
     PromptRole,
     type PromptSegment,
 } from '@llumiverse/core';
@@ -24,9 +22,14 @@ import {
     VertexAIDriver,
     WatsonxDriver,
     xAIDriver,
-} from '../src';
-import { assertCompletionOk, assertStreamingCompletionOk } from './assertions';
-import { testPrompt_color, testPrompt_describeImage, testSchema_animalDescription, testSchema_color } from './samples';
+} from '../src/index.js';
+import { assertCompletionOk, assertStreamingCompletionOk } from './assertions.js';
+import {
+    testPrompt_color,
+    testPrompt_describeImage,
+    testSchema_animalDescription,
+    testSchema_color,
+} from './samples.js';
 
 const TIMEOUT = 90 * 1000;
 
@@ -208,7 +211,6 @@ function getTestOptions(model: string): ExecutionOptions {
                 max_tokens: 3000,
                 stop_sequence: model === 'o3-mini' ? ['haemoglobin'] : undefined,
             },
-            output_modality: Modalities.text,
         };
     }
 
@@ -225,7 +227,6 @@ function getTestOptions(model: string): ExecutionOptions {
             frequency_penalty: -0.1,
             stop_sequence: ['haemoglobin'],
         },
-        output_modality: Modalities.text,
     };
 }
 
@@ -272,85 +273,71 @@ describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => 
         assertCompletionOk(r, model, driver);
     });
 
-    test.each(models)(
-        `${name}: execute prompt with streaming and schema on %s`,
-        {
-            timeout: TIMEOUT,
-            retry: 2,
-        },
-        async (model) => {
-            const r = await driver.stream(testPrompt_color, {
-                ...getTestOptions(model),
-                result_schema: testSchema_color,
-            });
-            const out = await assertStreamingCompletionOk(r, true);
-            console.log(`Result for streaming with schema ${model}`, JSON.stringify(out));
-        },
-    );
+    test.each(models)(`${name}: execute prompt with streaming and schema on %s`, {
+        timeout: TIMEOUT,
+        retry: 2,
+    }, async (model) => {
+        const r = await driver.stream(testPrompt_color, {
+            ...getTestOptions(model),
+            result_schema: testSchema_color,
+        });
+        const out = await assertStreamingCompletionOk(r, true);
+        console.log(`Result for streaming with schema ${model}`, JSON.stringify(out));
+    });
 
-    test.each(models)(
-        `${name}: max_tokens at documented limit on %s`,
-        {
-            timeout: TIMEOUT,
-            retry: 1,
-        },
-        async (model) => {
-            // Resolve the documented max_tokens limit: prefer provider-specific, fallback to provider-agnostic
-            let limit: number | undefined;
-            if (driver.provider === 'bedrock') {
-                limit = getMaxTokensLimitBedrock(model);
-            } else if (driver.provider === 'vertexai') {
-                limit = getMaxTokensLimitVertexAi(model);
-            }
-            // Fallback to conservative provider-agnostic limit for all other providers
-            if (!limit) {
-                limit = getMaxOutputTokens(model);
-            }
+    test.each(models)(`${name}: max_tokens at documented limit on %s`, {
+        timeout: TIMEOUT,
+        retry: 1,
+    }, async (model) => {
+        // Resolve the documented max_tokens limit: prefer provider-specific, fallback to provider-agnostic
+        let limit: number | undefined;
+        if (driver.provider === 'bedrock') {
+            limit = getMaxTokensLimitBedrock(model);
+        } else if (driver.provider === 'vertexai') {
+            limit = getMaxTokensLimitVertexAi(model);
+        }
+        // Fallback to conservative provider-agnostic limit for all other providers
+        if (!limit) {
+            limit = getMaxOutputTokens(model);
+        }
 
-            const shortPrompt: PromptSegment[] = [{ role: PromptRole.user, content: 'Say "ok".' }];
-            const r = await driver.execute(shortPrompt, {
-                model,
-                model_options: {
-                    _option_id: 'text-fallback',
-                    max_tokens: limit,
-                    temperature: 0,
-                },
-                output_modality: Modalities.text,
-            });
-            // If the provider rejects our limit value, r.error will be set
-            expect(r.error).toBeFalsy();
-            expect(r.finish_reason).toBeTruthy();
-        },
-    );
+        const shortPrompt: PromptSegment[] = [{ role: PromptRole.user, content: 'Say "ok".' }];
+        const r = await driver.execute(shortPrompt, {
+            model,
+            model_options: {
+                _option_id: 'text-fallback',
+                max_tokens: limit,
+                temperature: 0,
+            },
+        });
+        // If the provider rejects our limit value, r.error will be set
+        expect(r.error).toBeFalsy();
+        expect(r.finish_reason).toBeTruthy();
+    });
 
-    test.each(models)(
-        `${name}: multimodal test - describe image with %s`,
-        {
-            timeout: TIMEOUT,
-            retry: 2,
-        },
-        async (model) => {
-            if (!fetchedModels) {
-                fetchedModels = await driver.listModels();
-            }
+    test.each(models)(`${name}: multimodal test - describe image with %s`, {
+        timeout: TIMEOUT,
+        retry: 2,
+    }, async (model) => {
+        if (!fetchedModels) {
+            fetchedModels = await driver.listModels();
+        }
 
-            const isMultiModal = fetchedModels?.find((r) => r.id === model)?.is_multimodal;
+        const isMultiModal = fetchedModels?.find((r) => r.id === model)?.is_multimodal;
 
-            console.log(`${model} is multimodal: ${isMultiModal}`);
-            if (!isMultiModal) return;
+        console.log(`${model} is multimodal: ${isMultiModal}`);
+        if (!isMultiModal) return;
 
-            const r = await driver.execute(testPrompt_describeImage, {
-                output_modality: Modalities.text,
-                model: model,
-                model_options: {
-                    _option_id: 'text-fallback',
-                    temperature: 0.5,
-                    max_tokens: 1024,
-                },
-                result_schema: testSchema_animalDescription,
-            });
-            console.log('Result', r);
-            assertCompletionOk(r);
-        },
-    );
+        const r = await driver.execute(testPrompt_describeImage, {
+            model: model,
+            model_options: {
+                _option_id: 'text-fallback',
+                temperature: 0.5,
+                max_tokens: 1024,
+            },
+            result_schema: testSchema_animalDescription,
+        });
+        console.log('Result', r);
+        assertCompletionOk(r);
+    });
 });

@@ -35,6 +35,9 @@ class ImageUrlSource implements DataSource {
     get name() {
         return basename(this.url);
     }
+    async getURI(): Promise<string> {
+        return this.url;
+    }
     async getURL(): Promise<string> {
         return this.url;
     }

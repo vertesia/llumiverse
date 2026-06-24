@@ -1,16 +1,9 @@
-import {
-    type AbstractDriver,
-    type ExecutionOptions,
-    // biome-ignore lint/suspicious/noDeprecatedImports: exercising deprecated output_modality path until that API is removed
-    Modalities,
-    PromptRole,
-    type PromptSegment,
-} from '@llumiverse/core';
+import { type AbstractDriver, type ExecutionOptions, PromptRole, type PromptSegment } from '@llumiverse/core';
 import 'dotenv/config';
 import { GoogleAuth } from 'google-auth-library';
 import { describe, expect, test } from 'vitest';
-import { BedrockDriver, OpenAIDriver, VertexAIDriver } from '../src';
-import { completionResultToString } from './utils';
+import { BedrockDriver, OpenAIDriver, VertexAIDriver } from '../src/index.js';
+import { completionResultToString } from './utils.js';
 
 const TIMEOUT = 90 * 1000;
 
@@ -190,7 +183,6 @@ function getTestOptions(model: string): ExecutionOptions {
             frequency_penalty: -0.1,
             stop_sequence: ['Haemoglobin'],
         },
-        output_modality: Modalities.text,
         tools: [
             {
                 name: 'get_weather',

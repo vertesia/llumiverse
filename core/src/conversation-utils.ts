@@ -49,6 +49,15 @@ export interface StripOptions {
      * - N > 0: Truncate text to approximately N tokens (~4 chars/token)
      */
     textMaxTokens?: number;
+    /**
+     * Number of most-recent messages to leave untouched when truncating large
+     * text (the active working set). Only messages OLDER than the last
+     * `keepRecentMessages` entries get their large strings truncated to
+     * `textMaxTokens`. Requires a conversation with a `messages` array.
+     * - undefined/0: No turn awareness — truncate every large string (legacy).
+     * - N > 0: Keep the last N messages full; truncate older ones.
+     */
+    keepRecentMessages?: number;
 }
 
 /**
@@ -494,7 +503,56 @@ export function truncateLargeTextInConversation(obj: unknown, options?: StripOpt
     }
 
     const maxChars = maxTokens * CHARS_PER_TOKEN;
+    const keepRecent = options?.keepRecentMessages;
+
+    // Turn-aware path: keep the most recent `keepRecent` messages untouched (the
+    // agent's active working set — the file it just read/wrote, latest
+    // diagnostics) and truncate large strings only in older messages. This lets
+    // callers use an aggressive cap without blinding the model to current work.
+    if (keepRecent && keepRecent > 0) {
+        const messages = getConversationMessages(obj);
+        if (messages && messages.length > keepRecent) {
+            const cutoff = messages.length - keepRecent;
+            const truncated = messages.map((m, i) => (i < cutoff ? truncateLargeTextInternal(m, maxChars) : m));
+            return setConversationMessages(obj, truncated);
+        }
+        // No identifiable messages array, or short conversation: leave it full.
+        return obj;
+    }
+
+    // Legacy path: truncate every large string in the conversation.
     return truncateLargeTextInternal(obj, maxChars);
+}
+
+/**
+ * Extract the message history array from a conversation object, handling the
+ * `{ messages: [...] }` shape (Claude/OpenAI), the wrapped-array shape, and a
+ * plain array. Returns undefined when no message array is identifiable.
+ */
+function getConversationMessages(obj: unknown): unknown[] | undefined {
+    if (Array.isArray(obj)) return obj;
+    const wrapped = unwrapConversationArray(obj);
+    if (wrapped) return wrapped;
+    if (typeof obj === 'object' && obj !== null) {
+        const messages = (obj as Record<string, unknown>).messages;
+        if (Array.isArray(messages)) return messages;
+    }
+    return undefined;
+}
+
+/**
+ * Rebuild a conversation with a new message array, matching the shape returned
+ * by getConversationMessages.
+ */
+function setConversationMessages(obj: unknown, messages: unknown[]): unknown {
+    if (Array.isArray(obj)) return messages;
+    if (unwrapConversationArray(obj)) {
+        return { ...(obj as object), [ARRAY_WRAPPER_KEY]: messages };
+    }
+    if (typeof obj === 'object' && obj !== null) {
+        return { ...(obj as object), messages };
+    }
+    return obj;
 }
 
 function shouldPreserveMediaPayload(obj: unknown): boolean {
@@ -540,7 +598,18 @@ function truncateLargeTextInternal(obj: unknown, maxChars: number): unknown {
             return obj;
         }
         if (obj.length > maxChars) {
-            return obj.substring(0, maxChars) + TEXT_TRUNCATED_MARKER;
+            // Don't cut through a surrogate pair: substring() slices at a UTF-16
+            // code-unit index, so a boundary that lands between the two halves of
+            // a non-BMP character (emoji, CJK-ext, …) leaves a lone high surrogate.
+            // That is invalid Unicode — it can't be UTF-8 encoded losslessly and
+            // strict JSON parsers (e.g. Vertex/Gemini) reject the request body as
+            // "The input data is not valid json". Step back one unit in that case.
+            let end = maxChars;
+            const lastUnit = obj.charCodeAt(end - 1);
+            if (lastUnit >= 0xd800 && lastUnit <= 0xdbff) {
+                end -= 1;
+            }
+            return obj.substring(0, end) + TEXT_TRUNCATED_MARKER;
         }
         return obj;
     }

@@ -10,6 +10,7 @@ import {
     type PromptSegment,
     readStreamAsBase64,
 } from '@llumiverse/core';
+import { truncateBinaryForDebug } from '../../shared/debug-prompt.js';
 import type { VertexAIDriver } from '../index.js';
 
 interface ImagenBaseReference {
@@ -96,6 +97,24 @@ export interface ImagenPrompt {
     referenceImages?: ImagenMessage[];
     subjectDescription?: string; //Used for image customization to describe in the reference image
     negativePrompt?: string; //Used for negative prompts
+}
+
+export function formatImagenDebugPrompt(prompt: ImagenPrompt): ImagenPrompt {
+    return {
+        ...prompt,
+        referenceImages: prompt.referenceImages?.map((reference) => {
+            if (!reference.referenceImage?.bytesBase64Encoded) {
+                return reference;
+            }
+            return {
+                ...reference,
+                referenceImage: {
+                    ...reference.referenceImage,
+                    bytesBase64Encoded: truncateBinaryForDebug(reference.referenceImage.bytesBase64Encoded),
+                },
+            };
+        }),
+    };
 }
 
 function getImagenParameters(taskType: string, options: ImagenOptions) {
