@@ -772,10 +772,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
         // Process global google models from GenAI
         // Exclude embedding, retired and or unsupported models
-        const excludedModels = unsupportedModelsByPublisher.google;
+        const excludedModels = publisherConfig.google.excluded;
         models = models.concat(
             globalGoogleResult
-                .filter((model) => !excludedModels.includes(model.name ?? ''))
+                .filter((model) => !excludedModels.some((excludedModel) => (model.name ?? '').includes(excludedModel)))
                 .map((model) => {
                     const modelCapability = getModelCapabilities(model.name ?? '', 'vertexai');
                     return {
