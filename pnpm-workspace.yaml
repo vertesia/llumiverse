@@ -33,4 +33,4 @@ overrides:
   # Standard CVE overrides
   # ============================
   # Dependabot alerts #77/#78: Vite dev-server Windows path disclosure issues.
-  vite: 8.0.16
+  vite: ^8.0.16
