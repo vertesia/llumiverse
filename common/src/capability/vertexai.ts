@@ -87,6 +87,16 @@ const RECORD_FAMILY_CAPABILITIES: Record<
         output: { text: true, image: false, video: false, audio: false, embed: false },
         tool_support: true,
     },
+    'grok-3': {
+        input: { text: true, image: false, video: false, audio: false, embed: false },
+        output: { text: true, image: false, video: false, audio: false, embed: false },
+        tool_support: true,
+    },
+    grok: {
+        input: { text: true, image: true, video: false, audio: false, embed: false },
+        output: { text: true, image: false, video: false, audio: false, embed: false },
+        tool_support: true,
+    },
 };
 
 // Fallback pattern lists for inferring modalities and tool support
@@ -99,7 +109,7 @@ const VIDEO_OUTPUT_MODELS = ['video'];
 const AUDIO_OUTPUT_MODELS = ['audio'];
 const TEXT_OUTPUT_MODELS = ['text'];
 const EMBEDDING_OUTPUT_MODELS = ['embed'];
-const TOOL_SUPPORT_MODELS = ['tool', 'sonnet', 'opus', 'gemini', 'claude'];
+const TOOL_SUPPORT_MODELS = ['tool', 'sonnet', 'opus', 'gemini', 'claude', 'grok'];
 
 function modelMatches(modelName: string, patterns: string[]): boolean {
     return patterns.some((pattern) => modelName.includes(pattern));

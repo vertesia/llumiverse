@@ -20,7 +20,7 @@ import { hasSamplingParameterRestriction, isGeminiModelVersionGte } from './vers
 /**
  * @discriminator _option_id
  */
-export type VertexAIOptions = ImagenOptions | VertexAIClaudeOptions | VertexAIGeminiOptions;
+export type VertexAIOptions = ImagenOptions | VertexAIClaudeOptions | VertexAIGeminiOptions | VertexAIGrokOptions;
 
 export enum ImagenTaskType {
     TEXT_IMAGE = 'TEXT_IMAGE',
@@ -115,6 +115,14 @@ export interface VertexAIGeminiOptions {
     output_compression_quality?: number;
 }
 
+export interface VertexAIGrokOptions {
+    _option_id: 'vertexai-grok';
+    max_tokens?: number;
+    temperature?: number;
+    top_p?: number;
+    stop_sequence?: string[];
+}
+
 /** Models that support Flex processing (shared, cost-efficient tier). */
 const FLEX_SUPPORTED_GEMINI_MODELS = [
     'gemini-3.1-flash-lite-preview',
@@ -138,6 +146,8 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
         return getClaudeOptions(model, option);
     } else if (model.includes('llama')) {
         return getLlamaOptions(model);
+    } else if (model.includes('grok')) {
+        return getGrokOptions(model);
     }
     return textOptionsFallback;
 }
@@ -729,6 +739,17 @@ function getGeminiMaxTokensLimit(model: string): number {
 
 function getLlamaMaxTokensLimit(_model: string): number {
     return 8192;
+}
+
+function getGrokOptions(_model: string): ModelOptionsInfo {
+    // Exclude top_k (not in OpenAI spec) and presence/frequency penalty (not yet in payload builder)
+    const excludeOptions = ['top_k', 'presence_penalty', 'frequency_penalty'];
+    const commonOptions = textOptionsFallback.options.filter((opt) => !excludeOptions.includes(opt.name));
+
+    return {
+        _option_id: 'vertexai-grok',
+        options: [...commonOptions],
+    };
 }
 
 export function getMaxTokensLimitVertexAi(model: string): number {

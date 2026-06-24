@@ -34,6 +34,7 @@ import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.
 import { formatGeminiDebugPrompt } from './models/gemini.js';
 import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
 import type { LLamaPrompt } from './models/llama.js';
+import type { OpenAIMessage, OpenAIPrompt } from './models/openai_compatible.js';
 import { getModelDefinition, trimModelName } from './models.js';
 
 export interface VertexAIDriverOptions extends DriverOptions {
@@ -66,7 +67,7 @@ function isClaudeStreamingPrompt(prompt: unknown): prompt is ClaudeStreamingProm
 }
 
 //General Prompt type for VertexAI
-export type VertexAIPrompt = ImagenPrompt | GenerateContentPrompt | ClaudePrompt | LLamaPrompt;
+export type VertexAIPrompt = ImagenPrompt | GenerateContentPrompt | ClaudePrompt | LLamaPrompt | OpenAIPrompt;
 
 export { trimModelName };
 
@@ -77,6 +78,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     aiplatform: v1beta1.ModelServiceClient | undefined;
     anthropicClient: AnthropicVertex | undefined;
     fetchClient: FetchClient | undefined;
+    private regionOverrideClients: Map<string, FetchClient> = new Map();
     googleGenAI: GoogleGenAI | undefined;
     googleGenAIRegion: string | undefined;
     googleGenAIFlex: boolean | undefined;
@@ -200,6 +202,27 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             });
         }
         return this.fetchClient;
+    }
+
+    /**
+     * Get a fetch client with an overridden region. Useful when a model only exists
+     * in a specific region (e.g., "global" for xAI models).
+     */
+    public getFetchClientForRegion(region: string): FetchClient {
+        const cacheKey = `${region}:${this.options.project}`;
+        let client = this.regionOverrideClients.get(cacheKey);
+        if (!client) {
+            client = createFetchClient({
+                region: region,
+                project: this.options.project,
+                fetchImpl: this.getDriverFetch(),
+            }).withAuthCallback(async () => {
+                const token = await this.googleAuth.getAccessToken();
+                return `Bearer ${token}`;
+            });
+            this.regionOverrideClients.set(cacheKey, client);
+        }
+        return client;
     }
 
     public getLLamaClient(region: string = 'us-central1'): FetchClient {
@@ -364,6 +387,17 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         toolUse: unknown[] | undefined,
         options: ExecutionOptions,
     ): Content[] | unknown | undefined {
+        // Handle OpenAI-compatible prompts (xAI Grok, Meta Llama via Vertex AI MaaS)
+        // IMPORTANT: check this BEFORE the Claude check — both have a `messages` array
+        if ('_is_openai_compat' in prompt && prompt._is_openai_compat) {
+            return this.buildOpenAICompatStreamingConversation(
+                prompt as unknown as OpenAIPrompt,
+                result,
+                toolUse,
+                options,
+            );
+        }
+
         // Handle Claude-style prompts (has 'messages' array)
         if (isClaudeStreamingPrompt(prompt)) {
             return this.buildClaudeStreamingConversation(prompt, result, toolUse, options);
@@ -462,6 +496,80 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             }
         }
 
+        return processedConversation;
+    }
+
+    /**
+     * Build conversation for OpenAI-compatible streaming (e.g. xAI Grok, Meta Llama on Vertex AI).
+     * Reconstructs the assistant message with OpenAI-format `tool_calls` from the accumulated
+     * ToolUse[], ready for the next API call.
+     */
+    private buildOpenAICompatStreamingConversation(
+        prompt: OpenAIPrompt,
+        result: unknown[],
+        toolUse: unknown[] | undefined,
+        options: ExecutionOptions,
+    ): OpenAIPrompt {
+        const completionResults = result as CompletionResult[];
+        const textContent = completionResults
+            .map((r) => {
+                const r_ = r as CompletionResult;
+                switch (r_.type) {
+                    case 'text':
+                        return r_.value;
+                    case 'json':
+                        return typeof r_.value === 'string' ? r_.value : JSON.stringify(r_.value);
+                    default:
+                        return '';
+                }
+            })
+            .join('');
+
+        // Build OpenAI-format assistant message.
+        // Per OpenAI spec, content must be null (not '') when tool_calls are present.
+        const assistantMessage: OpenAIMessage = { role: 'assistant' };
+        if (textContent) {
+            assistantMessage.content = textContent;
+        } else if (toolUse && toolUse.length > 0) {
+            assistantMessage.content = null;
+        } else {
+            assistantMessage.content = '';
+        }
+
+        if (toolUse && toolUse.length > 0) {
+            assistantMessage.tool_calls = (toolUse as ToolUse[]).map((t) => ({
+                id: t.id,
+                type: 'function',
+                function: {
+                    name: t.tool_name,
+                    arguments: typeof t.tool_input === 'string' ? t.tool_input : JSON.stringify(t.tool_input ?? {}),
+                },
+            }));
+        }
+
+        // Reconstruct full conversation: prior history + current-turn messages + assistant reply.
+        // NOTE: prompt.messages only contains the current-turn messages; options.conversation
+        // holds the accumulated prior history (same pattern as buildClaudeStreamingConversation).
+        const existingMessages = (options.conversation as OpenAIPrompt | undefined)?.messages;
+        const priorMessages = Array.isArray(existingMessages) ? existingMessages : [];
+        let conversation: OpenAIPrompt = {
+            _is_openai_compat: true,
+            messages: [...priorMessages, ...prompt.messages, assistantMessage],
+        };
+
+        conversation = incrementConversationTurn(conversation) as OpenAIPrompt;
+        const currentTurn = getConversationMeta(conversation).turnNumber;
+        const stripOptions = {
+            keepForTurns: options.stripImagesAfterTurns ?? Infinity,
+            currentTurn,
+            textMaxTokens: options.stripTextMaxTokens,
+        };
+        let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions) as OpenAIPrompt;
+        processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions) as OpenAIPrompt;
+        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
+            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+            currentTurn,
+        }) as OpenAIPrompt;
         return processedConversation;
     }
 
@@ -586,40 +694,50 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         let models: AIModel<string>[] = [];
 
         //Model Garden Publisher models - Pretrained models
-        const publishers = ['google', 'anthropic', 'meta'];
-        // Meta "maas" models are LLama Models-As-A-Service. Non-maas models are not pre-deployed.
-        const supportedModels = { google: ['gemini', 'imagen'], anthropic: ['claude'], meta: ['maas'] };
-        // Additional models not in the listings, but we want to include
-        // TODO: Remove once the models are available in the listing API, or no longer needed
-        const additionalModels = {
-            google: ['imagen-3.0-fast-generate-001'],
-            anthropic: [],
-            meta: [
-                'llama-4-maverick-17b-128e-instruct-maas',
-                'llama-4-scout-17b-16e-instruct-maas',
-                'llama-3.3-70b-instruct-maas',
-                'llama-3.2-90b-vision-instruct-maas',
-                'llama-3.1-405b-instruct-maas',
-                'llama-3.1-70b-instruct-maas',
-                'llama-3.1-8b-instruct-maas',
-            ],
-        };
+        /** Meta "maas" models are LLama Models-As-A-Service. Non-maas models are not pre-deployed. */
+        const publisherConfig = {
+            google: {
+                families: ['gemini', 'imagen'],
+                excluded: [
+                    'gemini-pro',
+                    'gemini-ultra',
+                    'imagen-product-recontext-preview',
+                    'embedding',
+                    'embed',
+                    'gemini-live-2.5-flash-preview-native-audio',
+                    'computer-use-preview',
+                ],
+                /** Additional models not in the listings, but we want to include.
+                 * TODO: Remove once available in listing API. */
+                additional: ['imagen-3.0-fast-generate-001'],
+            },
+            anthropic: {
+                families: ['claude'],
+                excluded: [],
+                additional: [],
+            },
+            meta: {
+                families: ['maas'],
+                excluded: [],
+                additional: [
+                    'llama-4-maverick-17b-128e-instruct-maas',
+                    'llama-4-scout-17b-16e-instruct-maas',
+                    'llama-3.3-70b-instruct-maas',
+                    'llama-3.2-90b-vision-instruct-maas',
+                    'llama-3.1-405b-instruct-maas',
+                    'llama-3.1-70b-instruct-maas',
+                    'llama-3.1-8b-instruct-maas',
+                ],
+            },
+            xai: {
+                families: ['grok'],
+                excluded: [],
+                additional: [],
+            },
+        } as const;
 
-        //Used to exclude retired models that are still in the listing API but not available for use.
-        //Or models we do not support yet
-        const unsupportedModelsByPublisher = {
-            google: [
-                'gemini-pro',
-                'gemini-ultra',
-                'imagen-product-recontext-preview',
-                'embedding',
-                'embed',
-                'gemini-live-2.5-flash-preview-native-audio',
-                'computer-use-preview',
-            ],
-            anthropic: [],
-            meta: [],
-        };
+        type Publisher = keyof typeof publisherConfig;
+        const publishers: readonly Publisher[] = Object.keys(publisherConfig) as Publisher[];
 
         // Start all network requests in parallel
         const aiplatformPromise = aiplatform.listModels({
@@ -654,10 +772,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
         // Process global google models from GenAI
         // Exclude embedding, retired and or unsupported models
-        const excludedModels = unsupportedModelsByPublisher.google;
+        const excludedModels = publisherConfig.google.excluded;
         models = models.concat(
             globalGoogleResult
-                .filter((model) => !excludedModels.includes(model.name ?? ''))
+                .filter((model) => !excludedModels.some((excludedModel) => (model.name ?? '').includes(excludedModel)))
                 .map((model) => {
                     const modelCapability = getModelCapabilities(model.name ?? '', 'vertexai');
                     return {
@@ -674,9 +792,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
         // Process publisher models
         for (const result of publisherResults) {
-            const { publisher, response } = result;
-            const modelFamily = supportedModels[publisher as keyof typeof supportedModels];
-            const excludedModels = unsupportedModelsByPublisher[publisher as keyof typeof unsupportedModelsByPublisher];
+            const { publisher, response } = result as { publisher: string; response: Array<{ name?: string }> };
+            const config = publisherConfig[publisher as Publisher];
+            const modelFamily = config.families;
+            const excludedModels = config.excluded;
 
             models = models.concat(
                 response
@@ -783,7 +902,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             }
 
             // Add additional models that are not in the listing
-            for (const additionalModel of additionalModels[publisher as keyof typeof additionalModels]) {
+            for (const additionalModel of publisherConfig[publisher as Publisher].additional) {
                 const publisherModelName = `publishers/${publisher}/models/${additionalModel}`;
                 const modelCapability = getModelCapabilities(additionalModel, 'vertexai');
                 models.push({
@@ -846,7 +965,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
 //'us-central1-aiplatform.googleapis.com',
 const API_BASE_PATH = 'aiplatform.googleapis.com';
-function createFetchClient({
+export function createFetchClient({
     region,
     project,
     apiEndpoint,
@@ -858,8 +977,10 @@ function createFetchClient({
     apiEndpoint?: string;
     apiVersion?: string;
     fetchImpl?: FETCH_FN;
-}) {
-    const vertexBaseEndpoint = apiEndpoint ?? `${region}-${API_BASE_PATH}`;
+}): FetchClient {
+    // For the "global" region, use aiplatform.googleapis.com without any prefix.
+    // Regional endpoints use ${region}-aiplatform.googleapis.com (e.g., us-central1-aiplatform.googleapis.com).
+    const vertexBaseEndpoint = apiEndpoint ?? (region === 'global' ? API_BASE_PATH : `${region}-${API_BASE_PATH}`);
     return new FetchClient(
         `https://${vertexBaseEndpoint}/${apiVersion}/projects/${project}/locations/${region}`,
         fetchImpl,

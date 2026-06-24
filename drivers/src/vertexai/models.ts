@@ -11,6 +11,7 @@ import type { VertexAIDriver, VertexAIPrompt } from './index.js';
 import { ClaudeModelDefinition } from './models/claude.js';
 import { GeminiModelDefinition } from './models/gemini.js';
 import { LLamaModelDefinition } from './models/llama.js';
+import { OpenAICompatibleModelDefinition } from './models/openai_compatible.js';
 
 export function trimModelName(model: string): string {
     const i = model.lastIndexOf('@');
@@ -57,6 +58,10 @@ export function getModelDefinition(model: string): ModelDefinition {
 
     if (publisher?.includes('anthropic')) {
         return new ClaudeModelDefinition(modelName);
+    } else if (publisher?.includes('xai')) {
+        // Use OpenAI-compatible endpoint for xAI Grok models via Vertex AI's openapi endpoint
+        // xAI/Grok models only exist in the "global" region, not regional endpoints
+        return new OpenAICompatibleModelDefinition({ modelName: `xai/${modelName}`, region: 'global' });
     } else if (publisher?.includes('google')) {
         return new GeminiModelDefinition(modelName);
     } else if (publisher?.includes('meta')) {
