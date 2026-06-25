@@ -12,6 +12,9 @@ name: (backport) Cherry-pick merged PR
 
 on:
   pull_request:
+    # Only PRs targeting branches we backport FROM, so the job (and its App token /
+    # `backport` environment) never engages on unrelated merges.
+    branches: [main, "release/**"]
     types: [closed, labeled]
 
 concurrency:
@@ -25,13 +28,17 @@ permissions:
 jobs:
   backport:
     name: Backport merged PR
-    # Merged, same-repo PRs only. On `labeled`, react only to backport/* labels;
-    # never re-trigger on a backport PR's own merge.
+    # Merged, same-repo PRs only; never re-trigger on a backport PR's own merge.
+    # Require a `backport/*` label so no App token is minted on unrelated merges:
+    # on `labeled` the added label must be backport/*; on `closed` the PR must
+    # already carry one (substring match — the marker label `backport` has no
+    # slash, so it alone never triggers).
     if: >-
       github.event.pull_request.merged == true &&
       github.event.pull_request.head.repo.fork == false &&
       !startsWith(github.event.pull_request.head.ref, 'backport-') &&
-      (github.event.action != 'labeled' || startsWith(github.event.label.name, 'backport/'))
+      ((github.event.action == 'labeled' && startsWith(github.event.label.name, 'backport/')) ||
+      (github.event.action == 'closed' && contains(join(github.event.pull_request.labels.*.name, ','), 'backport/')))
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Mints a token for the release bot App, whose credentials are provisioned in
