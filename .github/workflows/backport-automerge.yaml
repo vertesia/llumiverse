@@ -66,7 +66,6 @@ jobs:
           {
             echo "should_merge=false"
             echo "pr_url="
-            echo "pr_number="
           } >> "$GITHUB_OUTPUT"
 
           prs_json="$(gh pr list \
@@ -103,8 +102,8 @@ jobs:
           # Backport PRs are opened by the release-bot App (see .github/bin/backport.sh).
           # This must stay distinct from the automerge App that approves below, otherwise
           # the approval would not count under branch protection.
-          if [[ "$author_login" != "app/vertesia-release-bot" ]]; then
-            echo "Skipping PR #$pr_number: author is $author_login, not app/vertesia-release-bot."
+          if [[ "$author_login" != "app/vertesia-release-bot" && "$author_login" != "vertesia-release-bot[bot]" ]]; then
+            echo "Skipping PR #$pr_number: author is $author_login, not the release-bot."
             exit 0
           fi
           if [[ "$head_ref" != "$HEAD_BRANCH" ]]; then
