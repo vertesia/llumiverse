@@ -53,7 +53,8 @@ Backport of #${PR_NUMBER} to \`${target}\`.
 - Author: @${PR_AUTHOR}
 - Source commit: \`${MERGE_SHA}\`
 
-Clean cherry-pick — no conflicts. CI runs as usual; review and merge.
+Clean cherry-pick — no conflicts. This PR auto-merges once all checks pass
+(see .github/workflows/backport-automerge.yaml); no action needed.
 EOF
 }
 
