@@ -79,8 +79,9 @@ git commit --amend --no-edit
 git push --force-with-lease
 \`\`\`
 
-> **Submodule (gitlink) conflicts:** choose the intended pointer commit, then run
-> \`git submodule update --init --recursive\` before building.
+> **Submodule (gitlink) conflicts** were auto-resolved to the cherry-picked
+> (incoming) commit so this PR could be opened — verify the pointer is the one you
+> want, then run \`git submodule update --init --recursive\` before building.
 EOF
 }
 
@@ -109,9 +110,11 @@ if ! git fetch --no-tags --quiet origin "$MERGE_SHA"; then
 fi
 
 # A merge commit (>= 2 parents) needs `--mainline 1`; squash/rebase merges don't.
-parent_count="$(git rev-list --parents -n 1 "$MERGE_SHA" | wc -w)"
+# `rev-list --parents` prints "<commit> <parent>...", so parents = fields - 1.
+# awk (not `wc -w`) avoids BSD/macOS leading-whitespace padding in the integer test.
+parent_count="$(git rev-list --parents -n 1 "$MERGE_SHA" | awk '{print NF - 1}')"
 cp_mainline=()
-if [ "$parent_count" -ge 3 ]; then
+if [ "$parent_count" -ge 2 ]; then
     cp_mainline=(--mainline 1)
 fi
 
@@ -234,9 +237,21 @@ backport_one() {
             return 0
         fi
         if git diff --name-only --diff-filter=U | grep -q .; then
-            echo "Conflicts cherry-picking onto ${target}; committing markers for a draft PR."
-            git add -A
-            git -c core.editor=true cherry-pick --continue
+            echo "Conflicts cherry-picking onto ${target}; preparing a draft PR."
+            # Text files keep their conflict markers for the human to resolve.
+            # Submodule gitlinks can't carry markers and may stay unmerged after
+            # `git add`, which would abort the run — resolve any still-unmerged
+            # path to the cherry-picked ("theirs") side so the pick can always be
+            # concluded and a draft PR opened. The PR body flags the gitlink fixup.
+            git add -A || true
+            if git ls-files --unmerged | grep -q .; then
+                git ls-files --unmerged | awk '{print $4}' | sort -u | while IFS= read -r p; do
+                    git checkout --theirs -- "$p" 2>/dev/null || true
+                    git add -- "$p" 2>/dev/null || true
+                done
+            fi
+            git -c core.editor=true cherry-pick --continue 2>/dev/null \
+                || git -c core.editor=true commit --no-edit
             conflicted=1
         else
             git cherry-pick --abort 2>/dev/null || true
