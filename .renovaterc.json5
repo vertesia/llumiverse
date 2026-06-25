@@ -5,6 +5,7 @@
   "labels": ["dependencies"],
   // Bypass the 7-day minimum release age for security fixes.
   "vulnerabilityAlerts": {
+    "enabled": true,
     "minimumReleaseAge": "0 days"
   },
   "packageRules": [
@@ -145,37 +146,16 @@
       "allowedVersions": "<8",
       "rangeStrategy": "bump"
     },
-    // Overrides go at the bottom, highest precedence
-    {
-      "groupName": "Package Overrides",
-      "matchManagers": [
-        "npm",
-        "pnpm"
-      ],
-      "matchDepTypes": [
-        "overrides"
-      ],
-      "rangeStrategy": "bump",
-      "schedule": "* * * * 4", // Thursday
-      "prCreation": "approval", // Branches still created automatically. This is to hide the group, do not merge.
-      "automerge": false
-    },
     {
       // Security-floor overrides (`pkg@<v: patchedVersion`) bump OLD, vulnerable transitive
-      // copies up to the patched release of the SAME major; they are not meant to upgrade
-      // the package. Renovate's "major" runs blindly retarget such floors across a major
-      // boundary (e.g. path-to-regexp 6→8, @babel/core 7→8, uuid 11→14), forcing transitive
-      // consumers onto an incompatible API and breaking the build. Disable major updates for
-      // every pnpm-workspace.yaml override; cross a major boundary manually if a CVE requires
-      // it. matchFileNames is the reliable matcher: pnpm-workspace.yaml entries get depType
-      // "pnpm.overrides", which the "Package Overrides" group's matchDepTypes:["overrides"]
-      // never matches, so they otherwise leak into the catch-all npm group's renovate/major-* PR.
-      "description": "Never major-bump pnpm-workspace.yaml security-floor overrides (breaks transitive consumers)",
+      // copies up to a patched release; they are not meant to track routine dependency updates.
+      // matchFileNames is the reliable matcher: pnpm-workspace.yaml entries get depType values
+      // such as "pnpm.overrides" or "pnpm-workspace.overrides", which matchDepTypes:["overrides"]
+      // does not catch. Disable normal Renovate PRs for these entries; vulnerabilityAlerts remains
+      // enabled above so advisory remediation can still run through Renovate's security flow.
+      "description": "Disable routine pnpm-workspace.yaml override updates; keep vulnerability alerts enabled",
       "matchFileNames": [
         "pnpm-workspace.yaml"
-      ],
-      "matchUpdateTypes": [
-        "major"
       ],
       "enabled": false
     }
