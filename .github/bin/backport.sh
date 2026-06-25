@@ -261,6 +261,15 @@ backport_one() {
         fi
     fi
 
+    # Don't open an empty PR: if the result is identical to the target there is
+    # nothing to backport (e.g. the change is already present, or a conflict was
+    # resolved back to the target's state).
+    if git diff --quiet "origin/${target}" HEAD; then
+        echo "No net change vs ${target}; skipping (nothing to backport)."
+        comment_original ":information_source: Backport to \`${target}\` skipped: no changes relative to \`${target}\`."
+        return 0
+    fi
+
     git push --quiet origin "HEAD:${branch}"
 
     finalize_pr "$target" "$branch" "$conflicted"
