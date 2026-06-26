@@ -39,9 +39,23 @@ export GH_TOKEN
 
 # --- helpers --------------------------------------------------------------
 
+# Append a line to the GitHub Actions job summary (no-op when run locally).
+summary() {
+    [ -n "${GITHUB_STEP_SUMMARY:-}" ] && printf '%s\n' "$1" >>"$GITHUB_STEP_SUMMARY"
+    return 0
+}
+
+# One result row in the summary table. `target` is read from the caller's scope
+# (dynamic scoping), so every outcome below is recorded with no extra wiring.
+summary_row() {
+    summary "| \`${target:-?}\` | $1 |"
+}
+
 comment_original() {
     gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$1" >/dev/null 2>&1 \
         || echo "::warning::Could not comment on PR #${PR_NUMBER}."
+    # Mirror the same one-liner into the job summary so results aren't log-only.
+    summary_row "$1"
 }
 
 clean_body() {
@@ -61,28 +75,32 @@ EOF
 conflict_body() {
     local target="$1" branch="$2"
     cat <<EOF
-Backport of #${PR_NUMBER} to \`${target}\`. :warning: **The cherry-pick had conflicts.**
+Backport of #${PR_NUMBER} to \`${target}\`. :warning: **The cherry-pick had conflicts**, so this is a **draft** for you to validate.
 
 - Original PR: ${PR_URL}
 - Author: @${PR_AUTHOR}
 - Source commit: \`${MERGE_SHA}\`
 
-Conflicting hunks were committed **with conflict markers** so this branch exists
-for you to fix. This PR is a **draft** and stays red until the markers are gone.
+What was committed so the branch exists for you to fix:
+- **Regular-file conflicts** kept their \`<<<<<<<\` markers — resolve them.
+- **Submodule (gitlink) conflicts** were set to the submodule's \`${target}\` HEAD
+  (e.g. composableai \`main\`) — verify the pointer is the one you want (this
+  assumes the matching submodule change was already backported there).
+- **Structural conflicts** (renames/deletes) were auto-resolved to the incoming
+  side — review the full diff, not just the markers.
 
-### Resolve locally
+### Resolve, then open it
 \`\`\`sh
 git fetch origin ${branch}
 git switch ${branch}
-# Resolve every <<<<<<< / ======= / >>>>>>> marker, then:
+# resolve any <<<<<<< / ======= / >>>>>>> markers, then:
 git add -A
 git commit --amend --no-edit
 git push --force-with-lease
+git submodule update --init --recursive   # if a gitlink changed
 \`\`\`
-
-> **Submodule (gitlink) conflicts** were auto-resolved to the cherry-picked
-> (incoming) commit so this PR could be opened — verify the pointer is the one you
-> want, then run \`git submodule update --init --recursive\` before building.
+When the diff is right, click **Ready for review** (or \`gh pr ready <this PR>\`)
+to open it — checks run and it merges from there like any other PR.
 EOF
 }
 
@@ -124,13 +142,19 @@ fi
 # Echoes 1 if the pushed branch contains cherry-pick conflict markers, else 0.
 # Defaults to 1 (open as draft) when the branch can't be inspected, so an
 # unverified backport is never presented as ready-to-merge.
-branch_has_conflict_markers() {
+# Decide whether a recovered (already-pushed, no-PR) branch must open as a DRAFT.
+# A conflicted backport carries a `Backport-Conflicted` trailer (gitlink conflicts
+# resolve markerlessly, so markers alone are unreliable); literal markers also
+# count. Default to draft if the branch can't be inspected — never recover a
+# conflicted backport as a mergeable PR.
+recovery_is_conflicted() {
     local branch="$1"
     if ! git fetch --no-tags --quiet origin "$branch"; then
         echo 1
         return 0
     fi
-    if git grep -qI -e '^<<<<<<< ' FETCH_HEAD -- . 2>/dev/null; then
+    if git log -1 --format=%B FETCH_HEAD 2>/dev/null | grep -qiE '^Backport-Conflicted:[[:space:]]*true' \
+        || git grep -qI -e '^<<<<<<< ' FETCH_HEAD -- . 2>/dev/null; then
         echo 1
     else
         echo 0
@@ -153,9 +177,15 @@ finalize_pr() {
         body="$(clean_body "$target")"
     fi
 
+    # set -e is suspended in this call path (backport_one runs as an if-condition),
+    # so check PR creation explicitly rather than trusting it to abort on failure.
     local pr_url
-    pr_url="$(gh pr create --repo "$REPO" --base "$target" --head "$branch" \
-        --title "$title" --body "$body" "${draft[@]}")"
+    if ! pr_url="$(gh pr create --repo "$REPO" --base "$target" --head "$branch" \
+        --title "$title" --body "$body" "${draft[@]}")" || [ -z "$pr_url" ]; then
+        echo "::error::Failed to create backport PR for ${branch} -> ${target}." >&2
+        comment_original ":x: Backport to \`${target}\`: branch pushed but PR creation failed. Re-run the job to recover. See ${RUN_URL}"
+        return 1
+    fi
     echo "Opened ${pr_url}"
 
     if [ -n "$PR_AUTHOR" ]; then
@@ -170,6 +200,35 @@ finalize_pr() {
     else
         comment_original ":white_check_mark: Opened a backport to \`${target}\`: ${pr_url}"
     fi
+    return 0
+}
+
+# Resolve unmerged submodule gitlinks (mode 160000) at the index level — the
+# submodule isn't checked out, so they can't be `git add`ed. Point each at the
+# submodule's HEAD on the SAME branch as the backport target (e.g. composableai
+# `main` for a backport to main), so the pointer matches this branch's line rather
+# than carrying the source line's commit. Assumes the matching submodule change
+# was already backported there; the draft PR flags it for verification.
+resolve_gitlink_conflicts() {
+    local target="$1" gl name url sha
+    while IFS= read -r gl; do
+        [ -n "$gl" ] || continue
+        name="$(git config -f .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null \
+            | awk -v p="$gl" '$2==p{print $1}' | sed -E 's/^submodule\.(.+)\.path$/\1/' | head -1)"
+        url=""
+        [ -n "$name" ] && url="$(git config -f .gitmodules --get "submodule.${name}.url" 2>/dev/null)"
+        if [ -z "$url" ]; then
+            echo "::warning::No .gitmodules URL for gitlink '${gl}'; leaving it unmerged."
+            continue
+        fi
+        sha="$(git ls-remote "$url" "refs/heads/${target}" 2>/dev/null | awk 'NR==1{print $1}')"
+        if [ -z "$sha" ]; then
+            echo "::warning::Could not read '${gl}' ${target} HEAD from ${url}; leaving it unmerged."
+            continue
+        fi
+        git update-index --cacheinfo "160000,${sha},${gl}"
+        echo "Set gitlink '${gl}' to its ${target} HEAD ${sha:0:12} (${url})."
+    done < <(git ls-files --unmerged | awk '$1=="160000"{print $4}' | sort -u)
 }
 
 # --- backport one target --------------------------------------------------
@@ -188,6 +247,7 @@ backport_one() {
     fi
     if [ "$target" = "$PR_HEAD_REF" ]; then
         echo "Skipping '${target}': same as the PR head ref."
+        summary_row ":fast_forward: Skipped — same as the PR head ref"
         return 0
     fi
 
@@ -217,8 +277,8 @@ backport_one() {
         # Branch exists but no PR was ever opened -> a prior run pushed the branch
         # then failed before `gh pr create`. Recover by opening the PR now.
         echo "Backport branch ${branch} exists with no PR; recovering by opening the PR."
-        finalize_pr "$target" "$branch" "$(branch_has_conflict_markers "$branch")"
-        return 0
+        finalize_pr "$target" "$branch" "$(recovery_is_conflicted "$branch")"
+        return $?
     fi
 
     if ! git fetch --no-tags --quiet origin "$target"; then
@@ -239,20 +299,43 @@ backport_one() {
         fi
         if git diff --name-only --diff-filter=U | grep -q .; then
             echo "Conflicts cherry-picking onto ${target}; preparing a draft PR."
-            # Text files keep their conflict markers for the human to resolve.
-            # Submodule gitlinks can't carry markers and may stay unmerged after
-            # `git add`, which would abort the run — resolve any still-unmerged
-            # path to the cherry-picked ("theirs") side so the pick can always be
-            # concluded and a draft PR opened. The PR body flags the gitlink fixup.
-            git add -A || true
+            # Stage conflicted regular files (they keep their markers for manual
+            # resolution); resolve submodule gitlinks at the index level since an
+            # unchecked-out submodule can't be `git add`ed. Avoid `git add -A`,
+            # which chokes on the empty submodule directory.
+            git ls-files --unmerged | awk '$1!="160000"{print $4}' | sort -u | while IFS= read -r f; do
+                [ -n "$f" ] && git add -- "$f" 2>/dev/null || true
+            done
+            resolve_gitlink_conflicts "$target"
+            # Force-resolve anything still unmerged (modify/delete, rename, add/add)
+            # to the incoming side, so ANY conflict becomes a draft for a human to
+            # validate rather than hard-failing the backport.
+            git ls-files --unmerged | awk '{print $4}' | sort -u | while IFS= read -r p; do
+                [ -n "$p" ] || continue
+                git checkout --theirs -- "$p" 2>/dev/null && git add -- "$p" 2>/dev/null \
+                    || git rm -q -- "$p" 2>/dev/null \
+                    || git add -- "$p" 2>/dev/null || true
+            done
+            # set -e is suspended here (if-condition subshell), so check explicitly.
+            # Only a path that can't even be force-resolved is truly unrecoverable.
             if git ls-files --unmerged | grep -q .; then
-                git ls-files --unmerged | awk '{print $4}' | sort -u | while IFS= read -r p; do
-                    git checkout --theirs -- "$p" 2>/dev/null || true
-                    git add -- "$p" 2>/dev/null || true
-                done
+                echo "::error::Could not auto-resolve conflicts onto ${target}; manual cherry-pick needed." >&2
+                comment_original ":x: Backport to \`${target}\` has conflicts that couldn't be auto-staged. Cherry-pick \`${MERGE_SHA}\` by hand. See ${RUN_URL}"
+                git cherry-pick --abort 2>/dev/null || true
+                return 1
             fi
-            git -c core.editor=true cherry-pick --continue 2>/dev/null \
-                || git -c core.editor=true commit --no-edit
+            if git diff --cached --quiet "origin/${target}"; then
+                git cherry-pick --quit 2>/dev/null || true
+                echo "Resolved conflict has no net change vs ${target}; skipping."
+                comment_original ":information_source: Backport to \`${target}\` skipped: no changes relative to \`${target}\`."
+                return 0
+            fi
+            if ! git -c core.editor=true cherry-pick --continue; then
+                echo "::error::Failed to conclude cherry-pick onto ${target}." >&2
+                comment_original ":x: Backport to \`${target}\` failed to conclude the cherry-pick. See ${RUN_URL}"
+                git cherry-pick --abort 2>/dev/null || true
+                return 1
+            fi
             conflicted=1
         else
             git cherry-pick --abort 2>/dev/null || true
@@ -271,13 +354,41 @@ backport_one() {
         return 0
     fi
 
-    git push --quiet origin "HEAD:${branch}"
+    if [ "$conflicted" -eq 1 ]; then
+        # Durably flag the conflict in the commit so a recovery rerun opens a DRAFT.
+        # Gitlink conflicts are resolved markerlessly (git update-index), so a marker
+        # grep alone can't tell a conflicted backport from a clean one on recovery.
+        # set -e is suspended here (if-condition subshell), so check explicitly:
+        # never push an unflagged conflicted backport — recovery would reopen it as
+        # a mergeable PR and the automerge workflow could land it unverified.
+        if ! git commit --amend --no-edit --quiet --trailer "Backport-Conflicted: true"; then
+            echo "::error::Could not flag the conflict on ${target}; refusing to push an unflagged conflicted backport." >&2
+            comment_original ":x: Backport to \`${target}\` could not be flagged as conflicted — not opening a PR (recovery safety). Re-run the job. See ${RUN_URL}"
+            return 1
+        fi
+    fi
+
+    if ! git push --quiet origin "HEAD:${branch}"; then
+        echo "::error::Failed to push ${branch} to origin." >&2
+        comment_original ":x: Backport to \`${target}\` failed to push the branch. See ${RUN_URL}"
+        return 1
+    fi
 
     finalize_pr "$target" "$branch" "$conflicted"
-    return 0
+    return $?
 }
 
 # --- run, isolating each target so one failure can't abort the rest -------
+
+# Job-summary header (rendered on the run page so outcomes aren't buried in logs).
+summary "## Backport of [#${PR_NUMBER}](${PR_URL})"
+summary ""
+summary "**${PR_TITLE}**"
+summary ""
+summary "Source \`${MERGE_SHA:0:12}\` &middot; targets: \`${targets[*]}\`"
+summary ""
+summary "| Target | Result |"
+summary "| --- | --- |"
 
 overall_status=0
 for target in "${targets[@]}"; do
@@ -288,5 +399,10 @@ for target in "${targets[@]}"; do
     fi
     echo "::endgroup::"
 done
+
+summary ""
+if [ "$overall_status" -ne 0 ]; then
+    summary "> :x: One or more targets failed. Re-run the failed job, or remove and re-add the \`backport/<target>\` label."
+fi
 
 exit "$overall_status"
