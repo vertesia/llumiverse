@@ -21,9 +21,9 @@ The `publish-all-packages.sh` script handles publishing the following packages i
 
 ### Parameters
 
-- `--ref` (required): Git reference - `main` for dev builds, `preview` for releases. Publishing releases outside of `preview` branch is forbidden.
+- `--ref` (required): Git reference - `main` for dev builds, a `release/X.Y` branch (e.g. `release/1.4`) for releases. Publishing releases outside of a `release/*` branch is forbidden.
 - `--release-type` (required): The type of the version, either "release" or "snapshot". A "release" means this is a stable version. A "snapshot" means this is a development version.
-  - "release" creates a stable version respecting semantic versioning, such as `1.0.0`. Release can only be performed from the `preview` branch.
+  - "release" creates a stable version respecting semantic versioning, such as `1.0.0`. Release can only be performed from a `release/*` branch (e.g. `release/1.4`).
   - "snapshot" creates a new development version in format `{base}-dev.{date}.{time}`, such as `1.0.0-dev.20260128.144200Z`. Note that the time part contains 'Z', which means that the time is in UTC; it also allows NPM to use leading zeros, as it turns the segment into alphanumeric.
 - `--bump-type` (required): The strategy for changing the version (`minor`, `patch`, `keep`)
   - `minor` increases the minor version in the package version
@@ -44,23 +44,23 @@ The `publish-all-packages.sh` script handles publishing the following packages i
 # Publish snapshot without bump from main
 # (ex: 1.0.0-dev.20260203.000000Z -> 1.0.0-dev.20260204.000000Z)
 ./publish-all-packages.sh \
-    --ref preview \
+    --ref release/1.4 \
     --release-type release \
     --bump-type minor
 
-# Publish release with 'patch' bump from preview
+# Publish release with 'patch' bump from a release branch
 # (ex: 0.24.0-dev.20260203.164053Z -> 0.24.1)
 # (ex: 0.24.0 -> 0.24.1)
 ./publish-all-packages.sh \
-    --ref preview \
+    --ref release/1.4 \
     --release-type release \
     --bump-type patch
 
-# Publish release with minor bump from prevew
+# Publish release with minor bump from a release branch
 # (ex: 0.24.0-dev.20260203.164053Z -> 0.25.0)
 # (ex: 0.24.0 -> 0.25.0)
 ./publish-all-packages.sh \
-    --ref preview \
+    --ref release/1.4 \
     --release-type release \
     --bump-type minor
 ```
@@ -126,7 +126,7 @@ The `publish-all-packages.sh` script handles publishing the following packages i
 
 ### Scenario 2: Publishing official releases
 
-**Purpose**: Publish official releases from `preview`
+**Purpose**: Publish official releases from a `release/*` branch (e.g. `release/1.4`)
 
 **Steps**:
 1. Bumps root `package.json` version using semantic versioning
@@ -149,7 +149,7 @@ The `publish-all-packages.sh` script handles publishing the following packages i
 # ==========
 # Example 1: we had a snapshot version
 # -----
-# params: ref=preview, release_type=release, bump_type=keep
+# params: ref=release/1.4, release_type=release, bump_type=keep
 # ==========
 
 # Before (package.json):
@@ -165,7 +165,7 @@ The `publish-all-packages.sh` script handles publishing the following packages i
 # ==========
 # Example 2: we had a release version
 # -----
-# params: ref=preview, release_type=release, bump_type=patch
+# params: ref=release/1.4, release_type=release, bump_type=patch
 # ==========
 
 # Before (package.json):
@@ -195,10 +195,10 @@ The `publish-all-packages.sh` script handles publishing the following packages i
 # Test publishing logic on main
 ./publish-all-packages.sh --ref main --dry-run --release-type snapshot --bump-type keep
 
-# Test publishing logic on preview
-./publish-all-packages.sh --ref preview --dry-run --release-type release --bump-type minor
-./publish-all-packages.sh --ref preview --dry-run --release-type release --bump-type patch
-./publish-all-packages.sh --ref preview --dry-run --release-type snapshot --bump-type keep
+# Test publishing logic on a release branch
+./publish-all-packages.sh --ref release/1.4 --dry-run --release-type release --bump-type minor
+./publish-all-packages.sh --ref release/1.4 --dry-run --release-type release --bump-type patch
+./publish-all-packages.sh --ref release/1.4 --dry-run --release-type snapshot --bump-type keep
 ```
 
 **Result**:
@@ -257,7 +257,7 @@ In dry run mode, the script:
 - Dry run enabled by default in GitHub Actions
 - All version updates happen before any publishing
 - Changes push to GitHub before publishing to prevent Git conflicts
-- Restrict publishing from the `preview` branch
+- Restrict publishing to `release/*` branches
 - Portable shell syntax (works on macOS and Linux)
 
 ### Requirements
