@@ -52,7 +52,7 @@ jobs:
         # push the version-bump commit past branch protection. With it false, the
         # push fails with "git@github.com: Permission denied (publickey)".
         # zizmor: ignore[artipacked] deploy key is scoped to the `build` environment.
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ssh-key: ${{ secrets.DEPLOY_KEY }} # Use deploy key to bypass branch protection rules
           persist-credentials: true
