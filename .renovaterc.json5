@@ -149,13 +149,17 @@
     {
       // Security-floor overrides (`pkg@<v: patchedVersion`) bump OLD, vulnerable transitive
       // copies up to a patched release; they are not meant to track routine dependency updates.
-      // matchFileNames is the reliable matcher: pnpm-workspace.yaml entries get depType values
-      // such as "pnpm.overrides" or "pnpm-workspace.overrides", which matchDepTypes:["overrides"]
-      // does not catch. Disable normal Renovate PRs for these entries; vulnerabilityAlerts remains
-      // enabled above so advisory remediation can still run through Renovate's security flow.
+      // Keep catalog entries in pnpm-workspace.yaml updateable by Renovate while disabling normal
+      // PRs for override entries. vulnerabilityAlerts remains enabled above so advisory remediation
+      // can still run through Renovate's security flow.
       "description": "Disable routine pnpm-workspace.yaml override updates; keep vulnerability alerts enabled",
       "matchFileNames": [
         "pnpm-workspace.yaml"
+      ],
+      "matchDepTypes": [
+        "overrides",
+        "pnpm.overrides",
+        "pnpm-workspace.overrides"
       ],
       "enabled": false
     }

@@ -5,7 +5,6 @@
     "type": "module",
     "scripts": {
         "build": "pnpm -r build",
-        "bump": "pnpm exec wst bump minor",
         "check": "pnpm exec biome check .",
         "check:write": "pnpm exec biome check --write .",
         "ci:local": "pnpm run ci:renovate && pnpm run check && pnpm run build && pnpm run typecheck:test && pnpm run test",
@@ -22,8 +21,6 @@
     },
     "devDependencies": {
         "@biomejs/biome": "2.5.0",
-        "cross-spawn": "^7.0.6",
-        "npm-ws-tools": "^0.3.0",
         "rollup": "^4.62.0",
         "typescript": "^6.0.3",
         "vitest": "^4.1.9"
