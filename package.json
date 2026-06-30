@@ -1,6 +1,6 @@
 {
     "name": "@llumiverse/parent",
-    "version": "1.4.0-dev.20260629.090753Z",
+    "version": "1.4.0",
     "private": true,
     "type": "module",
     "scripts": {
