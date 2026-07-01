@@ -172,7 +172,7 @@ describe('driver HTTP timeout wiring', () => {
         });
 
         await expectFetchClientUsesDriverFetch(driver, driver.getFetchClient());
-        await expectFetchClientUsesDriverFetch(driver, driver.getLLamaClient());
+        await expectFetchClientUsesDriverFetch(driver, driver.getFetchClientForRegion('us-east5'));
 
         driver.destroy();
     });

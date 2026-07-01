@@ -82,7 +82,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     googleGenAI: GoogleGenAI | undefined;
     googleGenAIRegion: string | undefined;
     googleGenAIFlex: boolean | undefined;
-    llamaClient: (FetchClient & { region?: string }) | undefined;
     modelGarden: v1beta1.ModelGardenServiceClient | undefined;
     imagenClient: PredictionServiceClient | undefined;
     predictionClient: PredictionServiceClient | undefined;
@@ -100,7 +99,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         this.googleGenAIRegion = undefined;
         this.googleGenAIFlex = undefined;
         this.modelGarden = undefined;
-        this.llamaClient = undefined;
         this.imagenClient = undefined;
         this.predictionClient = undefined;
 
@@ -208,13 +206,14 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
      * Get a fetch client with an overridden region. Useful when a model only exists
      * in a specific region (e.g., "global" for xAI models).
      */
-    public getFetchClientForRegion(region: string): FetchClient {
-        const cacheKey = `${region}:${this.options.project}`;
+    public getFetchClientForRegion(region: string, apiVersion = 'v1'): FetchClient {
+        const cacheKey = `${region}:${apiVersion}:${this.options.project}`;
         let client = this.regionOverrideClients.get(cacheKey);
         if (!client) {
             client = createFetchClient({
                 region: region,
                 project: this.options.project,
+                apiVersion,
                 fetchImpl: this.getDriverFetch(),
             }).withAuthCallback(async () => {
                 const token = await this.googleAuth.getAccessToken();
@@ -223,24 +222,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             this.regionOverrideClients.set(cacheKey, client);
         }
         return client;
-    }
-
-    public getLLamaClient(region: string = 'us-central1'): FetchClient {
-        //Lazy initialization
-        if (!this.llamaClient || this.llamaClient.region !== region) {
-            this.llamaClient = createFetchClient({
-                region: region,
-                project: this.options.project,
-                apiVersion: 'v1beta1',
-                fetchImpl: this.getDriverFetch(),
-            }).withAuthCallback(async () => {
-                const token = await this.googleAuth.getAccessToken();
-                return `Bearer ${token}`;
-            });
-            // Store the region for potential client reuse
-            this.llamaClient.region = region;
-        }
-        return this.llamaClient;
     }
 
     public async getAnthropicClient(

@@ -4,7 +4,9 @@ export interface VertexOpenMaaSModel {
     publisher: string;
     model: string;
     requestPublisher: string;
+    requestModel?: string;
     regions: readonly string[];
+    apiVersion?: string;
     extraBody?: Record<string, unknown>;
 }
 
@@ -28,21 +30,27 @@ export const VERTEX_OPEN_MAAS_MODELS = [
         publisher: 'meta',
         model: 'llama-4-maverick-17b-128e',
         requestPublisher: 'meta',
+        requestModel: 'llama-4-maverick-17b-128e-instruct-maas',
         regions: US_EAST5_REGIONS,
+        apiVersion: 'v1beta1',
         extraBody: LLAMA_SAFETY_EXTRA_BODY,
     },
     {
         publisher: 'meta',
         model: 'llama-4-scout-17b-16e',
         requestPublisher: 'meta',
+        requestModel: 'llama-4-scout-17b-16e-instruct-maas',
         regions: US_EAST5_REGIONS,
+        apiVersion: 'v1beta1',
         extraBody: LLAMA_SAFETY_EXTRA_BODY,
     },
     {
         publisher: 'meta',
         model: 'llama-3.3-70b',
         requestPublisher: 'meta',
+        requestModel: 'llama-3.3-70b-instruct-maas',
         regions: US_CENTRAL1_REGIONS,
+        apiVersion: 'v1beta1',
         extraBody: LLAMA_SAFETY_EXTRA_BODY,
     },
     {
@@ -146,11 +154,12 @@ export function getVertexOpenMaaSModel(publisher: string | undefined, model: str
 export function getVertexOpenMaaSRequestModel(
     publisher: string | undefined,
     model: string,
-): { modelName: string; extraBody?: Record<string, unknown> } | undefined {
+): { modelName: string; apiVersion?: string; extraBody?: Record<string, unknown> } | undefined {
     const entry = getVertexOpenMaaSModel(publisher, model);
     if (entry) {
         return {
-            modelName: `${entry.requestPublisher}/${entry.model}`,
+            modelName: `${entry.requestPublisher}/${entry.requestModel ?? entry.model}`,
+            apiVersion: entry.apiVersion,
             extraBody: entry.extraBody,
         };
     }

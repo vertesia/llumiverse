@@ -24,6 +24,8 @@ export interface OpenAICompatibleOptions extends OpenAICompletionsModelOptions {
     endpointPath?: string;
     /** Region override for the Vertex AI endpoint. Useful when a model only exists in a specific region. */
     region?: string;
+    /** Vertex API version for this OpenAI-compatible endpoint. */
+    apiVersion?: string;
 }
 
 /**
@@ -77,7 +79,7 @@ export class OpenAICompatibleModelDefinition
 
     private getClient(driver: VertexAIDriver) {
         return this.vertexOptions.region
-            ? driver.getFetchClientForRegion(this.vertexOptions.region)
+            ? driver.getFetchClientForRegion(this.vertexOptions.region, this.vertexOptions.apiVersion)
             : driver.getFetchClient();
     }
 

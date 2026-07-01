@@ -131,10 +131,10 @@ describe('Vertex open MaaS catalog', () => {
         );
 
         expect(completion.result).toEqual([{ type: 'text', value: 'ok' }]);
-        expect(getFetchClientForRegion).toHaveBeenCalledWith('us-east5');
+        expect(getFetchClientForRegion).toHaveBeenCalledWith('us-east5', 'v1beta1');
         expect(post).toHaveBeenCalledWith('endpoints/openapi/chat/completions', {
             payload: expect.objectContaining({
-                model: 'meta/llama-4-maverick-17b-128e',
+                model: 'meta/llama-4-maverick-17b-128e-instruct-maas',
                 extra_body: {
                     google: {
                         model_safety_settings: {
@@ -166,7 +166,7 @@ describe('Vertex open MaaS catalog', () => {
         for (const [model, requestModel] of cases) {
             const { post, getFetchClientForRegion } = await requestForModel(model);
 
-            expect(getFetchClientForRegion).toHaveBeenCalledWith(model.split('/')[1]);
+            expect(getFetchClientForRegion).toHaveBeenCalledWith(model.split('/')[1], undefined);
             expect(post).toHaveBeenCalledWith('endpoints/openapi/chat/completions', {
                 payload: expect.objectContaining({ model: requestModel }),
             });
