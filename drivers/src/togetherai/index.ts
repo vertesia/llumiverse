@@ -40,6 +40,17 @@ export class TogetherAIDriver extends BaseOpenAIDriver {
         });
     }
 
+    /**
+     * TogetherAI's OpenAI-compatible surface only implements Chat Completions (`/v1/chat/completions`)
+     * and does NOT support the Responses API (`/v1/responses`). Requests must therefore go through
+     * Chat Completions, where images are sent as `image_url` parts. Sending them via the Responses API
+     * makes vision requests fail: `openai/gpt-oss-120b` returns HTTP 400 "does not support the Responses
+     * api", while MiniMax/Kimi return 200 but never receive the image ("no content").
+     */
+    protected override useChatCompletionsApi(): boolean {
+        return true;
+    }
+
     async listModels(): Promise<AIModel[]> {
         const result = await this.service.get<TogetherModel[]>('/models');
         return result
