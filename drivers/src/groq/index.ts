@@ -17,11 +17,10 @@ import Groq from 'groq-sdk';
 import type { ChatCompletionMessageParam, ChatCompletionTool } from 'groq-sdk/resources/chat/completions';
 import type { FunctionParameters } from 'groq-sdk/resources/shared';
 import type OpenAI from 'openai';
-import { formatOpenAILikeMultimodalPrompt } from '../openai/openai_format.js';
+import { convertResponseItemsToChatMessages, formatOpenAILikeMultimodalPrompt } from '../openai/openai_format.js';
 import { truncateDataUrlForDebug } from '../shared/debug-prompt.js';
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
-type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
 type GroqToolCallMessage = {
     tool_calls?: Array<{
         id: string;
@@ -332,129 +331,13 @@ function updateConversation(
 }
 
 /**
- * Convert ResponseInputItem[] to Groq ChatCompletionMessageParam[]
+ * Convert ResponseInputItem[] to Groq ChatCompletionMessageParam[].
+ *
+ * Delegates to the shared Response->Chat-Completions converter in openai_format.ts.
+ * The `as unknown as` cast bridges the structurally-identical `ChatCompletionMessageParam`
+ * types from the `openai` and `groq-sdk` packages (same OpenAI wire format, distinct nominal
+ * declarations).
  */
 function convertResponseItemsToGroqMessages(items: ResponseInputItem[]): ChatCompletionMessageParam[] {
-    const messages: ChatCompletionMessageParam[] = [];
-
-    for (const item of items) {
-        // Handle EasyInputMessage (has role and content)
-        if ('role' in item && 'content' in item) {
-            const msg = item as EasyInputMessage;
-            const role = msg.role;
-
-            // Handle system/developer messages
-            if (role === 'system' || role === 'developer') {
-                let content: string;
-                if (typeof msg.content === 'string') {
-                    content = msg.content;
-                } else if (Array.isArray(msg.content)) {
-                    content = msg.content
-                        .filter((part): part is OpenAI.Responses.ResponseInputText => part.type === 'input_text')
-                        .map((part) => part.text)
-                        .join('\n');
-                } else {
-                    content = '';
-                }
-                messages.push({ role: 'system', content });
-                continue;
-            }
-
-            // Handle user messages
-            if (role === 'user') {
-                let content:
-                    | string
-                    | Array<
-                          | { type: 'text'; text: string }
-                          | { type: 'image_url'; image_url: { url: string; detail?: 'auto' | 'low' | 'high' } }
-                      >;
-                if (typeof msg.content === 'string') {
-                    content = msg.content;
-                } else if (Array.isArray(msg.content)) {
-                    const parts: Array<
-                        | { type: 'text'; text: string }
-                        | { type: 'image_url'; image_url: { url: string; detail?: 'auto' | 'low' | 'high' } }
-                    > = [];
-                    for (const part of msg.content) {
-                        if (part.type === 'input_text') {
-                            parts.push({ type: 'text', text: part.text });
-                        } else if (part.type === 'input_image') {
-                            const imgPart = part as OpenAI.Responses.ResponseInputImage;
-                            if (imgPart.image_url) {
-                                const image_url: { url: string; detail?: 'auto' | 'low' | 'high' } = {
-                                    url: imgPart.image_url,
-                                };
-
-                                if (imgPart.detail) {
-                                    image_url.detail = imgPart.detail as 'auto' | 'low' | 'high';
-                                }
-
-                                parts.push({
-                                    type: 'image_url',
-                                    image_url,
-                                });
-                            }
-                        }
-                    }
-                    content = parts.length > 0 ? parts : '';
-                } else {
-                    content = '';
-                }
-                messages.push({ role: 'user', content });
-                continue;
-            }
-
-            // Handle assistant messages
-            if (role === 'assistant') {
-                let content: string | null;
-                if (typeof msg.content === 'string') {
-                    content = msg.content;
-                } else if (Array.isArray(msg.content)) {
-                    content =
-                        msg.content
-                            .filter((part): part is OpenAI.Responses.ResponseInputText => part.type === 'input_text')
-                            .map((part) => part.text)
-                            .join('\n') || null;
-                } else {
-                    content = null;
-                }
-                messages.push({ role: 'assistant', content });
-                continue;
-            }
-        }
-
-        // Handle function_call_output (tool response)
-        if ('type' in item && item.type === 'function_call_output') {
-            const output = item as OpenAI.Responses.ResponseInputItem.FunctionCallOutput;
-            messages.push({
-                role: 'tool',
-                tool_call_id: output.call_id,
-                content: typeof output.output === 'string' ? output.output : JSON.stringify(output.output),
-            });
-            continue;
-        }
-
-        // Handle function_call (assistant tool call)
-        if ('type' in item && item.type === 'function_call') {
-            const call = item as OpenAI.Responses.ResponseFunctionToolCall;
-            // Groq expects tool_calls in assistant message, but we handle them separately
-            // This is a simplification - in practice tool_calls come from model responses
-            messages.push({
-                role: 'assistant',
-                content: null,
-                tool_calls: [
-                    {
-                        id: call.call_id,
-                        type: 'function',
-                        function: {
-                            name: call.name,
-                            arguments: call.arguments,
-                        },
-                    },
-                ],
-            });
-        }
-    }
-
-    return messages;
+    return convertResponseItemsToChatMessages(items) as unknown as ChatCompletionMessageParam[];
 }
