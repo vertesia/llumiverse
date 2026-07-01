@@ -87,6 +87,7 @@ type OpenAIChatCompletionPayload = {
             schema: unknown;
         };
     };
+    extra_body?: Record<string, unknown>;
 };
 type StreamingOpenAIToolUse = ToolUse<unknown> & { _actual_id?: string };
 
@@ -106,7 +107,9 @@ interface OpenAIResponseChoice {
     index: number;
     message: {
         role: string;
-        content?: string;
+        content?: string | null | OpenAIContentPart[];
+        reasoning_content?: string | null;
+        reasoning?: string | null;
         tool_calls?: Array<{
             id: string;
             type: string;
@@ -142,7 +145,9 @@ export interface OpenAIResponse {
  */
 interface OpenAIStreamChoiceDelta {
     role?: string;
-    content?: string;
+    content?: string | null | OpenAIContentPart[];
+    reasoning_content?: string | null;
+    reasoning?: string | null;
     tool_calls?: Array<{
         index?: number;
         id?: string;
@@ -182,6 +187,8 @@ export interface OpenAICompatibleOptions {
     endpointPath?: string;
     /** Region override for the Vertex AI endpoint. Useful when a model only exists in a specific region (e.g., "global" for xAI models). */
     region?: string;
+    /** Extra Vertex OpenAI-compatible request body fields for model-family-specific options. */
+    extraBody?: Record<string, unknown>;
 }
 
 /**
@@ -230,6 +237,50 @@ function safeJsonParse(value: string | undefined): JSONObject {
     } catch {
         return {};
     }
+}
+
+function extractOpenAIText(
+    source:
+        | Pick<OpenAIResponseChoice['message'], 'content' | 'reasoning_content' | 'reasoning'>
+        | Pick<OpenAIStreamChoiceDelta, 'content' | 'reasoning_content' | 'reasoning'>
+        | undefined,
+    includeThoughts: boolean,
+): string {
+    if (!source) return '';
+
+    const content = extractOpenAIContentText(source.content);
+    const reasoning = extractOpenAIReasoningText(source);
+
+    if (includeThoughts && reasoning) {
+        return content ? `${reasoning}\n\n${content}` : reasoning;
+    }
+
+    // Some MaaS/vLLM-backed models can emit thinking-only chunks or messages using
+    // reasoning_content/reasoning. Use those fields as a fallback so callers do not
+    // receive a silent blank response when no normal content is present.
+    return content || reasoning;
+}
+
+function extractOpenAIReasoningText(
+    source:
+        | Pick<OpenAIResponseChoice['message'], 'reasoning_content' | 'reasoning'>
+        | Pick<OpenAIStreamChoiceDelta, 'reasoning_content' | 'reasoning'>
+        | undefined,
+): string {
+    if (!source) return '';
+    return [source.reasoning_content, source.reasoning]
+        .filter((value): value is string => typeof value === 'string' && value.length > 0)
+        .join('');
+}
+
+function extractOpenAIContentText(content: string | null | OpenAIContentPart[] | undefined): string {
+    if (typeof content === 'string') return content;
+    if (!Array.isArray(content)) return '';
+
+    return content
+        .filter((part): part is TextPart => part.type === 'text' && typeof part.text === 'string')
+        .map((part) => part.text)
+        .join('\n');
 }
 
 /**
@@ -491,6 +542,8 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
         let conversation = updateConversation(options.conversation as OpenAIPrompt, prompt);
 
         const modelOptions = options.model_options as TextFallbackOptions;
+        const includeThoughts = (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })
+            ?.include_thoughts;
 
         // Build the request payload following OpenAI chat completions format
         const payload: OpenAIChatCompletionPayload = {
@@ -503,6 +556,9 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
             stop: modelOptions?.stop_sequence,
             stream: false,
         };
+        if (this.options.extraBody) {
+            payload.extra_body = this.options.extraBody;
+        }
 
         // Vertex AI OpenAI-compatible endpoint requires tools to be included in the request body
         const toolsPayload = convertToolsToOpenAIFormat(options.tools);
@@ -529,7 +585,7 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
         // Extract response data
         const choice = result?.choices?.[0];
         const message = choice?.message;
-        const text = message?.content ?? '';
+        const text = extractOpenAIText(message, includeThoughts ?? false);
         const tool_use = parseToolCalls(message?.tool_calls);
 
         // Update conversation with the response
@@ -578,6 +634,8 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
         const conversation = updateConversation(options.conversation as OpenAIPrompt, prompt);
 
         const modelOptions = options.model_options as TextFallbackOptions;
+        const includeThoughts = (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })
+            ?.include_thoughts;
 
         // Build the request payload following OpenAI chat completions format
         const payload: OpenAIChatCompletionPayload = {
@@ -590,6 +648,9 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
             stop: modelOptions?.stop_sequence,
             stream: true,
         };
+        if (this.options.extraBody) {
+            payload.extra_body = this.options.extraBody;
+        }
 
         // Vertex AI OpenAI-compatible endpoint requires tools to be included in the request body
         const toolsPayload = convertToolsToOpenAIFormat(options.tools);
@@ -613,6 +674,9 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
             payload,
             reader: 'sse',
         })) as ReadableStream;
+
+        let emittedContent = false;
+        let reasoningFallback = '';
 
         return transformSSEStream(responseStream, (data: string) => {
             const json = JSON.parse(data) as OpenAIStreamResponse;
@@ -648,10 +712,18 @@ export class OpenAICompatibleModelDefinition implements ModelDefinition<OpenAIPr
                 } satisfies CompletionChunkObject;
             }
 
-            // Handle text content
-            const content = delta?.content ?? '';
+            const content = extractOpenAIContentText(delta?.content);
+            const reasoning = extractOpenAIReasoningText(delta);
+            if (content) {
+                emittedContent = true;
+            } else if (reasoning) {
+                reasoningFallback += reasoning;
+            }
+
+            const text = includeThoughts ? reasoning + content : content;
+            const fallbackText = !includeThoughts && choice?.finish_reason && !emittedContent ? reasoningFallback : '';
             return {
-                result: content ? [{ type: 'text', value: content }] : [],
+                result: text || fallbackText ? [{ type: 'text', value: text || fallbackText }] : [],
                 finish_reason: choice?.finish_reason || undefined,
                 token_usage: json.usage
                     ? {
