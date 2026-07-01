@@ -6,6 +6,7 @@ import {
     type OpenAICompletionsPayload,
     type OpenAICompletionsPrompt,
     type OpenAICompletionsResponse,
+    stripOpenAICompletionsThinkBlocksFromCompletion,
 } from './openai_comp_completions.js';
 
 function createSSEStream(events: ServerSentEvent[]): ReadableStream<ServerSentEvent> {
@@ -134,6 +135,54 @@ describe('OpenAICompletionsModelDefinitionBase', () => {
         });
         await expect(contentModel.requestTextCompletion(undefined, prompt, options)).resolves.toMatchObject({
             result: [{ type: 'text', value: 'visible' }],
+        });
+    });
+
+    it('strips provider-emitted think blocks from completed non-streaming output and conversation', async () => {
+        const model = new TestCompletionsModel({
+            id: 'chatcmpl-1',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [
+                {
+                    index: 0,
+                    message: {
+                        role: 'assistant',
+                        content: '<think>hidden reasoning</think>\n\n{"answer":"Paris"}',
+                    },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+        });
+
+        const completion = await model.requestTextCompletion(undefined, prompt, options);
+
+        expect(completion.result).toEqual([{ type: 'text', value: '{"answer":"Paris"}' }]);
+        expect(completion.conversation).toMatchObject({
+            messages: expect.arrayContaining([{ role: 'assistant', content: '{"answer":"Paris"}' }]),
+        });
+    });
+
+    it('strips provider-emitted think blocks from final accumulated completion objects', () => {
+        const completion = stripOpenAICompletionsThinkBlocksFromCompletion({
+            result: [{ type: 'text', value: '<think>hidden</think>\n\nfinal answer' }],
+            conversation: {
+                _is_openai_compat: true,
+                messages: [
+                    { role: 'user', content: 'Hello' },
+                    { role: 'assistant', content: '<think>hidden</think>\n\nfinal answer' },
+                ],
+            },
+        });
+
+        expect(completion.result).toEqual([{ type: 'text', value: 'final answer' }]);
+        expect(completion.conversation).toMatchObject({
+            messages: [
+                { role: 'user', content: 'Hello' },
+                { role: 'assistant', content: 'final answer' },
+            ],
         });
     });
 

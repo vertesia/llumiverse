@@ -1,10 +1,11 @@
-import { type AIModel, ModelType } from '@llumiverse/core';
+import { type AIModel, type Completion, type ExecutionOptions, ModelType } from '@llumiverse/core';
 import {
     OpenAICompletionsModelDefinitionBase,
     type OpenAICompletionsModelOptions,
     type OpenAICompletionsPayload,
     type OpenAICompletionsPrompt,
     type OpenAICompletionsResponse,
+    stripOpenAICompletionsThinkBlocksFromCompletion,
 } from '../../openai/openai_comp_completions.js';
 import type { VertexAIDriver } from '../index.js';
 import type { ModelDefinition } from '../models.js';
@@ -75,6 +76,13 @@ export class OpenAICompatibleModelDefinition
             payload,
             reader: 'sse',
         })) as ReadableStream;
+    }
+
+    preValidationProcessing(
+        result: Completion,
+        options: ExecutionOptions,
+    ): { result: Completion; options: ExecutionOptions } {
+        return { result: stripOpenAICompletionsThinkBlocksFromCompletion(result), options };
     }
 
     private getClient(driver: VertexAIDriver) {

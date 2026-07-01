@@ -1,6 +1,7 @@
 import {
     type Completion,
     type CompletionChunkObject,
+    type CompletionResult,
     type ExecutionOptions,
     type JSONObject,
     type PromptOptions,
@@ -155,6 +156,47 @@ function safeJsonParse(value: string | undefined): JSONObject {
     }
 }
 
+export function stripOpenAICompletionsThinkBlocks(value: string): string {
+    return value.replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, '').trim();
+}
+
+export function stripOpenAICompletionsThinkBlocksFromCompletion(completion: Completion): Completion {
+    completion.result = completion.result.map((result): CompletionResult => {
+        if (result.type === 'text') {
+            return { ...result, value: stripOpenAICompletionsThinkBlocks(result.value) };
+        }
+        if (result.type === 'json' && typeof result.value === 'string') {
+            return { ...result, value: stripOpenAICompletionsThinkBlocks(result.value) };
+        }
+        return result;
+    });
+
+    const conversation = completion.conversation as OpenAICompletionsPrompt | undefined;
+    if (conversation?._is_openai_compat && Array.isArray(conversation.messages)) {
+        completion.conversation = {
+            ...conversation,
+            messages: conversation.messages.map((message) => {
+                if (typeof message.content === 'string') {
+                    return { ...message, content: stripOpenAICompletionsThinkBlocks(message.content) };
+                }
+                if (Array.isArray(message.content)) {
+                    return {
+                        ...message,
+                        content: message.content.map((part) =>
+                            part.type === 'text'
+                                ? { ...part, text: stripOpenAICompletionsThinkBlocks(part.text) }
+                                : part,
+                        ),
+                    };
+                }
+                return message;
+            }),
+        };
+    }
+
+    return completion;
+}
+
 export function extractOpenAICompletionsText(
     source:
         | Pick<OpenAICompletionsResponseChoice['message'], 'content' | 'reasoning_content' | 'reasoning'>
@@ -174,7 +216,7 @@ export function extractOpenAICompletionsText(
     // Some OpenAI-compatible model servers can emit thinking-only chunks or messages
     // using reasoning_content/reasoning. Use those fields only as a fallback so normal
     // assistant content remains the visible output whenever it exists.
-    return content || reasoning;
+    return stripOpenAICompletionsThinkBlocks(content || reasoning);
 }
 
 export function extractOpenAICompletionsReasoningText(
@@ -403,7 +445,7 @@ export abstract class OpenAICompletionsModelDefinitionBase<DriverT> {
 
         const choice = result?.choices?.[0];
         const message = choice?.message;
-        const text = extractOpenAICompletionsText(message, includeThoughts ?? false);
+        const text = stripOpenAICompletionsThinkBlocks(extractOpenAICompletionsText(message, includeThoughts ?? false));
         const tool_use = parseOpenAICompletionsToolCalls(message?.tool_calls);
 
         const assistantMessage: OpenAICompletionsMessage = {
