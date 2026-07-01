@@ -33,9 +33,9 @@ import { generateVertexAiEmbeddings } from './embeddings/embed.js';
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
 import { formatGeminiDebugPrompt } from './models/gemini.js';
 import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
-import type { LLamaPrompt } from './models/llama.js';
 import type { OpenAIMessage, OpenAIPrompt } from './models/openai_compatible.js';
 import { getModelDefinition, trimModelName } from './models.js';
+import { getListedVertexOpenMaaSModels } from './open-maas-models.js';
 
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
@@ -67,7 +67,7 @@ function isClaudeStreamingPrompt(prompt: unknown): prompt is ClaudeStreamingProm
 }
 
 //General Prompt type for VertexAI
-export type VertexAIPrompt = ImagenPrompt | GenerateContentPrompt | ClaudePrompt | LLamaPrompt | OpenAIPrompt;
+export type VertexAIPrompt = ImagenPrompt | GenerateContentPrompt | ClaudePrompt | OpenAIPrompt;
 
 export { trimModelName };
 
@@ -693,8 +693,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
         let models: AIModel<string>[] = [];
 
-        //Model Garden Publisher models - Pretrained models
-        /** Meta "maas" models are LLama Models-As-A-Service. Non-maas models are not pre-deployed. */
+        // Model Garden publisher listings for families that are reliably returned by the API.
+        // Open MaaS-only families are appended from VERTEX_OPEN_MAAS_MODELS below to avoid
+        // extra listPublisherModels calls for publishers whose MaaS models do not appear there.
         const publisherConfig = {
             google: {
                 families: ['gemini', 'imagen'],
@@ -715,19 +716,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 families: ['claude'],
                 excluded: [],
                 additional: [],
-            },
-            meta: {
-                families: ['maas'],
-                excluded: [],
-                additional: [
-                    'llama-4-maverick-17b-128e-instruct-maas',
-                    'llama-4-scout-17b-16e-instruct-maas',
-                    'llama-3.3-70b-instruct-maas',
-                    'llama-3.2-90b-vision-instruct-maas',
-                    'llama-3.1-405b-instruct-maas',
-                    'llama-3.1-70b-instruct-maas',
-                    'llama-3.1-8b-instruct-maas',
-                ],
             },
             xai: {
                 families: ['grok'],
@@ -759,6 +747,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             globalGooglePromise,
             ...publisherPromises,
         ]);
+
+        models = models.concat(getListedVertexOpenMaaSModels(this.options.region));
 
         // Process aiplatform models, project specific models
         const [response] = aiplatformResult;

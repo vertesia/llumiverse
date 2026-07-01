@@ -27,6 +27,7 @@ export function getMaxOutputTokens(model: string): number {
     if (model.includes('o3') || model.includes('o4')) return 100_000;
     // GPT models
     if (model.includes('gpt-5')) return 128_000;
+    if (model.includes('gpt-oss')) return 131_072;
     if (model.includes('gpt-4o')) return 16_384;
     if (model.includes('gpt-4')) return 8_192;
     if (model.includes('gpt-3.5')) return 4_096;
@@ -35,7 +36,23 @@ export function getMaxOutputTokens(model: string): number {
     // Mistral
     if (model.includes('mistral')) return 8_192;
     // DeepSeek
+    if (model.includes('deepseek-ocr')) return 8_192;
+    if (model.includes('deepseek-r1-0528')) return 32_768;
+    if (model.includes('deepseek-v3.2')) return 65_536;
+    if (model.includes('deepseek-v3.1')) return 65_536;
     if (model.includes('deepseek')) return 128_000;
+    // Qwen
+    if (model.includes('qwen3-next')) return 262_144;
+    if (model.includes('qwen3-coder')) return 65_536;
+    if (model.includes('qwen')) return 32_768;
+    // Kimi
+    if (model.includes('kimi-k2-thinking')) return 262_144;
+    // MiniMax
+    if (model.includes('minimax-m2')) return 196_608;
+    // ZAI GLM
+    if (model.includes('glm-')) return 32_768;
+    // Gemma
+    if (model.includes('gemma-4')) return 128_000;
     // Llama
     if (model.includes('llama')) return 8_192;
     // Cohere
@@ -70,6 +87,7 @@ export function getContextWindowSize(model: string): number {
     if (model.includes('o1') || model.includes('o3') || model.includes('o4')) return 200_000;
     // GPT models — check specific variants before generic gpt-4
     if (model.includes('gpt-5')) return 400_000;
+    if (model.includes('gpt-oss')) return 131_072;
     if (model.includes('gpt-4.1') || model.includes('gpt-4-1')) return 1_000_000;
     if (model.includes('gpt-4-turbo') || model.includes('gpt-4o')) return 128_000;
     if (model.includes('gpt-4')) return 8_000;
@@ -83,7 +101,23 @@ export function getContextWindowSize(model: string): number {
     if (model.includes('mistral-large')) return 128_000;
     if (model.includes('mistral')) return 32_000;
     // DeepSeek
+    if (model.includes('deepseek-ocr')) return 8_192;
+    if (model.includes('deepseek-v3.2')) return 163_840;
+    if (model.includes('deepseek-v3.1')) return 163_840;
+    if (model.includes('deepseek-r1-0528')) return 163_840;
     if (model.includes('deepseek')) return 128_000;
+    // Qwen
+    if (model.includes('qwen3-next')) return 262_144;
+    if (model.includes('qwen3-coder')) return 262_144;
+    if (model.includes('qwen')) return 262_144;
+    // Kimi
+    if (model.includes('kimi-k2-thinking')) return 262_144;
+    // MiniMax
+    if (model.includes('minimax-m2')) return 196_608;
+    // ZAI GLM
+    if (model.includes('glm-')) return 128_000;
+    // Gemma
+    if (model.includes('gemma-4')) return 256_000;
     // Llama
     if (model.includes('llama-4') || model.includes('llama4')) return 1_000_000;
     if (model.includes('llama-3.1') || model.includes('llama-3.2') || model.includes('llama-3.3')) return 128_000;
