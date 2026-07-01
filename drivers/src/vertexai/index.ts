@@ -206,14 +206,15 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
      * Get a fetch client with an overridden region. Useful when a model only exists
      * in a specific region (e.g., "global" for xAI models).
      */
-    public getFetchClientForRegion(region: string, apiVersion = 'v1'): FetchClient {
-        const cacheKey = `${region}:${apiVersion}:${this.options.project}`;
+    public getFetchClientForRegion(region: string, apiVersion = 'v1', endpointRegion?: string): FetchClient {
+        const cacheKey = `${region}:${endpointRegion ?? region}:${apiVersion}:${this.options.project}`;
         let client = this.regionOverrideClients.get(cacheKey);
         if (!client) {
             client = createFetchClient({
                 region: region,
                 project: this.options.project,
                 apiVersion,
+                endpointRegion,
                 fetchImpl: this.getDriverFetch(),
             }).withAuthCallback(async () => {
                 const token = await this.googleAuth.getAccessToken();
@@ -941,17 +942,21 @@ export function createFetchClient({
     project,
     apiEndpoint,
     apiVersion = 'v1',
+    endpointRegion,
     fetchImpl,
 }: {
     region: string;
     project: string;
     apiEndpoint?: string;
     apiVersion?: string;
+    endpointRegion?: string;
     fetchImpl?: FETCH_FN;
 }): FetchClient {
     // For the "global" region, use aiplatform.googleapis.com without any prefix.
     // Regional endpoints use ${region}-aiplatform.googleapis.com (e.g., us-central1-aiplatform.googleapis.com).
-    const vertexBaseEndpoint = apiEndpoint ?? (region === 'global' ? API_BASE_PATH : `${region}-${API_BASE_PATH}`);
+    const hostRegion = endpointRegion ?? region;
+    const vertexBaseEndpoint =
+        apiEndpoint ?? (hostRegion === 'global' ? API_BASE_PATH : `${hostRegion}-${API_BASE_PATH}`);
     return new FetchClient(
         `https://${vertexBaseEndpoint}/${apiVersion}/projects/${project}/locations/${region}`,
         fetchImpl,

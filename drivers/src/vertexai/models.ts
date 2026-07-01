@@ -68,8 +68,9 @@ export function getModelDefinition(model: string): ModelDefinition {
         if (openMaaSModel) {
             return new OpenAICompatibleModelDefinition({
                 modelName: openMaaSModel.modelName,
-                region,
+                region: region ?? openMaaSModel.region,
                 apiVersion: openMaaSModel.apiVersion,
+                endpointRegion: openMaaSModel.endpointRegion,
                 extraBody: openMaaSModel.extraBody,
             });
         }

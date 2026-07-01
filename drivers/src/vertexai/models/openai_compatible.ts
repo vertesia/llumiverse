@@ -27,6 +27,8 @@ export interface OpenAICompatibleOptions extends OpenAICompletionsModelOptions {
     region?: string;
     /** Vertex API version for this OpenAI-compatible endpoint. */
     apiVersion?: string;
+    /** Host region override; keeps the request location unchanged while selecting a different API hostname. */
+    endpointRegion?: string;
 }
 
 /**
@@ -86,9 +88,17 @@ export class OpenAICompatibleModelDefinition
     }
 
     private getClient(driver: VertexAIDriver) {
-        return this.vertexOptions.region
-            ? driver.getFetchClientForRegion(this.vertexOptions.region, this.vertexOptions.apiVersion)
-            : driver.getFetchClient();
+        if (!this.vertexOptions.region) {
+            return driver.getFetchClient();
+        }
+        if (this.vertexOptions.endpointRegion) {
+            return driver.getFetchClientForRegion(
+                this.vertexOptions.region,
+                this.vertexOptions.apiVersion,
+                this.vertexOptions.endpointRegion,
+            );
+        }
+        return driver.getFetchClientForRegion(this.vertexOptions.region, this.vertexOptions.apiVersion);
     }
 
     private get endpoint(): string {

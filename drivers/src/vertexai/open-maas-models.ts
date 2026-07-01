@@ -3,10 +3,12 @@ import { type AIModel, getModelCapabilities, modelModalitiesToArray } from '@llu
 export interface VertexOpenMaaSModel {
     publisher: string;
     model: string;
+    aliases?: readonly string[];
     requestPublisher: string;
     requestModel?: string;
     regions: readonly string[];
     apiVersion?: string;
+    endpointRegion?: string;
     extraBody?: Record<string, unknown>;
 }
 
@@ -25,30 +27,30 @@ const LLAMA_SAFETY_EXTRA_BODY = {
     },
 } satisfies Record<string, unknown>;
 
-export const VERTEX_OPEN_MAAS_MODELS = [
+export const VERTEX_OPEN_MAAS_MODELS: readonly VertexOpenMaaSModel[] = [
     {
         publisher: 'meta',
-        model: 'llama-4-maverick-17b-128e',
+        model: 'llama-4-maverick-17b-128e-instruct-maas',
+        aliases: ['llama-4-maverick-17b-128e'],
         requestPublisher: 'meta',
-        requestModel: 'llama-4-maverick-17b-128e-instruct-maas',
         regions: US_EAST5_REGIONS,
         apiVersion: 'v1beta1',
         extraBody: LLAMA_SAFETY_EXTRA_BODY,
     },
     {
         publisher: 'meta',
-        model: 'llama-4-scout-17b-16e',
+        model: 'llama-4-scout-17b-16e-instruct-maas',
+        aliases: ['llama-4-scout-17b-16e'],
         requestPublisher: 'meta',
-        requestModel: 'llama-4-scout-17b-16e-instruct-maas',
         regions: US_EAST5_REGIONS,
         apiVersion: 'v1beta1',
         extraBody: LLAMA_SAFETY_EXTRA_BODY,
     },
     {
         publisher: 'meta',
-        model: 'llama-3.3-70b',
+        model: 'llama-3.3-70b-instruct-maas',
+        aliases: ['llama-3.3-70b'],
         requestPublisher: 'meta',
-        requestModel: 'llama-3.3-70b-instruct-maas',
         regions: US_CENTRAL1_REGIONS,
         apiVersion: 'v1beta1',
         extraBody: LLAMA_SAFETY_EXTRA_BODY,
@@ -58,6 +60,7 @@ export const VERTEX_OPEN_MAAS_MODELS = [
         model: 'deepseek-ocr-maas',
         requestPublisher: 'deepseek-ai',
         regions: US_CENTRAL1_REGIONS,
+        endpointRegion: 'global',
     },
     {
         publisher: 'deepseek-ai',
@@ -143,23 +146,35 @@ export const VERTEX_OPEN_MAAS_MODELS = [
         requestPublisher: 'google',
         regions: GLOBAL_REGIONS,
     },
-] as const satisfies readonly VertexOpenMaaSModel[];
+] as const;
 
 export function getVertexOpenMaaSModel(publisher: string | undefined, model: string): VertexOpenMaaSModel | undefined {
     if (!publisher) return undefined;
     const normalizedPublisher = publisher === 'zaiorg' ? 'zai-org' : publisher;
-    return VERTEX_OPEN_MAAS_MODELS.find((entry) => entry.publisher === normalizedPublisher && entry.model === model);
+    return VERTEX_OPEN_MAAS_MODELS.find(
+        (entry) => entry.publisher === normalizedPublisher && (entry.model === model || entry.aliases?.includes(model)),
+    );
 }
 
 export function getVertexOpenMaaSRequestModel(
     publisher: string | undefined,
     model: string,
-): { modelName: string; apiVersion?: string; extraBody?: Record<string, unknown> } | undefined {
+):
+    | {
+          modelName: string;
+          region?: string;
+          apiVersion?: string;
+          endpointRegion?: string;
+          extraBody?: Record<string, unknown>;
+      }
+    | undefined {
     const entry = getVertexOpenMaaSModel(publisher, model);
     if (entry) {
         return {
             modelName: `${entry.requestPublisher}/${entry.requestModel ?? entry.model}`,
+            region: entry.regions[0],
             apiVersion: entry.apiVersion,
+            endpointRegion: entry.endpointRegion,
             extraBody: entry.extraBody,
         };
     }
@@ -185,12 +200,8 @@ export function vertexOpenMaaSModelToAIModel(entry: VertexOpenMaaSModel, region:
     } satisfies AIModel<string>;
 }
 
-export function getListedVertexOpenMaaSModels(region: string): AIModel<string>[] {
+export function getListedVertexOpenMaaSModels(_region: string): AIModel<string>[] {
     return (VERTEX_OPEN_MAAS_MODELS as readonly VertexOpenMaaSModel[]).flatMap((entry) => {
-        const listingRegions = entry.regions.includes('global') ? ['global'] : [];
-        if (region !== 'global' && entry.regions.includes(region)) {
-            listingRegions.push(region);
-        }
-        return listingRegions.map((listingRegion) => vertexOpenMaaSModelToAIModel(entry, listingRegion));
+        return entry.regions.map((listingRegion) => vertexOpenMaaSModelToAIModel(entry, listingRegion));
     });
 }

@@ -68,9 +68,9 @@ describe('Vertex open MaaS catalog', () => {
             'deepseek-ai/deepseek-v3.1-maas': ['us-central1'],
             'deepseek-ai/deepseek-v3.2-maas': ['global'],
             'google/gemma-4-26b-a4b-it-maas': ['global'],
-            'meta/llama-3.3-70b': ['us-central1'],
-            'meta/llama-4-maverick-17b-128e': ['us-east5'],
-            'meta/llama-4-scout-17b-16e': ['us-east5'],
+            'meta/llama-3.3-70b-instruct-maas': ['us-central1'],
+            'meta/llama-4-maverick-17b-128e-instruct-maas': ['us-east5'],
+            'meta/llama-4-scout-17b-16e-instruct-maas': ['us-east5'],
             'minimaxai/minimax-m2-maas': ['global'],
             'moonshotai/kimi-k2-thinking-maas': ['global'],
             'openai/gpt-oss-120b-maas': ['global', 'us-central1'],
@@ -87,21 +87,28 @@ describe('Vertex open MaaS catalog', () => {
     it('lists MaaS models as static Vertex model ids', () => {
         const modelIds = getListedVertexOpenMaaSModels('us-east5').map((model) => model.id);
 
-        expect(modelIds).toContain('locations/us-east5/publishers/meta/models/llama-4-maverick-17b-128e');
+        expect(modelIds).toContain('locations/us-east5/publishers/meta/models/llama-4-maverick-17b-128e-instruct-maas');
         expect(modelIds).toContain('locations/global/publishers/qwen/models/qwen3-coder-480b-a35b-instruct-maas');
         expect(modelIds).toContain('locations/global/publishers/zai-org/models/glm-5-maas');
         expect(modelIds).toContain('locations/global/publishers/minimaxai/models/minimax-m2-maas');
         expect(modelIds).toContain('locations/global/publishers/openai/models/gpt-oss-120b-maas');
         expect(modelIds).toContain('locations/global/publishers/google/models/gemma-4-26b-a4b-it-maas');
-        expect(modelIds).not.toContain('locations/global/publishers/meta/models/llama-4-maverick-17b-128e');
+        expect(modelIds).toContain('locations/us-central1/publishers/deepseek-ai/models/deepseek-ocr-maas');
+        expect(modelIds).toContain('locations/us-central1/publishers/deepseek-ai/models/deepseek-v3.1-maas');
+        expect(modelIds).not.toContain(
+            'locations/global/publishers/meta/models/llama-4-maverick-17b-128e-instruct-maas',
+        );
         expect(modelIds).not.toContain('locations/global/publishers/deepseek-ai/models/deepseek-ocr-maas');
         expect(modelIds).not.toContain('locations/us-east5/publishers/google/models/gemma-4-26b-a4b-it-maas');
     });
 
-    it('lists regional MaaS models only when the configured region supports them', () => {
+    it('lists regional MaaS models independently of the configured region', () => {
         const usCentralModels = getListedVertexOpenMaaSModels('us-central1');
         const usCentralIds = usCentralModels.map((model) => model.id);
 
+        expect(usCentralIds).toContain(
+            'locations/us-east5/publishers/meta/models/llama-4-maverick-17b-128e-instruct-maas',
+        );
         expect(usCentralIds).toContain('locations/us-central1/publishers/deepseek-ai/models/deepseek-ocr-maas');
         expect(usCentralIds).toContain('locations/us-central1/publishers/openai/models/gpt-oss-120b-maas');
         expect(usCentralIds).toContain('locations/us-central1/publishers/openai/models/gpt-oss-20b-maas');
@@ -127,7 +134,7 @@ describe('Vertex open MaaS catalog', () => {
 
     it('routes Llama MaaS through the OpenAI-compatible endpoint with Llama-specific extra body', async () => {
         const { post, getFetchClientForRegion, completion } = await requestForModel(
-            'locations/us-east5/publishers/meta/models/llama-4-maverick-17b-128e',
+            'locations/us-east5/publishers/meta/models/llama-4-maverick-17b-128e-instruct-maas',
         );
 
         expect(completion.result).toEqual([{ type: 'text', value: 'ok' }]);
@@ -143,6 +150,32 @@ describe('Vertex open MaaS catalog', () => {
                         },
                     },
                 },
+            }),
+        });
+    });
+
+    it('routes dynamic no-location MaaS ids to the catalog region', async () => {
+        const { post, getFetchClientForRegion } = await requestForModel(
+            'publishers/meta/models/llama-4-maverick-17b-128e-instruct-maas',
+        );
+
+        expect(getFetchClientForRegion).toHaveBeenCalledWith('us-east5', 'v1beta1');
+        expect(post).toHaveBeenCalledWith('endpoints/openapi/chat/completions', {
+            payload: expect.objectContaining({
+                model: 'meta/llama-4-maverick-17b-128e-instruct-maas',
+            }),
+        });
+    });
+
+    it('keeps old short Llama ids as routing aliases', async () => {
+        const { post, getFetchClientForRegion } = await requestForModel(
+            'locations/us-east5/publishers/meta/models/llama-4-maverick-17b-128e',
+        );
+
+        expect(getFetchClientForRegion).toHaveBeenCalledWith('us-east5', 'v1beta1');
+        expect(post).toHaveBeenCalledWith('endpoints/openapi/chat/completions', {
+            payload: expect.objectContaining({
+                model: 'meta/llama-4-maverick-17b-128e-instruct-maas',
             }),
         });
     });
@@ -166,7 +199,11 @@ describe('Vertex open MaaS catalog', () => {
         for (const [model, requestModel] of cases) {
             const { post, getFetchClientForRegion } = await requestForModel(model);
 
-            expect(getFetchClientForRegion).toHaveBeenCalledWith(model.split('/')[1], undefined);
+            if (model.includes('deepseek-ocr-maas')) {
+                expect(getFetchClientForRegion).toHaveBeenCalledWith('us-central1', undefined, 'global');
+            } else {
+                expect(getFetchClientForRegion).toHaveBeenCalledWith(model.split('/')[1], undefined);
+            }
             expect(post).toHaveBeenCalledWith('endpoints/openapi/chat/completions', {
                 payload: expect.objectContaining({ model: requestModel }),
             });
