@@ -71,6 +71,7 @@ export function getModelDefinition(model: string): ModelDefinition {
                 region: region ?? openMaaSModel.region,
                 apiVersion: openMaaSModel.apiVersion,
                 endpointRegion: openMaaSModel.endpointRegion,
+                defaultMaxTokens: openMaaSModel.defaultMaxTokens,
                 extraBody: openMaaSModel.extraBody,
             });
         }

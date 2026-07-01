@@ -38,7 +38,6 @@ export function getMaxOutputTokens(model: string): number {
     // DeepSeek
     if (model.includes('deepseek-r1-0528')) return 32_768;
     if (model.includes('deepseek-v3.2')) return 65_536;
-    if (model.includes('deepseek-v3.1')) return 65_536;
     if (model.includes('deepseek')) return 128_000;
     // Qwen
     if (model.includes('qwen3-next')) return 262_144;
@@ -101,7 +100,6 @@ export function getContextWindowSize(model: string): number {
     if (model.includes('mistral')) return 32_000;
     // DeepSeek
     if (model.includes('deepseek-v3.2')) return 163_840;
-    if (model.includes('deepseek-v3.1')) return 163_840;
     if (model.includes('deepseek-r1-0528')) return 163_840;
     if (model.includes('deepseek')) return 128_000;
     // Qwen

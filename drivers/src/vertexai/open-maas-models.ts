@@ -9,6 +9,7 @@ export interface VertexOpenMaaSModel {
     regions: readonly string[];
     apiVersion?: string;
     endpointRegion?: string;
+    defaultMaxTokens?: number;
     extraBody?: Record<string, unknown>;
 }
 
@@ -44,6 +45,8 @@ export const VERTEX_OPEN_MAAS_MODELS: readonly VertexOpenMaaSModel[] = [
         requestPublisher: 'meta',
         regions: US_EAST5_REGIONS,
         apiVersion: 'v1beta1',
+        // Runtime validation showed Scout returns an empty completion when max_tokens is omitted.
+        defaultMaxTokens: 1024,
         extraBody: LLAMA_SAFETY_EXTRA_BODY,
     },
     {
@@ -57,17 +60,12 @@ export const VERTEX_OPEN_MAAS_MODELS: readonly VertexOpenMaaSModel[] = [
     },
     // DeepSeek OCR is intentionally omitted: the documented regional model currently requires the
     // global endpoint but did not return reliably through raw curl or the OpenAI-compatible driver.
+    // DeepSeek V3.1 is also omitted because Vertex returns FAILED_PRECONDITION for its documented region.
     {
         publisher: 'deepseek-ai',
         model: 'deepseek-v3.2-maas',
         requestPublisher: 'deepseek-ai',
         regions: GLOBAL_REGIONS,
-    },
-    {
-        publisher: 'deepseek-ai',
-        model: 'deepseek-v3.1-maas',
-        requestPublisher: 'deepseek-ai',
-        regions: US_CENTRAL1_REGIONS,
     },
     {
         publisher: 'deepseek-ai',
@@ -91,7 +89,8 @@ export const VERTEX_OPEN_MAAS_MODELS: readonly VertexOpenMaaSModel[] = [
         publisher: 'qwen',
         model: 'qwen3-coder-480b-a35b-instruct-maas',
         requestPublisher: 'qwen',
-        regions: US_SOUTH1_AND_GLOBAL_REGIONS,
+        // The documented us-south1 variant returned no healthy upstream and blank completions in runtime tests.
+        regions: GLOBAL_REGIONS,
     },
     {
         publisher: 'qwen',
@@ -128,6 +127,8 @@ export const VERTEX_OPEN_MAAS_MODELS: readonly VertexOpenMaaSModel[] = [
         model: 'gpt-oss-120b-maas',
         requestPublisher: 'openai',
         regions: US_CENTRAL1_AND_GLOBAL_REGIONS,
+        // Runtime validation showed 120B can spend the provider default budget on reasoning only.
+        defaultMaxTokens: 1024,
     },
     {
         publisher: 'openai',
@@ -160,6 +161,7 @@ export function getVertexOpenMaaSRequestModel(
           region?: string;
           apiVersion?: string;
           endpointRegion?: string;
+          defaultMaxTokens?: number;
           extraBody?: Record<string, unknown>;
       }
     | undefined {
@@ -170,6 +172,7 @@ export function getVertexOpenMaaSRequestModel(
             region: entry.regions[0],
             apiVersion: entry.apiVersion,
             endpointRegion: entry.endpointRegion,
+            defaultMaxTokens: entry.defaultMaxTokens,
             extraBody: entry.extraBody,
         };
     }

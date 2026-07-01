@@ -64,7 +64,6 @@ describe('Vertex open MaaS catalog', () => {
 
         expect(catalog).toEqual({
             'deepseek-ai/deepseek-r1-0528-maas': ['us-central1'],
-            'deepseek-ai/deepseek-v3.1-maas': ['us-central1'],
             'deepseek-ai/deepseek-v3.2-maas': ['global'],
             'google/gemma-4-26b-a4b-it-maas': ['global'],
             'meta/llama-3.3-70b-instruct-maas': ['us-central1'],
@@ -75,7 +74,7 @@ describe('Vertex open MaaS catalog', () => {
             'openai/gpt-oss-120b-maas': ['global', 'us-central1'],
             'openai/gpt-oss-20b-maas': ['us-central1'],
             'qwen/qwen3-235b-a22b-instruct-2507-maas': ['global', 'us-south1'],
-            'qwen/qwen3-coder-480b-a35b-instruct-maas': ['global', 'us-south1'],
+            'qwen/qwen3-coder-480b-a35b-instruct-maas': ['global'],
             'qwen/qwen3-next-80b-a3b-instruct-maas': ['global'],
             'qwen/qwen3-next-80b-a3b-thinking-maas': ['global'],
             'zai-org/glm-4.7-maas': ['global'],
@@ -92,10 +91,10 @@ describe('Vertex open MaaS catalog', () => {
         expect(modelIds).toContain('locations/global/publishers/minimaxai/models/minimax-m2-maas');
         expect(modelIds).toContain('locations/global/publishers/openai/models/gpt-oss-120b-maas');
         expect(modelIds).toContain('locations/global/publishers/google/models/gemma-4-26b-a4b-it-maas');
-        expect(modelIds).toContain('locations/us-central1/publishers/deepseek-ai/models/deepseek-v3.1-maas');
         expect(modelIds).not.toContain(
             'locations/global/publishers/meta/models/llama-4-maverick-17b-128e-instruct-maas',
         );
+        expect(modelIds).not.toContain('locations/us-central1/publishers/deepseek-ai/models/deepseek-v3.1-maas');
         expect(modelIds).not.toContain('locations/us-central1/publishers/deepseek-ai/models/deepseek-ocr-maas');
         expect(modelIds).not.toContain('locations/global/publishers/deepseek-ai/models/deepseek-ocr-maas');
         expect(modelIds).not.toContain('locations/us-east5/publishers/google/models/gemma-4-26b-a4b-it-maas');
@@ -119,7 +118,9 @@ describe('Vertex open MaaS catalog', () => {
         const modelIds = getListedVertexOpenMaaSModels('us-south1').map((model) => model.id);
 
         expect(modelIds).toContain('locations/global/publishers/qwen/models/qwen3-coder-480b-a35b-instruct-maas');
-        expect(modelIds).toContain('locations/us-south1/publishers/qwen/models/qwen3-coder-480b-a35b-instruct-maas');
+        expect(modelIds).not.toContain(
+            'locations/us-south1/publishers/qwen/models/qwen3-coder-480b-a35b-instruct-maas',
+        );
         expect(modelIds).toContain('locations/global/publishers/qwen/models/qwen3-235b-a22b-instruct-2507-maas');
         expect(modelIds).toContain('locations/us-south1/publishers/qwen/models/qwen3-235b-a22b-instruct-2507-maas');
     });
@@ -142,6 +143,34 @@ describe('Vertex open MaaS catalog', () => {
                         },
                     },
                 },
+            }),
+        });
+    });
+
+    it('applies the Llama Scout max token default required for non-empty responses', async () => {
+        const { post, getFetchClientForRegion } = await requestForModel(
+            'locations/us-east5/publishers/meta/models/llama-4-scout-17b-16e-instruct-maas',
+        );
+
+        expect(getFetchClientForRegion).toHaveBeenCalledWith('us-east5', 'v1beta1');
+        expect(post).toHaveBeenCalledWith('endpoints/openapi/chat/completions', {
+            payload: expect.objectContaining({
+                model: 'meta/llama-4-scout-17b-16e-instruct-maas',
+                max_tokens: 1024,
+            }),
+        });
+    });
+
+    it('applies the gpt-oss 120B max token default required for structured output', async () => {
+        const { post, getFetchClientForRegion } = await requestForModel(
+            'locations/global/publishers/openai/models/gpt-oss-120b-maas',
+        );
+
+        expect(getFetchClientForRegion).toHaveBeenCalledWith('global', undefined);
+        expect(post).toHaveBeenCalledWith('endpoints/openapi/chat/completions', {
+            payload: expect.objectContaining({
+                model: 'openai/gpt-oss-120b-maas',
+                max_tokens: 1024,
             }),
         });
     });

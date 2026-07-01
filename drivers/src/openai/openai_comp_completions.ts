@@ -104,6 +104,8 @@ export interface OpenAICompletionsPrompt {
 export interface OpenAICompletionsModelOptions {
     /** The model identifier to send in the request body (for example, "zai-org/glm-5-maas"). */
     modelName: string;
+    /** Model API contract default used only when callers do not provide max_tokens. */
+    defaultMaxTokens?: number;
     /** Extra OpenAI-compatible request body fields for model-family-specific options. */
     extraBody?: Record<string, unknown>;
 }
@@ -560,7 +562,9 @@ export abstract class OpenAICompletionsModelDefinitionBase<DriverT> {
         const payload: OpenAICompletionsPayload = {
             model: this.options.modelName,
             messages: convertToOpenAICompletionsMessages(conversation.messages),
-            max_tokens: modelOptions?.max_tokens,
+            // Some OpenAI-compatible providers return empty/truncated completions unless a
+            // documented or runtime-validated token budget is supplied. Caller options still win.
+            max_tokens: modelOptions?.max_tokens ?? this.options.defaultMaxTokens,
             temperature: modelOptions?.temperature,
             top_p: modelOptions?.top_p,
             n: 1,
