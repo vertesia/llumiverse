@@ -30,6 +30,15 @@ The main abstractions are:
 - **Format files**: `pnpm format`
 - **Check formatting**: `pnpm format:check`
 
+### Verification Scope
+
+Prefer sparse, change-scoped verification in llumiverse unless the user explicitly asks for a full provider sweep. Many driver tests make live network calls and can produce heavy output or fail on unrelated local credentials.
+
+- For common package changes, run `cd common && pnpm lint`, `pnpm typecheck:test`, and the specific Vitest files that cover the edit.
+- For driver changes, run `cd drivers && pnpm lint`, `pnpm typecheck:test`, and targeted tests for the touched driver or behavior.
+- For shared package changes that drivers consume, build dependencies sequentially, for example `common`, then `core`, then `drivers`; do not run these builds in parallel because each package build clears its own `lib` output.
+- Run full `pnpm test` / `pnpm -r test` only when the change affects broad cross-provider behavior or when requested. If skipped, report the scoped commands that were run.
+
 ## Code Style
 
 - TypeScript strict mode with noUnusedLocals/Parameters
