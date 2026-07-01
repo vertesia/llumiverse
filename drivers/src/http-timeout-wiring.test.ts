@@ -8,7 +8,7 @@ import { HuggingFaceIEDriver } from './huggingface_ie.js';
 import { MistralAIDriver } from './mistral/index.js';
 import { AzureOpenAIDriver } from './openai/azure_openai.js';
 import { OpenAIDriver } from './openai/openai.js';
-import { OpenAICompatibleDriver } from './openai/openai_compatible.js';
+import { OpenAICompatibleDriver } from './openai/openai_comp_responses.js';
 import { ReplicateDriver } from './replicate.js';
 import { TogetherAIDriver } from './togetherai/index.js';
 import { VertexAIDriver } from './vertexai/index.js';
