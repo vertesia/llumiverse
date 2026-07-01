@@ -21,7 +21,7 @@ describe('Vertex AI MaaS metadata', () => {
             'vertexai',
         );
         expect(gemma.input.text).toBe(true);
-        expect(gemma.input.image).toBe(false);
+        expect(gemma.input.image).toBe(true);
         expect(gemma.output.text).toBe(true);
         expect(gemma.tool_support).toBe(false);
     });
