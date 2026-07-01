@@ -16,16 +16,6 @@ describe('Vertex AI MaaS metadata', () => {
     });
 
     it('keeps model-specific MaaS capability exceptions', () => {
-        const deepSeekOcr = getModelCapabilities(
-            'locations/global/publishers/deepseek-ai/models/deepseek-ocr-maas',
-            'vertexai',
-        );
-
-        expect(deepSeekOcr.input.text).toBe(true);
-        expect(deepSeekOcr.input.image).toBe(true);
-        expect(deepSeekOcr.output.text).toBe(true);
-        expect(deepSeekOcr.tool_support).toBe(false);
-
         const gemma = getModelCapabilities(
             'locations/global/publishers/google/models/gemma-4-26b-a4b-it-maas',
             'vertexai',
@@ -76,7 +66,6 @@ describe('Vertex AI MaaS metadata', () => {
     });
 
     it('uses model-specific MaaS output token limits where known', () => {
-        expect(getMaxTokensLimitVertexAi('deepseek-ocr-maas')).toBe(8192);
         expect(getMaxTokensLimitVertexAi('qwen3-next-80b-a3b-thinking-maas')).toBe(262144);
     });
 });

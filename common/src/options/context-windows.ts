@@ -36,7 +36,6 @@ export function getMaxOutputTokens(model: string): number {
     // Mistral
     if (model.includes('mistral')) return 8_192;
     // DeepSeek
-    if (model.includes('deepseek-ocr')) return 8_192;
     if (model.includes('deepseek-r1-0528')) return 32_768;
     if (model.includes('deepseek-v3.2')) return 65_536;
     if (model.includes('deepseek-v3.1')) return 65_536;
@@ -101,7 +100,6 @@ export function getContextWindowSize(model: string): number {
     if (model.includes('mistral-large')) return 128_000;
     if (model.includes('mistral')) return 32_000;
     // DeepSeek
-    if (model.includes('deepseek-ocr')) return 8_192;
     if (model.includes('deepseek-v3.2')) return 163_840;
     if (model.includes('deepseek-v3.1')) return 163_840;
     if (model.includes('deepseek-r1-0528')) return 163_840;

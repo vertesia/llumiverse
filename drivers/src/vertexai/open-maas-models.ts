@@ -55,13 +55,8 @@ export const VERTEX_OPEN_MAAS_MODELS: readonly VertexOpenMaaSModel[] = [
         apiVersion: 'v1beta1',
         extraBody: LLAMA_SAFETY_EXTRA_BODY,
     },
-    {
-        publisher: 'deepseek-ai',
-        model: 'deepseek-ocr-maas',
-        requestPublisher: 'deepseek-ai',
-        regions: US_CENTRAL1_REGIONS,
-        endpointRegion: 'global',
-    },
+    // DeepSeek OCR is intentionally omitted: the documented regional model currently requires the
+    // global endpoint but did not return reliably through raw curl or the OpenAI-compatible driver.
     {
         publisher: 'deepseek-ai',
         model: 'deepseek-v3.2-maas',

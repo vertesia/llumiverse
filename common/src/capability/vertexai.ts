@@ -10,11 +10,6 @@ const RECORD_MODEL_CAPABILITIES: Record<
         output: { text: true, image: false, video: false, audio: false, embed: false },
         tool_support: false,
     },
-    'deepseek-ocr-maas': {
-        input: { text: true, image: true, video: false, audio: false, embed: false },
-        output: { text: true, image: false, video: false, audio: false, embed: false },
-        tool_support: false,
-    },
     'gemma-4-26b-a4b-it-maas': {
         input: { text: true, image: false, video: false, audio: false, embed: false },
         output: { text: true, image: false, video: false, audio: false, embed: false },

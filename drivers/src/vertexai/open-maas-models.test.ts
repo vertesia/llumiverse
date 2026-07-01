@@ -63,7 +63,6 @@ describe('Vertex open MaaS catalog', () => {
         );
 
         expect(catalog).toEqual({
-            'deepseek-ai/deepseek-ocr-maas': ['us-central1'],
             'deepseek-ai/deepseek-r1-0528-maas': ['us-central1'],
             'deepseek-ai/deepseek-v3.1-maas': ['us-central1'],
             'deepseek-ai/deepseek-v3.2-maas': ['global'],
@@ -93,11 +92,11 @@ describe('Vertex open MaaS catalog', () => {
         expect(modelIds).toContain('locations/global/publishers/minimaxai/models/minimax-m2-maas');
         expect(modelIds).toContain('locations/global/publishers/openai/models/gpt-oss-120b-maas');
         expect(modelIds).toContain('locations/global/publishers/google/models/gemma-4-26b-a4b-it-maas');
-        expect(modelIds).toContain('locations/us-central1/publishers/deepseek-ai/models/deepseek-ocr-maas');
         expect(modelIds).toContain('locations/us-central1/publishers/deepseek-ai/models/deepseek-v3.1-maas');
         expect(modelIds).not.toContain(
             'locations/global/publishers/meta/models/llama-4-maverick-17b-128e-instruct-maas',
         );
+        expect(modelIds).not.toContain('locations/us-central1/publishers/deepseek-ai/models/deepseek-ocr-maas');
         expect(modelIds).not.toContain('locations/global/publishers/deepseek-ai/models/deepseek-ocr-maas');
         expect(modelIds).not.toContain('locations/us-east5/publishers/google/models/gemma-4-26b-a4b-it-maas');
     });
@@ -109,18 +108,11 @@ describe('Vertex open MaaS catalog', () => {
         expect(usCentralIds).toContain(
             'locations/us-east5/publishers/meta/models/llama-4-maverick-17b-128e-instruct-maas',
         );
-        expect(usCentralIds).toContain('locations/us-central1/publishers/deepseek-ai/models/deepseek-ocr-maas');
         expect(usCentralIds).toContain('locations/us-central1/publishers/openai/models/gpt-oss-120b-maas');
         expect(usCentralIds).toContain('locations/us-central1/publishers/openai/models/gpt-oss-20b-maas');
         expect(usCentralIds).toContain('locations/global/publishers/openai/models/gpt-oss-120b-maas');
         expect(usCentralIds).not.toContain('locations/global/publishers/openai/models/gpt-oss-20b-maas');
-
-        const deepSeekOcr = usCentralModels.find(
-            (model) => model.id === 'locations/us-central1/publishers/deepseek-ai/models/deepseek-ocr-maas',
-        );
-        expect(deepSeekOcr?.input_modalities).toEqual(['text', 'image']);
-        expect(deepSeekOcr?.output_modalities).toEqual(['text']);
-        expect(deepSeekOcr?.tool_support).toBe(false);
+        expect(usCentralIds).not.toContain('locations/us-central1/publishers/deepseek-ai/models/deepseek-ocr-maas');
     });
 
     it('lists MaaS regional alternates for the configured region', () => {
@@ -183,7 +175,6 @@ describe('Vertex open MaaS catalog', () => {
     it('routes new open MaaS families through the OpenAI-compatible endpoint', async () => {
         const cases = [
             ['locations/global/publishers/deepseek-ai/models/deepseek-v3.2-maas', 'deepseek-ai/deepseek-v3.2-maas'],
-            ['locations/us-central1/publishers/deepseek-ai/models/deepseek-ocr-maas', 'deepseek-ai/deepseek-ocr-maas'],
             [
                 'locations/global/publishers/qwen/models/qwen3-next-80b-a3b-instruct-maas',
                 'qwen/qwen3-next-80b-a3b-instruct-maas',
@@ -199,11 +190,7 @@ describe('Vertex open MaaS catalog', () => {
         for (const [model, requestModel] of cases) {
             const { post, getFetchClientForRegion } = await requestForModel(model);
 
-            if (model.includes('deepseek-ocr-maas')) {
-                expect(getFetchClientForRegion).toHaveBeenCalledWith('us-central1', undefined, 'global');
-            } else {
-                expect(getFetchClientForRegion).toHaveBeenCalledWith(model.split('/')[1], undefined);
-            }
+            expect(getFetchClientForRegion).toHaveBeenCalledWith(model.split('/')[1], undefined);
             expect(post).toHaveBeenCalledWith('endpoints/openapi/chat/completions', {
                 payload: expect.objectContaining({ model: requestModel }),
             });
