@@ -160,7 +160,7 @@ describe('Vertex open MaaS catalog', () => {
         });
     });
 
-    it('applies the gpt-oss 120B max output default required for structured output', async () => {
+    it('applies the gpt-oss 120B conservative max output default required for structured output', async () => {
         const { post, getFetchClientForRegion } = await requestForModel(
             'locations/global/publishers/openai/models/gpt-oss-120b-maas',
         );
@@ -169,7 +169,7 @@ describe('Vertex open MaaS catalog', () => {
         expect(post).toHaveBeenCalledWith('endpoints/openapi/chat/completions', {
             payload: expect.objectContaining({
                 model: 'openai/gpt-oss-120b-maas',
-                max_tokens: 131072,
+                max_tokens: 16384,
             }),
         });
     });

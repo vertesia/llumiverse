@@ -27,7 +27,7 @@ export function getMaxOutputTokens(model: string): number {
     if (model.includes('o3') || model.includes('o4')) return 100_000;
     // GPT models
     if (model.includes('gpt-5')) return 128_000;
-    if (model.includes('gpt-oss')) return 131_072;
+    if (model.includes('gpt-oss')) return 16_384;
     if (model.includes('gpt-4o')) return 16_384;
     if (model.includes('gpt-4')) return 8_192;
     if (model.includes('gpt-3.5')) return 4_096;

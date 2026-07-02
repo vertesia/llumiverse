@@ -129,8 +129,9 @@ export const VERTEX_OPEN_MAAS_MODELS: readonly VertexOpenMaaSModel[] = [
         model: 'gpt-oss-120b-maas',
         requestPublisher: 'openai',
         regions: US_CENTRAL1_AND_GLOBAL_REGIONS,
-        // 120B can spend the provider default budget on reasoning only; Vertex reports max 131072.
-        // Use the max output budget only for this model-level workaround; caller options still win.
+        // 120B can spend the provider default budget on reasoning only. Vertex reports max
+        // 131072, but output shares the context window, so use the conservative metadata cap.
+        // This model-level workaround only applies when callers omit max_tokens; caller options still win.
         defaultMaxTokens: getMaxOutputTokens('gpt-oss-120b-maas'),
     },
     {
