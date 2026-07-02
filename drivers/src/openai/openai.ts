@@ -1,6 +1,6 @@
 import { type DriverOptions, Providers } from '@llumiverse/core';
 import OpenAI from 'openai';
-import { BaseOpenAIDriver } from './index.js';
+import { OpenAIResponsesDriverBase } from './index.js';
 
 export interface OpenAIDriverOptions extends DriverOptions {
     /**
@@ -9,7 +9,7 @@ export interface OpenAIDriverOptions extends DriverOptions {
     apiKey?: string; //type with azure credentials
 }
 
-export class OpenAIDriver extends BaseOpenAIDriver {
+export class OpenAIDriver extends OpenAIResponsesDriverBase {
     service: OpenAI;
     readonly provider = Providers.openai;
 

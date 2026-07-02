@@ -7,9 +7,9 @@ import {
     Providers,
 } from '@llumiverse/core';
 import OpenAI from 'openai';
-import { BaseOpenAIDriver } from './index.js';
+import { OpenAIResponsesDriverBase } from './index.js';
 
-export interface OpenAICompatibleDriverOptions extends DriverOptions {
+export interface OpenAIResponsesDriverOptions extends DriverOptions {
     /**
      * The API key for the OpenAI-compatible service
      */
@@ -33,11 +33,11 @@ export interface OpenAICompatibleDriverOptions extends DriverOptions {
  * This can be used with any service that implements the OpenAI API spec,
  * such as xAI (Grok), LM Studio, Ollama, vLLM, LocalAI, etc.
  */
-export class OpenAICompatibleDriver extends BaseOpenAIDriver {
+export class OpenAIResponsesDriver extends OpenAIResponsesDriverBase {
     service: OpenAI;
     readonly provider = Providers.openai_compatible;
 
-    constructor(opts: OpenAICompatibleDriverOptions) {
+    constructor(opts: OpenAIResponsesDriverOptions) {
         super(opts);
 
         if (!opts.apiKey) {
@@ -84,7 +84,7 @@ export class OpenAICompatibleDriver extends BaseOpenAIDriver {
 
             return models;
         } catch (error) {
-            this.logger.warn({ error }, '[OpenAICompatible] Failed to list models, returning empty list');
+            this.logger.warn({ error }, '[OpenAIResponses] Failed to list models, returning empty list');
             return [];
         }
     }

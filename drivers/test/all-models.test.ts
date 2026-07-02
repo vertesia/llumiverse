@@ -16,8 +16,8 @@ import {
     BedrockDriver,
     GroqDriver,
     MistralAIDriver,
-    OpenAICompatibleDriver,
     OpenAIDriver,
+    OpenAIResponsesDriver,
     TogetherAIDriver,
     VertexAIDriver,
     WatsonxDriver,
@@ -174,7 +174,7 @@ if (process.env.WATSONX_API_KEY) {
 if (process.env.OPENROUTER_API_KEY) {
     drivers.push({
         name: 'openrouter',
-        driver: new OpenAICompatibleDriver({
+        driver: new OpenAIResponsesDriver({
             apiKey: process.env.OPENROUTER_API_KEY,
             endpoint: 'https://openrouter.ai/api/v1',
         }),

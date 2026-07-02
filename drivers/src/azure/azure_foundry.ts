@@ -29,7 +29,7 @@ import {
 } from '@llumiverse/core';
 import { AbstractDriver } from '@llumiverse/core/driver';
 import type OpenAI from 'openai';
-import { BaseOpenAIDriver } from '../openai/index.js';
+import { OpenAIResponsesDriverBase } from '../openai/index.js';
 import { formatOpenAIDebugPrompt, formatOpenAILikeMultimodalPrompt } from '../openai/openai_format.js';
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
@@ -37,7 +37,7 @@ type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
 type SSEMessage = { data?: string };
 type ErrorWithStatus = Error & { status?: unknown };
 
-class AzureFoundryOpenAIProtocolDriver extends BaseOpenAIDriver {
+class AzureFoundryOpenAIProtocolDriver extends OpenAIResponsesDriverBase {
     service: OpenAI;
     readonly provider = Providers.azure_foundry;
 

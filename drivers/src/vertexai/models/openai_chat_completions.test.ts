@@ -1,8 +1,9 @@
 import type { CompletionChunkObject, ExecutionOptions } from '@llumiverse/core';
 import type { ServerSentEvent } from '@vertesia/api-fetch-client';
 import { describe, expect, it, vi } from 'vitest';
+import type { OpenAIChatCompletionsPrompt } from '../../openai/openai_chat_completions.js';
 import { VertexAIDriver } from '../index.js';
-import { OpenAICompatibleModelDefinition, type OpenAIPrompt } from './openai_compatible.js';
+import { OpenAIChatCompletionsModelDefinition } from './openai_chat_completions.js';
 
 function createSSEStream(events: ServerSentEvent[]): ReadableStream<ServerSentEvent> {
     return new ReadableStream<ServerSentEvent>({
@@ -36,9 +37,9 @@ class TestVertexAIDriver extends VertexAIDriver {
     }
 }
 
-describe('OpenAICompatibleModelDefinition', () => {
+describe('OpenAIChatCompletionsModelDefinition', () => {
     it('uses a stable streaming tool-call key and preserves the real OpenAI tool id', async () => {
-        const modelDef = new OpenAICompatibleModelDefinition({ modelName: 'xai/grok-4.1', region: 'global' });
+        const modelDef = new OpenAIChatCompletionsModelDefinition({ modelName: 'xai/grok-4.1', region: 'global' });
         const stream = createSSEStream([
             {
                 type: 'event',
@@ -105,7 +106,10 @@ describe('OpenAICompatibleModelDefinition', () => {
                 post: async () => stream,
             }),
         } as unknown as VertexAIDriver;
-        const prompt: OpenAIPrompt = { _is_openai_compat: true, messages: [{ role: 'user', content: 'Weather?' }] };
+        const prompt: OpenAIChatCompletionsPrompt = {
+            _is_openai_chat_completions: true,
+            messages: [{ role: 'user', content: 'Weather?' }],
+        };
         const options: ExecutionOptions = {
             model: 'publishers/xai/models/grok-4.1',
             model_options: { _option_id: 'text-fallback' },
@@ -141,14 +145,17 @@ describe('OpenAICompatibleModelDefinition', () => {
     it('builds streaming conversation when there is no prior OpenAI-compatible conversation', () => {
         const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }))) as unknown as typeof fetch;
         const driver = new TestVertexAIDriver(fetchMock);
-        const prompt: OpenAIPrompt = { _is_openai_compat: true, messages: [{ role: 'user', content: 'Hello' }] };
+        const prompt: OpenAIChatCompletionsPrompt = {
+            _is_openai_chat_completions: true,
+            messages: [{ role: 'user', content: 'Hello' }],
+        };
 
         const conversation = driver.buildStreamingConversation(
             prompt,
             [{ type: 'text', value: 'Hi there' }],
             undefined,
             { model: 'publishers/xai/models/grok-4.1' },
-        ) as OpenAIPrompt;
+        ) as OpenAIChatCompletionsPrompt;
 
         expect(conversation.messages).toEqual([
             { role: 'user', content: 'Hello' },
@@ -157,7 +164,10 @@ describe('OpenAICompatibleModelDefinition', () => {
     });
 
     it('uses reasoning fields as a fallback when non-streaming content is blank', async () => {
-        const modelDef = new OpenAICompatibleModelDefinition({ modelName: 'zai-org/glm-5-maas', region: 'global' });
+        const modelDef = new OpenAIChatCompletionsModelDefinition({
+            modelName: 'zai-org/glm-5-maas',
+            region: 'global',
+        });
         const driver = {
             getFetchClientForRegion: () => ({
                 post: async () => ({
@@ -179,7 +189,10 @@ describe('OpenAICompatibleModelDefinition', () => {
                 }),
             }),
         } as unknown as VertexAIDriver;
-        const prompt: OpenAIPrompt = { _is_openai_compat: true, messages: [{ role: 'user', content: 'Hello' }] };
+        const prompt: OpenAIChatCompletionsPrompt = {
+            _is_openai_chat_completions: true,
+            messages: [{ role: 'user', content: 'Hello' }],
+        };
         const options: ExecutionOptions = {
             model: 'locations/global/publishers/zai-org/models/glm-5-maas',
             model_options: { _option_id: 'text-fallback' },
@@ -191,7 +204,7 @@ describe('OpenAICompatibleModelDefinition', () => {
     });
 
     it('reads text from non-streaming OpenAI content arrays', async () => {
-        const modelDef = new OpenAICompatibleModelDefinition({
+        const modelDef = new OpenAIChatCompletionsModelDefinition({
             modelName: 'deepseek-ai/deepseek-v3.2-maas',
             region: 'global',
         });
@@ -219,7 +232,10 @@ describe('OpenAICompatibleModelDefinition', () => {
                 }),
             }),
         } as unknown as VertexAIDriver;
-        const prompt: OpenAIPrompt = { _is_openai_compat: true, messages: [{ role: 'user', content: 'Hello' }] };
+        const prompt: OpenAIChatCompletionsPrompt = {
+            _is_openai_chat_completions: true,
+            messages: [{ role: 'user', content: 'Hello' }],
+        };
         const options: ExecutionOptions = {
             model: 'locations/global/publishers/deepseek-ai/models/deepseek-v3.2-maas',
             model_options: { _option_id: 'text-fallback' },
@@ -231,7 +247,10 @@ describe('OpenAICompatibleModelDefinition', () => {
     });
 
     it('prefers normal content over reasoning fields in non-streaming responses', async () => {
-        const modelDef = new OpenAICompatibleModelDefinition({ modelName: 'zai-org/glm-5-maas', region: 'global' });
+        const modelDef = new OpenAIChatCompletionsModelDefinition({
+            modelName: 'zai-org/glm-5-maas',
+            region: 'global',
+        });
         const driver = {
             getFetchClientForRegion: () => ({
                 post: async () => ({
@@ -253,7 +272,10 @@ describe('OpenAICompatibleModelDefinition', () => {
                 }),
             }),
         } as unknown as VertexAIDriver;
-        const prompt: OpenAIPrompt = { _is_openai_compat: true, messages: [{ role: 'user', content: 'Hello' }] };
+        const prompt: OpenAIChatCompletionsPrompt = {
+            _is_openai_chat_completions: true,
+            messages: [{ role: 'user', content: 'Hello' }],
+        };
         const options: ExecutionOptions = {
             model: 'locations/global/publishers/zai-org/models/glm-5-maas',
             model_options: { _option_id: 'text-fallback' },
@@ -264,8 +286,66 @@ describe('OpenAICompatibleModelDefinition', () => {
         expect(completion.result).toEqual([{ type: 'text', value: 'visible content' }]);
     });
 
+    it('uses response_format with normalized JSON schema for structured Vertex MaaS output', async () => {
+        const modelDef = new OpenAIChatCompletionsModelDefinition({
+            modelName: 'zai-org/glm-5-maas',
+            region: 'global',
+        });
+        const post = vi.fn(async () => ({
+            id: 'chatcmpl-1',
+            object: 'chat.completion',
+            created: 1,
+            model: 'zai-org/glm-5-maas',
+            choices: [
+                {
+                    index: 0,
+                    message: {
+                        role: 'assistant',
+                        content: '{"answer":"Paris"}',
+                    },
+                    finish_reason: 'stop',
+                },
+            ],
+        }));
+        const driver = {
+            getFetchClientForRegion: () => ({ post }),
+        } as unknown as VertexAIDriver;
+        const prompt: OpenAIChatCompletionsPrompt = {
+            _is_openai_chat_completions: true,
+            messages: [{ role: 'user', content: 'Hello' }],
+        };
+        const options: ExecutionOptions = {
+            model: 'locations/global/publishers/zai-org/models/glm-5-maas',
+            model_options: { _option_id: 'text-fallback' },
+            result_schema: {
+                type: 'object',
+                properties: { answer: { type: 'string' } },
+            },
+        };
+
+        await modelDef.requestTextCompletion(driver, prompt, options);
+
+        expect(post).toHaveBeenCalledWith('endpoints/openapi/chat/completions', {
+            payload: expect.objectContaining({
+                response_format: {
+                    type: 'json_schema',
+                    json_schema: {
+                        name: 'output',
+                        strict: true,
+                        schema: {
+                            type: 'object',
+                            properties: { answer: { type: 'string' } },
+                            required: ['answer'],
+                            additionalProperties: false,
+                        },
+                    },
+                },
+            }),
+        });
+    });
+
     it('reads text from streaming OpenAI content arrays', async () => {
-        const modelDef = new OpenAICompatibleModelDefinition({
+        const modelDef = new OpenAIChatCompletionsModelDefinition({
             modelName: 'deepseek-ai/deepseek-v3.2-maas',
             region: 'global',
         });
@@ -293,7 +373,10 @@ describe('OpenAICompatibleModelDefinition', () => {
                 post: async () => stream,
             }),
         } as unknown as VertexAIDriver;
-        const prompt: OpenAIPrompt = { _is_openai_compat: true, messages: [{ role: 'user', content: 'Hello' }] };
+        const prompt: OpenAIChatCompletionsPrompt = {
+            _is_openai_chat_completions: true,
+            messages: [{ role: 'user', content: 'Hello' }],
+        };
         const options: ExecutionOptions = {
             model: 'locations/global/publishers/deepseek-ai/models/deepseek-v3.2-maas',
             model_options: { _option_id: 'text-fallback' },
@@ -305,7 +388,10 @@ describe('OpenAICompatibleModelDefinition', () => {
     });
 
     it('does not emit streaming reasoning fallback after normal content arrives', async () => {
-        const modelDef = new OpenAICompatibleModelDefinition({ modelName: 'zai-org/glm-5-maas', region: 'global' });
+        const modelDef = new OpenAIChatCompletionsModelDefinition({
+            modelName: 'zai-org/glm-5-maas',
+            region: 'global',
+        });
         const stream = createSSEStream([
             {
                 type: 'event',
@@ -348,7 +434,10 @@ describe('OpenAICompatibleModelDefinition', () => {
                 post: async () => stream,
             }),
         } as unknown as VertexAIDriver;
-        const prompt: OpenAIPrompt = { _is_openai_compat: true, messages: [{ role: 'user', content: 'Hello' }] };
+        const prompt: OpenAIChatCompletionsPrompt = {
+            _is_openai_chat_completions: true,
+            messages: [{ role: 'user', content: 'Hello' }],
+        };
         const options: ExecutionOptions = {
             model: 'locations/global/publishers/zai-org/models/glm-5-maas',
             model_options: { _option_id: 'text-fallback' },
@@ -360,7 +449,10 @@ describe('OpenAICompatibleModelDefinition', () => {
     });
 
     it('uses buffered streaming reasoning as a fallback when no content deltas arrive', async () => {
-        const modelDef = new OpenAICompatibleModelDefinition({ modelName: 'zai-org/glm-5-maas', region: 'global' });
+        const modelDef = new OpenAIChatCompletionsModelDefinition({
+            modelName: 'zai-org/glm-5-maas',
+            region: 'global',
+        });
         const stream = createSSEStream([
             {
                 type: 'event',
@@ -403,7 +495,10 @@ describe('OpenAICompatibleModelDefinition', () => {
                 post: async () => stream,
             }),
         } as unknown as VertexAIDriver;
-        const prompt: OpenAIPrompt = { _is_openai_compat: true, messages: [{ role: 'user', content: 'Hello' }] };
+        const prompt: OpenAIChatCompletionsPrompt = {
+            _is_openai_chat_completions: true,
+            messages: [{ role: 'user', content: 'Hello' }],
+        };
         const options: ExecutionOptions = {
             model: 'locations/global/publishers/zai-org/models/glm-5-maas',
             model_options: { _option_id: 'text-fallback' },

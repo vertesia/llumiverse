@@ -28,13 +28,15 @@ import { AbstractDriver } from '@llumiverse/core/driver';
 import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
 import { type FETCH_FN, FetchClient } from '@vertesia/api-fetch-client';
 import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from 'google-auth-library';
-import { buildOpenAICompletionsStreamingConversation } from '../openai/openai_comp_completions.js';
+import {
+    buildOpenAIChatCompletionsStreamingConversation,
+    type OpenAIChatCompletionsPrompt,
+} from '../openai/openai_chat_completions.js';
 import { type ClaudePrompt, formatClaudeDebugPrompt } from '../shared/claude-messages.js';
 import { generateVertexAiEmbeddings } from './embeddings/embed.js';
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
 import { formatGeminiDebugPrompt } from './models/gemini.js';
 import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
-import type { OpenAIPrompt } from './models/openai_compatible.js';
 import { getModelDefinition, trimModelName } from './models.js';
 import { getListedVertexOpenMaaSModels } from './open-maas-models.js';
 
@@ -68,7 +70,7 @@ function isClaudeStreamingPrompt(prompt: unknown): prompt is ClaudeStreamingProm
 }
 
 //General Prompt type for VertexAI
-export type VertexAIPrompt = ImagenPrompt | GenerateContentPrompt | ClaudePrompt | OpenAIPrompt;
+export type VertexAIPrompt = ImagenPrompt | GenerateContentPrompt | ClaudePrompt | OpenAIChatCompletionsPrompt;
 
 export { trimModelName };
 
@@ -370,11 +372,11 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         toolUse: unknown[] | undefined,
         options: ExecutionOptions,
     ): Content[] | unknown | undefined {
-        // Handle OpenAI-compatible prompts (xAI Grok, Meta Llama via Vertex AI MaaS)
+        // Handle OpenAI Chat Completions prompts (xAI Grok, Meta Llama via Vertex AI MaaS)
         // IMPORTANT: check this BEFORE the Claude check — both have a `messages` array
-        if ('_is_openai_compat' in prompt && prompt._is_openai_compat) {
-            return this.buildOpenAICompatStreamingConversation(
-                prompt as unknown as OpenAIPrompt,
+        if ('_is_openai_chat_completions' in prompt && prompt._is_openai_chat_completions) {
+            return buildOpenAIChatCompletionsStreamingConversation(
+                prompt as unknown as OpenAIChatCompletionsPrompt,
                 result,
                 toolUse,
                 options,
@@ -480,20 +482,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         }
 
         return processedConversation;
-    }
-
-    /**
-     * Build conversation for OpenAI-compatible streaming (e.g. xAI Grok, Meta Llama on Vertex AI).
-     * Reconstructs the assistant message with OpenAI-format `tool_calls` from the accumulated
-     * ToolUse[], ready for the next API call.
-     */
-    private buildOpenAICompatStreamingConversation(
-        prompt: OpenAIPrompt,
-        result: unknown[],
-        toolUse: unknown[] | undefined,
-        options: ExecutionOptions,
-    ): OpenAIPrompt {
-        return buildOpenAICompletionsStreamingConversation(prompt, result, toolUse, options);
     }
 
     /**

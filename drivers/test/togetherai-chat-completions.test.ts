@@ -190,10 +190,16 @@ describe('TogetherAIDriver Chat Completions transport', () => {
         expect(payload.tools).toEqual([
             {
                 type: 'function',
-                function: { name: 'lookup', description: 'Lookup weather', parameters: { type: 'object' } },
+                function: {
+                    name: 'lookup',
+                    description: 'Lookup weather',
+                    parameters: { type: 'object' },
+                    strict: false,
+                },
             },
         ]);
         expect((completion.tool_use?.[0] as ToolUse).tool_input).toEqual({ city: 'Paris' });
+        expect(completion.finish_reason).toBe('tool_use');
     });
 
     test('streams through Chat Completions and preserves usage-only terminal chunks', async () => {

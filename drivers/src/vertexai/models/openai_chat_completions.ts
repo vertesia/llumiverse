@@ -1,26 +1,19 @@
 import { type AIModel, type Completion, type ExecutionOptions, ModelType } from '@llumiverse/core';
 import {
-    OpenAICompletionsModelDefinitionBase,
-    type OpenAICompletionsModelOptions,
-    type OpenAICompletionsPayload,
-    type OpenAICompletionsPrompt,
-    type OpenAICompletionsResponse,
-    stripOpenAICompletionsThinkBlocksFromCompletion,
-} from '../../openai/openai_comp_completions.js';
+    type OpenAIChatCompletionsPayload,
+    type OpenAIChatCompletionsPrompt,
+    OpenAIChatCompletionsProtocol,
+    type OpenAIChatCompletionsProtocolOptions,
+    type OpenAIChatCompletionsResponse,
+    stripOpenAIChatCompletionsThinkBlocksFromCompletion,
+} from '../../openai/openai_chat_completions.js';
 import type { VertexAIDriver } from '../index.js';
 import type { ModelDefinition } from '../models.js';
-
-export type {
-    OpenAICompletionsMessage as OpenAIMessage,
-    OpenAICompletionsPrompt as OpenAIPrompt,
-    OpenAICompletionsResponse as OpenAIResponse,
-    OpenAICompletionsStreamResponse as OpenAIStreamResponse,
-} from '../../openai/openai_comp_completions.js';
 
 /**
  * Options for configuring the Vertex OpenAI-compatible model.
  */
-export interface OpenAICompatibleOptions extends OpenAICompletionsModelOptions {
+export interface VertexOpenAIChatCompletionsOptions extends OpenAIChatCompletionsProtocolOptions {
     modelName: string;
     /** Custom endpoint path override (defaults to "endpoints/openapi/chat/completions") */
     endpointPath?: string;
@@ -40,14 +33,14 @@ export interface OpenAICompatibleOptions extends OpenAICompletionsModelOptions {
  * only Vertex-specific routing: region selection, endpoint path, and request
  * model name.
  */
-export class OpenAICompatibleModelDefinition
-    extends OpenAICompletionsModelDefinitionBase<VertexAIDriver>
-    implements ModelDefinition<OpenAICompletionsPrompt>
+export class OpenAIChatCompletionsModelDefinition
+    extends OpenAIChatCompletionsProtocol<VertexAIDriver>
+    implements ModelDefinition<OpenAIChatCompletionsPrompt>
 {
     model: AIModel;
-    private readonly vertexOptions: OpenAICompatibleOptions;
+    private readonly vertexOptions: VertexOpenAIChatCompletionsOptions;
 
-    constructor(options: OpenAICompatibleOptions) {
+    constructor(options: VertexOpenAIChatCompletionsOptions) {
         super(options);
         this.vertexOptions = options;
         const modelName = options.modelName.split('/').pop() || options.modelName;
@@ -62,17 +55,17 @@ export class OpenAICompatibleModelDefinition
 
     protected async postChatCompletion(
         driver: VertexAIDriver,
-        payload: OpenAICompletionsPayload,
-    ): Promise<OpenAICompletionsResponse> {
+        payload: OpenAIChatCompletionsPayload,
+    ): Promise<OpenAIChatCompletionsResponse> {
         const client = this.getClient(driver);
         return (await client.post(this.endpoint, {
             payload,
-        })) as OpenAICompletionsResponse;
+        })) as OpenAIChatCompletionsResponse;
     }
 
     protected async postChatCompletionStream(
         driver: VertexAIDriver,
-        payload: OpenAICompletionsPayload,
+        payload: OpenAIChatCompletionsPayload,
     ): Promise<ReadableStream> {
         const client = this.getClient(driver);
         return (await client.post(this.endpoint, {
@@ -85,7 +78,7 @@ export class OpenAICompatibleModelDefinition
         result: Completion,
         options: ExecutionOptions,
     ): { result: Completion; options: ExecutionOptions } {
-        return { result: stripOpenAICompletionsThinkBlocksFromCompletion(result), options };
+        return { result: stripOpenAIChatCompletionsThinkBlocksFromCompletion(result), options };
     }
 
     private getClient(driver: VertexAIDriver) {

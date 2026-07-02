@@ -8,7 +8,7 @@ import { HuggingFaceIEDriver } from './huggingface_ie.js';
 import { MistralAIDriver } from './mistral/index.js';
 import { AzureOpenAIDriver } from './openai/azure_openai.js';
 import { OpenAIDriver } from './openai/openai.js';
-import { OpenAICompatibleDriver } from './openai/openai_comp_responses.js';
+import { OpenAIResponsesDriver } from './openai/openai_responses.js';
 import { ReplicateDriver } from './replicate.js';
 import { TogetherAIDriver } from './togetherai/index.js';
 import { VertexAIDriver } from './vertexai/index.js';
@@ -112,7 +112,7 @@ describe('driver HTTP timeout wiring', () => {
         expectSdkUsesDriverFetch(azure, azure.service);
         azure.destroy();
 
-        const compatible = new OpenAICompatibleDriver({
+        const compatible = new OpenAIResponsesDriver({
             apiKey: 'test-key',
             endpoint: 'https://example.test/v1',
         });

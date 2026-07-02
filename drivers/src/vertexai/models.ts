@@ -10,7 +10,7 @@ import type {
 import type { VertexAIDriver, VertexAIPrompt } from './index.js';
 import { ClaudeModelDefinition } from './models/claude.js';
 import { GeminiModelDefinition } from './models/gemini.js';
-import { OpenAICompatibleModelDefinition } from './models/openai_compatible.js';
+import { OpenAIChatCompletionsModelDefinition } from './models/openai_chat_completions.js';
 import { getVertexOpenMaaSRequestModel } from './open-maas-models.js';
 
 export function trimModelName(model: string): string {
@@ -66,7 +66,7 @@ export function getModelDefinition(model: string): ModelDefinition {
     } else {
         const openMaaSModel = getVertexOpenMaaSRequestModel(publisher, modelName);
         if (openMaaSModel) {
-            return new OpenAICompatibleModelDefinition({
+            return new OpenAIChatCompletionsModelDefinition({
                 modelName: openMaaSModel.modelName,
                 region: region ?? openMaaSModel.region,
                 apiVersion: openMaaSModel.apiVersion,
@@ -80,7 +80,7 @@ export function getModelDefinition(model: string): ModelDefinition {
     if (publisher === 'xai') {
         // Use OpenAI-compatible endpoint for xAI Grok models via Vertex AI's openapi endpoint
         // xAI/Grok models only exist in the "global" region, not regional endpoints
-        return new OpenAICompatibleModelDefinition({ modelName: `xai/${modelName}`, region: 'global' });
+        return new OpenAIChatCompletionsModelDefinition({ modelName: `xai/${modelName}`, region: 'global' });
     }
 
     if (publisher?.includes('google') && modelName.includes('gemini')) {

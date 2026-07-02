@@ -4,9 +4,11 @@ import {
     type CompletionResult,
     type DriverOptions,
     type ExecutionOptions,
+    type ExecutionTokenUsage,
     getConversationMeta,
     incrementConversationTurn,
     type JSONObject,
+    type JSONSchema,
     type PromptOptions,
     PromptRole,
     type PromptSegment,
@@ -21,16 +23,17 @@ import {
 import { transformSSEStream } from '@llumiverse/core/async';
 import { AbstractDriver } from '@llumiverse/core/driver';
 import type OpenAI from 'openai';
+import { formatOpenAISchema } from './schema.js';
 
-export type OpenAICompletionsTextPart = OpenAI.Chat.ChatCompletionContentPartText;
-export type OpenAICompletionsImageUrlPart = OpenAI.Chat.ChatCompletionContentPartImage;
-export type OpenAICompletionsContentPart = OpenAICompletionsTextPart | OpenAICompletionsImageUrlPart;
-export type OpenAICompletionsToolCall = OpenAI.Chat.ChatCompletionMessageFunctionToolCall;
-export type OpenAICompletionsToolDefinition = OpenAI.Chat.ChatCompletionTool;
+export type OpenAIChatCompletionsTextPart = OpenAI.Chat.ChatCompletionContentPartText;
+export type OpenAIChatCompletionsImageUrlPart = OpenAI.Chat.ChatCompletionContentPartImage;
+export type OpenAIChatCompletionsContentPart = OpenAIChatCompletionsTextPart | OpenAIChatCompletionsImageUrlPart;
+export type OpenAIChatCompletionsToolCall = OpenAI.Chat.ChatCompletionMessageFunctionToolCall;
+export type OpenAIChatCompletionsToolDefinition = OpenAI.Chat.ChatCompletionTool;
 
-export type OpenAICompletionsMessage = {
+export type OpenAIChatCompletionsMessage = {
     role: string;
-    content?: string | null | OpenAICompletionsContentPart[];
+    content?: string | null | OpenAIChatCompletionsContentPart[];
     /**
      * Required for tool role messages - references the tool_call.id from the assistant's message.
      * Per OpenAI API spec: https://platform.openai.com/docs/api-reference/chat/messages#message-role
@@ -39,47 +42,50 @@ export type OpenAICompletionsMessage = {
     /**
      * Tool calls from assistant messages - stored and sent back with tool results.
      */
-    tool_calls?: OpenAICompletionsToolCall[];
+    tool_calls?: OpenAIChatCompletionsToolCall[];
 };
 
-export type OpenAICompletionsRequestMessage = {
+export type OpenAIChatCompletionsRequestMessage = {
     role: string;
-    content?: string | null | OpenAICompletionsContentPart[];
+    content?: string | null | OpenAIChatCompletionsContentPart[];
     tool_call_id?: string;
-    tool_calls?: OpenAICompletionsToolCall[];
+    tool_calls?: OpenAIChatCompletionsToolCall[];
 };
 
-export type OpenAICompletionsPayload = Omit<
+export type OpenAIChatCompletionsPayload = Omit<
     OpenAI.Chat.ChatCompletionCreateParams,
     'model' | 'messages' | 'stream' | 'tools'
 > & {
     model: string;
-    messages: OpenAICompletionsRequestMessage[];
+    messages: OpenAIChatCompletionsRequestMessage[];
     stream: boolean;
-    tools?: OpenAICompletionsToolDefinition[];
+    tools?: OpenAIChatCompletionsToolDefinition[];
     extra_body?: Record<string, unknown>;
 };
 
-type OpenAICompletionsUsage = NonNullable<OpenAI.Chat.ChatCompletion['usage']>;
-type OpenAICompletionsResponseMessage = Omit<Partial<OpenAI.Chat.ChatCompletionMessage>, 'content' | 'tool_calls'> & {
+type OpenAIChatCompletionsUsage = NonNullable<OpenAI.Chat.ChatCompletion['usage']>;
+type OpenAIChatCompletionsResponseMessage = Omit<
+    Partial<OpenAI.Chat.ChatCompletionMessage>,
+    'content' | 'tool_calls'
+> & {
     role?: string;
-    content?: string | null | OpenAICompletionsContentPart[];
+    content?: string | null | OpenAIChatCompletionsContentPart[];
     reasoning_content?: string | null;
     reasoning?: string | null;
-    tool_calls?: OpenAICompletionsToolCall[];
+    tool_calls?: OpenAIChatCompletionsToolCall[];
 };
-type OpenAICompletionsResponseChoice = Omit<OpenAI.Chat.ChatCompletion.Choice, 'message'> & {
-    message: OpenAICompletionsResponseMessage;
-};
-
-export type OpenAICompletionsResponse = Omit<OpenAI.Chat.ChatCompletion, 'choices' | 'usage'> & {
-    choices: OpenAICompletionsResponseChoice[];
-    usage?: OpenAICompletionsUsage;
+type OpenAIChatCompletionsResponseChoice = Omit<OpenAI.Chat.ChatCompletion.Choice, 'message'> & {
+    message: OpenAIChatCompletionsResponseMessage;
 };
 
-type OpenAICompletionsStreamChoiceDelta = {
+export type OpenAIChatCompletionsResponse = Omit<OpenAI.Chat.ChatCompletion, 'choices' | 'usage'> & {
+    choices: OpenAIChatCompletionsResponseChoice[];
+    usage?: OpenAIChatCompletionsUsage;
+};
+
+type OpenAIChatCompletionsStreamChoiceDelta = {
     role?: string;
-    content?: string | null | OpenAICompletionsContentPart[];
+    content?: string | null | OpenAIChatCompletionsContentPart[];
     reasoning_content?: string | null;
     reasoning?: string | null;
     tool_calls?: Array<{
@@ -93,22 +99,22 @@ type OpenAICompletionsStreamChoiceDelta = {
     }>;
 };
 
-type OpenAICompletionsStreamChoice = Omit<OpenAI.Chat.ChatCompletionChunk.Choice, 'delta'> & {
-    delta: OpenAICompletionsStreamChoiceDelta;
+type OpenAIChatCompletionsStreamChoice = Omit<OpenAI.Chat.ChatCompletionChunk.Choice, 'delta'> & {
+    delta: OpenAIChatCompletionsStreamChoiceDelta;
 };
 
-export type OpenAICompletionsStreamResponse = Omit<OpenAI.Chat.ChatCompletionChunk, 'choices' | 'usage'> & {
-    choices: OpenAICompletionsStreamChoice[];
-    usage?: OpenAICompletionsUsage;
+export type OpenAIChatCompletionsStreamResponse = Omit<OpenAI.Chat.ChatCompletionChunk, 'choices' | 'usage'> & {
+    choices: OpenAIChatCompletionsStreamChoice[];
+    usage?: OpenAIChatCompletionsUsage;
 };
 
-export interface OpenAICompletionsPrompt {
-    messages: OpenAICompletionsMessage[];
+export interface OpenAIChatCompletionsPrompt {
+    messages: OpenAIChatCompletionsMessage[];
     /** Discriminator for drivers that share a `messages` array with other provider prompts. */
-    _is_openai_compat?: true;
+    _is_openai_chat_completions?: true;
 }
 
-export interface OpenAICompletionsModelOptions {
+export interface OpenAIChatCompletionsProtocolOptions {
     /** The model identifier to send in the request body (for example, "zai-org/glm-5-maas"). */
     modelName?: string;
     /** Model API contract default used only when callers do not provide max_tokens. */
@@ -135,19 +141,19 @@ async function streamToString(stream: ReadableAsyncStream): Promise<string> {
     return Buffer.concat(chunks).toString('utf-8');
 }
 
-export function updateOpenAICompletionsConversation(
-    conversation: OpenAICompletionsPrompt | undefined | null,
-    prompt: OpenAICompletionsPrompt,
-): OpenAICompletionsPrompt {
+export function updateOpenAIChatCompletionsConversation(
+    conversation: OpenAIChatCompletionsPrompt | undefined | null,
+    prompt: OpenAIChatCompletionsPrompt,
+): OpenAIChatCompletionsPrompt {
     const baseMessages = conversation ? conversation.messages : [];
     return {
-        _is_openai_compat: true,
+        _is_openai_chat_completions: true,
         messages: [...baseMessages, ...(prompt.messages || [])],
     };
 }
 
-export function parseOpenAICompletionsToolCalls(
-    toolCalls: OpenAICompletionsResponseChoice['message']['tool_calls'],
+export function parseOpenAIChatCompletionsToolCalls(
+    toolCalls: OpenAIChatCompletionsResponseChoice['message']['tool_calls'],
 ): ToolUse[] | undefined {
     if (!toolCalls || toolCalls.length === 0) {
         return undefined;
@@ -171,35 +177,56 @@ function safeJsonParse(value: string | undefined): JSONObject {
     }
 }
 
-export function stripOpenAICompletionsThinkBlocks(value: string): string {
+function mapOpenAIChatCompletionsUsage(usage?: OpenAIChatCompletionsUsage | null): ExecutionTokenUsage | undefined {
+    if (!usage) {
+        return undefined;
+    }
+    return {
+        prompt: usage.prompt_tokens,
+        result: usage.completion_tokens,
+        total: usage.total_tokens,
+    };
+}
+
+function normalizeOpenAIChatCompletionsFinishReason(
+    reason: string | null | undefined,
+    hasToolUse: boolean = false,
+): string | undefined {
+    if (hasToolUse || reason === 'tool_calls' || reason === 'function_call') {
+        return 'tool_use';
+    }
+    return reason || undefined;
+}
+
+export function stripOpenAIChatCompletionsThinkBlocks(value: string): string {
     return value.replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, '').trim();
 }
 
-export function stripOpenAICompletionsThinkBlocksFromCompletion(completion: Completion): Completion {
+export function stripOpenAIChatCompletionsThinkBlocksFromCompletion(completion: Completion): Completion {
     completion.result = completion.result.map((result): CompletionResult => {
         if (result.type === 'text') {
-            return { ...result, value: stripOpenAICompletionsThinkBlocks(result.value) };
+            return { ...result, value: stripOpenAIChatCompletionsThinkBlocks(result.value) };
         }
         if (result.type === 'json' && typeof result.value === 'string') {
-            return { ...result, value: stripOpenAICompletionsThinkBlocks(result.value) };
+            return { ...result, value: stripOpenAIChatCompletionsThinkBlocks(result.value) };
         }
         return result;
     });
 
-    const conversation = completion.conversation as OpenAICompletionsPrompt | undefined;
-    if (conversation?._is_openai_compat && Array.isArray(conversation.messages)) {
+    const conversation = completion.conversation as OpenAIChatCompletionsPrompt | undefined;
+    if (conversation?._is_openai_chat_completions && Array.isArray(conversation.messages)) {
         completion.conversation = {
             ...conversation,
             messages: conversation.messages.map((message) => {
                 if (typeof message.content === 'string') {
-                    return { ...message, content: stripOpenAICompletionsThinkBlocks(message.content) };
+                    return { ...message, content: stripOpenAIChatCompletionsThinkBlocks(message.content) };
                 }
                 if (Array.isArray(message.content)) {
                     return {
                         ...message,
                         content: message.content.map((part) =>
                             part.type === 'text'
-                                ? { ...part, text: stripOpenAICompletionsThinkBlocks(part.text) }
+                                ? { ...part, text: stripOpenAIChatCompletionsThinkBlocks(part.text) }
                                 : part,
                         ),
                     };
@@ -212,17 +239,17 @@ export function stripOpenAICompletionsThinkBlocksFromCompletion(completion: Comp
     return completion;
 }
 
-export function extractOpenAICompletionsText(
+export function extractOpenAIChatCompletionsText(
     source:
-        | Pick<OpenAICompletionsResponseChoice['message'], 'content' | 'reasoning_content' | 'reasoning'>
-        | Pick<OpenAICompletionsStreamChoiceDelta, 'content' | 'reasoning_content' | 'reasoning'>
+        | Pick<OpenAIChatCompletionsResponseChoice['message'], 'content' | 'reasoning_content' | 'reasoning'>
+        | Pick<OpenAIChatCompletionsStreamChoiceDelta, 'content' | 'reasoning_content' | 'reasoning'>
         | undefined,
     includeThoughts: boolean,
 ): string {
     if (!source) return '';
 
-    const content = extractOpenAICompletionsContentText(source.content);
-    const reasoning = extractOpenAICompletionsReasoningText(source);
+    const content = stripOpenAIChatCompletionsThinkBlocks(extractOpenAIChatCompletionsContentText(source.content));
+    const reasoning = extractOpenAIChatCompletionsReasoningText(source);
 
     if (includeThoughts && reasoning) {
         return content ? `${reasoning}\n\n${content}` : reasoning;
@@ -230,14 +257,15 @@ export function extractOpenAICompletionsText(
 
     // Some OpenAI-compatible model servers can emit thinking-only chunks or messages
     // using reasoning_content/reasoning. Use those fields only as a fallback so normal
-    // assistant content remains the visible output whenever it exists.
-    return stripOpenAICompletionsThinkBlocks(content || reasoning);
+    // assistant content remains the visible output whenever it exists after provider
+    // <think>...</think> blocks and whitespace-only output are removed.
+    return content || stripOpenAIChatCompletionsThinkBlocks(reasoning);
 }
 
-export function extractOpenAICompletionsReasoningText(
+export function extractOpenAIChatCompletionsReasoningText(
     source:
-        | Pick<OpenAICompletionsResponseChoice['message'], 'reasoning_content' | 'reasoning'>
-        | Pick<OpenAICompletionsStreamChoiceDelta, 'reasoning_content' | 'reasoning'>
+        | Pick<OpenAIChatCompletionsResponseChoice['message'], 'reasoning_content' | 'reasoning'>
+        | Pick<OpenAIChatCompletionsStreamChoiceDelta, 'reasoning_content' | 'reasoning'>
         | undefined,
 ): string {
     if (!source) return '';
@@ -246,40 +274,53 @@ export function extractOpenAICompletionsReasoningText(
         .join('');
 }
 
-export function extractOpenAICompletionsContentText(
-    content: string | null | OpenAICompletionsContentPart[] | undefined,
+export function extractOpenAIChatCompletionsContentText(
+    content: string | null | OpenAIChatCompletionsContentPart[] | undefined,
 ): string {
     if (typeof content === 'string') return content;
     if (!Array.isArray(content)) return '';
 
     return content
-        .filter((part): part is OpenAICompletionsTextPart => part.type === 'text' && typeof part.text === 'string')
+        .filter((part): part is OpenAIChatCompletionsTextPart => part.type === 'text' && typeof part.text === 'string')
         .map((part) => part.text)
         .join('\n');
 }
 
-export function convertToolsToOpenAICompletionsFormat(
+export function convertToolsToOpenAIChatCompletionsFormat(
     tools: ToolDefinition[] | undefined,
-): OpenAICompletionsToolDefinition[] | undefined {
+): OpenAIChatCompletionsToolDefinition[] | undefined {
     if (!tools || tools.length === 0) {
         return undefined;
     }
 
-    return tools.map((tool) => ({
-        type: 'function',
-        function: {
-            name: tool.name,
-            description: tool.description,
-            parameters: tool.input_schema ?? {},
-        },
-    }));
+    return tools.map((tool) => {
+        let parameters: JSONSchema | undefined;
+        let strict: boolean | undefined;
+        if (tool.input_schema) {
+            // Reuse the same schema normalization as the OpenAI Responses path:
+            // strict mode when possible, limited non-strict schema otherwise.
+            const formattedSchema = formatOpenAISchema(tool.input_schema as JSONSchema);
+            parameters = formattedSchema.schema;
+            strict = formattedSchema.strict;
+        }
+
+        return {
+            type: 'function',
+            function: {
+                name: tool.name,
+                description: tool.description,
+                parameters: parameters ?? {},
+                ...(strict !== undefined ? { strict } : {}),
+            },
+        };
+    });
 }
 
-export function convertToOpenAICompletionsMessages(
-    messages: OpenAICompletionsMessage[],
-): OpenAICompletionsRequestMessage[] {
+export function convertToOpenAIChatCompletionsMessages(
+    messages: OpenAIChatCompletionsMessage[],
+): OpenAIChatCompletionsRequestMessage[] {
     return messages.map((msg) => {
-        const result: OpenAICompletionsRequestMessage = {
+        const result: OpenAIChatCompletionsRequestMessage = {
             role: msg.role,
         };
 
@@ -298,7 +339,7 @@ export function convertToOpenAICompletionsMessages(
 
         if (Array.isArray(msg.content)) {
             const textParts: string[] = [];
-            const imageUrls: OpenAICompletionsImageUrlPart['image_url'][] = [];
+            const imageUrls: OpenAIChatCompletionsImageUrlPart['image_url'][] = [];
 
             for (const part of msg.content) {
                 if (part.type === 'text') {
@@ -308,7 +349,7 @@ export function convertToOpenAICompletionsMessages(
                 }
             }
 
-            const content: OpenAICompletionsContentPart[] = [];
+            const content: OpenAIChatCompletionsContentPart[] = [];
             if (textParts.length > 0) {
                 content.push({ type: 'text', text: textParts.join('\n') });
             }
@@ -331,12 +372,12 @@ export function convertToOpenAICompletionsMessages(
     });
 }
 
-export function buildOpenAICompletionsStreamingConversation(
-    prompt: OpenAICompletionsPrompt,
+export function buildOpenAIChatCompletionsStreamingConversation(
+    prompt: OpenAIChatCompletionsPrompt,
     result: unknown[],
     toolUse: unknown[] | undefined,
     options: ExecutionOptions,
-): OpenAICompletionsPrompt {
+): OpenAIChatCompletionsPrompt {
     const completionResults = result as CompletionResult[];
     const textContent = completionResults
         .map((r) => {
@@ -351,9 +392,9 @@ export function buildOpenAICompletionsStreamingConversation(
         })
         .join('');
 
-    const assistantMessage: OpenAICompletionsMessage = { role: 'assistant' };
+    const assistantMessage: OpenAIChatCompletionsMessage = { role: 'assistant' };
     if (textContent) {
-        assistantMessage.content = stripOpenAICompletionsThinkBlocks(textContent);
+        assistantMessage.content = stripOpenAIChatCompletionsThinkBlocks(textContent);
     } else if (toolUse && toolUse.length > 0) {
         assistantMessage.content = null;
     } else {
@@ -371,14 +412,21 @@ export function buildOpenAICompletionsStreamingConversation(
         }));
     }
 
-    const existingMessages = (options.conversation as OpenAICompletionsPrompt | undefined)?.messages;
+    const existingMessages = (options.conversation as OpenAIChatCompletionsPrompt | undefined)?.messages;
     const priorMessages = Array.isArray(existingMessages) ? existingMessages : [];
-    let conversation: OpenAICompletionsPrompt = {
-        _is_openai_compat: true,
+    const conversation: OpenAIChatCompletionsPrompt = {
+        _is_openai_chat_completions: true,
         messages: [...priorMessages, ...prompt.messages, assistantMessage],
     };
 
-    conversation = incrementConversationTurn(conversation) as OpenAICompletionsPrompt;
+    return finalizeOpenAIChatCompletionsConversation(conversation, options);
+}
+
+function finalizeOpenAIChatCompletionsConversation(
+    conversation: OpenAIChatCompletionsPrompt,
+    options: ExecutionOptions,
+): OpenAIChatCompletionsPrompt {
+    conversation = incrementConversationTurn(conversation) as OpenAIChatCompletionsPrompt;
     const currentTurn = getConversationMeta(conversation).turnNumber;
     const stripOptions = {
         keepForTurns: options.stripImagesAfterTurns ?? Infinity,
@@ -388,23 +436,23 @@ export function buildOpenAICompletionsStreamingConversation(
     let processedConversation = stripBase64ImagesFromConversation(
         conversation,
         stripOptions,
-    ) as OpenAICompletionsPrompt;
+    ) as OpenAIChatCompletionsPrompt;
     processedConversation = truncateLargeTextInConversation(
         processedConversation,
         stripOptions,
-    ) as OpenAICompletionsPrompt;
+    ) as OpenAIChatCompletionsPrompt;
     processedConversation = stripHeartbeatsFromConversation(processedConversation, {
         keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
         currentTurn,
-    }) as OpenAICompletionsPrompt;
+    }) as OpenAIChatCompletionsPrompt;
 
     return processedConversation;
 }
 
-export abstract class OpenAICompletionsModelDefinitionBase<DriverT> {
-    protected readonly options: OpenAICompletionsModelOptions;
+export abstract class OpenAIChatCompletionsProtocol<DriverT> {
+    protected readonly options: OpenAIChatCompletionsProtocolOptions;
 
-    constructor(options: OpenAICompletionsModelOptions) {
+    constructor(options: OpenAIChatCompletionsProtocolOptions) {
         this.options = options;
     }
 
@@ -412,8 +460,8 @@ export abstract class OpenAICompletionsModelDefinitionBase<DriverT> {
         _driver: DriverT,
         segments: PromptSegment[],
         _options: PromptOptions,
-    ): Promise<OpenAICompletionsPrompt> {
-        const messages: OpenAICompletionsMessage[] = [];
+    ): Promise<OpenAIChatCompletionsPrompt> {
+        const messages: OpenAIChatCompletionsMessage[] = [];
 
         let systemContent = '';
         for (const segment of segments) {
@@ -443,7 +491,7 @@ export abstract class OpenAICompletionsModelDefinitionBase<DriverT> {
                     throw new Error('Tool prompt segment must have a tool_use_id to reference the original tool call');
                 }
 
-                const content: OpenAICompletionsContentPart[] = [];
+                const content: OpenAIChatCompletionsContentPart[] = [];
 
                 if (segment.content) {
                     content.push({ type: 'text', text: segment.content });
@@ -471,17 +519,17 @@ export abstract class OpenAICompletionsModelDefinitionBase<DriverT> {
                     }
                 }
 
-                const toolMessage: OpenAICompletionsMessage = {
+                const toolMessage: OpenAIChatCompletionsMessage = {
                     role: 'tool',
                     tool_call_id: segment.tool_use_id,
                     content: content.length === 1 && content[0]?.type === 'text' ? content[0].text : content,
                 };
                 messages.push(toolMessage);
             } else {
-                let content: string | OpenAICompletionsContentPart[] = segment.content || '';
+                let content: string | OpenAIChatCompletionsContentPart[] = segment.content || '';
 
                 if (segment.files && segment.files.length > 0) {
-                    const parts: OpenAICompletionsContentPart[] = [];
+                    const parts: OpenAIChatCompletionsContentPart[] = [];
 
                     if (content && typeof content === 'string' && content.trim()) {
                         parts.push({ type: 'text', text: content });
@@ -519,17 +567,20 @@ export abstract class OpenAICompletionsModelDefinitionBase<DriverT> {
         }
 
         return {
-            _is_openai_compat: true,
+            _is_openai_chat_completions: true,
             messages,
         };
     }
 
     async requestTextCompletion(
         driver: DriverT,
-        prompt: OpenAICompletionsPrompt,
+        prompt: OpenAIChatCompletionsPrompt,
         options: ExecutionOptions,
     ): Promise<Completion> {
-        let conversation = updateOpenAICompletionsConversation(options.conversation as OpenAICompletionsPrompt, prompt);
+        let conversation = updateOpenAIChatCompletionsConversation(
+            options.conversation as OpenAIChatCompletionsPrompt,
+            prompt,
+        );
         const includeThoughts = (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })
             ?.include_thoughts;
         const payload = this.buildPayload(conversation, options, false);
@@ -537,10 +588,12 @@ export abstract class OpenAICompletionsModelDefinitionBase<DriverT> {
 
         const choice = result?.choices?.[0];
         const message = choice?.message;
-        const text = stripOpenAICompletionsThinkBlocks(extractOpenAICompletionsText(message, includeThoughts ?? false));
-        const tool_use = parseOpenAICompletionsToolCalls(message?.tool_calls);
+        const text = stripOpenAIChatCompletionsThinkBlocks(
+            extractOpenAIChatCompletionsText(message, includeThoughts ?? false),
+        );
+        const tool_use = parseOpenAIChatCompletionsToolCalls(message?.tool_calls);
 
-        const assistantMessage: OpenAICompletionsMessage = {
+        const assistantMessage: OpenAIChatCompletionsMessage = {
             role: 'assistant',
             content: text || null,
         };
@@ -556,21 +609,16 @@ export abstract class OpenAICompletionsModelDefinitionBase<DriverT> {
             }));
         }
 
-        conversation = updateOpenAICompletionsConversation(conversation, {
+        conversation = updateOpenAIChatCompletionsConversation(conversation, {
             messages: [assistantMessage],
         });
+        conversation = finalizeOpenAIChatCompletionsConversation(conversation, options);
 
         return {
             result: text ? [{ type: 'text', value: text }] : [{ type: 'text', value: '' }],
             tool_use,
-            token_usage: result.usage
-                ? {
-                      prompt: result.usage.prompt_tokens,
-                      result: result.usage.completion_tokens,
-                      total: result.usage.total_tokens,
-                  }
-                : undefined,
-            finish_reason: choice?.finish_reason || undefined,
+            token_usage: mapOpenAIChatCompletionsUsage(result.usage),
+            finish_reason: normalizeOpenAIChatCompletionsFinishReason(choice?.finish_reason, !!tool_use?.length),
             original_response: options.include_original_response ? result : undefined,
             conversation,
         };
@@ -578,11 +626,11 @@ export abstract class OpenAICompletionsModelDefinitionBase<DriverT> {
 
     async requestTextCompletionStream(
         driver: DriverT,
-        prompt: OpenAICompletionsPrompt,
+        prompt: OpenAIChatCompletionsPrompt,
         options: ExecutionOptions,
     ): Promise<AsyncIterable<CompletionChunkObject>> {
-        const conversation = updateOpenAICompletionsConversation(
-            options.conversation as OpenAICompletionsPrompt,
+        const conversation = updateOpenAIChatCompletionsConversation(
+            options.conversation as OpenAIChatCompletionsPrompt,
             prompt,
         );
         const includeThoughts = (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })
@@ -594,7 +642,7 @@ export abstract class OpenAICompletionsModelDefinitionBase<DriverT> {
         let reasoningFallback = '';
 
         return transformSSEStream(responseStream, (data: string) => {
-            const json = JSON.parse(data) as OpenAICompletionsStreamResponse;
+            const json = JSON.parse(data) as OpenAIChatCompletionsStreamResponse;
             const choice = json.choices?.[0];
             const delta = choice?.delta;
 
@@ -617,42 +665,47 @@ export abstract class OpenAICompletionsModelDefinitionBase<DriverT> {
                 return {
                     result: [],
                     tool_use: toolUseChunks,
+                    finish_reason: choice?.finish_reason
+                        ? normalizeOpenAIChatCompletionsFinishReason(choice.finish_reason, toolUseChunks.length > 0)
+                        : undefined,
+                    token_usage: mapOpenAIChatCompletionsUsage(json.usage),
                 } satisfies CompletionChunkObject;
             }
 
-            const content = extractOpenAICompletionsContentText(delta?.content);
-            const reasoning = extractOpenAICompletionsReasoningText(delta);
-            if (content) {
+            const content = extractOpenAIChatCompletionsContentText(delta?.content);
+            const reasoning = extractOpenAIChatCompletionsReasoningText(delta);
+            const visibleContent = stripOpenAIChatCompletionsThinkBlocks(content);
+            if (visibleContent) {
                 emittedContent = true;
             } else if (reasoning) {
                 reasoningFallback += reasoning;
             }
 
             const text = includeThoughts ? reasoning + content : content;
-            const fallbackText = !includeThoughts && choice?.finish_reason && !emittedContent ? reasoningFallback : '';
+            // Streaming can expose provider <think> blocks while the stream is in flight.
+            // They are stripped from the final accumulated Completion in validateResult();
+            // for fallback purposes they do not count as normal content.
+            const fallbackText =
+                !includeThoughts && choice?.finish_reason && !emittedContent
+                    ? stripOpenAIChatCompletionsThinkBlocks(reasoningFallback)
+                    : '';
             return {
-                result: text || fallbackText ? [{ type: 'text', value: text || fallbackText }] : [],
-                finish_reason: choice?.finish_reason || undefined,
-                token_usage: json.usage
-                    ? {
-                          prompt: json.usage.prompt_tokens,
-                          result: json.usage.completion_tokens,
-                          total: json.usage.total_tokens,
-                      }
-                    : undefined,
+                result: text || fallbackText ? [{ type: 'text', value: fallbackText || text }] : [],
+                finish_reason: normalizeOpenAIChatCompletionsFinishReason(choice?.finish_reason),
+                token_usage: mapOpenAIChatCompletionsUsage(json.usage),
             } satisfies CompletionChunkObject;
         });
     }
 
     protected buildPayload(
-        conversation: OpenAICompletionsPrompt,
+        conversation: OpenAIChatCompletionsPrompt,
         options: ExecutionOptions,
         stream: boolean,
-    ): OpenAICompletionsPayload {
+    ): OpenAIChatCompletionsPayload {
         const modelOptions = options.model_options as TextFallbackOptions;
-        const payload: OpenAICompletionsPayload = {
+        const payload: OpenAIChatCompletionsPayload = {
             model: this.getModelName(options),
-            messages: convertToOpenAICompletionsMessages(conversation.messages),
+            messages: convertToOpenAIChatCompletionsMessages(conversation.messages),
             // Some OpenAI-compatible providers return empty/truncated completions unless a
             // documented or runtime-validated token budget is supplied. Caller options still win.
             max_tokens: modelOptions?.max_tokens ?? this.options.defaultMaxTokens,
@@ -667,15 +720,16 @@ export abstract class OpenAICompletionsModelDefinitionBase<DriverT> {
             payload.extra_body = this.options.extraBody;
         }
 
-        const toolsPayload = convertToolsToOpenAICompletionsFormat(options.tools);
+        const toolsPayload = convertToolsToOpenAIChatCompletionsFormat(options.tools);
         if (toolsPayload && toolsPayload.length > 0) {
             payload.tools = toolsPayload;
         }
 
         if (options.result_schema && this.options.resultSchemaMode !== 'prompt') {
+            const formattedSchema = formatOpenAISchema(options.result_schema as JSONSchema);
             payload.response_format = {
                 type: 'json_schema',
-                json_schema: { name: 'output', strict: false, schema: options.result_schema },
+                json_schema: { name: 'output', strict: formattedSchema.strict, schema: formattedSchema.schema },
             };
         }
 
@@ -688,26 +742,26 @@ export abstract class OpenAICompletionsModelDefinitionBase<DriverT> {
 
     protected abstract postChatCompletion(
         driver: DriverT,
-        payload: OpenAICompletionsPayload,
-    ): Promise<OpenAICompletionsResponse>;
+        payload: OpenAIChatCompletionsPayload,
+    ): Promise<OpenAIChatCompletionsResponse>;
 
     protected abstract postChatCompletionStream(
         driver: DriverT,
-        payload: OpenAICompletionsPayload,
+        payload: OpenAIChatCompletionsPayload,
     ): Promise<ReadableStream>;
 }
 
 export interface OpenAIChatCompletionsDriverOptions extends DriverOptions {
     defaultMaxTokens?: number;
     extraBody?: Record<string, unknown>;
-    resultSchemaMode?: OpenAICompletionsModelOptions['resultSchemaMode'];
+    resultSchemaMode?: OpenAIChatCompletionsProtocolOptions['resultSchemaMode'];
 }
 
-type OpenAIChatCompletionsDriver = AbstractDriver<OpenAIChatCompletionsDriverOptions, OpenAICompletionsPrompt> & {
+type OpenAIChatCompletionsDriver = AbstractDriver<OpenAIChatCompletionsDriverOptions, OpenAIChatCompletionsPrompt> & {
     service: OpenAI;
 };
 
-function sdkStreamToSSEStream(stream: AsyncIterable<OpenAICompletionsStreamResponse>): ReadableStream {
+function sdkStreamToSSEStream(stream: AsyncIterable<OpenAIChatCompletionsStreamResponse>): ReadableStream {
     return new ReadableStream({
         async start(controller) {
             try {
@@ -722,41 +776,41 @@ function sdkStreamToSSEStream(stream: AsyncIterable<OpenAICompletionsStreamRespo
     });
 }
 
-class OpenAISDKChatCompletionsModelDefinition extends OpenAICompletionsModelDefinitionBase<OpenAIChatCompletionsDriver> {
+class OpenAISDKChatCompletionsProtocol extends OpenAIChatCompletionsProtocol<OpenAIChatCompletionsDriver> {
     protected async postChatCompletion(
         driver: OpenAIChatCompletionsDriver,
-        payload: OpenAICompletionsPayload,
-    ): Promise<OpenAICompletionsResponse> {
+        payload: OpenAIChatCompletionsPayload,
+    ): Promise<OpenAIChatCompletionsResponse> {
         const { extra_body: _extraBody, ...body } = payload;
         return (await driver.service.chat.completions.create(
             body as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming,
-        )) as OpenAICompletionsResponse;
+        )) as OpenAIChatCompletionsResponse;
     }
 
     protected async postChatCompletionStream(
         driver: OpenAIChatCompletionsDriver,
-        payload: OpenAICompletionsPayload,
+        payload: OpenAIChatCompletionsPayload,
     ): Promise<ReadableStream> {
         const { extra_body: _extraBody, ...body } = payload;
         const stream = (await driver.service.chat.completions.create({
             ...body,
             stream: true,
             stream_options: { include_usage: true },
-        } as OpenAI.Chat.ChatCompletionCreateParamsStreaming)) as unknown as AsyncIterable<OpenAICompletionsStreamResponse>;
+        } as OpenAI.Chat.ChatCompletionCreateParamsStreaming)) as unknown as AsyncIterable<OpenAIChatCompletionsStreamResponse>;
         return sdkStreamToSSEStream(stream);
     }
 }
 
 export abstract class OpenAIChatCompletionsDriverBase<
     OptionsT extends OpenAIChatCompletionsDriverOptions = OpenAIChatCompletionsDriverOptions,
-> extends AbstractDriver<OptionsT, OpenAICompletionsPrompt> {
+> extends AbstractDriver<OptionsT, OpenAIChatCompletionsPrompt> {
     abstract service: OpenAI;
 
-    private readonly completionsModel: OpenAISDKChatCompletionsModelDefinition;
+    private readonly chatCompletionsProtocol: OpenAISDKChatCompletionsProtocol;
 
     constructor(options: OptionsT) {
         super(options);
-        this.completionsModel = new OpenAISDKChatCompletionsModelDefinition({
+        this.chatCompletionsProtocol = new OpenAISDKChatCompletionsProtocol({
             defaultMaxTokens: options.defaultMaxTokens,
             extraBody: options.extraBody,
             resultSchemaMode: options.resultSchemaMode,
@@ -766,31 +820,31 @@ export abstract class OpenAIChatCompletionsDriverBase<
     protected async formatPrompt(
         segments: PromptSegment[],
         options: ExecutionOptions,
-    ): Promise<OpenAICompletionsPrompt> {
-        return this.completionsModel.createPrompt(this, segments, options);
+    ): Promise<OpenAIChatCompletionsPrompt> {
+        return this.chatCompletionsProtocol.createPrompt(this, segments, options);
     }
 
-    requestTextCompletion(prompt: OpenAICompletionsPrompt, options: ExecutionOptions): Promise<Completion> {
-        return this.completionsModel.requestTextCompletion(this, prompt, options);
+    requestTextCompletion(prompt: OpenAIChatCompletionsPrompt, options: ExecutionOptions): Promise<Completion> {
+        return this.chatCompletionsProtocol.requestTextCompletion(this, prompt, options);
     }
 
     requestTextCompletionStream(
-        prompt: OpenAICompletionsPrompt,
+        prompt: OpenAIChatCompletionsPrompt,
         options: ExecutionOptions,
     ): Promise<AsyncIterable<CompletionChunkObject>> {
-        return this.completionsModel.requestTextCompletionStream(this, prompt, options);
+        return this.chatCompletionsProtocol.requestTextCompletionStream(this, prompt, options);
     }
 
     buildStreamingConversation(
-        prompt: OpenAICompletionsPrompt,
+        prompt: OpenAIChatCompletionsPrompt,
         result: unknown[],
         toolUse: unknown[] | undefined,
         options: ExecutionOptions,
-    ): OpenAICompletionsPrompt {
-        return buildOpenAICompletionsStreamingConversation(prompt, result, toolUse, options);
+    ): OpenAIChatCompletionsPrompt {
+        return buildOpenAIChatCompletionsStreamingConversation(prompt, result, toolUse, options);
     }
 
     validateResult(result: Completion, options: ExecutionOptions) {
-        super.validateResult(stripOpenAICompletionsThinkBlocksFromCompletion(result), options);
+        super.validateResult(stripOpenAIChatCompletionsThinkBlocksFromCompletion(result), options);
     }
 }
