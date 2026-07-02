@@ -55,7 +55,7 @@ import {
     RateLimitError,
     UnprocessableEntityError,
 } from 'openai/error';
-import { formatOpenAILikeMultimodalPrompt } from './openai_format.js';
+import { convertResponseItemsToChatMessages, formatOpenAILikeMultimodalPrompt } from './openai_format.js';
 
 // Response API types
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
@@ -140,6 +140,20 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
         this.formatPrompt = formatOpenAILikeMultimodalPrompt;
     }
 
+    /**
+     * Whether requests must be sent via the OpenAI *Chat Completions* API (`/v1/chat/completions`)
+     * instead of the newer *Responses* API (`/v1/responses`).
+     *
+     * The default (`false`) uses the Responses API, matching OpenAI/Azure. Providers whose
+     * OpenAI-compatible surface only implements Chat Completions (e.g. TogetherAI) override this to
+     * `true`. When enabled, the request methods convert the `ResponseInputItem[]` conversation to
+     * Chat Completions messages (images become `image_url`) and call `chat.completions.create`.
+     * All shared conversation/stripping/tool-call handling is unchanged.
+     */
+    protected useChatCompletionsApi(): boolean {
+        return false;
+    }
+
     extractDataFromResponse(_options: ExecutionOptions, result: OpenAI.Responses.Response): Completion {
         const tokenInfo = mapUsage(result.usage);
 
@@ -206,6 +220,23 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
         const isReasoningModel = isOpenAIReasoningModel(options.model);
         const effort = openAIReasoningEffort(options.model, model_options?.effort ?? model_options?.reasoning_effort);
         const reasoning = effort ? { effort } : undefined;
+
+        // Chat Completions API path (providers without the Responses API, e.g. TogetherAI).
+        // The result_schema instruction is already injected into the prompt by
+        // formatOpenAILikeMultimodalPrompt, so no response_format is required here.
+        if (this.useChatCompletionsApi()) {
+            const chatStream = await this.service.chat.completions.create({
+                stream: true,
+                model: options.model,
+                messages: convertResponseItemsToChatMessages(conversation),
+                temperature: isReasoningModel ? undefined : model_options?.temperature,
+                top_p: isReasoningModel ? undefined : model_options?.top_p,
+                max_tokens: model_options?.max_tokens,
+                tools: useTools ? getChatCompletionsToolDefinitions(options.tools) : undefined,
+                stream_options: { include_usage: true },
+            });
+            return mapChatCompletionStream(chatStream);
+        }
 
         const stream = await this.service.responses.create({
             stream: true,
@@ -274,30 +305,51 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
         const effort = openAIReasoningEffort(options.model, model_options?.effort ?? model_options?.reasoning_effort);
         const reasoning = effort ? { effort } : undefined;
 
-        const res = await this.service.responses.create({
-            stream: false,
-            model: options.model,
-            input: conversation,
-            reasoning,
-            temperature: isReasoningModel ? undefined : model_options?.temperature,
-            top_p: isReasoningModel ? undefined : model_options?.top_p,
-            max_output_tokens: model_options?.max_tokens, //TODO: use max_tokens for older models, currently relying on OpenAI to handle it
-            tools: useTools ? toolDefs : undefined,
-            text: parsedSchema
-                ? {
-                      format: {
-                          type: 'json_schema',
-                          name: 'format_output',
-                          schema: parsedSchema,
-                          strict: strictMode,
-                      },
-                  }
-                : undefined,
-        });
+        let completion: Completion;
 
-        const completion = this.extractDataFromResponse(options, res);
-        if (options.include_original_response) {
-            completion.original_response = res;
+        // Chat Completions API path (providers without the Responses API, e.g. TogetherAI).
+        // The result_schema instruction is already injected into the prompt by
+        // formatOpenAILikeMultimodalPrompt, so no response_format is required here.
+        if (this.useChatCompletionsApi()) {
+            const res = await this.service.chat.completions.create({
+                stream: false,
+                model: options.model,
+                messages: convertResponseItemsToChatMessages(conversation),
+                temperature: isReasoningModel ? undefined : model_options?.temperature,
+                top_p: isReasoningModel ? undefined : model_options?.top_p,
+                max_tokens: model_options?.max_tokens,
+                tools: useTools ? getChatCompletionsToolDefinitions(options.tools) : undefined,
+            });
+            completion = extractDataFromChatCompletion(res);
+            if (options.include_original_response) {
+                completion.original_response = res;
+            }
+        } else {
+            const res = await this.service.responses.create({
+                stream: false,
+                model: options.model,
+                input: conversation,
+                reasoning,
+                temperature: isReasoningModel ? undefined : model_options?.temperature,
+                top_p: isReasoningModel ? undefined : model_options?.top_p,
+                max_output_tokens: model_options?.max_tokens, //TODO: use max_tokens for older models, currently relying on OpenAI to handle it
+                tools: useTools ? toolDefs : undefined,
+                text: parsedSchema
+                    ? {
+                          format: {
+                              type: 'json_schema',
+                              name: 'format_output',
+                              schema: parsedSchema,
+                              strict: strictMode,
+                          },
+                      }
+                    : undefined,
+            });
+
+            completion = this.extractDataFromResponse(options, res);
+            if (options.include_original_response) {
+                completion.original_response = res;
+            }
         }
 
         conversation = updateConversation(conversation, createAssistantMessageFromCompletion(completion));
@@ -1047,6 +1099,163 @@ export function mapResponseStream(
                         result: [],
                         finish_reason: responseFinishReason(event.response, finalTools),
                         token_usage: mapUsage(event.response.usage),
+                    } satisfies CompletionChunkObject;
+                }
+            }
+        },
+    };
+}
+
+// ========= Chat Completions API helpers =========
+// Used by OpenAI-compatible providers that only implement /v1/chat/completions and lack the
+// Responses API (e.g. TogetherAI). See BaseOpenAIDriver.useChatCompletionsApi().
+
+type ChatCompletionUsage = {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    prompt_tokens_details?: { cached_tokens?: number | null } | null;
+};
+
+function getChatCompletionsToolDefinitions(
+    tools: ToolDefinition[] | undefined | null,
+): OpenAI.Chat.Completions.ChatCompletionTool[] | undefined {
+    if (!tools || tools.length === 0) {
+        return undefined;
+    }
+    return tools.map(getChatCompletionToolDefinition);
+}
+
+function getChatCompletionToolDefinition(toolDef: ToolDefinition): OpenAI.Chat.Completions.ChatCompletionFunctionTool {
+    let parsedSchema: JSONSchema | undefined;
+    let strictMode = false;
+    if (toolDef.input_schema) {
+        try {
+            parsedSchema = openAISchemaFormat(toolDef.input_schema as JSONSchema);
+            strictMode = true;
+        } catch {
+            parsedSchema = limitedSchemaFormat(toolDef.input_schema as JSONSchema);
+            strictMode = false;
+        }
+    }
+
+    return {
+        type: 'function',
+        function: {
+            name: toolDef.name,
+            description: toolDef.description,
+            parameters: parsedSchema ?? undefined,
+            strict: strictMode,
+        },
+    };
+}
+
+function extractChatCompletionToolUse(
+    message: OpenAI.Chat.Completions.ChatCompletionMessage | undefined,
+): ToolUse<unknown>[] | undefined {
+    const toolCalls = message?.tool_calls;
+    if (!toolCalls || toolCalls.length === 0) {
+        return undefined;
+    }
+    const tools: ToolUse<unknown>[] = [];
+    for (const toolCall of toolCalls) {
+        if (toolCall.type !== 'function') {
+            continue;
+        }
+        tools.push({
+            id: toolCall.id,
+            tool_name: toolCall.function.name,
+            tool_input: safeJsonParse(toolCall.function.arguments),
+        });
+    }
+    return tools.length > 0 ? tools : undefined;
+}
+
+function mapChatUsage(usage?: ChatCompletionUsage | null): ExecutionTokenUsage | undefined {
+    if (!usage) {
+        return undefined;
+    }
+    const cachedTokens = usage.prompt_tokens_details?.cached_tokens;
+    return {
+        prompt: usage.prompt_tokens,
+        result: usage.completion_tokens,
+        total: usage.total_tokens,
+        prompt_cached: cachedTokens ?? undefined,
+        prompt_new: usage.prompt_tokens - (cachedTokens ?? 0),
+    };
+}
+
+function chatCompletionFinishReason(reason: string | null | undefined): string | undefined {
+    if (reason === 'tool_calls' || reason === 'function_call') {
+        return 'tool_use';
+    }
+    return reason ?? 'stop';
+}
+
+function extractDataFromChatCompletion(result: OpenAI.Chat.Completions.ChatCompletion): Completion {
+    const choice = result.choices?.[0];
+    const message = choice?.message;
+    const rawContent = message?.content;
+    const text = typeof rawContent === 'string' ? rawContent : '';
+    const tools = extractChatCompletionToolUse(message);
+
+    return {
+        result: textToCompletionResult(text),
+        token_usage: mapChatUsage(result.usage),
+        finish_reason: tools && tools.length > 0 ? 'tool_use' : chatCompletionFinishReason(choice?.finish_reason),
+        tool_use: tools,
+    };
+}
+
+/**
+ * Map a Chat Completions stream to Llumiverse CompletionChunkObjects.
+ *
+ * Tool-call deltas are keyed by their array `index` (the tool call `id` and `name` only arrive on
+ * the first delta; `arguments` stream as string fragments). A stable synthetic id (`tool_<index>`)
+ * lets the shared stream accumulator concatenate arguments and restore the real id at the end,
+ * mirroring the Responses-API streaming path.
+ */
+export function mapChatCompletionStream(
+    stream: AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk>,
+): AsyncIterable<CompletionChunkObject> {
+    return {
+        async *[Symbol.asyncIterator]() {
+            for await (const chunk of stream) {
+                const choice = chunk.choices?.[0];
+
+                if (choice?.delta?.tool_calls) {
+                    for (const toolCall of choice.delta.tool_calls) {
+                        const syntheticId = `tool_${toolCall.index}`;
+                        const toolUse: ToolUse<unknown> & { _actual_id?: string } = {
+                            id: syntheticId,
+                            _actual_id: toolCall.id,
+                            tool_name: toolCall.function?.name ?? '',
+                            tool_input: toolCall.function?.arguments ?? '',
+                        };
+                        yield {
+                            result: [],
+                            tool_use: [toolUse],
+                        } satisfies CompletionChunkObject;
+                    }
+                }
+
+                const deltaText = choice?.delta?.content;
+                if (deltaText) {
+                    yield {
+                        result: textToCompletionResult(deltaText),
+                    } satisfies CompletionChunkObject;
+                }
+
+                if (choice?.finish_reason || chunk.usage) {
+                    // A usage-only trailing chunk (choices=[] when stream_options.include_usage) has no
+                    // finish_reason; leave it undefined so the accumulator keeps any prior reason
+                    // (e.g. 'tool_use') rather than overwriting it with a default.
+                    yield {
+                        result: [],
+                        finish_reason: choice?.finish_reason
+                            ? chatCompletionFinishReason(choice.finish_reason)
+                            : undefined,
+                        token_usage: mapChatUsage(chunk.usage),
                     } satisfies CompletionChunkObject;
                 }
             }
