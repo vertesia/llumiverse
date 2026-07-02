@@ -21,6 +21,7 @@ export type {
  * Options for configuring the Vertex OpenAI-compatible model.
  */
 export interface OpenAICompatibleOptions extends OpenAICompletionsModelOptions {
+    modelName: string;
     /** Custom endpoint path override (defaults to "endpoints/openapi/chat/completions") */
     endpointPath?: string;
     /** Region override for the Vertex AI endpoint. Useful when a model only exists in a specific region. */

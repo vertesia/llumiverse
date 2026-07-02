@@ -28,12 +28,13 @@ import { AbstractDriver } from '@llumiverse/core/driver';
 import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
 import { type FETCH_FN, FetchClient } from '@vertesia/api-fetch-client';
 import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from 'google-auth-library';
+import { buildOpenAICompletionsStreamingConversation } from '../openai/openai_comp_completions.js';
 import { type ClaudePrompt, formatClaudeDebugPrompt } from '../shared/claude-messages.js';
 import { generateVertexAiEmbeddings } from './embeddings/embed.js';
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
 import { formatGeminiDebugPrompt } from './models/gemini.js';
 import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
-import type { OpenAIMessage, OpenAIPrompt } from './models/openai_compatible.js';
+import type { OpenAIPrompt } from './models/openai_compatible.js';
 import { getModelDefinition, trimModelName } from './models.js';
 import { getListedVertexOpenMaaSModels } from './open-maas-models.js';
 
@@ -492,67 +493,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         toolUse: unknown[] | undefined,
         options: ExecutionOptions,
     ): OpenAIPrompt {
-        const completionResults = result as CompletionResult[];
-        const textContent = completionResults
-            .map((r) => {
-                const r_ = r as CompletionResult;
-                switch (r_.type) {
-                    case 'text':
-                        return r_.value;
-                    case 'json':
-                        return typeof r_.value === 'string' ? r_.value : JSON.stringify(r_.value);
-                    default:
-                        return '';
-                }
-            })
-            .join('');
-
-        // Build OpenAI-format assistant message.
-        // Per OpenAI spec, content must be null (not '') when tool_calls are present.
-        const assistantMessage: OpenAIMessage = { role: 'assistant' };
-        if (textContent) {
-            assistantMessage.content = textContent;
-        } else if (toolUse && toolUse.length > 0) {
-            assistantMessage.content = null;
-        } else {
-            assistantMessage.content = '';
-        }
-
-        if (toolUse && toolUse.length > 0) {
-            assistantMessage.tool_calls = (toolUse as ToolUse[]).map((t) => ({
-                id: t.id,
-                type: 'function',
-                function: {
-                    name: t.tool_name,
-                    arguments: typeof t.tool_input === 'string' ? t.tool_input : JSON.stringify(t.tool_input ?? {}),
-                },
-            }));
-        }
-
-        // Reconstruct full conversation: prior history + current-turn messages + assistant reply.
-        // NOTE: prompt.messages only contains the current-turn messages; options.conversation
-        // holds the accumulated prior history (same pattern as buildClaudeStreamingConversation).
-        const existingMessages = (options.conversation as OpenAIPrompt | undefined)?.messages;
-        const priorMessages = Array.isArray(existingMessages) ? existingMessages : [];
-        let conversation: OpenAIPrompt = {
-            _is_openai_compat: true,
-            messages: [...priorMessages, ...prompt.messages, assistantMessage],
-        };
-
-        conversation = incrementConversationTurn(conversation) as OpenAIPrompt;
-        const currentTurn = getConversationMeta(conversation).turnNumber;
-        const stripOptions = {
-            keepForTurns: options.stripImagesAfterTurns ?? Infinity,
-            currentTurn,
-            textMaxTokens: options.stripTextMaxTokens,
-        };
-        let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions) as OpenAIPrompt;
-        processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions) as OpenAIPrompt;
-        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
-            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
-            currentTurn,
-        }) as OpenAIPrompt;
-        return processedConversation;
+        return buildOpenAICompletionsStreamingConversation(prompt, result, toolUse, options);
     }
 
     /**
