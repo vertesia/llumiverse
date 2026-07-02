@@ -713,10 +713,15 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                         return false;
                     })
                     .map((model) => {
-                        const modelCapability = getModelCapabilities(model.name ?? '', 'vertexai');
+                        const rawModelId = model.name ?? '';
+                        const isGlobalOnlyPublisher = publisher === 'xai';
+                        const listedModelId = isGlobalOnlyPublisher ? `locations/global/${rawModelId}` : rawModelId;
+                        const modelCapability = getModelCapabilities(listedModelId, 'vertexai');
                         return {
-                            id: model.name ?? '',
-                            name: model.name?.split('/').pop() ?? '',
+                            id: listedModelId,
+                            name: isGlobalOnlyPublisher
+                                ? `Global ${rawModelId.split('/').pop()}`
+                                : (rawModelId.split('/').pop() ?? ''),
                             provider: 'vertexai',
                             owner: publisher,
                             input_modalities: modelModalitiesToArray(modelCapability.input),

@@ -152,6 +152,19 @@ export function updateOpenAIChatCompletionsConversation(
     };
 }
 
+export function prepareOpenAIChatCompletionsConversation(
+    conversation: OpenAIChatCompletionsPrompt,
+    options: Pick<ExecutionOptions, 'tools'>,
+): OpenAIChatCompletionsPrompt {
+    let messages = fixOrphanedOpenAIChatCompletionsToolResults(
+        fixOrphanedOpenAIChatCompletionsToolUse(conversation.messages),
+    );
+    if (!options.tools || options.tools.length === 0) {
+        messages = convertOpenAIChatCompletionsToolMessagesToText(messages);
+    }
+    return { ...conversation, messages };
+}
+
 export function parseOpenAIChatCompletionsToolCalls(
     toolCalls: OpenAIChatCompletionsResponseChoice['message']['tool_calls'],
 ): ToolUse[] | undefined {
@@ -196,6 +209,125 @@ function normalizeOpenAIChatCompletionsFinishReason(
         return 'tool_use';
     }
     return reason || undefined;
+}
+
+function toolCallInterruptedMessage(id: string, toolName: string): OpenAIChatCompletionsMessage {
+    return {
+        role: 'tool',
+        tool_call_id: id,
+        content: `[Tool interrupted: The user stopped the operation before "${toolName}" could execute.]`,
+    };
+}
+
+/**
+ * Chat Completions requires every assistant tool call to be followed by a tool
+ * response. If a run is stopped mid-tool-execution, synthesize a result so the
+ * next request can continue instead of failing provider-side validation.
+ */
+export function fixOrphanedOpenAIChatCompletionsToolUse(
+    messages: OpenAIChatCompletionsMessage[],
+): OpenAIChatCompletionsMessage[] {
+    if (messages.length < 2) return messages;
+
+    const toolResultIds = new Set<string>();
+    for (const message of messages) {
+        if (message.role === 'tool' && message.tool_call_id) {
+            toolResultIds.add(message.tool_call_id);
+        }
+    }
+
+    const result: OpenAIChatCompletionsMessage[] = [];
+    const pendingCalls = new Map<string, string>();
+
+    for (const message of messages) {
+        if (message.tool_calls && message.tool_calls.length > 0) {
+            for (const toolCall of message.tool_calls) {
+                if (toolCall.id && !toolResultIds.has(toolCall.id)) {
+                    pendingCalls.set(toolCall.id, toolCall.function?.name ?? 'unknown');
+                }
+            }
+            result.push(message);
+            continue;
+        }
+
+        if (message.role === 'tool') {
+            result.push(message);
+            continue;
+        }
+
+        if (pendingCalls.size > 0) {
+            for (const [callId, toolName] of pendingCalls) {
+                result.push(toolCallInterruptedMessage(callId, toolName));
+            }
+            pendingCalls.clear();
+        }
+        result.push(message);
+    }
+
+    if (pendingCalls.size > 0) {
+        for (const [callId, toolName] of pendingCalls) {
+            result.push(toolCallInterruptedMessage(callId, toolName));
+        }
+    }
+
+    return result;
+}
+
+/**
+ * Drop tool result messages whose matching assistant tool call is no longer in
+ * the conversation, usually after compaction/trimming removed the tool-call turn.
+ */
+export function fixOrphanedOpenAIChatCompletionsToolResults(
+    messages: OpenAIChatCompletionsMessage[],
+): OpenAIChatCompletionsMessage[] {
+    if (messages.length === 0) return messages;
+
+    const toolCallIds = new Set<string>();
+    for (const message of messages) {
+        for (const toolCall of message.tool_calls ?? []) {
+            if (toolCall.id) {
+                toolCallIds.add(toolCall.id);
+            }
+        }
+    }
+
+    return messages.filter((message) => {
+        if (message.role !== 'tool') return true;
+        return !!message.tool_call_id && toolCallIds.has(message.tool_call_id);
+    });
+}
+
+export function convertOpenAIChatCompletionsToolMessagesToText(
+    messages: OpenAIChatCompletionsMessage[],
+): OpenAIChatCompletionsMessage[] {
+    const hasToolMessages = messages.some((message) => message.role === 'tool' || !!message.tool_calls?.length);
+    if (!hasToolMessages) return messages;
+
+    return messages.map((message) => {
+        if (message.tool_calls && message.tool_calls.length > 0) {
+            const textParts: string[] = [];
+            const contentText = extractOpenAIChatCompletionsContentText(message.content);
+            if (contentText.trim()) {
+                textParts.push(contentText);
+            }
+            for (const toolCall of message.tool_calls) {
+                const args = toolCall.function?.arguments ?? '';
+                textParts.push(`[Tool call: ${toolCall.function?.name ?? 'unknown'}(${truncateToolText(args)})]`);
+            }
+            return { role: message.role, content: textParts.join('\n') || null };
+        }
+
+        if (message.role === 'tool') {
+            const output = extractOpenAIChatCompletionsContentText(message.content) || 'No output';
+            return { role: 'user', content: `[Tool result: ${truncateToolText(output)}]` };
+        }
+
+        return message;
+    });
+}
+
+function truncateToolText(value: string): string {
+    return value.length > 500 ? `${value.substring(0, 500)}...` : value;
 }
 
 export function stripOpenAIChatCompletionsThinkBlocks(value: string): string {
@@ -412,11 +544,18 @@ export function buildOpenAIChatCompletionsStreamingConversation(
         }));
     }
 
-    const existingMessages = (options.conversation as OpenAIChatCompletionsPrompt | undefined)?.messages;
-    const priorMessages = Array.isArray(existingMessages) ? existingMessages : [];
     const conversation: OpenAIChatCompletionsPrompt = {
         _is_openai_chat_completions: true,
-        messages: [...priorMessages, ...prompt.messages, assistantMessage],
+        messages: [
+            ...prepareOpenAIChatCompletionsConversation(
+                updateOpenAIChatCompletionsConversation(
+                    options.conversation as OpenAIChatCompletionsPrompt | undefined,
+                    prompt,
+                ),
+                options,
+            ).messages,
+            assistantMessage,
+        ],
     };
 
     return finalizeOpenAIChatCompletionsConversation(conversation, options);
@@ -581,6 +720,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             options.conversation as OpenAIChatCompletionsPrompt,
             prompt,
         );
+        conversation = prepareOpenAIChatCompletionsConversation(conversation, options);
         const includeThoughts = (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })
             ?.include_thoughts;
         const payload = this.buildPayload(conversation, options, false);
@@ -592,6 +732,9 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             extractOpenAIChatCompletionsText(message, includeThoughts ?? false),
         );
         const tool_use = parseOpenAIChatCompletionsToolCalls(message?.tool_calls);
+        if (!text && (!tool_use || tool_use.length === 0)) {
+            throw new Error('Chat Completions response is not valid: no data');
+        }
 
         const assistantMessage: OpenAIChatCompletionsMessage = {
             role: 'assistant',
@@ -615,7 +758,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         conversation = finalizeOpenAIChatCompletionsConversation(conversation, options);
 
         return {
-            result: text ? [{ type: 'text', value: text }] : [{ type: 'text', value: '' }],
+            result: text ? [{ type: 'text', value: text }] : [],
             tool_use,
             token_usage: mapOpenAIChatCompletionsUsage(result.usage),
             finish_reason: normalizeOpenAIChatCompletionsFinishReason(choice?.finish_reason, !!tool_use?.length),
@@ -629,10 +772,11 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         prompt: OpenAIChatCompletionsPrompt,
         options: ExecutionOptions,
     ): Promise<AsyncIterable<CompletionChunkObject>> {
-        const conversation = updateOpenAIChatCompletionsConversation(
+        let conversation = updateOpenAIChatCompletionsConversation(
             options.conversation as OpenAIChatCompletionsPrompt,
             prompt,
         );
+        conversation = prepareOpenAIChatCompletionsConversation(conversation, options);
         const includeThoughts = (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })
             ?.include_thoughts;
         const payload = this.buildPayload(conversation, options, true);
@@ -682,8 +826,8 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             }
 
             const text = includeThoughts ? reasoning + content : content;
-            // Streaming can expose provider <think> blocks while the stream is in flight.
-            // They are stripped from the final accumulated Completion in validateResult();
+            // Intentionally stream provider <think> blocks as they arrive. The final
+            // accumulated Completion/conversation strips them in validateResult();
             // for fallback purposes they do not count as normal content.
             const fallbackText =
                 !includeThoughts && choice?.finish_reason && !emittedContent

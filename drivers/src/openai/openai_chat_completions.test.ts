@@ -372,6 +372,113 @@ describe('OpenAIChatCompletionsProtocol', () => {
         expect(completion.finish_reason).toBe('tool_use');
     });
 
+    it('injects synthetic tool results for interrupted prior Chat Completions tool calls', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol({
+            id: 'chatcmpl-1',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: 'ok' },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+        });
+        const toolCall = {
+            id: 'call_1',
+            type: 'function' as const,
+            function: { name: 'lookup', arguments: '{"city":"Paris"}' },
+        };
+
+        await model.requestTextCompletion(undefined, prompt, {
+            ...options,
+            conversation: {
+                _is_openai_chat_completions: true,
+                messages: [{ role: 'assistant', content: null, tool_calls: [toolCall] }],
+            },
+            tools: [{ name: 'lookup', description: 'Lookup weather', input_schema: { type: 'object' } }],
+        });
+
+        expect(model.payloads[0].messages).toEqual([
+            { role: 'assistant', content: null, tool_calls: [toolCall] },
+            {
+                role: 'tool',
+                tool_call_id: 'call_1',
+                content: '[Tool interrupted: The user stopped the operation before "lookup" could execute.]',
+            },
+            { role: 'user', content: 'Hello' },
+        ]);
+    });
+
+    it('converts prior tool calls and results to text when no tools are provided', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol({
+            id: 'chatcmpl-1',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: 'ok' },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+        });
+
+        await model.requestTextCompletion(undefined, prompt, {
+            ...options,
+            conversation: {
+                _is_openai_chat_completions: true,
+                messages: [
+                    {
+                        role: 'assistant',
+                        content: null,
+                        tool_calls: [
+                            {
+                                id: 'call_1',
+                                type: 'function',
+                                function: { name: 'lookup', arguments: '{"city":"Paris"}' },
+                            },
+                        ],
+                    },
+                    { role: 'tool', tool_call_id: 'call_1', content: '15 degrees celsius, sunny' },
+                ],
+            },
+            tools: [],
+        });
+
+        expect(model.payloads[0].messages).toEqual([
+            { role: 'assistant', content: '[Tool call: lookup({"city":"Paris"})]' },
+            { role: 'user', content: '[Tool result: 15 degrees celsius, sunny]' },
+            { role: 'user', content: 'Hello' },
+        ]);
+    });
+
+    it('throws when a non-streaming response has no content or tool calls', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol({
+            id: 'chatcmpl-1',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: null },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+        });
+
+        await expect(model.requestTextCompletion(undefined, prompt, options)).rejects.toThrow(
+            'Chat Completions response is not valid: no data',
+        );
+    });
+
     it('preserves streaming function tool-call chunks', async () => {
         const model = new TestOpenAIChatCompletionsProtocol(
             undefined,
