@@ -46,8 +46,8 @@ export const VERTEX_OPEN_MAAS_MODELS: readonly VertexOpenMaaSModel[] = [
         requestPublisher: 'meta',
         regions: US_EAST5_REGIONS,
         apiVersion: 'v1beta1',
-        // Runtime validation showed Scout returns an empty completion when max_tokens is omitted.
-        // Use the known max output budget only for this model-level workaround; caller options still win.
+        // Scout returns an empty completion when max_tokens is omitted; Vertex reports max 8192.
+        // Use the max output budget only for this model-level workaround; caller options still win.
         defaultMaxTokens: getMaxOutputTokens('llama-4-scout-17b-16e-instruct-maas'),
         extraBody: LLAMA_SAFETY_EXTRA_BODY,
     },
@@ -129,8 +129,8 @@ export const VERTEX_OPEN_MAAS_MODELS: readonly VertexOpenMaaSModel[] = [
         model: 'gpt-oss-120b-maas',
         requestPublisher: 'openai',
         regions: US_CENTRAL1_AND_GLOBAL_REGIONS,
-        // Runtime validation showed 120B can spend the provider default budget on reasoning only.
-        // Use the known max output budget only for this model-level workaround; caller options still win.
+        // 120B can spend the provider default budget on reasoning only; Vertex reports max 131072.
+        // Use the max output budget only for this model-level workaround; caller options still win.
         defaultMaxTokens: getMaxOutputTokens('gpt-oss-120b-maas'),
     },
     {
