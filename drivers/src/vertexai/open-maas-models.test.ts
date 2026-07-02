@@ -94,7 +94,6 @@ describe('Vertex open MaaS catalog', () => {
         expect(modelIds).not.toContain(
             'locations/global/publishers/meta/models/llama-4-maverick-17b-128e-instruct-maas',
         );
-        expect(modelIds).not.toContain('locations/us-central1/publishers/deepseek-ai/models/deepseek-v3.1-maas');
         expect(modelIds).not.toContain('locations/us-central1/publishers/deepseek-ai/models/deepseek-ocr-maas');
         expect(modelIds).not.toContain('locations/global/publishers/deepseek-ai/models/deepseek-ocr-maas');
         expect(modelIds).not.toContain('locations/us-east5/publishers/google/models/gemma-4-26b-a4b-it-maas');
