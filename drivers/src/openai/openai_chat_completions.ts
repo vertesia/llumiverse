@@ -23,7 +23,7 @@ import {
 import { transformSSEStream } from '@llumiverse/core/async';
 import { AbstractDriver } from '@llumiverse/core/driver';
 import type OpenAI from 'openai';
-import { formatOpenAISchema } from './schema.js';
+import { formatOpenAISchema, limitedSchemaFormat } from './schema.js';
 
 export type OpenAIChatCompletionsTextPart = OpenAI.Chat.ChatCompletionContentPartText;
 export type OpenAIChatCompletionsImageUrlPart = OpenAI.Chat.ChatCompletionContentPartImage;
@@ -127,6 +127,12 @@ export interface OpenAIChatCompletionsProtocolOptions {
      * Chat Completions only and response_format support is not reliable across hosted models.
      */
     resultSchemaMode?: 'response_format' | 'prompt';
+    /**
+     * OpenAI supports strict function schemas. Some OpenAI-compatible providers reject
+     * or mis-handle those OpenAI-specific fields, so adapters can request a looser
+     * JSON Schema payload for tools while preserving the shared Chat Completions path.
+     */
+    toolSchemaMode?: 'openai_strict' | 'compatible';
 }
 
 type StreamChunk = string | Uint8Array;
@@ -420,6 +426,7 @@ export function extractOpenAIChatCompletionsContentText(
 
 export function convertToolsToOpenAIChatCompletionsFormat(
     tools: ToolDefinition[] | undefined,
+    mode: OpenAIChatCompletionsProtocolOptions['toolSchemaMode'] = 'openai_strict',
 ): OpenAIChatCompletionsToolDefinition[] | undefined {
     if (!tools || tools.length === 0) {
         return undefined;
@@ -429,11 +436,15 @@ export function convertToolsToOpenAIChatCompletionsFormat(
         let parameters: JSONSchema | undefined;
         let strict: boolean | undefined;
         if (tool.input_schema) {
-            // Reuse the same schema normalization as the OpenAI Responses path:
-            // strict mode when possible, limited non-strict schema otherwise.
-            const formattedSchema = formatOpenAISchema(tool.input_schema as JSONSchema);
-            parameters = formattedSchema.schema;
-            strict = formattedSchema.strict;
+            if (mode === 'compatible') {
+                parameters = limitedSchemaFormat(tool.input_schema as JSONSchema);
+            } else {
+                // Reuse the same schema normalization as the OpenAI Responses path:
+                // strict mode when possible, limited non-strict schema otherwise.
+                const formattedSchema = formatOpenAISchema(tool.input_schema as JSONSchema);
+                parameters = formattedSchema.schema;
+                strict = formattedSchema.strict;
+            }
         }
 
         return {
@@ -864,7 +875,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             payload.extra_body = this.options.extraBody;
         }
 
-        const toolsPayload = convertToolsToOpenAIChatCompletionsFormat(options.tools);
+        const toolsPayload = convertToolsToOpenAIChatCompletionsFormat(options.tools, this.options.toolSchemaMode);
         if (toolsPayload && toolsPayload.length > 0) {
             payload.tools = toolsPayload;
         }

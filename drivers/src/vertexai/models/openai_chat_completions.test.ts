@@ -344,6 +344,78 @@ describe('OpenAIChatCompletionsModelDefinition', () => {
         });
     });
 
+    it('uses provider-compatible tool schemas for Vertex MaaS requests', async () => {
+        const modelDef = new OpenAIChatCompletionsModelDefinition({
+            modelName: 'meta/llama-3.3-70b-instruct-maas',
+            region: 'us-central1',
+        });
+        const post = vi.fn(async () => ({
+            id: 'chatcmpl-1',
+            object: 'chat.completion',
+            created: 1,
+            model: 'meta/llama-3.3-70b-instruct-maas',
+            choices: [
+                {
+                    index: 0,
+                    message: {
+                        role: 'assistant',
+                        content: 'Done',
+                    },
+                    finish_reason: 'stop',
+                },
+            ],
+        }));
+        const driver = {
+            getFetchClientForRegion: () => ({ post }),
+        } as unknown as VertexAIDriver;
+        const prompt: OpenAIChatCompletionsPrompt = {
+            _is_openai_chat_completions: true,
+            messages: [{ role: 'user', content: 'Use a tool if needed' }],
+        };
+        const options: ExecutionOptions = {
+            model: 'locations/us-central1/publishers/meta/models/llama-3.3-70b-instruct-maas',
+            model_options: { _option_id: 'text-fallback' },
+            tools: [
+                {
+                    name: 'think',
+                    description: 'Think before answering',
+                    input_schema: {
+                        type: 'object',
+                        properties: {
+                            thought: { type: 'string' },
+                            message_to_human: { type: 'string' },
+                        },
+                        required: ['thought'],
+                    },
+                },
+            ],
+        };
+
+        await modelDef.requestTextCompletion(driver, prompt, options);
+
+        expect(post).toHaveBeenCalledWith('endpoints/openapi/chat/completions', {
+            payload: expect.objectContaining({
+                tools: [
+                    {
+                        type: 'function',
+                        function: {
+                            name: 'think',
+                            description: 'Think before answering',
+                            parameters: {
+                                type: 'object',
+                                properties: {
+                                    thought: { type: 'string' },
+                                    message_to_human: { type: 'string' },
+                                },
+                                required: ['thought'],
+                            },
+                        },
+                    },
+                ],
+            }),
+        });
+    });
+
     it('reads text from streaming OpenAI content arrays', async () => {
         const modelDef = new OpenAIChatCompletionsModelDefinition({
             modelName: 'deepseek-ai/deepseek-v3.2-maas',

@@ -41,7 +41,7 @@ export class OpenAIChatCompletionsModelDefinition
     private readonly vertexOptions: VertexOpenAIChatCompletionsOptions;
 
     constructor(options: VertexOpenAIChatCompletionsOptions) {
-        super(options);
+        super({ ...options, toolSchemaMode: options.toolSchemaMode ?? 'compatible' });
         this.vertexOptions = options;
         const modelName = options.modelName.split('/').pop() || options.modelName;
         this.model = {
