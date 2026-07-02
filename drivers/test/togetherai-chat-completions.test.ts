@@ -1,13 +1,13 @@
-import { Readable } from 'node:stream';
-import { PromptRole, type ToolUse } from '@llumiverse/core';
+import { type JSONSchema, PromptRole, type ToolUse } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import { describe, expect, test, vi } from 'vitest';
 import { TogetherAIDriver } from '../src/togetherai/index.js';
 
 type ChatCreatePayload = OpenAI.Chat.ChatCompletionCreateParams;
+type ChatCreate = (payload: ChatCreatePayload) => Promise<unknown>;
 
 function mockTogetherDriver(response: unknown) {
-    const chatCreate = vi.fn(async () => response);
+    const chatCreate = vi.fn<ChatCreate>(async (_payload) => response);
     const responsesCreate = vi.fn();
     const driver = new TogetherAIDriver({ apiKey: 'test-key' });
     driver.service = {
@@ -17,6 +17,14 @@ function mockTogetherDriver(response: unknown) {
         models: { list: vi.fn() },
     } as unknown as TogetherAIDriver['service'];
     return { driver, chatCreate, responsesCreate };
+}
+
+function getChatCreatePayload(chatCreate: ReturnType<typeof mockTogetherDriver>['chatCreate']): ChatCreatePayload {
+    const payload = chatCreate.mock.calls[0]?.[0];
+    if (!payload) {
+        throw new Error('Expected chat completions create to be called');
+    }
+    return payload;
 }
 
 function textResponse(content: string | null, extra: Record<string, unknown> = {}) {
@@ -85,8 +93,17 @@ describe('TogetherAIDriver Chat Completions transport', () => {
                     content: 'What is this?',
                     files: [
                         {
+                            name: 'image.png',
                             mime_type: 'image/png',
-                            getStream: async () => Readable.from([Buffer.from('image-bytes')]),
+                            getURI: async () => 'test://image.png',
+                            getURL: async () => 'test://image.png',
+                            getStream: async () =>
+                                new ReadableStream({
+                                    start(controller) {
+                                        controller.enqueue(Buffer.from('image-bytes'));
+                                        controller.close();
+                                    },
+                                }),
                         },
                     ],
                 },
@@ -99,7 +116,7 @@ describe('TogetherAIDriver Chat Completions transport', () => {
             model_options: { _option_id: 'text-fallback' },
         });
 
-        const payload = chatCreate.mock.calls[0][0] as ChatCreatePayload;
+        const payload = getChatCreatePayload(chatCreate);
         expect(payload.messages).toEqual([
             {
                 role: 'user',
@@ -119,7 +136,7 @@ describe('TogetherAIDriver Chat Completions transport', () => {
 
     test('uses prompt schema instructions instead of response_format', async () => {
         const { driver, chatCreate } = mockTogetherDriver(textResponse('{"color":"green"}'));
-        const result_schema = {
+        const result_schema: JSONSchema = {
             type: 'object',
             properties: { color: { type: 'string' } },
             required: ['color'],
@@ -135,7 +152,7 @@ describe('TogetherAIDriver Chat Completions transport', () => {
             result_schema,
         });
 
-        const payload = chatCreate.mock.calls[0][0] as ChatCreatePayload;
+        const payload = getChatCreatePayload(chatCreate);
         expect(payload).not.toHaveProperty('response_format');
         expect(payload.messages).toEqual(
             expect.arrayContaining([
@@ -169,7 +186,7 @@ describe('TogetherAIDriver Chat Completions transport', () => {
             tools: [{ name: 'lookup', description: 'Lookup weather', input_schema: { type: 'object' } }],
         });
 
-        const payload = chatCreate.mock.calls[0][0] as ChatCreatePayload;
+        const payload = getChatCreatePayload(chatCreate);
         expect(payload.tools).toEqual([
             {
                 type: 'function',
