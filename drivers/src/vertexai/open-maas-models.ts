@@ -1,3 +1,4 @@
+import { getMaxOutputTokens } from '@llumiverse/common';
 import { type AIModel, getModelCapabilities, modelModalitiesToArray } from '@llumiverse/core';
 
 export interface VertexOpenMaaSModel {
@@ -46,7 +47,8 @@ export const VERTEX_OPEN_MAAS_MODELS: readonly VertexOpenMaaSModel[] = [
         regions: US_EAST5_REGIONS,
         apiVersion: 'v1beta1',
         // Runtime validation showed Scout returns an empty completion when max_tokens is omitted.
-        defaultMaxTokens: 1024,
+        // Use the known max output budget only for this model-level workaround; caller options still win.
+        defaultMaxTokens: getMaxOutputTokens('llama-4-scout-17b-16e-instruct-maas'),
         extraBody: LLAMA_SAFETY_EXTRA_BODY,
     },
     {
@@ -128,7 +130,8 @@ export const VERTEX_OPEN_MAAS_MODELS: readonly VertexOpenMaaSModel[] = [
         requestPublisher: 'openai',
         regions: US_CENTRAL1_AND_GLOBAL_REGIONS,
         // Runtime validation showed 120B can spend the provider default budget on reasoning only.
-        defaultMaxTokens: 1024,
+        // Use the known max output budget only for this model-level workaround; caller options still win.
+        defaultMaxTokens: getMaxOutputTokens('gpt-oss-120b-maas'),
     },
     {
         publisher: 'openai',

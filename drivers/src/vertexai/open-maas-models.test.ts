@@ -146,7 +146,7 @@ describe('Vertex open MaaS catalog', () => {
         });
     });
 
-    it('applies the Llama Scout max token default required for non-empty responses', async () => {
+    it('applies the Llama Scout max output default required for non-empty responses', async () => {
         const { post, getFetchClientForRegion } = await requestForModel(
             'locations/us-east5/publishers/meta/models/llama-4-scout-17b-16e-instruct-maas',
         );
@@ -155,12 +155,12 @@ describe('Vertex open MaaS catalog', () => {
         expect(post).toHaveBeenCalledWith('endpoints/openapi/chat/completions', {
             payload: expect.objectContaining({
                 model: 'meta/llama-4-scout-17b-16e-instruct-maas',
-                max_tokens: 1024,
+                max_tokens: 8192,
             }),
         });
     });
 
-    it('applies the gpt-oss 120B max token default required for structured output', async () => {
+    it('applies the gpt-oss 120B max output default required for structured output', async () => {
         const { post, getFetchClientForRegion } = await requestForModel(
             'locations/global/publishers/openai/models/gpt-oss-120b-maas',
         );
@@ -169,7 +169,7 @@ describe('Vertex open MaaS catalog', () => {
         expect(post).toHaveBeenCalledWith('endpoints/openapi/chat/completions', {
             payload: expect.objectContaining({
                 model: 'openai/gpt-oss-120b-maas',
-                max_tokens: 1024,
+                max_tokens: 131072,
             }),
         });
     });
