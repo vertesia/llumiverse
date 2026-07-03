@@ -1,7 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
-import type { AnthropicClaudeOptions } from "@llumiverse/common";
+import type { AnthropicClaudeOptions } from '@llumiverse/common';
 import {
-    AbstractDriver,
     type AIModel,
     type Completion,
     type CompletionChunkObject,
@@ -15,15 +14,17 @@ import {
     ModelType,
     type PromptSegment,
     Providers,
-} from "@llumiverse/core";
+} from '@llumiverse/core';
+import { AbstractDriver } from '@llumiverse/core/driver';
 import {
     buildClaudeStreamingConversation,
     type ClaudePrompt,
     executeClaudeCompletion,
     formatAnthropicLlumiverseError,
+    formatClaudeDebugPrompt,
     formatClaudePrompt,
     streamClaudeCompletion,
-} from "../shared/claude-messages.js";
+} from '../shared/claude-messages.js';
 
 export interface AnthropicDriverOptions extends DriverOptions {
     apiKey?: string;
@@ -31,44 +32,60 @@ export interface AnthropicDriverOptions extends DriverOptions {
 }
 
 export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, ClaudePrompt> {
-
     provider = Providers.anthropic;
     client: Anthropic;
 
     constructor(opts: AnthropicDriverOptions) {
         super(opts);
-        this.client = new Anthropic({ apiKey: opts.apiKey, ...(opts.baseURL ? { baseURL: opts.baseURL } : {}) });
+        // Route requests through the driver's HTTP agent (configured by
+        // opts.httpTimeout) so a hung upstream surfaces in seconds rather
+        // than blocking on Node's 5-minute undici default.
+        this.client = new Anthropic({
+            apiKey: opts.apiKey,
+            ...(opts.baseURL ? { baseURL: opts.baseURL } : {}),
+            fetch: this.getDriverFetch(),
+        });
     }
 
     protected formatPrompt(segments: PromptSegment[], opts: ExecutionOptions): Promise<ClaudePrompt> {
-        return formatClaudePrompt(segments, opts);
+        return formatClaudePrompt(segments, opts, this.logger);
+    }
+
+    public formatDebugPrompt(prompt: ClaudePrompt): ClaudePrompt {
+        return formatClaudeDebugPrompt(prompt);
     }
 
     async requestTextCompletion(prompt: ClaudePrompt, options: ExecutionOptions): Promise<Completion> {
         const model_options = options.model_options as AnthropicClaudeOptions | undefined;
-        if (model_options?._option_id !== undefined && model_options?._option_id !== "anthropic-claude") {
-            this.logger.debug({ options: options.model_options }, "Unexpected option id");
+        if (model_options?._option_id !== undefined && model_options?._option_id !== 'anthropic-claude') {
+            this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
         return executeClaudeCompletion(this.client, prompt, options);
     }
 
-    async requestTextCompletionStream(prompt: ClaudePrompt, options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
+    async requestTextCompletionStream(
+        prompt: ClaudePrompt,
+        options: ExecutionOptions,
+    ): Promise<AsyncIterable<CompletionChunkObject>> {
         const model_options = options.model_options as AnthropicClaudeOptions | undefined;
-        if (model_options?._option_id !== undefined && model_options?._option_id !== "anthropic-claude") {
-            this.logger.debug({ options: options.model_options }, "Unexpected option id");
+        if (model_options?._option_id !== undefined && model_options?._option_id !== 'anthropic-claude') {
+            this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
         return streamClaudeCompletion(this.client, prompt, options);
     }
 
     async listModels(_params?: ModelSearchPayload): Promise<AIModel[]> {
         const page = await this.client.models.list({ limit: 1000 });
-        return page.data.map((m) => ({
-            id: m.id,
-            name: m.display_name ?? m.id,
-            provider: Providers.anthropic,
-            type: ModelType.Text,
-            can_stream: true,
-        } satisfies AIModel));
+        return page.data.map(
+            (m) =>
+                ({
+                    id: m.id,
+                    name: m.display_name ?? m.id,
+                    provider: Providers.anthropic,
+                    type: ModelType.Text,
+                    can_stream: true,
+                }) satisfies AIModel,
+        );
     }
 
     async validateConnection(): Promise<boolean> {
@@ -93,7 +110,7 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
         prompt: ClaudePrompt,
         result: unknown[],
         toolUse: unknown[] | undefined,
-        options: ExecutionOptions
+        options: ExecutionOptions,
     ): ClaudePrompt {
         return buildClaudeStreamingConversation(prompt, result, toolUse, options);
     }

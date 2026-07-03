@@ -3,7 +3,7 @@ set -e
 
 # Script to publish all llumiverse packages to NPM
 # Usage: publish-all-packages.sh --ref <ref> --release-type <type> --bump-type <type> [--dry-run [true|false]]
-#   --ref: Git reference (main for dev builds, preview for releases)
+#   --ref: Git reference (main for dev builds, release/X.Y for releases, e.g. release/1.4)
 #   --release-type: Release type (release, snapshot). Release creates stable versions, snapshot creates dev versions.
 #   --bump-type: Bump type (minor, patch, keep). How to change the version.
 #   --dry-run: Optional flag for dry run mode (value can be true, false, or omitted which means true)
@@ -30,7 +30,7 @@ update_package_versions() {
   fi
 
   # Get current version and strip any existing -dev* suffix to get base version
-  current_version=$(pnpm pkg get version | tr -d '"')
+  current_version=$(npm pkg get version | tr -d '"')
   base_version=$(echo "$current_version" | sed 's/-dev.*//')
 
   # Apply bump if needed (for both snapshot and release)
@@ -72,7 +72,7 @@ publish_packages() {
     if [ -d "$pkg" ] && [ -f "$pkg/package.json" ]; then
       cd "$pkg"
 
-      pkg_version=$(pnpm pkg get version | tr -d '"')
+      pkg_version=$(npm pkg get version | tr -d '"')
 
       # Fail if npm_tag is not set (safety check to prevent publishing without explicit tag)
       if [ -z "$npm_tag" ]; then
@@ -101,7 +101,7 @@ verify_published_packages() {
   failed_packages=()
 
   # Get the expected version from root package.json
-  expected_version=$(pnpm pkg get version | tr -d '"')
+  expected_version=$(npm pkg get version | tr -d '"')
 
   for pkg in "${PACKAGES[@]}"; do
     if [ -d "$pkg" ]; then
@@ -188,7 +188,7 @@ commit_and_push() {
   echo "=== Committing version changes ==="
 
   # Get the version from root package.json
-  version=$(pnpm pkg get version | tr -d '"')
+  version=$(npm pkg get version | tr -d '"')
 
   git config user.email "github-actions[bot]@users.noreply.github.com"
   git config user.name "github-actions[bot]"
@@ -215,7 +215,7 @@ write_github_summary() {
   echo "=== Writing GitHub Summary ==="
 
   # Get the version from root package.json
-  version=$(pnpm pkg get version | tr -d '"')
+  version=$(npm pkg get version | tr -d '"')
 
   # Determine title based on dry run mode
   if [ "$DRY_RUN" = "true" ]; then
@@ -329,9 +329,9 @@ if [[ ! "$BUMP_TYPE" =~ ^(minor|patch|keep)$ ]]; then
   exit 1
 fi
 
-# Validate that releases can only be published from 'preview' branch
-if [ "$RELEASE_TYPE" = "release" ] && [ "$REF" != "preview" ]; then
-  echo "Error: Release versions can only be published from the 'preview' branch."
+# Validate that releases can only be published from a release branch (release/X.Y, e.g. release/1.4)
+if [ "$RELEASE_TYPE" = "release" ] && [[ "$REF" != release/* ]]; then
+  echo "Error: Release versions can only be published from a 'release/*' branch (e.g. 'release/1.4')."
   echo "Current branch: $REF"
   exit 1
 fi

@@ -1,38 +1,38 @@
-import type { EmbeddingInput, Providers } from "../types.js";
+import type { EmbeddingInput, Providers } from '../types.js';
 
 /** Default embedding model ids, one per provider. */
 
 // ── Vertex AI ──────────────────────────────────────────────────────────────
 /** Default Vertex AI text/multimodal embedding model (supports text + image/video/audio via embedContent). */
-export const VERTEX_DEFAULT_EMBEDDING_MODEL = "gemini-embedding-2";
+export const VERTEX_DEFAULT_EMBEDDING_MODEL = 'gemini-embedding-2';
 /** Legacy Vertex AI multimodal predict API model (joint text+image+video in one vector). */
-export const VERTEX_MULTIMODAL_EMBEDDING_MODEL = "multimodalembedding@001";
+export const VERTEX_MULTIMODAL_EMBEDDING_MODEL = 'multimodalembedding@001';
 
 // ── AWS Bedrock ────────────────────────────────────────────────────────────
 /** Default Bedrock embedding model — Nova 2 multimodal (text, image, video, audio). */
-export const BEDROCK_DEFAULT_EMBEDDING_MODEL = "amazon.nova-2-multimodal-embeddings-v1:0";
+export const BEDROCK_DEFAULT_EMBEDDING_MODEL = 'amazon.nova-2-multimodal-embeddings-v1:0';
 /** Bedrock Titan text embedding model (text only). */
-export const BEDROCK_TITAN_TEXT_EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0";
+export const BEDROCK_TITAN_TEXT_EMBEDDING_MODEL = 'amazon.titan-embed-text-v2:0';
 /** Bedrock Titan image embedding model (text + image). */
-export const BEDROCK_TITAN_IMAGE_EMBEDDING_MODEL = "amazon.titan-embed-image-v1";
+export const BEDROCK_TITAN_IMAGE_EMBEDDING_MODEL = 'amazon.titan-embed-image-v1';
 /** Bedrock Cohere English embedding model (text + image, native batch). */
-export const BEDROCK_COHERE_ENGLISH_EMBEDDING_MODEL = "cohere.embed-english-v3";
+export const BEDROCK_COHERE_ENGLISH_EMBEDDING_MODEL = 'cohere.embed-english-v3';
 /** Bedrock Cohere multilingual embedding model (text + image, native batch). */
-export const BEDROCK_COHERE_MULTILINGUAL_EMBEDDING_MODEL = "cohere.embed-multilingual-v3";
+export const BEDROCK_COHERE_MULTILINGUAL_EMBEDDING_MODEL = 'cohere.embed-multilingual-v3';
 
 // ── OpenAI ─────────────────────────────────────────────────────────────────
 /** Default OpenAI embedding model (text only, supports dimensions). */
-export const OPENAI_DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small";
+export const OPENAI_DEFAULT_EMBEDDING_MODEL = 'text-embedding-3-small';
 /** OpenAI large embedding model (text only, higher capacity). */
-export const OPENAI_LARGE_EMBEDDING_MODEL = "text-embedding-3-large";
+export const OPENAI_LARGE_EMBEDDING_MODEL = 'text-embedding-3-large';
 
 // ── Mistral AI ─────────────────────────────────────────────────────────────
 /** Default Mistral AI embedding model (text only). */
-export const MISTRAL_DEFAULT_EMBEDDING_MODEL = "mistral-embed";
+export const MISTRAL_DEFAULT_EMBEDDING_MODEL = 'mistral-embed';
 
 // ── IBM Watsonx ────────────────────────────────────────────────────────────
 /** Default Watsonx embedding model (text only). */
-export const WATSONX_DEFAULT_EMBEDDING_MODEL = "ibm/slate-125m-english-rtrvr";
+export const WATSONX_DEFAULT_EMBEDDING_MODEL = 'ibm/slate-125m-english-rtrvr';
 
 // ── Azure Foundry ──────────────────────────────────────────────────────────
 /**
@@ -43,7 +43,7 @@ export const AZURE_FOUNDRY_DEFAULT_EMBEDDING_MODEL: undefined = undefined;
 
 // ── Provider → default model map ───────────────────────────────────────────
 
-type EmbeddingModality = EmbeddingInput["type"];
+type EmbeddingModality = EmbeddingInput['type'];
 
 /**
  * Per-provider default embedding model, keyed first by provider then by the
@@ -84,9 +84,9 @@ const DEFAULT_EMBEDDING_MODELS: Partial<Record<Providers, Partial<Record<Embeddi
  */
 export function getDefaultEmbeddingModel(
     provider: Providers,
-    modality: EmbeddingModality = "text",
+    modality: EmbeddingModality = 'text',
 ): string | undefined {
     const byProvider = DEFAULT_EMBEDDING_MODELS[provider];
     if (!byProvider) return undefined;
-    return byProvider[modality] ?? byProvider["text"];
+    return byProvider[modality] ?? byProvider.text;
 }

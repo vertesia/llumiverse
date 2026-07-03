@@ -1,5 +1,3 @@
-
-
 export interface WatsonxTextGenerationPayload {
     model_id: string;
     input: string;
@@ -10,7 +8,7 @@ export interface WatsonxTextGenerationPayload {
         temperature?: number;
         top_k?: number;
         top_p?: number;
-    },
+    };
     project_id: string;
 }
 
@@ -22,7 +20,7 @@ export interface WatsonxTextGenerationResponse {
         generated_token_count: number;
         input_token_count: number;
         stop_reason: string;
-    }[]
+    }[];
 }
 
 export interface GenerateEmbeddingPayload {
@@ -31,13 +29,12 @@ export interface GenerateEmbeddingPayload {
     project_id: string;
 }
 
-
 export interface GenerateEmbeddingResponse {
     model_id: string;
     created_at: string;
     results: {
         embedding: number[];
-    }[]
+    }[];
     input_token_count: number;
 }
 
@@ -51,13 +48,12 @@ export interface WatsonxModelSpec {
         id: string;
         ratings: {
             quality: number;
-        }
+        };
     }[];
     min_shot_size: number;
     tier: string;
     number_params: string;
 }
-
 
 export interface WatsonxListModelResponse {
     total_count: number;
@@ -65,11 +61,10 @@ export interface WatsonxListModelResponse {
     resources: WatsonxModelSpec[];
 }
 
-
 export interface WatsonAuthToken {
-    access_token: string
-    refresh_token: string
-    token_type: string
-    expire_in: number
-    expiration: number
+    access_token: string;
+    refresh_token: string;
+    token_type: string;
+    expire_in: number;
+    expiration: number;
 }

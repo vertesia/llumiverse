@@ -20,7 +20,7 @@ export enum Providers {
     groq = 'groq',
     watsonx = 'watsonx',
     xai = 'xai',
-    anthropic = 'anthropic'
+    anthropic = 'anthropic',
 }
 
 export interface ProviderParams {
@@ -33,112 +33,106 @@ export interface ProviderParams {
 }
 
 export const ProviderList: Record<Providers, ProviderParams> = {
-    openai:
-    {
+    openai: {
         id: Providers.openai,
-        name: "OpenAI",
+        name: 'OpenAI',
         requiresApiKey: true,
         requiresEndpointUrl: false,
         supportSearch: false,
     },
-    azure_openai:
-    {
+    azure_openai: {
         id: Providers.azure_openai,
-        name: "Azure OpenAI",
+        name: 'Azure OpenAI',
         requiresApiKey: false,
         requiresEndpointUrl: true,
         supportSearch: false,
     },
-    azure_foundry:
-    {
+    azure_foundry: {
         id: Providers.azure_foundry,
-        name: "Azure Foundry",
+        name: 'Microsoft Foundry',
         requiresApiKey: true,
         requiresEndpointUrl: true,
         supportSearch: false,
     },
-    huggingface_ie:
-    {
+    huggingface_ie: {
         id: Providers.huggingface_ie,
-        name: "HuggingFace Inference Endpoint",
+        name: 'HuggingFace Inference Endpoint',
         requiresApiKey: true,
         requiresEndpointUrl: true,
     },
-    replicate:
-    {
+    replicate: {
         id: Providers.replicate,
-        name: "Replicate",
+        name: 'Replicate',
         requiresApiKey: true,
         requiresEndpointUrl: false,
         supportSearch: true,
     },
-    bedrock:
-    {
+    bedrock: {
         id: Providers.bedrock,
-        name: "AWS Bedrock",
+        name: 'Amazon Bedrock',
         requiresApiKey: false,
         requiresEndpointUrl: false,
-        endpointPlaceholder: "region name (eg. us-east-1)",
+        endpointPlaceholder: 'region name (eg. us-east-1)',
         supportSearch: false,
     },
     vertexai: {
         id: Providers.vertexai,
-        name: "Google Agent Platform (Vertex AI)",
+        name: 'Google Agent Platform (Vertex AI)',
         requiresApiKey: false,
         requiresEndpointUrl: false,
         supportSearch: false,
     },
     togetherai: {
         id: Providers.togetherai,
-        name: "Together AI",
-        requiresApiKey: false,
+        name: 'Together AI',
+        requiresApiKey: true,
         requiresEndpointUrl: false,
         supportSearch: false,
     },
     mistralai: {
         id: Providers.mistralai,
-        name: "Mistral AI",
+        name: 'Mistral AI',
         requiresApiKey: false,
         requiresEndpointUrl: false,
         supportSearch: false,
     },
     groq: {
         id: Providers.groq,
-        name: "Groq Cloud",
+        name: 'Groq Cloud',
         requiresApiKey: false,
         requiresEndpointUrl: false,
         supportSearch: false,
     },
     watsonx: {
         id: Providers.watsonx,
-        name: "IBM WatsonX",
+        name: 'IBM WatsonX',
         requiresApiKey: true,
         requiresEndpointUrl: true,
-        supportSearch: false
+        supportSearch: false,
     },
     xai: {
         id: Providers.xai,
-        name: "xAI (Grok)",
-        requiresApiKey: true,
-        requiresEndpointUrl: false,
-        supportSearch: false
-    },
-    openai_compatible: {
-        id: Providers.openai_compatible,
-        name: "OpenAI Compatible",
-        requiresApiKey: true,
-        requiresEndpointUrl: true,
-        endpointPlaceholder: "https://api.example.com/v1",
-        supportSearch: false
-    },
-    anthropic: {
-        id: Providers.anthropic,
-        name: "Anthropic",
+        name: 'xAI (Grok)',
         requiresApiKey: true,
         requiresEndpointUrl: false,
         supportSearch: false,
     },
-}
+    openai_compatible: {
+        id: Providers.openai_compatible,
+        name: 'OpenAI Compatible',
+        requiresApiKey: true,
+        requiresEndpointUrl: true,
+        endpointPlaceholder: 'https://api.example.com/v1',
+        supportSearch: false,
+    },
+    anthropic: {
+        id: Providers.anthropic,
+        name: 'Anthropic',
+        requiresApiKey: true,
+        requiresEndpointUrl: false,
+        supportSearch: false,
+    },
+};
 
 // ============== Embeddings ===============
 
@@ -148,21 +142,17 @@ export const ProviderList: Record<Providers, ProviderParams> = {
  * - "query"    — a search query to find relevant documents
  * - "document" — a document to be indexed and retrieved
  */
-export type EmbeddingTaskType = "query" | "document";
+export type EmbeddingTaskType = 'query' | 'document';
 
 /**
  * One input to an embedding model. Discriminated by `type`.
  * Drivers consume binary content via DataSource and may pass a provider-native
  * URL (gs://, s3://, https://) when one is available.
  */
-export type EmbeddingInput =
-    | TextEmbeddingInput
-    | ImageEmbeddingInput
-    | VideoEmbeddingInput
-    | AudioEmbeddingInput;
+export type EmbeddingInput = TextEmbeddingInput | ImageEmbeddingInput | VideoEmbeddingInput | AudioEmbeddingInput;
 
 export interface TextEmbeddingInput {
-    type: "text";
+    type: 'text';
     text: string;
     /** Overrides EmbeddingsOptions.task_type for this input. */
     task_type?: EmbeddingTaskType;
@@ -171,12 +161,12 @@ export interface TextEmbeddingInput {
 }
 
 export interface ImageEmbeddingInput {
-    type: "image";
+    type: 'image';
     source: DataSource;
 }
 
 export interface VideoEmbeddingInput {
-    type: "video";
+    type: 'video';
     source: DataSource;
     start_sec?: number;
     length_sec?: number;
@@ -187,11 +177,11 @@ export interface VideoEmbeddingInput {
     /** TwelveLabs Marengo. */
     min_clip_sec?: number;
     /** TwelveLabs Marengo: which views to extract per segment. */
-    embedding_option?: ("visual-text" | "visual-image" | "audio")[];
+    embedding_option?: ('visual-text' | 'visual-image' | 'audio')[];
 }
 
 export interface AudioEmbeddingInput {
-    type: "audio";
+    type: 'audio';
     source: DataSource;
     start_sec?: number;
     length_sec?: number;
@@ -234,7 +224,7 @@ export interface EmbeddingResultItem {
 export interface EmbeddingOutput {
     values: number[];
     /** Which modality this vector represents (useful for joint-multimodal results). */
-    modality?: "text" | "image" | "video" | "audio";
+    modality?: 'text' | 'image' | 'video' | 'audio';
     /** Segment start time for video/audio. */
     start_sec?: number;
     /** Segment end time for video/audio. */
@@ -270,11 +260,11 @@ export interface LlumiverseErrorContext {
 
 /**
  * Standardized error class for Llumiverse driver errors.
- * 
+ *
  * Normalizes errors from different LLM providers (OpenAI, Anthropic, Bedrock, VertexAI, etc.)
  * into a consistent format. The primary value is the `retryable` flag, which enables upstream
  * consumers to implement smart retry logic.
- * 
+ *
  * @example
  * ```typescript
  * try {
@@ -284,7 +274,7 @@ export interface LlumiverseErrorContext {
  *     console.log(`Provider: ${error.context.provider}`);
  *     console.log(`Model: ${error.context.model}`);
  *     console.log(`Retryable: ${error.retryable}`);
- *     
+ *
  *     if (error.retryable) {
  *       // Implement retry logic with exponential backoff
  *       await retryWithBackoff(() => driver.execute(segments, options));
@@ -298,7 +288,7 @@ export interface LlumiverseErrorContext {
  * ```
  */
 export class LlumiverseError extends Error {
-    /** 
+    /**
      * HTTP status code (e.g., 429, 500) if available.
      * Undefined if the error doesn't have a numeric status code.
      */
@@ -310,12 +300,12 @@ export class LlumiverseError extends Error {
      */
     readonly name: string;
 
-    /** 
+    /**
      * Whether this error is retryable.
      * - True: Definitely retryable (rate limits, timeouts, server errors)
      * - False: Definitely not retryable (auth failures, invalid requests, malformed schemas)
      * - Undefined: Unknown retryability - allows consumers to decide default behavior
-     * 
+     *
      * When undefined, consumers can choose their retry strategy:
      * - Conservative: Don't retry unknown errors (avoid spam)
      * - Resilient: Retry unknown errors (prioritize success)
@@ -340,7 +330,7 @@ export class LlumiverseError extends Error {
         context: LlumiverseErrorContext,
         originalError: unknown,
         code?: number,
-        name?: string
+        name?: string,
     ) {
         super(message);
         this.name = name || 'LlumiverseError';
@@ -368,16 +358,15 @@ export class LlumiverseError extends Error {
             context: this.context,
             stack: this.stack,
             // Include original error message if available
-            originalErrorMessage: this.originalError instanceof Error
-                ? this.originalError.message
-                : String(this.originalError),
+            originalErrorMessage:
+                this.originalError instanceof Error ? this.originalError.message : String(this.originalError),
         };
     }
 
     /**
      * Type guard to check if an error is a LlumiverseError.
      * Useful for conditional error handling.
-     * 
+     *
      * @param error - The error to check
      * @returns True if the error is a LlumiverseError
      */
@@ -389,22 +378,22 @@ export class LlumiverseError extends Error {
 // ============== Result Types ===============
 
 export interface BaseResult {
-    type: "text" | "json" | "image";
+    type: 'text' | 'json' | 'image';
     value: unknown;
 }
 
 export interface TextResult extends BaseResult {
-    type: "text";
+    type: 'text';
     value: string;
 }
 
 export interface JsonResult extends BaseResult {
-    type: "json";
+    type: 'json';
     value: JSONValue;
 }
 
 export interface ImageResult extends BaseResult {
-    type: "image";
+    type: 'image';
     value: string; // base64 data url or real url
 }
 
@@ -413,15 +402,16 @@ export interface ImageResult extends BaseResult {
  */
 export type CompletionResult = TextResult | JsonResult | ImageResult;
 
-
 //Internal structure used in driver implementation.
 export interface CompletionChunkObject {
     result: CompletionResult[];
     token_usage?: ExecutionTokenUsage;
-    finish_reason?: "stop" | "length" | string;
+    finish_reason?: 'stop' | 'length' | string;
     /**
      * Tool calls returned by the model during streaming.
      * Each chunk may contain partial tool call information that needs to be aggregated.
+     * Typed with `unknown` params because streamed chunks carry partial (often string)
+     * tool_input that is only parsed into a JSONObject once fully accumulated.
      */
     tool_use?: ToolUse<unknown>[];
 }
@@ -433,29 +423,29 @@ export interface CompletionChunkObject {
  * - Plain object schemas for simpler cases
  */
 export interface ToolDefinition {
-    name: string,
-    description?: string,
+    name: string;
+    description?: string;
     input_schema: {
         type?: unknown;
         properties?: Record<string, unknown> | null | undefined;
         required?: readonly string[] | string[];
         additionalProperties?: unknown;
         [k: string]: unknown;
-    },
+    };
 }
 /**
  * A tool use instance represents a call to a tool.
  * The id property is used to identify the tool call.
  */
 export interface ToolUse<ParamsT = JSONObject> {
-    id: string,
-    tool_name: string,
-    tool_input: ParamsT | null,
+    id: string;
+    tool_name: string;
+    tool_input: ParamsT | null;
     /**
      * Gemini thinking models require thought_signature to be passed back with tool results.
      * This preserves the model's reasoning state during multi-turn tool use.
      */
-    thought_signature?: string,
+    thought_signature?: string;
 }
 
 export interface Completion {
@@ -469,7 +459,7 @@ export interface Completion {
     /**
      * The finish reason as reported by the model: stop | length or other model specific values
      */
-    finish_reason?: "stop" | "length" | "tool_use" | string;
+    finish_reason?: 'stop' | 'length' | 'tool_use' | string;
 
     /**
      * Set only if a result validation error occurred, otherwise if the result is valid the error field is undefined
@@ -500,7 +490,6 @@ export interface ExecutionResponse<PromptT = unknown> extends Completion {
     chunks?: number;
 }
 
-
 export interface CompletionStream<PromptT = unknown> extends AsyncIterable<string> {
     completion: ExecutionResponse<PromptT> | undefined;
 }
@@ -511,7 +500,7 @@ export interface CompletionStream<PromptT = unknown> extends AsyncIterable<strin
  * - Message-only: logger.info("message")
  * - Object-first: logger.info({ data }, "message")
  * - PREVENTS: logger.info("message", { data }) - compile error (objects not allowed in ...args)
- * 
+ *
  * Additional args must be primitives (string | number | boolean) for string interpolation.
  */
 export interface Logger {
@@ -525,19 +514,52 @@ export interface Logger {
     error<T>(obj: T, msg?: T extends string ? never : string, ...args: (string | number | boolean)[]): void;
 }
 
+/**
+ * HTTP timeouts applied to a driver's upstream LLM-provider calls.
+ *
+ * All values are in milliseconds. Drivers should map these onto whatever
+ * HTTP client their SDK uses; the defaults applied in
+ * `@llumiverse/core/createDriverHttpAgent` are:
+ *   - headersTimeout:   60_000
+ *   - bodyTimeout:      60_000
+ *   - connectTimeout:   10_000
+ *   - keepAliveTimeout: 30_000
+ *
+ * The defaults are deliberately tighter than Node's undici default
+ * (5 minutes for headers/body) so a hung upstream surfaces quickly. Bump
+ * `bodyTimeout` for streaming flows that have legitimate silent gaps
+ * (e.g. tool-using agents).
+ */
+export interface HttpTimeoutOptions {
+    /** Time (ms) to wait for the first response byte after the request is sent. */
+    headersTimeout?: number;
+    /** Time (ms) between body chunks once streaming has started. */
+    bodyTimeout?: number;
+    /** TCP/TLS connect timeout (ms). */
+    connectTimeout?: number;
+    /** Idle socket reuse timeout (ms). */
+    keepAliveTimeout?: number;
+}
+
 export interface DriverOptions {
-    logger?: Logger | "console";
+    logger?: Logger | 'console';
+    /**
+     * Optional HTTP timeouts applied to the driver's upstream LLM-provider
+     * calls. Drivers that don't make HTTP calls (e.g. the in-process test
+     * driver) ignore this. See {@link HttpTimeoutOptions} for defaults.
+     */
+    httpTimeout?: HttpTimeoutOptions;
 }
 
 export type JSONSchemaTypeName =
-    | "string" //
-    | "number"
-    | "integer"
-    | "boolean"
-    | "object"
-    | "array"
-    | "null"
-    | "any";
+    | 'string' //
+    | 'number'
+    | 'integer'
+    | 'boolean'
+    | 'object'
+    | 'array'
+    | 'null'
+    | 'any';
 
 export type JSONSchemaType =
     | string //
@@ -551,7 +573,7 @@ export interface JSONSchemaObject {
     [key: string]: JSONSchemaType;
 }
 
-export interface JSONSchemaArray extends Array<JSONSchemaType> { }
+export interface JSONSchemaArray extends Array<JSONSchemaType> {}
 
 export interface JSONSchemaProperties {
     [key: string]: JSONSchema;
@@ -593,6 +615,12 @@ export interface StatelessExecutionOptions extends PromptOptions {
      */
     include_original_response?: boolean;
     model_options?: ModelOptions;
+
+    /**
+     * Per-call HTTP timeouts for upstream LLM-provider calls. These override
+     * the driver's default `DriverOptions.httpTimeout` for this execution only.
+     */
+    httpTimeout?: HttpTimeoutOptions;
 
     /**
      * @deprecated This is deprecated. Use CompletionResult.type information instead.
@@ -648,28 +676,28 @@ export interface ExecutionOptions extends StatelessExecutionOptions {
 //Common names to share between different models
 export enum SharedOptions {
     //Text
-    max_tokens = "max_tokens",
-    temperature = "temperature",
-    top_p = "top_p",
-    top_k = "top_k",
-    presence_penalty = "presence_penalty",
-    frequency_penalty = "frequency_penalty",
-    stop_sequence = "stop_sequence",
-    effort = "effort",
+    max_tokens = 'max_tokens',
+    temperature = 'temperature',
+    top_p = 'top_p',
+    top_k = 'top_k',
+    presence_penalty = 'presence_penalty',
+    frequency_penalty = 'frequency_penalty',
+    stop_sequence = 'stop_sequence',
+    effort = 'effort',
 
     //Image
-    seed = "seed",
-    number_of_images = "number_of_images",
+    seed = 'seed',
+    number_of_images = 'number_of_images',
 }
 
 export enum OptionType {
-    numeric = "numeric",
-    enum = "enum",
-    boolean = "boolean",
-    string_list = "string_list"
+    numeric = 'numeric',
+    enum = 'enum',
+    boolean = 'boolean',
+    string_list = 'string_list',
 }
 
-export type ReasoningEffort = "low" | "medium" | "high";
+export type ReasoningEffort = 'low' | 'medium' | 'high';
 
 // ============== Model Options ===============
 
@@ -727,16 +755,16 @@ export interface StringListOptionInfo extends OptionInfoPrototype {
 
 // ============== Prompts ===============
 export enum PromptRole {
-    safety = "safety",
-    system = "system",
-    user = "user",
-    assistant = "assistant",
-    negative = "negative",
-    mask = "mask",
+    safety = 'safety',
+    system = 'system',
+    user = 'user',
+    assistant = 'assistant',
+    negative = 'negative',
+    mask = 'mask',
     /**
      * Used to send the response of a tool
      */
-    tool = "tool"
+    tool = 'tool',
 }
 
 export interface PromptSegment {
@@ -751,7 +779,7 @@ export interface PromptSegment {
      * This should be copied from the ToolUse.thought_signature when sending tool responses.
      */
     thought_signature?: string;
-    files?: DataSource[]
+    files?: DataSource[];
 }
 
 export interface ExecutionTokenUsage {
@@ -775,8 +803,8 @@ export interface ExecutionTokenUsage {
  * @deprecated This is deprecated. Use CompletionResult.type information instead.
  */
 export enum Modalities {
-    text = "text",
-    image = "image",
+    text = 'text',
+    image = 'image',
 }
 
 /**
@@ -811,7 +839,7 @@ export interface AIModel<ProviderKeys = string> {
     status?: AIModelStatus; //status of the model
     can_stream?: boolean; //if the model's response can be streamed
     is_custom?: boolean; //if the model is a custom model (a trained model)
-    is_multimodal?: boolean //if the model support files and images
+    is_multimodal?: boolean; //if the model support files and images
     input_modalities?: string[]; //Input modalities supported by the model (e.g. text, image, video, audio)
     output_modalities?: string[]; //Output modalities supported by the model (e.g. text, image, video, audio)
     tool_support?: boolean; //if the model supports tool use
@@ -819,12 +847,12 @@ export interface AIModel<ProviderKeys = string> {
 }
 
 export enum AIModelStatus {
-    Available = "available",
-    Pending = "pending",
-    Stopped = "stopped",
-    Unavailable = "unavailable",
-    Unknown = "unknown",
-    Legacy = "legacy",
+    Available = 'available',
+    Pending = 'pending',
+    Stopped = 'stopped',
+    Unavailable = 'unavailable',
+    Unknown = 'unknown',
+    Legacy = 'legacy',
 }
 
 /**
@@ -841,37 +869,34 @@ export interface ModelSearchPayload {
     owner?: string;
 }
 
-
 export enum ModelType {
-    Classifier = "classifier",
-    Regressor = "regressor",
-    Clustering = "clustering",
-    AnomalyDetection = "anomaly-detection",
-    TimeSeries = "time-series",
-    Text = "text",
-    Image = "image",
-    Audio = "audio",
-    Video = "video",
-    Embedding = "embedding",
-    Chat = "chat",
-    Code = "code",
-    NLP = "nlp",
-    MultiModal = "multi-modal",
-    Test = "test",
-    Other = "other",
-    Unknown = "unknown"
+    Classifier = 'classifier',
+    Regressor = 'regressor',
+    Clustering = 'clustering',
+    AnomalyDetection = 'anomaly-detection',
+    TimeSeries = 'time-series',
+    Text = 'text',
+    Image = 'image',
+    Audio = 'audio',
+    Video = 'video',
+    Embedding = 'embedding',
+    Chat = 'chat',
+    Code = 'code',
+    NLP = 'nlp',
+    MultiModal = 'multi-modal',
+    Test = 'test',
+    Other = 'other',
+    Unknown = 'unknown',
 }
 
-
 // ============== training =====================
-
-
 
 export interface DataSource {
     name: string;
     mime_type: string;
     getStream(): Promise<ReadableStream<Uint8Array | string>>;
     getURL(): Promise<string>;
+    getURI(): Promise<string>;
 }
 
 export interface TrainingOptions {
@@ -882,16 +907,16 @@ export interface TrainingOptions {
 
 export interface TrainingPromptOptions {
     segments: PromptSegment[];
-    completion: CompletionResult[]
+    completion: CompletionResult[];
     model: string; // the model to train
     schema?: JSONSchema; // the result schema f any
 }
 
 export enum TrainingJobStatus {
-    running = "running",
-    succeeded = "succeeded",
-    failed = "failed",
-    cancelled = "cancelled",
+    running = 'running',
+    succeeded = 'succeeded',
+    failed = 'failed',
+    cancelled = 'cancelled',
 }
 
 export interface TrainingJob {

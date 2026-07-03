@@ -1,37 +1,42 @@
-import { DataSource, PromptRole, PromptSegment, readStreamAsBase64 } from "@llumiverse/core";
-import { NovaMessagesPrompt } from "@llumiverse/core/formatters";
-import { createReadStream } from "fs";
-import { JSONSchema } from "@llumiverse/core";
-import { createReadableStreamFromReadable } from "node-web-stream-adapters";
-import { basename, dirname, resolve } from "path";
-import { fileURLToPath } from "url";
+import { createReadStream } from 'node:fs';
+import { basename, dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { JSONSchema } from '@llumiverse/core';
+import { type DataSource, PromptRole, type PromptSegment, readStreamAsBase64 } from '@llumiverse/core';
+import type { NovaMessagesPrompt } from '@llumiverse/core/formatters';
+import { createReadableStreamFromReadable } from 'node-web-stream-adapters';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // 512x512 JPEG fallback — within Bedrock's [320, 4096] range
-const LOCAL_FALLBACK_IMAGE = resolve(__dirname, "test_image_1.jpg");
+const LOCAL_FALLBACK_IMAGE = resolve(__dirname, 'test_image_1.jpg');
 
 export const testPrompt_color: PromptSegment[] = [
     {
         role: PromptRole.user,
-        content: "What color is the sky?"
-    }
-]
+        content: 'What color is the sky?',
+    },
+];
 
 //json schema with 2 properties object and color
 export const testSchema_color: JSONSchema = {
-    type: "object",
+    type: 'object',
     properties: {
         color: {
-            type: "string"
-        }
-    }
-}
+            type: 'string',
+        },
+    },
+};
 
 class ImageUrlSource implements DataSource {
-    constructor(public url: string, public mime_type: string = "image/jpeg") {
-    }
+    constructor(
+        public url: string,
+        public mime_type: string = 'image/jpeg',
+    ) {}
     get name() {
         return basename(this.url);
+    }
+    async getURI(): Promise<string> {
+        return this.url;
     }
     async getURL(): Promise<string> {
         return this.url;
@@ -61,83 +66,104 @@ async function fetchWithFallback(url: string): Promise<ReadableStream<string | U
 
 export const testPrompt_describeImage: PromptSegment[] = [
     {
-        content: "You are a lab assistant analysing images of animals, then tag the images with accurate description of the animal shown in the picture.",
+        content:
+            'You are a lab assistant analysing images of animals, then tag the images with accurate description of the animal shown in the picture.',
         role: PromptRole.user,
-        files: [new ImageUrlSource("https://upload.wikimedia.org/wikipedia/commons/b/b2/WhiteCat.jpg")]
-    }
-]
+        files: [new ImageUrlSource('https://upload.wikimedia.org/wikipedia/commons/b/b2/WhiteCat.jpg')],
+    },
+];
 
-export const testSchema_animalDescription: JSONSchema =
-{
-    type: "object",
+export const testSchema_animalDescription: JSONSchema = {
+    type: 'object',
     properties: {
         name: {
-            type: "string"
+            type: 'string',
         },
         type: {
-            type: "string"
+            type: 'string',
         },
         species: {
-            type: "string"
+            type: 'string',
         },
         characteristics: {
-            type: "array",
+            type: 'array',
             items: {
-                type: "string"
-            }
-        }
-    }
-}
-
-export const testPrompt_textToImage: NovaMessagesPrompt =
-{
-    messages: [{
-        role: PromptRole.user,
-        content: [{
-            text: "A blue sky with a purple unicorn flying"
-        }]
-    }]
-}
-
-export const testPrompt_textToImageGuidance: NovaMessagesPrompt =
-{
-    messages: [{
-        role: PromptRole.user,
-        content: [{
-            text: "A blue sky with a purple unicorn flying"
+                type: 'string',
+            },
         },
-        {
-            image: {
-                format: "jpeg",
-                source: { bytes: await getImageAsBase64(new ImageUrlSource("https://upload.wikimedia.org/wikipedia/commons/b/b2/WhiteCat.jpg")) }
-            }
-        }
-        ]
-    }]
-}
+    },
+};
 
-export const testPrompt_imageVariations: NovaMessagesPrompt =
-{
-    messages: [{
-        role: PromptRole.user,
-        content: [{
-            text: "A purple cat in from of a cathedral"
-        },
+export const testPrompt_textToImage: NovaMessagesPrompt = {
+    messages: [
         {
-            image: {
-                format: "jpeg",
-                source: { bytes: await getImageAsBase64(new ImageUrlSource("https://upload.wikimedia.org/wikipedia/commons/b/b2/WhiteCat.jpg")), }
-            }
+            role: PromptRole.user,
+            content: [
+                {
+                    text: 'A blue sky with a purple unicorn flying',
+                },
+            ],
         },
+    ],
+};
+
+export const testPrompt_textToImageGuidance: NovaMessagesPrompt = {
+    messages: [
         {
-            image: {
-                format: "jpeg",
-                source: { bytes: await getImageAsBase64(new ImageUrlSource("https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg/640px-Cat03.jpg")), }
-            }
-        }
-        ]
-    }]
-}
+            role: PromptRole.user,
+            content: [
+                {
+                    text: 'A blue sky with a purple unicorn flying',
+                },
+                {
+                    image: {
+                        format: 'jpeg',
+                        source: {
+                            bytes: await getImageAsBase64(
+                                new ImageUrlSource('https://upload.wikimedia.org/wikipedia/commons/b/b2/WhiteCat.jpg'),
+                            ),
+                        },
+                    },
+                },
+            ],
+        },
+    ],
+};
+
+export const testPrompt_imageVariations: NovaMessagesPrompt = {
+    messages: [
+        {
+            role: PromptRole.user,
+            content: [
+                {
+                    text: 'A purple cat in from of a cathedral',
+                },
+                {
+                    image: {
+                        format: 'jpeg',
+                        source: {
+                            bytes: await getImageAsBase64(
+                                new ImageUrlSource('https://upload.wikimedia.org/wikipedia/commons/b/b2/WhiteCat.jpg'),
+                            ),
+                        },
+                    },
+                },
+                {
+                    image: {
+                        format: 'jpeg',
+                        source: {
+                            bytes: await getImageAsBase64(
+                                new ImageUrlSource(
+                                    'https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg/640px-Cat03.jpg',
+                                ),
+                            ),
+                        },
+                    },
+                },
+            ],
+        },
+    ],
+};
 
 async function getImageAsBase64(source: DataSource) {
     const stream = await source.getStream();

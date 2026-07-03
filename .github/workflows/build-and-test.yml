@@ -1,35 +1,48 @@
-name: Build+Test
+name: (test) Build and test
 
 on:
   push:
   workflow_dispatch:
+
+# Cancel superseded runs on the same branch (latest push wins).
+concurrency:
+  group: build-and-test-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
   build-and-test:
+    name: Build and test
     runs-on: ubuntu-latest
+    # Scopes provider API keys (OPENAI, MISTRAL, GROQ, TOGETHER, etc.) to a
+    # dedicated environment (zizmor: secrets-outside-env).
+    environment: build
     permissions:
-      id-token: write
+      id-token: write # required for OIDC federation with GCP and AWS
       contents: read
     strategy:
       matrix:
         node-version: [24.x]
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:
           run_install: false
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: "pnpm"
-      - run: pnpm install
-      - run: pnpm build
-      - run: pnpm typecheck:test
+      - name: Install workspace dependencies
+        run: pnpm install
+      - name: Build workspace
+        run: pnpm build
 
       - name: Authenticate with Google Cloud
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
@@ -38,14 +51,15 @@ jobs:
           project_id: "dengenlabs"
           workload_identity_provider: "projects/265888598630/locations/global/workloadIdentityPools/composable-cloud/providers/github"
 
-      - uses: aws-actions/configure-aws-credentials@d979d5b3a71173a29b74b5b88418bfda9437d885 # v6.1.1
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
         with:
           audience: sts.amazonaws.com
           role-to-assume: arn:aws:iam::716085231028:role/ComposablePromptExecutor
           role-session-name: github-actions
           aws-region: us-east-1
 
-      - run: npx vitest
+      - name: Typecheck and test
         env:
           TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
@@ -54,26 +68,31 @@ jobs:
           BEDROCK_REGION: us-east-1
           GOOGLE_PROJECT_ID: dengenlabs
           GOOGLE_REGION: us-central1
+        run: pnpm typecheck:test && npx vitest
 
   notify-repo-composableai:
+    name: Notify vertesia/composableai of new commit
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/preview' || startsWith(github.ref, 'refs/heads/repo-dispatch')
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/preview' || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/repo-dispatch')
     needs:
       - build-and-test
+    # Scopes the cross-repo dispatch token to a dedicated environment.
+    environment: build
     steps:
       - name: Notify repository vertesia/composableai
+        env:
+          REPO_COMPOSABLEAI_ACCESS_TOKEN: ${{ secrets.REPO_COMPOSABLEAI_ACCESS_TOKEN }}
+          LLUMIVERSE_SHA: ${{ github.sha }}
+          BRANCH: ${{ github.ref_name }}
         run: |
           curl -L \
             -X POST \
             -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${{ secrets.REPO_COMPOSABLEAI_ACCESS_TOKEN }}" \
+            -H "Authorization: Bearer ${REPO_COMPOSABLEAI_ACCESS_TOKEN}" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             --fail-with-body \
             https://api.github.com/repos/vertesia/composableai/dispatches \
-            -d '{
-              "event_type": "update-git-submodule-request",
-              "client_payload": {
-                "llumiverse_sha": "${{ github.sha }}",
-                "branch": "${GITHUB_REF_NAME}"
-              }
-            }'
+            -d "$(jq -nc \
+              --arg sha "${LLUMIVERSE_SHA}" \
+              --arg branch "${BRANCH}" \
+              '{event_type: "update-git-submodule-request", client_payload: {llumiverse_sha: $sha, branch: $branch}}')"

@@ -1,16 +1,16 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from 'vitest';
 import {
-    stripBinaryFromConversation,
+    deserializeBinaryFromStorage,
+    getConversationMeta,
+    incrementConversationTurn,
+    setConversationMeta,
     stripBase64ImagesFromConversation,
+    stripBinaryFromConversation,
     stripHeartbeatsFromConversation,
     truncateLargeTextInConversation,
-    getConversationMeta,
-    setConversationMeta,
-    incrementConversationTurn,
-    deserializeBinaryFromStorage
-} from "../src/conversation-utils";
+} from '../src/conversation-utils.js';
 
-import { Tree } from "./__helpers__/test-utils";
+import type { Tree } from './__helpers__/test-utils.js';
 
 const IMAGE_PLACEHOLDER = '[Image removed from conversation history]';
 const DOCUMENT_PLACEHOLDER = '[Document removed from conversation history]';
@@ -21,21 +21,28 @@ const FORCE_STRIP = { keepForTurns: 0, currentTurn: 0 };
 describe('stripBinaryFromConversation', () => {
     test('should replace Bedrock image block with text block when force stripping', () => {
         const input = {
-            messages: [{
-                content: [{
-                    toolResult: {
-                        toolUseId: 'abc123',
-                        content: [{
-                            text: 'Image loaded'
-                        }, {
-                            image: {
-                                format: 'png',
-                                source: { bytes: new Uint8Array([137, 80, 78, 71]) }
-                            }
-                        }]
-                    }
-                }]
-            }]
+            messages: [
+                {
+                    content: [
+                        {
+                            toolResult: {
+                                toolUseId: 'abc123',
+                                content: [
+                                    {
+                                        text: 'Image loaded',
+                                    },
+                                    {
+                                        image: {
+                                            format: 'png',
+                                            source: { bytes: new Uint8Array([137, 80, 78, 71]) },
+                                        },
+                                    },
+                                ],
+                            },
+                        },
+                    ],
+                },
+            ],
         };
 
         const result = stripBinaryFromConversation(input, FORCE_STRIP) as Tree;
@@ -47,14 +54,18 @@ describe('stripBinaryFromConversation', () => {
 
     test('should serialize (not strip) by default when no options provided', () => {
         const input = {
-            messages: [{
-                content: [{
-                    image: {
-                        format: 'png',
-                        source: { bytes: new Uint8Array([137, 80, 78, 71]) }
-                    }
-                }]
-            }]
+            messages: [
+                {
+                    content: [
+                        {
+                            image: {
+                                format: 'png',
+                                source: { bytes: new Uint8Array([137, 80, 78, 71]) },
+                            },
+                        },
+                    ],
+                },
+            ],
         };
 
         // Default keepForTurns=Infinity means serialize for safe JSON storage
@@ -64,10 +75,12 @@ describe('stripBinaryFromConversation', () => {
 
     test('should preserve structure when no Uint8Array present', () => {
         const input = {
-            messages: [{
-                role: 'user',
-                content: [{ text: 'Hello' }]
-            }]
+            messages: [
+                {
+                    role: 'user',
+                    content: [{ text: 'Hello' }],
+                },
+            ],
         };
 
         const result = stripBinaryFromConversation(input);
@@ -86,10 +99,7 @@ describe('stripBinaryFromConversation', () => {
     });
 
     test('should handle raw Uint8Array in array', () => {
-        const input = [
-            { text: 'normal' },
-            new Uint8Array([4, 5, 6])
-        ];
+        const input = [{ text: 'normal' }, new Uint8Array([4, 5, 6])];
 
         const result = stripBinaryFromConversation(input, FORCE_STRIP) as unknown as Tree[];
 
@@ -103,25 +113,29 @@ describe('stripBinaryFromConversation', () => {
     });
 
     test('should replace Bedrock document block with text block', () => {
-        const input = [{
-            document: {
-                format: 'pdf',
-                name: 'report.pdf',
-                source: { bytes: new Uint8Array([0x25, 0x50, 0x44, 0x46]) } // %PDF
-            }
-        }];
+        const input = [
+            {
+                document: {
+                    format: 'pdf',
+                    name: 'report.pdf',
+                    source: { bytes: new Uint8Array([0x25, 0x50, 0x44, 0x46]) }, // %PDF
+                },
+            },
+        ];
 
         const result = stripBinaryFromConversation(input, FORCE_STRIP) as unknown as Tree[];
         expect(result[0]).toEqual({ text: DOCUMENT_PLACEHOLDER });
     });
 
     test('should replace Bedrock video block with text block', () => {
-        const input = [{
-            video: {
-                format: 'mp4',
-                source: { bytes: new Uint8Array([0x00, 0x00, 0x00, 0x20]) }
-            }
-        }];
+        const input = [
+            {
+                video: {
+                    format: 'mp4',
+                    source: { bytes: new Uint8Array([0x00, 0x00, 0x00, 0x20]) },
+                },
+            },
+        ];
 
         const result = stripBinaryFromConversation(input, FORCE_STRIP) as unknown as Tree[];
         expect(result[0]).toEqual({ text: VIDEO_PLACEHOLDER });
@@ -134,8 +148,8 @@ describe('stripBinaryFromConversation', () => {
                 { image: { format: 'png', source: { bytes: new Uint8Array([1]) } } },
                 { text: 'Middle' },
                 { image: { format: 'jpg', source: { bytes: new Uint8Array([2]) } } },
-                { text: 'Last' }
-            ]
+                { text: 'Last' },
+            ],
         };
 
         const result = stripBinaryFromConversation(input, FORCE_STRIP) as Tree;
@@ -151,14 +165,18 @@ describe('stripBinaryFromConversation', () => {
 describe('stripBase64ImagesFromConversation', () => {
     test('should replace OpenAI image_url block with text block', () => {
         const input = {
-            messages: [{
-                content: [{
-                    type: 'image_url',
-                    image_url: {
-                        url: 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD...'
-                    }
-                }]
-            }]
+            messages: [
+                {
+                    content: [
+                        {
+                            type: 'image_url',
+                            image_url: {
+                                url: 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD...',
+                            },
+                        },
+                    ],
+                },
+            ],
         };
 
         const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as Tree;
@@ -168,12 +186,16 @@ describe('stripBase64ImagesFromConversation', () => {
 
     test('should be a no-op by default when no options provided', () => {
         const input = {
-            messages: [{
-                content: [{
-                    type: 'image_url',
-                    image_url: { url: 'data:image/png;base64,abc123' }
-                }]
-            }]
+            messages: [
+                {
+                    content: [
+                        {
+                            type: 'image_url',
+                            image_url: { url: 'data:image/png;base64,abc123' },
+                        },
+                    ],
+                },
+            ],
         };
 
         // Default keepForTurns=Infinity means don't strip
@@ -183,14 +205,19 @@ describe('stripBase64ImagesFromConversation', () => {
 
     test('should replace Gemini inlineData block with text block', () => {
         // Generate a base64 string > 1000 chars
-        const largeBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='.repeat(20);
+        const largeBase64 =
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='.repeat(
+                20,
+            );
         const input = {
-            parts: [{
-                inlineData: {
-                    mimeType: 'image/png',
-                    data: largeBase64
-                }
-            }]
+            parts: [
+                {
+                    inlineData: {
+                        mimeType: 'image/png',
+                        data: largeBase64,
+                    },
+                },
+            ],
         };
 
         const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as Tree;
@@ -200,12 +227,14 @@ describe('stripBase64ImagesFromConversation', () => {
 
     test('should preserve short inlineData (not images)', () => {
         const input = {
-            parts: [{
-                inlineData: {
-                    mimeType: 'text/plain',
-                    data: 'short'
-                }
-            }]
+            parts: [
+                {
+                    inlineData: {
+                        mimeType: 'text/plain',
+                        data: 'short',
+                    },
+                },
+            ],
         };
 
         const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as Tree;
@@ -214,12 +243,16 @@ describe('stripBase64ImagesFromConversation', () => {
 
     test('should preserve http URLs in image_url blocks', () => {
         const input = {
-            messages: [{
-                content: [{
-                    type: 'image_url',
-                    image_url: { url: 'https://example.com/image.jpg' }
-                }]
-            }]
+            messages: [
+                {
+                    content: [
+                        {
+                            type: 'image_url',
+                            image_url: { url: 'https://example.com/image.jpg' },
+                        },
+                    ],
+                },
+            ],
         };
 
         const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as Tree;
@@ -234,7 +267,7 @@ describe('stripBase64ImagesFromConversation', () => {
 
     test('should preserve non-image data URLs', () => {
         const input = {
-            url: 'data:text/plain;base64,SGVsbG8gV29ybGQ='
+            url: 'data:text/plain;base64,SGVsbG8gV29ybGQ=',
         };
 
         const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as Tree;
@@ -243,20 +276,22 @@ describe('stripBase64ImagesFromConversation', () => {
 
     test('should replace Anthropic base64 image block with text block', () => {
         const input = {
-            messages: [{
-                role: 'user',
-                content: [
-                    { type: 'text', text: 'Here is an image' },
-                    {
-                        type: 'image',
-                        source: {
-                            type: 'base64',
-                            data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk',
-                            media_type: 'image/png'
-                        }
-                    }
-                ]
-            }]
+            messages: [
+                {
+                    role: 'user',
+                    content: [
+                        { type: 'text', text: 'Here is an image' },
+                        {
+                            type: 'image',
+                            source: {
+                                type: 'base64',
+                                data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk',
+                                media_type: 'image/png',
+                            },
+                        },
+                    ],
+                },
+            ],
         };
 
         const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as Tree;
@@ -267,20 +302,22 @@ describe('stripBase64ImagesFromConversation', () => {
 
     test('should replace Anthropic base64 document block with text block', () => {
         const input = {
-            messages: [{
-                role: 'user',
-                content: [
-                    { type: 'text', text: 'Here is a document' },
-                    {
-                        type: 'document',
-                        source: {
-                            type: 'base64',
-                            data: 'JVBERi0xLjQKJeLjz9MKMSAwIG9iago=',
-                            media_type: 'application/pdf'
-                        }
-                    }
-                ]
-            }]
+            messages: [
+                {
+                    role: 'user',
+                    content: [
+                        { type: 'text', text: 'Here is a document' },
+                        {
+                            type: 'document',
+                            source: {
+                                type: 'base64',
+                                data: 'JVBERi0xLjQKJeLjz9MKMSAwIG9iago=',
+                                media_type: 'application/pdf',
+                            },
+                        },
+                    ],
+                },
+            ],
         };
 
         const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as Tree;
@@ -291,16 +328,20 @@ describe('stripBase64ImagesFromConversation', () => {
 
     test('should not strip Anthropic image block with URL source', () => {
         const input = {
-            messages: [{
-                role: 'user',
-                content: [{
-                    type: 'image',
-                    source: {
-                        type: 'url',
-                        url: 'https://example.com/image.png'
-                    }
-                }]
-            }]
+            messages: [
+                {
+                    role: 'user',
+                    content: [
+                        {
+                            type: 'image',
+                            source: {
+                                type: 'url',
+                                url: 'https://example.com/image.png',
+                            },
+                        },
+                    ],
+                },
+            ],
         };
 
         const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as Tree;
@@ -314,8 +355,8 @@ describe('stripBase64ImagesFromConversation', () => {
             content: [
                 { type: 'text', text: 'Hello' },
                 { type: 'image_url', image_url: { url: 'data:image/png;base64,abc123' } },
-                { type: 'text', text: 'World' }
-            ]
+                { type: 'text', text: 'World' },
+            ],
         };
 
         const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as Tree;
@@ -362,18 +403,20 @@ describe('turn-based stripping', () => {
     describe('keepForTurns option', () => {
         test('should serialize binary data when keepForTurns > currentTurn', () => {
             const input = {
-                content: [{
-                    image: {
-                        format: 'png',
-                        source: { bytes: new Uint8Array([137, 80, 78, 71]) }
-                    }
-                }]
+                content: [
+                    {
+                        image: {
+                            format: 'png',
+                            source: { bytes: new Uint8Array([137, 80, 78, 71]) },
+                        },
+                    },
+                ],
             };
 
             // Keep for 3 turns, current turn is 1 - should serialize not strip
             const result = stripBinaryFromConversation(input, {
                 keepForTurns: 3,
-                currentTurn: 1
+                currentTurn: 1,
             }) as Tree;
 
             // Should have serialized format (bytes._base64), not placeholder
@@ -383,18 +426,20 @@ describe('turn-based stripping', () => {
 
         test('should strip when currentTurn >= keepForTurns', () => {
             const input = {
-                content: [{
-                    image: {
-                        format: 'png',
-                        source: { bytes: new Uint8Array([137, 80, 78, 71]) }
-                    }
-                }]
+                content: [
+                    {
+                        image: {
+                            format: 'png',
+                            source: { bytes: new Uint8Array([137, 80, 78, 71]) },
+                        },
+                    },
+                ],
             };
 
             // Keep for 2 turns, current turn is 2 - should strip
             const result = stripBinaryFromConversation(input, {
                 keepForTurns: 2,
-                currentTurn: 2
+                currentTurn: 2,
             }) as Tree;
 
             expect(result.content[0]).toEqual({ text: IMAGE_PLACEHOLDER });
@@ -402,18 +447,20 @@ describe('turn-based stripping', () => {
 
         test('should strip when currentTurn > keepForTurns', () => {
             const input = {
-                content: [{
-                    image: {
-                        format: 'png',
-                        source: { bytes: new Uint8Array([137, 80, 78, 71]) }
-                    }
-                }]
+                content: [
+                    {
+                        image: {
+                            format: 'png',
+                            source: { bytes: new Uint8Array([137, 80, 78, 71]) },
+                        },
+                    },
+                ],
             };
 
             // Keep for 2 turns, current turn is 5 - should strip
             const result = stripBinaryFromConversation(input, {
                 keepForTurns: 2,
-                currentTurn: 5
+                currentTurn: 5,
             }) as Tree;
 
             expect(result.content[0]).toEqual({ text: IMAGE_PLACEHOLDER });
@@ -421,17 +468,19 @@ describe('turn-based stripping', () => {
 
         test('should strip immediately when keepForTurns is 0', () => {
             const input = {
-                content: [{
-                    image: {
-                        format: 'png',
-                        source: { bytes: new Uint8Array([137, 80, 78, 71]) }
-                    }
-                }]
+                content: [
+                    {
+                        image: {
+                            format: 'png',
+                            source: { bytes: new Uint8Array([137, 80, 78, 71]) },
+                        },
+                    },
+                ],
             };
 
             const result = stripBinaryFromConversation(input, {
                 keepForTurns: 0,
-                currentTurn: 0
+                currentTurn: 0,
             }) as Tree;
 
             expect(result.content[0]).toEqual({ text: IMAGE_PLACEHOLDER });
@@ -439,12 +488,14 @@ describe('turn-based stripping', () => {
 
         test('should use turn number from metadata when currentTurn not provided', () => {
             let conversation: unknown = {
-                content: [{
-                    image: {
-                        format: 'png',
-                        source: { bytes: new Uint8Array([137, 80, 78, 71]) }
-                    }
-                }]
+                content: [
+                    {
+                        image: {
+                            format: 'png',
+                            source: { bytes: new Uint8Array([137, 80, 78, 71]) },
+                        },
+                    },
+                ],
             };
 
             // Set turn number to 1 in metadata
@@ -452,7 +503,7 @@ describe('turn-based stripping', () => {
 
             // Keep for 3 turns - should serialize (turn 1 < 3)
             const result = stripBinaryFromConversation(conversation, {
-                keepForTurns: 3
+                keepForTurns: 3,
             }) as Tree;
 
             expect(result.content[0].image.source.bytes._base64).toBeDefined();
@@ -463,18 +514,20 @@ describe('turn-based stripping', () => {
         test('should serialize Uint8Array to base64 for safe storage', () => {
             const originalBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
             const input = {
-                content: [{
-                    image: {
-                        format: 'png',
-                        source: { bytes: originalBytes }
-                    }
-                }]
+                content: [
+                    {
+                        image: {
+                            format: 'png',
+                            source: { bytes: originalBytes },
+                        },
+                    },
+                ],
             };
 
             // Serialize for storage
             const serialized = stripBinaryFromConversation(input, {
                 keepForTurns: 5,
-                currentTurn: 1
+                currentTurn: 1,
             }) as Tree;
 
             // Should be base64 encoded (bytes becomes { _base64: ... })
@@ -488,26 +541,30 @@ describe('turn-based stripping', () => {
             // Should be deserializable back to Uint8Array
             const deserialized = deserializeBinaryFromStorage(parsed) as Tree;
             expect(deserialized.content[0].image.source.bytes).toBeInstanceOf(Uint8Array);
-            expect(Array.from(deserialized.content[0].image.source.bytes as unknown as Uint8Array)).toEqual(Array.from(originalBytes));
+            expect(Array.from(deserialized.content[0].image.source.bytes as unknown as Uint8Array)).toEqual(
+                Array.from(originalBytes),
+            );
         });
 
         test('should strip serialized images when threshold exceeded', () => {
             // Start with serialized data (as if it was stored and restored)
             // The serialized format has bytes: { _base64: '...' }
             const serializedConversation = {
-                content: [{
-                    image: {
-                        format: 'png',
-                        source: { bytes: { _base64: 'iVBORw0KGgo=' } }
-                    }
-                }],
-                _llumiverse_meta: { turnNumber: 3 }
+                content: [
+                    {
+                        image: {
+                            format: 'png',
+                            source: { bytes: { _base64: 'iVBORw0KGgo=' } },
+                        },
+                    },
+                ],
+                _llumiverse_meta: { turnNumber: 3 },
             };
 
             // Now strip with threshold of 2 turns (current turn 3 >= 2)
             const result = stripBinaryFromConversation(serializedConversation, {
                 keepForTurns: 2,
-                currentTurn: 3
+                currentTurn: 3,
             }) as Tree;
 
             // Should be stripped to placeholder
@@ -518,16 +575,18 @@ describe('turn-based stripping', () => {
     describe('base64 images turn-based stripping', () => {
         test('should keep base64 images when keepForTurns > currentTurn', () => {
             const input = {
-                content: [{
-                    type: 'image_url',
-                    image_url: { url: 'data:image/png;base64,abc123' }
-                }]
+                content: [
+                    {
+                        type: 'image_url',
+                        image_url: { url: 'data:image/png;base64,abc123' },
+                    },
+                ],
             };
 
             // Keep for 3 turns, current turn is 1 - should keep
             const result = stripBase64ImagesFromConversation(input, {
                 keepForTurns: 3,
-                currentTurn: 1
+                currentTurn: 1,
             }) as Tree;
 
             // Should still have the image URL
@@ -536,16 +595,18 @@ describe('turn-based stripping', () => {
 
         test('should strip base64 images when currentTurn >= keepForTurns', () => {
             const input = {
-                content: [{
-                    type: 'image_url',
-                    image_url: { url: 'data:image/png;base64,abc123' }
-                }]
+                content: [
+                    {
+                        type: 'image_url',
+                        image_url: { url: 'data:image/png;base64,abc123' },
+                    },
+                ],
             };
 
             // Keep for 2 turns, current turn is 3 - should strip
             const result = stripBase64ImagesFromConversation(input, {
                 keepForTurns: 2,
-                currentTurn: 3
+                currentTurn: 3,
             }) as Tree;
 
             expect(result.content[0]).toEqual({ type: 'text', text: IMAGE_PLACEHOLDER });
@@ -558,7 +619,7 @@ const TEXT_TRUNCATED_MARKER = '\n\n[Content truncated - exceeded token limit]';
 describe('truncateLargeTextInConversation', () => {
     test('should not truncate when textMaxTokens is not set', () => {
         const input = {
-            content: [{ text: 'a'.repeat(100000) }]
+            content: [{ text: 'a'.repeat(100000) }],
         };
 
         const result = truncateLargeTextInConversation(input) as Tree;
@@ -568,7 +629,7 @@ describe('truncateLargeTextInConversation', () => {
 
     test('should not truncate when textMaxTokens is 0', () => {
         const input = {
-            content: [{ text: 'a'.repeat(100000) }]
+            content: [{ text: 'a'.repeat(100000) }],
         };
 
         const result = truncateLargeTextInConversation(input, { textMaxTokens: 0 }) as Tree;
@@ -580,7 +641,7 @@ describe('truncateLargeTextInConversation', () => {
         // 10000 tokens = ~40000 chars
         const longText = 'a'.repeat(50000);
         const input = {
-            content: [{ text: longText }]
+            content: [{ text: longText }],
         };
 
         const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as Tree;
@@ -594,7 +655,7 @@ describe('truncateLargeTextInConversation', () => {
     test('should not truncate text within token limit', () => {
         const shortText = 'Hello world';
         const input = {
-            content: [{ text: shortText }]
+            content: [{ text: shortText }],
         };
 
         const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as Tree;
@@ -605,16 +666,22 @@ describe('truncateLargeTextInConversation', () => {
     test('should truncate nested text in Bedrock tool results', () => {
         const longText = 'x'.repeat(50000);
         const input = {
-            messages: [{
-                content: [{
-                    toolResult: {
-                        toolUseId: 'abc123',
-                        content: [{
-                            text: longText
-                        }]
-                    }
-                }]
-            }]
+            messages: [
+                {
+                    content: [
+                        {
+                            toolResult: {
+                                toolUseId: 'abc123',
+                                content: [
+                                    {
+                                        text: longText,
+                                    },
+                                ],
+                            },
+                        },
+                    ],
+                },
+            ],
         };
 
         const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as Tree;
@@ -627,11 +694,13 @@ describe('truncateLargeTextInConversation', () => {
     test('should truncate OpenAI tool message content string', () => {
         const longText = 'y'.repeat(50000);
         const input = {
-            messages: [{
-                role: 'tool',
-                content: longText,
-                tool_call_id: 'call_123'
-            }]
+            messages: [
+                {
+                    role: 'tool',
+                    content: longText,
+                    tool_call_id: 'call_123',
+                },
+            ],
         };
 
         const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as Tree;
@@ -644,7 +713,7 @@ describe('truncateLargeTextInConversation', () => {
         const longText = 'z'.repeat(50000);
         const input = {
             content: [{ text: longText }],
-            _llumiverse_meta: { turnNumber: 5 }
+            _llumiverse_meta: { turnNumber: 5 },
         };
 
         const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as Tree;
@@ -655,11 +724,7 @@ describe('truncateLargeTextInConversation', () => {
 
     test('should handle arrays with mixed short and long text', () => {
         const input = {
-            items: [
-                { text: 'short' },
-                { text: 'w'.repeat(50000) },
-                { text: 'also short' }
-            ]
+            items: [{ text: 'short' }, { text: 'w'.repeat(50000) }, { text: 'also short' }],
         };
 
         const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as Tree;
@@ -677,24 +742,28 @@ describe('truncateLargeTextInConversation', () => {
     test('should preserve Anthropic base64 image blocks in tool results', () => {
         const largeBase64 = 'a'.repeat(200000); // well over any token limit
         const input = {
-            messages: [{
-                role: 'user',
-                content: [{
-                    type: 'tool_result',
-                    tool_use_id: 'abc123',
+            messages: [
+                {
+                    role: 'user',
                     content: [
-                        { type: 'text', text: 'x'.repeat(50000) },
                         {
-                            type: 'image',
-                            source: {
-                                type: 'base64',
-                                data: largeBase64,
-                                media_type: 'image/jpeg'
-                            }
-                        }
-                    ]
-                }]
-            }]
+                            type: 'tool_result',
+                            tool_use_id: 'abc123',
+                            content: [
+                                { type: 'text', text: 'x'.repeat(50000) },
+                                {
+                                    type: 'image',
+                                    source: {
+                                        type: 'base64',
+                                        data: largeBase64,
+                                        media_type: 'image/jpeg',
+                                    },
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ],
         };
 
         const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as Tree;
@@ -710,17 +779,21 @@ describe('truncateLargeTextInConversation', () => {
     test('should preserve Anthropic base64 document blocks', () => {
         const largeBase64 = 'b'.repeat(200000);
         const input = {
-            messages: [{
-                role: 'user',
-                content: [{
-                    type: 'document',
-                    source: {
-                        type: 'base64',
-                        data: largeBase64,
-                        media_type: 'application/pdf'
-                    }
-                }]
-            }]
+            messages: [
+                {
+                    role: 'user',
+                    content: [
+                        {
+                            type: 'document',
+                            source: {
+                                type: 'base64',
+                                data: largeBase64,
+                                media_type: 'application/pdf',
+                            },
+                        },
+                    ],
+                },
+            ],
         };
 
         const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as Tree;
@@ -729,14 +802,18 @@ describe('truncateLargeTextInConversation', () => {
     });
 
     test('should preserve OpenAI base64 image blocks', () => {
-        const largeBase64 = 'data:image/png;base64,' + 'c'.repeat(200000);
+        const largeBase64 = `data:image/png;base64,${'c'.repeat(200000)}`;
         const input = {
-            messages: [{
-                content: [{
-                    type: 'image_url',
-                    image_url: { url: largeBase64 }
-                }]
-            }]
+            messages: [
+                {
+                    content: [
+                        {
+                            type: 'image_url',
+                            image_url: { url: largeBase64 },
+                        },
+                    ],
+                },
+            ],
         };
 
         const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as Tree;
@@ -747,14 +824,18 @@ describe('truncateLargeTextInConversation', () => {
     test('should preserve Bedrock serialized image blocks', () => {
         const largeBase64 = 'd'.repeat(200000);
         const input = {
-            messages: [{
-                content: [{
-                    image: {
-                        format: 'png',
-                        source: { bytes: { _base64: largeBase64 } }
-                    }
-                }]
-            }]
+            messages: [
+                {
+                    content: [
+                        {
+                            image: {
+                                format: 'png',
+                                source: { bytes: { _base64: largeBase64 } },
+                            },
+                        },
+                    ],
+                },
+            ],
         };
 
         const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as Tree;
@@ -765,13 +846,17 @@ describe('truncateLargeTextInConversation', () => {
     test('should not truncate retained OpenAI base64 image payloads before image stripping threshold', () => {
         const originalUrl = `data:image/png;base64,${'a'.repeat(50000)}`;
         let conversation: unknown = {
-            messages: [{
-                role: 'user',
-                content: [{
-                    type: 'image_url',
-                    image_url: { url: originalUrl }
-                }]
-            }]
+            messages: [
+                {
+                    role: 'user',
+                    content: [
+                        {
+                            type: 'image_url',
+                            image_url: { url: originalUrl },
+                        },
+                    ],
+                },
+            ],
         };
 
         conversation = incrementConversationTurn(conversation);
@@ -789,15 +874,19 @@ describe('truncateLargeTextInConversation', () => {
     test('should not truncate retained Gemini inlineData image payloads before image stripping threshold', () => {
         const originalData = 'b'.repeat(50000);
         let conversation: unknown = {
-            contents: [{
-                role: 'user',
-                parts: [{
-                    inlineData: {
-                        mimeType: 'image/png',
-                        data: originalData
-                    }
-                }]
-            }]
+            contents: [
+                {
+                    role: 'user',
+                    parts: [
+                        {
+                            inlineData: {
+                                mimeType: 'image/png',
+                                data: originalData,
+                            },
+                        },
+                    ],
+                },
+            ],
         };
 
         conversation = incrementConversationTurn(conversation);
@@ -815,17 +904,21 @@ describe('truncateLargeTextInConversation', () => {
     test('should not truncate retained Claude base64 image payloads before image stripping threshold', () => {
         const originalData = 'c'.repeat(50000);
         let conversation: unknown = {
-            messages: [{
-                role: 'user',
-                content: [{
-                    type: 'image',
-                    source: {
-                        type: 'base64',
-                        media_type: 'image/png',
-                        data: originalData
-                    }
-                }]
-            }]
+            messages: [
+                {
+                    role: 'user',
+                    content: [
+                        {
+                            type: 'image',
+                            source: {
+                                type: 'base64',
+                                media_type: 'image/png',
+                                data: originalData,
+                            },
+                        },
+                    ],
+                },
+            ],
         };
 
         conversation = incrementConversationTurn(conversation);
@@ -839,25 +932,141 @@ describe('truncateLargeTextInConversation', () => {
 
         expect(result.messages[0].content[0].source.data).toBe(originalData);
     });
+
+    describe('keepRecentMessages (turn-aware truncation)', () => {
+        type TextMessage = { content: Array<{ text: string }> };
+        type TextConversation = { messages: TextMessage[] };
+
+        const isRecord = (value: unknown): value is Record<string, unknown> =>
+            typeof value === 'object' && value !== null;
+
+        const isTextMessage = (value: unknown): value is TextMessage => {
+            if (!isRecord(value) || !Array.isArray(value.content)) return false;
+            const firstContent = value.content[0];
+            return isRecord(firstContent) && typeof firstContent.text === 'string';
+        };
+
+        const expectTextMessages = (value: unknown): TextMessage[] => {
+            expect(Array.isArray(value)).toBe(true);
+            if (!Array.isArray(value)) {
+                throw new Error('Expected message array');
+            }
+
+            const allTextMessages = value.every(isTextMessage);
+            expect(allTextMessages).toBe(true);
+            if (!allTextMessages) {
+                throw new Error('Expected messages with text content');
+            }
+
+            return value;
+        };
+
+        const expectTextConversation = (value: unknown): TextConversation => {
+            expect(isRecord(value)).toBe(true);
+            if (!isRecord(value)) {
+                throw new Error('Expected conversation object');
+            }
+
+            return { messages: expectTextMessages(value.messages) };
+        };
+
+        const big = (c: string) => c.repeat(50000); // ~12.5k tokens, over any small cap
+        const makeMessages = (n: number) =>
+            Array.from({ length: n }, (_, i) => ({
+                role: i % 2 === 0 ? 'user' : 'assistant',
+                content: [{ type: 'text', text: big(String.fromCharCode(97 + (i % 26))) }],
+            }));
+
+        test('keeps the last N messages full and truncates older ones ({messages} shape)', () => {
+            const input = { messages: makeMessages(10) };
+
+            const result = expectTextConversation(
+                truncateLargeTextInConversation(input, {
+                    textMaxTokens: 1000,
+                    keepRecentMessages: 3,
+                }),
+            );
+
+            const msgs = result.messages;
+            // First 7 (older) truncated, last 3 (recent working set) untouched.
+            for (let i = 0; i < 7; i++) {
+                expect(msgs[i].content[0].text).toContain(TEXT_TRUNCATED_MARKER);
+                expect(msgs[i].content[0].text.length).toBeLessThan(50000);
+            }
+            for (let i = 7; i < 10; i++) {
+                expect(msgs[i].content[0].text.length).toBe(50000);
+                expect(msgs[i].content[0].text).not.toContain(TEXT_TRUNCATED_MARKER);
+            }
+        });
+
+        test('does not truncate when conversation is shorter than keepRecentMessages', () => {
+            const input = { messages: makeMessages(3) };
+
+            const result = expectTextConversation(
+                truncateLargeTextInConversation(input, {
+                    textMaxTokens: 1000,
+                    keepRecentMessages: 5,
+                }),
+            );
+
+            const msgs = result.messages;
+            for (const m of msgs) {
+                expect(m.content[0].text.length).toBe(50000);
+            }
+        });
+
+        test('supports a plain message array', () => {
+            const input = makeMessages(6);
+
+            const result = expectTextMessages(
+                truncateLargeTextInConversation(input, {
+                    textMaxTokens: 1000,
+                    keepRecentMessages: 2,
+                }),
+            );
+
+            for (let i = 0; i < 4; i++) {
+                expect(result[i].content[0].text).toContain(TEXT_TRUNCATED_MARKER);
+            }
+            for (let i = 4; i < 6; i++) {
+                expect(result[i].content[0].text.length).toBe(50000);
+            }
+        });
+
+        test('truncates every large string when keepRecentMessages is not set (legacy)', () => {
+            const input = { messages: makeMessages(6) };
+
+            const result = expectTextConversation(truncateLargeTextInConversation(input, { textMaxTokens: 1000 }));
+
+            const msgs = result.messages;
+            for (const m of msgs) {
+                expect(m.content[0].text).toContain(TEXT_TRUNCATED_MARKER);
+            }
+        });
+    });
 });
 
 describe('conversation serialization safety', () => {
     test('conversation with binary data should survive JSON roundtrip when serialized', () => {
         const originalConversation = {
-            messages: [{
-                content: [{
-                    image: {
-                        format: 'png',
-                        source: { bytes: new Uint8Array([137, 80, 78, 71]) }
-                    }
-                }]
-            }]
+            messages: [
+                {
+                    content: [
+                        {
+                            image: {
+                                format: 'png',
+                                source: { bytes: new Uint8Array([137, 80, 78, 71]) },
+                            },
+                        },
+                    ],
+                },
+            ],
         };
 
         // Serialize for storage (keeping for 5 turns)
         const serialized = stripBinaryFromConversation(originalConversation, {
             keepForTurns: 5,
-            currentTurn: 1
+            currentTurn: 1,
         });
 
         // Simulate storage: JSON stringify and parse
@@ -876,14 +1085,18 @@ describe('conversation serialization safety', () => {
 
     test('conversation with stripped data should survive JSON roundtrip', () => {
         const originalConversation = {
-            messages: [{
-                content: [{
-                    image: {
-                        format: 'png',
-                        source: { bytes: new Uint8Array([137, 80, 78, 71]) }
-                    }
-                }]
-            }]
+            messages: [
+                {
+                    content: [
+                        {
+                            image: {
+                                format: 'png',
+                                source: { bytes: new Uint8Array([137, 80, 78, 71]) },
+                            },
+                        },
+                    ],
+                },
+            ],
         };
 
         // Strip immediately (explicit keepForTurns: 0)
@@ -907,7 +1120,7 @@ describe('conversation serialization safety', () => {
         // Serialize for storage
         const serialized = stripBinaryFromConversation(conversation, {
             keepForTurns: 5,
-            currentTurn: 2
+            currentTurn: 2,
         });
 
         // JSON roundtrip
@@ -919,17 +1132,20 @@ describe('conversation serialization safety', () => {
 });
 
 const HEARTBEAT_PLACEHOLDER = '[Heartbeat removed from conversation history]';
-const HEARTBEAT_MSG = '<heartbeat>[System] Workstream status heartbeat:\n- search_engine: running (web_search) — 45s elapsed, 255s remaining\n\nYou may steer, cancel, or launch additional workstreams. If no action needed, simply acknowledge.</heartbeat>';
+const HEARTBEAT_MSG =
+    '<heartbeat>[System] Workstream status heartbeat:\n- search_engine: running (web_search) — 45s elapsed, 255s remaining\n\nYou may steer, cancel, or launch additional workstreams. If no action needed, simply acknowledge.</heartbeat>';
 
 describe('stripHeartbeatsFromConversation', () => {
     const FORCE_STRIP_HB = { keepForTurns: 0, currentTurn: 0 };
 
     test('should strip heartbeat-tagged strings when force stripping', () => {
         const input = {
-            messages: [{
-                role: 'user',
-                content: [{ type: 'text', text: HEARTBEAT_MSG }]
-            }]
+            messages: [
+                {
+                    role: 'user',
+                    content: [{ type: 'text', text: HEARTBEAT_MSG }],
+                },
+            ],
         };
 
         const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as Tree;
@@ -938,10 +1154,12 @@ describe('stripHeartbeatsFromConversation', () => {
 
     test('should preserve heartbeats within keepForTurns threshold', () => {
         const input = {
-            messages: [{
-                role: 'user',
-                content: [{ type: 'text', text: HEARTBEAT_MSG }]
-            }]
+            messages: [
+                {
+                    role: 'user',
+                    content: [{ type: 'text', text: HEARTBEAT_MSG }],
+                },
+            ],
         };
 
         // Keep for 3 turns, current turn is 1 - should preserve
@@ -955,10 +1173,12 @@ describe('stripHeartbeatsFromConversation', () => {
 
     test('should strip when currentTurn >= keepForTurns', () => {
         const input = {
-            messages: [{
-                role: 'user',
-                content: [{ type: 'text', text: HEARTBEAT_MSG }]
-            }]
+            messages: [
+                {
+                    role: 'user',
+                    content: [{ type: 'text', text: HEARTBEAT_MSG }],
+                },
+            ],
         };
 
         const result = stripHeartbeatsFromConversation(input, {
@@ -971,7 +1191,7 @@ describe('stripHeartbeatsFromConversation', () => {
 
     test('should strip with default keepForTurns (1) when currentTurn >= 1', () => {
         const input = {
-            content: [{ text: HEARTBEAT_MSG }]
+            content: [{ text: HEARTBEAT_MSG }],
         };
 
         // Default keepForTurns is 1, currentTurn 1 means strip
@@ -981,7 +1201,7 @@ describe('stripHeartbeatsFromConversation', () => {
 
     test('should not strip with default keepForTurns (1) when currentTurn is 0', () => {
         const input = {
-            content: [{ text: HEARTBEAT_MSG }]
+            content: [{ text: HEARTBEAT_MSG }],
         };
 
         // Default keepForTurns is 1, currentTurn 0 means keep
@@ -991,7 +1211,7 @@ describe('stripHeartbeatsFromConversation', () => {
 
     test('should never strip when keepForTurns is Infinity', () => {
         const input = {
-            content: [{ text: HEARTBEAT_MSG }]
+            content: [{ text: HEARTBEAT_MSG }],
         };
 
         const result = stripHeartbeatsFromConversation(input, {
@@ -1008,7 +1228,7 @@ describe('stripHeartbeatsFromConversation', () => {
                 { role: 'user', content: [{ type: 'text', text: 'Hello, how are you?' }] },
                 { role: 'user', content: [{ type: 'text', text: '[System] Some other system message' }] },
                 { role: 'assistant', content: [{ type: 'text', text: 'I am doing well.' }] },
-            ]
+            ],
         };
 
         const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as Tree;
@@ -1035,7 +1255,7 @@ describe('stripHeartbeatsFromConversation', () => {
             messages: [
                 { role: 'user', content: [{ text: HEARTBEAT_MSG }] },
                 { role: 'assistant', content: [{ text: 'Acknowledged.' }] },
-            ]
+            ],
         };
 
         const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as Tree;
@@ -1079,10 +1299,18 @@ describe('stripHeartbeatsFromConversation', () => {
                 { role: 'user', content: [{ type: 'text', text: 'Analyze this data' }] },
                 { role: 'user', content: [{ type: 'text', text: HEARTBEAT_MSG }] },
                 { role: 'assistant', content: [{ type: 'text', text: 'Acknowledged.' }] },
-                { role: 'user', content: [{ type: 'text', text: '<heartbeat>[System] Workstream status heartbeat:\n- analyzer: running — 90s elapsed\n\nAcknowledge.</heartbeat>' }] },
+                {
+                    role: 'user',
+                    content: [
+                        {
+                            type: 'text',
+                            text: '<heartbeat>[System] Workstream status heartbeat:\n- analyzer: running — 90s elapsed\n\nAcknowledge.</heartbeat>',
+                        },
+                    ],
+                },
                 { role: 'assistant', content: [{ type: 'text', text: 'Still waiting.' }] },
                 { role: 'assistant', content: [{ type: 'text', text: 'Analysis complete: found 15 results.' }] },
-            ]
+            ],
         };
 
         const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as Tree;
@@ -1097,7 +1325,7 @@ describe('stripHeartbeatsFromConversation', () => {
 
     test('should use turn number from metadata when currentTurn not provided', () => {
         let conversation: unknown = {
-            content: [{ text: HEARTBEAT_MSG }]
+            content: [{ text: HEARTBEAT_MSG }],
         };
 
         // Set turn number to 2 in metadata
@@ -1117,7 +1345,7 @@ describe('stripHeartbeatsFromConversation', () => {
                 { text: '<heartbeat>partial tag without close' },
                 { text: 'no tags at all' },
                 { text: 'some text</heartbeat>' },
-            ]
+            ],
         };
 
         const result = stripHeartbeatsFromConversation(input, FORCE_STRIP_HB) as Tree;

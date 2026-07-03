@@ -1,0 +1,77 @@
+name: (backport) Cherry-pick merged PR
+
+# Backport a merged PR onto other branches via `backport/<target>` labels.
+#
+# Typical flow: a maintenance fix merged into `release/X.Y` is forward-ported to
+# `main` (label `backport/main`). A clean cherry-pick opens a ready-to-merge PR;
+# a conflicting one opens a DRAFT PR with the conflict markers committed and
+# resolution steps posted on the original PR. See .github/bin/backport.sh.
+#
+# NOTE: backport.sh + this workflow must exist on every branch used as a backport
+# SOURCE (so a fix merged into release/X.Y can be ported up to main).
+
+on:
+  pull_request:
+    # Only PRs targeting branches we backport FROM, so the job (and its App token /
+    # `backport` environment) never engages on unrelated merges.
+    branches: [main, "release/**"]
+    types: [closed, labeled]
+
+concurrency:
+  # Serialize per merged PR so a late `labeled` event can't race the `closed` run.
+  group: backport-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backport:
+    name: Backport merged PR
+    # Merged, same-repo PRs only; never re-trigger on a backport PR's own merge.
+    # Require a `backport/*` label so no App token is minted on unrelated merges:
+    # on `labeled` the added label must be backport/*; on `closed` the PR must
+    # already carry one (substring match — the marker label `backport` has no
+    # slash, so it alone never triggers).
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.repo.fork == false &&
+      !startsWith(github.event.pull_request.head.ref, 'backport-') &&
+      ((github.event.action == 'labeled' && startsWith(github.event.label.name, 'backport/')) ||
+      (github.event.action == 'closed' && contains(join(github.event.pull_request.labels.*.name, ','), 'backport/')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Mints a token for the release bot App, whose credentials are provisioned in
+    # this repo's `backport` environment (contents:write + pull-requests:write).
+    environment: backport
+    permissions:
+      contents: read # only checkout uses the default token; all writes go via the App token
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # cherry-pick needs history; the script fetches target + source SHA
+          submodules: false # cherry-pick operates on gitlinks; submodule contents aren't needed
+          persist-credentials: false # the script re-points origin at the App token
+
+      - name: Generate backport token
+        id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.APP_VERTESIA_RELEASE_CLIENT_ID }}
+          private-key: ${{ secrets.APP_VERTESIA_RELEASE_PEM }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Backport
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels) }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: ./.github/bin/backport.sh

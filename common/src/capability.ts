@@ -1,16 +1,16 @@
-import { getModelCapabilitiesAnthropic } from "./capability/anthropic.js";
-import { getModelCapabilitiesAzureFoundry } from "./capability/azure_foundry.js";
-import { getModelCapabilitiesBedrock } from "./capability/bedrock.js";
-import { getModelCapabilitiesOpenAI } from "./capability/openai.js";
-import { getModelCapabilitiesVertexAI } from "./capability/vertexai.js";
-import { type ModelCapabilities, type ModelModalities, Providers } from "./types.js";
+import { getModelCapabilitiesAnthropic } from './capability/anthropic.js';
+import { getModelCapabilitiesAzureFoundry } from './capability/azure_foundry.js';
+import { getModelCapabilitiesBedrock } from './capability/bedrock.js';
+import { getModelCapabilitiesOpenAI } from './capability/openai.js';
+import { getModelCapabilitiesVertexAI } from './capability/vertexai.js';
+import { type ModelCapabilities, type ModelModalities, Providers } from './types.js';
 
 export function getModelCapabilities(model: string, provider?: string | Providers): ModelCapabilities {
     //Check for locations/<location>/ prefix and remove it
-    if (model.startsWith("locations/")) {
-        const parts = model.split("/");
+    if (model.startsWith('locations/')) {
+        const parts = model.split('/');
         if (parts.length >= 3) {
-            model = parts.slice(2).join("/");
+            model = parts.slice(2).join('/');
         }
     }
     const capabilities = _getModelCapabilities(model, provider);
@@ -40,35 +40,38 @@ function _getModelCapabilities(model: string, provider?: string | Providers): Mo
             // Azure Foundry uses OpenAI capabilities
             return getModelCapabilitiesAzureFoundry(model);
         case Providers.groq:
-        case Providers.togetherai:
         case Providers.mistralai:
             // These providers host text models that generally support tool use
             return getModelCapabilitiesOpenAICompatible(model);
+        case Providers.togetherai:
+            // Same OpenAI-compatible tool-use default, but also flag the natively-multimodal
+            // model families TogetherAI hosts so is_multimodal is reported correctly.
+            return getModelCapabilitiesTogetherAI(model);
         case Providers.xai:
             // xAI (Grok) models support tool use and are text-based
             return {
-                input: { text: true, image: model.includes("vision") },
+                input: { text: true, image: model.includes('vision') },
                 output: { text: true },
                 tool_support: true,
                 tool_support_streaming: false, // Conservative - may work but not tested
             };
         default:
             // Guess the provider based on the model name
-            if (model.startsWith("gpt")) {
+            if (model.startsWith('gpt')) {
                 return getModelCapabilitiesOpenAI(model);
-            } else if (model.startsWith("claude")) {
+            } else if (model.startsWith('claude')) {
                 return getModelCapabilitiesAnthropic(model);
-            } else if (model.startsWith("grok")) {
+            } else if (model.startsWith('grok')) {
                 // xAI Grok models
                 return {
-                    input: { text: true, image: model.includes("vision") },
+                    input: { text: true, image: model.includes('vision') },
                     output: { text: true },
                     tool_support: true,
                     tool_support_streaming: false,
                 };
-            } else if (model.startsWith("publishers/")) {
+            } else if (model.startsWith('publishers/')) {
                 return getModelCapabilitiesVertexAI(model);
-            } else if (model.startsWith("arn:aws")) {
+            } else if (model.startsWith('arn:aws')) {
                 return getModelCapabilitiesBedrock(model);
             }
             // Fallback to a generic model with no capabilities
@@ -90,13 +93,40 @@ function getModelCapabilitiesOpenAICompatible(model: string): ModelCapabilities 
         return caps;
     }
     const normalized = model.toLowerCase();
-    const isNonToolModel = NO_TOOL_SUPPORT_PATTERNS.some(p => normalized.includes(p));
+    const isNonToolModel = NO_TOOL_SUPPORT_PATTERNS.some((p) => normalized.includes(p));
     return {
         input: { text: true },
         output: { text: true },
         tool_support: !isNonToolModel,
         tool_support_streaming: !isNonToolModel,
     };
+}
+
+// TogetherAI vision-capable model families. Conservative on purpose: only families that are
+// natively multimodal when served on Together are listed, so text-only models are not falsely
+// flagged as multimodal. This list can be extended as Together adds vision models.
+const TOGETHER_VISION_PATTERNS = [
+    'vision', // meta-llama/Llama-3.2-*-Vision-Instruct
+    'llama-4', // Llama 4 Scout / Maverick are natively multimodal
+    'gemma-3', // Gemma 3 is multimodal (gemma-2 and earlier are text-only)
+    'qwen2-vl',
+    'qwen2.5-vl',
+    '-vl-', // generic Qwen*-VL / other *-VL-* naming
+];
+
+/**
+ * TogetherAI capability resolver. Starts from the OpenAI-compatible defaults (tool_support, etc.)
+ * and additionally marks `input.image: true` for known natively-multimodal families, so the
+ * driver's `is_multimodal` flag is accurate. TogetherAI vision requests are sent via the Chat
+ * Completions API (see TogetherAIDriver.useChatCompletionsApi()).
+ */
+function getModelCapabilitiesTogetherAI(model: string): ModelCapabilities {
+    const caps = getModelCapabilitiesOpenAICompatible(model);
+    const normalized = model.toLowerCase();
+    if (TOGETHER_VISION_PATTERNS.some((p) => normalized.includes(p))) {
+        caps.input = { ...caps.input, image: true };
+    }
+    return caps;
 }
 
 export function supportsToolUse(model: string, provider?: string | Providers, streaming: boolean = false): boolean {

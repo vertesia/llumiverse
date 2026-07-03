@@ -1,9 +1,29 @@
-import { AbstractDriver, type AIModel, type Completion, type CompletionChunkObject, type DriverOptions, type EmbeddingsOptions, type EmbeddingsResult, type ExecutionOptions, LlumiverseError, MISTRAL_DEFAULT_EMBEDDING_MODEL, normalizeEmbeddingsOptions, type PromptSegment, type TextFallbackOptions } from "@llumiverse/core";
-import { transformSSEStream } from "@llumiverse/core/async";
-import { getJSONSafetyNotice } from "@llumiverse/core/formatters";
-import { FetchClient, type ServerSentEvent } from "@vertesia/api-fetch-client";
-import { formatOpenAILikeTextPrompt, type OpenAITextMessage } from "../openai/openai_format.js";
-import type { ChatCompletionResponse, CompletionRequestParams, EmbeddingResponse, ListModelsResponse, ResponseFormat } from "./types.js";
+import {
+    type AIModel,
+    type Completion,
+    type CompletionChunkObject,
+    type DriverOptions,
+    type EmbeddingsOptions,
+    type EmbeddingsResult,
+    type ExecutionOptions,
+    LlumiverseError,
+    MISTRAL_DEFAULT_EMBEDDING_MODEL,
+    normalizeEmbeddingsOptions,
+    type PromptSegment,
+    type TextFallbackOptions,
+} from '@llumiverse/core';
+import { transformSSEStream } from '@llumiverse/core/async';
+import { AbstractDriver } from '@llumiverse/core/driver';
+import { getJSONSafetyNotice } from '@llumiverse/core/formatters';
+import { FetchClient, type ServerSentEvent } from '@vertesia/api-fetch-client';
+import { formatOpenAILikeTextPrompt, type OpenAITextMessage } from '../openai/openai_format.js';
+import type {
+    ChatCompletionResponse,
+    CompletionRequestParams,
+    EmbeddingResponse,
+    ListModelsResponse,
+    ResponseFormat,
+} from './types.js';
 
 //TODO retry on 429
 //const RETRY_STATUS_CODES = [429, 500, 502, 503, 504];
@@ -16,7 +36,7 @@ interface MistralAIDriverOptions extends DriverOptions {
 }
 
 export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, OpenAITextMessage[]> {
-    static PROVIDER = "mistralai";
+    static PROVIDER = 'mistralai';
 
     provider = MistralAIDriver.PROVIDER;
     apiKey: string;
@@ -27,13 +47,12 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
         super(options);
         this.apiKey = options.apiKey;
         //this.client = new MistralClient(options.apiKey, options.endpointUrl);
-        this.client = new FetchClient(options.endpoint_url || ENDPOINT).withHeaders({
-            authorization: `Bearer ${this.apiKey}`
+        this.client = new FetchClient(options.endpoint_url || ENDPOINT, this.getDriverFetch()).withHeaders({
+            authorization: `Bearer ${this.apiKey}`,
         });
     }
 
     getResponseFormat = (_options: ExecutionOptions): ResponseFormat | undefined => {
-
         // const responseFormatJson: ResponseFormat = {
         //     type: "json_object",
         // } as ResponseFormat
@@ -42,29 +61,28 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
         //     type: "text",
         // } as ResponseFormat;
 
-
         // return _options.result_schema ? responseFormatJson : responseFormatText;
 
         //TODO remove this when Mistral properly supports the parameters - it makes an error for now
         // some models like mixtral mistral tiny or medium are throwing an error when using the response_format parameter
-        return undefined
-    }
+        return undefined;
+    };
 
     protected async formatPrompt(segments: PromptSegment[], opts: ExecutionOptions): Promise<OpenAITextMessage[]> {
         const messages = formatOpenAILikeTextPrompt(segments);
         //Add JSON instruction is schema is provided
         if (opts.result_schema) {
             messages.push({
-                role: "user",
-                content: "IMPORTANT: " + getJSONSafetyNotice(opts.result_schema)
+                role: 'user',
+                content: `IMPORTANT: ${getJSONSafetyNotice(opts.result_schema)}`,
             });
         }
         return messages;
     }
 
     async requestTextCompletion(messages: OpenAITextMessage[], options: ExecutionOptions): Promise<Completion> {
-        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "text-fallback") {
-            this.logger.debug({ options: options.model_options }, "Unexpected option id");
+        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== 'text-fallback') {
+            this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
@@ -75,30 +93,33 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
             temperature: options.model_options?.temperature,
             responseFormat: this.getResponseFormat(options),
         });
-        this.logger.debug({ payload: JSON.stringify(requestPayload) }, "Mistral request payload");
+        this.logger.debug({ payload: JSON.stringify(requestPayload) }, 'Mistral request payload');
 
-        const res = await this.client.post('/v1/chat/completions', {
+        const res = (await this.client.post('/v1/chat/completions', {
             payload: requestPayload,
-        }) as ChatCompletionResponse;
+        })) as ChatCompletionResponse;
 
         const choice = res.choices[0];
         const result = choice.message.content;
 
         return {
-            result: result ? [{ type: "text", value: result }] : [],
+            result: result ? [{ type: 'text', value: result }] : [],
             token_usage: {
                 prompt: res.usage.prompt_tokens,
                 result: res.usage.completion_tokens,
                 total: res.usage.total_tokens,
             },
-            finish_reason: choice.finish_reason,        //Uses expected "stop" , "length" format
+            finish_reason: choice.finish_reason, //Uses expected "stop" , "length" format
             original_response: options.include_original_response ? res : undefined,
         };
     }
 
-    async requestTextCompletionStream(messages: OpenAITextMessage[], options: ExecutionOptions): Promise<AsyncIterable<CompletionChunkObject>> {
-        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== "text-fallback") {
-            this.logger.debug({ options: options.model_options }, "Unexpected option id");
+    async requestTextCompletionStream(
+        messages: OpenAITextMessage[],
+        options: ExecutionOptions,
+    ): Promise<AsyncIterable<CompletionChunkObject>> {
+        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== 'text-fallback') {
+            this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
@@ -112,19 +133,19 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
             stream: true,
             stopSequences: options.model_options?.stop_sequence,
         });
-        this.logger.debug({ payload: JSON.stringify(streamPayload) }, "Mistral stream request payload");
+        this.logger.debug({ payload: JSON.stringify(streamPayload) }, 'Mistral stream request payload');
 
-        const stream = await this.client.post('/v1/chat/completions', {
+        const stream = (await this.client.post('/v1/chat/completions', {
             payload: streamPayload,
-            reader: 'sse'
-        }) as ReadableStream<ServerSentEvent>;
+            reader: 'sse',
+        })) as ReadableStream<ServerSentEvent>;
 
         return transformSSEStream(stream, (data: string) => {
             const json = JSON.parse(data);
             const content = json.choices[0]?.delta.content;
             return {
-                result: content ? [{ type: "text", value: content }] : [],
-                finish_reason: json.choices[0]?.finish_reason,      //Uses expected "stop" , "length" format
+                result: content ? [{ type: 'text', value: content }] : [],
+                finish_reason: json.choices[0]?.finish_reason, //Uses expected "stop" , "length" format
                 token_usage: {
                     prompt: json.usage?.prompt_tokens,
                     result: json.usage?.completion_tokens,
@@ -132,57 +153,59 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
                 },
             };
         });
-
     }
 
     async listModels(): Promise<AIModel<string>[]> {
         const models: ListModelsResponse = await this.client.get('v1/models');
 
-        const aiModels = models.data.map(m => {
+        const aiModels = models.data.map((m) => {
             return {
                 id: m.id,
                 name: m.id,
                 description: undefined,
                 provider: this.provider,
                 owner: m.owned_by,
-            }
+            };
         });
 
         return aiModels;
     }
 
     validateConnection(): Promise<boolean> {
-        throw new Error("Method not implemented.");
+        throw new Error('Method not implemented.');
     }
 
     async generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
         const normalized = normalizeEmbeddingsOptions(options);
         const model = normalized.model ?? MISTRAL_DEFAULT_EMBEDDING_MODEL;
         const texts = normalized.inputs.map((input) => {
-            if (input.type !== "text") {
-                throw new Error(`Provider 'mistralai' does not support '${input.type}' embeddings; only 'text' is supported.`);
+            if (input.type !== 'text') {
+                throw new Error(
+                    `Provider 'mistralai' does not support '${input.type}' embeddings; only 'text' is supported.`,
+                );
             }
             return input.text;
         });
 
         try {
-            const r = await this.client.post('/v1/embeddings', {
+            const r = (await this.client.post('/v1/embeddings', {
                 payload: {
                     model,
                     input: texts,
-                    encoding_format: "float",
+                    encoding_format: 'float',
                 },
-            }) as EmbeddingResponse;
+            })) as EmbeddingResponse;
             const ordered: { index: number; embedding: number[] }[] = [...r.data].sort((a, b) => a.index - b.index);
-            const promptTokens: number | undefined = r.usage?.total_tokens
-                ?? (r.usage ? (r.usage.prompt_tokens ?? 0) + (r.usage.completion_tokens ?? 0) : undefined);
+            const promptTokens: number | undefined =
+                r.usage?.total_tokens ??
+                (r.usage ? (r.usage.prompt_tokens ?? 0) + (r.usage.completion_tokens ?? 0) : undefined);
 
             return {
                 model,
                 results: ordered.map((entry) => ({
-                    outputs: [{ values: entry.embedding, modality: "text" }],
+                    outputs: [{ values: entry.embedding, modality: 'text' }],
                 })),
-                ...(typeof promptTokens === "number"
+                ...(typeof promptTokens === 'number'
                     ? { usage: { input_tokens: promptTokens, input_text_tokens: promptTokens } }
                     : {}),
             };
@@ -196,7 +219,6 @@ export class MistralAIDriver extends AbstractDriver<MistralAIDriverOptions, Open
             });
         }
     }
-
 }
 
 /**
@@ -241,4 +263,4 @@ function _makeChatCompletionRequest({
         response_format: responseFormat ?? undefined,
         stop: stopSequences ?? undefined,
     };
-};
+}

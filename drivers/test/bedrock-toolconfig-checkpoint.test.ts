@@ -29,7 +29,6 @@ type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 // ─── Bedrock ──────────────────────────────────────────────────────────────────
 
 describe('Bedrock - convertToolBlocksToText', () => {
-
     test('detects tool blocks in messages', () => {
         const withTools: Message[] = [
             { role: 'user', content: [{ text: 'hi' }] },
@@ -56,37 +55,38 @@ describe('Bedrock - convertToolBlocksToText', () => {
             },
             {
                 role: 'user',
-                content: [
-                    { toolResult: { toolUseId: 't1', content: [{ text: 'Found 3 docs' }] } },
-                ],
+                content: [{ toolResult: { toolUseId: 't1', content: [{ text: 'Found 3 docs' }] } }],
             },
         ];
 
         const result = convertToolBlocksToText(messages);
 
         // Plain message unchanged
-        expect((result[0].content![0] as unknown as Tree).text).toBe('Search');
+        expect((result[0].content?.[0] as unknown as Tree).text).toBe('Search');
         // Text block preserved, toolUse converted
-        expect((result[1].content![0] as unknown as Tree).text).toBe('Searching...');
-        expect((result[1].content![1] as unknown as Tree).text).toContain('[Tool call: search_docs');
-        expect((result[1].content![1] as unknown as Tree).text).toContain('query');
-        expect((result[1].content![1] as unknown as Tree).toolUse).toBeUndefined();
+        expect((result[1].content?.[0] as unknown as Tree).text).toBe('Searching...');
+        expect((result[1].content?.[1] as unknown as Tree).text).toContain('[Tool call: search_docs');
+        expect((result[1].content?.[1] as unknown as Tree).text).toContain('query');
+        expect((result[1].content?.[1] as unknown as Tree).toolUse).toBeUndefined();
         // toolResult converted
-        expect((result[2].content![0] as unknown as Tree).text).toContain('[Tool result:');
-        expect((result[2].content![0] as unknown as Tree).text).toContain('Found 3 docs');
-        expect((result[2].content![0] as unknown as Tree).toolResult).toBeUndefined();
+        expect((result[2].content?.[0] as unknown as Tree).text).toContain('[Tool result:');
+        expect((result[2].content?.[0] as unknown as Tree).text).toContain('Found 3 docs');
+        expect((result[2].content?.[0] as unknown as Tree).toolResult).toBeUndefined();
     });
 
     test('truncates large inputs and results', () => {
         const messages: Message[] = [
-            { role: 'assistant', content: [{ toolUse: { toolUseId: 't1', name: 'big', input: { data: 'x'.repeat(1000) } } }] },
+            {
+                role: 'assistant',
+                content: [{ toolUse: { toolUseId: 't1', name: 'big', input: { data: 'x'.repeat(1000) } } }],
+            },
             { role: 'user', content: [{ toolResult: { toolUseId: 't1', content: [{ text: 'y'.repeat(1000) }] } }] },
         ];
         const result = convertToolBlocksToText(messages);
-        expect((result[0].content![0] as unknown as Tree).text.length).toBeLessThan(700);
-        expect((result[0].content![0] as unknown as Tree).text).toContain('...');
-        expect((result[1].content![0] as unknown as Tree).text.length).toBeLessThan(700);
-        expect((result[1].content![0] as unknown as Tree).text).toContain('...');
+        expect((result[0].content?.[0] as unknown as Tree).text.length).toBeLessThan(700);
+        expect((result[0].content?.[0] as unknown as Tree).text).toContain('...');
+        expect((result[1].content?.[0] as unknown as Tree).text.length).toBeLessThan(700);
+        expect((result[1].content?.[0] as unknown as Tree).text).toContain('...');
     });
 
     test('preparePayload converts when tools=[] but preserves when tools provided', () => {
@@ -100,18 +100,24 @@ describe('Bedrock - convertToolBlocksToText', () => {
         const prompt: ConverseRequest = { modelId: 'anthropic.claude-sonnet-4-20250514', messages };
 
         // tools=[] → conversion, no toolConfig
-        const emptyTools = driver.preparePayload(prompt, { model: 'anthropic.claude-sonnet-4-20250514', tools: [] } as ExecutionOptions);
+        const emptyTools = driver.preparePayload(prompt, {
+            model: 'anthropic.claude-sonnet-4-20250514',
+            tools: [],
+        } as ExecutionOptions);
         expect(emptyTools.toolConfig).toBeUndefined();
-        expect((emptyTools.messages![1].content![0] as unknown as Tree).toolUse).toBeUndefined();
-        expect((emptyTools.messages![1].content![0] as unknown as Tree).text).toContain('[Tool call: think');
+        expect((emptyTools.messages?.[1].content?.[0] as unknown as Tree).toolUse).toBeUndefined();
+        expect((emptyTools.messages?.[1].content?.[0] as unknown as Tree).text).toContain('[Tool call: think');
 
         // tools provided → no conversion, toolConfig set
         const withTools = driver.preparePayload(
             { modelId: 'anthropic.claude-sonnet-4-20250514', messages: [...messages] },
-            { model: 'anthropic.claude-sonnet-4-20250514', tools: [{ name: 'x', description: 'x', input_schema: { type: 'object' } }] } as ExecutionOptions,
+            {
+                model: 'anthropic.claude-sonnet-4-20250514',
+                tools: [{ name: 'x', description: 'x', input_schema: { type: 'object' } }],
+            } as ExecutionOptions,
         );
         expect(withTools.toolConfig).toBeDefined();
-        expect((withTools.messages![1].content![0] as unknown as Tree).toolUse).toBeDefined();
+        expect((withTools.messages?.[1].content?.[0] as unknown as Tree).toolUse).toBeDefined();
     });
 
     test('no conversion when conversation has no tool blocks', () => {
@@ -127,7 +133,6 @@ describe('Bedrock - convertToolBlocksToText', () => {
 // ─── VertexAI Claude ──────────────────────────────────────────────────────────
 
 describe('VertexAI Claude - convertClaudeToolBlocksToText', () => {
-
     test('detects tool blocks in messages', () => {
         const withTools: MessageParam[] = [
             { role: 'user', content: [{ type: 'text', text: 'hi' }] },
@@ -154,9 +159,7 @@ describe('VertexAI Claude - convertClaudeToolBlocksToText', () => {
             },
             {
                 role: 'user',
-                content: [
-                    { type: 'tool_result', tool_use_id: 't1', content: 'Found 3 docs' },
-                ],
+                content: [{ type: 'tool_result', tool_use_id: 't1', content: 'Found 3 docs' }],
             },
         ];
 
@@ -189,7 +192,10 @@ describe('VertexAI Claude - convertClaudeToolBlocksToText', () => {
                     {
                         type: 'tool_result',
                         tool_use_id: 't1',
-                        content: [{ type: 'text', text: 'line 1' }, { type: 'text', text: 'line 2' }],
+                        content: [
+                            { type: 'text', text: 'line 1' },
+                            { type: 'text', text: 'line 2' },
+                        ],
                     },
                 ],
             },
@@ -202,7 +208,10 @@ describe('VertexAI Claude - convertClaudeToolBlocksToText', () => {
 
     test('truncates large inputs and results', () => {
         const messages: MessageParam[] = [
-            { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'big', input: { data: 'x'.repeat(1000) } }] },
+            {
+                role: 'assistant',
+                content: [{ type: 'tool_use', id: 't1', name: 'big', input: { data: 'x'.repeat(1000) } }],
+            },
             { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'y'.repeat(1000) }] },
         ];
         const result = convertClaudeToolBlocksToText(messages);
@@ -227,7 +236,6 @@ describe('VertexAI Claude - convertClaudeToolBlocksToText', () => {
 // ─── VertexAI Gemini ──────────────────────────────────────────────────────────
 
 describe('VertexAI Gemini - convertGeminiFunctionPartsToText', () => {
-
     test('converts functionCall and functionResponse to text parts', () => {
         const contents: Content[] = [
             { role: 'user', parts: [{ text: 'What is the weather?' }] },
@@ -240,27 +248,25 @@ describe('VertexAI Gemini - convertGeminiFunctionPartsToText', () => {
             },
             {
                 role: 'user',
-                parts: [
-                    { functionResponse: { name: 'get_weather', response: { temperature: 15 } } },
-                ],
+                parts: [{ functionResponse: { name: 'get_weather', response: { temperature: 15 } } }],
             },
         ];
 
         const result = convertGeminiFunctionPartsToText(contents);
 
         // Plain text unchanged
-        expect(result[0].parts![0].text).toBe('What is the weather?');
+        expect(result[0].parts?.[0].text).toBe('What is the weather?');
 
         // functionCall converted, text preserved
-        expect(result[1].parts![0].text).toBe('Let me check.');
-        expect(result[1].parts![1].text).toContain('[Tool call: get_weather');
-        expect(result[1].parts![1].text).toContain('Paris');
-        expect(result[1].parts![1].functionCall).toBeUndefined();
+        expect(result[1].parts?.[0].text).toBe('Let me check.');
+        expect(result[1].parts?.[1].text).toContain('[Tool call: get_weather');
+        expect(result[1].parts?.[1].text).toContain('Paris');
+        expect(result[1].parts?.[1].functionCall).toBeUndefined();
 
         // functionResponse converted
-        expect(result[2].parts![0].text).toContain('[Tool result for get_weather:');
-        expect(result[2].parts![0].text).toContain('temperature');
-        expect(result[2].parts![0].functionResponse).toBeUndefined();
+        expect(result[2].parts?.[0].text).toContain('[Tool result for get_weather:');
+        expect(result[2].parts?.[0].text).toContain('temperature');
+        expect(result[2].parts?.[0].functionResponse).toBeUndefined();
     });
 
     test('truncates large args and responses', () => {
@@ -275,10 +281,10 @@ describe('VertexAI Gemini - convertGeminiFunctionPartsToText', () => {
             },
         ];
         const result = convertGeminiFunctionPartsToText(contents);
-        expect(result[0].parts![0].text!.length).toBeLessThan(700);
-        expect(result[0].parts![0].text).toContain('...');
-        expect(result[1].parts![0].text!.length).toBeLessThan(700);
-        expect(result[1].parts![0].text).toContain('...');
+        expect(result[0].parts?.[0].text?.length).toBeLessThan(700);
+        expect(result[0].parts?.[0].text).toContain('...');
+        expect(result[1].parts?.[0].text?.length).toBeLessThan(700);
+        expect(result[1].parts?.[0].text).toContain('...');
     });
 
     test('no conversion when no function parts', () => {
@@ -294,12 +300,16 @@ describe('VertexAI Gemini - convertGeminiFunctionPartsToText', () => {
 // ─── OpenAI ───────────────────────────────────────────────────────────────────
 
 describe('OpenAI - convertOpenAIFunctionItemsToText', () => {
-
     test('converts function_call and function_call_output to text messages', () => {
         const items: ResponseInputItem[] = [
             { role: 'user', content: 'What is the weather?' },
             { role: 'assistant', content: 'Let me check.' },
-            { type: 'function_call', call_id: 'fc1', name: 'get_weather', arguments: '{"location":"Paris"}' } as ResponseInputItem,
+            {
+                type: 'function_call',
+                call_id: 'fc1',
+                name: 'get_weather',
+                arguments: '{"location":"Paris"}',
+            } as ResponseInputItem,
             { type: 'function_call_output', call_id: 'fc1', output: '15 degrees' } as ResponseInputItem,
             { role: 'assistant', content: 'It is 15 degrees.' },
         ];
