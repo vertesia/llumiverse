@@ -85,7 +85,7 @@ export class OpenAIResponsesDriver extends OpenAIResponsesDriverBase {
             return models;
         } catch (error) {
             this.logger.warn({ error }, '[OpenAIResponses] Failed to list models, returning empty list');
-            return [];
+            throw new Error(`Failed to list models: ${error instanceof Error ? error.message : String(error)}`);
         }
     }
 }
