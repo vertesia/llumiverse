@@ -117,8 +117,8 @@ const TOGETHER_VISION_PATTERNS = [
 /**
  * TogetherAI capability resolver. Starts from the OpenAI-compatible defaults (tool_support, etc.)
  * and additionally marks `input.image: true` for known natively-multimodal families, so the
- * driver's `is_multimodal` flag is accurate. TogetherAI vision requests are sent via the Chat
- * Completions API (see TogetherAIDriver.useChatCompletionsApi()).
+ * driver's `is_multimodal` flag is accurate. TogetherAI vision requests are sent via the shared
+ * OpenAI Chat Completions driver path.
  */
 function getModelCapabilitiesTogetherAI(model: string): ModelCapabilities {
     const caps = getModelCapabilitiesOpenAICompatible(model);

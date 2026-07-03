@@ -28,14 +28,17 @@ import { AbstractDriver } from '@llumiverse/core/driver';
 import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
 import { type FETCH_FN, FetchClient } from '@vertesia/api-fetch-client';
 import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from 'google-auth-library';
+import {
+    buildOpenAIChatCompletionsStreamingConversation,
+    type OpenAIChatCompletionsPrompt,
+} from '../openai/openai_chat_completions.js';
 import { type ClaudePrompt, formatClaudeDebugPrompt } from '../shared/claude-messages.js';
 import { generateVertexAiEmbeddings } from './embeddings/embed.js';
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
 import { formatGeminiDebugPrompt } from './models/gemini.js';
 import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
-import type { LLamaPrompt } from './models/llama.js';
-import type { OpenAIMessage, OpenAIPrompt } from './models/openai_compatible.js';
 import { getModelDefinition, trimModelName } from './models.js';
+import { getListedVertexOpenMaaSModels } from './open-maas-models.js';
 
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
@@ -67,7 +70,7 @@ function isClaudeStreamingPrompt(prompt: unknown): prompt is ClaudeStreamingProm
 }
 
 //General Prompt type for VertexAI
-export type VertexAIPrompt = ImagenPrompt | GenerateContentPrompt | ClaudePrompt | LLamaPrompt | OpenAIPrompt;
+export type VertexAIPrompt = ImagenPrompt | GenerateContentPrompt | ClaudePrompt | OpenAIChatCompletionsPrompt;
 
 export { trimModelName };
 
@@ -82,7 +85,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     googleGenAI: GoogleGenAI | undefined;
     googleGenAIRegion: string | undefined;
     googleGenAIFlex: boolean | undefined;
-    llamaClient: (FetchClient & { region?: string }) | undefined;
     modelGarden: v1beta1.ModelGardenServiceClient | undefined;
     imagenClient: PredictionServiceClient | undefined;
     predictionClient: PredictionServiceClient | undefined;
@@ -100,7 +102,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         this.googleGenAIRegion = undefined;
         this.googleGenAIFlex = undefined;
         this.modelGarden = undefined;
-        this.llamaClient = undefined;
         this.imagenClient = undefined;
         this.predictionClient = undefined;
 
@@ -208,13 +209,15 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
      * Get a fetch client with an overridden region. Useful when a model only exists
      * in a specific region (e.g., "global" for xAI models).
      */
-    public getFetchClientForRegion(region: string): FetchClient {
-        const cacheKey = `${region}:${this.options.project}`;
+    public getFetchClientForRegion(region: string, apiVersion = 'v1', endpointRegion?: string): FetchClient {
+        const cacheKey = `${region}:${endpointRegion ?? region}:${apiVersion}:${this.options.project}`;
         let client = this.regionOverrideClients.get(cacheKey);
         if (!client) {
             client = createFetchClient({
                 region: region,
                 project: this.options.project,
+                apiVersion,
+                endpointRegion,
                 fetchImpl: this.getDriverFetch(),
             }).withAuthCallback(async () => {
                 const token = await this.googleAuth.getAccessToken();
@@ -223,24 +226,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             this.regionOverrideClients.set(cacheKey, client);
         }
         return client;
-    }
-
-    public getLLamaClient(region: string = 'us-central1'): FetchClient {
-        //Lazy initialization
-        if (!this.llamaClient || this.llamaClient.region !== region) {
-            this.llamaClient = createFetchClient({
-                region: region,
-                project: this.options.project,
-                apiVersion: 'v1beta1',
-                fetchImpl: this.getDriverFetch(),
-            }).withAuthCallback(async () => {
-                const token = await this.googleAuth.getAccessToken();
-                return `Bearer ${token}`;
-            });
-            // Store the region for potential client reuse
-            this.llamaClient.region = region;
-        }
-        return this.llamaClient;
     }
 
     public async getAnthropicClient(
@@ -387,11 +372,11 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         toolUse: unknown[] | undefined,
         options: ExecutionOptions,
     ): Content[] | unknown | undefined {
-        // Handle OpenAI-compatible prompts (xAI Grok, Meta Llama via Vertex AI MaaS)
+        // Handle OpenAI Chat Completions prompts (xAI Grok, Meta Llama via Vertex AI MaaS)
         // IMPORTANT: check this BEFORE the Claude check — both have a `messages` array
-        if ('_is_openai_compat' in prompt && prompt._is_openai_compat) {
-            return this.buildOpenAICompatStreamingConversation(
-                prompt as unknown as OpenAIPrompt,
+        if ('_is_openai_chat_completions' in prompt && prompt._is_openai_chat_completions) {
+            return buildOpenAIChatCompletionsStreamingConversation(
+                prompt as unknown as OpenAIChatCompletionsPrompt,
                 result,
                 toolUse,
                 options,
@@ -496,80 +481,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             }
         }
 
-        return processedConversation;
-    }
-
-    /**
-     * Build conversation for OpenAI-compatible streaming (e.g. xAI Grok, Meta Llama on Vertex AI).
-     * Reconstructs the assistant message with OpenAI-format `tool_calls` from the accumulated
-     * ToolUse[], ready for the next API call.
-     */
-    private buildOpenAICompatStreamingConversation(
-        prompt: OpenAIPrompt,
-        result: unknown[],
-        toolUse: unknown[] | undefined,
-        options: ExecutionOptions,
-    ): OpenAIPrompt {
-        const completionResults = result as CompletionResult[];
-        const textContent = completionResults
-            .map((r) => {
-                const r_ = r as CompletionResult;
-                switch (r_.type) {
-                    case 'text':
-                        return r_.value;
-                    case 'json':
-                        return typeof r_.value === 'string' ? r_.value : JSON.stringify(r_.value);
-                    default:
-                        return '';
-                }
-            })
-            .join('');
-
-        // Build OpenAI-format assistant message.
-        // Per OpenAI spec, content must be null (not '') when tool_calls are present.
-        const assistantMessage: OpenAIMessage = { role: 'assistant' };
-        if (textContent) {
-            assistantMessage.content = textContent;
-        } else if (toolUse && toolUse.length > 0) {
-            assistantMessage.content = null;
-        } else {
-            assistantMessage.content = '';
-        }
-
-        if (toolUse && toolUse.length > 0) {
-            assistantMessage.tool_calls = (toolUse as ToolUse[]).map((t) => ({
-                id: t.id,
-                type: 'function',
-                function: {
-                    name: t.tool_name,
-                    arguments: typeof t.tool_input === 'string' ? t.tool_input : JSON.stringify(t.tool_input ?? {}),
-                },
-            }));
-        }
-
-        // Reconstruct full conversation: prior history + current-turn messages + assistant reply.
-        // NOTE: prompt.messages only contains the current-turn messages; options.conversation
-        // holds the accumulated prior history (same pattern as buildClaudeStreamingConversation).
-        const existingMessages = (options.conversation as OpenAIPrompt | undefined)?.messages;
-        const priorMessages = Array.isArray(existingMessages) ? existingMessages : [];
-        let conversation: OpenAIPrompt = {
-            _is_openai_compat: true,
-            messages: [...priorMessages, ...prompt.messages, assistantMessage],
-        };
-
-        conversation = incrementConversationTurn(conversation) as OpenAIPrompt;
-        const currentTurn = getConversationMeta(conversation).turnNumber;
-        const stripOptions = {
-            keepForTurns: options.stripImagesAfterTurns ?? Infinity,
-            currentTurn,
-            textMaxTokens: options.stripTextMaxTokens,
-        };
-        let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions) as OpenAIPrompt;
-        processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions) as OpenAIPrompt;
-        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
-            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
-            currentTurn,
-        }) as OpenAIPrompt;
         return processedConversation;
     }
 
@@ -693,8 +604,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
         let models: AIModel<string>[] = [];
 
-        //Model Garden Publisher models - Pretrained models
-        /** Meta "maas" models are LLama Models-As-A-Service. Non-maas models are not pre-deployed. */
+        // Model Garden publisher listings for families that are reliably returned by the API.
+        // Open MaaS-only families are appended from VERTEX_OPEN_MAAS_MODELS below to avoid
+        // extra listPublisherModels calls for publishers whose MaaS models do not appear there.
         const publisherConfig = {
             google: {
                 families: ['gemini', 'imagen'],
@@ -715,19 +627,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 families: ['claude'],
                 excluded: [],
                 additional: [],
-            },
-            meta: {
-                families: ['maas'],
-                excluded: [],
-                additional: [
-                    'llama-4-maverick-17b-128e-instruct-maas',
-                    'llama-4-scout-17b-16e-instruct-maas',
-                    'llama-3.3-70b-instruct-maas',
-                    'llama-3.2-90b-vision-instruct-maas',
-                    'llama-3.1-405b-instruct-maas',
-                    'llama-3.1-70b-instruct-maas',
-                    'llama-3.1-8b-instruct-maas',
-                ],
             },
             xai: {
                 families: ['grok'],
@@ -759,6 +658,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             globalGooglePromise,
             ...publisherPromises,
         ]);
+
+        models = models.concat(getListedVertexOpenMaaSModels(this.options.region));
 
         // Process aiplatform models, project specific models
         const [response] = aiplatformResult;
@@ -812,10 +713,15 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                         return false;
                     })
                     .map((model) => {
-                        const modelCapability = getModelCapabilities(model.name ?? '', 'vertexai');
+                        const rawModelId = model.name ?? '';
+                        const isGlobalOnlyPublisher = publisher === 'xai';
+                        const listedModelId = isGlobalOnlyPublisher ? `locations/global/${rawModelId}` : rawModelId;
+                        const modelCapability = getModelCapabilities(listedModelId, 'vertexai');
                         return {
-                            id: model.name ?? '',
-                            name: model.name?.split('/').pop() ?? '',
+                            id: listedModelId,
+                            name: isGlobalOnlyPublisher
+                                ? `Global ${rawModelId.split('/').pop()}`
+                                : (rawModelId.split('/').pop() ?? ''),
                             provider: 'vertexai',
                             owner: publisher,
                             input_modalities: modelModalitiesToArray(modelCapability.input),
@@ -970,17 +876,21 @@ export function createFetchClient({
     project,
     apiEndpoint,
     apiVersion = 'v1',
+    endpointRegion,
     fetchImpl,
 }: {
     region: string;
     project: string;
     apiEndpoint?: string;
     apiVersion?: string;
+    endpointRegion?: string;
     fetchImpl?: FETCH_FN;
 }): FetchClient {
     // For the "global" region, use aiplatform.googleapis.com without any prefix.
     // Regional endpoints use ${region}-aiplatform.googleapis.com (e.g., us-central1-aiplatform.googleapis.com).
-    const vertexBaseEndpoint = apiEndpoint ?? (region === 'global' ? API_BASE_PATH : `${region}-${API_BASE_PATH}`);
+    const hostRegion = endpointRegion ?? region;
+    const vertexBaseEndpoint =
+        apiEndpoint ?? (hostRegion === 'global' ? API_BASE_PATH : `${hostRegion}-${API_BASE_PATH}`);
     return new FetchClient(
         `https://${vertexBaseEndpoint}/${apiVersion}/projects/${project}/locations/${region}`,
         fetchImpl,
