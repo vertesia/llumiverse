@@ -49,7 +49,10 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
             project: process.env.GOOGLE_PROJECT_ID as string,
             region: process.env.GOOGLE_REGION as string,
         }),
-        models: ['publishers/google/models/gemini-2.5-flash-lite', 'publishers/anthropic/models/claude-sonnet-5'],
+        models: [
+            'publishers/google/models/gemini-2.5-flash-lite',
+            'locations/global/publishers/anthropic/models/claude-sonnet-5',
+        ],
     });
 } else {
     console.warn('Google Vertex tests are skipped: GOOGLE_PROJECT_ID environment variable is not set');
@@ -214,7 +217,7 @@ function getTestOptions(model: string): ExecutionOptions {
     };
 }
 
-describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => {
+describe.each(drivers)('Driver $name', ({ name, driver, models }) => {
     let fetchedModels: AIModel[];
 
     test(`${name}: list models`, { timeout: TIMEOUT, retry: 1 }, async () => {
