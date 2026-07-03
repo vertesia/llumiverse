@@ -10,9 +10,16 @@ const RECORD_MODEL_CAPABILITIES: Record<
         output: { text: true, image: false, video: false, audio: false, embed: false },
         tool_support: false,
     },
+    'gemma-4-26b-a4b-it-maas': {
+        input: { text: true, image: true, video: false, audio: false, embed: false },
+        output: { text: true, image: false, video: false, audio: false, embed: false },
+        tool_support: false,
+    },
 };
 
-// Populate RECORD_FAMILY_CAPABILITIES as a const record (lowest common denominator for each family)
+// Default family capabilities intentionally describe the latest known behavior for a model family.
+// Newer Vertex models should inherit these defaults by prefix until proven otherwise; add model-specific
+// records above only for older variants or materially different models that do not match the family default.
 const RECORD_FAMILY_CAPABILITIES: Record<
     string,
     { input: ModelModalities; output: ModelModalities; tool_support?: boolean }
@@ -97,6 +104,41 @@ const RECORD_FAMILY_CAPABILITIES: Record<
         output: { text: true, image: false, video: false, audio: false, embed: false },
         tool_support: true,
     },
+    deepseek: {
+        input: { text: true, image: false, video: false, audio: false, embed: false },
+        output: { text: true, image: false, video: false, audio: false, embed: false },
+        tool_support: true,
+    },
+    gemma: {
+        input: { text: true, image: false, video: false, audio: false, embed: false },
+        output: { text: true, image: false, video: false, audio: false, embed: false },
+        tool_support: false,
+    },
+    glm: {
+        input: { text: true, image: false, video: false, audio: false, embed: false },
+        output: { text: true, image: false, video: false, audio: false, embed: false },
+        tool_support: true,
+    },
+    'gpt-oss': {
+        input: { text: true, image: false, video: false, audio: false, embed: false },
+        output: { text: true, image: false, video: false, audio: false, embed: false },
+        tool_support: true,
+    },
+    kimi: {
+        input: { text: true, image: false, video: false, audio: false, embed: false },
+        output: { text: true, image: false, video: false, audio: false, embed: false },
+        tool_support: true,
+    },
+    minimax: {
+        input: { text: true, image: false, video: false, audio: false, embed: false },
+        output: { text: true, image: false, video: false, audio: false, embed: false },
+        tool_support: true,
+    },
+    qwen: {
+        input: { text: true, image: false, video: false, audio: false, embed: false },
+        output: { text: true, image: false, video: false, audio: false, embed: false },
+        tool_support: true,
+    },
 };
 
 // Fallback pattern lists for inferring modalities and tool support
@@ -109,7 +151,22 @@ const VIDEO_OUTPUT_MODELS = ['video'];
 const AUDIO_OUTPUT_MODELS = ['audio'];
 const TEXT_OUTPUT_MODELS = ['text'];
 const EMBEDDING_OUTPUT_MODELS = ['embed'];
-const TOOL_SUPPORT_MODELS = ['tool', 'sonnet', 'opus', 'gemini', 'claude', 'grok'];
+const TOOL_SUPPORT_MODELS = [
+    'tool',
+    'sonnet',
+    'opus',
+    'gemini',
+    'claude',
+    'grok',
+    'deepseek',
+    'gemma',
+    'glm',
+    'gpt-oss',
+    'kimi',
+    'llama',
+    'minimax',
+    'qwen',
+];
 
 function modelMatches(modelName: string, patterns: string[]): boolean {
     return patterns.some((pattern) => modelName.includes(pattern));

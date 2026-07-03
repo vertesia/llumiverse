@@ -1,140 +1,226 @@
-import type { CompletionChunkObject, ToolUse } from '@llumiverse/core';
+import { type JSONSchema, PromptRole, type ToolUse } from '@llumiverse/core';
 import type OpenAI from 'openai';
-import { describe, expect, test } from 'vitest';
-import { mapChatCompletionStream } from '../src/openai/index.js';
-import { convertResponseItemsToChatMessages } from '../src/openai/openai_format.js';
+import { describe, expect, test, vi } from 'vitest';
+import { TogetherAIDriver } from '../src/togetherai/index.js';
 
-type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
-type ChatCompletionChunk = OpenAI.Chat.Completions.ChatCompletionChunk;
+type ChatCreatePayload = OpenAI.Chat.ChatCompletionCreateParams;
+type ChatCreate = (payload: ChatCreatePayload) => Promise<unknown>;
 
-async function* streamChunks(chunks: ChatCompletionChunk[]): AsyncIterable<ChatCompletionChunk> {
+function mockTogetherDriver(response: unknown) {
+    const chatCreate = vi.fn<ChatCreate>(async (_payload) => response);
+    const responsesCreate = vi.fn();
+    const driver = new TogetherAIDriver({ apiKey: 'test-key' });
+    driver.service = {
+        chat: { completions: { create: chatCreate } },
+        responses: { create: responsesCreate },
+        get: vi.fn(),
+        models: { list: vi.fn() },
+    } as unknown as TogetherAIDriver['service'];
+    return { driver, chatCreate, responsesCreate };
+}
+
+function getChatCreatePayload(chatCreate: ReturnType<typeof mockTogetherDriver>['chatCreate']): ChatCreatePayload {
+    const payload = chatCreate.mock.calls[0]?.[0];
+    if (!payload) {
+        throw new Error('Expected chat completions create to be called');
+    }
+    return payload;
+}
+
+function textResponse(content: string | null, extra: Record<string, unknown> = {}) {
+    return {
+        id: 'chatcmpl-1',
+        object: 'chat.completion',
+        created: 1,
+        model: 'together/model',
+        choices: [
+            {
+                index: 0,
+                message: { role: 'assistant', content, ...extra },
+                finish_reason: 'stop',
+                logprobs: null,
+            },
+        ],
+        usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+    };
+}
+
+async function* streamChunks(chunks: unknown[]): AsyncIterable<unknown> {
     for (const chunk of chunks) {
         yield chunk;
     }
 }
 
-async function collect(stream: AsyncIterable<CompletionChunkObject>): Promise<CompletionChunkObject[]> {
-    const out: CompletionChunkObject[] = [];
+async function collectText(stream: AsyncIterable<unknown>): Promise<string> {
+    let text = '';
     for await (const chunk of stream) {
-        out.push(chunk);
+        const item = chunk as { result?: Array<{ type: string; value: string }> };
+        text += item.result?.map((result) => (result.type === 'text' ? result.value : '')).join('') ?? '';
     }
-    return out;
+    return text;
 }
 
-describe('convertResponseItemsToChatMessages (Response API -> Chat Completions)', () => {
-    test('maps a user input_image to a Chat Completions image_url part', () => {
-        const items = [
+describe('TogetherAIDriver Chat Completions transport', () => {
+    test('uses Chat Completions for normal text and never calls Responses', async () => {
+        const { driver, chatCreate, responsesCreate } = mockTogetherDriver(textResponse('ok'));
+        const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Hello' }], {
+            model: 'meta-llama/Llama-4-Scout-17B-16E-Instruct',
+        });
+
+        const completion = await driver.requestTextCompletion(prompt, {
+            model: 'meta-llama/Llama-4-Scout-17B-16E-Instruct',
+            model_options: { _option_id: 'text-fallback', temperature: 0.2, max_tokens: 8 },
+        });
+
+        expect(responsesCreate).not.toHaveBeenCalled();
+        expect(chatCreate).toHaveBeenCalledWith(
+            expect.objectContaining({
+                model: 'meta-llama/Llama-4-Scout-17B-16E-Instruct',
+                stream: false,
+                temperature: 0.2,
+                max_tokens: 8,
+            }),
+        );
+        expect(completion.result).toEqual([{ type: 'text', value: 'ok' }]);
+    });
+
+    test('formats image prompts as Chat Completions image_url parts', async () => {
+        const { driver, chatCreate } = mockTogetherDriver(textResponse('image ok'));
+        const prompt = await driver.createPrompt(
+            [
+                {
+                    role: PromptRole.user,
+                    content: 'What is this?',
+                    files: [
+                        {
+                            name: 'image.png',
+                            mime_type: 'image/png',
+                            getURI: async () => 'test://image.png',
+                            getURL: async () => 'test://image.png',
+                            getStream: async () =>
+                                new ReadableStream({
+                                    start(controller) {
+                                        controller.enqueue(Buffer.from('image-bytes'));
+                                        controller.close();
+                                    },
+                                }),
+                        },
+                    ],
+                },
+            ],
+            { model: 'meta-llama/Llama-4-Scout-17B-16E-Instruct' },
+        );
+
+        await driver.requestTextCompletion(prompt, {
+            model: 'meta-llama/Llama-4-Scout-17B-16E-Instruct',
+            model_options: { _option_id: 'text-fallback' },
+        });
+
+        const payload = getChatCreatePayload(chatCreate);
+        expect(payload.messages).toEqual([
             {
-                type: 'message',
                 role: 'user',
                 content: [
-                    { type: 'input_text', text: 'What is in this image?' },
-                    { type: 'input_image', image_url: 'data:image/jpeg;base64,AAAA', detail: 'auto' },
+                    { type: 'text', text: 'What is this?' },
+                    {
+                        type: 'image_url',
+                        image_url: {
+                            url: `data:image/png;base64,${Buffer.from('image-bytes').toString('base64')}`,
+                            detail: 'auto',
+                        },
+                    },
                 ],
             },
-        ] as ResponseInputItem[];
-
-        const messages = convertResponseItemsToChatMessages(items);
-
-        expect(messages).toHaveLength(1);
-        const msg = messages[0] as unknown as { role: string; content: Array<Record<string, unknown>> };
-        expect(msg.role).toBe('user');
-        expect(msg.content).toEqual([
-            { type: 'text', text: 'What is in this image?' },
-            { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,AAAA', detail: 'auto' } },
         ]);
     });
 
-    test('maps system messages, tool outputs, and tool calls', () => {
-        const items = [
-            { type: 'message', role: 'system', content: 'You are helpful.' },
-            { type: 'function_call', call_id: 'call_1', name: 'search', arguments: '{"q":"cats"}' },
-            { type: 'function_call_output', call_id: 'call_1', output: 'result text' },
-        ] as ResponseInputItem[];
-
-        const messages = convertResponseItemsToChatMessages(items) as unknown as Array<Record<string, unknown>>;
-
-        expect(messages[0]).toEqual({ role: 'system', content: 'You are helpful.' });
-        expect(messages[1]).toEqual({
-            role: 'assistant',
-            content: null,
-            tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'search', arguments: '{"q":"cats"}' } }],
+    test('uses prompt schema instructions instead of response_format', async () => {
+        const { driver, chatCreate } = mockTogetherDriver(textResponse('{"color":"green"}'));
+        const result_schema: JSONSchema = {
+            type: 'object',
+            properties: { color: { type: 'string' } },
+            required: ['color'],
+        };
+        const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'grass' }], {
+            model: 'Qwen/Qwen3',
+            result_schema,
         });
-        expect(messages[2]).toEqual({ role: 'tool', tool_call_id: 'call_1', content: 'result text' });
-    });
-});
 
-describe('mapChatCompletionStream (Chat Completions streaming)', () => {
-    test('accumulates text deltas and terminal finish/usage', async () => {
-        const chunks = [
-            { choices: [{ index: 0, delta: { content: 'Hello ' }, finish_reason: null }] },
-            { choices: [{ index: 0, delta: { content: 'world' }, finish_reason: null }] },
-            { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
-            {
-                choices: [],
-                usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
-            },
-        ] as unknown as ChatCompletionChunk[];
+        await driver.requestTextCompletion(prompt, {
+            model: 'Qwen/Qwen3',
+            model_options: { _option_id: 'text-fallback' },
+            result_schema,
+        });
 
-        const out = await collect(mapChatCompletionStream(streamChunks(chunks)));
-
-        const text = out
-            .flatMap((c) => c.result ?? [])
-            .map((r) => (r.type === 'text' ? r.value : ''))
-            .join('');
-        expect(text).toBe('Hello world');
-
-        // The 'stop' finish chunk carries finish_reason; the usage-only chunk must NOT overwrite it.
-        expect(out.some((c) => c.finish_reason === 'stop')).toBe(true);
-        const usageChunk = out.find((c) => c.token_usage);
-        expect(usageChunk?.token_usage).toMatchObject({ prompt: 10, result: 5, total: 15 });
-        expect(usageChunk?.finish_reason).toBeUndefined();
+        const payload = getChatCreatePayload(chatCreate);
+        expect(payload).not.toHaveProperty('response_format');
+        expect(payload.messages).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    role: 'system',
+                    content: expect.stringContaining('<response_schema>'),
+                }),
+            ]),
+        );
     });
 
-    test('streams tool call deltas keyed by index and maps finish_reason to tool_use', async () => {
-        const chunks = [
-            {
-                choices: [
+    test('passes tools and parses tool calls', async () => {
+        const { driver, chatCreate } = mockTogetherDriver(
+            textResponse(null, {
+                tool_calls: [
                     {
-                        index: 0,
-                        delta: {
-                            tool_calls: [
-                                {
-                                    index: 0,
-                                    id: 'call_abc',
-                                    type: 'function',
-                                    function: { name: 'get_weather', arguments: '{"ci' },
-                                },
-                            ],
-                        },
-                        finish_reason: null,
+                        id: 'call_1',
+                        type: 'function',
+                        function: { name: 'lookup', arguments: '{"city":"Paris"}' },
                     },
                 ],
-            },
+            }),
+        );
+        const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Weather?' }], {
+            model: 'Qwen/Qwen3',
+        });
+
+        const completion = await driver.requestTextCompletion(prompt, {
+            model: 'Qwen/Qwen3',
+            model_options: { _option_id: 'text-fallback' },
+            tools: [{ name: 'lookup', description: 'Lookup weather', input_schema: { type: 'object' } }],
+        });
+
+        const payload = getChatCreatePayload(chatCreate);
+        expect(payload.tools).toEqual([
             {
-                choices: [
-                    {
-                        index: 0,
-                        delta: { tool_calls: [{ index: 0, function: { arguments: 'ty":"Paris"}' } }] },
-                        finish_reason: null,
-                    },
-                ],
+                type: 'function',
+                function: {
+                    name: 'lookup',
+                    description: 'Lookup weather',
+                    parameters: { type: 'object' },
+                    strict: false,
+                },
             },
-            { choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] },
-        ] as unknown as ChatCompletionChunk[];
+        ]);
+        expect((completion.tool_use?.[0] as ToolUse).tool_input).toEqual({ city: 'Paris' });
+        expect(completion.finish_reason).toBe('tool_use');
+    });
 
-        const out = await collect(mapChatCompletionStream(streamChunks(chunks)));
+    test('streams through Chat Completions and preserves usage-only terminal chunks', async () => {
+        const { driver, chatCreate, responsesCreate } = mockTogetherDriver(
+            streamChunks([
+                { choices: [{ index: 0, delta: { content: [{ type: 'text', text: 'hel' }] }, finish_reason: null }] },
+                { choices: [{ index: 0, delta: { content: 'lo' }, finish_reason: 'stop' }] },
+                { choices: [], usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } },
+            ]),
+        );
+        const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Hello' }], {
+            model: 'Qwen/Qwen3',
+        });
 
-        const toolChunks = out.filter((c) => c.tool_use && c.tool_use.length > 0);
-        const first = toolChunks[0].tool_use?.[0] as ToolUse<unknown> & { _actual_id?: string };
-        expect(first.id).toBe('tool_0');
-        expect(first._actual_id).toBe('call_abc');
-        expect(first.tool_name).toBe('get_weather');
+        const stream = await driver.requestTextCompletionStream(prompt, {
+            model: 'Qwen/Qwen3',
+            model_options: { _option_id: 'text-fallback' },
+        });
 
-        // Argument fragments arrive across chunks and concatenate to valid JSON.
-        const args = toolChunks.map((c) => (c.tool_use?.[0].tool_input as string) ?? '').join('');
-        expect(args).toBe('{"city":"Paris"}');
-
-        expect(out.some((c) => c.finish_reason === 'tool_use')).toBe(true);
+        expect(await collectText(stream)).toBe('hello');
+        expect(responsesCreate).not.toHaveBeenCalled();
+        expect(chatCreate).toHaveBeenCalledWith(expect.objectContaining({ stream: true }));
     });
 });

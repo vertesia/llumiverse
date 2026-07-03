@@ -212,11 +212,8 @@ type ChatCompletionContentPart = OpenAI.Chat.Completions.ChatCompletionContentPa
  * Convert Response API items (`ResponseInputItem[]`) into Chat Completions messages
  * (`ChatCompletionMessageParam[]`).
  *
- * Some OpenAI-compatible providers expose only the *Chat Completions* surface and do NOT
- * implement the newer *Responses* API (e.g. TogetherAI, Groq). Those drivers still build
- * their prompts/conversations as `ResponseInputItem[]` — so all the shared conversation,
- * stripping and tool-handling logic keeps working — and convert to Chat Completions messages
- * right before the request. Crucially, images become `{ type: 'image_url', image_url: { url } }`
+ * This is useful for adapters that start from Response API conversation items but must call an
+ * OpenAI Chat Completions-compatible endpoint. Crucially, images become `{ type: 'image_url', image_url: { url } }`
  * (the Chat Completions shape) instead of the Responses `input_image` shape, which those
  * providers silently ignore.
  */

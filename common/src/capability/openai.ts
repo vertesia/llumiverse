@@ -78,7 +78,7 @@ const RECORD_FAMILY_CAPABILITIES: Record<string, OpenAIModelCapability> = {
     'gpt-oss': {
         input: { text: true, image: false, video: false, audio: false, embed: false },
         output: { text: true, image: false, video: false, audio: false, embed: false },
-        tool_support: false,
+        tool_support: true,
     },
     o: {
         input: { text: true, image: true, video: false, audio: false, embed: false },

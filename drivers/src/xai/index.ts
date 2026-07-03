@@ -1,7 +1,7 @@
 import { type AIModel, type DriverOptions, type PromptOptions, type PromptSegment, Providers } from '@llumiverse/core';
 import { FetchClient } from '@vertesia/api-fetch-client';
 import OpenAI from 'openai';
-import { BaseOpenAIDriver } from '../openai/index.js';
+import { OpenAIResponsesDriverBase } from '../openai/index.js';
 import { formatOpenAILikeMultimodalPrompt, type OpenAIPromptFormatterOptions } from '../openai/openai_format.js';
 
 export interface xAiDriverOptions extends DriverOptions {
@@ -10,7 +10,7 @@ export interface xAiDriverOptions extends DriverOptions {
     endpoint?: string;
 }
 
-export class xAIDriver extends BaseOpenAIDriver {
+export class xAIDriver extends OpenAIResponsesDriverBase {
     service: OpenAI;
     readonly provider = Providers.xai;
     xai_service: FetchClient;
