@@ -3,6 +3,10 @@ import { type Content, GoogleGenAI, type Model } from '@google/genai';
 import { PredictionServiceClient, v1beta1 } from '@google-cloud/aiplatform';
 import {
     type AIModel,
+    type BatchInferenceJob,
+    type BatchInferenceOptions,
+    type BatchInferenceRequestItem,
+    type BatchInferenceResultItem,
     type Completion,
     type CompletionChunkObject,
     type CompletionResult,
@@ -33,9 +37,18 @@ import {
     type OpenAIChatCompletionsPrompt,
 } from '../openai/openai_chat_completions.js';
 import { type ClaudePrompt, formatClaudeDebugPrompt } from '../shared/claude-messages.js';
+import {
+    gcsDownloadText,
+    gcsList,
+    gcsUploadText,
+    mapBatchJobState,
+    parseBatchOutputLine,
+    parseGcsBucket,
+    toRestGenerateContentRequest,
+} from './batch.js';
 import { generateVertexAiEmbeddings } from './embeddings/embed.js';
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
-import { formatGeminiDebugPrompt } from './models/gemini.js';
+import { formatGeminiDebugPrompt, getGeminiPayload } from './models/gemini.js';
 import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
 import { getModelDefinition, trimModelName } from './models.js';
 import { getListedVertexOpenMaaSModels } from './open-maas-models.js';
@@ -44,6 +57,8 @@ export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
     region: string;
     googleAuthOptions?: GoogleAuthOptions;
+    /** GCS bucket (name or gs://bucket/prefix) used to stage batch-inference input/output. Required to use batch inference. */
+    batch_bucket?: string;
 }
 
 export interface GenerateContentPrompt {
@@ -359,6 +374,109 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         options: ExecutionOptions,
     ): Promise<AsyncIterable<CompletionChunkObject>> {
         return getModelDefinition(options.model).requestTextCompletionStream(this, prompt, options);
+    }
+
+    // ===================== Batch inference (Vertex GCS) =====================
+
+    supportsBatchInference(model?: string): boolean {
+        // Vertex batch prediction is available for Gemini generateContent models.
+        // Anthropic/Imagen/OpenAI-MaaS models on Vertex are not handled by this path.
+        if (!model) {
+            return true;
+        }
+        const m = model.toLowerCase();
+        return m.includes('gemini');
+    }
+
+    async startBatchInference(
+        requests: BatchInferenceRequestItem[],
+        options?: BatchInferenceOptions,
+    ): Promise<BatchInferenceJob> {
+        if (requests.length === 0) {
+            throw new Error('[vertexai] startBatchInference called with no requests');
+        }
+        const model = requests[0].options.model;
+        const bucketSpec = options?.input_uri ?? this.options.batch_bucket;
+        if (!bucketSpec) {
+            throw new Error(
+                "[vertexai] Batch inference requires a GCS bucket: set 'batch_bucket' in driver options or 'input_uri' in batch options",
+            );
+        }
+        const { bucket, prefix } = parseGcsBucket(bucketSpec);
+        const auth = await this.getAuthClient();
+
+        const lines: string[] = [];
+        for (const item of requests) {
+            const prompt = await this.createPrompt(item.segments, item.options);
+            if (!('contents' in prompt)) {
+                throw new Error('[vertexai] Batch inference currently supports Gemini (generateContent) models only');
+            }
+            const params = getGeminiPayload(item.options, prompt as GenerateContentPrompt);
+            const request = toRestGenerateContentRequest(params);
+            lines.push(JSON.stringify({ custom_id: item.custom_id, request }));
+        }
+
+        const runId = options?.name ? `${options.name}-${Date.now()}` : `llumiverse-batch-${Date.now()}`;
+        const base = prefix ? `${prefix}/${runId}` : runId;
+        const inputUri = await gcsUploadText(auth, bucket, `${base}/input.jsonl`, lines.join('\n'));
+        const destUri = `gs://${bucket}/${base}/output`;
+
+        const genai = this.getGoogleGenAIClient();
+        const job = await genai.batches.create({
+            model,
+            src: inputUri,
+            config: { displayName: runId, dest: destUri },
+        });
+
+        return {
+            id: job.name ?? '',
+            status: mapBatchJobState(job.state as string | undefined),
+            output_uri: destUri,
+            request_count: requests.length,
+        };
+    }
+
+    async getBatchInferenceJob(jobId: string): Promise<BatchInferenceJob> {
+        const genai = this.getGoogleGenAIClient();
+        const job = await genai.batches.get({ name: jobId });
+        const destUri = typeof job.dest === 'string' ? job.dest : (job.dest?.gcsUri ?? undefined);
+        return {
+            id: job.name ?? jobId,
+            status: mapBatchJobState(job.state as string | undefined),
+            details: (job as { error?: { message?: string } }).error?.message ?? undefined,
+            output_uri: destUri,
+        };
+    }
+
+    async cancelBatchInference(jobId: string): Promise<BatchInferenceJob> {
+        const genai = this.getGoogleGenAIClient();
+        await genai.batches.cancel({ name: jobId });
+        return this.getBatchInferenceJob(jobId);
+    }
+
+    async getBatchInferenceResults(jobId: string): Promise<BatchInferenceResultItem[]> {
+        const genai = this.getGoogleGenAIClient();
+        const job = await genai.batches.get({ name: jobId });
+        const destUri = typeof job.dest === 'string' ? job.dest : (job.dest?.gcsUri ?? undefined);
+        if (!destUri) {
+            throw new Error('[vertexai] batch job has no GCS output destination');
+        }
+        const { bucket, prefix } = parseGcsBucket(destUri);
+        const auth = await this.getAuthClient();
+        const names = (await gcsList(auth, bucket, prefix)).filter(
+            (n) => n.endsWith('.jsonl') || n.includes('prediction'),
+        );
+        const items: BatchInferenceResultItem[] = [];
+        for (const name of names) {
+            const text = await gcsDownloadText(auth, bucket, name);
+            for (const line of text.split('\n')) {
+                const parsed = parseBatchOutputLine(line, items.length);
+                if (parsed) {
+                    items.push(parsed);
+                }
+            }
+        }
+        return items;
     }
 
     /**

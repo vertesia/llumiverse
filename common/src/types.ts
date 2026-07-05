@@ -926,6 +926,58 @@ export interface TrainingJob {
     model?: string; // the name of the fine tuned model which is created
 }
 
+// ============== batch inference =====================
+
+export enum BatchInferenceJobStatus {
+    queued = 'queued',
+    running = 'running',
+    succeeded = 'succeeded',
+    failed = 'failed',
+    cancelled = 'cancelled',
+}
+
+/**
+ * A single request in a batch. `custom_id` is echoed back on the matching result
+ * so callers can map a result to their own unit of work (e.g. a document page).
+ * `segments`/`options` are the SAME inputs the synchronous `execute()` takes, so the
+ * batch request is formatted by the driver's existing `createPrompt` — guaranteeing
+ * batch output matches interactive output for the same model.
+ */
+export interface BatchInferenceRequestItem {
+    custom_id: string;
+    segments: PromptSegment[];
+    options: ExecutionOptions;
+}
+
+/**
+ * Options controlling where the driver stages the batch input/output. If not
+ * provided, the driver falls back to a bucket configured in its driver options
+ * (e.g. `batch_bucket` for Vertex/Bedrock).
+ */
+export interface BatchInferenceOptions {
+    name?: string; // display name / job-name prefix
+    input_uri?: string; // pre-staged input JSONL location (gs://… or s3://…) — overrides driver staging
+    output_uri?: string; // output location (gs://… or s3://…) — overrides driver default
+}
+
+export interface BatchInferenceJob {
+    id: string; // provider job resource name / id
+    status: BatchInferenceJobStatus;
+    details?: string; // status detail or error message
+    output_uri?: string; // location of the results once available (gs://… or s3://…)
+    request_count?: number; // number of requests submitted, when known
+    start_time?: number; // epoch millis
+    end_time?: number; // epoch millis
+}
+
+export interface BatchInferenceResultItem {
+    custom_id: string;
+    result?: CompletionResult[];
+    token_usage?: ExecutionTokenUsage;
+    finish_reason?: string;
+    error?: string;
+}
+
 export type JSONPrimitive = string | number | boolean | null;
 export type JSONArray = JSONValue[];
 export type JSONObject = { [key: string]: JSONValue };
