@@ -1,5 +1,9 @@
 import {
     type AIModel,
+    type BatchInferenceJob,
+    type BatchInferenceOptions,
+    type BatchInferenceRequestItem,
+    type BatchInferenceResultItem,
     type Completion,
     type CompletionChunkObject,
     type CompletionResult,
@@ -41,6 +45,8 @@ import {
 } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import type { AzureOpenAI } from 'openai';
+import { toFile } from 'openai';
+import { mapOpenAIBatchStatus, parseOpenAIBatchOutputLine } from './batch.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAILikeMultimodalPrompt } from './openai_format.js';
 import { formatOpenAISchema } from './schema.js';
@@ -271,21 +277,11 @@ export class OpenAIResponsesProtocol {
         );
     }
 
-    async requestTextCompletion(
+    buildTextCompletionRequest(
         driver: OpenAIResponsesDriverBase,
         prompt: ResponseInputItem[],
         options: ExecutionOptions,
-    ): Promise<Completion> {
-        if (
-            options.model_options?._option_id !== undefined &&
-            options.model_options?._option_id !== 'openai-text' &&
-            options.model_options?._option_id !== 'openai-thinking' &&
-            options.model_options?._option_id !== 'bedrock-mantle-responses' &&
-            options.model_options?._option_id !== 'text-fallback'
-        ) {
-            driver.logger.debug({ options: options.model_options }, 'Unexpected option id');
-        }
-
+    ): { body: OpenAI.Responses.ResponseCreateParamsNonStreaming; conversation: ResponseInputItem[] } {
         convertRoles(prompt, options.model);
 
         const model_options = options.model_options as OpenAIRequestOptions | undefined;
@@ -330,26 +326,48 @@ export class OpenAIResponsesProtocol {
             driver.getResponsesRequestModel(options.model),
             promptCacheKey,
         );
-        const res = await driver.service.responses.create({
-            stream: false,
-            model: driver.getResponsesRequestModel(options.model),
-            prompt_cache_key: promptCacheKey,
-            prompt_cache_retention: promptCacheRetention,
-            prompt_cache_options: promptCache.options,
-            input: promptCache.input,
-            reasoning,
-            include: reasoning ? ['reasoning.encrypted_content'] : undefined,
-            temperature: isReasoningModel ? undefined : model_options?.temperature,
-            top_p: isReasoningModel ? undefined : model_options?.top_p,
-            max_output_tokens: model_options?.max_tokens, //TODO: use max_tokens for older models, currently relying on OpenAI to handle it
-            tools: useTools ? toolDefs : undefined,
-            text: buildResponseTextConfig(
-                parsedSchema,
-                strictMode,
-                model_options?.verbosity,
-                options.prompt_cache_schema_suffix === true && !!options.result_schema,
-            ),
-        });
+        return {
+            body: {
+                stream: false,
+                model: driver.getResponsesRequestModel(options.model),
+                prompt_cache_key: promptCacheKey,
+                prompt_cache_retention: promptCacheRetention,
+                prompt_cache_options: promptCache.options,
+                input: promptCache.input,
+                reasoning,
+                include: reasoning ? ['reasoning.encrypted_content'] : undefined,
+                temperature: isReasoningModel ? undefined : model_options?.temperature,
+                top_p: isReasoningModel ? undefined : model_options?.top_p,
+                max_output_tokens: model_options?.max_tokens,
+                tools: useTools ? toolDefs : undefined,
+                text: buildResponseTextConfig(
+                    parsedSchema,
+                    strictMode,
+                    model_options?.verbosity,
+                    options.prompt_cache_schema_suffix === true && !!options.result_schema,
+                ),
+            },
+            conversation,
+        };
+    }
+
+    async requestTextCompletion(
+        driver: OpenAIResponsesDriverBase,
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+    ): Promise<Completion> {
+        if (
+            options.model_options?._option_id !== undefined &&
+            options.model_options?._option_id !== 'openai-text' &&
+            options.model_options?._option_id !== 'openai-thinking' &&
+            options.model_options?._option_id !== 'bedrock-mantle-responses' &&
+            options.model_options?._option_id !== 'text-fallback'
+        ) {
+            driver.logger.debug({ options: options.model_options }, 'Unexpected option id');
+        }
+
+        const { body, conversation } = this.buildTextCompletionRequest(driver, prompt, options);
+        const res = await driver.service.responses.create(body);
 
         const completion = driver.extractDataFromResponse(options, res);
         if (options.include_original_response) {
@@ -431,6 +449,14 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 
     requestTextCompletion(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<Completion> {
         return this.responsesProtocol.requestTextCompletion(this, prompt, options);
+    }
+
+    /** Build the same non-streaming request body used by direct execution for a provider batch line. */
+    protected buildResponsesBody(
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+    ): OpenAI.Responses.ResponseCreateParamsNonStreaming {
+        return this.responsesProtocol.buildTextCompletionRequest(this, prompt, options).body;
     }
 
     protected canStream(_options: ExecutionOptions): Promise<boolean> {
@@ -517,6 +543,75 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
             // babbage, davinci not yet implemented
             throw new Error(`Unsupported model for training: ${options.model}`);
         }
+    }
+
+    // ===================== Batch inference (OpenAI Batch API) =====================
+
+    supportsBatchInference(_model?: string): boolean {
+        return true;
+    }
+
+    async startBatchInference(
+        requests: BatchInferenceRequestItem[],
+        options?: BatchInferenceOptions,
+    ): Promise<BatchInferenceJob> {
+        if (requests.length === 0) {
+            throw new Error('[openai] startBatchInference called with no requests');
+        }
+        const lines: string[] = [];
+        for (const item of requests) {
+            const prompt = await this.createPrompt(item.segments, item.options);
+            const { stream: _stream, ...body } = this.buildResponsesBody(prompt, item.options);
+            lines.push(JSON.stringify({ custom_id: item.custom_id, method: 'POST', url: '/v1/responses', body }));
+        }
+        const file = await this.service.files.create({
+            file: await toFile(Buffer.from(lines.join('\n')), `${options?.name ?? 'llumiverse-batch'}.jsonl`, {
+                type: 'application/jsonl',
+            }),
+            purpose: 'batch',
+        });
+        const job = await this.service.batches.create({
+            input_file_id: file.id,
+            endpoint: '/v1/responses',
+            completion_window: '24h',
+        });
+        return {
+            id: job.id,
+            status: mapOpenAIBatchStatus(job.status),
+            request_count: requests.length,
+        };
+    }
+
+    async getBatchInferenceJob(jobId: string): Promise<BatchInferenceJob> {
+        const job = await this.service.batches.retrieve(jobId);
+        return {
+            id: job.id,
+            status: mapOpenAIBatchStatus(job.status),
+            details: job.errors ? JSON.stringify(job.errors) : undefined,
+            output_uri: job.output_file_id ?? undefined,
+        };
+    }
+
+    async cancelBatchInference(jobId: string): Promise<BatchInferenceJob> {
+        await this.service.batches.cancel(jobId);
+        return this.getBatchInferenceJob(jobId);
+    }
+
+    async getBatchInferenceResults(jobId: string): Promise<BatchInferenceResultItem[]> {
+        const job = await this.service.batches.retrieve(jobId);
+        if (!job.output_file_id) {
+            throw new Error('[openai] batch job has no output file');
+        }
+        const content = await this.service.files.content(job.output_file_id);
+        const text = await content.text();
+        const items: BatchInferenceResultItem[] = [];
+        for (const line of text.split('\n')) {
+            const parsed = parseOpenAIBatchOutputLine(line, items.length);
+            if (parsed) {
+                items.push(parsed);
+            }
+        }
+        return items;
     }
 
     async startTraining(dataset: DataSource, options: TrainingOptions): Promise<TrainingJob> {
