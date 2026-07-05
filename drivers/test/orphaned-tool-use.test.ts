@@ -32,6 +32,15 @@ import type { Tree } from './__helpers__/test-utils.js';
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 
+function requireBedrockContent(message: Message | undefined, messageIndex: number): NonNullable<Message['content']> {
+    const content = message?.content;
+    expect(content).toBeDefined();
+    if (!content) {
+        throw new Error(`Expected Bedrock message content at index ${messageIndex}`);
+    }
+    return content;
+}
+
 describe('fixOrphanedToolUse - Claude', () => {
     test('returns empty array for empty input', () => {
         const result = fixOrphanedToolUseClaude([]);
@@ -383,8 +392,7 @@ describe('fixOrphanedToolUse - Bedrock', () => {
         expect(result[1].role).toBe('user');
 
         // The user message should have synthetic toolResult prepended
-        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
-        const userContent = result[1].content!;
+        const userContent = requireBedrockContent(result[1], 1);
         expect(userContent).toHaveLength(2);
         expect(userContent[0].toolResult).toBeDefined();
         expect(userContent[0].toolResult?.toolUseId).toBe('tool_1');
@@ -412,8 +420,7 @@ describe('fixOrphanedToolUse - Bedrock', () => {
 
         const result = fixOrphanedToolUseBedrock(messages);
 
-        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
-        const userContent = result[1].content!;
+        const userContent = requireBedrockContent(result[1], 1);
         expect(userContent).toHaveLength(4); // 3 synthetic toolResults + 1 text
 
         // Verify synthetic toolResults
@@ -443,8 +450,7 @@ describe('fixOrphanedToolUse - Bedrock', () => {
 
         const result = fixOrphanedToolUseBedrock(messages);
 
-        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
-        const userContent = result[1].content!;
+        const userContent = requireBedrockContent(result[1], 1);
         expect(userContent).toHaveLength(3); // 1 synthetic + 1 real toolResult + 1 text
 
         // Synthetic toolResult for tool_2 should be first
@@ -483,8 +489,7 @@ describe('fixOrphanedToolUse - Bedrock', () => {
         expect(result).toHaveLength(5);
 
         // Check that the last user message has synthetic toolResults
-        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
-        const lastUserContent = result[4].content!;
+        const lastUserContent = requireBedrockContent(result[4], 4);
         expect(lastUserContent).toHaveLength(3); // 2 synthetic + 1 text
 
         expect(lastUserContent[0].toolResult?.toolUseId).toBe('toolu_search');
@@ -523,8 +528,7 @@ describe('fixOrphanedToolResults - Bedrock', () => {
         ];
 
         const result = fixOrphanedToolResultsBedrock(messages);
-        // biome-ignore lint/style/noNonNullAssertion: content is set above
-        const userContent = result[1].content!;
+        const userContent = requireBedrockContent(result[1], 1);
         expect(userContent).toHaveLength(1);
         expect(userContent[0].toolResult?.toolUseId).toBe('tool_1');
     });
@@ -538,8 +542,8 @@ describe('fixOrphanedToolResults - Bedrock', () => {
 
         const result = fixOrphanedToolResultsBedrock(messages);
         expect(result).toHaveLength(1);
-        // biome-ignore lint/style/noNonNullAssertion: content is set above
-        expect(result[0].content![0].text).toBe('[summary of prior work]');
+        const userContent = requireBedrockContent(result[0], 0);
+        expect(userContent[0].text).toBe('[summary of prior work]');
     });
 
     test('preserves non-toolResult blocks while dropping the orphan', () => {
@@ -555,8 +559,7 @@ describe('fixOrphanedToolResults - Bedrock', () => {
         ];
 
         const result = fixOrphanedToolResultsBedrock(messages);
-        // biome-ignore lint/style/noNonNullAssertion: content is set above
-        const userContent = result[1].content!;
+        const userContent = requireBedrockContent(result[1], 1);
         expect(userContent).toHaveLength(1);
         expect(userContent[0].text).toBe('continue please');
     });

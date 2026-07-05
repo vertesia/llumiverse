@@ -47,8 +47,10 @@ async function main() {
     }
 
     // get the recomposed response from the stream chunks
-    // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
-    const streamingResponse = stream.completion!;
+    const streamingResponse = stream.completion;
+    if (!streamingResponse) {
+        throw new Error('Streaming completion was not populated');
+    }
 
     console.log('\n# LLM response:', streamingResponse.result);
     console.log('# Response took', streamingResponse.execution_time, 'ms');

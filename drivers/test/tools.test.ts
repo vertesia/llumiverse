@@ -206,13 +206,15 @@ describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => 
     test.each(models)(`${name}: generation with tools for %s`, { timeout: TIMEOUT, retry: 1 }, async (model) => {
         const options = getTestOptions(model);
         let r = await driver.execute(PROMPT_WITH_GET_NAME_TOOL, options);
-        expect(r.tool_use).toBeDefined();
-        expect(r.tool_use?.length).toBe(1);
-        expect(r.tool_use?.[0].id).toBeDefined();
-        expect(r.tool_use?.[0].tool_input).toBeDefined();
-        expect(r.tool_use?.[0].tool_name).toBe('get_weather');
-        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
-        const tool_use = r.tool_use!;
+        const tool_use = r.tool_use;
+        expect(tool_use).toBeDefined();
+        if (!tool_use) {
+            throw new Error('Expected tool use in first driver response');
+        }
+        expect(tool_use.length).toBe(1);
+        expect(tool_use[0].id).toBeDefined();
+        expect(tool_use[0].tool_input).toBeDefined();
+        expect(tool_use[0].tool_name).toBe('get_weather');
         r = await driver.execute(
             [
                 {
