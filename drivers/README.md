@@ -54,14 +54,14 @@ Vercel's SDK is fantastic for frontend/full-stack React/Next.js applications.
 
 ## Requirements
 
-* Node.js 22+
+* Node.js 24.x
 * Bun 1.0+ (experimental support)
 
 ## Installation
 
 **For most use cases (recommended):**
 ```bash
-npm install @llumiverse/core @llumiverse/drivers
+pnpm add @llumiverse/core @llumiverse/drivers
 ```
 
 *   `@llumiverse/core`: The interfaces, types, and base abstractions.
