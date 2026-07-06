@@ -417,8 +417,10 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)(
         );
 
         test.skipIf(!visionModel)(`${name}: multi-turn conversation with image`, { timeout: TIMEOUT }, async () => {
-            // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
-            const options = getTextOptions(visionModel!);
+            if (!visionModel) {
+                throw new Error(`Expected vision model for ${name}`);
+            }
+            const options = getTextOptions(visionModel);
 
             // Turn 1: Send an image as base64 (like Studio does)
             // Using Google logo as a simple, accessible test image
@@ -483,8 +485,10 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)(
         });
 
         test.skipIf(!visionModel)(`${name}: conversation with multiple images`, { timeout: TIMEOUT }, async () => {
-            // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
-            const options = getTextOptions(visionModel!);
+            if (!visionModel) {
+                throw new Error(`Expected vision model for ${name}`);
+            }
+            const options = getTextOptions(visionModel);
 
             // Turn 1: Send two images as base64 (like Studio does)
             const googleLogoUrl = 'https://www.google.com/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png';

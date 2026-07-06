@@ -1529,7 +1529,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }),
         );
 
-        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
+        // biome-ignore lint/style/noNonNullAssertion: jobArn is always returned by a successful CreateModelCustomizationJob response; AWS SDK types it optional
         return jobInfo(job, response.jobArn!);
     }
 
