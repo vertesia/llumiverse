@@ -66,12 +66,12 @@ function firstValues(d: Driver) {
 }
 
 if (vertex) {
+    const vertexDriver = vertex;
     describe('VertexAI: embeddings generation', () => {
         test(
             'embeddings for text',
             async () => {
-                // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
-                const r = await firstValues(vertex!)({ type: 'text', text: TEXT });
+                const r = await firstValues(vertexDriver)({ type: 'text', text: TEXT });
                 expect(r.results).toHaveLength(1);
                 expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
                 expect(r.model).toBe('gemini-embedding-2');
@@ -82,8 +82,7 @@ if (vertex) {
         test(
             'embeddings for image (multimodal)',
             async () => {
-                // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
-                const r = await firstValues(vertex!)({ type: 'image', source: imageDataSource() });
+                const r = await firstValues(vertexDriver)({ type: 'image', source: imageDataSource() });
                 expect(r.results).toHaveLength(1);
                 expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
             },
@@ -93,7 +92,7 @@ if (vertex) {
         test(
             'embeddings for batched text inputs',
             async () => {
-                const r = await vertex?.generateEmbeddings({
+                const r = await vertexDriver.generateEmbeddings({
                     inputs: [
                         { type: 'text', text: 'first' },
                         { type: 'text', text: 'second' },
@@ -109,12 +108,12 @@ if (vertex) {
 }
 
 if (bedrock) {
+    const bedrockDriver = bedrock;
     describe('Bedrock: embeddings generation', () => {
         test(
             'embeddings for text (Nova default)',
             async () => {
-                // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
-                const r = await firstValues(bedrock!)({ type: 'text', text: TEXT });
+                const r = await firstValues(bedrockDriver)({ type: 'text', text: TEXT });
                 expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
             },
             TIMEOUT,
@@ -123,8 +122,7 @@ if (bedrock) {
         test(
             'embeddings for image (Nova multimodal)',
             async () => {
-                // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
-                const r = await firstValues(bedrock!)({ type: 'image', source: imageDataSource() });
+                const r = await firstValues(bedrockDriver)({ type: 'image', source: imageDataSource() });
                 expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
             },
             TIMEOUT,
@@ -133,12 +131,12 @@ if (bedrock) {
 }
 
 if (openai) {
+    const openaiDriver = openai;
     describe('OpenAI: embeddings generation', () => {
         test(
             'embeddings for text',
             async () => {
-                // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
-                const r = await firstValues(openai!)({ type: 'text', text: TEXT });
+                const r = await firstValues(openaiDriver)({ type: 'text', text: TEXT });
                 expect(r.results).toHaveLength(1);
                 expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
                 expect(r.model).toBe('text-embedding-3-small');
@@ -150,7 +148,7 @@ if (openai) {
         test(
             'embeddings for batched text inputs',
             async () => {
-                const r = await openai?.generateEmbeddings({
+                const r = await openaiDriver.generateEmbeddings({
                     inputs: [
                         { type: 'text', text: 'alpha' },
                         { type: 'text', text: 'beta' },
@@ -164,12 +162,12 @@ if (openai) {
 }
 
 if (mistral) {
+    const mistralDriver = mistral;
     describe('MistralAI: embeddings generation', () => {
         test(
             'embeddings for text',
             async () => {
-                // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
-                const r = await firstValues(mistral!)({ type: 'text', text: TEXT });
+                const r = await firstValues(mistralDriver)({ type: 'text', text: TEXT });
                 expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
                 expect(r.model).toBe('mistral-embed');
             },
@@ -179,12 +177,12 @@ if (mistral) {
 }
 
 if (watsonx) {
+    const watsonxDriver = watsonx;
     describe('Watsonx: embeddings generation', () => {
         test(
             'embeddings for text',
             async () => {
-                // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
-                const r = await firstValues(watsonx!)({ type: 'text', text: TEXT });
+                const r = await firstValues(watsonxDriver)({ type: 'text', text: TEXT });
                 expect(r.results[0].outputs[0].values.length).toBeGreaterThan(0);
                 expect(r.model).toBe('ibm/slate-125m-english-rtrvr');
             },

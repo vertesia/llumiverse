@@ -15,7 +15,7 @@ import {
 import { EventStream } from '@llumiverse/core/async';
 import { AbstractDriver } from '@llumiverse/core/driver';
 import { EventSource } from 'eventsource';
-import Replicate, { type Prediction, type Training } from 'replicate';
+import Replicate, { type Model, type Prediction, type Training } from 'replicate';
 
 let cachedTrainableModels: AIModel[] | undefined;
 let cachedTrainableModelsTimestamp: number = 0;
@@ -107,7 +107,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
 
         const stream = new EventStream<CompletionChunkObject>();
 
-        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
+        // biome-ignore lint/style/noNonNullAssertion: urls.stream is populated by Replicate because the prediction was created with stream:true; SDK types it optional
         const source = new EventSource(prediction.urls.stream!);
         source.addEventListener('output', (e: ReplicateEvent) => {
             stream.push({ result: [{ type: 'text', value: e.data }] });
@@ -218,11 +218,10 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
         });
         const results = await Promise.all(promises);
         return results
-            .filter((m) => !!m.latest_version)
+            .filter((m): m is Model & Required<Pick<Model, 'latest_version'>> => !!m.latest_version)
             .map((m) => {
                 const fullName = `${m.owner}/${m.name}`;
-                // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
-                const v = m.latest_version!;
+                const v = m.latest_version;
                 return {
                     id: `${fullName}:${v.id}`,
                     name: `${fullName}@${v.cog_version}:${v.id.slice(0, 6)}`,

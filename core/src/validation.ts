@@ -12,8 +12,8 @@ const ajv = new Ajv({
     removeAdditional: 'failing',
 });
 
-// biome-ignore lint/suspicious/noTsIgnore: ajv-formats default export inconsistently callable under ESM/CJS interop
-// @ts-ignore - ajv-formats default export is not callable under one of the TS configs in this monorepo
+// biome-ignore lint/suspicious/noTsIgnore: ajv-formats' runtime module.exports is the callable plugin, but its shipped .d.ts declares an ESM default that resolves to a non-callable namespace under module:nodenext; no cast-free import form works
+// @ts-ignore - ajv-formats default export is not callable under module:nodenext ESM resolution
 addFormats(ajv);
 
 function errorMessage(error: unknown): string {
