@@ -99,6 +99,11 @@ type BedrockRuntimeExecutorScope = {
     close(): void;
 };
 
+const BEDROCK_NON_STREAMING_HTTP_TIMEOUT: HttpTimeoutOptions = {
+    headersTimeout: 900_000,
+    bodyTimeout: 900_000,
+};
+
 enum BedrockModelType {
     FoundationModel = 'foundation-model',
     InferenceProfile = 'inference-profile',
@@ -378,6 +383,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         };
     }
 
+    private getBedrockNonStreamingHttpTimeout(httpTimeout?: HttpTimeoutOptions): HttpTimeoutOptions {
+        return mergeDriverHttpTimeoutOptions(
+            BEDROCK_NON_STREAMING_HTTP_TIMEOUT,
+            mergeDriverHttpTimeoutOptions(this.options.httpTimeout, httpTimeout),
+        ) as HttpTimeoutOptions;
+    }
+
     private createExecutor(httpTimeout?: HttpTimeoutOptions) {
         return new BedrockRuntime({
             region: this.options.region,
@@ -405,6 +417,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
 
         const executor = this.getExecutor(options.httpTimeout);
+        return {
+            executor,
+            close: () => executor.destroy(),
+        };
+    }
+
+    private getScopedNonStreamingExecutor(options: Pick<ExecutionOptions, 'httpTimeout'>): BedrockRuntimeExecutorScope {
+        const executor = this.getExecutor(this.getBedrockNonStreamingHttpTimeout(options.httpTimeout));
         return {
             executor,
             close: () => executor.destroy(),
@@ -956,7 +976,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         let conversation = updateConversation(incomingConversation, conversePrompt);
 
         const payload = this.preparePayload(conversation, options);
-        const executorScope = this.getScopedExecutor(options);
+        const executorScope = this.getScopedNonStreamingExecutor(options);
 
         let res: ConverseResponse;
         try {
@@ -1031,7 +1051,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         prompt: TwelvelabsPegasusRequest,
         options: ExecutionOptions,
     ): Promise<Completion> {
-        const executorScope = this.getScopedExecutor(options);
+        const executorScope = this.getScopedNonStreamingExecutor(options);
 
         let res: InvokeModelCommandOutput;
         try {
