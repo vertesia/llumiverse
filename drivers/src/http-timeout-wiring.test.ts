@@ -99,6 +99,62 @@ describe('driver HTTP timeout wiring', () => {
         driver.destroy();
     });
 
+    it('uses a longer Bedrock timeout default for non-streaming text execution', () => {
+        const driver = new BedrockDriver({
+            region: 'us-east-1',
+        });
+
+        const internals = exposePrivate<{
+            getBedrockRequestHandlerConfig: (httpTimeout?: HttpTimeoutOptions) => BedrockRequestHandlerConfig;
+            getBedrockNonStreamingHttpTimeout: (httpTimeout?: HttpTimeoutOptions) => HttpTimeoutOptions;
+        }>(driver);
+
+        expect(internals.getBedrockRequestHandlerConfig()).toEqual({
+            requestTimeout: 60_000,
+            throwOnRequestTimeout: true,
+            connectionTimeout: 10_000,
+            socketTimeout: 60_000,
+        });
+        expect(internals.getBedrockRequestHandlerConfig(internals.getBedrockNonStreamingHttpTimeout())).toEqual({
+            requestTimeout: 900_000,
+            throwOnRequestTimeout: true,
+            connectionTimeout: 10_000,
+            socketTimeout: 900_000,
+        });
+
+        driver.destroy();
+    });
+
+    it('keeps explicit Bedrock non-streaming timeout overrides field-by-field', () => {
+        const driver = new BedrockDriver({
+            region: 'us-east-1',
+            httpTimeout: {
+                bodyTimeout: 120_000,
+                connectTimeout: 1_000,
+            },
+        });
+
+        const internals = exposePrivate<{
+            getBedrockRequestHandlerConfig: (httpTimeout?: HttpTimeoutOptions) => BedrockRequestHandlerConfig;
+            getBedrockNonStreamingHttpTimeout: (httpTimeout?: HttpTimeoutOptions) => HttpTimeoutOptions;
+        }>(driver);
+
+        expect(
+            internals.getBedrockRequestHandlerConfig(
+                internals.getBedrockNonStreamingHttpTimeout({
+                    headersTimeout: 180_000,
+                }),
+            ),
+        ).toEqual({
+            requestTimeout: 180_000,
+            throwOnRequestTimeout: true,
+            connectionTimeout: 1_000,
+            socketTimeout: 120_000,
+        });
+
+        driver.destroy();
+    });
+
     it('passes the driver fetch to SDK clients that accept a custom fetch implementation', () => {
         const openai = new OpenAIDriver({ apiKey: 'test-key' });
         expectSdkUsesDriverFetch(openai, openai.service);
