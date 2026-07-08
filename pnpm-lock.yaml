@@ -5,7 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  google-auth-library: ^10.7.0
+  google-auth-library: ^10.9.0
   '@types/node': ^24.13.2
   vite: ^8.0.16
 
@@ -53,8 +53,8 @@ importers:
         specifier: ^3.0.1
         version: 3.0.1(ajv@8.20.0)
       jsonrepair:
-        specifier: ^3.14.0
-        version: 3.14.0
+        specifier: ^3.14.1
+        version: 3.15.0
       undici:
         specifier: ^7.28.0
         version: 7.28.0
@@ -138,7 +138,7 @@ importers:
         specifier: ^4.1.0
         version: 4.1.0
       google-auth-library:
-        specifier: ^10.7.0
+        specifier: ^10.9.0
         version: 10.9.0
       groq-sdk:
         specifier: ^1.3.0
@@ -1066,8 +1066,8 @@ packages:
   json-schema-traverse@1.0.0:
     resolution: {integrity: sha512-NM8/P9n3XjXhIZn1lLhkFaACTOURQXjWhV4BA/RnOv8xvgqtqpAX9IO4mRQxSx1Rlo4tqzeqb0sOlruaOy3dug==}
 
-  jsonrepair@3.14.0:
-    resolution: {integrity: sha512-tWPGKMZf/8UPim+fcW2EfcQ/d/7aKUrP6IECz9G3Tu6Q5dX0orSleqJ9z6sSw7qrQkjF8/Edo4DvsWBZ8H+HNg==}
+  jsonrepair@3.15.0:
+    resolution: {integrity: sha512-wy8OTjwsJwQRnQJkKnMJJ9vcytRdBPAgIF/Hy6+s1dAj42BHMKiyL8JzEieIl3JY7idt8eyHwBWTO8mh/+mtwA==}
     hasBin: true
 
   jsonwebtoken@9.0.2:
@@ -2705,7 +2705,7 @@ snapshots:
 
   json-schema-traverse@1.0.0: {}
 
-  jsonrepair@3.14.0: {}
+  jsonrepair@3.15.0: {}
 
   jsonwebtoken@9.0.2:
     dependencies:
