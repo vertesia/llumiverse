@@ -39,7 +39,7 @@
         "lint": "biome lint src",
         "test": "vitest run",
         "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
-        "build": "pnpm exec rimraf ./lib ./tsconfig.tsbuildinfo && tsc",
+        "build": "pnpm exec rimraf ./lib ./tsconfig.tsbuildinfo && tsc -b .",
         "clean": "rimraf ./lib tsconfig.tsbuildinfo"
     },
     "author": "Llumiverse",
