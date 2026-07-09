@@ -1,4 +1,5 @@
 import type { BedrockOptions } from './options/bedrock.js';
+import type { BedrockMantleOptions } from './options/bedrock_mantle.js';
 import type { TextFallbackOptions } from './options/fallback.js';
 import type { GroqOptions } from './options/groq.js';
 import type { OpenAiOptions } from './options/openai.js';
@@ -14,6 +15,7 @@ export enum Providers {
     huggingface_ie = 'huggingface_ie',
     replicate = 'replicate',
     bedrock = 'bedrock',
+    bedrock_mantle = 'bedrock_mantle',
     vertexai = 'vertexai',
     togetherai = 'togetherai',
     mistralai = 'mistralai',
@@ -73,6 +75,14 @@ export const ProviderList: Record<Providers, ProviderParams> = {
         requiresApiKey: false,
         requiresEndpointUrl: false,
         endpointPlaceholder: 'region name (eg. us-east-1)',
+        supportSearch: false,
+    },
+    bedrock_mantle: {
+        id: Providers.bedrock_mantle,
+        name: 'Amazon Bedrock Mantle',
+        requiresApiKey: false,
+        requiresEndpointUrl: true,
+        endpointPlaceholder: 'region name (eg. us-west-2)',
         supportSearch: false,
     },
     vertexai: {
@@ -704,7 +714,13 @@ export type ReasoningEffort = 'low' | 'medium' | 'high';
 /**
  * @discriminator _option_id
  */
-export type ModelOptions = TextFallbackOptions | VertexAIOptions | BedrockOptions | OpenAiOptions | GroqOptions;
+export type ModelOptions =
+    | TextFallbackOptions
+    | VertexAIOptions
+    | BedrockOptions
+    | BedrockMantleOptions
+    | OpenAiOptions
+    | GroqOptions;
 
 // ============== Option Info ===============
 

@@ -1,6 +1,7 @@
 import { getAnthropicOptions } from './options/anthropic.js';
 import { getAzureFoundryOptions } from './options/azure_foundry.js';
 import { getBedrockOptions } from './options/bedrock.js';
+import { getBedrockMantleOptions } from './options/bedrock_mantle.js';
 import { textOptionsFallback } from './options/fallback.js';
 import { getGroqOptions } from './options/groq.js';
 import { getOpenAiOptions } from './options/openai.js';
@@ -16,6 +17,8 @@ export function getOptions(model: string, provider?: string | Providers, options
             return getAnthropicOptions(model, options);
         case Providers.bedrock:
             return getBedrockOptions(model, options);
+        case Providers.bedrock_mantle:
+            return getBedrockMantleOptions(model, options);
         case Providers.vertexai:
             return getVertexAiOptions(model, options);
         case Providers.openai:
