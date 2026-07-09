@@ -1640,12 +1640,15 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         // exclude embedding models, not to be used for typical completions.
         const filter = (m: FoundationModelSummary) =>
             (m.inferenceTypesSupported?.includes('ON_DEMAND') && !m.outputModalities?.includes('EMBEDDING')) ?? false;
-        return this._listModels(filter);
+        return this._listModels(filter, true);
     }
 
-    async _listModels(foundationFilter?: (m: FoundationModelSummary) => boolean): Promise<AIModel[]> {
+    async _listModels(
+        foundationFilter?: (m: FoundationModelSummary) => boolean,
+        includeMantleModels = false,
+    ): Promise<AIModel[]> {
         const service = this.getService();
-        const [foundationModelsList, customModelsList, inferenceProfilesList] = await Promise.all([
+        const [foundationModelsList, customModelsList, inferenceProfilesList, mantleModels] = await Promise.all([
             service.listFoundationModels({}).catch(() => {
                 this.logger.warn(
                     "[Bedrock] Can't list foundation models. Check if the user has the right permissions.",
@@ -1662,6 +1665,16 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 );
                 return undefined;
             }),
+            includeMantleModels
+                ? this.getMantleDriver()
+                      .listModels()
+                      .catch(() => {
+                          this.logger.warn(
+                              "[Bedrock] Can't list Mantle models. Check if the user has bedrock-mantle permissions.",
+                          );
+                          return [];
+                      })
+                : Promise.resolve([]),
         ]);
 
         if (!foundationModelsList?.modelSummaries) {
@@ -1814,6 +1827,12 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     aiModels.push(model);
                 }
             });
+        }
+
+        for (const model of mantleModels) {
+            if (!aiModels.some((existing) => existing.id === model.id)) {
+                aiModels.push(model);
+            }
         }
 
         return aiModels;

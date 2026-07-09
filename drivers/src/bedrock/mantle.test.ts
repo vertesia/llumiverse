@@ -1,6 +1,7 @@
 import { getTokenProvider } from '@aws/bedrock-token-generator';
 import type { AwsCredentialIdentity } from '@aws-sdk/types';
 import {
+    type AIModel,
     type Completion,
     type CompletionChunkObject,
     PromptRole,
@@ -33,6 +34,7 @@ type MantleStub = {
         options: typeof gpt55Options,
     ) => BedrockMantlePrompt;
     supportsStreaming: (options: typeof gpt55Options) => Promise<boolean>;
+    listModels: () => Promise<AIModel[]>;
     destroy: () => void;
 };
 
@@ -79,6 +81,7 @@ describe('Bedrock Mantle model routing', () => {
             requestTextCompletionStream: vi.fn(async () => emptyStream()),
             buildStreamingConversation: vi.fn(() => streamingConversation),
             supportsStreaming: vi.fn(async () => true),
+            listModels: vi.fn(async () => []),
             destroy: vi.fn(),
         };
         setMantleStub(driver, mantle);
@@ -96,6 +99,56 @@ describe('Bedrock Mantle model routing', () => {
         expect(mantle.requestTextCompletionStream).toHaveBeenCalledWith(prompt, gpt55Options);
         expect(mantle.supportsStreaming).toHaveBeenCalledWith(gpt55Options);
         expect(mantle.buildStreamingConversation).toHaveBeenCalledWith(prompt, [], undefined, gpt55Options);
+    });
+
+    it('merges Mantle-only OpenAI models into the Bedrock model listing', async () => {
+        const driver = new BedrockDriver({ region: 'us-east-2' });
+        const service = {
+            listFoundationModels: vi.fn(async () => ({
+                modelSummaries: [
+                    {
+                        modelId: 'openai.gpt-oss-120b-1:0',
+                        modelArn: 'arn:aws:bedrock:us-east-2::foundation-model/openai.gpt-oss-120b-1:0',
+                        providerName: 'OpenAI',
+                        modelName: 'gpt-oss-120b',
+                        inferenceTypesSupported: ['ON_DEMAND'],
+                        inputModalities: ['TEXT'],
+                        outputModalities: ['TEXT'],
+                        responseStreamingSupported: true,
+                    },
+                ],
+            })),
+            listCustomModels: vi.fn(async () => ({ modelSummaries: [] })),
+            listInferenceProfiles: vi.fn(async () => ({ inferenceProfileSummaries: [] })),
+        };
+        const mantleModel: AIModel = {
+            id: 'openai.gpt-5.5',
+            name: 'OpenAI GPT-5.5',
+            provider: Providers.bedrock,
+            owner: 'OpenAI',
+            can_stream: true,
+            input_modalities: ['text', 'image'],
+            output_modalities: ['text'],
+            tool_support: true,
+        };
+        const mantle: MantleStub = {
+            requestTextCompletion: vi.fn(async () => ({ result: [] })),
+            requestTextCompletionStream: vi.fn(async () => emptyStream()),
+            buildStreamingConversation: vi.fn(() => []),
+            supportsStreaming: vi.fn(async () => true),
+            listModels: vi.fn(async () => [mantleModel]),
+            destroy: vi.fn(),
+        };
+        (driver as unknown as { getService: () => typeof service }).getService = () => service;
+        setMantleStub(driver, mantle);
+
+        const models = await driver.listModels();
+
+        expect(models.map((model) => model.id)).toEqual([
+            'arn:aws:bedrock:us-east-2::foundation-model/openai.gpt-oss-120b-1:0',
+            'openai.gpt-5.5',
+        ]);
+        expect(mantle.listModels).toHaveBeenCalled();
     });
 });
 
@@ -119,6 +172,41 @@ describe('BedrockMantleDriver auth', () => {
         new BedrockMantleDriver({ region: 'us-east-2' });
 
         expect(getTokenProvider).toHaveBeenCalledWith({ region: 'us-east-2' });
+    });
+});
+
+describe('BedrockMantleDriver model listing', () => {
+    it('lists only the Mantle models that the Bedrock driver can route', async () => {
+        const driver = new BedrockMantleDriver({ region: 'us-east-2' });
+        const list = vi.fn(async () => ({
+            data: [
+                { id: 'openai.gpt-5.5', owned_by: 'system' },
+                { id: 'openai.gpt-5.4', owned_by: 'system' },
+                { id: 'openai.gpt-oss-120b-1:0', owned_by: 'system' },
+            ],
+        }));
+        (driver as unknown as { modelsService: OpenAI }).modelsService = { models: { list } } as unknown as OpenAI;
+
+        const models = await driver.listModels();
+
+        expect(models).toEqual([
+            expect.objectContaining({
+                id: 'openai.gpt-5.4',
+                name: 'OpenAI GPT-5.4',
+                provider: Providers.bedrock,
+                owner: 'OpenAI',
+                can_stream: true,
+                tool_support: true,
+            }),
+            expect.objectContaining({
+                id: 'openai.gpt-5.5',
+                name: 'OpenAI GPT-5.5',
+                provider: Providers.bedrock,
+                owner: 'OpenAI',
+                can_stream: true,
+                tool_support: true,
+            }),
+        ]);
     });
 });
 
