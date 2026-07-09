@@ -24,6 +24,7 @@ export type BedrockOptions =
     | BedrockClaudeOptions
     | BedrockPalmyraOptions
     | BedrockGptOssOptions
+    | BedrockMantleOpenAIOptions
     | TwelvelabsPegasusOptions;
 
 export interface NovaCanvasOptions {
@@ -83,6 +84,15 @@ export interface BedrockGptOssOptions extends BaseConverseOptions<'bedrock-gpt-o
     reasoning_effort?: 'low' | 'medium' | 'high';
     frequency_penalty?: number;
     presence_penalty?: number;
+}
+
+export interface BedrockMantleOpenAIOptions {
+    _option_id: 'bedrock-openai-responses';
+    max_tokens?: number;
+    effort?: 'low' | 'medium' | 'high';
+    reasoning_effort?: 'low' | 'medium' | 'high';
+    verbosity?: 'low' | 'medium' | 'high';
+    image_detail?: 'low' | 'high' | 'auto';
 }
 
 export interface TwelvelabsPegasusOptions {
@@ -155,6 +165,9 @@ export function getMaxTokensLimitBedrock(model: string): number | undefined {
         }
     }
     // OpenAI gpt-oss models
+    if (model.includes('openai.gpt-5.5') || model.includes('openai.gpt-5.4')) {
+        return undefined;
+    }
     if (model.includes('gpt-oss')) {
         return 8192;
     }
@@ -520,6 +533,54 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
             return {
                 _option_id: 'bedrock-palmyra',
                 options: [...baseConverseOptions, ...palmyraConverseOptions],
+            };
+        } else if (model.includes('openai.gpt-5.5') || model.includes('openai.gpt-5.4')) {
+            const mantleOptions: ModelOptionInfoItem[] = [
+                {
+                    name: 'effort',
+                    type: OptionType.enum,
+                    enum: {
+                        low: 'low',
+                        medium: 'medium',
+                        high: 'high',
+                    },
+                    default: 'medium',
+                    description:
+                        'The reasoning effort of the model, which affects the quality and speed of the response',
+                },
+                {
+                    name: 'reasoning_effort',
+                    type: OptionType.enum,
+                    enum: {
+                        low: 'low',
+                        medium: 'medium',
+                        high: 'high',
+                    },
+                    default: 'medium',
+                    description: 'Alias for effort; controls how much reasoning the model performs before responding',
+                },
+                {
+                    name: 'verbosity',
+                    type: OptionType.enum,
+                    enum: {
+                        low: 'low',
+                        medium: 'medium',
+                        high: 'high',
+                    },
+                    default: 'medium',
+                    description: 'Controls how concise or verbose the model response should be',
+                },
+                {
+                    name: 'image_detail',
+                    type: OptionType.enum,
+                    enum: { Low: 'low', High: 'high', Auto: 'auto' },
+                    default: 'auto',
+                    description: 'Controls how the model processes an input image',
+                },
+            ];
+            return {
+                _option_id: 'bedrock-openai-responses',
+                options: [...baseConverseOptions.slice(0, 1), ...mantleOptions],
             };
         } else if (model.includes('gpt-oss')) {
             const gptOssOptions: ModelOptionInfoItem[] = [

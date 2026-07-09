@@ -169,6 +169,18 @@ const RECORD_FAMILY_CAPABILITIES: Record<string, ModelCapabilities> = {
         tool_support: false,
         tool_support_streaming: false,
     },
+    'openai.gpt-5.5': {
+        input: { text: true, image: true, video: false, audio: false, embed: false },
+        output: { text: true, image: false, video: false, audio: false, embed: false },
+        tool_support: true,
+        tool_support_streaming: true,
+    },
+    'openai.gpt-5.4': {
+        input: { text: true, image: true, video: false, audio: false, embed: false },
+        output: { text: true, image: false, video: false, audio: false, embed: false },
+        tool_support: true,
+        tool_support_streaming: true,
+    },
     'qwen.': {
         input: { text: true, image: false, video: false, audio: false, embed: false },
         output: { text: true, image: false, video: false, audio: false, embed: false },
