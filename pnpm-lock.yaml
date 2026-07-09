@@ -109,7 +109,7 @@ importers:
         version: 1.0.0-beta.6
       '@azure/ai-projects':
         specifier: ^2.3.0
-        version: 2.3.0(@aws-sdk/credential-provider-node@3.972.62)(@smithy/signature-v4@5.6.2)(ws@8.21.0)
+        version: 2.3.0(@aws-sdk/credential-provider-node@3.972.62)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.6.2)(ws@8.21.0)
       '@azure/core-auth':
         specifier: ^1.10.1
         version: 1.10.1
@@ -157,7 +157,7 @@ importers:
         version: 0.2.1
       openai:
         specifier: ^6.45.0
-        version: 6.45.0(@aws-sdk/credential-provider-node@3.972.62)(@smithy/signature-v4@5.6.2)(ws@8.21.0)
+        version: 6.45.0(@aws-sdk/credential-provider-node@3.972.62)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.6.2)(ws@8.21.0)
       replicate:
         specifier: ^1.4.0
         version: 1.4.0
@@ -195,15 +195,6 @@ importers:
         version: 6.0.3
 
 packages:
-
-  '@anthropic-ai/sdk@0.106.0':
-    resolution: {integrity: sha512-ufwVvYNDBj2dzOGupBCTaNzBLxqcTnGOzI4z8Wouxlt+mT3J3HuOmatgCy1VmwCHOUueqZ41ERhm0O99OUcbWA==}
-    hasBin: true
-    peerDependencies:
-      zod: ^3.25.0 || ^4.0.0
-    peerDependenciesMeta:
-      zod:
-        optional: true
 
   '@anthropic-ai/sdk@0.109.1':
     resolution: {integrity: sha512-q9OnEKLr5H9nxSuXdgDgJhxfYMiE+AaUEBze2Gk91UcaaLnsN+Lx5fbCYywiqurU/APLdwv23x03Wm6WN3EBsg==}
@@ -1599,11 +1590,6 @@ packages:
 
 snapshots:
 
-  '@anthropic-ai/sdk@0.106.0':
-    dependencies:
-      json-schema-to-ts: 3.1.1
-      standardwebhooks: 1.0.0
-
   '@anthropic-ai/sdk@0.109.1':
     dependencies:
       json-schema-to-ts: 3.1.1
@@ -1611,7 +1597,7 @@ snapshots:
 
   '@anthropic-ai/vertex-sdk@0.19.0':
     dependencies:
-      '@anthropic-ai/sdk': 0.106.0
+      '@anthropic-ai/sdk': 0.109.1
       google-auth-library: 10.9.0
     transitivePeerDependencies:
       - supports-color
@@ -1927,7 +1913,7 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@azure/ai-projects@2.3.0(@aws-sdk/credential-provider-node@3.972.62)(@smithy/signature-v4@5.6.2)(ws@8.21.0)':
+  '@azure/ai-projects@2.3.0(@aws-sdk/credential-provider-node@3.972.62)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.6.2)(ws@8.21.0)':
     dependencies:
       '@azure-rest/core-client': 2.3.4
       '@azure/abort-controller': 2.1.2
@@ -1941,7 +1927,7 @@ snapshots:
       '@azure/logger': 1.1.4
       '@azure/storage-blob': 12.27.0
       '@opentelemetry/api': 1.9.1
-      openai: 6.45.0(@aws-sdk/credential-provider-node@3.972.62)(@smithy/signature-v4@5.6.2)(ws@8.21.0)
+      openai: 6.45.0(@aws-sdk/credential-provider-node@3.972.62)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.6.2)(ws@8.21.0)
       tslib: 2.8.1
     transitivePeerDependencies:
       - '@aws-sdk/credential-provider-node'
@@ -2863,9 +2849,10 @@ snapshots:
       is-inside-container: 1.0.0
       is-wsl: 3.1.0
 
-  openai@6.45.0(@aws-sdk/credential-provider-node@3.972.62)(@smithy/signature-v4@5.6.2)(ws@8.21.0):
+  openai@6.45.0(@aws-sdk/credential-provider-node@3.972.62)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.6.2)(ws@8.21.0):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.62
+      '@smithy/hash-node': 4.4.6
       '@smithy/signature-v4': 5.6.2
       ws: 8.21.0
 
