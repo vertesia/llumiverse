@@ -30,6 +30,10 @@
             "types": "./lib/bedrock/index.d.ts",
             "default": "./lib/bedrock/index.js"
         },
+        "./bedrock-mantle": {
+            "types": "./lib/bedrock-mantle/index.d.ts",
+            "default": "./lib/bedrock-mantle/index.js"
+        },
         "./vertexai": {
             "types": "./lib/vertexai/index.d.ts",
             "default": "./lib/vertexai/index.js"

@@ -146,6 +146,7 @@ export abstract class OpenAIResponsesDriverBase extends AbstractDriver<
         | Providers.xai
         | Providers.azure_foundry
         | Providers.bedrock
+        | Providers.bedrock_mantle
         | Providers.openai_compatible;
     abstract service: OpenAI | AzureOpenAI;
 
@@ -182,7 +183,7 @@ export abstract class OpenAIResponsesDriverBase extends AbstractDriver<
             options.model_options?._option_id !== undefined &&
             options.model_options?._option_id !== 'openai-text' &&
             options.model_options?._option_id !== 'openai-thinking' &&
-            options.model_options?._option_id !== 'bedrock-openai-responses' &&
+            options.model_options?._option_id !== 'bedrock-mantle-responses' &&
             options.model_options?._option_id !== 'text-fallback'
         ) {
             this.logger.debug({ options: options.model_options }, 'Unexpected option id');
@@ -238,7 +239,7 @@ export abstract class OpenAIResponsesDriverBase extends AbstractDriver<
             options.model_options?._option_id !== undefined &&
             options.model_options?._option_id !== 'openai-text' &&
             options.model_options?._option_id !== 'openai-thinking' &&
-            options.model_options?._option_id !== 'bedrock-openai-responses' &&
+            options.model_options?._option_id !== 'bedrock-mantle-responses' &&
             options.model_options?._option_id !== 'text-fallback'
         ) {
             this.logger.debug({ options: options.model_options }, 'Unexpected option id');

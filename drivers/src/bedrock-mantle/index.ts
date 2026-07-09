@@ -38,7 +38,7 @@ export function isBedrockMantleModel(model: string): boolean {
 export class BedrockMantleDriver extends OpenAIResponsesDriverBase {
     service: BedrockOpenAI;
     private modelsService: BedrockOpenAI;
-    readonly provider = Providers.bedrock;
+    readonly provider = Providers.bedrock_mantle;
 
     constructor(opts: BedrockMantleDriverOptions) {
         super(opts);

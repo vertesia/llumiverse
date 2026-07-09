@@ -65,7 +65,6 @@ import { AbstractDriver } from '@llumiverse/core/driver';
 import { formatNovaPrompt, type NovaMessagesPrompt } from '@llumiverse/core/formatters';
 import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
 import { LRUCache } from 'mnemonist';
-import { formatOpenAIDebugPrompt, formatOpenAILikeMultimodalPrompt } from '../openai/openai_format.js';
 import { resolveClaudeThinking } from '../shared/claude-thinking.js';
 import { truncateBinaryForDebug, uint8ArrayToBase64ForDebug } from '../shared/debug-prompt.js';
 import {
@@ -75,7 +74,6 @@ import {
     formatConversePrompt,
 } from './converse.js';
 import { generateBedrockEmbeddings } from './embeddings.js';
-import { BedrockMantleDriver, type BedrockMantlePrompt, isBedrockMantleModel } from './mantle.js';
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from './nova-image-payload.js';
 import { forceUploadFile } from './s3.js';
 import { formatTwelvelabsPegasusPrompt, type TwelvelabsPegasusRequest } from './twelvelabs.js';
@@ -181,7 +179,7 @@ function maxTokenFallbackClaude(option: StatelessExecutionOptions): number {
     }
 }
 
-export type BedrockPrompt = NovaMessagesPrompt | ConverseRequest | TwelvelabsPegasusRequest | BedrockMantlePrompt;
+export type BedrockPrompt = NovaMessagesPrompt | ConverseRequest | TwelvelabsPegasusRequest;
 
 type BedrockSystemBlock = NonNullable<ConverseRequest['system']>[number];
 type BedrockToolEntry = NonNullable<NonNullable<ConverseRequest['toolConfig']>['tools']>[number];
@@ -359,8 +357,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     private _executor?: BedrockRuntime;
     private _service?: Bedrock;
     private _service_region?: string;
-    private _mantleDriver?: BedrockMantleDriver;
-
     constructor(options: BedrockDriverOptions) {
         super(options);
         if (!options.region) {
@@ -446,22 +442,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return this._service;
     }
 
-    private getMantleDriver(): BedrockMantleDriver {
-        if (!this._mantleDriver) {
-            this._mantleDriver = new BedrockMantleDriver({
-                logger: this.logger,
-                httpTimeout: this.options.httpTimeout,
-                region: this.options.region,
-                credentials: this.options.credentials,
-            });
-        }
-        return this._mantleDriver;
-    }
-
     protected async formatPrompt(segments: PromptSegment[], opts: ExecutionOptions): Promise<BedrockPrompt> {
-        if (isBedrockMantleModel(opts.model)) {
-            return await formatOpenAILikeMultimodalPrompt(segments, opts);
-        }
         if (opts.model.includes('canvas')) {
             return await formatNovaPrompt(segments, opts.result_schema);
         }
@@ -472,9 +453,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     public formatDebugPrompt(prompt: BedrockPrompt): BedrockPrompt {
-        if (Array.isArray(prompt)) {
-            return formatOpenAIDebugPrompt(prompt);
-        }
         if ('mediaSource' in prompt) {
             return formatTwelvelabsPromptForDebug(prompt);
         }
@@ -869,9 +847,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     protected async canStream(options: ExecutionOptions): Promise<boolean> {
-        if (isBedrockMantleModel(options.model)) {
-            return this.getMantleDriver().supportsStreaming(options);
-        }
         // // TwelveLabs Pegasus supports streaming according to the documentation
         // if (options.model.includes("twelvelabs.pegasus")) {
         //     return true;
@@ -902,15 +877,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         result: unknown[],
         toolUse: unknown[] | undefined,
         options: ExecutionOptions,
-    ): ConverseRequest | BedrockMantlePrompt | undefined {
-        if (isBedrockMantleModel(options.model)) {
-            return this.getMantleDriver().buildStreamingConversation(
-                prompt as BedrockMantlePrompt,
-                result,
-                toolUse,
-                options,
-            );
-        }
+    ): ConverseRequest | undefined {
         // Only handle ConverseRequest prompts (not NovaMessagesPrompt or TwelvelabsPegasusRequest)
         if (options.model.includes('canvas') || options.model.includes('twelvelabs.pegasus')) {
             return undefined;
@@ -995,9 +962,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     async requestTextCompletion(prompt: BedrockPrompt, options: ExecutionOptions): Promise<Completion> {
-        if (isBedrockMantleModel(options.model)) {
-            return this.getMantleDriver().requestTextCompletion(prompt as BedrockMantlePrompt, options);
-        }
         // Handle Twelvelabs Pegasus models
         if (options.model.includes('twelvelabs.pegasus')) {
             return this.requestTwelvelabsPegasusCompletion(prompt as TwelvelabsPegasusRequest, options);
@@ -1195,9 +1159,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         prompt: BedrockPrompt,
         options: ExecutionOptions,
     ): Promise<AsyncIterable<CompletionChunkObject>> {
-        if (isBedrockMantleModel(options.model)) {
-            return this.getMantleDriver().requestTextCompletionStream(prompt as BedrockMantlePrompt, options);
-        }
         // Handle Twelvelabs Pegasus models
         if (options.model.includes('twelvelabs.pegasus')) {
             return this.requestTwelvelabsPegasusCompletionStream(prompt as TwelvelabsPegasusRequest, options);
@@ -1640,15 +1601,12 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         // exclude embedding models, not to be used for typical completions.
         const filter = (m: FoundationModelSummary) =>
             (m.inferenceTypesSupported?.includes('ON_DEMAND') && !m.outputModalities?.includes('EMBEDDING')) ?? false;
-        return this._listModels(filter, true);
+        return this._listModels(filter);
     }
 
-    async _listModels(
-        foundationFilter?: (m: FoundationModelSummary) => boolean,
-        includeMantleModels = false,
-    ): Promise<AIModel[]> {
+    async _listModels(foundationFilter?: (m: FoundationModelSummary) => boolean): Promise<AIModel[]> {
         const service = this.getService();
-        const [foundationModelsList, customModelsList, inferenceProfilesList, mantleModels] = await Promise.all([
+        const [foundationModelsList, customModelsList, inferenceProfilesList] = await Promise.all([
             service.listFoundationModels({}).catch(() => {
                 this.logger.warn(
                     "[Bedrock] Can't list foundation models. Check if the user has the right permissions.",
@@ -1665,16 +1623,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 );
                 return undefined;
             }),
-            includeMantleModels
-                ? this.getMantleDriver()
-                      .listModels()
-                      .catch(() => {
-                          this.logger.warn(
-                              "[Bedrock] Can't list Mantle models. Check if the user has bedrock-mantle permissions.",
-                          );
-                          return [];
-                      })
-                : Promise.resolve([]),
         ]);
 
         if (!foundationModelsList?.modelSummaries) {
@@ -1829,12 +1777,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             });
         }
 
-        for (const model of mantleModels) {
-            if (!aiModels.some((existing) => existing.id === model.id)) {
-                aiModels.push(model);
-            }
-        }
-
         return aiModels;
     }
 
@@ -1848,10 +1790,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     destroy(): void {
         this._executor?.destroy();
         this._service?.destroy();
-        this._mantleDriver?.destroy();
         this._executor = undefined;
         this._service = undefined;
-        this._mantleDriver = undefined;
         super.destroy();
     }
 }
