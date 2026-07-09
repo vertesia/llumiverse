@@ -1,12 +1,15 @@
 import {
     Bedrock,
     CreateModelCustomizationJobCommand,
+    CreateModelInvocationJobCommand,
     type FoundationModelSummary,
     GetModelCustomizationJobCommand,
     type GetModelCustomizationJobCommandOutput,
+    GetModelInvocationJobCommand,
     ModelCustomizationJobStatus,
     ModelModality,
     StopModelCustomizationJobCommand,
+    StopModelInvocationJobCommand,
 } from '@aws-sdk/client-bedrock';
 import {
     BedrockRuntime,
@@ -24,6 +27,11 @@ import { S3Client } from '@aws-sdk/client-s3';
 import type { AwsCredentialIdentity, Provider } from '@aws-sdk/types';
 import {
     type AIModel,
+    type BatchInferenceJob,
+    BatchInferenceJobStatus,
+    type BatchInferenceOptions,
+    type BatchInferenceRequestItem,
+    type BatchInferenceResultItem,
     type BedrockClaudeOptions,
     type BedrockGptOssOptions,
     type BedrockPalmyraOptions,
@@ -68,6 +76,14 @@ import { LRUCache } from 'mnemonist';
 import { resolveClaudeThinking } from '../shared/claude-thinking.js';
 import { truncateBinaryForDebug, uint8ArrayToBase64ForDebug } from '../shared/debug-prompt.js';
 import {
+    mapModelInvocationJobStatus,
+    parseBedrockBatchOutputLine,
+    parseS3Bucket,
+    s3DownloadText,
+    s3List,
+    s3UploadText,
+} from './batch.js';
+import {
     converseConcatMessages,
     converseJSONprefill,
     converseSystemToMessages,
@@ -75,7 +91,7 @@ import {
 } from './converse.js';
 import { generateBedrockEmbeddings } from './embeddings.js';
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from './nova-image-payload.js';
-import { forceUploadFile } from './s3.js';
+import { forceUploadFile, tryCreateBucket } from './s3.js';
 import { formatTwelvelabsPegasusPrompt, type TwelvelabsPegasusRequest } from './twelvelabs.js';
 
 const supportStreamingCache = new LRUCache<string, boolean>(4096);
@@ -157,6 +173,17 @@ export interface BedrockDriverOptions extends DriverOptions {
      * The role ARN to be used for training
      */
     training_role_arn?: string;
+
+    /**
+     * S3 bucket used to stage batch-inference input/output (falls back to training_bucket).
+     * Created if it does not already exist.
+     */
+    batch_bucket?: string;
+
+    /**
+     * The IAM role ARN Bedrock assumes to read/write the batch S3 data (falls back to training_role_arn).
+     */
+    batch_role_arn?: string;
 
     /**
      * The credentials to use to access AWS (IAM access key + secret)
@@ -1578,6 +1605,105 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         );
 
         return jobInfo(job, jobId);
+    }
+
+    // ===================== Batch inference (Bedrock S3) =====================
+
+    supportsBatchInference(_model?: string): boolean {
+        return true;
+    }
+
+    async startBatchInference(
+        requests: BatchInferenceRequestItem[],
+        options?: BatchInferenceOptions,
+    ): Promise<BatchInferenceJob> {
+        if (requests.length === 0) {
+            throw new Error('[bedrock] startBatchInference called with no requests');
+        }
+        const model = requests[0].options.model;
+        const bucketSpec = options?.input_uri ?? this.options.batch_bucket ?? this.options.training_bucket;
+        const roleArn = this.options.batch_role_arn ?? this.options.training_role_arn;
+        if (!bucketSpec) {
+            throw new Error("[bedrock] Batch inference requires an S3 bucket: set 'batch_bucket' in driver options");
+        }
+        if (!roleArn) {
+            throw new Error("[bedrock] Batch inference requires 'batch_role_arn' in driver options");
+        }
+        const { bucket, prefix } = parseS3Bucket(bucketSpec);
+        const s3 = new S3Client({ region: this.options.region, credentials: this.options.credentials });
+        await tryCreateBucket(s3, bucket);
+
+        // Build JSONL: one { recordId, modelInput } per request. `recordId` carries the
+        // caller's custom_id. NOTE: modelInput must be the model-native InvokeModel body;
+        // see batch.ts for the Converse→native caveat for some model families.
+        const lines: string[] = [];
+        for (const item of requests) {
+            const prompt = await this.createPrompt(item.segments, item.options);
+            lines.push(JSON.stringify({ recordId: item.custom_id, modelInput: prompt }));
+        }
+
+        const runId = options?.name ? `${options.name}-${Date.now()}` : `llumiverse-batch-${Date.now()}`;
+        const base = prefix ? `${prefix}/${runId}` : runId;
+        const inputUri = await s3UploadText(s3, bucket, `${base}/input.jsonl`, lines.join('\n'));
+        const outputUri = `s3://${bucket}/${base}/output/`;
+
+        const service = this.getService();
+        const res = await service.send(
+            new CreateModelInvocationJobCommand({
+                jobName: runId,
+                roleArn,
+                modelId: model,
+                inputDataConfig: { s3InputDataConfig: { s3Uri: inputUri, s3InputFormat: 'JSONL' } },
+                outputDataConfig: { s3OutputDataConfig: { s3Uri: outputUri } },
+            }),
+        );
+
+        return {
+            id: res.jobArn ?? '',
+            status: BatchInferenceJobStatus.queued,
+            output_uri: outputUri,
+            request_count: requests.length,
+        };
+    }
+
+    async getBatchInferenceJob(jobId: string): Promise<BatchInferenceJob> {
+        const service = this.getService();
+        const job = await service.send(new GetModelInvocationJobCommand({ jobIdentifier: jobId }));
+        return {
+            id: jobId,
+            status: mapModelInvocationJobStatus(job.status),
+            details: job.message ?? undefined,
+            output_uri: job.outputDataConfig?.s3OutputDataConfig?.s3Uri,
+        };
+    }
+
+    async cancelBatchInference(jobId: string): Promise<BatchInferenceJob> {
+        const service = this.getService();
+        await service.send(new StopModelInvocationJobCommand({ jobIdentifier: jobId }));
+        return this.getBatchInferenceJob(jobId);
+    }
+
+    async getBatchInferenceResults(jobId: string): Promise<BatchInferenceResultItem[]> {
+        const service = this.getService();
+        const job = await service.send(new GetModelInvocationJobCommand({ jobIdentifier: jobId }));
+        const outputUri = job.outputDataConfig?.s3OutputDataConfig?.s3Uri;
+        if (!outputUri) {
+            throw new Error('[bedrock] batch job has no S3 output destination');
+        }
+        const { bucket, prefix } = parseS3Bucket(outputUri);
+        const s3 = new S3Client({ region: this.options.region, credentials: this.options.credentials });
+        const keys = (await s3List(s3, bucket, prefix)).filter((k) => k.endsWith('.jsonl') || k.endsWith('.out'));
+        const items: BatchInferenceResultItem[] = [];
+        for (const key of keys) {
+            const text = await s3DownloadText(s3, bucket, key);
+            for (const line of text.split('\n')) {
+                const parsed = parseBedrockBatchOutputLine(line, items.length);
+                if (parsed) {
+                    items.push(parsed);
+                }
+            }
+        }
+        return items;
     }
 
     // ===================== management API ==================

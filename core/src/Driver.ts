@@ -6,6 +6,10 @@
 
 import {
     type AIModel,
+    type BatchInferenceJob,
+    type BatchInferenceOptions,
+    type BatchInferenceRequestItem,
+    type BatchInferenceResultItem,
     type Completion,
     type CompletionChunkObject,
     type CompletionStream,
@@ -69,6 +73,31 @@ export interface Driver<PromptT = unknown> {
     cancelTraining(jobId: string): Promise<TrainingJob>;
 
     getTrainingJob(jobId: string): Promise<TrainingJob>;
+
+    /**
+     * Submit a batch of inference requests to the provider's asynchronous batch API.
+     * Each request is formatted with the driver's `createPrompt`, so batch output
+     * matches interactive output for the same model. Returns a job handle to poll.
+     * Only supported by drivers whose provider offers a batch API (Vertex, Bedrock, …).
+     */
+    startBatchInference(
+        requests: BatchInferenceRequestItem[],
+        options?: BatchInferenceOptions,
+    ): Promise<BatchInferenceJob>;
+
+    getBatchInferenceJob(jobId: string): Promise<BatchInferenceJob>;
+
+    cancelBatchInference(jobId: string): Promise<BatchInferenceJob>;
+
+    /** Fetch the results of a completed batch job, mapped back by `custom_id`. */
+    getBatchInferenceResults(jobId: string): Promise<BatchInferenceResultItem[]>;
+
+    /**
+     * Whether this driver's provider offers a batch-inference API that this driver
+     * implements. Callers query this to decide whether to route work to the batch
+     * path or fall back to synchronous execution. Optionally refined per model.
+     */
+    supportsBatchInference(model?: string): boolean;
 
     //list models available for this environment
     listModels(params?: ModelSearchPayload): Promise<AIModel[]>;
@@ -170,6 +199,29 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     getTrainingJob(_jobId: string): Promise<TrainingJob> {
         throw new Error('Method not implemented.');
+    }
+
+    startBatchInference(
+        _requests: BatchInferenceRequestItem[],
+        _options?: BatchInferenceOptions,
+    ): Promise<BatchInferenceJob> {
+        throw new Error(`[${this.provider}] Batch inference is not supported by this driver.`);
+    }
+
+    getBatchInferenceJob(_jobId: string): Promise<BatchInferenceJob> {
+        throw new Error(`[${this.provider}] Batch inference is not supported by this driver.`);
+    }
+
+    cancelBatchInference(_jobId: string): Promise<BatchInferenceJob> {
+        throw new Error(`[${this.provider}] Batch inference is not supported by this driver.`);
+    }
+
+    getBatchInferenceResults(_jobId: string): Promise<BatchInferenceResultItem[]> {
+        throw new Error(`[${this.provider}] Batch inference is not supported by this driver.`);
+    }
+
+    supportsBatchInference(_model?: string): boolean {
+        return false;
     }
 
     validateResult(result: Completion, options: ExecutionOptions) {
