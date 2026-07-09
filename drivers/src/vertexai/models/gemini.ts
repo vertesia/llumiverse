@@ -978,11 +978,21 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         if (httpStatusCode >= 500 && httpStatusCode < 600) return true; // Other 5xx server errors
 
         // Vertex AI URL fetcher transient throttling, surfaced as 400 INVALID_ARGUMENT
-        // but really a Google-side rate limit on the inline-content fetcher.
-        if (httpStatusCode === 400 && message) {
+        // but really a Google-side rate limit on the inline-content fetcher. The fetcher
+        // rejects with a family of transient throttle statuses that share the
+        // THROTTLED / RATE_LIMITED / TOO_MANY_PENDING markers, e.g.
+        //   URL_REJECTED-REJECTED_CLIENT_THROTTLED
+        //   URL_REJECTED-REJECTED_PROXY_THROTTLED
+        //   URL_REJECTED-REJECTED_RATE_LIMITED
+        //   URL_REJECTED-REJECTED_FC_TOO_MANY_PENDING
+        // Match on the marker rather than an exact status so new fetcher-throttle
+        // variants are retried too; permanent URL rejections (robots-denied, unsafe,
+        // unsupported content) lack these markers and fall through to non-retryable.
+        if (httpStatusCode === 400 && message && message.includes('URL_REJECTED')) {
             if (
-                message.includes('URL_REJECTED-REJECTED_CLIENT_THROTTLED') ||
-                message.includes('URL_REJECTED-REJECTED_RATE_LIMITED')
+                message.includes('THROTTLED') ||
+                message.includes('RATE_LIMITED') ||
+                message.includes('TOO_MANY_PENDING')
             ) {
                 return true;
             }

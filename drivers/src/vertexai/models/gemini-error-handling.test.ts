@@ -302,6 +302,69 @@ describe('GeminiModelDefinition Error Handling', () => {
             expect(error.retryable).toBe(true);
         });
 
+        it('should mark URL_REJECTED-REJECTED_PROXY_THROTTLED 400s as retryable', () => {
+            // Reproduces a real CI failure: sys:AnalyzeVideo intake 400'd with this
+            // status, failing the media-transcription integration test.
+            const googleError = {
+                status: 400,
+                message:
+                    'Cannot fetch content from the provided URL. Please ensure the URL is valid ' +
+                    'and accessible by Vertex AI. Vertex AI respects robots.txt rules, so confirm ' +
+                    'the URL is allowed to be crawled. Status: URL_REJECTED-REJECTED_PROXY_THROTTLED',
+            };
+
+            const error = modelDef.formatLlumiverseError(driver, googleError, {
+                provider: 'vertexai',
+                model: 'gemini-2.5-flash',
+                operation: 'execute',
+            });
+
+            expect(error.code).toBe(400);
+            expect(error.retryable).toBe(true);
+        });
+
+        it('should mark URL_REJECTED-REJECTED_FC_TOO_MANY_PENDING 400s as retryable', () => {
+            // Reproduces a real CI failure: sys:AnalyzeAudio intake 400'd with this
+            // status, failing the media-transcription integration test.
+            const googleError = {
+                status: 400,
+                message:
+                    'Cannot fetch content from the provided URL. Please ensure the URL is valid ' +
+                    'and accessible by Vertex AI. Vertex AI respects robots.txt rules, so confirm ' +
+                    'the URL is allowed to be crawled. Status: URL_REJECTED-REJECTED_FC_TOO_MANY_PENDING',
+            };
+
+            const error = modelDef.formatLlumiverseError(driver, googleError, {
+                provider: 'vertexai',
+                model: 'gemini-2.5-flash',
+                operation: 'execute',
+            });
+
+            expect(error.code).toBe(400);
+            expect(error.retryable).toBe(true);
+        });
+
+        it('should keep permanent URL_REJECTED rejections (robots-denied) non-retryable', () => {
+            // A URL_REJECTED status without a throttle marker is a permanent failure
+            // (e.g. robots.txt denied) and must not be retried.
+            const googleError = {
+                status: 400,
+                message:
+                    'Cannot fetch content from the provided URL. Please ensure the URL is valid ' +
+                    'and accessible by Vertex AI. Vertex AI respects robots.txt rules, so confirm ' +
+                    'the URL is allowed to be crawled. Status: URL_REJECTED-REJECTED_ROBOTS_DENIED',
+            };
+
+            const error = modelDef.formatLlumiverseError(driver, googleError, {
+                provider: 'vertexai',
+                model: 'gemini-2.5-flash',
+                operation: 'execute',
+            });
+
+            expect(error.code).toBe(400);
+            expect(error.retryable).toBe(false);
+        });
+
         it('should handle errors without extractable name', () => {
             const googleError = {
                 status: 500,
