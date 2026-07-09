@@ -15,9 +15,15 @@ import { OpenAIResponsesDriverBase } from '../openai/index.js';
 
 export type BedrockMantlePrompt = OpenAI.Responses.ResponseInputItem[];
 
-const BEDROCK_MANTLE_MODEL_NAMES: Record<string, string> = {
-    'openai.gpt-5.5': 'OpenAI GPT-5.5',
-    'openai.gpt-5.4': 'OpenAI GPT-5.4',
+interface BedrockMantleModelMetadata {
+    name: string;
+    owner: string;
+}
+
+const BEDROCK_MANTLE_MODELS: Record<string, BedrockMantleModelMetadata> = {
+    'openai.gpt-5.5': { name: 'OpenAI GPT-5.5', owner: 'OpenAI' },
+    'openai.gpt-5.4': { name: 'OpenAI GPT-5.4', owner: 'OpenAI' },
+    'xai.grok-4.3': { name: 'xAI Grok 4.3', owner: 'xAI' },
 };
 
 export interface BedrockMantleDriverOptions extends DriverOptions {
@@ -26,8 +32,7 @@ export interface BedrockMantleDriverOptions extends DriverOptions {
 }
 
 export function isBedrockMantleModel(model: string): boolean {
-    const normalized = model.toLowerCase();
-    return normalized === 'openai.gpt-5.5' || normalized === 'openai.gpt-5.4';
+    return BEDROCK_MANTLE_MODELS[model.toLowerCase()] !== undefined;
 }
 
 export class BedrockMantleDriver extends OpenAIResponsesDriverBase {
@@ -63,12 +68,13 @@ export class BedrockMantleDriver extends OpenAIResponsesDriverBase {
         return models
             .filter((model) => isBedrockMantleModel(model.id))
             .map((model) => {
+                const metadata = BEDROCK_MANTLE_MODELS[model.id.toLowerCase()];
                 const modelCapability = getModelCapabilities(model.id, this.provider);
                 return {
                     id: model.id,
-                    name: BEDROCK_MANTLE_MODEL_NAMES[model.id.toLowerCase()] ?? model.id,
+                    name: metadata?.name ?? model.id,
                     provider: this.provider,
-                    owner: 'OpenAI',
+                    owner: metadata?.owner ?? model.owned_by,
                     type: ModelType.Text,
                     can_stream: true,
                     input_modalities: modelModalitiesToArray(modelCapability.input),

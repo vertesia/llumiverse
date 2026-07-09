@@ -102,19 +102,27 @@ function isOpenAIReasoningModel(model: string): boolean {
     );
 }
 
+function supportsOpenAIReasoningEffort(model: string): boolean {
+    const normalized = model.toLowerCase();
+    return isOpenAIReasoningModel(model) || normalized.includes('xai.grok-4.3');
+}
+
 function isGpt5ProModel(model: string): boolean {
     const modelName = model.toLowerCase().split('/').pop() ?? model.toLowerCase();
     return /^gpt-5(?:\.\d+)?-pro/.test(modelName);
 }
 
-function openAIReasoningEffort(model: string, effort: string | undefined): 'low' | 'medium' | 'high' | undefined {
-    if (!effort || !isOpenAIReasoningModel(model)) {
+function openAIReasoningEffort(
+    model: string,
+    effort: string | undefined,
+): 'none' | 'low' | 'medium' | 'high' | undefined {
+    if (!effort || !supportsOpenAIReasoningEffort(model)) {
         return undefined;
     }
     if (isGpt5ProModel(model)) {
         return 'high';
     }
-    return effort === 'low' || effort === 'medium' || effort === 'high' ? effort : undefined;
+    return effort === 'none' || effort === 'low' || effort === 'medium' || effort === 'high' ? effort : undefined;
 }
 
 //TODO: Do we need a list?, replace with if statements and modernize?

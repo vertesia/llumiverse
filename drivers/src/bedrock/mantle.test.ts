@@ -47,9 +47,10 @@ async function* emptyStream(): AsyncIterable<CompletionChunkObject> {
 }
 
 describe('Bedrock Mantle model routing', () => {
-    it('matches GPT-5.5 and GPT-5.4 but not GPT-OSS', () => {
+    it('matches Bedrock Mantle models but not GPT-OSS', () => {
         expect(isBedrockMantleModel('openai.gpt-5.5')).toBe(true);
         expect(isBedrockMantleModel('openai.gpt-5.4')).toBe(true);
+        expect(isBedrockMantleModel('xai.grok-4.3')).toBe(true);
         expect(isBedrockMantleModel('openai.gpt-oss-120b-1:0')).toBe(false);
     });
 
@@ -101,7 +102,7 @@ describe('Bedrock Mantle model routing', () => {
         expect(mantle.buildStreamingConversation).toHaveBeenCalledWith(prompt, [], undefined, gpt55Options);
     });
 
-    it('merges Mantle-only OpenAI models into the Bedrock model listing', async () => {
+    it('merges Mantle-only models into the Bedrock model listing', async () => {
         const driver = new BedrockDriver({ region: 'us-east-2' });
         const service = {
             listFoundationModels: vi.fn(async () => ({
@@ -182,6 +183,7 @@ describe('BedrockMantleDriver model listing', () => {
             data: [
                 { id: 'openai.gpt-5.5', owned_by: 'system' },
                 { id: 'openai.gpt-5.4', owned_by: 'system' },
+                { id: 'xai.grok-4.3', owned_by: 'system' },
                 { id: 'openai.gpt-oss-120b-1:0', owned_by: 'system' },
             ],
         }));
@@ -204,6 +206,16 @@ describe('BedrockMantleDriver model listing', () => {
                 provider: Providers.bedrock,
                 owner: 'OpenAI',
                 can_stream: true,
+                tool_support: true,
+            }),
+            expect.objectContaining({
+                id: 'xai.grok-4.3',
+                name: 'xAI Grok 4.3',
+                provider: Providers.bedrock,
+                owner: 'xAI',
+                can_stream: true,
+                input_modalities: ['text', 'image'],
+                output_modalities: ['text'],
                 tool_support: true,
             }),
         ]);
@@ -258,6 +270,39 @@ describe('Bedrock Mantle Responses options', () => {
                     verbosity: 'low',
                     format: expect.objectContaining({ type: 'json_schema', name: 'format_output' }),
                 }),
+            }),
+        );
+    });
+
+    it('forwards Grok reasoning effort through the Responses API', async () => {
+        const create = vi.fn(async () => ({
+            output: [
+                {
+                    type: 'message',
+                    role: 'assistant',
+                    content: [{ type: 'output_text', text: 'ok', annotations: [] }],
+                },
+            ],
+        }));
+        const driver = new TestResponsesDriver(create);
+        const prompt = [{ type: 'message', role: 'user', content: 'hello' }] as BedrockPrompt;
+
+        await driver.requestTextCompletion(prompt as BedrockMantlePrompt, {
+            model: 'xai.grok-4.3',
+            model_options: {
+                _option_id: 'bedrock-openai-responses',
+                reasoning_effort: 'none',
+                temperature: 0.4,
+                top_p: 0.9,
+            },
+        });
+
+        expect(create).toHaveBeenCalledWith(
+            expect.objectContaining({
+                model: 'xai.grok-4.3',
+                reasoning: { effort: 'none' },
+                temperature: 0.4,
+                top_p: 0.9,
             }),
         );
     });

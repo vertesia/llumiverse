@@ -32,6 +32,8 @@ export function getMaxOutputTokens(model: string): number {
     if (model.includes('gpt-4o')) return 16_384;
     if (model.includes('gpt-4')) return 8_192;
     if (model.includes('gpt-3.5')) return 4_096;
+    // Grok
+    if (model.includes('xai.grok-4.3') || model.includes('grok-4.3')) return 131_072;
     // Amazon Nova
     if (model.includes('nova')) return 10_000;
     // Mistral
@@ -93,6 +95,7 @@ export function getContextWindowSize(model: string): number {
     if (model.includes('gpt-4')) return 8_000;
     if (model.includes('gpt-3.5')) return 16_000;
     // Grok
+    if (model.includes('xai.grok-4.3') || model.includes('grok-4.3')) return 1_000_000;
     if (model.includes('grok-4.1') || model.includes('grok-4-1')) return 256_000;
     if (model.includes('grok')) return 131_072;
     // Amazon Nova

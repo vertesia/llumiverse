@@ -181,6 +181,12 @@ const RECORD_FAMILY_CAPABILITIES: Record<string, ModelCapabilities> = {
         tool_support: true,
         tool_support_streaming: true,
     },
+    'xai.grok-4.3': {
+        input: { text: true, image: true, video: false, audio: false, embed: false },
+        output: { text: true, image: false, video: false, audio: false, embed: false },
+        tool_support: true,
+        tool_support_streaming: true,
+    },
     'qwen.': {
         input: { text: true, image: false, video: false, audio: false, embed: false },
         output: { text: true, image: false, video: false, audio: false, embed: false },

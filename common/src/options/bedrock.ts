@@ -89,10 +89,20 @@ export interface BedrockGptOssOptions extends BaseConverseOptions<'bedrock-gpt-o
 export interface BedrockMantleOpenAIOptions {
     _option_id: 'bedrock-openai-responses';
     max_tokens?: number;
-    effort?: 'low' | 'medium' | 'high';
-    reasoning_effort?: 'low' | 'medium' | 'high';
+    temperature?: number;
+    top_p?: number;
+    effort?: 'none' | 'low' | 'medium' | 'high';
+    reasoning_effort?: 'none' | 'low' | 'medium' | 'high';
     verbosity?: 'low' | 'medium' | 'high';
     image_detail?: 'low' | 'high' | 'auto';
+}
+
+function isBedrockMantleResponsesModel(model: string): boolean {
+    return model.includes('openai.gpt-5.5') || model.includes('openai.gpt-5.4') || model.includes('xai.grok-4.3');
+}
+
+function isBedrockMantleGrokModel(model: string): boolean {
+    return model.includes('xai.grok-4.3');
 }
 
 export interface TwelvelabsPegasusOptions {
@@ -164,7 +174,10 @@ export function getMaxTokensLimitBedrock(model: string): number | undefined {
             return 8192;
         }
     }
-    // OpenAI gpt-oss models
+    // Bedrock Mantle Responses models
+    if (model.includes('xai.grok-4.3')) {
+        return 131_072;
+    }
     if (model.includes('openai.gpt-5.5') || model.includes('openai.gpt-5.4')) {
         return undefined;
     }
@@ -534,41 +547,35 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                 _option_id: 'bedrock-palmyra',
                 options: [...baseConverseOptions, ...palmyraConverseOptions],
             };
-        } else if (model.includes('openai.gpt-5.5') || model.includes('openai.gpt-5.4')) {
+        } else if (isBedrockMantleResponsesModel(model)) {
+            const reasoningEffortEnum: Record<string, string> = isBedrockMantleGrokModel(model)
+                ? {
+                      none: 'none',
+                      low: 'low',
+                      medium: 'medium',
+                      high: 'high',
+                  }
+                : {
+                      low: 'low',
+                      medium: 'medium',
+                      high: 'high',
+                  };
+            const reasoningEffortDefault = isBedrockMantleGrokModel(model) ? 'low' : 'medium';
             const mantleOptions: ModelOptionInfoItem[] = [
                 {
                     name: 'effort',
                     type: OptionType.enum,
-                    enum: {
-                        low: 'low',
-                        medium: 'medium',
-                        high: 'high',
-                    },
-                    default: 'medium',
+                    enum: reasoningEffortEnum,
+                    default: reasoningEffortDefault,
                     description:
                         'The reasoning effort of the model, which affects the quality and speed of the response',
                 },
                 {
                     name: 'reasoning_effort',
                     type: OptionType.enum,
-                    enum: {
-                        low: 'low',
-                        medium: 'medium',
-                        high: 'high',
-                    },
-                    default: 'medium',
+                    enum: reasoningEffortEnum,
+                    default: reasoningEffortDefault,
                     description: 'Alias for effort; controls how much reasoning the model performs before responding',
-                },
-                {
-                    name: 'verbosity',
-                    type: OptionType.enum,
-                    enum: {
-                        low: 'low',
-                        medium: 'medium',
-                        high: 'high',
-                    },
-                    default: 'medium',
-                    description: 'Controls how concise or verbose the model response should be',
                 },
                 {
                     name: 'image_detail',
@@ -578,9 +585,25 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                     description: 'Controls how the model processes an input image',
                 },
             ];
+            if (!isBedrockMantleGrokModel(model)) {
+                mantleOptions.splice(2, 0, {
+                    name: 'verbosity',
+                    type: OptionType.enum,
+                    enum: {
+                        low: 'low',
+                        medium: 'medium',
+                        high: 'high',
+                    },
+                    default: 'medium',
+                    description: 'Controls how concise or verbose the model response should be',
+                });
+            }
+            const baseMantleOptions = isBedrockMantleGrokModel(model)
+                ? baseConverseOptions.slice(0, 3)
+                : baseConverseOptions.slice(0, 1);
             return {
                 _option_id: 'bedrock-openai-responses',
-                options: [...baseConverseOptions.slice(0, 1), ...mantleOptions],
+                options: [...baseMantleOptions, ...mantleOptions],
             };
         } else if (model.includes('gpt-oss')) {
             const gptOssOptions: ModelOptionInfoItem[] = [
