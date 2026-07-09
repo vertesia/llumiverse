@@ -71,7 +71,7 @@
         "lint": "biome lint src",
         "test": "vitest run --retry 3 --passWithNoTests",
         "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
-        "build": "pnpm exec rimraf ./lib ./tsconfig.tsbuildinfo && tsc -b ../common ../core .",
+        "build": "pnpm exec rimraf ./lib ./tsconfig.tsbuildinfo && tsc",
         "clean": "rimraf ./lib tsconfig.tsbuildinfo"
     },
     "author": "Llumiverse",
