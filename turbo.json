@@ -1,0 +1,31 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "!**/*.test.ts",
+        "!**/*.test.tsx",
+        "!**/*.spec.ts",
+        "!**/*.spec.tsx",
+        "!**/test/**",
+        "!**/tests/**",
+        "!**/__tests__/**"
+      ],
+      "outputs": [
+        "lib/**",
+        "tsconfig.tsbuildinfo"
+      ]
+    },
+    "test": {
+      "dependsOn": ["build"],
+      "outputs": [],
+      "cache": false
+    },
+    "typecheck:test": {
+      "dependsOn": ["^build", "build"],
+      "outputs": []
+    }
+  }
+}
