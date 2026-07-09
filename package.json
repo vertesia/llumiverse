@@ -9,7 +9,7 @@
         "check:write": "pnpm exec biome check --write .",
         "ci:local": "pnpm run ci:renovate && pnpm run check && pnpm run build && pnpm run typecheck:test && pnpm run test",
         "ci:renovate": "npx --yes --package renovate -- renovate-config-validator --strict",
-        "clean:outputs": "pnpm -r exec rm -rf ./lib ./dist ./.next ./tsconfig.tsbuildinfo ./.tsbuildinfo",
+        "clean:outputs": "pnpm -r exec rimraf ./lib ./dist ./.next ./tsconfig.tsbuildinfo ./.tsbuildinfo",
         "format": "pnpm exec biome format --write .",
         "format:check": "pnpm exec biome format .",
         "lint": "pnpm exec biome lint",
