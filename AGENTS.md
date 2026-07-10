@@ -1,8 +1,4 @@
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-# Llumiverse
+# Llumiverse Agent Guide
 
 Llumiverse is a universal interface for interacting with Large Language Models for the TypeScript/JavaScript ecosystem. It provides a lightweight modular library for interacting with various LLM models and execution platforms.
 
@@ -41,14 +37,22 @@ Prefer sparse, change-scoped verification in llumiverse unless the user explicit
 
 ## Code Style
 
-- TypeScript strict mode with noUnusedLocals/Parameters
+- TypeScript strict mode with `noUnusedLocals`/`noUnusedParameters` enabled
 - ESM modules with node-next resolution
-- Use async/await with proper error handling (no floating promises)
-- Objects: use shorthand notation
-- Unused variables prefix: `_` (e.g., `_unused`)
-- Line length: 120 characters, 4-space indentation, single quotes
+- Async patterns:
+  - Use async/await with proper error handling
+  - No floating promises allowed
+  - Always catch and handle exceptions appropriately
+- Objects: use shorthand notation where applicable
+- Naming conventions:
+  - Unused variables prefix: `_` (e.g., `_unused`)
+  - Line length: 120 characters maximum
+  - Use 4-space indentation
+  - Use single quotes for strings
 - Component patterns: follow existing naming, directory structure and import patterns
-- Always use proper typing - avoid `any` when possible
+- Type safety:
+  - Always use proper typing - avoid `any` when possible
+  - Use TypeScript utility types where appropriate
 - Error handling: use proper error types and propagation, especially with async code
 - Formatting: follows `biome.json` in this repository
 
