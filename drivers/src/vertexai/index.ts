@@ -3,6 +3,7 @@ import { type Content, GoogleGenAI, type Model } from '@google/genai';
 import { PredictionServiceClient, v1beta1 } from '@google-cloud/aiplatform';
 import {
     type AIModel,
+    type BatchBlobStore,
     type BatchInferenceJob,
     type BatchInferenceOptions,
     type BatchInferenceRequestItem,
@@ -396,14 +397,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             throw new Error('[vertexai] startBatchInference called with no requests');
         }
         const model = requests[0].options.model;
-        const bucketSpec = options?.input_uri ?? this.options.batch_bucket;
-        if (!bucketSpec) {
-            throw new Error(
-                "[vertexai] Batch inference requires a GCS bucket: set 'batch_bucket' in driver options or 'input_uri' in batch options",
-            );
-        }
-        const { bucket, prefix } = parseGcsBucket(bucketSpec);
-        const auth = await this.getAuthClient();
 
         const lines: string[] = [];
         for (const item of requests) {
@@ -417,9 +410,28 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         }
 
         const runId = options?.name ? `${options.name}-${Date.now()}` : `llumiverse-batch-${Date.now()}`;
-        const base = prefix ? `${prefix}/${runId}` : runId;
-        const inputUri = await gcsUploadText(auth, bucket, `${base}/input.jsonl`, lines.join('\n'));
-        const destUri = `gs://${bucket}/${base}/output`;
+
+        // Staging: prefer injected blob I/O (host stages via its own storage — no driver GCS creds
+        // needed); otherwise use the driver's own GCS client + configured bucket.
+        let inputUri: string;
+        let destUri: string;
+        if (options?.blobStore) {
+            const base = `batch-staging/${runId}`;
+            inputUri = await options.blobStore.putText(`${base}/input.jsonl`, lines.join('\n'));
+            destUri = inputUri.replace(/input\.jsonl$/, 'output');
+        } else {
+            const bucketSpec = options?.input_uri ?? this.options.batch_bucket;
+            if (!bucketSpec) {
+                throw new Error(
+                    "[vertexai] Batch inference requires a GCS bucket: set 'batch_bucket' in driver options, 'input_uri' in batch options, or pass a blobStore",
+                );
+            }
+            const { bucket, prefix } = parseGcsBucket(bucketSpec);
+            const auth = await this.getAuthClient();
+            const base = prefix ? `${prefix}/${runId}` : runId;
+            inputUri = await gcsUploadText(auth, bucket, `${base}/input.jsonl`, lines.join('\n'));
+            destUri = `gs://${bucket}/${base}/output`;
+        }
 
         const genai = this.getGoogleGenAIClient();
         const job = await genai.batches.create({
@@ -454,26 +466,38 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return this.getBatchInferenceJob(jobId);
     }
 
-    async getBatchInferenceResults(jobId: string): Promise<BatchInferenceResultItem[]> {
+    async getBatchInferenceResults(
+        jobId: string,
+        options?: { blobStore?: BatchBlobStore },
+    ): Promise<BatchInferenceResultItem[]> {
         const genai = this.getGoogleGenAIClient();
         const job = await genai.batches.get({ name: jobId });
         const destUri = typeof job.dest === 'string' ? job.dest : (job.dest?.gcsUri ?? undefined);
         if (!destUri) {
             throw new Error('[vertexai] batch job has no GCS output destination');
         }
-        const { bucket, prefix } = parseGcsBucket(destUri);
-        const auth = await this.getAuthClient();
-        const names = (await gcsList(auth, bucket, prefix)).filter(
-            (n) => n.endsWith('.jsonl') || n.includes('prediction'),
-        );
         const items: BatchInferenceResultItem[] = [];
-        for (const name of names) {
-            const text = await gcsDownloadText(auth, bucket, name);
+        const collect = (text: string) => {
             for (const line of text.split('\n')) {
                 const parsed = parseBatchOutputLine(line, items.length);
                 if (parsed) {
                     items.push(parsed);
                 }
+            }
+        };
+        if (options?.blobStore) {
+            // Host reads the output through its own storage (mirrors the injected submit staging).
+            for (const text of await options.blobStore.readOutput(destUri)) {
+                collect(text);
+            }
+        } else {
+            const { bucket, prefix } = parseGcsBucket(destUri);
+            const auth = await this.getAuthClient();
+            const names = (await gcsList(auth, bucket, prefix)).filter(
+                (n) => n.endsWith('.jsonl') || n.includes('prediction'),
+            );
+            for (const name of names) {
+                collect(await gcsDownloadText(auth, bucket, name));
             }
         }
         return items;

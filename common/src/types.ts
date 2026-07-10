@@ -954,10 +954,25 @@ export interface BatchInferenceRequestItem {
  * provided, the driver falls back to a bucket configured in its driver options
  * (e.g. `batch_bucket` for Vertex/Bedrock).
  */
+/**
+ * Blob I/O for batch staging, injected by the caller so the driver does not need its own
+ * cloud-storage credentials. When provided, the driver delegates input upload + output read
+ * to it (e.g. a host that stages through its own storage service / tenant bucket) instead of
+ * writing/reading the object store directly. If absent, the driver uses its native staging
+ * (its own GCS/S3 client + configured bucket).
+ */
+export interface BatchBlobStore {
+    /** Write `content` at bucket-relative `path`; return the absolute URI written (gs://… or s3://…). */
+    putText(path: string, content: string): Promise<string>;
+    /** List objects under `outputUri` and return each output object's text content. */
+    readOutput(outputUri: string): Promise<string[]>;
+}
+
 export interface BatchInferenceOptions {
     name?: string; // display name / job-name prefix
     input_uri?: string; // pre-staged input JSONL location (gs://… or s3://…) — overrides driver staging
     output_uri?: string; // output location (gs://… or s3://…) — overrides driver default
+    blobStore?: BatchBlobStore; // inject blob I/O so the driver never needs its own storage credentials
 }
 
 export interface BatchInferenceJob {

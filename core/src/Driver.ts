@@ -6,6 +6,7 @@
 
 import {
     type AIModel,
+    type BatchBlobStore,
     type BatchInferenceJob,
     type BatchInferenceOptions,
     type BatchInferenceRequestItem,
@@ -89,8 +90,14 @@ export interface Driver<PromptT = unknown> {
 
     cancelBatchInference(jobId: string): Promise<BatchInferenceJob>;
 
-    /** Fetch the results of a completed batch job, mapped back by `custom_id`. */
-    getBatchInferenceResults(jobId: string): Promise<BatchInferenceResultItem[]>;
+    /**
+     * Fetch the results of a completed batch job, mapped back by `custom_id`.
+     * Pass `blobStore` to read the output through injected blob I/O (mirrors the store used at submit).
+     */
+    getBatchInferenceResults(
+        jobId: string,
+        options?: { blobStore?: BatchBlobStore },
+    ): Promise<BatchInferenceResultItem[]>;
 
     /**
      * Whether this driver's provider offers a batch-inference API that this driver
@@ -216,7 +223,10 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         throw new Error(`[${this.provider}] Batch inference is not supported by this driver.`);
     }
 
-    getBatchInferenceResults(_jobId: string): Promise<BatchInferenceResultItem[]> {
+    getBatchInferenceResults(
+        _jobId: string,
+        _options?: { blobStore?: BatchBlobStore },
+    ): Promise<BatchInferenceResultItem[]> {
         throw new Error(`[${this.provider}] Batch inference is not supported by this driver.`);
     }
 
