@@ -79,7 +79,7 @@ jobs:
           BEDROCK_REGION: us-east-1
           GOOGLE_PROJECT_ID: dengenlabs
           GOOGLE_REGION: us-central1
-        run: npx vitest 'drivers/test/*.live.test.ts'
+        run: npx vitest --passWithNoTests --exclude '**/!(*.live).test.ts'
 
   notify-repo-composableai:
     name: Notify vertesia/composableai of new commit
