@@ -6,6 +6,26 @@ import { getBedrockOptions } from './bedrock.js';
 import { getContextWindowSize } from './context-windows.js';
 
 describe('Bedrock Mantle metadata', () => {
+    it('uses Responses options and capabilities for newly listed OpenAI models', () => {
+        const options = getOptions('openai.gpt-5.6', Providers.bedrock_mantle);
+        const capabilities = getModelCapabilities('openai.gpt-5.5-2026-04-23', Providers.bedrock_mantle);
+
+        expect(options._option_id).toBe('bedrock-mantle-responses');
+        expect(options.options.map((option) => option.name)).toContain('verbosity');
+        expect(capabilities.input).toMatchObject({ text: true, image: true });
+        expect(capabilities.output.text).toBe(true);
+        expect(capabilities.tool_support).toBe(true);
+        expect(capabilities.tool_support_streaming).toBe(true);
+    });
+
+    it('keeps GPT-OSS on the existing Bedrock path', () => {
+        const options = getOptions('openai.gpt-oss-120b-1:0', Providers.bedrock_mantle);
+        const capabilities = getModelCapabilities('openai.gpt-oss-120b-1:0', Providers.bedrock_mantle);
+
+        expect(options._option_id).not.toBe('bedrock-mantle-responses');
+        expect(capabilities).toEqual({ input: { audio: false }, output: { audio: false, video: false } });
+    });
+
     it('uses Responses options for GPT-5.5 under the Bedrock Mantle provider', () => {
         const options = getOptions('openai.gpt-5.5', Providers.bedrock_mantle);
         const optionNames = options.options.map((option) => option.name);
@@ -17,6 +37,14 @@ describe('Bedrock Mantle metadata', () => {
         expect(optionNames).toContain('verbosity');
         expect(optionNames).toContain('image_detail');
         expect(optionNames).not.toContain('stop_sequence');
+        expect(options.options.find((option) => option.name === 'effort')).toMatchObject({
+            enum: {
+                low: 'low',
+                medium: 'medium',
+                high: 'high',
+                xhigh: 'xhigh',
+            },
+        });
     });
 
     it('sets GPT-5.5 Bedrock Mantle capabilities and context window', () => {

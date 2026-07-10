@@ -115,14 +115,21 @@ function isGpt5ProModel(model: string): boolean {
 function openAIReasoningEffort(
     model: string,
     effort: string | undefined,
-): 'none' | 'low' | 'medium' | 'high' | undefined {
+): 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | undefined {
     if (!effort || !supportsOpenAIReasoningEffort(model)) {
         return undefined;
     }
     if (isGpt5ProModel(model)) {
         return 'high';
     }
-    return effort === 'none' || effort === 'low' || effort === 'medium' || effort === 'high' ? effort : undefined;
+    return effort === 'none' ||
+        effort === 'minimal' ||
+        effort === 'low' ||
+        effort === 'medium' ||
+        effort === 'high' ||
+        effort === 'xhigh'
+        ? effort
+        : undefined;
 }
 
 //TODO: Do we need a list?, replace with if statements and modernize?

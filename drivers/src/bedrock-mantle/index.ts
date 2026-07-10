@@ -4,6 +4,7 @@ import {
     type AIModel,
     type DriverOptions,
     type ExecutionOptions,
+    getBedrockMantleModelFamily,
     getModelCapabilities,
     ModelType,
     modelModalitiesToArray,
@@ -20,19 +21,26 @@ interface BedrockMantleModelMetadata {
     owner: string;
 }
 
-const BEDROCK_MANTLE_MODELS: Record<string, BedrockMantleModelMetadata> = {
-    'openai.gpt-5.5': { name: 'OpenAI GPT-5.5', owner: 'OpenAI' },
-    'openai.gpt-5.4': { name: 'OpenAI GPT-5.4', owner: 'OpenAI' },
-    'xai.grok-4.3': { name: 'xAI Grok 4.3', owner: 'xAI' },
-};
-
 export interface BedrockMantleDriverOptions extends DriverOptions {
     region: string;
     credentials?: AwsCredentialIdentity | Provider<AwsCredentialIdentity>;
 }
 
+function getBedrockMantleModelMetadata(model: string): BedrockMantleModelMetadata | undefined {
+    const family = getBedrockMantleModelFamily(model);
+    if (family === 'openai') {
+        const modelName = model.slice('openai.'.length).replace(/^gpt-/i, 'GPT-');
+        return { name: `OpenAI ${modelName}`, owner: 'OpenAI' };
+    }
+    if (family === 'grok') {
+        const modelName = model.slice('xai.'.length).replace(/^grok-/i, 'Grok ');
+        return { name: `xAI ${modelName}`, owner: 'xAI' };
+    }
+    return undefined;
+}
+
 export function isBedrockMantleModel(model: string): boolean {
-    return BEDROCK_MANTLE_MODELS[model.toLowerCase()] !== undefined;
+    return getBedrockMantleModelMetadata(model) !== undefined;
 }
 
 export class BedrockMantleDriver extends OpenAIResponsesDriverBase {
@@ -68,7 +76,7 @@ export class BedrockMantleDriver extends OpenAIResponsesDriverBase {
         return models
             .filter((model) => isBedrockMantleModel(model.id))
             .map((model) => {
-                const metadata = BEDROCK_MANTLE_MODELS[model.id.toLowerCase()];
+                const metadata = getBedrockMantleModelMetadata(model.id);
                 const modelCapability = getModelCapabilities(model.id, this.provider);
                 return {
                     id: model.id,

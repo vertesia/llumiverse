@@ -14,11 +14,13 @@ vi.mock('@aws/bedrock-token-generator', () => ({
 const promptSegments: PromptSegment[] = [{ role: PromptRole.user, content: 'hello' }];
 
 describe('Bedrock Mantle model routing', () => {
-    it('matches Bedrock Mantle models but not GPT-OSS', () => {
+    it('matches OpenAI and Grok models without requiring an exact model allowlist', () => {
+        expect(isBedrockMantleModel('openai.gpt-5.6')).toBe(true);
         expect(isBedrockMantleModel('openai.gpt-5.5')).toBe(true);
-        expect(isBedrockMantleModel('openai.gpt-5.4')).toBe(true);
         expect(isBedrockMantleModel('xai.grok-4.3')).toBe(true);
+        expect(isBedrockMantleModel('xai.grok-4.4')).toBe(true);
         expect(isBedrockMantleModel('openai.gpt-oss-120b-1:0')).toBe(false);
+        expect(isBedrockMantleModel('anthropic.claude-opus-4-7')).toBe(false);
     });
 
     it('formats Mantle prompts as OpenAI Responses input items', async () => {
@@ -77,10 +79,12 @@ describe('BedrockMantleDriver model listing', () => {
         const driver = new BedrockMantleDriver({ region: 'us-west-2' });
         const list = vi.fn(async () => ({
             data: [
+                { id: 'openai.gpt-5.6', object: 'model', created: 1783669008, owned_by: 'system' },
                 { id: 'openai.gpt-5.5', owned_by: 'system' },
                 { id: 'openai.gpt-5.4', owned_by: 'system' },
                 { id: 'xai.grok-4.3', owned_by: 'system' },
                 { id: 'openai.gpt-oss-120b-1:0', owned_by: 'system' },
+                { id: 'anthropic.claude-opus-4-7', owned_by: 'system' },
             ],
         }));
         (driver as unknown as { modelsService: OpenAI }).modelsService = { models: { list } } as unknown as OpenAI;
@@ -103,6 +107,13 @@ describe('BedrockMantleDriver model listing', () => {
                 owner: 'OpenAI',
                 can_stream: true,
                 tool_support: true,
+            }),
+            expect.objectContaining({
+                id: 'openai.gpt-5.6',
+                name: 'OpenAI GPT-5.6',
+                provider: Providers.bedrock_mantle,
+                owner: 'OpenAI',
+                can_stream: true,
             }),
             expect.objectContaining({
                 id: 'xai.grok-4.3',
@@ -147,7 +158,7 @@ describe('Bedrock Mantle Responses options', () => {
             model_options: {
                 _option_id: 'bedrock-mantle-responses',
                 max_tokens: 100,
-                effort: 'medium',
+                effort: 'low',
                 verbosity: 'low',
             },
             result_schema: {
@@ -161,7 +172,7 @@ describe('Bedrock Mantle Responses options', () => {
             expect.objectContaining({
                 model: 'openai.gpt-5.5',
                 max_output_tokens: 100,
-                reasoning: { effort: 'medium' },
+                reasoning: { effort: 'low' },
                 text: expect.objectContaining({
                     verbosity: 'low',
                     format: expect.objectContaining({ type: 'json_schema', name: 'format_output' }),

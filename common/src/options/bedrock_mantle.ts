@@ -6,18 +6,31 @@ export interface BedrockMantleOptions {
     max_tokens?: number;
     temperature?: number;
     top_p?: number;
-    effort?: 'none' | 'low' | 'medium' | 'high';
-    reasoning_effort?: 'none' | 'low' | 'medium' | 'high';
+    effort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh';
+    reasoning_effort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh';
     verbosity?: 'low' | 'medium' | 'high';
     image_detail?: 'low' | 'high' | 'auto';
 }
 
+export type BedrockMantleModelFamily = 'openai' | 'grok';
+
+export function getBedrockMantleModelFamily(model: string): BedrockMantleModelFamily | undefined {
+    const normalized = model.toLowerCase();
+    if (normalized.startsWith('openai.') && !normalized.startsWith('openai.gpt-oss')) {
+        return 'openai';
+    }
+    if (normalized.startsWith('xai.grok-')) {
+        return 'grok';
+    }
+    return undefined;
+}
+
 function isBedrockMantleResponsesModel(model: string): boolean {
-    return model.includes('openai.gpt-5.5') || model.includes('openai.gpt-5.4') || model.includes('xai.grok-4.3');
+    return getBedrockMantleModelFamily(model) !== undefined;
 }
 
 function isBedrockMantleGrokModel(model: string): boolean {
-    return model.includes('xai.grok-4.3');
+    return getBedrockMantleModelFamily(model) === 'grok';
 }
 
 export function getBedrockMantleOptions(model: string, _option?: ModelOptions): ModelOptionsInfo {
@@ -67,6 +80,7 @@ export function getBedrockMantleOptions(model: string, _option?: ModelOptions): 
               low: 'low',
               medium: 'medium',
               high: 'high',
+              xhigh: 'xhigh',
           };
     const reasoningEffortDefault = isBedrockMantleGrokModel(model) ? 'low' : 'medium';
     const mantleOptions: ModelOptionInfoItem[] = [
