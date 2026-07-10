@@ -1,6 +1,7 @@
 import { getModelCapabilitiesAnthropic } from './capability/anthropic.js';
 import { getModelCapabilitiesAzureFoundry } from './capability/azure_foundry.js';
 import { getModelCapabilitiesBedrock } from './capability/bedrock.js';
+import { getModelCapabilitiesBedrockMantle } from './capability/bedrock_mantle.js';
 import { getModelCapabilitiesOpenAI } from './capability/openai.js';
 import { getModelCapabilitiesVertexAI } from './capability/vertexai.js';
 import { type ModelCapabilities, type ModelModalities, Providers } from './types.js';
@@ -36,6 +37,8 @@ function _getModelCapabilities(model: string, provider?: string | Providers): Mo
             return getModelCapabilitiesOpenAICompatible(model);
         case Providers.bedrock:
             return getModelCapabilitiesBedrock(model);
+        case Providers.bedrock_mantle:
+            return getModelCapabilitiesBedrockMantle(model);
         case Providers.azure_foundry:
             // Azure Foundry uses OpenAI capabilities
             return getModelCapabilitiesAzureFoundry(model);

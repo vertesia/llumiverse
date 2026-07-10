@@ -357,7 +357,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     private _executor?: BedrockRuntime;
     private _service?: Bedrock;
     private _service_region?: string;
-
     constructor(options: BedrockDriverOptions) {
         super(options);
         if (!options.region) {

@@ -65,6 +65,7 @@ type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
     image_detail?: 'low' | 'high' | 'auto';
     effort?: string;
     reasoning_effort?: string;
+    verbosity?: 'low' | 'medium' | 'high';
 };
 type OpenAIErrorWithStatus = Error & { status?: unknown };
 type OpenAIUsageWithProviderDetails = OpenAI.Responses.ResponseUsage & {
@@ -101,19 +102,12 @@ function isOpenAIReasoningModel(model: string): boolean {
     );
 }
 
-function isGpt5ProModel(model: string): boolean {
-    const modelName = model.toLowerCase().split('/').pop() ?? model.toLowerCase();
-    return /^gpt-5(?:\.\d+)?-pro/.test(modelName);
-}
-
-function openAIReasoningEffort(model: string, effort: string | undefined): 'low' | 'medium' | 'high' | undefined {
-    if (!effort || !isOpenAIReasoningModel(model)) {
+function openAIReasoning(effort: string | undefined): OpenAI.Responses.ResponseCreateParams['reasoning'] {
+    if (!effort) {
         return undefined;
     }
-    if (isGpt5ProModel(model)) {
-        return 'high';
-    }
-    return effort === 'low' || effort === 'medium' || effort === 'high' ? effort : undefined;
+    // Forward provider-native values unchanged so the provider can return an authoritative validation error.
+    return { effort } as OpenAI.Responses.ResponseCreateParams['reasoning'];
 }
 
 //TODO: Do we need a list?, replace with if statements and modernize?
@@ -136,6 +130,8 @@ export abstract class OpenAIResponsesDriverBase extends AbstractDriver<
         | Providers.azure_openai
         | Providers.xai
         | Providers.azure_foundry
+        | Providers.bedrock
+        | Providers.bedrock_mantle
         | Providers.openai_compatible;
     abstract service: OpenAI | AzureOpenAI;
 
@@ -172,6 +168,7 @@ export abstract class OpenAIResponsesDriverBase extends AbstractDriver<
             options.model_options?._option_id !== undefined &&
             options.model_options?._option_id !== 'openai-text' &&
             options.model_options?._option_id !== 'openai-thinking' &&
+            options.model_options?._option_id !== 'bedrock-mantle-responses' &&
             options.model_options?._option_id !== 'text-fallback'
         ) {
             this.logger.debug({ options: options.model_options }, 'Unexpected option id');
@@ -204,8 +201,7 @@ export abstract class OpenAIResponsesDriverBase extends AbstractDriver<
         }
 
         const isReasoningModel = isOpenAIReasoningModel(options.model);
-        const effort = openAIReasoningEffort(options.model, model_options?.effort ?? model_options?.reasoning_effort);
-        const reasoning = effort ? { effort } : undefined;
+        const reasoning = openAIReasoning(model_options?.effort ?? model_options?.reasoning_effort);
 
         const stream = await this.service.responses.create({
             stream: true,
@@ -216,16 +212,7 @@ export abstract class OpenAIResponsesDriverBase extends AbstractDriver<
             top_p: isReasoningModel ? undefined : model_options?.top_p,
             max_output_tokens: model_options?.max_tokens,
             tools: useTools ? toolDefs : undefined,
-            text: parsedSchema
-                ? {
-                      format: {
-                          type: 'json_schema',
-                          name: 'format_output',
-                          schema: parsedSchema,
-                          strict: strictMode,
-                      },
-                  }
-                : undefined,
+            text: buildResponseTextConfig(parsedSchema, strictMode, model_options?.verbosity),
         });
 
         return mapResponseStream(stream);
@@ -236,6 +223,7 @@ export abstract class OpenAIResponsesDriverBase extends AbstractDriver<
             options.model_options?._option_id !== undefined &&
             options.model_options?._option_id !== 'openai-text' &&
             options.model_options?._option_id !== 'openai-thinking' &&
+            options.model_options?._option_id !== 'bedrock-mantle-responses' &&
             options.model_options?._option_id !== 'text-fallback'
         ) {
             this.logger.debug({ options: options.model_options }, 'Unexpected option id');
@@ -267,8 +255,7 @@ export abstract class OpenAIResponsesDriverBase extends AbstractDriver<
         }
 
         const isReasoningModel = isOpenAIReasoningModel(options.model);
-        const effort = openAIReasoningEffort(options.model, model_options?.effort ?? model_options?.reasoning_effort);
-        const reasoning = effort ? { effort } : undefined;
+        const reasoning = openAIReasoning(model_options?.effort ?? model_options?.reasoning_effort);
 
         let completion: Completion;
 
@@ -281,16 +268,7 @@ export abstract class OpenAIResponsesDriverBase extends AbstractDriver<
             top_p: isReasoningModel ? undefined : model_options?.top_p,
             max_output_tokens: model_options?.max_tokens, //TODO: use max_tokens for older models, currently relying on OpenAI to handle it
             tools: useTools ? toolDefs : undefined,
-            text: parsedSchema
-                ? {
-                      format: {
-                          type: 'json_schema',
-                          name: 'format_output',
-                          schema: parsedSchema,
-                          strict: strictMode,
-                      },
-                  }
-                : undefined,
+            text: buildResponseTextConfig(parsedSchema, strictMode, model_options?.verbosity),
         });
 
         completion = this.extractDataFromResponse(options, res);
@@ -924,6 +902,29 @@ function completionResultsToText(completionResults: CompletionResult[] | undefin
             }
         })
         .join('');
+}
+
+function buildResponseTextConfig(
+    schema: JSONSchema | undefined,
+    strict: boolean,
+    verbosity: OpenAIRequestOptions['verbosity'] | undefined,
+): OpenAI.Responses.ResponseTextConfig | undefined {
+    if (!schema && !verbosity) {
+        return undefined;
+    }
+    return {
+        ...(schema
+            ? {
+                  format: {
+                      type: 'json_schema' as const,
+                      name: 'format_output',
+                      schema,
+                      strict,
+                  },
+              }
+            : {}),
+        ...(verbosity ? { verbosity } : {}),
+    };
 }
 
 function createAssistantMessageFromCompletion(completion: Completion): ResponseInputItem[] {

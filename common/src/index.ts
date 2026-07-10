@@ -1,6 +1,7 @@
 export * from './capability.js';
 export * from './options/anthropic.js';
 export * from './options/bedrock.js';
+export * from './options/bedrock_mantle.js';
 export * from './options/context-windows.js';
 export * from './options/embedding.js';
 export * from './options/fallback.js';

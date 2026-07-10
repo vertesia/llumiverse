@@ -30,6 +30,10 @@
             "types": "./lib/bedrock/index.d.ts",
             "default": "./lib/bedrock/index.js"
         },
+        "./bedrock-mantle": {
+            "types": "./lib/bedrock-mantle/index.d.ts",
+            "default": "./lib/bedrock-mantle/index.js"
+        },
         "./vertexai": {
             "types": "./lib/vertexai/index.d.ts",
             "default": "./lib/vertexai/index.js"
@@ -116,6 +120,7 @@
         "@aws-sdk/credential-providers": "^3.1078.0",
         "@aws-sdk/lib-storage": "^3.1078.0",
         "@aws-sdk/types": "^3.973.15",
+        "@aws/bedrock-token-generator": "^1.1.0",
         "@azure-rest/ai-inference": "1.0.0-beta.6",
         "@azure/ai-projects": "^2.3.0",
         "@azure/core-auth": "^1.10.1",

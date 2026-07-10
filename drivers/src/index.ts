@@ -1,6 +1,7 @@
 export * from './anthropic/index.js';
 export * from './azure/azure_foundry.js';
 export * from './bedrock/index.js';
+export * from './bedrock-mantle/index.js';
 export * from './groq/index.js';
 export * from './huggingface_ie.js';
 export * from './mistral/index.js';

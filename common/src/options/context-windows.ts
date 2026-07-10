@@ -26,11 +26,14 @@ export function getMaxOutputTokens(model: string): number {
     if (model.includes('o1')) return 100_000;
     if (model.includes('o3') || model.includes('o4')) return 100_000;
     // GPT models
+    if (model.includes('openai.gpt-5.5') || model.includes('openai.gpt-5.4')) return 128_000;
     if (model.includes('gpt-5')) return 128_000;
     if (model.includes('gpt-oss')) return 16_384;
     if (model.includes('gpt-4o')) return 16_384;
     if (model.includes('gpt-4')) return 8_192;
     if (model.includes('gpt-3.5')) return 4_096;
+    // Grok
+    if (model.includes('xai.grok-4.3') || model.includes('grok-4.3')) return 131_072;
     // Amazon Nova
     if (model.includes('nova')) return 10_000;
     // Mistral
@@ -84,6 +87,7 @@ export function getContextWindowSize(model: string): number {
     // OpenAI o-series (check before gpt-4 to avoid false matches)
     if (model.includes('o1') || model.includes('o3') || model.includes('o4')) return 200_000;
     // GPT models — check specific variants before generic gpt-4
+    if (model.includes('openai.gpt-5.5') || model.includes('openai.gpt-5.4')) return 272_000;
     if (model.includes('gpt-5')) return 400_000;
     if (model.includes('gpt-oss')) return 131_072;
     if (model.includes('gpt-4.1') || model.includes('gpt-4-1')) return 1_000_000;
@@ -91,6 +95,7 @@ export function getContextWindowSize(model: string): number {
     if (model.includes('gpt-4')) return 8_000;
     if (model.includes('gpt-3.5')) return 16_000;
     // Grok
+    if (model.includes('xai.grok-4.3') || model.includes('grok-4.3')) return 1_000_000;
     if (model.includes('grok-4.1') || model.includes('grok-4-1')) return 256_000;
     if (model.includes('grok')) return 131_072;
     // Amazon Nova
