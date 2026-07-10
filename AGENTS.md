@@ -20,8 +20,9 @@ The main abstractions are:
 - **Build all packages**: `pnpm build`
 - **Build core package**: `cd core && pnpm build`
 - **Build drivers package**: `cd drivers && pnpm build`
-- **Run all tests**: `pnpm -r test`
-- **Run specific tests**: `cd drivers && pnpm test -- -t "pattern"`
+- **Run functional tests**: `pnpm exec vitest run --exclude '**/*.live.test.ts'`
+- **Run a targeted test**: `cd drivers && pnpm test -- <test-file>`
+- **Run all tests, including live provider tests**: `pnpm -r test`
 - **Run linting**: `pnpm lint`
 - **Format files**: `pnpm format`
 - **Check formatting**: `pnpm format:check`
@@ -30,10 +31,13 @@ The main abstractions are:
 
 Prefer sparse, change-scoped verification in llumiverse unless the user explicitly asks for a full provider sweep. Many driver tests make live network calls and can produce heavy output or fail on unrelated local credentials.
 
-- For common package changes, run `cd common && pnpm lint`, `pnpm typecheck:test`, and the specific Vitest files that cover the edit.
-- For driver changes, run `cd drivers && pnpm lint`, `pnpm typecheck:test`, and targeted tests for the touched driver or behavior.
-- For shared package changes that drivers consume, build dependencies sequentially, for example `common`, then `core`, then `drivers`; do not run these builds in parallel because each package build clears its own `lib` output.
-- Run full `pnpm test` / `pnpm -r test` only when the change affects broad cross-provider behavior or when requested. If skipped, report the scoped commands that were run.
+- For common package changes, run `cd common && pnpm lint`, `pnpm typecheck:test`, and the specific functional Vitest files that cover the edit.
+- For driver changes, run `cd drivers && pnpm lint`, `pnpm typecheck:test`, and targeted functional tests for the touched driver or behavior.
+- Run `pnpm build` from the Llumiverse root for the normal workspace build; it uses Turbo to order package dependencies.
+- Use `pnpm clean:outputs && pnpm build` only when diagnosing stale generated artifacts or a failed build after branch changes.
+- Files named `*.live.test.ts` call provider APIs and may consume quota or tokens; run only the affected provider/model suite, while running functional tests freely.
+- Use `LLUMIVERSE_LIVE_PROVIDERS` and `LLUMIVERSE_LIVE_MODELS` with `drivers/test/model-smoke.live.test.ts` to select exact live smoke targets instead of relying on a Vitest name filter.
+- Run the full `pnpm test` / `pnpm -r test` only when the change affects broad cross-provider behavior or when requested. If skipped, report the scoped commands that were run.
 
 ## Code Style
 
@@ -119,7 +123,7 @@ Tests require API keys for the various LLM providers stored as environment varia
 - OPENROUTER_API_KEY
 
 Tests can be found in:
-- `drivers/test/all-models.test.ts` - Tests for all models across providers
+- `drivers/test/model-smoke.live.test.ts` - Curated live smoke coverage for a small set of models across providers
 - `drivers/test/tools.test.ts` - Tests for LLM tool functionality
 - `drivers/test/embeddings.test.ts` - Tests for embedding functionality
 - `drivers/test/image-gen.test.ts` - Tests for image generation
