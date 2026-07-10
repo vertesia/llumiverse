@@ -102,34 +102,12 @@ function isOpenAIReasoningModel(model: string): boolean {
     );
 }
 
-function supportsOpenAIReasoningEffort(model: string): boolean {
-    const normalized = model.toLowerCase();
-    return isOpenAIReasoningModel(model) || normalized.includes('xai.grok-4.3');
-}
-
-function isGpt5ProModel(model: string): boolean {
-    const modelName = model.toLowerCase().split('/').pop() ?? model.toLowerCase();
-    return /^gpt-5(?:\.\d+)?-pro/.test(modelName);
-}
-
-function openAIReasoningEffort(
-    model: string,
-    effort: string | undefined,
-): 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | undefined {
-    if (!effort || !supportsOpenAIReasoningEffort(model)) {
+function openAIReasoning(effort: string | undefined): OpenAI.Responses.ResponseCreateParams['reasoning'] {
+    if (!effort) {
         return undefined;
     }
-    if (isGpt5ProModel(model)) {
-        return 'high';
-    }
-    return effort === 'none' ||
-        effort === 'minimal' ||
-        effort === 'low' ||
-        effort === 'medium' ||
-        effort === 'high' ||
-        effort === 'xhigh'
-        ? effort
-        : undefined;
+    // Forward provider-native values unchanged so the provider can return an authoritative validation error.
+    return { effort } as OpenAI.Responses.ResponseCreateParams['reasoning'];
 }
 
 //TODO: Do we need a list?, replace with if statements and modernize?
@@ -223,8 +201,7 @@ export abstract class OpenAIResponsesDriverBase extends AbstractDriver<
         }
 
         const isReasoningModel = isOpenAIReasoningModel(options.model);
-        const effort = openAIReasoningEffort(options.model, model_options?.effort ?? model_options?.reasoning_effort);
-        const reasoning = effort ? { effort } : undefined;
+        const reasoning = openAIReasoning(model_options?.effort ?? model_options?.reasoning_effort);
 
         const stream = await this.service.responses.create({
             stream: true,
@@ -278,8 +255,7 @@ export abstract class OpenAIResponsesDriverBase extends AbstractDriver<
         }
 
         const isReasoningModel = isOpenAIReasoningModel(options.model);
-        const effort = openAIReasoningEffort(options.model, model_options?.effort ?? model_options?.reasoning_effort);
-        const reasoning = effort ? { effort } : undefined;
+        const reasoning = openAIReasoning(model_options?.effort ?? model_options?.reasoning_effort);
 
         let completion: Completion;
 
