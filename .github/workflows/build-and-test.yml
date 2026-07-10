@@ -59,7 +59,7 @@ jobs:
           role-session-name: github-actions
           aws-region: us-east-1
 
-      - name: Typecheck and test
+      - name: Typecheck and functional tests
         env:
           TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
@@ -68,7 +68,18 @@ jobs:
           BEDROCK_REGION: us-east-1
           GOOGLE_PROJECT_ID: dengenlabs
           GOOGLE_REGION: us-central1
-        run: pnpm typecheck:test && npx vitest
+        run: pnpm typecheck:test && npx vitest --exclude '**/*.live.test.ts'
+
+      - name: Curated live provider smoke tests
+        env:
+          TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          BEDROCK_REGION: us-east-1
+          GOOGLE_PROJECT_ID: dengenlabs
+          GOOGLE_REGION: us-central1
+        run: npx vitest --exclude '**/!(*.live).test.ts'
 
   notify-repo-composableai:
     name: Notify vertesia/composableai of new commit

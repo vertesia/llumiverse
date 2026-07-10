@@ -24,6 +24,7 @@ import {
     xAIDriver,
 } from '../src/index.js';
 import { assertCompletionOk, assertStreamingCompletionOk } from './assertions.js';
+import { selectLiveTestDrivers } from './live-model-selection.js';
 import {
     testPrompt_color,
     testPrompt_describeImage,
@@ -189,6 +190,11 @@ if (process.env.XAI_API_KEY) {
     console.warn('xAI tests are skipped: XAI_API_KEY environment variable is not set');
 }
 
+const selectedDrivers = selectLiveTestDrivers(drivers, {
+    providers: process.env.LLUMIVERSE_LIVE_PROVIDERS,
+    models: process.env.LLUMIVERSE_LIVE_MODELS,
+});
+
 function getTestOptions(model: string): ExecutionOptions {
     if (model === 'o1-mini' || model === 'o3-mini') {
         return {
@@ -217,7 +223,7 @@ function getTestOptions(model: string): ExecutionOptions {
     };
 }
 
-describe.each(drivers)('Driver $name', ({ name, driver, models }) => {
+describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
     let fetchedModels: AIModel[];
 
     test(`${name}: list models`, { timeout: TIMEOUT, retry: 1 }, async () => {
