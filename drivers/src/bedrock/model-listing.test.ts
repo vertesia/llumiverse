@@ -53,4 +53,29 @@ describe('Bedrock Converse model discovery', () => {
             }
         }
     });
+
+    it('uses the AWS model name without repeating the publisher', async () => {
+        const driver = new BedrockDriver({ region: 'us-east-2' });
+        const service = {
+            listFoundationModels: vi.fn(async () => ({
+                modelSummaries: [
+                    {
+                        modelId: 'deepseek.v3.2',
+                        modelName: 'DeepSeek V3.2',
+                        providerName: 'DeepSeek',
+                        inferenceTypesSupported: ['ON_DEMAND'],
+                        inputModalities: ['TEXT'],
+                        outputModalities: ['TEXT'],
+                    },
+                ],
+            })),
+            listCustomModels: vi.fn(async () => ({ modelSummaries: [] })),
+            listInferenceProfiles: vi.fn(async () => ({ inferenceProfileSummaries: [] })),
+        };
+        vi.spyOn(driver, 'getService').mockReturnValue(service as unknown as Bedrock);
+
+        expect(await driver.listModels()).toEqual([
+            expect.objectContaining({ name: 'DeepSeek V3.2', owner: 'DeepSeek' }),
+        ]);
+    });
 });

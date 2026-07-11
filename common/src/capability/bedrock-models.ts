@@ -58,6 +58,7 @@ function getModalities(model: string): Pick<BedrockModelKnowledge, 'input' | 'ou
 
     const image =
         (model.includes('anthropic.claude') && !model.includes('claude-3-5-haiku')) ||
+        (model.includes('amazon.nova') && !model.includes('nova-micro')) ||
         model.includes('google.gemma') ||
         includesAny(model, ['meta.llama3-2-11b', 'meta.llama3-2-90b', 'meta.llama4']) ||
         includesAny(model, [
@@ -74,6 +75,7 @@ function getModalities(model: string): Pick<BedrockModelKnowledge, 'input' | 'ou
         model.startsWith('xai.grok-');
     const video =
         (model.includes('amazon.nova') && !model.includes('nova-micro')) ||
+        model.includes('twelvelabs.pegasus') ||
         isFamilyVersionGte(model, 'google.gemma-', 4);
     const audio = includesAny(model, ['nova-sonic', 'mistral.voxtral-']) || model.includes('google.gemma-4-e2b');
 
@@ -185,22 +187,35 @@ function getLimits(model: string): Pick<BedrockModelKnowledge, 'context_window' 
     return {};
 }
 
-function supportsRuntimeTools(model: string): boolean {
-    if (model.includes('anthropic.claude')) return true;
-    if (model.includes('ai21.jamba')) return model.includes('large');
-    if (model.includes('amazon.nova')) {
-        return includesAny(model, ['nova-2-lite', 'nova-lite', 'nova-micro', 'nova-premier']);
+function getRuntimeToolSupport(model: string): Pick<ModelCapabilities, 'tool_support' | 'tool_support_streaming'> {
+    let toolSupport = false;
+    let streaming = false;
+
+    if (model.includes('anthropic.claude')) {
+        toolSupport = true;
+        streaming = !model.includes('claude-3-5-haiku');
+    } else if (model.includes('ai21.jamba') && !model.includes('jamba-instruct')) {
+        toolSupport = true;
+        streaming = true;
+    } else if (model.includes('amazon.nova') && !includesAny(model, ['nova-canvas', 'nova-reel'])) {
+        toolSupport = true;
+        streaming = true;
+    } else if (model.includes('cohere.command-r')) {
+        toolSupport = true;
+        streaming = true;
+    } else if (model.includes('meta.llama3-1')) {
+        toolSupport = true;
+    } else if (includesAny(model, ['meta.llama3-2-11b', 'meta.llama3-2-90b'])) {
+        toolSupport = true;
+    } else if (includesAny(model, ['mistral.mistral-large', 'mistral.pixtral'])) {
+        toolSupport = true;
+    } else if (model.includes('twelvelabs.pegasus')) {
+        toolSupport = true;
+    } else if (model.includes('writer.palmyra')) {
+        toolSupport = true;
     }
-    if (model.includes('cohere.command-r')) return true;
-    if (model.includes('deepseek.')) return model.includes('deepseek.v3-v1');
-    if (model.includes('meta.llama')) {
-        return includesAny(model, ['llama3-1', 'llama3-2-90b', 'llama4-maverick']);
-    }
-    if (model.includes('mistral.')) {
-        return includesAny(model, ['mistral-large-2402', 'mistral-small-2402', 'pixtral-large-2502']);
-    }
-    if (model.includes('qwen.')) return includesAny(model, ['qwen3-235b', 'qwen3-coder-480b']);
-    return includesAny(model, ['writer.palmyra-x4', 'writer.palmyra-x5']);
+
+    return { tool_support: toolSupport, tool_support_streaming: toolSupport && streaming };
 }
 
 export function getBedrockModelKnowledge(model: string): BedrockModelKnowledge {
@@ -219,11 +234,11 @@ export function getBedrockModelCapabilities(model: string, endpoint: BedrockEndp
         return { input: {}, output: {} };
     }
     const knowledge = getBedrockModelKnowledge(modelId);
-    const toolSupport = endpoint === 'mantle' ? true : supportsRuntimeTools(modelId);
+    const toolSupport =
+        endpoint === 'mantle' ? { tool_support: true, tool_support_streaming: true } : getRuntimeToolSupport(modelId);
     return {
         input: knowledge.input,
         output: knowledge.output,
-        tool_support: toolSupport,
-        tool_support_streaming: toolSupport,
+        ...toolSupport,
     };
 }

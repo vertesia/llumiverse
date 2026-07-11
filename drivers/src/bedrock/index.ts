@@ -1729,7 +1729,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
             const model: AIModel = {
                 id: m.modelArn ?? m.modelId,
-                name: `${m.providerName} ${m.modelName}`,
+                name: m.modelName ?? m.modelId,
                 provider: this.provider,
                 owner: m.providerName,
                 can_stream: m.responseStreamingSupported ?? false,

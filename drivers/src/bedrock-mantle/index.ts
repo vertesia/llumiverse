@@ -58,11 +58,11 @@ class BedrockMantleResponsesDelegate extends OpenAIResponsesDriverBase {
     }
 }
 
-function modelDisplayName(model: string, owner: string): string {
+function modelDisplayName(model: string): string {
     const modelName = model.slice(model.indexOf('.') + 1);
-    if (owner === 'OpenAI') return `${owner} ${modelName.replace(/^gpt-/i, 'GPT-')}`;
-    if (owner === 'xAI') return `${owner} ${modelName.replace(/^grok-/i, 'Grok ')}`;
-    return `${owner} ${modelName}`;
+    if (model.startsWith('openai.')) return modelName.replace(/^gpt-/i, 'GPT-');
+    if (model.startsWith('xai.')) return modelName.replace(/^grok-/i, 'Grok ');
+    return modelName;
 }
 
 function isResponsesPrompt(prompt: BedrockMantlePrompt): prompt is BedrockMantleResponsesPrompt {
@@ -258,7 +258,7 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
                 return [
                     {
                         id: model.id,
-                        name: modelDisplayName(model.id, info.owner),
+                        name: modelDisplayName(model.id),
                         provider: this.provider,
                         owner: info.owner,
                         type: ModelType.Text,

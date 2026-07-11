@@ -206,19 +206,43 @@ describe('Bedrock Mantle metadata', () => {
         expect(getModelCapabilities('zai.glm-6', Providers.bedrock).output.text).toBe(true);
     });
 
+    it('normalizes Runtime profile modalities through the shared family knowledge', () => {
+        const nova = getModelCapabilities(
+            'arn:aws:bedrock:us-east-1:123:inference-profile/us.amazon.nova-pro-v1:0',
+            Providers.bedrock,
+        );
+        const pegasus = getModelCapabilities(
+            'arn:aws:bedrock:us-east-1:123:inference-profile/us.twelvelabs.pegasus-1-2-v1:0',
+            Providers.bedrock,
+        );
+
+        expect(nova.input).toMatchObject({ text: true, image: true, video: true });
+        expect(pegasus.input).toMatchObject({ text: true, video: true });
+    });
+
     it.each([
         ['ai21.jamba-1-5-large-v1:0', true],
-        ['ai21.jamba-1-5-mini-v1:0', false],
+        ['ai21.jamba-1-5-mini-v1:0', true],
         ['amazon.nova-premier-v1:0', true],
-        ['amazon.nova-pro-v1:0', false],
-        ['deepseek.v3-v1:0', true],
+        ['amazon.nova-pro-v1:0', true],
+        ['deepseek.v3-v1:0', false],
         ['deepseek.v3.2', false],
         ['meta.llama3-2-90b-instruct-v1:0', true],
         ['meta.llama4-scout-17b-instruct-v1:0', false],
-        ['qwen.qwen3-235b-a22b-2507-v1:0', true],
+        ['mistral.mistral-large-3-675b-instruct', true],
+        ['qwen.qwen3-235b-a22b-2507-v1:0', false],
         ['qwen.qwen3-32b-v1:0', false],
-    ] as const)('uses the Runtime model-card tool capability for %s', (model, expected) => {
+        ['writer.palmyra-vision-7b', true],
+    ] as const)('uses the Runtime execution tool capability for %s', (model, expected) => {
         expect(getModelCapabilities(model, Providers.bedrock).tool_support).toBe(expected);
+    });
+
+    it('distinguishes Runtime streaming tool support from blocking tool support', () => {
+        const llama = getModelCapabilities('meta.llama3-1-70b-instruct-v1:0', Providers.bedrock);
+        const nova = getModelCapabilities('amazon.nova-pro-v1:0', Providers.bedrock);
+
+        expect(llama).toMatchObject({ tool_support: true, tool_support_streaming: false });
+        expect(nova).toMatchObject({ tool_support: true, tool_support_streaming: true });
     });
 
     it.each([

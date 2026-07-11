@@ -177,6 +177,7 @@ describe('BedrockMantleDriver model listing', () => {
             expect.arrayContaining([
                 expect.objectContaining({
                     id: 'anthropic.claude-opus-4-7',
+                    name: 'claude-opus-4-7',
                     owner: 'Anthropic',
                     input_modalities: ['text', 'image'],
                 }),
@@ -192,6 +193,7 @@ describe('BedrockMantleDriver model listing', () => {
                 }),
                 expect.objectContaining({
                     id: 'openai.gpt-oss-120b',
+                    name: 'GPT-oss-120b',
                     owner: 'OpenAI',
                     input_modalities: ['text'],
                 }),
