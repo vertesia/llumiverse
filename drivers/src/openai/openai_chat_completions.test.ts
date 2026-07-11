@@ -5,6 +5,7 @@ import {
     type OpenAIChatCompletionsPayload,
     type OpenAIChatCompletionsPrompt,
     OpenAIChatCompletionsProtocol,
+    type OpenAIChatCompletionsProtocolOptions,
     type OpenAIChatCompletionsResponse,
     stripOpenAIChatCompletionsThinkBlocksFromCompletion,
 } from './openai_chat_completions.js';
@@ -34,8 +35,9 @@ class TestOpenAIChatCompletionsProtocol extends OpenAIChatCompletionsProtocol<un
     constructor(
         private readonly response?: OpenAIChatCompletionsResponse,
         private readonly stream?: ReadableStream,
+        protocolOptions: OpenAIChatCompletionsProtocolOptions = {},
     ) {
-        super({ modelName: 'test/model' });
+        super({ modelName: 'test/model', ...protocolOptions });
     }
 
     protected async postChatCompletion(
@@ -72,6 +74,120 @@ const options: ExecutionOptions = {
 };
 
 describe('OpenAIChatCompletionsProtocol', () => {
+    it('requires one tool call at the start of each user turn when configured', async () => {
+        const response: OpenAIChatCompletionsResponse = {
+            id: 'chatcmpl-1',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: 'ok' },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+        };
+        const model = new TestOpenAIChatCompletionsProtocol(response, undefined, {
+            toolChoicePolicy: 'required_on_new_user_turn',
+        });
+        const tools = [{ name: 'think', description: 'Think', input_schema: { type: 'object' as const } }];
+
+        await model.requestTextCompletion(undefined, prompt, { ...options, tools });
+        await model.requestTextCompletion(
+            undefined,
+            { _is_openai_chat_completions: true, messages: [] },
+            {
+                ...options,
+                tools,
+                conversation: {
+                    _is_openai_chat_completions: true,
+                    messages: [
+                        { role: 'user', content: 'Use a tool' },
+                        {
+                            role: 'assistant',
+                            content: null,
+                            tool_calls: [
+                                {
+                                    id: 'call_1',
+                                    type: 'function',
+                                    function: { name: 'think', arguments: '{}' },
+                                },
+                            ],
+                        },
+                        { role: 'tool', tool_call_id: 'call_1', content: 'done' },
+                    ],
+                },
+            },
+        );
+        await model.requestTextCompletion(undefined, prompt, {
+            ...options,
+            tools,
+            conversation: {
+                _is_openai_chat_completions: true,
+                messages: [
+                    { role: 'user', content: 'Earlier turn' },
+                    { role: 'assistant', content: 'Earlier answer' },
+                ],
+            },
+        });
+
+        expect(model.payloads.map((payload) => payload.tool_choice)).toEqual(['required', undefined, 'required']);
+    });
+
+    it('keeps the default tool choice implicit', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol({
+            id: 'chatcmpl-1',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: 'ok' },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+        });
+
+        await model.requestTextCompletion(undefined, prompt, {
+            ...options,
+            tools: [{ name: 'think', description: 'Think', input_schema: { type: 'object' } }],
+        });
+
+        expect(model.payloads[0].tool_choice).toBeUndefined();
+    });
+
+    it('applies the required-on-new-turn policy to streaming requests', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol(
+            undefined,
+            createSSEStream([
+                {
+                    type: 'event',
+                    data: JSON.stringify({
+                        id: 'chatcmpl-1',
+                        object: 'chat.completion.chunk',
+                        created: 1,
+                        model: 'test/model',
+                        choices: [{ index: 0, delta: { content: 'ok' }, finish_reason: 'stop' }],
+                    }),
+                },
+            ]),
+            { toolChoicePolicy: 'required_on_new_user_turn' },
+        );
+
+        await collectChunks(
+            await model.requestTextCompletionStream(undefined, prompt, {
+                ...options,
+                tools: [{ name: 'think', description: 'Think', input_schema: { type: 'object' } }],
+            }),
+        );
+
+        expect(model.payloads[0].tool_choice).toBe('required');
+    });
+
     it('reads text from non-streaming content arrays', async () => {
         const model = new TestOpenAIChatCompletionsProtocol({
             id: 'chatcmpl-1',

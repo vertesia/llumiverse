@@ -83,6 +83,7 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
     service: BedrockOpenAI;
     private readonly responsesDelegate: BedrockMantleResponsesDelegate;
     private readonly chatCompletionsProtocol: OpenAISDKChatCompletionsProtocol;
+    private readonly gemmaChatCompletionsProtocol: OpenAISDKChatCompletionsProtocol;
     private readonly alignedChatCompletionsProtocol: OpenAISDKChatCompletionsProtocol;
     private readonly anthropicService: AnthropicBedrockMantle;
     readonly provider = Providers.bedrock_mantle;
@@ -113,6 +114,12 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
             resultSchemaMode: 'response_format',
             toolSchemaMode: 'compatible',
         });
+        this.gemmaChatCompletionsProtocol = new OpenAISDKChatCompletionsProtocol({
+            resultSchemaMode: 'response_format',
+            toolSchemaMode: 'compatible',
+            toolChoicePolicy: 'required_on_new_user_turn',
+            toolResultMode: 'user_message',
+        });
         this.alignedChatCompletionsProtocol = new OpenAISDKChatCompletionsProtocol({
             resultSchemaMode: 'response_format',
             includeResultSchemaInPrompt: true,
@@ -137,6 +144,7 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
     }
 
     private getChatCompletionsProtocol(model: string): OpenAISDKChatCompletionsProtocol {
+        if (model.toLowerCase().includes('google.gemma-3-')) return this.gemmaChatCompletionsProtocol;
         return model.toLowerCase().includes('mistral.magistral-')
             ? this.alignedChatCompletionsProtocol
             : this.chatCompletionsProtocol;

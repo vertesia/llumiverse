@@ -211,6 +211,82 @@ describe('BedrockMantleDriver model listing', () => {
 });
 
 describe('BedrockMantleDriver protocol execution', () => {
+    it('requires a native Gemma tool call at the start of a user turn', async () => {
+        const driver = new BedrockMantleDriver({ region: 'us-west-2' });
+        let requestCount = 0;
+        const create = vi.fn(async () => {
+            requestCount++;
+            return {
+                id: 'chatcmpl-test',
+                object: 'chat.completion',
+                created: 1,
+                model: 'google.gemma-3-4b-it',
+                choices: [
+                    requestCount === 1
+                        ? {
+                              index: 0,
+                              message: {
+                                  role: 'assistant',
+                                  content: null,
+                                  tool_calls: [
+                                      {
+                                          id: 'call_1',
+                                          type: 'function',
+                                          function: { name: 'think', arguments: '{"thought":"test"}' },
+                                      },
+                                  ],
+                              },
+                              finish_reason: 'tool_calls',
+                          }
+                        : {
+                              index: 0,
+                              message: { role: 'assistant', content: 'Tool completed' },
+                              finish_reason: 'stop',
+                          },
+                ],
+            };
+        });
+        driver.service = { chat: { completions: { create } } } as unknown as BedrockOpenAI;
+        const prompt = await driver.createPrompt(promptSegments, { model: 'google.gemma-3-4b-it' });
+
+        const completion = await driver.requestTextCompletion(prompt, {
+            model: 'google.gemma-3-4b-it',
+            tools: [{ name: 'think', description: 'Think', input_schema: { type: 'object' } }],
+            model_options: { _option_id: 'bedrock-mantle-chat-completions' },
+        });
+
+        expect(create).toHaveBeenCalledWith(expect.objectContaining({ tool_choice: 'required' }));
+        expect(completion).toMatchObject({
+            finish_reason: 'tool_use',
+            tool_use: [{ id: 'call_1', tool_name: 'think', tool_input: { thought: 'test' } }],
+        });
+
+        const finalCompletion = await driver.requestTextCompletion(
+            {
+                _is_openai_chat_completions: true,
+                messages: [{ role: 'tool', tool_call_id: 'call_1', content: 'done' }],
+            },
+            {
+                model: 'google.gemma-3-4b-it',
+                tools: [{ name: 'think', description: 'Think', input_schema: { type: 'object' } }],
+                conversation: completion.conversation,
+                model_options: { _option_id: 'bedrock-mantle-chat-completions' },
+            },
+        );
+
+        expect(create).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+                messages: [
+                    { role: 'user', content: 'hello' },
+                    expect.objectContaining({ role: 'assistant', tool_calls: expect.any(Array) }),
+                    { role: 'user', content: '[Tool result for call_1]: done' },
+                ],
+            }),
+        );
+        expect(create.mock.calls[1][0].tool_choice).toBeUndefined();
+        expect(finalCompletion.result).toEqual([{ type: 'text', value: 'Tool completed' }]);
+    });
+
     it('executes Chat Completions through the shared OpenAI SDK protocol', async () => {
         const driver = new BedrockMantleDriver({ region: 'us-west-2' });
         const create = vi.fn(async () => ({

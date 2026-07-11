@@ -135,6 +135,10 @@ export interface OpenAIChatCompletionsProtocolOptions {
      * JSON Schema payload for tools while preserving the shared Chat Completions path.
      */
     toolSchemaMode?: 'openai_strict' | 'compatible';
+    /** Force a native tool call once at the beginning of each user turn. */
+    toolChoicePolicy?: 'auto' | 'required_on_new_user_turn';
+    /** Adapt native tool result messages for providers that require strict user/assistant alternation. */
+    toolResultMode?: 'native' | 'user_message';
 }
 
 type StreamChunk = string | Uint8Array;
@@ -461,10 +465,35 @@ export function convertToolsToOpenAIChatCompletionsFormat(
     });
 }
 
+function shouldRequireToolOnCurrentUserTurn(messages: OpenAIChatCompletionsMessage[]): boolean {
+    const lastUserIndex = messages.findLastIndex((message) => message.role === 'user');
+    if (lastUserIndex === -1) return false;
+
+    return !messages
+        .slice(lastUserIndex + 1)
+        .some(
+            (message) =>
+                message.role === 'tool' ||
+                (message.role === 'assistant' && message.tool_calls !== undefined && message.tool_calls.length > 0),
+        );
+}
+
 export function convertToOpenAIChatCompletionsMessages(
     messages: OpenAIChatCompletionsMessage[],
+    toolResultMode: OpenAIChatCompletionsProtocolOptions['toolResultMode'] = 'native',
 ): OpenAIChatCompletionsRequestMessage[] {
-    return messages.map((msg) => {
+    const converted: OpenAIChatCompletionsRequestMessage[] = [];
+    for (const msg of messages) {
+        if (toolResultMode === 'user_message' && msg.role === 'tool') {
+            const content = `[Tool result${msg.tool_call_id ? ` for ${msg.tool_call_id}` : ''}]: ${extractOpenAIChatCompletionsContentText(msg.content)}`;
+            const previous = converted.at(-1);
+            if (previous?.role === 'user') {
+                previous.content = `${extractOpenAIChatCompletionsContentText(previous.content)}\n${content}`;
+            } else {
+                converted.push({ role: 'user', content });
+            }
+            continue;
+        }
         const result: OpenAIChatCompletionsRequestMessage = {
             role: msg.role,
         };
@@ -513,8 +542,9 @@ export function convertToOpenAIChatCompletionsMessages(
             result.tool_call_id = msg.tool_call_id;
         }
 
-        return result;
-    });
+        converted.push(result);
+    }
+    return converted;
 }
 
 export function buildOpenAIChatCompletionsStreamingConversation(
@@ -868,7 +898,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         const modelOptions = options.model_options as TextFallbackOptions;
         const payload: OpenAIChatCompletionsPayload = {
             model: this.getModelName(options),
-            messages: convertToOpenAIChatCompletionsMessages(conversation.messages),
+            messages: convertToOpenAIChatCompletionsMessages(conversation.messages, this.options.toolResultMode),
             // Some OpenAI-compatible providers return empty/truncated completions unless a
             // documented or runtime-validated token budget is supplied. Caller options still win.
             max_tokens: modelOptions?.max_tokens ?? this.options.defaultMaxTokens,
@@ -886,6 +916,12 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         const toolsPayload = convertToolsToOpenAIChatCompletionsFormat(options.tools, this.options.toolSchemaMode);
         if (toolsPayload && toolsPayload.length > 0) {
             payload.tools = toolsPayload;
+            if (
+                this.options.toolChoicePolicy === 'required_on_new_user_turn' &&
+                shouldRequireToolOnCurrentUserTurn(conversation.messages)
+            ) {
+                payload.tool_choice = 'required';
+            }
         }
 
         if (options.result_schema && this.options.resultSchemaMode !== 'prompt') {
