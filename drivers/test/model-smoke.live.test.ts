@@ -284,7 +284,9 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
     });
 
     test(`${name}: WhatColor across every discovered text model`, {
-        timeout: TIMEOUT * 20,
+        // The test intentionally runs sequentially to avoid exhausting provider quotas.
+        // Allow the full current Bedrock catalog plus retries to complete locally.
+        timeout: TIMEOUT * 120,
         retry: 1,
         skip: !RUN_ALL_BEDROCK_TEXT_MODELS || !['bedrock', 'bedrock-mantle'].includes(name),
     }, async () => {
