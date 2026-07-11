@@ -18,12 +18,33 @@ import { isAmazonS3Hostname, parseS3UrlToUri } from './s3.js';
 
 export function supportsConverseOutputConfig(model: string): boolean {
     const normalized = model.toLowerCase();
-    return (
-        !normalized.includes('claude') &&
-        !normalized.includes('google.gemma-3-4b') &&
-        // Nova Micro supports Converse but rejects the outputConfig field.
-        !normalized.includes('amazon.nova-micro')
-    );
+
+    // These Converse families reject outputConfig and must keep prompt-guided schemas.
+    if (
+        normalized.includes('claude') ||
+        normalized.includes('ai21.') ||
+        normalized.includes('amazon.nova') ||
+        normalized.includes('cohere.') ||
+        normalized.includes('meta.llama') ||
+        normalized.includes('deepseek.r1') ||
+        normalized.includes('writer.palmyra-x')
+    ) {
+        return false;
+    }
+
+    // Older Mistral generations reject outputConfig. New model families inherit
+    // the native structured-output behavior verified on the current generation.
+    if (
+        normalized.includes('mistral.mistral-7b-') ||
+        normalized.includes('mistral.mixtral-') ||
+        normalized.includes('mistral.mistral-large-2402') ||
+        normalized.includes('mistral.mistral-small-2402') ||
+        normalized.includes('mistral.pixtral-large-2502')
+    ) {
+        return false;
+    }
+
+    return !normalized.includes('google.gemma-3-4b');
 }
 
 export function shouldIncludeSchemaInConversePrompt(model: string): boolean {
@@ -380,8 +401,8 @@ export async function formatConversePrompt(
         }
     }
 
-    // Claude behavior is intentionally unchanged. Gemma 3 4B rejects outputConfig, while MiniMax M2.5
-    // accepts it but needs this supplemental alignment to produce consistently parseable JSON.
+    // Families that reject outputConfig keep prompt-guided schemas. MiniMax M2.5 accepts native
+    // structured output but also needs this alignment to produce consistently parseable JSON.
     if (options.result_schema && shouldIncludeSchemaInConversePrompt(options.model)) {
         let schemaText: string;
         if (options.tools && options.tools.length > 0) {

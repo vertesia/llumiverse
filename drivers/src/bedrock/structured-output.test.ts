@@ -66,13 +66,23 @@ describe('Bedrock Converse structured output', () => {
         expect(payload.outputConfig).toBeUndefined();
     });
 
-    it('falls back to prompt alignment when Nova Micro rejects outputConfig', async () => {
+    it.each([
+        'us.amazon.nova-micro-v1:0',
+        'global.amazon.nova-2-lite-v1:0',
+        'ai21.jamba-1-5-large-v1:0',
+        'cohere.command-r-v1:0',
+        'us.meta.llama3-3-70b-instruct-v1:0',
+        'us.deepseek.r1-v1:0',
+        'mistral.mistral-large-2402-v1:0',
+        'mistral.pixtral-large-2502-v1:0',
+        'us.writer.palmyra-x5-v1:0',
+    ])('falls back to prompt alignment when %s rejects outputConfig', async (model) => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
         const prompt = await formatConversePrompt([{ role: PromptRole.user, content: 'hello' }], {
-            model: 'us.amazon.nova-micro-v1:0',
+            model,
             result_schema,
         });
-        const payload = driver.preparePayload(prompt, { model: 'us.amazon.nova-micro-v1:0', result_schema });
+        const payload = driver.preparePayload(prompt, { model, result_schema });
 
         expect(prompt.system).toEqual([{ text: expect.stringContaining('JSON Schema') }]);
         expect(payload.outputConfig).toBeUndefined();

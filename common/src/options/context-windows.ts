@@ -15,7 +15,7 @@ export function getMaxOutputTokens(model: string): number {
         if (isClaudeVersionGTE(model, 4, 7)) return 128_000;
         if (model.includes('opus-4-6')) return 128_000;
         if (model.includes('opus-4-5')) return 64_000;
-        if (model.includes('opus-')) return 32_768; // Opus 4.0, 4.1
+        if (model.includes('opus-')) return 32_000; // Opus 4.0, 4.1
         if (model.includes('-4-')) return 64_000; // Sonnet 4.x, Haiku 4.5
         if (model.includes('-3-7')) return 64_000; // 128K with beta header, default 64K
         if (model.includes('-3-5')) return 8_192;
