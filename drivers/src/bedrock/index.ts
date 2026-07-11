@@ -1696,10 +1696,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         // Helper function to check if model should be filtered out
         const shouldIncludeModel = (modelId?: string, providerName?: string): boolean => {
-            // TODO(pre-commit): Remove this temporary discovery bypass and restore the verified model filter.
-            const bypassModelFilter = true;
-            if (bypassModelFilter) return true;
-
             if (!modelId || !providerName) return false;
 
             // Normalize punctuation so publisher display names such as "Z.AI" match the stable "zai" key.

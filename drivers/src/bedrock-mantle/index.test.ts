@@ -154,7 +154,7 @@ describe('BedrockMantleDriver model listing', () => {
                 { id: 'zai.glm-5', owned_by: 'system' },
             ],
         }));
-        (driver as unknown as { modelsService: OpenAI }).modelsService = { models: { list } } as unknown as OpenAI;
+        driver.service = { models: { list } } as unknown as BedrockOpenAI;
 
         const models = await driver.listModels();
         const modelIds = models.map((model) => model.id);
@@ -172,8 +172,7 @@ describe('BedrockMantleDriver model listing', () => {
         ]) {
             expect(modelIds).toContain(expectedModel);
         }
-        // TODO(pre-commit): Restore the assertion that unverified models are filtered out.
-        expect(modelIds).toContain('unverified.model-1');
+        expect(modelIds).not.toContain('unverified.model-1');
         expect(models).toEqual(
             expect.arrayContaining([
                 expect.objectContaining({

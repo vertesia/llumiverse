@@ -81,7 +81,6 @@ export function isBedrockMantleModel(model: string): boolean {
 
 export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptions, BedrockMantlePrompt> {
     service: BedrockOpenAI;
-    private readonly modelsService: BedrockOpenAI;
     private readonly responsesDelegate: BedrockMantleResponsesDelegate;
     private readonly chatCompletionsProtocol: OpenAISDKChatCompletionsProtocol;
     private readonly alignedChatCompletionsProtocol: OpenAISDKChatCompletionsProtocol;
@@ -95,26 +94,21 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
             ? getTokenProvider({ region: opts.region, credentials: opts.credentials })
             : getTokenProvider({ region: opts.region });
         const driverFetch = this.getDriverFetch();
-        const openAIBaseURL = `https://bedrock-mantle.${opts.region}.api.aws/v1`;
+        const v1BaseURL = `https://bedrock-mantle.${opts.region}.api.aws/v1`;
 
         this.service = new BedrockOpenAI({
-            baseURL: openAIBaseURL,
+            baseURL: v1BaseURL,
             awsRegion: opts.region,
             bedrockTokenProvider,
             fetch: driverFetch,
         });
-        const legacyResponsesService = new BedrockOpenAI({
+        const responsesService = new BedrockOpenAI({
             baseURL: `https://bedrock-mantle.${opts.region}.api.aws/openai/v1`,
             awsRegion: opts.region,
             bedrockTokenProvider,
             fetch: driverFetch,
         });
-        this.modelsService = new BedrockOpenAI({
-            baseURL: openAIBaseURL,
-            bedrockTokenProvider,
-            fetch: driverFetch,
-        });
-        this.responsesDelegate = new BedrockMantleResponsesDelegate(opts, legacyResponsesService);
+        this.responsesDelegate = new BedrockMantleResponsesDelegate(opts, responsesService);
         this.chatCompletionsProtocol = new OpenAISDKChatCompletionsProtocol({
             resultSchemaMode: 'response_format',
             toolSchemaMode: 'compatible',
@@ -255,21 +249,18 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
     }
 
     async listModels(): Promise<AIModel[]> {
-        const models = (await this.modelsService.models.list()).data;
-        // TODO(pre-commit): Remove this temporary discovery bypass and restore protocol-based filtering.
-        const shouldIncludeModel = (_modelId: string): boolean => true;
+        const models = (await this.service.models.list()).data;
         return models
             .flatMap((model) => {
-                if (!shouldIncludeModel(model.id)) return [];
                 const info = getBedrockMantleModelInfo(model.id);
-                const owner = info?.owner ?? model.owned_by ?? model.id.split('.')[0];
+                if (!info) return [];
                 const modelCapability = getModelCapabilities(model.id, this.provider);
                 return [
                     {
                         id: model.id,
-                        name: modelDisplayName(model.id, owner),
+                        name: modelDisplayName(model.id, info.owner),
                         provider: this.provider,
-                        owner,
+                        owner: info.owner,
                         type: ModelType.Text,
                         can_stream: true,
                         input_modalities: modelModalitiesToArray(modelCapability.input),
@@ -283,7 +274,7 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
 
     async validateConnection(): Promise<boolean> {
         try {
-            await this.modelsService.models.list();
+            await this.service.models.list();
             return true;
         } catch {
             return false;

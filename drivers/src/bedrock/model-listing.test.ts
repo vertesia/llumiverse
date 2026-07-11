@@ -19,9 +19,8 @@ const DISCOVERY_CASES = [
     { id: 'qwen.qwen4-coder', discoverable: true },
     { id: 'writer.palmyra-x6-v1:0', discoverable: true },
     { id: 'zai.glm-6', discoverable: true },
-    // TODO(pre-commit): Restore these exclusions when the temporary discovery bypass is removed.
-    { id: 'amazon.titan-image-generator-v3', discoverable: true },
-    { id: 'unverified.model-1', discoverable: true },
+    { id: 'amazon.titan-image-generator-v3', discoverable: false },
+    { id: 'unverified.model-1', discoverable: false },
 ] as const;
 
 describe('Bedrock Converse model discovery', () => {
