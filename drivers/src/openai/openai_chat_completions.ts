@@ -127,6 +127,8 @@ export interface OpenAIChatCompletionsProtocolOptions {
      * Chat Completions only and response_format support is not reliable across hosted models.
      */
     resultSchemaMode?: 'response_format' | 'prompt';
+    /** Supplement native structured output with prompt alignment for providers with unreliable enforcement. */
+    includeResultSchemaInPrompt?: boolean;
     /**
      * OpenAI supports strict function schemas. Some OpenAI-compatible providers reject
      * or mis-handle those OpenAI-specific fields, so adapters can request a looser
@@ -624,10 +626,16 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             messages.push({ role: 'system', content: systemContent.trim() });
         }
 
-        if (this.options.resultSchemaMode === 'prompt' && _options.result_schema) {
+        const resultSchemaInstruction = _options.result_schema
+            ? `IMPORTANT: only answer using JSON, and respecting the schema included below, between the <response_schema> tags. <response_schema>${JSON.stringify(_options.result_schema)}</response_schema>`
+            : undefined;
+        if (
+            (this.options.resultSchemaMode === 'prompt' || this.options.includeResultSchemaInPrompt) &&
+            resultSchemaInstruction
+        ) {
             messages.push({
                 role: 'system',
-                content: `IMPORTANT: only answer using JSON, and respecting the schema included below, between the <response_schema> tags. <response_schema>${JSON.stringify(_options.result_schema)}</response_schema>`,
+                content: resultSchemaInstruction,
             });
         }
 
@@ -912,7 +920,7 @@ export interface OpenAIChatCompletionsDriverOptions extends DriverOptions {
     resultSchemaMode?: OpenAIChatCompletionsProtocolOptions['resultSchemaMode'];
 }
 
-type OpenAIChatCompletionsDriver = AbstractDriver<OpenAIChatCompletionsDriverOptions, OpenAIChatCompletionsPrompt> & {
+export type OpenAIChatCompletionsDriver = {
     service: OpenAI;
 };
 
@@ -931,7 +939,7 @@ function sdkStreamToSSEStream(stream: AsyncIterable<OpenAIChatCompletionsStreamR
     });
 }
 
-class OpenAISDKChatCompletionsProtocol extends OpenAIChatCompletionsProtocol<OpenAIChatCompletionsDriver> {
+export class OpenAISDKChatCompletionsProtocol extends OpenAIChatCompletionsProtocol<OpenAIChatCompletionsDriver> {
     protected async postChatCompletion(
         driver: OpenAIChatCompletionsDriver,
         payload: OpenAIChatCompletionsPayload,

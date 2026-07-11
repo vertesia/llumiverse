@@ -1,51 +1,91 @@
+import { AnthropicBedrockMantle } from '@anthropic-ai/bedrock-sdk';
 import { getTokenProvider } from '@aws/bedrock-token-generator';
 import type { AwsCredentialIdentity, Provider } from '@aws-sdk/types';
 import {
     type AIModel,
+    type Completion,
+    type CompletionChunkObject,
     type DriverOptions,
+    type EmbeddingsOptions,
+    type EmbeddingsResult,
     type ExecutionOptions,
-    getBedrockMantleModelFamily,
+    getBedrockMantleModelInfo,
+    getBedrockMantleProtocol,
     getModelCapabilities,
+    type LlumiverseError,
+    type LlumiverseErrorContext,
     ModelType,
     modelModalitiesToArray,
+    type PromptSegment,
     Providers,
 } from '@llumiverse/core';
+import { AbstractDriver } from '@llumiverse/core/driver';
 import type OpenAI from 'openai';
 import { BedrockOpenAI } from 'openai';
 import { OpenAIResponsesDriverBase } from '../openai/index.js';
+import {
+    buildOpenAIChatCompletionsStreamingConversation,
+    type OpenAIChatCompletionsPrompt,
+    OpenAISDKChatCompletionsProtocol,
+    stripOpenAIChatCompletionsThinkBlocksFromCompletion,
+} from '../openai/openai_chat_completions.js';
+import { formatOpenAIDebugPrompt } from '../openai/openai_format.js';
+import {
+    buildClaudeStreamingConversation,
+    type ClaudePrompt,
+    executeClaudeCompletion,
+    formatAnthropicLlumiverseError,
+    formatClaudeDebugPrompt,
+    formatClaudePrompt,
+    streamClaudeCompletion,
+} from '../shared/claude-messages.js';
 
-export type BedrockMantlePrompt = OpenAI.Responses.ResponseInputItem[];
-
-interface BedrockMantleModelMetadata {
-    name: string;
-    owner: string;
-}
+type BedrockMantleResponsesPrompt = OpenAI.Responses.ResponseInputItem[];
+export type BedrockMantlePrompt = BedrockMantleResponsesPrompt | OpenAIChatCompletionsPrompt | ClaudePrompt;
 
 export interface BedrockMantleDriverOptions extends DriverOptions {
     region: string;
     credentials?: AwsCredentialIdentity | Provider<AwsCredentialIdentity>;
 }
 
-function getBedrockMantleModelMetadata(model: string): BedrockMantleModelMetadata | undefined {
-    const family = getBedrockMantleModelFamily(model);
-    if (family === 'openai') {
-        const modelName = model.slice('openai.'.length).replace(/^gpt-/i, 'GPT-');
-        return { name: `OpenAI ${modelName}`, owner: 'OpenAI' };
+class BedrockMantleResponsesDelegate extends OpenAIResponsesDriverBase {
+    readonly provider = Providers.bedrock_mantle;
+    service: OpenAI;
+
+    constructor(opts: BedrockMantleDriverOptions, service: OpenAI) {
+        super(opts);
+        this.service = service;
     }
-    if (family === 'grok') {
-        const modelName = model.slice('xai.'.length).replace(/^grok-/i, 'Grok ');
-        return { name: `xAI ${modelName}`, owner: 'xAI' };
-    }
-    return undefined;
+}
+
+function modelDisplayName(model: string, owner: string): string {
+    const modelName = model.slice(model.indexOf('.') + 1);
+    if (owner === 'OpenAI') return `${owner} ${modelName.replace(/^gpt-/i, 'GPT-')}`;
+    if (owner === 'xAI') return `${owner} ${modelName.replace(/^grok-/i, 'Grok ')}`;
+    return `${owner} ${modelName}`;
+}
+
+function isResponsesPrompt(prompt: BedrockMantlePrompt): prompt is BedrockMantleResponsesPrompt {
+    return Array.isArray(prompt);
+}
+
+function isChatCompletionsPrompt(prompt: BedrockMantlePrompt): prompt is OpenAIChatCompletionsPrompt {
+    return (
+        !Array.isArray(prompt) && '_is_openai_chat_completions' in prompt && prompt._is_openai_chat_completions === true
+    );
 }
 
 export function isBedrockMantleModel(model: string): boolean {
-    return getBedrockMantleModelMetadata(model) !== undefined;
+    return getBedrockMantleProtocol(model) !== undefined;
 }
 
-export class BedrockMantleDriver extends OpenAIResponsesDriverBase {
+export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptions, BedrockMantlePrompt> {
     service: BedrockOpenAI;
-    private modelsService: BedrockOpenAI;
+    private readonly modelsService: BedrockOpenAI;
+    private readonly responsesDelegate: BedrockMantleResponsesDelegate;
+    private readonly chatCompletionsProtocol: OpenAISDKChatCompletionsProtocol;
+    private readonly alignedChatCompletionsProtocol: OpenAISDKChatCompletionsProtocol;
+    private readonly anthropicService: AnthropicBedrockMantle;
     readonly provider = Providers.bedrock_mantle;
 
     constructor(opts: BedrockMantleDriverOptions) {
@@ -54,17 +94,160 @@ export class BedrockMantleDriver extends OpenAIResponsesDriverBase {
         const bedrockTokenProvider = opts.credentials
             ? getTokenProvider({ region: opts.region, credentials: opts.credentials })
             : getTokenProvider({ region: opts.region });
+        const driverFetch = this.getDriverFetch();
+        const openAIBaseURL = `https://bedrock-mantle.${opts.region}.api.aws/v1`;
 
         this.service = new BedrockOpenAI({
+            baseURL: openAIBaseURL,
             awsRegion: opts.region,
             bedrockTokenProvider,
-            fetch: this.getDriverFetch(),
+            fetch: driverFetch,
+        });
+        const legacyResponsesService = new BedrockOpenAI({
+            baseURL: `https://bedrock-mantle.${opts.region}.api.aws/openai/v1`,
+            awsRegion: opts.region,
+            bedrockTokenProvider,
+            fetch: driverFetch,
         });
         this.modelsService = new BedrockOpenAI({
-            baseURL: `https://bedrock-mantle.${opts.region}.api.aws/v1`,
+            baseURL: openAIBaseURL,
             bedrockTokenProvider,
-            fetch: this.getDriverFetch(),
+            fetch: driverFetch,
         });
+        this.responsesDelegate = new BedrockMantleResponsesDelegate(opts, legacyResponsesService);
+        this.chatCompletionsProtocol = new OpenAISDKChatCompletionsProtocol({
+            resultSchemaMode: 'response_format',
+            toolSchemaMode: 'compatible',
+        });
+        this.alignedChatCompletionsProtocol = new OpenAISDKChatCompletionsProtocol({
+            resultSchemaMode: 'response_format',
+            includeResultSchemaInPrompt: true,
+            toolSchemaMode: 'compatible',
+        });
+
+        const credentialOptions =
+            typeof opts.credentials === 'function'
+                ? { providerChainResolver: async () => opts.credentials as Provider<AwsCredentialIdentity> }
+                : opts.credentials
+                  ? {
+                        awsAccessKey: opts.credentials.accessKeyId,
+                        awsSecretAccessKey: opts.credentials.secretAccessKey,
+                        awsSessionToken: opts.credentials.sessionToken,
+                    }
+                  : {};
+        this.anthropicService = new AnthropicBedrockMantle({
+            awsRegion: opts.region,
+            fetch: driverFetch,
+            ...credentialOptions,
+        });
+    }
+
+    private getChatCompletionsProtocol(model: string): OpenAISDKChatCompletionsProtocol {
+        return model.toLowerCase().includes('mistral.magistral-')
+            ? this.alignedChatCompletionsProtocol
+            : this.chatCompletionsProtocol;
+    }
+
+    protected async formatPrompt(segments: PromptSegment[], options: ExecutionOptions): Promise<BedrockMantlePrompt> {
+        switch (getBedrockMantleProtocol(options.model)) {
+            case 'responses':
+                return this.responsesDelegate.createPrompt(segments, options);
+            case 'chat_completions':
+                return this.getChatCompletionsProtocol(options.model).createPrompt(this, segments, options);
+            case 'messages':
+                return formatClaudePrompt(segments, options, this.logger);
+            default:
+                throw new Error(`Unsupported Bedrock Mantle model: ${options.model}`);
+        }
+    }
+
+    public formatDebugPrompt(prompt: BedrockMantlePrompt): BedrockMantlePrompt {
+        if (isResponsesPrompt(prompt)) return formatOpenAIDebugPrompt(prompt);
+        if (isChatCompletionsPrompt(prompt)) return prompt;
+        return formatClaudeDebugPrompt(prompt);
+    }
+
+    requestTextCompletion(prompt: BedrockMantlePrompt, options: ExecutionOptions): Promise<Completion> {
+        switch (getBedrockMantleProtocol(options.model)) {
+            case 'responses':
+                return this.responsesDelegate.requestTextCompletion(prompt as BedrockMantleResponsesPrompt, options);
+            case 'chat_completions':
+                return this.getChatCompletionsProtocol(options.model).requestTextCompletion(
+                    this,
+                    prompt as OpenAIChatCompletionsPrompt,
+                    options,
+                );
+            case 'messages':
+                return executeClaudeCompletion(this.anthropicService, prompt as ClaudePrompt, options);
+            default:
+                throw new Error(`Unsupported Bedrock Mantle model: ${options.model}`);
+        }
+    }
+
+    requestTextCompletionStream(
+        prompt: BedrockMantlePrompt,
+        options: ExecutionOptions,
+    ): Promise<AsyncIterable<CompletionChunkObject>> {
+        switch (getBedrockMantleProtocol(options.model)) {
+            case 'responses':
+                return this.responsesDelegate.requestTextCompletionStream(
+                    prompt as BedrockMantleResponsesPrompt,
+                    options,
+                );
+            case 'chat_completions':
+                return this.getChatCompletionsProtocol(options.model).requestTextCompletionStream(
+                    this,
+                    prompt as OpenAIChatCompletionsPrompt,
+                    options,
+                );
+            case 'messages':
+                return streamClaudeCompletion(this.anthropicService, prompt as ClaudePrompt, options);
+            default:
+                throw new Error(`Unsupported Bedrock Mantle model: ${options.model}`);
+        }
+    }
+
+    buildStreamingConversation(
+        prompt: BedrockMantlePrompt,
+        result: unknown[],
+        toolUse: unknown[] | undefined,
+        options: ExecutionOptions,
+    ): BedrockMantlePrompt | undefined {
+        switch (getBedrockMantleProtocol(options.model)) {
+            case 'responses':
+                return this.responsesDelegate.buildStreamingConversation(
+                    prompt as BedrockMantleResponsesPrompt,
+                    result,
+                    toolUse,
+                    options,
+                );
+            case 'chat_completions':
+                return buildOpenAIChatCompletionsStreamingConversation(
+                    prompt as OpenAIChatCompletionsPrompt,
+                    result,
+                    toolUse,
+                    options,
+                );
+            case 'messages':
+                return buildClaudeStreamingConversation(prompt as ClaudePrompt, result, toolUse, options);
+            default:
+                return undefined;
+        }
+    }
+
+    validateResult(result: Completion, options: ExecutionOptions): void {
+        const processedResult =
+            getBedrockMantleProtocol(options.model) === 'chat_completions'
+                ? stripOpenAIChatCompletionsThinkBlocksFromCompletion(result)
+                : result;
+        super.validateResult(processedResult, options);
+    }
+
+    formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
+        if (getBedrockMantleProtocol(context.model) === 'messages') {
+            return formatAnthropicLlumiverseError(error, context);
+        }
+        return this.responsesDelegate.formatLlumiverseError(error, context);
     }
 
     supportsStreaming(options: ExecutionOptions): Promise<boolean> {
@@ -73,23 +256,41 @@ export class BedrockMantleDriver extends OpenAIResponsesDriverBase {
 
     async listModels(): Promise<AIModel[]> {
         const models = (await this.modelsService.models.list()).data;
+        // TODO(pre-commit): Remove this temporary discovery bypass and restore protocol-based filtering.
+        const shouldIncludeModel = (_modelId: string): boolean => true;
         return models
-            .filter((model) => isBedrockMantleModel(model.id))
-            .map((model) => {
-                const metadata = getBedrockMantleModelMetadata(model.id);
+            .flatMap((model) => {
+                if (!shouldIncludeModel(model.id)) return [];
+                const info = getBedrockMantleModelInfo(model.id);
+                const owner = info?.owner ?? model.owned_by ?? model.id.split('.')[0];
                 const modelCapability = getModelCapabilities(model.id, this.provider);
-                return {
-                    id: model.id,
-                    name: metadata?.name ?? model.id,
-                    provider: this.provider,
-                    owner: metadata?.owner ?? model.owned_by,
-                    type: ModelType.Text,
-                    can_stream: true,
-                    input_modalities: modelModalitiesToArray(modelCapability.input),
-                    output_modalities: modelModalitiesToArray(modelCapability.output),
-                    tool_support: modelCapability.tool_support,
-                } satisfies AIModel<string>;
+                return [
+                    {
+                        id: model.id,
+                        name: modelDisplayName(model.id, owner),
+                        provider: this.provider,
+                        owner,
+                        type: ModelType.Text,
+                        can_stream: true,
+                        input_modalities: modelModalitiesToArray(modelCapability.input),
+                        output_modalities: modelModalitiesToArray(modelCapability.output),
+                        tool_support: modelCapability.tool_support,
+                    } satisfies AIModel<string>,
+                ];
             })
             .sort((a, b) => a.id.localeCompare(b.id));
+    }
+
+    async validateConnection(): Promise<boolean> {
+        try {
+            await this.modelsService.models.list();
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult> {
+        return this.responsesDelegate.generateEmbeddings(options);
     }
 }

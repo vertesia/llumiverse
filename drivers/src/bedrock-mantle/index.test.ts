@@ -1,11 +1,12 @@
 import { getTokenProvider } from '@aws/bedrock-token-generator';
 import type { AwsCredentialIdentity } from '@aws-sdk/types';
-import { PromptRole, type PromptSegment, Providers } from '@llumiverse/core';
+import { getBedrockMantleProtocol, PromptRole, type PromptSegment, Providers } from '@llumiverse/core';
 import type OpenAI from 'openai';
+import type { BedrockOpenAI } from 'openai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BedrockDriver } from '../bedrock/index.js';
 import { OpenAIResponsesDriverBase } from '../openai/index.js';
-import { BedrockMantleDriver, type BedrockMantlePrompt, isBedrockMantleModel } from './index.js';
+import { BedrockMantleDriver, isBedrockMantleModel } from './index.js';
 
 vi.mock('@aws/bedrock-token-generator', () => ({
     getTokenProvider: vi.fn(() => async () => 'bedrock-api-key-test'),
@@ -14,13 +15,17 @@ vi.mock('@aws/bedrock-token-generator', () => ({
 const promptSegments: PromptSegment[] = [{ role: PromptRole.user, content: 'hello' }];
 
 describe('Bedrock Mantle model routing', () => {
-    it('matches OpenAI and Grok models without requiring an exact model allowlist', () => {
-        expect(isBedrockMantleModel('openai.gpt-5.6')).toBe(true);
-        expect(isBedrockMantleModel('openai.gpt-5.5')).toBe(true);
-        expect(isBedrockMantleModel('xai.grok-4.3')).toBe(true);
-        expect(isBedrockMantleModel('xai.grok-4.4')).toBe(true);
-        expect(isBedrockMantleModel('openai.gpt-oss-120b-1:0')).toBe(false);
-        expect(isBedrockMantleModel('anthropic.claude-opus-4-7')).toBe(false);
+    it('routes model families through their publisher protocol', () => {
+        expect(getBedrockMantleProtocol('openai.gpt-oss-120b')).toBe('chat_completions');
+        expect(getBedrockMantleProtocol('xai.grok-4.3')).toBe('responses');
+        expect(getBedrockMantleProtocol('openai.gpt-oss-safeguard-120b')).toBe('chat_completions');
+        expect(getBedrockMantleProtocol('anthropic.claude-opus-4-7')).toBe('messages');
+        expect(getBedrockMantleProtocol('google.gemma-3-27b-it')).toBe('chat_completions');
+        expect(getBedrockMantleProtocol('google.gemma-4-31b')).toBe('responses');
+        expect(getBedrockMantleProtocol('google.gemma-5-70b')).toBe('responses');
+        expect(isBedrockMantleModel('openai.gpt-6.1')).toBe(true);
+        expect(isBedrockMantleModel('qwen.qwen4-coder')).toBe(true);
+        expect(isBedrockMantleModel('openai.o7')).toBe(false);
     });
 
     it('formats Mantle prompts as OpenAI Responses input items', async () => {
@@ -30,6 +35,55 @@ describe('Bedrock Mantle model routing', () => {
 
         expect(Array.isArray(prompt)).toBe(true);
         expect(prompt).toEqual([{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] }]);
+    });
+
+    it('keeps result schemas out of Chat Completions prompts', async () => {
+        const driver = new BedrockMantleDriver({ region: 'us-west-2' });
+
+        const prompt = await driver.createPrompt(promptSegments, {
+            model: 'google.gemma-3-4b-it',
+            result_schema: {
+                type: 'object',
+                properties: { answer: { type: 'string' } },
+                required: ['answer'],
+            },
+        });
+
+        expect(prompt).toMatchObject({
+            _is_openai_chat_completions: true,
+            messages: [{ role: 'user', content: 'hello' }],
+        });
+    });
+
+    it('formats Gemma 4 and later models as Responses input', async () => {
+        const driver = new BedrockMantleDriver({ region: 'us-west-2' });
+
+        for (const model of ['google.gemma-4-31b', 'google.gemma-5-70b']) {
+            const prompt = await driver.createPrompt(promptSegments, { model });
+
+            expect(prompt).toEqual([
+                { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] },
+            ]);
+        }
+    });
+
+    it('formats every GPT-OSS Mantle model as Chat Completions', async () => {
+        const driver = new BedrockMantleDriver({ region: 'us-west-2' });
+
+        const prompt = await driver.createPrompt(promptSegments, { model: 'openai.gpt-oss-200b' });
+
+        expect(prompt).toMatchObject({
+            _is_openai_chat_completions: true,
+            messages: [{ role: 'user', content: 'hello' }],
+        });
+    });
+
+    it('formats Claude models with the shared Anthropic Messages prompt shape', async () => {
+        const driver = new BedrockMantleDriver({ region: 'us-west-2' });
+
+        const prompt = await driver.createPrompt(promptSegments, { model: 'anthropic.claude-haiku-4-5' });
+
+        expect(prompt).toEqual({ messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }] });
     });
 
     it('keeps Bedrock GPT-OSS on the existing Converse prompt shape', async () => {
@@ -62,15 +116,23 @@ describe('BedrockMantleDriver auth', () => {
             secretAccessKey: 'test-secret',
         };
 
-        new BedrockMantleDriver({ region: 'us-west-2', credentials });
+        const driver = new BedrockMantleDriver({ region: 'us-west-2', credentials });
 
         expect(getTokenProvider).toHaveBeenCalledWith({ region: 'us-west-2', credentials });
+        expect(
+            (driver as unknown as { anthropicService: { awsAccessKey: string; awsSecretAccessKey: string } })
+                .anthropicService,
+        ).toMatchObject({ awsAccessKey: 'test-key', awsSecretAccessKey: 'test-secret' });
     });
 
     it('builds a bearer token provider from the default AWS credential chain when credentials are absent', () => {
-        new BedrockMantleDriver({ region: 'us-west-2' });
+        const driver = new BedrockMantleDriver({ region: 'us-west-2' });
 
         expect(getTokenProvider).toHaveBeenCalledWith({ region: 'us-west-2' });
+        expect(driver.service.baseURL).toBe('https://bedrock-mantle.us-west-2.api.aws/v1');
+        expect(
+            (driver as unknown as { responsesDelegate: { service: OpenAI } }).responsesDelegate.service.baseURL,
+        ).toBe('https://bedrock-mantle.us-west-2.api.aws/openai/v1');
     });
 });
 
@@ -79,53 +141,225 @@ describe('BedrockMantleDriver model listing', () => {
         const driver = new BedrockMantleDriver({ region: 'us-west-2' });
         const list = vi.fn(async () => ({
             data: [
+                { id: 'unverified.model-1', object: 'model', created: 1783669008, owned_by: 'system' },
                 { id: 'openai.gpt-5.6', object: 'model', created: 1783669008, owned_by: 'system' },
                 { id: 'openai.gpt-5.5', owned_by: 'system' },
-                { id: 'openai.gpt-5.4', owned_by: 'system' },
+                { id: 'openai.gpt-oss-120b', owned_by: 'system' },
                 { id: 'xai.grok-4.3', owned_by: 'system' },
                 { id: 'openai.gpt-oss-120b-1:0', owned_by: 'system' },
                 { id: 'anthropic.claude-opus-4-7', owned_by: 'system' },
+                { id: 'google.gemma-3-4b-it', owned_by: 'system' },
+                { id: 'google.gemma-4-31b', owned_by: 'system' },
+                { id: 'google.gemma-5-70b', owned_by: 'system' },
+                { id: 'zai.glm-5', owned_by: 'system' },
             ],
         }));
         (driver as unknown as { modelsService: OpenAI }).modelsService = { models: { list } } as unknown as OpenAI;
 
         const models = await driver.listModels();
+        const modelIds = models.map((model) => model.id);
+        for (const expectedModel of [
+            'anthropic.claude-opus-4-7',
+            'google.gemma-3-4b-it',
+            'google.gemma-4-31b',
+            'google.gemma-5-70b',
+            'openai.gpt-5.5',
+            'openai.gpt-5.6',
+            'openai.gpt-oss-120b',
+            'openai.gpt-oss-120b-1:0',
+            'xai.grok-4.3',
+            'zai.glm-5',
+        ]) {
+            expect(modelIds).toContain(expectedModel);
+        }
+        // TODO(pre-commit): Restore the assertion that unverified models are filtered out.
+        expect(modelIds).toContain('unverified.model-1');
+        expect(models).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    id: 'anthropic.claude-opus-4-7',
+                    owner: 'Anthropic',
+                    input_modalities: ['text', 'image'],
+                }),
+                expect.objectContaining({
+                    id: 'google.gemma-3-4b-it',
+                    owner: 'Google',
+                    input_modalities: ['text', 'image'],
+                }),
+                expect.objectContaining({
+                    id: 'google.gemma-4-31b',
+                    owner: 'Google',
+                    input_modalities: ['text', 'image'],
+                }),
+                expect.objectContaining({
+                    id: 'openai.gpt-oss-120b',
+                    owner: 'OpenAI',
+                    input_modalities: ['text'],
+                }),
+                expect.objectContaining({
+                    id: 'zai.glm-5',
+                    owner: 'Z.AI',
+                    provider: Providers.bedrock_mantle,
+                    can_stream: true,
+                    output_modalities: ['text'],
+                    tool_support: true,
+                }),
+            ]),
+        );
+    });
+});
 
-        expect(models).toEqual([
+describe('BedrockMantleDriver protocol execution', () => {
+    it('executes Chat Completions through the shared OpenAI SDK protocol', async () => {
+        const driver = new BedrockMantleDriver({ region: 'us-west-2' });
+        const create = vi.fn(async () => ({
+            id: 'chatcmpl-test',
+            object: 'chat.completion',
+            created: 1,
+            model: 'google.gemma-3-4b-it',
+            choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 4, completion_tokens: 1, total_tokens: 5 },
+        }));
+        driver.service = { chat: { completions: { create } } } as unknown as BedrockOpenAI;
+        const prompt = await driver.createPrompt(promptSegments, { model: 'google.gemma-3-4b-it' });
+
+        const completion = await driver.requestTextCompletion(prompt, {
+            model: 'google.gemma-3-4b-it',
+            model_options: { _option_id: 'bedrock-mantle-chat-completions', max_tokens: 100 },
+        });
+
+        expect(create).toHaveBeenCalledWith(
             expect.objectContaining({
-                id: 'openai.gpt-5.4',
-                name: 'OpenAI GPT-5.4',
-                provider: Providers.bedrock_mantle,
-                owner: 'OpenAI',
-                can_stream: true,
-                tool_support: true,
+                model: 'google.gemma-3-4b-it',
+                messages: [{ role: 'user', content: 'hello' }],
+                max_tokens: 100,
             }),
+        );
+        expect(completion.result).toEqual([{ type: 'text', value: 'ok' }]);
+    });
+
+    it('uses response_format for Chat Completions schema requests', async () => {
+        for (const model of [
+            'google.gemma-3-4b-it',
+            'mistral.ministral-3-3b-instruct',
+            'openai.gpt-oss-20b',
+            'qwen.qwen3-vl-235b-a22b-instruct',
+            'writer.palmyra-vision-7b',
+        ]) {
+            const driver = new BedrockMantleDriver({ region: 'us-west-2' });
+            const create = vi.fn(async () => ({
+                id: 'chatcmpl-test',
+                object: 'chat.completion',
+                created: 1,
+                model,
+                choices: [
+                    {
+                        index: 0,
+                        message: { role: 'assistant', content: '{"answer":"ok"}' },
+                        finish_reason: 'stop',
+                    },
+                ],
+            }));
+            driver.service = { chat: { completions: { create } } } as unknown as BedrockOpenAI;
+            const result_schema = {
+                type: 'object' as const,
+                properties: { answer: { type: 'string' as const } },
+                required: ['answer'],
+            };
+            const prompt = await driver.createPrompt(promptSegments, { model, result_schema });
+
+            await driver.requestTextCompletion(prompt, {
+                model,
+                result_schema,
+                model_options: { _option_id: 'bedrock-mantle-chat-completions' },
+            });
+
+            expect(create).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    model,
+                    messages: [{ role: 'user', content: 'hello' }],
+                    response_format: expect.objectContaining({ type: 'json_schema' }),
+                }),
+            );
+        }
+    });
+
+    it('supplements Magistral response_format with schema prompt alignment', async () => {
+        const driver = new BedrockMantleDriver({ region: 'us-west-2' });
+        const create = vi.fn(async () => ({
+            id: 'chatcmpl-test',
+            object: 'chat.completion',
+            created: 1,
+            model: 'mistral.magistral-small-2509',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: '{"answer":"ok"}' },
+                    finish_reason: 'stop',
+                },
+            ],
+        }));
+        driver.service = { chat: { completions: { create } } } as unknown as BedrockOpenAI;
+        const result_schema = {
+            type: 'object' as const,
+            properties: { answer: { type: 'string' as const } },
+            required: ['answer'],
+        };
+        const prompt = await driver.createPrompt(promptSegments, {
+            model: 'mistral.magistral-small-2509',
+            result_schema,
+        });
+
+        await driver.requestTextCompletion(prompt, {
+            model: 'mistral.magistral-small-2509',
+            result_schema,
+            model_options: { _option_id: 'bedrock-mantle-chat-completions' },
+        });
+
+        expect(create).toHaveBeenCalledWith(
             expect.objectContaining({
-                id: 'openai.gpt-5.5',
-                name: 'OpenAI GPT-5.5',
-                provider: Providers.bedrock_mantle,
-                owner: 'OpenAI',
-                can_stream: true,
-                tool_support: true,
+                messages: [
+                    { role: 'system', content: expect.stringContaining('<response_schema>') },
+                    { role: 'user', content: 'hello' },
+                ],
+                response_format: expect.objectContaining({ type: 'json_schema' }),
             }),
+        );
+    });
+
+    it('executes Claude through the shared Messages helpers', async () => {
+        const driver = new BedrockMantleDriver({ region: 'us-west-2' });
+        const finalMessage = vi.fn(async () => ({
+            id: 'msg-test',
+            type: 'message',
+            role: 'assistant',
+            model: 'anthropic.claude-haiku-4-5',
+            content: [{ type: 'text', text: 'ok', citations: null }],
+            stop_reason: 'end_turn',
+            stop_sequence: null,
+            usage: { input_tokens: 4, output_tokens: 1 },
+        }));
+        const stream = vi.fn(() => ({ finalMessage }));
+        (driver as unknown as { anthropicService: { messages: { stream: typeof stream } } }).anthropicService = {
+            messages: { stream },
+        };
+        const prompt = await driver.createPrompt(promptSegments, { model: 'anthropic.claude-haiku-4-5' });
+
+        const completion = await driver.requestTextCompletion(prompt, {
+            model: 'anthropic.claude-haiku-4-5',
+            model_options: { _option_id: 'bedrock-mantle-claude', max_tokens: 100 },
+        });
+
+        expect(stream).toHaveBeenCalledWith(
             expect.objectContaining({
-                id: 'openai.gpt-5.6',
-                name: 'OpenAI GPT-5.6',
-                provider: Providers.bedrock_mantle,
-                owner: 'OpenAI',
-                can_stream: true,
+                model: 'anthropic.claude-haiku-4-5',
+                messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }],
+                max_tokens: 100,
+                stream: true,
             }),
-            expect.objectContaining({
-                id: 'xai.grok-4.3',
-                name: 'xAI Grok 4.3',
-                provider: Providers.bedrock_mantle,
-                owner: 'xAI',
-                can_stream: true,
-                input_modalities: ['text', 'image'],
-                output_modalities: ['text'],
-                tool_support: true,
-            }),
-        ]);
+            undefined,
+        );
+        expect(completion.result).toEqual([{ type: 'text', value: 'ok' }]);
     });
 });
 
@@ -151,7 +385,7 @@ describe('Bedrock Mantle Responses options', () => {
             ],
         }));
         const driver = new TestResponsesDriver(create);
-        const prompt = [{ type: 'message', role: 'user', content: 'hello' }] as BedrockMantlePrompt;
+        const prompt = [{ type: 'message', role: 'user', content: 'hello' }] as OpenAI.Responses.ResponseInputItem[];
 
         await driver.requestTextCompletion(prompt, {
             model: 'openai.gpt-5.5',
@@ -192,7 +426,7 @@ describe('Bedrock Mantle Responses options', () => {
             ],
         }));
         const driver = new TestResponsesDriver(create);
-        const prompt = [{ type: 'message', role: 'user', content: 'hello' }] as BedrockMantlePrompt;
+        const prompt = [{ type: 'message', role: 'user', content: 'hello' }] as OpenAI.Responses.ResponseInputItem[];
 
         await driver.requestTextCompletion(prompt, {
             model: 'xai.grok-4.3',

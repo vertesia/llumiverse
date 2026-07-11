@@ -16,6 +16,16 @@ import {
 } from '@llumiverse/core';
 import { isAmazonS3Hostname, parseS3UrlToUri } from './s3.js';
 
+export function supportsConverseOutputConfig(model: string): boolean {
+    const normalized = model.toLowerCase();
+    return !normalized.includes('claude') && !normalized.includes('google.gemma-3-4b');
+}
+
+export function shouldIncludeSchemaInConversePrompt(model: string): boolean {
+    const normalized = model.toLowerCase();
+    return !supportsConverseOutputConfig(normalized) || normalized.includes('minimax.minimax-m2.5');
+}
+
 function roleConversion(role: PromptRole): ConversationRole {
     return role === PromptRole.assistant ? ConversationRole.ASSISTANT : ConversationRole.USER;
 }
@@ -365,7 +375,9 @@ export async function formatConversePrompt(
         }
     }
 
-    if (options.result_schema) {
+    // Claude behavior is intentionally unchanged. Gemma 3 4B rejects outputConfig, while MiniMax M2.5
+    // accepts it but needs this supplemental alignment to produce consistently parseable JSON.
+    if (options.result_schema && shouldIncludeSchemaInConversePrompt(options.model)) {
         let schemaText: string;
         if (options.tools && options.tools.length > 0) {
             schemaText = `When not calling tools, the answer must be a JSON object using the following JSON Schema:\n${JSON.stringify(options.result_schema, undefined, 2)}`;
