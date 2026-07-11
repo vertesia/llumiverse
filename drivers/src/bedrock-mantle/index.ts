@@ -117,7 +117,6 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
         this.gemmaChatCompletionsProtocol = new OpenAISDKChatCompletionsProtocol({
             resultSchemaMode: 'response_format',
             toolSchemaMode: 'compatible',
-            toolChoicePolicy: 'required_on_new_user_turn',
             toolResultMode: 'user_message',
         });
         this.alignedChatCompletionsProtocol = new OpenAISDKChatCompletionsProtocol({

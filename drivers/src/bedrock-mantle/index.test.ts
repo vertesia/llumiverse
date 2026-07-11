@@ -211,7 +211,7 @@ describe('BedrockMantleDriver model listing', () => {
 });
 
 describe('BedrockMantleDriver protocol execution', () => {
-    it('requires a native Gemma tool call at the start of a user turn', async () => {
+    it('uses automatic native Gemma tool calls and adapts tool results', async () => {
         const driver = new BedrockMantleDriver({ region: 'us-west-2' });
         let requestCount = 0;
         const create = vi.fn(async () => {
@@ -255,7 +255,7 @@ describe('BedrockMantleDriver protocol execution', () => {
             model_options: { _option_id: 'bedrock-mantle-chat-completions' },
         });
 
-        expect(create).toHaveBeenCalledWith(expect.objectContaining({ tool_choice: 'required' }));
+        expect(create.mock.calls[0][0].tool_choice).toBeUndefined();
         expect(completion).toMatchObject({
             finish_reason: 'tool_use',
             tool_use: [{ id: 'call_1', tool_name: 'think', tool_input: { thought: 'test' } }],
