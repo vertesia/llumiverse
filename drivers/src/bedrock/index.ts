@@ -1742,7 +1742,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     : modelModalitiesToArray(modelCapability.input),
                 output_modalities: m.outputModalities
                     ? formatAmazonModalities(m.outputModalities)
-                    : modelModalitiesToArray(modelCapability.input),
+                    : modelModalitiesToArray(modelCapability.output),
                 tool_support: modelCapability.tool_support,
             };
 

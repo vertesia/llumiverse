@@ -66,6 +66,18 @@ describe('Bedrock Converse structured output', () => {
         expect(payload.outputConfig).toBeUndefined();
     });
 
+    it('falls back to prompt alignment when Nova Micro rejects outputConfig', async () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const prompt = await formatConversePrompt([{ role: PromptRole.user, content: 'hello' }], {
+            model: 'us.amazon.nova-micro-v1:0',
+            result_schema,
+        });
+        const payload = driver.preparePayload(prompt, { model: 'us.amazon.nova-micro-v1:0', result_schema });
+
+        expect(prompt.system).toEqual([{ text: expect.stringContaining('JSON Schema') }]);
+        expect(payload.outputConfig).toBeUndefined();
+    });
+
     it('supplements MiniMax M2.5 outputConfig with prompt alignment', async () => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
         const prompt = await formatConversePrompt([{ role: PromptRole.user, content: 'hello' }], {

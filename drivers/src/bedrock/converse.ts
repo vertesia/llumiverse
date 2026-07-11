@@ -18,7 +18,12 @@ import { isAmazonS3Hostname, parseS3UrlToUri } from './s3.js';
 
 export function supportsConverseOutputConfig(model: string): boolean {
     const normalized = model.toLowerCase();
-    return !normalized.includes('claude') && !normalized.includes('google.gemma-3-4b');
+    return (
+        !normalized.includes('claude') &&
+        !normalized.includes('google.gemma-3-4b') &&
+        // Nova Micro supports Converse but rejects the outputConfig field.
+        !normalized.includes('amazon.nova-micro')
+    );
 }
 
 export function shouldIncludeSchemaInConversePrompt(model: string): boolean {

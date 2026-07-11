@@ -206,6 +206,12 @@ const selectedDrivers = selectLiveTestDrivers(drivers, {
     models: process.env.LLUMIVERSE_LIVE_MODELS,
 });
 
+const RUN_ALL_BEDROCK_TEXT_MODELS = process.env.LLUMIVERSE_LIVE_ALL_BEDROCK_MODELS === 'true';
+
+function isBedrockTextModel(model: AIModel): boolean {
+    return (model.output_modalities ?? []).includes('text');
+}
+
 function getTestOptions(model: string): ExecutionOptions {
     if (model === 'o1-mini' || model === 'o3-mini') {
         return {
@@ -275,6 +281,26 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
         });
         const out = await assertStreamingCompletionOk(r, true);
         console.log(`Result for streaming with schema ${model}`, JSON.stringify(out));
+    });
+
+    test(`${name}: WhatColor across every discovered text model`, {
+        timeout: TIMEOUT * 20,
+        retry: 1,
+        skip: !RUN_ALL_BEDROCK_TEXT_MODELS || !['bedrock', 'bedrock-mantle'].includes(name),
+    }, async () => {
+        const discoveredModels = await driver.listModels();
+        const textModels = discoveredModels.filter(isBedrockTextModel);
+        expect(textModels.length).toBeGreaterThan(0);
+
+        for (const { id: model } of textModels) {
+            const r = await driver.stream(testPrompt_color, {
+                ...getTestOptions(model),
+                model,
+                result_schema: testSchema_color,
+            });
+            const out = await assertStreamingCompletionOk(r, true);
+            console.log(`Result for all-text-model WhatColor ${model}`, JSON.stringify(out));
+        }
     });
 
     test.each(models)(`${name}: max_tokens at documented limit on %s`, {
