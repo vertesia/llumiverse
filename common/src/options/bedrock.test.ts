@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { getBedrockModelKnowledge } from '../capability/bedrock-models.js';
 import { getModelCapabilities } from '../capability.js';
 import { getOptions } from '../options.js';
-import { Providers } from '../types.js';
+import { OptionType, Providers } from '../types.js';
 import { getBedrockOptions } from './bedrock.js';
 import { getBedrockMantleProtocol } from './bedrock_mantle.js';
-import { getContextWindowSize, getMaxOutputTokens } from './context-windows.js';
+import { getContextWindowSize } from './context-windows.js';
 import { getClaudeMaxTokensLimit } from './shared-parsing.js';
 import { hasSamplingParameterRestriction, parseClaudeVersion, supportsAdaptiveThinking } from './version-parsing.js';
 
@@ -177,9 +178,14 @@ describe('Bedrock Mantle metadata', () => {
     });
 
     it('inherits the latest DeepSeek limits for later versions and publisher-style IDs', () => {
-        expect(getMaxOutputTokens('deepseek.v3.2')).toBe(65_536);
-        expect(getMaxOutputTokens('deepseek.v3.3')).toBe(65_536);
-        expect(getContextWindowSize('deepseek.v3.3')).toBe(163_840);
+        expect(getBedrockModelKnowledge('deepseek.v3.2')).toMatchObject({
+            context_window: 163_840,
+            max_output_tokens: 8_192,
+        });
+        expect(getBedrockModelKnowledge('deepseek.v3.3')).toMatchObject({
+            context_window: 163_840,
+            max_output_tokens: 8_192,
+        });
     });
 
     it('does not expose Mantle options or capabilities from the Bedrock provider', () => {
@@ -198,5 +204,50 @@ describe('Bedrock Mantle metadata', () => {
         expect(getModelCapabilities('nvidia.nemotron-nano-12b-v3', Providers.bedrock).input.image).toBe(true);
         expect(getModelCapabilities('nvidia.nemotron-super-4-180b', Providers.bedrock).input.image).toBe(false);
         expect(getModelCapabilities('zai.glm-6', Providers.bedrock).output.text).toBe(true);
+    });
+
+    it.each([
+        ['ai21.jamba-1-5-large-v1:0', true],
+        ['ai21.jamba-1-5-mini-v1:0', false],
+        ['amazon.nova-premier-v1:0', true],
+        ['amazon.nova-pro-v1:0', false],
+        ['deepseek.v3-v1:0', true],
+        ['deepseek.v3.2', false],
+        ['meta.llama3-2-90b-instruct-v1:0', true],
+        ['meta.llama4-scout-17b-instruct-v1:0', false],
+        ['qwen.qwen3-235b-a22b-2507-v1:0', true],
+        ['qwen.qwen3-32b-v1:0', false],
+    ] as const)('uses the Runtime model-card tool capability for %s', (model, expected) => {
+        expect(getModelCapabilities(model, Providers.bedrock).tool_support).toBe(expected);
+    });
+
+    it.each([
+        ['amazon.nova-2-lite-v1:0', 1_000_000, 65_536],
+        ['anthropic.claude-haiku-4-5-20251001-v1:0', 200_000, 63_999],
+        ['google.gemma-3-12b-it', 128_000, 8_192],
+        ['meta.llama4-scout-17b-instruct-v1:0', 10_000_000, 8_192],
+        ['minimax.minimax-m2.5', 196_000, 8_192],
+        ['mistral.magistral-small-2509', 128_000, 40_960],
+        ['moonshotai.kimi-k2.5', 256_000, 16_384],
+        ['nvidia.nemotron-super-3-120b', 256_000, 32_768],
+        ['qwen.qwen3-coder-next', 256_000, 16_384],
+        ['zai.glm-5', 200_000, 131_072],
+    ] as const)('uses model-card limits for %s', (model, contextWindow, maxOutputTokens) => {
+        expect(getBedrockModelKnowledge(model)).toMatchObject({
+            context_window: contextWindow,
+            max_output_tokens: maxOutputTokens,
+        });
+    });
+
+    it('applies model-card limits to Runtime and Mantle option metadata', () => {
+        const runtimeMaxTokens = getBedrockOptions('mistral.magistral-small-2509').options.find(
+            (option) => option.name === 'max_tokens',
+        );
+        const mantleMaxTokens = getOptions('minimax.minimax-m2.5', Providers.bedrock_mantle).options.find(
+            (option) => option.name === 'max_tokens',
+        );
+
+        expect(runtimeMaxTokens).toMatchObject({ type: OptionType.numeric, max: 40_960 });
+        expect(mantleMaxTokens).toMatchObject({ type: OptionType.numeric, max: 8_192 });
     });
 });

@@ -1,3 +1,4 @@
+import { getBedrockModelKnowledge } from '../capability/bedrock-models.js';
 import { type ModelOptionInfoItem, type ModelOptions, type ModelOptionsInfo, OptionType } from '../types.js';
 import { getAnthropicOptions } from './anthropic.js';
 import { textOptionsFallback } from './fallback.js';
@@ -77,50 +78,14 @@ const PUBLISHERS: Record<string, string> = {
 export interface BedrockMantleModelInfo {
     protocol: BedrockMantleProtocol;
     owner: string;
-    input_image: boolean;
 }
 
 function getPublisher(model: string): string {
     return model.split('.')[0];
 }
 
-function isKimiMultimodal(model: string): boolean {
-    const match = /kimi-k(\d+)(?:[.-](\d+))?/i.exec(model);
-    if (!match) return false;
-    const major = Number(match[1]);
-    const minor = Number(match[2] ?? 0);
-    return major > 2 || (major === 2 && minor >= 5);
-}
-
-function supportsImageInput(model: string, protocol: BedrockMantleProtocol): boolean {
-    if (protocol === 'messages') return true;
-
-    const publisher = getPublisher(model);
-    switch (publisher) {
-        case 'openai':
-            return !model.includes('gpt-oss');
-        case 'xai':
-        case 'google':
-            return true;
-        case 'mistral':
-            return (
-                model.includes('magistral-') ||
-                model.includes('ministral-3-') ||
-                model.includes('mistral-large-3-') ||
-                model.includes('pixtral-')
-            );
-        case 'moonshot':
-        case 'moonshotai':
-            return isKimiMultimodal(model);
-        case 'nvidia':
-            return model.includes('nemotron-nano-12b');
-        case 'qwen':
-            return model.includes('-vl-');
-        case 'writer':
-            return model.includes('vision');
-        default:
-            return false;
-    }
+function supportsImageInput(model: string): boolean {
+    return getBedrockModelKnowledge(model).input.image === true;
 }
 
 export function getBedrockMantleProtocol(model: string): BedrockMantleProtocol | undefined {
@@ -157,7 +122,6 @@ export function getBedrockMantleModelInfo(model: string): BedrockMantleModelInfo
     return {
         protocol,
         owner: PUBLISHERS[publisher] ?? publisher,
-        input_image: supportsImageInput(normalized, protocol),
     };
 }
 
@@ -175,11 +139,12 @@ export function getBedrockMantleModelFamily(model: string): BedrockMantleModelFa
     return undefined;
 }
 
-function maxTokensOption(): ModelOptionInfoItem {
+function maxTokensOption(model: string): ModelOptionInfoItem {
     return {
         name: 'max_tokens',
         type: OptionType.numeric,
         min: 1,
+        max: getBedrockModelKnowledge(model).max_output_tokens,
         integer: true,
         step: 200,
         description: 'The maximum number of tokens to generate',
@@ -193,7 +158,7 @@ function getResponsesOptions(model: string): ModelOptionsInfo {
         ? { none: 'none', low: 'low', medium: 'medium', high: 'high' }
         : { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh' };
     const reasoningEffortDefault = isGrok ? 'low' : 'medium';
-    const options: ModelOptionInfoItem[] = [maxTokensOption()];
+    const options: ModelOptionInfoItem[] = [maxTokensOption(model)];
 
     if (isGrok) {
         options.push(
@@ -246,7 +211,7 @@ function getResponsesOptions(model: string): ModelOptionsInfo {
         });
     }
 
-    if (supportsImageInput(normalized, 'responses')) {
+    if (supportsImageInput(normalized)) {
         options.push({
             name: 'image_detail',
             type: OptionType.enum,
@@ -259,11 +224,14 @@ function getResponsesOptions(model: string): ModelOptionsInfo {
     return { _option_id: 'bedrock-mantle-responses', options };
 }
 
-function getChatCompletionsOptions(): ModelOptionsInfo {
+function getChatCompletionsOptions(model: string): ModelOptionsInfo {
     const allowedOptions = new Set(['max_tokens', 'temperature', 'top_p', 'stop_sequence']);
+    const maxOutputTokens = getBedrockModelKnowledge(model).max_output_tokens;
     return {
         _option_id: 'bedrock-mantle-chat-completions',
-        options: textOptionsFallback.options.filter((option) => allowedOptions.has(option.name)),
+        options: textOptionsFallback.options
+            .filter((option) => allowedOptions.has(option.name))
+            .map((option) => (option.name === 'max_tokens' ? { ...option, max: maxOutputTokens } : option)),
     };
 }
 
@@ -272,7 +240,7 @@ export function getBedrockMantleOptions(model: string, option?: ModelOptions): M
         case 'responses':
             return getResponsesOptions(model);
         case 'chat_completions':
-            return getChatCompletionsOptions();
+            return getChatCompletionsOptions(model);
         case 'messages': {
             const anthropicOptions = getAnthropicOptions(model, option);
             return { ...anthropicOptions, _option_id: 'bedrock-mantle-claude' };
