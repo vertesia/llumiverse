@@ -135,8 +135,6 @@ export interface OpenAIChatCompletionsProtocolOptions {
      * JSON Schema payload for tools while preserving the shared Chat Completions path.
      */
     toolSchemaMode?: 'openai_strict' | 'compatible';
-    /** Adapt native tool result messages for providers that require strict user/assistant alternation. */
-    toolResultMode?: 'native' | 'user_message';
 }
 
 type StreamChunk = string | Uint8Array;
@@ -465,20 +463,9 @@ export function convertToolsToOpenAIChatCompletionsFormat(
 
 export function convertToOpenAIChatCompletionsMessages(
     messages: OpenAIChatCompletionsMessage[],
-    toolResultMode: OpenAIChatCompletionsProtocolOptions['toolResultMode'] = 'native',
 ): OpenAIChatCompletionsRequestMessage[] {
     const converted: OpenAIChatCompletionsRequestMessage[] = [];
     for (const msg of messages) {
-        if (toolResultMode === 'user_message' && msg.role === 'tool') {
-            const content = `[Tool result${msg.tool_call_id ? ` for ${msg.tool_call_id}` : ''}]: ${extractOpenAIChatCompletionsContentText(msg.content)}`;
-            const previous = converted.at(-1);
-            if (previous?.role === 'user') {
-                previous.content = `${extractOpenAIChatCompletionsContentText(previous.content)}\n${content}`;
-            } else {
-                converted.push({ role: 'user', content });
-            }
-            continue;
-        }
         const result: OpenAIChatCompletionsRequestMessage = {
             role: msg.role,
         };
@@ -883,7 +870,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         const modelOptions = options.model_options as TextFallbackOptions;
         const payload: OpenAIChatCompletionsPayload = {
             model: this.getModelName(options),
-            messages: convertToOpenAIChatCompletionsMessages(conversation.messages, this.options.toolResultMode),
+            messages: convertToOpenAIChatCompletionsMessages(conversation.messages),
             // Some OpenAI-compatible providers return empty/truncated completions unless a
             // documented or runtime-validated token budget is supplied. Caller options still win.
             max_tokens: modelOptions?.max_tokens ?? this.options.defaultMaxTokens,
