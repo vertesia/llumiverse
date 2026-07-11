@@ -23,7 +23,7 @@ import { getAvailableEffortLevels, isClaudeVersionGTE, supportsAdaptiveThinking 
  */
 export function getClaudeMaxTokensLimit(model: string): number {
     if (model.includes('-3-7')) return 128000;
-    if (model.includes('opus-4-7')) return 128000;
+    if (isClaudeVersionGTE(model, 4, 7)) return 128000;
     return getMaxOutputTokens(model);
 }
 

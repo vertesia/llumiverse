@@ -13,6 +13,35 @@
  */
 
 // ============================================================================
+// Generic Model-Family Version Parsing
+// ============================================================================
+
+/**
+ * Check a numeric model-family suffix using major/minor ordering.
+ *
+ * The family includes the stable part immediately before the version, for
+ * example `openai.gpt-`, `xai.grok-`, or `deepseek.v`. This deliberately
+ * accepts later versions so new models inherit the newest known behavior.
+ */
+export function isModelFamilyVersionGTE(
+    modelString: string,
+    family: string,
+    targetMajor: number,
+    targetMinor: number,
+): boolean {
+    const normalized = modelString.toLowerCase();
+    const familyIndex = normalized.indexOf(family.toLowerCase());
+    if (familyIndex === -1) return false;
+
+    const version = normalized.slice(familyIndex + family.length).match(/^(\d+)(?:[.-](\d+))?/);
+    if (!version) return false;
+
+    const major = Number(version[1]);
+    const minor = Number(version[2] ?? 0);
+    return major > targetMajor || (major === targetMajor && minor >= targetMinor);
+}
+
+// ============================================================================
 // Claude Version Parsing
 // ============================================================================
 
@@ -24,8 +53,8 @@ export interface ClaudeVersion {
     major: number;
     /** Minor version number (e.g., 5, 6, 7) */
     minor: number;
-    /** Model variant: opus, sonnet, or haiku */
-    variant: 'opus' | 'sonnet' | 'haiku';
+    /** Model variant: opus, sonnet, haiku, fable, or mythos */
+    variant: 'opus' | 'sonnet' | 'haiku' | 'fable' | 'mythos';
 }
 
 /**
@@ -41,11 +70,15 @@ export interface ClaudeVersion {
  * @returns Parsed version info, or null if not parseable
  */
 export function parseClaudeVersion(modelString: string): ClaudeVersion | null {
+    if (/claude-mythos-preview(?:-|\b)/i.test(modelString)) {
+        return { major: 5, minor: 0, variant: 'mythos' };
+    }
+
     // Match pattern: claude-[variant-]-{major}-[optional minor]
     // The minor version is limited to 1-2 digits to avoid matching dates (YYYYMMDD format)
-    const match = modelString.match(/claude-(opus|sonnet|haiku)-?(\d+)(?:-(\d{1,2}))?(?:-|\b)/i);
+    const match = modelString.match(/claude-(opus|sonnet|haiku|fable|mythos)-?(\d+)(?:-(\d{1,2}))?(?:-|\b)/i);
     if (match) {
-        const variant = match[1].toLowerCase() as 'opus' | 'sonnet' | 'haiku';
+        const variant = match[1].toLowerCase() as ClaudeVersion['variant'];
         const major = parseInt(match[2], 10);
         const minor = match[3] ? parseInt(match[3], 10) : 0;
         return { major, minor, variant };
@@ -56,7 +89,7 @@ export function parseClaudeVersion(modelString: string): ClaudeVersion | null {
     if (fallbackMatch) {
         const major = parseInt(fallbackMatch[1], 10);
         const minor = parseInt(fallbackMatch[2], 10);
-        const variant = fallbackMatch[3].toLowerCase() as 'opus' | 'sonnet' | 'haiku';
+        const variant = fallbackMatch[3].toLowerCase() as ClaudeVersion['variant'];
         return { major, minor, variant };
     }
 
@@ -148,7 +181,11 @@ export function requiresAdaptiveThinking(modelString: string): boolean {
  * @returns true if the model supports adaptive thinking
  */
 export function supportsAdaptiveThinking(modelString: string): boolean {
-    return requiresAdaptiveThinking(modelString) || isClaudeVariantVersionGTE(modelString, 'sonnet', 4, 6);
+    return (
+        isClaudeVersionGTE(modelString, 5, 0) ||
+        requiresAdaptiveThinking(modelString) ||
+        isClaudeVariantVersionGTE(modelString, 'sonnet', 4, 6)
+    );
 }
 
 /**

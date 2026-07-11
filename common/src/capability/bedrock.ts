@@ -1,5 +1,14 @@
 import type { ModelCapabilities, ModelModalities } from '../types.js';
 
+function textModelCapabilities(image = false): ModelCapabilities {
+    return {
+        input: { text: true, image, video: false, audio: false, embed: false },
+        output: { text: true, image: false, video: false, audio: false, embed: false },
+        tool_support: false,
+        tool_support_streaming: false,
+    };
+}
+
 // Explicit exception lists keyed by the model identifier (last segment after the prefix)
 const RECORD_FOUNDATION_EXCEPTIONS: Record<string, ModelCapabilities> = {};
 const RECORD_PROFILE_EXCEPTIONS: Record<string, ModelCapabilities> = {
@@ -109,6 +118,8 @@ const RECORD_FAMILY_CAPABILITIES: Record<string, ModelCapabilities> = {
         tool_support: false,
         tool_support_streaming: false,
     },
+    'google.gemma': textModelCapabilities(true),
+    'minimax.': textModelCapabilities(),
     'meta.llama3-1': {
         input: { text: true, image: false, video: false, audio: false, embed: false },
         output: { text: true, image: false, video: false, audio: false, embed: false },
@@ -163,6 +174,10 @@ const RECORD_FAMILY_CAPABILITIES: Record<string, ModelCapabilities> = {
         tool_support: true,
         tool_support_streaming: false,
     },
+    'moonshot.kimi': textModelCapabilities(),
+    'moonshotai.kimi': textModelCapabilities(true),
+    'nvidia.nemotron-nano-12b': textModelCapabilities(true),
+    'nvidia.nemotron': textModelCapabilities(),
     'openai.gpt-oss': {
         input: { text: true, image: false, video: false, audio: false, embed: false },
         output: { text: true, image: false, video: false, audio: false, embed: false },
@@ -181,6 +196,7 @@ const RECORD_FAMILY_CAPABILITIES: Record<string, ModelCapabilities> = {
         tool_support: true,
         tool_support_streaming: false,
     },
+    'zai.': textModelCapabilities(),
     'writer.palmyra': {
         input: { text: true, image: false, video: false, audio: false, embed: false },
         output: { text: true, image: false, video: false, audio: false, embed: false },
