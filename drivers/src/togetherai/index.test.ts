@@ -1,4 +1,5 @@
 import { ModelType, PromptRole, Providers } from '@llumiverse/core';
+import { APIConnectionTimeoutError } from 'together-ai/error';
 import { describe, expect, it, vi } from 'vitest';
 import { TogetherAIDriver } from './index.js';
 
@@ -179,5 +180,63 @@ describe('TogetherAIDriver', () => {
             { id: 'call_a', tool_name: 'first_tool', tool_input: { value: 1 } },
             { id: 'call_b', tool_name: 'second_tool', tool_input: { value: 2 } },
         ]);
+    });
+
+    it('classifies Together transport timeouts as retryable llumiverse errors', () => {
+        const driver = new TogetherAIDriver({ apiKey: 'test-key' });
+        const error = driver.formatLlumiverseError(new APIConnectionTimeoutError({ message: 'timed out' }), {
+            provider: driver.provider,
+            model: 'test-model',
+            operation: 'execute',
+        });
+
+        expect(error).toMatchObject({ name: 'APIConnectionTimeoutError', retryable: true });
+    });
+
+    it('retains tool text and image references when Together requires string tool content', async () => {
+        const driver = new TogetherAIDriver({ apiKey: 'test-key' });
+        const create = vi.fn(async (_request: unknown) => ({
+            id: 'together-1',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test-model',
+            choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } }],
+        }));
+        driver.service = { chat: { completions: { create } } } as unknown as TogetherAIDriver['service'];
+
+        await driver.requestTextCompletion(
+            {
+                _is_openai_chat_completions: true,
+                messages: [
+                    {
+                        role: 'assistant',
+                        content: null,
+                        tool_calls: [
+                            {
+                                id: 'call_1',
+                                type: 'function',
+                                function: { name: 'lookup', arguments: '{}' },
+                            },
+                        ],
+                    },
+                    {
+                        role: 'tool',
+                        tool_call_id: 'call_1',
+                        content: [
+                            { type: 'text', text: 'result' },
+                            { type: 'image_url', image_url: { url: 'https://example.test/image.png' } },
+                        ],
+                    },
+                ],
+            },
+            { model: 'test-model', tools: [{ name: 'lookup', input_schema: { type: 'object' } }] },
+        );
+
+        const request = create.mock.calls[0][0] as { messages: unknown[] };
+        expect(request.messages[1]).toEqual({
+            role: 'tool',
+            tool_call_id: 'call_1',
+            content: 'result\n[Image: https://example.test/image.png]',
+        });
     });
 });

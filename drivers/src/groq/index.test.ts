@@ -1,4 +1,5 @@
 import { PromptRole } from '@llumiverse/core';
+import { APIConnectionTimeoutError } from 'groq-sdk/error';
 import { describe, expect, it, vi } from 'vitest';
 import { GroqDriver } from './index.js';
 
@@ -146,5 +147,66 @@ describe('GroqDriver shared Chat Completions transport', () => {
         await expect(driver.generateEmbeddings({ inputs: [{ type: 'text', text: 'hello' }] })).rejects.toThrow(
             'does not expose an embeddings transport',
         );
+    });
+
+    it('classifies Groq transport timeouts as retryable llumiverse errors', () => {
+        const driver = new GroqDriver({ apiKey: 'test-key' });
+        const error = driver.formatLlumiverseError(new APIConnectionTimeoutError({ message: 'timed out' }), {
+            provider: driver.provider,
+            model: 'llama',
+            operation: 'execute',
+        });
+
+        expect(error).toMatchObject({ name: 'APIConnectionTimeoutError', retryable: true });
+    });
+
+    it('preserves array-shaped tool results at the Groq SDK boundary', async () => {
+        const driver = new GroqDriver({ apiKey: 'test-key' });
+        const create = vi.fn(async (_request: unknown) => ({
+            id: 'groq-1',
+            object: 'chat.completion',
+            created: 1,
+            model: 'llama',
+            choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } }],
+        }));
+        setGroqCreate(driver, create);
+
+        await driver.requestTextCompletion(
+            {
+                _is_openai_chat_completions: true,
+                messages: [
+                    {
+                        role: 'assistant',
+                        content: null,
+                        tool_calls: [
+                            {
+                                id: 'call_1',
+                                type: 'function',
+                                function: { name: 'lookup', arguments: '{}' },
+                            },
+                        ],
+                    },
+                    {
+                        role: 'tool',
+                        tool_call_id: 'call_1',
+                        content: [
+                            { type: 'text', text: 'result' },
+                            { type: 'image_url', image_url: { url: 'https://example.test/image.png' } },
+                        ],
+                    },
+                ],
+            },
+            { model: 'llama', tools: [{ name: 'lookup', input_schema: { type: 'object' } }] },
+        );
+
+        const request = create.mock.calls[0][0] as { messages: unknown[] };
+        expect(request.messages[1]).toEqual({
+            role: 'tool',
+            tool_call_id: 'call_1',
+            content: [
+                { type: 'text', text: 'result' },
+                { type: 'image_url', image_url: { url: 'https://example.test/image.png' } },
+            ],
+        });
     });
 });

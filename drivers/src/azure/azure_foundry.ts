@@ -24,6 +24,7 @@ import {
     getModelCapabilities,
     type ImageEmbeddingInput,
     LlumiverseError,
+    type LlumiverseErrorContext,
     modelModalitiesToArray,
     normalizeEmbeddingsOptions,
     Providers,
@@ -53,6 +54,18 @@ type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type SSEMessage = { data?: string };
 type ErrorWithStatus = Error & { status?: unknown };
 
+class AzureFoundryHTTPError extends Error {
+    readonly status: number;
+    readonly body: unknown;
+
+    constructor(message: string, status: string, body?: unknown) {
+        super(message);
+        this.name = 'AzureFoundryHTTPError';
+        this.status = Number(status);
+        this.body = body;
+    }
+}
+
 class AzureFoundryOpenAIProtocolDriver extends OpenAIResponsesDriverBase {
     service: OpenAI;
     readonly provider = Providers.azure_foundry;
@@ -81,8 +94,10 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
             body: toAzureInferenceRequest(payload, false),
         });
         if (response.status !== '200') {
-            throw new Error(
+            throw new AzureFoundryHTTPError(
                 `Chat completion request failed with status ${response.status}: ${JSON.stringify(response.body)}`,
+                response.status,
+                response.body,
             );
         }
         const original = response.body as ChatCompletionsOutput;
@@ -100,7 +115,10 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
         }
         if (response.status !== '200') {
             stream.destroy();
-            throw new Error(`Failed to get chat completions, HTTP operation failed with ${response.status} code`);
+            throw new AzureFoundryHTTPError(
+                `Failed to get chat completions, HTTP operation failed with ${response.status} code`,
+                response.status,
+            );
         }
         return openAIChatCompletionsStreamToSSE(normalizeAzureInferenceStream(createSseStream(stream)));
     }
@@ -249,6 +267,58 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             chatPrompt,
             toAzureFoundryChatOptions(options, deploymentName),
         );
+    }
+
+    buildStreamingConversation(
+        prompt: ResponseInputItem[],
+        result: unknown[],
+        toolUse: unknown[] | undefined,
+        options: ExecutionOptions,
+    ): unknown | undefined {
+        const { deploymentName } = parseAzureFoundryModelId(options.model);
+        const protocol = this.deploymentProtocols.get(deploymentName);
+        if (protocol === 'responses' && this.openAIProtocolDriver) {
+            return this.openAIProtocolDriver.buildStreamingConversation(prompt, result, toolUse, {
+                ...options,
+                model: deploymentName,
+            });
+        }
+        if (protocol === 'chat_completions') {
+            return this.inferenceProtocolDriver.buildStreamingConversation(
+                toAzureFoundryChatPrompt(prompt),
+                result,
+                toolUse,
+                toAzureFoundryChatOptions(options, deploymentName),
+            );
+        }
+        return undefined;
+    }
+
+    validateResult(result: Completion, options: ExecutionOptions): void {
+        const { deploymentName } = parseAzureFoundryModelId(options.model);
+        const protocol = this.deploymentProtocols.get(deploymentName);
+        if (protocol === 'responses' && this.openAIProtocolDriver) {
+            this.openAIProtocolDriver.validateResult(result, { ...options, model: deploymentName });
+            return;
+        }
+        if (protocol === 'chat_completions') {
+            this.inferenceProtocolDriver.validateResult(result, toAzureFoundryChatOptions(options, deploymentName));
+            return;
+        }
+        super.validateResult(result, options);
+    }
+
+    formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
+        const { deploymentName } = parseAzureFoundryModelId(context.model);
+        const protocol = this.deploymentProtocols.get(deploymentName);
+        const delegatedContext = { ...context, model: deploymentName };
+        if (protocol === 'responses' && this.openAIProtocolDriver) {
+            return this.openAIProtocolDriver.formatLlumiverseError(error, delegatedContext);
+        }
+        if (protocol === 'chat_completions') {
+            return this.inferenceProtocolDriver.formatLlumiverseError(error, delegatedContext);
+        }
+        return super.formatLlumiverseError(error, context);
     }
 
     async validateConnection(): Promise<boolean> {

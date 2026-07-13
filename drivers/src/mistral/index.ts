@@ -17,6 +17,12 @@ import type {
     ContentChunk,
 } from '@mistralai/mistralai/models/components';
 import {
+    HTTPClientError,
+    InvalidRequestError,
+    MistralError,
+    RequestAbortedError,
+} from '@mistralai/mistralai/models/errors';
+import {
     OpenAIChatCompletionsDriverBase,
     type OpenAIChatCompletionsDriverOptions,
     type OpenAIChatCompletionsPayload,
@@ -25,6 +31,7 @@ import {
     openAIChatCompletionsStreamToSSE,
     preserveOpenAIChatCompletionsOriginalResponse,
 } from '../openai/openai_chat_completions.js';
+import type { CompatibleAPIError } from '../openai/openai_compatible.js';
 
 const ENDPOINT = 'https://api.mistral.ai';
 
@@ -116,6 +123,21 @@ export class MistralAIDriver extends OpenAIChatCompletionsDriverBase<MistralAIDr
                 : { usage: { input_tokens: promptTokens, input_text_tokens: promptTokens } }),
         };
     }
+
+    protected isCompatibleAPIError(error: unknown): error is CompatibleAPIError {
+        return error instanceof MistralError || error instanceof HTTPClientError || super.isCompatibleAPIError(error);
+    }
+
+    protected isOpenAIErrorRetryable(
+        error: unknown,
+        httpStatusCode: number | undefined,
+        errorCode: string | null | undefined,
+        errorType: string | undefined,
+    ): boolean | undefined {
+        if (error instanceof RequestAbortedError) return true;
+        if (error instanceof InvalidRequestError) return false;
+        return super.isOpenAIErrorRetryable(error, httpStatusCode, errorCode, errorType);
+    }
 }
 
 function toMistralRequest(payload: OpenAIChatCompletionsPayload, stream: boolean): ChatCompletionRequest {
@@ -136,6 +158,14 @@ function toMistralRequest(payload: OpenAIChatCompletionsPayload, stream: boolean
 
 function toMistralMessage(message: OpenAIChatCompletionsPayload['messages'][number]): ChatCompletionRequestMessage {
     const textContent = typeof message.content === 'string' || message.content === null ? message.content : undefined;
+    const contentParts = Array.isArray(message.content)
+        ? message.content.map(
+              (part): ContentChunk =>
+                  part.type === 'text'
+                      ? { type: 'text', text: part.text }
+                      : { type: 'image_url', imageUrl: part.image_url.url },
+          )
+        : undefined;
     switch (message.role) {
         case 'system':
         case 'developer':
@@ -143,7 +173,7 @@ function toMistralMessage(message: OpenAIChatCompletionsPayload['messages'][numb
         case 'assistant':
             return {
                 role: 'assistant',
-                content: textContent,
+                content: contentParts ?? textContent,
                 toolCalls: message.tool_calls?.map((toolCall, index) => ({
                     id: toolCall.id,
                     index,
@@ -155,19 +185,11 @@ function toMistralMessage(message: OpenAIChatCompletionsPayload['messages'][numb
                 })),
             };
         case 'tool':
-            return { role: 'tool', content: textContent ?? '', toolCallId: message.tool_call_id };
+            return { role: 'tool', content: contentParts ?? textContent ?? '', toolCallId: message.tool_call_id };
         default:
             return {
                 role: 'user',
-                content:
-                    typeof message.content === 'string'
-                        ? message.content
-                        : (message.content?.map(
-                              (part): ContentChunk =>
-                                  part.type === 'text'
-                                      ? { type: 'text', text: part.text }
-                                      : { type: 'image_url', imageUrl: part.image_url.url },
-                          ) ?? ''),
+                content: typeof message.content === 'string' ? message.content : (contentParts ?? ''),
             };
     }
 }

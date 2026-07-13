@@ -2,6 +2,7 @@ import type { GroqDeepseekThinkingOptions } from '@llumiverse/common';
 import type { AIModel, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions } from '@llumiverse/core';
 import { Providers } from '@llumiverse/core';
 import Groq from 'groq-sdk';
+import { APIConnectionError, APIError, APIUserAbortError } from 'groq-sdk/error';
 import type {
     ChatCompletion,
     ChatCompletionChunk,
@@ -20,6 +21,7 @@ import {
     openAIChatCompletionsStreamToSSE,
     preserveOpenAIChatCompletionsOriginalResponse,
 } from '../openai/openai_chat_completions.js';
+import type { CompatibleAPIError } from '../openai/openai_compatible.js';
 import { truncateDataUrlForDebug } from '../shared/debug-prompt.js';
 
 export interface GroqDriverOptions extends OpenAIChatCompletionsDriverOptions {
@@ -106,6 +108,20 @@ export class GroqDriver extends OpenAIChatCompletionsDriverBase<GroqDriverOption
     async generateEmbeddings(_options: EmbeddingsOptions): Promise<EmbeddingsResult> {
         throw new Error('Groq does not expose an embeddings transport.');
     }
+
+    protected isCompatibleAPIError(error: unknown): error is CompatibleAPIError {
+        return error instanceof APIError || super.isCompatibleAPIError(error);
+    }
+
+    protected isOpenAIErrorRetryable(
+        error: unknown,
+        httpStatusCode: number | undefined,
+        errorCode: string | null | undefined,
+        errorType: string | undefined,
+    ): boolean | undefined {
+        if (error instanceof APIConnectionError || error instanceof APIUserAbortError) return true;
+        return super.isOpenAIErrorRetryable(error, httpStatusCode, errorCode, errorType);
+    }
 }
 
 function toGroqRequest(
@@ -150,6 +166,13 @@ function toGroqRequest(
 
 function toGroqMessage(message: OpenAIChatCompletionsPayload['messages'][number]): ChatCompletionMessageParam {
     const textContent = typeof message.content === 'string' || message.content === null ? message.content : undefined;
+    const contentParts = Array.isArray(message.content)
+        ? message.content.map((part) =>
+              part.type === 'text'
+                  ? { type: 'text' as const, text: part.text }
+                  : { type: 'image_url' as const, image_url: part.image_url },
+          )
+        : undefined;
     switch (message.role) {
         case 'system':
         case 'developer':
@@ -168,18 +191,15 @@ function toGroqMessage(message: OpenAIChatCompletionsPayload['messages'][number]
                 })),
             };
         case 'tool':
-            return { role: 'tool', content: textContent ?? '', tool_call_id: message.tool_call_id ?? '' };
+            return {
+                role: 'tool',
+                content: contentParts ?? textContent ?? '',
+                tool_call_id: message.tool_call_id ?? '',
+            };
         default:
             return {
                 role: 'user',
-                content:
-                    typeof message.content === 'string'
-                        ? message.content
-                        : (message.content?.map((part) =>
-                              part.type === 'text'
-                                  ? { type: 'text' as const, text: part.text }
-                                  : { type: 'image_url' as const, image_url: part.image_url },
-                          ) ?? ''),
+                content: typeof message.content === 'string' ? message.content : (contentParts ?? ''),
             };
     }
 }

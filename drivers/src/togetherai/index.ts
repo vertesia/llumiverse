@@ -11,6 +11,7 @@ import {
     Providers,
 } from '@llumiverse/core';
 import Together from 'together-ai';
+import { APIConnectionError, APIError, APIUserAbortError } from 'together-ai/error';
 import type {
     ChatCompletion,
     ChatCompletionChunk,
@@ -29,6 +30,7 @@ import {
     openAIChatCompletionsStreamToSSE,
     preserveOpenAIChatCompletionsOriginalResponse,
 } from '../openai/openai_chat_completions.js';
+import type { CompatibleAPIError } from '../openai/openai_compatible.js';
 
 export interface TogetherAIDriverOptions extends OpenAIChatCompletionsDriverOptions {
     apiKey: string;
@@ -142,6 +144,20 @@ export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAI
             })
             .sort((a, b) => a.id.localeCompare(b.id));
     }
+
+    protected isCompatibleAPIError(error: unknown): error is CompatibleAPIError {
+        return error instanceof APIError || super.isCompatibleAPIError(error);
+    }
+
+    protected isOpenAIErrorRetryable(
+        error: unknown,
+        httpStatusCode: number | undefined,
+        errorCode: string | null | undefined,
+        errorType: string | undefined,
+    ): boolean | undefined {
+        if (error instanceof APIConnectionError || error instanceof APIUserAbortError) return true;
+        return super.isOpenAIErrorRetryable(error, httpStatusCode, errorCode, errorType);
+    }
 }
 
 function toTogetherRequest(payload: OpenAIChatCompletionsPayload, stream: false): CompletionCreateParamsNonStreaming;
@@ -171,6 +187,11 @@ function toTogetherRequest(
 
 function toTogetherMessage(message: OpenAIChatCompletionsPayload['messages'][number]): ChatCompletionMessageParam {
     const textContent = typeof message.content === 'string' || message.content === null ? message.content : undefined;
+    const flattenedContent = Array.isArray(message.content)
+        ? message.content
+              .map((part) => (part.type === 'text' ? part.text : `[Image: ${part.image_url.url}]`))
+              .join('\n')
+        : textContent;
     switch (message.role) {
         case 'system':
         case 'developer':
@@ -178,7 +199,7 @@ function toTogetherMessage(message: OpenAIChatCompletionsPayload['messages'][num
         case 'assistant':
             return {
                 role: 'assistant',
-                content: textContent,
+                content: flattenedContent,
                 tool_calls: message.tool_calls?.map((toolCall, index) => ({
                     id: toolCall.id,
                     index,
@@ -190,7 +211,7 @@ function toTogetherMessage(message: OpenAIChatCompletionsPayload['messages'][num
                 })),
             };
         case 'tool':
-            return { role: 'tool', content: textContent ?? '', tool_call_id: message.tool_call_id ?? '' };
+            return { role: 'tool', content: flattenedContent ?? '', tool_call_id: message.tool_call_id ?? '' };
         default:
             return {
                 role: 'user',

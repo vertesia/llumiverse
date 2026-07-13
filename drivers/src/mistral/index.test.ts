@@ -1,4 +1,5 @@
 import { PromptRole } from '@llumiverse/core';
+import { InvalidRequestError, RequestTimeoutError } from '@mistralai/mistralai/models/errors';
 import { describe, expect, it, vi } from 'vitest';
 import { MistralAIDriver } from './index.js';
 
@@ -105,5 +106,90 @@ describe('MistralAIDriver official SDK transport', () => {
             usage: { input_tokens: 2, input_text_tokens: 2 },
         });
         expect(list).toHaveBeenCalledTimes(2);
+    });
+
+    it('classifies Mistral transport and request errors', () => {
+        const driver = new MistralAIDriver({ apiKey: 'test-key' });
+        const context = { provider: driver.provider, model: 'mistral-large', operation: 'execute' as const };
+
+        expect(driver.formatLlumiverseError(new RequestTimeoutError('timed out'), context)).toMatchObject({
+            name: 'RequestTimeoutError',
+            retryable: true,
+        });
+        expect(driver.formatLlumiverseError(new InvalidRequestError('invalid request'), context)).toMatchObject({
+            name: 'InvalidRequestError',
+            retryable: false,
+        });
+    });
+
+    it('preserves array-shaped assistant and tool content at the Mistral SDK boundary', async () => {
+        const driver = new MistralAIDriver({ apiKey: 'test-key' });
+        const complete = vi.fn(async (_request: unknown) => ({
+            id: 'mistral-1',
+            object: 'chat.completion',
+            created: 1,
+            model: 'mistral-large',
+            choices: [{ index: 0, finishReason: 'stop', message: { role: 'assistant', content: 'ok' } }],
+            usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+        }));
+        Object.defineProperty(driver.client.chat, 'complete', { value: complete });
+
+        await driver.requestTextCompletion(
+            {
+                _is_openai_chat_completions: true,
+                messages: [
+                    {
+                        role: 'assistant',
+                        content: [
+                            { type: 'text', text: 'working' },
+                            { type: 'image_url', image_url: { url: 'https://example.test/context.png' } },
+                        ],
+                        tool_calls: [
+                            {
+                                id: 'call_1',
+                                type: 'function',
+                                function: { name: 'lookup', arguments: '{}' },
+                            },
+                        ],
+                    },
+                    {
+                        role: 'tool',
+                        tool_call_id: 'call_1',
+                        content: [
+                            { type: 'text', text: 'result' },
+                            { type: 'image_url', image_url: { url: 'https://example.test/image.png' } },
+                        ],
+                    },
+                ],
+            },
+            { model: 'mistral-large', tools: [{ name: 'lookup', input_schema: { type: 'object' } }] },
+        );
+
+        const request = complete.mock.calls[0][0] as { messages: unknown[] };
+        expect(request.messages).toEqual([
+            {
+                role: 'assistant',
+                content: [
+                    { type: 'text', text: 'working' },
+                    { type: 'image_url', imageUrl: 'https://example.test/context.png' },
+                ],
+                toolCalls: [
+                    {
+                        id: 'call_1',
+                        index: 0,
+                        type: 'function',
+                        function: { name: 'lookup', arguments: '{}' },
+                    },
+                ],
+            },
+            {
+                role: 'tool',
+                toolCallId: 'call_1',
+                content: [
+                    { type: 'text', text: 'result' },
+                    { type: 'image_url', imageUrl: 'https://example.test/image.png' },
+                ],
+            },
+        ]);
     });
 });

@@ -168,5 +168,83 @@ describe('AzureFoundryDriver protocol composition', () => {
         expect(deploymentGet).toHaveBeenCalledOnce();
         expect(getOpenAIClient).toHaveBeenCalledOnce();
         expect(create).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-deployment', stream: false }));
+        expect(
+            driver.buildStreamingConversation(prompt, [{ type: 'text', value: 'streamed' }], undefined, options),
+        ).toEqual(
+            expect.objectContaining({
+                _arrayConversation: expect.arrayContaining([
+                    expect.objectContaining({ type: 'message', role: 'assistant', content: 'streamed' }),
+                ]),
+            }),
+        );
+    });
+
+    it('delegates Chat streaming conversation reconstruction and result cleanup', async () => {
+        const driver = createDriver();
+        driver.service = {
+            deployments: { get: vi.fn(async () => ({ modelPublisher: 'Meta' })) },
+        } as unknown as AzureFoundryDriver['service'];
+        const options = {
+            model: 'llama-deployment::llama',
+            tools: [{ name: 'lookup', input_schema: { type: 'object' as const } }],
+        };
+        const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Weather?' }], options);
+        await driver.isOpenAIDeployment(options.model);
+
+        const conversation = driver.buildStreamingConversation(
+            prompt,
+            [{ type: 'text', value: '<think>hidden</think>Checking' }],
+            [{ id: 'call_1', tool_name: 'lookup', tool_input: { city: 'Paris' } }],
+            options,
+        );
+        const completion = { result: [{ type: 'text' as const, value: '<think>hidden</think>Answer' }] };
+        driver.validateResult(completion, options);
+
+        expect(conversation).toEqual(
+            expect.objectContaining({
+                _is_openai_chat_completions: true,
+                messages: expect.arrayContaining([
+                    expect.objectContaining({
+                        role: 'assistant',
+                        content: 'Checking',
+                        tool_calls: [
+                            {
+                                id: 'call_1',
+                                type: 'function',
+                                function: { name: 'lookup', arguments: '{"city":"Paris"}' },
+                            },
+                        ],
+                    }),
+                ]),
+            }),
+        );
+        expect(completion.result).toEqual([{ type: 'text', value: 'Answer' }]);
+    });
+
+    it('preserves Azure HTTP status and retryability in LlumiverseError', async () => {
+        const driver = createDriver();
+        driver.service = {
+            deployments: { get: vi.fn(async () => ({ modelPublisher: 'Meta' })) },
+        } as unknown as AzureFoundryDriver['service'];
+        const post = vi.fn(async () => ({
+            status: '503',
+            body: { error: { code: 'ServiceUnavailable', message: 'Temporarily unavailable' } },
+        }));
+        const inferenceAdapter = exposePrivate<FoundryInternals>(driver).inferenceProtocolDriver;
+        Object.defineProperty(inferenceAdapter, 'service', { value: { path: vi.fn(() => ({ post })) } });
+
+        await expect(
+            driver.execute([{ role: PromptRole.user, content: 'Hello' }], {
+                model: 'llama-deployment::llama',
+            }),
+        ).rejects.toMatchObject({
+            name: 'AzureFoundryHTTPError',
+            code: 503,
+            retryable: true,
+            originalError: expect.objectContaining({
+                status: 503,
+                body: { error: { code: 'ServiceUnavailable', message: 'Temporarily unavailable' } },
+            }),
+        });
     });
 });

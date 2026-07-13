@@ -17,7 +17,7 @@ import {
     UnprocessableEntityError,
 } from 'openai/error';
 
-type CompatibleAPIError = Error & {
+export type CompatibleAPIError = Error & {
     status?: number;
     statusCode?: number;
     code?: string | null;
@@ -33,7 +33,7 @@ export abstract class OpenAICompatibleDriverBase<
     PromptT = unknown,
 > extends AbstractDriver<OptionsT, PromptT> {
     public formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
-        if (!isCompatibleAPIError(error)) {
+        if (!this.isCompatibleAPIError(error)) {
             throw error;
         }
 
@@ -74,6 +74,11 @@ export abstract class OpenAICompatibleDriverBase<
         errorType: string | undefined,
     ): boolean | undefined {
         return isCompatibleErrorRetryable(error, httpStatusCode, errorCode, errorType);
+    }
+
+    /** Provider SDKs can extend compatible error recognition without weakening the shared structural checks. */
+    protected isCompatibleAPIError(error: unknown): error is CompatibleAPIError {
+        return isCompatibleAPIError(error);
     }
 }
 
