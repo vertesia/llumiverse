@@ -4,6 +4,152 @@ import { describe, expect, it, vi } from 'vitest';
 import { MistralAIDriver } from './index.js';
 
 describe('MistralAIDriver official SDK transport', () => {
+    it('preserves signed thinking for replay after JSON roundtrip while projecting thoughts by default', async () => {
+        const driver = new MistralAIDriver({ apiKey: 'test-key' });
+        const response = {
+            id: 'mistral-signed',
+            object: 'chat.completion',
+            created: 1,
+            model: 'magistral',
+            choices: [
+                {
+                    index: 0,
+                    finishReason: 'stop',
+                    message: {
+                        role: 'assistant' as const,
+                        content: [
+                            {
+                                type: 'thinking' as const,
+                                thinking: [{ type: 'text' as const, text: 'native plan' }],
+                                signature: 'signed-thinking',
+                                closed: true,
+                            },
+                            { type: 'text' as const, text: 'answer' },
+                        ],
+                    },
+                },
+            ],
+            usage: { promptTokens: 2, completionTokens: 3, totalTokens: 5 },
+        };
+        const complete = vi.fn(async (_request: unknown) => response);
+        Object.defineProperty(driver.client.chat, 'complete', { value: complete });
+
+        const first = await driver.requestTextCompletion(
+            { messages: [{ role: 'user', content: 'question' }] },
+            { model: 'magistral', stripTextMaxTokens: 1, stripImagesAfterTurns: 0 },
+        );
+        expect(first.result).toEqual([
+            { type: 'thoughts', value: 'native plan' },
+            { type: 'text', value: 'answer' },
+        ]);
+
+        const persisted = JSON.parse(JSON.stringify(first.conversation));
+        await driver.requestTextCompletion(
+            { messages: [{ role: 'user', content: 'continue' }] },
+            { model: 'magistral', conversation: persisted },
+        );
+        expect((complete.mock.calls[1][0] as { messages: unknown[] }).messages).toContainEqual(
+            response.choices[0].message,
+        );
+
+        const hidden = await driver.requestTextCompletion(
+            { messages: [{ role: 'user', content: 'hidden' }] },
+            {
+                model: 'magistral',
+                model_options: { _option_id: 'text-fallback', include_thoughts: false },
+            },
+        );
+        expect(hidden.result).toEqual([{ type: 'text', value: 'answer' }]);
+        expect(hidden.conversation).toMatchObject({
+            messages: expect.arrayContaining([response.choices[0].message]),
+        });
+    });
+
+    it('reconstructs fragmented signed thinking in the native streaming assistant message', async () => {
+        const driver = new MistralAIDriver({ apiKey: 'test-key' });
+        Object.defineProperty(driver.client.chat, 'stream', {
+            value: vi.fn(async () =>
+                (async function* () {
+                    yield {
+                        data: {
+                            id: 'chunk-1',
+                            model: 'magistral',
+                            choices: [
+                                {
+                                    index: 0,
+                                    delta: {
+                                        content: [
+                                            {
+                                                type: 'thinking',
+                                                thinking: [{ type: 'text', text: 'plan' }],
+                                            },
+                                        ],
+                                    },
+                                },
+                            ],
+                        },
+                    };
+                    yield {
+                        data: {
+                            id: 'chunk-2',
+                            model: 'magistral',
+                            choices: [
+                                {
+                                    index: 0,
+                                    finishReason: 'stop',
+                                    delta: {
+                                        content: [
+                                            {
+                                                type: 'thinking',
+                                                thinking: [{ type: 'text', text: ' more' }],
+                                                signature: 'stream-signature',
+                                                closed: true,
+                                            },
+                                            { type: 'text', text: 'answer' },
+                                        ],
+                                    },
+                                },
+                            ],
+                        },
+                    };
+                })(),
+            ),
+        });
+
+        const stream = await driver.requestTextCompletionStream(
+            { messages: [{ role: 'user', content: 'question' }] },
+            { model: 'magistral' },
+        );
+        const results = [];
+        for await (const chunk of stream) results.push(...chunk.result);
+        const conversation = await stream.finalizeConversation?.({ result: results });
+
+        expect(results).toEqual([
+            { type: 'thoughts', value: 'plan' },
+            { type: 'thoughts', value: ' more' },
+            { type: 'text', value: 'answer' },
+        ]);
+        expect(conversation).toMatchObject({
+            messages: expect.arrayContaining([
+                expect.objectContaining({
+                    role: 'assistant',
+                    content: [
+                        {
+                            type: 'thinking',
+                            thinking: [
+                                { type: 'text', text: 'plan' },
+                                { type: 'text', text: ' more' },
+                            ],
+                            signature: 'stream-signature',
+                            closed: true,
+                        },
+                        { type: 'text', text: 'answer' },
+                    ],
+                }),
+            ]),
+        });
+    });
+
     it('maps canonical Chat requests and preserves typed content, tools, usage, and the native response', async () => {
         const driver = new MistralAIDriver({ apiKey: 'test-key', endpoint_url: 'https://mistral.example.test' });
         const response = {
