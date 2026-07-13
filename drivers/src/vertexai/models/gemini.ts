@@ -20,8 +20,8 @@ import {
 import {
     type AIModel,
     type Completion,
-    type CompletionChunkObject,
     type CompletionResult,
+    type DriverCompletionStream,
     type ExecutionOptions,
     type ExecutionTokenUsage,
     getConversationMeta,
@@ -209,16 +209,17 @@ export function getGeminiPayload(options: ExecutionOptions, prompt: GenerateCont
  * Collect all parts (text and images) from content in order.
  * This preserves the original ordering of text and image parts.
  */
-function extractCompletionResults(content: Content): CompletionResult[] {
+function extractCompletionResults(content: Content, includeThoughts = true): CompletionResult[] {
     const results: CompletionResult[] = [];
     const parts = content.parts;
     if (parts) {
         for (const part of parts) {
             if (part.text) {
-                results.push({
-                    type: 'text',
-                    value: part.text,
-                });
+                if (part.thought) {
+                    if (includeThoughts) results.push({ type: 'thoughts', value: part.text });
+                } else {
+                    results.push({ type: 'text', value: part.text });
+                }
             } else if (part.inlineData) {
                 const base64ImageBytes: string = part.inlineData.data ?? '';
                 const mimeType = part.inlineData.mimeType ?? 'image/png';
@@ -231,6 +232,59 @@ function extractCompletionResults(content: Content): CompletionResult[] {
         }
     }
     return results;
+}
+
+function finalizeGeminiConversation(
+    conversation: Content[],
+    assistantContent: Content | undefined,
+    system: Content | undefined,
+    options: ExecutionOptions,
+): GenerateContentPrompt['contents'] {
+    let completed = assistantContent ? updateConversation(conversation, [assistantContent]) : conversation;
+    completed = incrementConversationTurn(completed) as Content[];
+    const completedContents =
+        unwrapConversationArray<Content>(completed) ?? (Array.isArray(completed) ? completed : []);
+    if (completedContents.some((content) => content.parts?.some((part) => !!part.thoughtSignature))) {
+        // Gemini signatures are position-sensitive and belong to the exact Part.
+        // Keep the full signed chain rather than rewriting any covered prefix.
+        // TODO: Vertex AI does not currently expose the Interactions API. If provider-managed
+        // conversation state becomes available on Vertex, evaluate it as an optimization while
+        // retaining durable Content.parts replay for persisted conversations.
+        return storeSystemInConversation(completed, system) as Content[];
+    }
+    const currentTurn = getConversationMeta(completed).turnNumber;
+    const stripOptions = {
+        keepForTurns: options.stripImagesAfterTurns ?? Infinity,
+        currentTurn,
+        textMaxTokens: options.stripTextMaxTokens,
+    };
+    let processed = stripBase64ImagesFromConversation(completed, stripOptions);
+    processed = truncateLargeTextInConversation(processed, stripOptions);
+    processed = stripHeartbeatsFromConversation(processed, {
+        keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+        currentTurn,
+    });
+    return storeSystemInConversation(processed, system) as Content[];
+}
+
+function appendGeminiStreamParts(target: Part[], incoming: Part[]): void {
+    for (const part of incoming) {
+        const previous = target[target.length - 1];
+        const canMergeText =
+            typeof part.text === 'string' &&
+            part.text.length > 0 &&
+            typeof previous?.text === 'string' &&
+            !previous.thoughtSignature &&
+            !!previous.thought === !!part.thought;
+        if (canMergeText && previous) {
+            previous.text = (previous.text ?? '') + part.text;
+            if (part.thoughtSignature) previous.thoughtSignature = part.thoughtSignature;
+        } else {
+            // Signatures, empty terminal parts, function calls, and all structured
+            // parts remain on the exact Part and at the exact position received.
+            target.push(structuredClone(part));
+        }
+    }
 }
 
 function collectToolUseParts(content: Content): ToolUse[] | undefined {
@@ -404,10 +458,11 @@ function geminiThinkingConfig(option: StatelessExecutionOptions): ThinkingConfig
     const model_options = option.model_options as VertexAIGeminiOptions | undefined;
 
     // If thinking options are explicitly set in model options, use them directly
-    const include_thoughts = model_options?.include_thoughts ?? false;
+    // Always request thought summaries when thinking is active. The llumiverse
+    // include_thoughts option controls only result projection, not native state.
     if (model_options?.thinking_budget_tokens !== undefined || model_options?.thinking_level) {
         return {
-            includeThoughts: include_thoughts,
+            includeThoughts: true,
             thinkingBudget: model_options.thinking_budget_tokens,
             thinkingLevel: model_options.thinking_level,
         };
@@ -415,12 +470,12 @@ function geminiThinkingConfig(option: StatelessExecutionOptions): ThinkingConfig
     if (model_options?.effort) {
         if (isGeminiModelVersionGte(option.model, '3.0')) {
             return {
-                includeThoughts: include_thoughts,
+                includeThoughts: true,
                 thinkingLevel: geminiThinkingLevelForEffort(option.model, model_options.effort),
             };
         }
         return {
-            includeThoughts: include_thoughts,
+            includeThoughts: true,
             thinkingBudget: geminiBudgetForEffort(option.model, model_options.effort),
         };
     }
@@ -430,14 +485,14 @@ function geminiThinkingConfig(option: StatelessExecutionOptions): ThinkingConfig
     // https://docs.cloud.google.com/vertex-ai/generative-ai/docs/thinking
     if (isGeminiModelVersionGte(option.model, '3.0')) {
         return {
-            includeThoughts: include_thoughts,
+            includeThoughts: true,
             thinkingLevel: option.model.includes('gemini-3-pro-image') ? ThinkingLevel.HIGH : ThinkingLevel.LOW,
         };
     }
     if (isGeminiModelVersionGte(option.model, '2.5')) {
         const thinking_budget_tokens = geminiThinkingBudget(option) ?? 0;
         return {
-            includeThoughts: include_thoughts,
+            includeThoughts: true,
             thinkingBudget: thinking_budget_tokens,
         };
     }
@@ -653,7 +708,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             prompt.system = existingSystem;
         }
 
-        let conversation = updateConversation(options.conversation, prompt.contents);
+        const conversation = updateConversation(options.conversation, prompt.contents);
         prompt.contents = conversation;
 
         // TODO: Remove hack, use global endpoint manually if needed.
@@ -662,6 +717,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         }
 
         const model_options = options.model_options as VertexAIGeminiOptions | undefined;
+        const includeThoughts = model_options?.include_thoughts !== false;
         const client = driver.getGoogleGenAIClient(region, model_options?.flex ?? false, options.httpTimeout);
 
         const payload = getGeminiPayload(options, prompt);
@@ -714,8 +770,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                     );
                 }
 
-                result = extractCompletionResults(content);
-                conversation = updateConversation(conversation, [content]);
+                result = extractCompletionResults(content, includeThoughts);
             }
         }
 
@@ -723,32 +778,10 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             finish_reason = 'tool_use';
         }
 
-        // Increment turn counter for deferred stripping
-        conversation = incrementConversationTurn(conversation) as Content[];
-
-        // Strip large base64 image data based on options.stripImagesAfterTurns
-        const currentTurn = getConversationMeta(conversation).turnNumber;
-        const stripOptions = {
-            keepForTurns: options.stripImagesAfterTurns ?? Infinity,
-            currentTurn,
-            textMaxTokens: options.stripTextMaxTokens,
-        };
-        let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions);
-
-        // Truncate large text content if configured
-        processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
-
-        // Strip old heartbeat status messages
-        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
-            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
-            currentTurn,
-        });
-
-        // Preserve system instruction in conversation for multi-turn support
-        const finalConversation = storeSystemInConversation(processedConversation, prompt.system);
+        const finalConversation = finalizeGeminiConversation(conversation, candidate?.content, prompt.system, options);
 
         return {
-            result: result && result.length > 0 ? result : [{ type: 'text' as const, value: '' }],
+            result: result ?? [],
             token_usage: token_usage,
             finish_reason: finish_reason,
             original_response: options.include_original_response ? response : undefined,
@@ -761,7 +794,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         driver: VertexAIDriver,
         prompt: GenerateContentPrompt,
         options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>> {
+    ): Promise<DriverCompletionStream> {
         const splits = options.model.split('/');
         let region: string | undefined;
         if (splits[0] === 'locations' && splits.length >= 2) {
@@ -788,11 +821,13 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         }
 
         const model_options = options.model_options as VertexAIGeminiOptions | undefined;
+        const includeThoughts = model_options?.include_thoughts !== false;
         const client = driver.getGoogleGenAIClient(region, model_options?.flex ?? false, options.httpTimeout);
 
         const payload = getGeminiPayload(options, prompt);
         const response = await client.models.generateContentStream(payload);
 
+        const nativeParts: Part[] = [];
         const stream = asyncMap(response, async (item) => {
             const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(driver, item.usageMetadata);
             if (item.candidates && item.candidates.length > 0) {
@@ -823,8 +858,9 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                         );
                     }
                     if (candidate.content?.role === 'model') {
+                        appendGeminiStreamParts(nativeParts, candidate.content.parts ?? []);
                         // Collect all parts in order (text and images)
-                        const combinedResults = extractCompletionResults(candidate.content);
+                        const combinedResults = extractCompletionResults(candidate.content, includeThoughts);
                         tool_use = collectToolUseParts(candidate.content);
                         if (tool_use) {
                             finish_reason = 'tool_use';
@@ -858,7 +894,15 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             };
         });
 
-        return stream;
+        return Object.assign(stream, {
+            finalizeConversation: () =>
+                finalizeGeminiConversation(
+                    conversation,
+                    nativeParts.length > 0 ? { role: 'model', parts: nativeParts } : undefined,
+                    prompt.system,
+                    options,
+                ),
+        });
     }
 
     /**
