@@ -73,6 +73,7 @@ describe('Bedrock Mantle metadata', () => {
             'temperature',
             'top_p',
             'stop_sequence',
+            'include_thoughts',
         ]);
         expect(capabilities.input).toMatchObject({ text: true, image: true });
         expect(capabilities.output.text).toBe(true);
