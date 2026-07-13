@@ -106,8 +106,8 @@ function makeContentsWithFunctionParts() {
 }
 
 function makeDriver(overrides: {
-    generateContent?: () => Promise<unknown>;
-    generateContentStream?: () => Promise<AsyncIterable<unknown>>;
+    generateContent?: (request?: unknown) => Promise<unknown>;
+    generateContentStream?: (request?: unknown) => Promise<AsyncIterable<unknown>>;
 }) {
     return {
         logger: { warn: () => {}, info: () => {}, error: () => {} },
@@ -143,6 +143,163 @@ const mockStreamingChunk = {
 };
 
 describe('GeminiModelDefinition - no conversation mutation', () => {
+    it('preserves signatures on arbitrary Parts and empty terminal Parts across JSON roundtrip', async () => {
+        const modelDef = new GeminiModelDefinition('gemini-3-flash');
+        const nativeContent = {
+            role: 'model',
+            parts: [
+                { text: 'plan', thought: true, thoughtSignature: 'thought-signature' },
+                {
+                    functionCall: { name: 'first', args: { value: 1 } },
+                    thoughtSignature: 'call-signature',
+                },
+                { text: 'answer', thoughtSignature: 'text-signature' },
+                { text: '', thoughtSignature: 'terminal-signature' },
+            ],
+        };
+        const requests: unknown[] = [];
+        const driver = makeDriver({
+            generateContent: async (request) => {
+                requests.push(request);
+                return {
+                    usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
+                    candidates: [{ finishReason: FinishReason.STOP, content: nativeContent, safetyRatings: [] }],
+                };
+            },
+        });
+        const first = await modelDef.requestTextCompletion(
+            driver,
+            { contents: [{ role: 'user', parts: [{ text: 'question' }] }] },
+            {
+                model: 'publishers/google/models/gemini-3-flash',
+                tools: [
+                    { name: 'first', input_schema: { type: 'object' } },
+                    { name: 'second', input_schema: { type: 'object' } },
+                ],
+                stripTextMaxTokens: 1,
+                stripImagesAfterTurns: 0,
+            },
+        );
+        expect(first.result).toEqual([
+            { type: 'thoughts', value: 'plan' },
+            { type: 'text', value: 'answer' },
+        ]);
+
+        const persisted = JSON.parse(JSON.stringify(first.conversation));
+        await modelDef.requestTextCompletion(
+            driver,
+            {
+                contents: [
+                    {
+                        role: 'user',
+                        parts: [
+                            { functionResponse: { name: 'first', response: { output: 'one' } } },
+                            { functionResponse: { name: 'second', response: { output: 'two' } } },
+                        ],
+                    },
+                ],
+            },
+            {
+                model: 'publishers/google/models/gemini-3-flash',
+                conversation: persisted,
+                tools: [
+                    { name: 'first', input_schema: { type: 'object' } },
+                    { name: 'second', input_schema: { type: 'object' } },
+                ],
+            },
+        );
+        expect(requests[1]).toMatchObject({ contents: expect.arrayContaining([nativeContent]) });
+
+        const hidden = await modelDef.requestTextCompletion(
+            driver,
+            { contents: [{ role: 'user', parts: [{ text: 'hidden' }] }] },
+            {
+                model: 'publishers/google/models/gemini-3-flash',
+                model_options: { _option_id: 'vertexai-gemini', include_thoughts: false },
+            },
+        );
+        expect(hidden.result).toEqual([{ type: 'text', value: 'answer' }]);
+        expect(JSON.stringify(hidden.conversation)).toContain('terminal-signature');
+    });
+
+    it('reconstructs streamed thought, parallel function-call, and terminal signatures in order', async () => {
+        const modelDef = new GeminiModelDefinition('gemini-3-flash');
+        const driver = makeDriver({
+            generateContentStream: async () =>
+                (async function* () {
+                    yield {
+                        candidates: [
+                            {
+                                content: {
+                                    role: 'model',
+                                    parts: [
+                                        { text: 'plan ', thought: true },
+                                        {
+                                            functionCall: { name: 'first', args: { value: 1 } },
+                                            thoughtSignature: 'first-signature',
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    };
+                    yield {
+                        usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 2, totalTokenCount: 3 },
+                        candidates: [
+                            {
+                                finishReason: FinishReason.STOP,
+                                content: {
+                                    role: 'model',
+                                    parts: [
+                                        { text: 'continued', thought: true, thoughtSignature: 'thought-signature' },
+                                        {
+                                            functionCall: { name: 'second', args: { value: 2 } },
+                                            thoughtSignature: 'second-signature',
+                                        },
+                                        { text: 'answer', thoughtSignature: 'answer-signature' },
+                                        { text: '', thoughtSignature: 'terminal-signature' },
+                                    ],
+                                },
+                                safetyRatings: [],
+                            },
+                        ],
+                    };
+                })(),
+        });
+        const stream = await modelDef.requestTextCompletionStream(
+            driver,
+            { contents: [{ role: 'user', parts: [{ text: 'question' }] }] },
+            { model: 'publishers/google/models/gemini-3-flash' },
+        );
+        const results = [];
+        for await (const chunk of stream) results.push(...chunk.result);
+        const conversation = await stream.finalizeConversation?.({ result: results });
+
+        expect(results).toContainEqual({ type: 'thoughts', value: 'plan ' });
+        expect(results).toContainEqual({ type: 'thoughts', value: 'continued' });
+        expect(conversation).toMatchObject({
+            _arrayConversation: expect.arrayContaining([
+                {
+                    role: 'model',
+                    parts: [
+                        { text: 'plan ', thought: true },
+                        {
+                            functionCall: { name: 'first', args: { value: 1 } },
+                            thoughtSignature: 'first-signature',
+                        },
+                        { text: 'continued', thought: true, thoughtSignature: 'thought-signature' },
+                        {
+                            functionCall: { name: 'second', args: { value: 2 } },
+                            thoughtSignature: 'second-signature',
+                        },
+                        { text: 'answer', thoughtSignature: 'answer-signature' },
+                        { text: '', thoughtSignature: 'terminal-signature' },
+                    ],
+                },
+            ]),
+        });
+    });
+
     it('createPrompt uses DataSource URIs directly for Gemini file data', async () => {
         const modelDef = new GeminiModelDefinition('gemini-2.0-flash');
         const file: DataSource = {
