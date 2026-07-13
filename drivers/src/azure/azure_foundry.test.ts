@@ -10,6 +10,7 @@ const credential: TokenCredential = {
 };
 
 type FoundryInternals = {
+    inferenceClient: object;
     inferenceProtocolDriver: {
         service: object;
     };
@@ -156,7 +157,18 @@ describe('AzureFoundryDriver protocol composition', () => {
         });
         const options = {
             model: 'gpt-deployment::gpt-5',
-            model_options: { _option_id: 'text-fallback' as const },
+            model_options: {
+                _option_id: 'openai-thinking' as const,
+                effort: 'high' as const,
+                temperature: 0.3,
+                top_p: 0.7,
+            },
+            tools: [{ name: 'lookup', input_schema: { type: 'object' as const } }],
+            result_schema: {
+                type: 'object' as const,
+                properties: { answer: { type: 'string' as const } },
+                required: ['answer'],
+            },
         };
 
         await expect(driver.requestTextCompletion(prompt, options)).resolves.toEqual(
@@ -167,7 +179,19 @@ describe('AzureFoundryDriver protocol composition', () => {
         );
         expect(deploymentGet).toHaveBeenCalledOnce();
         expect(getOpenAIClient).toHaveBeenCalledOnce();
-        expect(create).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-deployment', stream: false }));
+        expect(create).toHaveBeenCalledWith(
+            expect.objectContaining({
+                model: 'gpt-deployment',
+                stream: false,
+                reasoning: { effort: 'high' },
+                temperature: undefined,
+                top_p: undefined,
+                tools: [expect.objectContaining({ type: 'function', name: 'lookup' })],
+                text: expect.objectContaining({
+                    format: expect.objectContaining({ type: 'json_schema', name: 'format_output' }),
+                }),
+            }),
+        );
         expect(
             driver.buildStreamingConversation(prompt, [{ type: 'text', value: 'streamed' }], undefined, options),
         ).toEqual(
@@ -241,6 +265,39 @@ describe('AzureFoundryDriver protocol composition', () => {
             name: 'AzureFoundryHTTPError',
             code: 503,
             retryable: true,
+            originalError: expect.objectContaining({
+                status: 503,
+                body: { error: { code: 'ServiceUnavailable', message: 'Temporarily unavailable' } },
+            }),
+        });
+    });
+
+    it('preserves Azure embedding HTTP status and retryability in LlumiverseError', async () => {
+        const driver = createDriver();
+        const post = vi.fn(async () => ({
+            status: '503',
+            body: { error: { code: 'ServiceUnavailable', message: 'Temporarily unavailable' } },
+            headers: { get: vi.fn(() => undefined) },
+            request: { url: 'https://foundry.example.test/embeddings' },
+        }));
+        Object.defineProperty(exposePrivate<FoundryInternals>(driver), 'inferenceClient', {
+            value: { path: vi.fn(() => ({ post })) },
+        });
+
+        await expect(
+            driver.generateEmbeddings({
+                model: 'embedding-deployment::embedding-model',
+                inputs: [{ type: 'text', text: 'Hello' }],
+            }),
+        ).rejects.toMatchObject({
+            name: 'AzureFoundryHTTPError',
+            code: 503,
+            retryable: true,
+            context: {
+                provider: driver.provider,
+                model: 'embedding-deployment::embedding-model',
+                operation: 'execute',
+            },
             originalError: expect.objectContaining({
                 status: 503,
                 body: { error: { code: 'ServiceUnavailable', message: 'Temporarily unavailable' } },

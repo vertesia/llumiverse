@@ -122,6 +122,24 @@ describe('MistralAIDriver official SDK transport', () => {
         });
     });
 
+    it('normalizes Mistral embedding transport errors', async () => {
+        const driver = new MistralAIDriver({ apiKey: 'test-key' });
+        Object.defineProperty(driver.client.embeddings, 'create', {
+            value: vi.fn(async () => {
+                throw new RequestTimeoutError('timed out');
+            }),
+        });
+
+        await expect(
+            driver.generateEmbeddings({ model: 'mistral-embed', inputs: [{ type: 'text', text: 'hello' }] }),
+        ).rejects.toMatchObject({
+            name: 'RequestTimeoutError',
+            retryable: true,
+            context: { provider: driver.provider, model: 'mistral-embed', operation: 'execute' },
+            originalError: expect.any(RequestTimeoutError),
+        });
+    });
+
     it('preserves array-shaped assistant and tool content at the Mistral SDK boundary', async () => {
         const driver = new MistralAIDriver({ apiKey: 'test-key' });
         const complete = vi.fn(async (_request: unknown) => ({

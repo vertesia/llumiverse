@@ -152,7 +152,7 @@ export class OpenAIResponsesProtocol {
 
         const stream = await driver.service.responses.create({
             stream: true,
-            model: options.model,
+            model: driver.getResponsesRequestModel(options.model),
             input: conversation,
             reasoning,
             temperature: isReasoningModel ? undefined : model_options?.temperature,
@@ -210,7 +210,7 @@ export class OpenAIResponsesProtocol {
 
         const res = await driver.service.responses.create({
             stream: false,
-            model: options.model,
+            model: driver.getResponsesRequestModel(options.model),
             input: conversation,
             reasoning,
             temperature: isReasoningModel ? undefined : model_options?.temperature,
@@ -273,6 +273,11 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         super(opts);
         this.responsesProtocol = new OpenAIResponsesProtocol();
         this.formatPrompt = formatOpenAILikeMultimodalPrompt;
+    }
+
+    /** @internal Resolve the model identifier sent to the Responses transport. */
+    getResponsesRequestModel(model: string): string {
+        return model;
     }
 
     extractDataFromResponse(_options: ExecutionOptions, result: OpenAI.Responses.Response): Completion {

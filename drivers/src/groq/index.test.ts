@@ -160,6 +160,30 @@ describe('GroqDriver shared Chat Completions transport', () => {
         expect(error).toMatchObject({ name: 'APIConnectionTimeoutError', retryable: true });
     });
 
+    it('normalizes shared protocol errors through execute', async () => {
+        const driver = new GroqDriver({ apiKey: 'test-key' });
+        setGroqCreate(
+            driver,
+            vi.fn(async () => ({
+                id: 'groq-empty',
+                object: 'chat.completion',
+                created: 1,
+                model: 'llama',
+                choices: [],
+            })),
+        );
+
+        await expect(
+            driver.execute([{ role: PromptRole.user, content: 'Hello' }], { model: 'llama' }),
+        ).rejects.toMatchObject({
+            name: 'Error',
+            context: { provider: driver.provider, model: 'llama', operation: 'execute' },
+            originalError: expect.objectContaining({
+                message: 'Chat Completions response is not valid: no data',
+            }),
+        });
+    });
+
     it('preserves array-shaped tool results at the Groq SDK boundary', async () => {
         const driver = new GroqDriver({ apiKey: 'test-key' });
         const create = vi.fn(async (_request: unknown) => ({

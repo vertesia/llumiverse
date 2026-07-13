@@ -52,7 +52,6 @@ import {
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type SSEMessage = { data?: string };
-type ErrorWithStatus = Error & { status?: unknown };
 
 class AzureFoundryHTTPError extends Error {
     readonly status: number;
@@ -77,6 +76,10 @@ class AzureFoundryOpenAIProtocolDriver extends OpenAIResponsesDriverBase {
 
     async listModels(): Promise<AIModel[]> {
         return [];
+    }
+
+    getResponsesRequestModel(model: string): string {
+        return parseAzureFoundryModelId(model).deploymentName;
     }
 }
 
@@ -134,10 +137,6 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
     async generateEmbeddings(_options: EmbeddingsOptions): Promise<EmbeddingsResult> {
         throw new Error('Azure Foundry embeddings are provided by the parent driver transport.');
     }
-}
-
-function hasNumericStatus(error: unknown): boolean {
-    return error instanceof Error && typeof (error as ErrorWithStatus).status === 'number';
 }
 
 export interface AzureFoundryDriverOptions extends DriverOptions {
@@ -240,8 +239,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
         if (isOpenAI) {
             this.openAIProtocolDriver ??= new AzureFoundryOpenAIProtocolDriver(this.service.getOpenAIClient());
-            const modifiedOptions = { ...options, model: deploymentName };
-            return this.openAIProtocolDriver.requestTextCompletion(prompt, modifiedOptions);
+            return this.openAIProtocolDriver.requestTextCompletion(prompt, options);
         }
         const chatPrompt = toAzureFoundryChatPrompt(prompt);
         return this.inferenceProtocolDriver.requestTextCompletion(
@@ -259,8 +257,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
         if (isOpenAI) {
             this.openAIProtocolDriver ??= new AzureFoundryOpenAIProtocolDriver(this.service.getOpenAIClient());
-            const modifiedOptions = { ...options, model: deploymentName };
-            return this.openAIProtocolDriver.requestTextCompletionStream(prompt, modifiedOptions);
+            return this.openAIProtocolDriver.requestTextCompletionStream(prompt, options);
         }
         const chatPrompt = toAzureFoundryChatPrompt(prompt);
         return this.inferenceProtocolDriver.requestTextCompletionStream(
@@ -278,10 +275,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         const { deploymentName } = parseAzureFoundryModelId(options.model);
         const protocol = this.deploymentProtocols.get(deploymentName);
         if (protocol === 'responses' && this.openAIProtocolDriver) {
-            return this.openAIProtocolDriver.buildStreamingConversation(prompt, result, toolUse, {
-                ...options,
-                model: deploymentName,
-            });
+            return this.openAIProtocolDriver.buildStreamingConversation(prompt, result, toolUse, options);
         }
         if (protocol === 'chat_completions') {
             return this.inferenceProtocolDriver.buildStreamingConversation(
@@ -298,7 +292,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         const { deploymentName } = parseAzureFoundryModelId(options.model);
         const protocol = this.deploymentProtocols.get(deploymentName);
         if (protocol === 'responses' && this.openAIProtocolDriver) {
-            this.openAIProtocolDriver.validateResult(result, { ...options, model: deploymentName });
+            this.openAIProtocolDriver.validateResult(result, options);
             return;
         }
         if (protocol === 'chat_completions') {
@@ -311,12 +305,11 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
         const { deploymentName } = parseAzureFoundryModelId(context.model);
         const protocol = this.deploymentProtocols.get(deploymentName);
-        const delegatedContext = { ...context, model: deploymentName };
         if (protocol === 'responses' && this.openAIProtocolDriver) {
-            return this.openAIProtocolDriver.formatLlumiverseError(error, delegatedContext);
+            return this.openAIProtocolDriver.formatLlumiverseError(error, context);
         }
         if (protocol === 'chat_completions') {
-            return this.inferenceProtocolDriver.formatLlumiverseError(error, delegatedContext);
+            return this.inferenceProtocolDriver.formatLlumiverseError(error, { ...context, model: deploymentName });
         }
         return super.formatLlumiverseError(error, context);
     }
@@ -392,8 +385,10 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             const embeddingsClient = this.inferenceClient.path('/embeddings');
             const response = await embeddingsClient.post({ body: { input, model: deploymentName } });
             if (isUnexpected(response)) {
-                throw new Error(
+                throw new AzureFoundryHTTPError(
                     `${kind} embeddings request failed: ${response.status} ${response.body?.error?.message || 'Unknown error'}`,
+                    response.status,
+                    response.body,
                 );
             }
 
@@ -413,7 +408,6 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             });
         } catch (error) {
             if (LlumiverseError.isLlumiverseError(error)) throw error;
-            if (error instanceof Error && !hasNumericStatus(error)) throw error;
             this.logger.error({ error }, `Azure Foundry ${kind} embeddings error:`);
             throw this.formatLlumiverseError(error, {
                 provider: this.provider,

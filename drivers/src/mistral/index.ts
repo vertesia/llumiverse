@@ -3,6 +3,7 @@ import {
     type EmbeddingResultItem,
     type EmbeddingsOptions,
     type EmbeddingsResult,
+    LlumiverseError,
     MISTRAL_DEFAULT_EMBEDDING_MODEL,
     normalizeEmbeddingsOptions,
     Providers,
@@ -106,22 +107,31 @@ export class MistralAIDriver extends OpenAIChatCompletionsDriverBase<MistralAIDr
             }
             return input.text;
         });
-        const response = await this.client.embeddings.create({ model, inputs: texts, encodingFormat: 'float' });
-        const ordered = [...response.data].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
-        const results = ordered.map((entry, index): EmbeddingResultItem => {
-            if (!entry.embedding?.length) {
-                throw new Error(`Mistral embedding empty for input index ${entry.index ?? index}`);
-            }
-            return { outputs: [{ values: entry.embedding, modality: 'text' }] };
-        });
-        const promptTokens = response.usage.promptTokens ?? response.usage.totalTokens;
-        return {
-            model,
-            results,
-            ...(promptTokens === undefined
-                ? {}
-                : { usage: { input_tokens: promptTokens, input_text_tokens: promptTokens } }),
-        };
+        try {
+            const response = await this.client.embeddings.create({ model, inputs: texts, encodingFormat: 'float' });
+            const ordered = [...response.data].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+            const results = ordered.map((entry, index): EmbeddingResultItem => {
+                if (!entry.embedding?.length) {
+                    throw new Error(`Mistral embedding empty for input index ${entry.index ?? index}`);
+                }
+                return { outputs: [{ values: entry.embedding, modality: 'text' }] };
+            });
+            const promptTokens = response.usage.promptTokens ?? response.usage.totalTokens;
+            return {
+                model,
+                results,
+                ...(promptTokens === undefined
+                    ? {}
+                    : { usage: { input_tokens: promptTokens, input_text_tokens: promptTokens } }),
+            };
+        } catch (error: unknown) {
+            if (LlumiverseError.isLlumiverseError(error)) throw error;
+            throw this.formatLlumiverseError(error, {
+                provider: this.provider,
+                model,
+                operation: 'execute',
+            });
+        }
     }
 
     protected isCompatibleAPIError(error: unknown): error is CompatibleAPIError {

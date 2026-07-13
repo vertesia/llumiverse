@@ -383,16 +383,20 @@ describe('OpenAIResponsesDriverBase Error Handling', () => {
             expect(error.message).toContain('req_xyz789');
         });
 
-        it('should throw for non-OpenAI errors', () => {
+        it('should normalize non-OpenAI errors with llumiverse context', () => {
             const regularError = new Error('Regular error');
 
-            expect(() => {
-                driver.formatLlumiverseError(regularError, {
-                    provider: 'openai',
-                    model: 'gpt-4',
-                    operation: 'execute',
-                });
-            }).toThrow('Regular error');
+            const error = driver.formatLlumiverseError(regularError, {
+                provider: 'openai',
+                model: 'gpt-4',
+                operation: 'execute',
+            });
+
+            expect(error).toMatchObject({
+                name: 'Error',
+                context: { provider: 'openai', model: 'gpt-4', operation: 'execute' },
+                originalError: regularError,
+            });
         });
 
         it('should preserve original error for debugging', () => {

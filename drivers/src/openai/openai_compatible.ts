@@ -34,7 +34,7 @@ export abstract class OpenAICompatibleDriverBase<
 > extends AbstractDriver<OptionsT, PromptT> {
     public formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
         if (!this.isCompatibleAPIError(error)) {
-            throw error;
+            return super.formatLlumiverseError(error, context);
         }
 
         const httpStatusCode = error.status ?? error.statusCode;
