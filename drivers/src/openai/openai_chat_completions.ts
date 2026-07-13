@@ -72,7 +72,7 @@ type OpenAIChatCompletionsResponseMessage = Omit<
     content?: string | null | OpenAIChatCompletionsContentPart[];
     reasoning_content?: string | null;
     reasoning?: string | null;
-    tool_calls?: OpenAIChatCompletionsToolCall[];
+    tool_calls?: OpenAI.Chat.ChatCompletionMessageToolCall[];
 };
 type OpenAIChatCompletionsResponseChoice = Omit<OpenAI.Chat.ChatCompletion.Choice, 'message'> & {
     message: OpenAIChatCompletionsResponseMessage;
@@ -105,7 +105,7 @@ type OpenAIChatCompletionsStreamChoice = Omit<OpenAI.Chat.ChatCompletionChunk.Ch
 
 export type OpenAIChatCompletionsStreamResponse = Omit<OpenAI.Chat.ChatCompletionChunk, 'choices' | 'usage'> & {
     choices: OpenAIChatCompletionsStreamChoice[];
-    usage?: OpenAIChatCompletionsUsage;
+    usage?: OpenAIChatCompletionsUsage | null;
 };
 
 export interface OpenAIChatCompletionsPrompt {
@@ -127,6 +127,8 @@ export interface OpenAIChatCompletionsProtocolOptions {
      * Chat Completions only and response_format support is not reliable across hosted models.
      */
     resultSchemaMode?: 'response_format' | 'prompt';
+    /** Supplement native structured output with prompt alignment for providers with unreliable enforcement. */
+    includeResultSchemaInPrompt?: boolean;
     /**
      * OpenAI supports strict function schemas. Some OpenAI-compatible providers reject
      * or mis-handle those OpenAI-specific fields, so adapters can request a looser
@@ -177,7 +179,13 @@ export function parseOpenAIChatCompletionsToolCalls(
     if (!toolCalls || toolCalls.length === 0) {
         return undefined;
     }
-    return toolCalls.map((tc) => ({
+    const functionCalls = toolCalls.filter(
+        (toolCall): toolCall is OpenAI.Chat.ChatCompletionMessageFunctionToolCall => toolCall.type === 'function',
+    );
+    if (functionCalls.length === 0) {
+        return undefined;
+    }
+    return functionCalls.map((tc) => ({
         id: tc.id ?? '',
         tool_name: tc.function?.name ?? '',
         tool_input: safeJsonParse(tc.function?.arguments),
@@ -462,7 +470,8 @@ export function convertToolsToOpenAIChatCompletionsFormat(
 export function convertToOpenAIChatCompletionsMessages(
     messages: OpenAIChatCompletionsMessage[],
 ): OpenAIChatCompletionsRequestMessage[] {
-    return messages.map((msg) => {
+    const converted: OpenAIChatCompletionsRequestMessage[] = [];
+    for (const msg of messages) {
         const result: OpenAIChatCompletionsRequestMessage = {
             role: msg.role,
         };
@@ -511,8 +520,9 @@ export function convertToOpenAIChatCompletionsMessages(
             result.tool_call_id = msg.tool_call_id;
         }
 
-        return result;
-    });
+        converted.push(result);
+    }
+    return converted;
 }
 
 export function buildOpenAIChatCompletionsStreamingConversation(
@@ -624,10 +634,16 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             messages.push({ role: 'system', content: systemContent.trim() });
         }
 
-        if (this.options.resultSchemaMode === 'prompt' && _options.result_schema) {
+        const resultSchemaInstruction = _options.result_schema
+            ? `IMPORTANT: only answer using JSON, and respecting the schema included below, between the <response_schema> tags. <response_schema>${JSON.stringify(_options.result_schema)}</response_schema>`
+            : undefined;
+        if (
+            (this.options.resultSchemaMode === 'prompt' || this.options.includeResultSchemaInPrompt) &&
+            resultSchemaInstruction
+        ) {
             messages.push({
                 role: 'system',
-                content: `IMPORTANT: only answer using JSON, and respecting the schema included below, between the <response_schema> tags. <response_schema>${JSON.stringify(_options.result_schema)}</response_schema>`,
+                content: resultSchemaInstruction,
             });
         }
 
@@ -753,14 +769,10 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         };
 
         if (tool_use && tool_use.length > 0 && message?.tool_calls) {
-            assistantMessage.tool_calls = message.tool_calls.map((tc) => ({
-                id: tc.id,
-                type: 'function',
-                function: {
-                    name: tc.function.name,
-                    arguments: tc.function.arguments,
-                },
-            }));
+            assistantMessage.tool_calls = message.tool_calls.filter(
+                (toolCall): toolCall is OpenAI.Chat.ChatCompletionMessageFunctionToolCall =>
+                    toolCall.type === 'function',
+            );
         }
 
         conversation = updateOpenAIChatCompletionsConversation(conversation, {
@@ -912,7 +924,7 @@ export interface OpenAIChatCompletionsDriverOptions extends DriverOptions {
     resultSchemaMode?: OpenAIChatCompletionsProtocolOptions['resultSchemaMode'];
 }
 
-type OpenAIChatCompletionsDriver = AbstractDriver<OpenAIChatCompletionsDriverOptions, OpenAIChatCompletionsPrompt> & {
+export type OpenAIChatCompletionsDriver = {
     service: OpenAI;
 };
 
@@ -931,27 +943,81 @@ function sdkStreamToSSEStream(stream: AsyncIterable<OpenAIChatCompletionsStreamR
     });
 }
 
-class OpenAISDKChatCompletionsProtocol extends OpenAIChatCompletionsProtocol<OpenAIChatCompletionsDriver> {
+function toOpenAISDKMessage(message: OpenAIChatCompletionsRequestMessage): OpenAI.Chat.ChatCompletionMessageParam {
+    const textParts = Array.isArray(message.content)
+        ? message.content.filter((part): part is OpenAIChatCompletionsTextPart => part.type === 'text')
+        : undefined;
+
+    switch (message.role) {
+        case 'assistant':
+            return {
+                role: 'assistant',
+                content: typeof message.content === 'string' || message.content === null ? message.content : textParts,
+                tool_calls: message.tool_calls,
+            };
+        case 'developer':
+        case 'system':
+            return {
+                role: message.role,
+                content: typeof message.content === 'string' ? message.content : (textParts ?? []),
+            };
+        case 'tool':
+            if (!message.tool_call_id) {
+                throw new TypeError('OpenAI tool messages require tool_call_id');
+            }
+            return {
+                role: 'tool',
+                content: typeof message.content === 'string' ? message.content : (textParts ?? []),
+                tool_call_id: message.tool_call_id,
+            };
+        case 'user':
+            if (message.content === null || message.content === undefined) {
+                throw new TypeError('OpenAI user messages require content');
+            }
+            return { role: 'user', content: message.content };
+        default:
+            throw new TypeError(`Unsupported OpenAI message role: ${message.role}`);
+    }
+}
+
+function toOpenAINonStreamingPayload(
+    payload: OpenAIChatCompletionsPayload,
+): OpenAI.Chat.ChatCompletionCreateParamsNonStreaming {
+    const { extra_body: _extraBody, messages, stream: _stream, ...body } = payload;
+    return {
+        ...body,
+        messages: messages.map(toOpenAISDKMessage),
+        stream: false,
+    };
+}
+
+function toOpenAIStreamingPayload(
+    payload: OpenAIChatCompletionsPayload,
+): OpenAI.Chat.ChatCompletionCreateParamsStreaming {
+    const { extra_body: _extraBody, messages, stream: _stream, ...body } = payload;
+    return {
+        ...body,
+        messages: messages.map(toOpenAISDKMessage),
+        stream: true,
+        stream_options: { include_usage: true },
+    };
+}
+
+export class OpenAISDKChatCompletionsProtocol extends OpenAIChatCompletionsProtocol<OpenAIChatCompletionsDriver> {
     protected async postChatCompletion(
         driver: OpenAIChatCompletionsDriver,
         payload: OpenAIChatCompletionsPayload,
     ): Promise<OpenAIChatCompletionsResponse> {
-        const { extra_body: _extraBody, ...body } = payload;
-        return (await driver.service.chat.completions.create(
-            body as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming,
-        )) as OpenAIChatCompletionsResponse;
+        return driver.service.chat.completions.create(toOpenAINonStreamingPayload(payload));
     }
 
     protected async postChatCompletionStream(
         driver: OpenAIChatCompletionsDriver,
         payload: OpenAIChatCompletionsPayload,
     ): Promise<ReadableStream> {
-        const { extra_body: _extraBody, ...body } = payload;
-        const stream = (await driver.service.chat.completions.create({
-            ...body,
-            stream: true,
-            stream_options: { include_usage: true },
-        } as OpenAI.Chat.ChatCompletionCreateParamsStreaming)) as unknown as AsyncIterable<OpenAIChatCompletionsStreamResponse>;
+        const stream: AsyncIterable<OpenAIChatCompletionsStreamResponse> = await driver.service.chat.completions.create(
+            toOpenAIStreamingPayload(payload),
+        );
         return sdkStreamToSSEStream(stream);
     }
 }

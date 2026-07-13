@@ -72,6 +72,8 @@ import {
     converseJSONprefill,
     converseSystemToMessages,
     formatConversePrompt,
+    shouldIncludeSchemaInConversePrompt,
+    supportsConverseOutputConfig,
 } from './converse.js';
 import { generateBedrockEmbeddings } from './embeddings.js';
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from './nova-image-payload.js';
@@ -1350,7 +1352,12 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const tool_defs = getToolDefinitions(options.tools);
 
         // Use prefill when there is a schema and tools are not being used
-        if (supportsJSONPrefill && options.result_schema && !tool_defs) {
+        if (
+            supportsJSONPrefill &&
+            options.result_schema &&
+            !tool_defs &&
+            shouldIncludeSchemaInConversePrompt(options.model)
+        ) {
             prompt.messages = converseJSONprefill(prompt.messages);
         }
 
@@ -1390,6 +1397,20 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if (Object.keys(cleanedAdditionalFields).length > 0) {
             request.additionalModelRequestFields =
                 cleanedAdditionalFields as unknown as ConverseRequest['additionalModelRequestFields'];
+        }
+
+        if (options.result_schema && supportsConverseOutputConfig(options.model)) {
+            request.outputConfig = {
+                textFormat: {
+                    type: 'json_schema',
+                    structure: {
+                        jsonSchema: {
+                            name: 'output',
+                            schema: JSON.stringify(options.result_schema),
+                        },
+                    },
+                },
+            };
         }
 
         if (tool_defs?.length) {
@@ -1646,6 +1667,12 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             'openai',
             'twelvelabs',
             'qwen',
+            'google',
+            'minimax',
+            'moonshot',
+            'moonshotai',
+            'nvidia',
+            'zai',
         ];
         const unsupportedModelsByPublisher = {
             amazon: ['titan-image-generator', 'nova-reel', 'nova-sonic', 'rerank'],
@@ -1659,13 +1686,20 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             openai: [],
             twelvelabs: ['marengo'],
             qwen: [],
+            google: [],
+            minimax: [],
+            moonshot: [],
+            moonshotai: [],
+            nvidia: [],
+            zai: [],
         };
 
         // Helper function to check if model should be filtered out
         const shouldIncludeModel = (modelId?: string, providerName?: string): boolean => {
             if (!modelId || !providerName) return false;
 
-            const normalizedProvider = providerName.toLowerCase();
+            // Normalize punctuation so publisher display names such as "Z.AI" match the stable "zai" key.
+            const normalizedProvider = providerName.toLowerCase().replace(/[^a-z0-9]/g, '');
 
             // Check if provider is supported
             const isProviderSupported = supportedPublishers.some((provider) => normalizedProvider.includes(provider));
@@ -1695,7 +1729,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
             const model: AIModel = {
                 id: m.modelArn ?? m.modelId,
-                name: `${m.providerName} ${m.modelName}`,
+                name: m.modelName ?? m.modelId,
                 provider: this.provider,
                 owner: m.providerName,
                 can_stream: m.responseStreamingSupported ?? false,
@@ -1704,7 +1738,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     : modelModalitiesToArray(modelCapability.input),
                 output_modalities: m.outputModalities
                     ? formatAmazonModalities(m.outputModalities)
-                    : modelModalitiesToArray(modelCapability.input),
+                    : modelModalitiesToArray(modelCapability.output),
                 tool_support: modelCapability.tool_support,
             };
 

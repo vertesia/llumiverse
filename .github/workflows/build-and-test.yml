@@ -77,6 +77,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           BEDROCK_REGION: us-east-1
+          BEDROCK_MANTLE_REGION: us-east-1
           GOOGLE_PROJECT_ID: dengenlabs
           GOOGLE_REGION: us-central1
         run: npx vitest --exclude '**/!(*.live).test.ts'

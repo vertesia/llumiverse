@@ -60,6 +60,33 @@ Prefer sparse, change-scoped verification in llumiverse unless the user explicit
 - Error handling: use proper error types and propagation, especially with async code
 - Formatting: follows `biome.json` in this repository
 
+## Model Compatibility and Forward Compatibility
+
+Provider model catalogs evolve independently of llumiverse releases. Model support must therefore be expressed through
+stable routing rules rather than duplicated catalog snapshots.
+
+- Classify models by provider, publisher, model family, and generation markers. Do not use an exhaustive list of model
+  IDs as a production allowlist when a family-level rule can describe the behavior.
+- A newly discovered model in a known family should inherit the protocol, options, capabilities, and execution behavior
+  of the newest understood generation in that family. For version-dependent behavior, use parsed versions and
+  greater-than-or-equal comparisons so later generations receive the latest behavior by default.
+- Keep exact-ID exceptions only for documented model-specific behavior that cannot be represented by a family or
+  version rule. Explain the exception next to the code.
+- Treat the provider's model-discovery API as the source of regional and account availability. Llumiverse should filter
+  or enrich those results by category; it should not maintain a second exhaustive provider catalog.
+- Tests should cover category invariants, version boundaries, representative current IDs, and plausible future IDs.
+  Avoid assertions over a complete ordered model list or a fixed catalog size when adding a model should remain a
+  compatible change.
+- Exact model inventories may appear in opt-in compatibility audits or fixtures, but they must not determine runtime
+  support and should not make the normal test suite fail solely because a provider added a model.
+- Prefer provider-native structured-output configuration (`response_format`, `outputConfig`, constrained output, or the
+  provider equivalent) whenever the model supports it. Keep fallback behavior as explicit family-level rules for
+  providers or generations with known schema-enforcement defects; do not silently make prompt alignment the default.
+- Keep Claude schema behavior conservative because Claude is heavily used by customers: continue using prompt guidance
+  for schemas rather than switching to strict constrained-output enforcement. Do not change this established
+  prompt/schema handling unless a future Claude-specific overhaul includes dedicated regression coverage and an explicit
+  compatibility review.
+
 ## Multi-Turn Conversations
 
 Llumiverse supports multi-turn conversations via the `conversation` property in `ExecutionOptions`. The conversation object is driver-specific and opaque - you receive it from one execution and pass it to the next.
