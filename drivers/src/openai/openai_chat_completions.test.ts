@@ -5,6 +5,7 @@ import {
     type OpenAIChatCompletionsPayload,
     type OpenAIChatCompletionsPrompt,
     OpenAIChatCompletionsProtocol,
+    type OpenAIChatCompletionsProtocolOptions,
     type OpenAIChatCompletionsResponse,
     stripOpenAIChatCompletionsThinkBlocksFromCompletion,
 } from './openai_chat_completions.js';
@@ -34,8 +35,9 @@ class TestOpenAIChatCompletionsProtocol extends OpenAIChatCompletionsProtocol<un
     constructor(
         private readonly response?: OpenAIChatCompletionsResponse,
         private readonly stream?: ReadableStream,
+        protocolOptions: Partial<OpenAIChatCompletionsProtocolOptions> = {},
     ) {
-        super({ modelName: 'test/model' });
+        super({ modelName: 'test/model', ...protocolOptions });
     }
 
     protected async postChatCompletion(
@@ -72,6 +74,47 @@ const options: ExecutionOptions = {
 };
 
 describe('OpenAIChatCompletionsProtocol', () => {
+    it('forwards token fields, penalties, stop sequences, and extra_body to the transport', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol(
+            {
+                id: 'chatcmpl-1',
+                object: 'chat.completion',
+                created: 1,
+                model: 'test/model',
+                choices: [
+                    {
+                        index: 0,
+                        message: { role: 'assistant', content: 'ok' },
+                        finish_reason: 'stop',
+                        logprobs: null,
+                    },
+                ],
+            },
+            undefined,
+            { defaultMaxTokens: 64, extraBody: { google: { model_safety_settings: { enabled: false } } } },
+        );
+
+        await model.requestTextCompletion(undefined, prompt, {
+            ...options,
+            model_options: {
+                _option_id: 'text-fallback',
+                presence_penalty: 0.1,
+                frequency_penalty: 0.2,
+                stop_sequence: ['END'],
+            },
+        });
+
+        expect(model.payloads[0]).toEqual(
+            expect.objectContaining({
+                max_tokens: 64,
+                presence_penalty: 0.1,
+                frequency_penalty: 0.2,
+                stop: ['END'],
+                extra_body: { google: { model_safety_settings: { enabled: false } } },
+            }),
+        );
+    });
+
     it('reads text from non-streaming content arrays', async () => {
         const model = new TestOpenAIChatCompletionsProtocol({
             id: 'chatcmpl-1',
