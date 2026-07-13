@@ -4,7 +4,6 @@ import {
     buildClaudeCacheOptions,
     buildClaudeCacheTtlOptions,
     buildClaudeEffortOptions,
-    buildClaudeIncludeThoughtsOption,
     buildClaudeThinkingBudgetOption,
     getClaudeMaxTokensLimit,
 } from './shared-parsing.js';
@@ -56,6 +55,7 @@ export interface BaseConverseOptions<TOptionId extends string = string> {
     temperature?: number;
     top_p?: number;
     stop_sequence?: string[];
+    include_thoughts?: boolean;
 }
 
 export type BedrockConverseOptions = BaseConverseOptions<'bedrock-converse'>;
@@ -328,6 +328,12 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                 step: 200,
                 description: 'The maximum number of tokens to generate',
             },
+            {
+                name: 'include_thoughts',
+                type: OptionType.boolean,
+                default: true,
+                description: 'Include visible model reasoning as separate thoughts results.',
+            },
         ];
 
         // Opus 4.7+ models don't support temperature, top_p
@@ -378,7 +384,6 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                     ...claudeConverseOptions,
                     ...buildClaudeEffortOptions(model),
                     ...buildClaudeThinkingBudgetOption(model),
-                    ...buildClaudeIncludeThoughtsOption(model),
                     ...buildClaudeCacheOptions(),
                     ...buildClaudeCacheTtlOptions((option as BedrockClaudeOptions)?.cache_enabled),
                 ],

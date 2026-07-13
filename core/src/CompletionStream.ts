@@ -2,6 +2,7 @@ import {
     type CompletionChunkObject,
     type CompletionResult,
     type CompletionStream,
+    type DriverCompletionStream,
     type DriverOptions,
     type ExecutionOptions,
     type ExecutionResponse,
@@ -108,12 +109,11 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
         let promptNewTokens: number | undefined;
         const httpScope = this.driver.createExecutionHttpAgentScope(this.options);
         let sourceIterator: AsyncIterator<CompletionChunkObject> | undefined;
+        let stream: DriverCompletionStream | undefined;
         let streamCompleted = false;
 
         try {
-            const stream = await httpScope.run(() =>
-                this.driver.requestTextCompletionStream(this.prompt, this.options),
-            );
+            stream = await httpScope.run(() => this.driver.requestTextCompletionStream(this.prompt, this.options));
             const iterator = stream[Symbol.asyncIterator]();
             sourceIterator = iterator;
             while (true) {
@@ -160,10 +160,11 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
                                 if (
                                     lastResult &&
                                     ((lastResult.type === 'text' && result.type === 'text') ||
+                                        (lastResult.type === 'thoughts' && result.type === 'thoughts') ||
                                         (lastResult.type === 'json' && result.type === 'json'))
                                 ) {
                                     // Combine consecutive text or JSON results
-                                    if (result.type === 'text') {
+                                    if (result.type === 'text' || result.type === 'thoughts') {
                                         lastResult.value += result.value;
                                     } else if (result.type === 'json') {
                                         // For JSON, combine the parsed objects directly
@@ -208,6 +209,10 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
                                     switch (r.type) {
                                         case 'text':
                                             return r.value;
+                                        case 'thoughts':
+                                            // The public stream remains answer-only. Callers that want
+                                            // reasoning can read the typed results on stream.completion.
+                                            return '';
                                         case 'json':
                                             return JSON.stringify(r.value);
                                         case 'image': {
@@ -315,12 +320,13 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
         };
 
         // Build conversation context for multi-turn support
-        const conversation = this.driver.buildStreamingConversation(
-            this.prompt,
-            accumulatedResults,
-            toolUseArray,
-            this.options,
-        );
+        const conversation = stream?.finalizeConversation
+            ? await stream.finalizeConversation({
+                  result: accumulatedResults,
+                  tool_use: toolUseArray,
+                  finish_reason,
+              })
+            : this.driver.buildStreamingConversation(this.prompt, accumulatedResults, toolUseArray, this.options);
         if (conversation !== undefined) {
             this.completion.conversation = conversation;
         }
@@ -366,6 +372,8 @@ export class FallbackCompletionStream<PromptT = unknown> implements CompletionSt
                     switch (r.type) {
                         case 'text':
                             return r.value;
+                        case 'thoughts':
+                            return '';
                         case 'json':
                             return JSON.stringify(r.value);
                         case 'image': {

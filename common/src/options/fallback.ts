@@ -9,6 +9,7 @@ export interface TextFallbackOptions {
     presence_penalty?: number;
     frequency_penalty?: number;
     stop_sequence?: string[];
+    include_thoughts?: boolean;
 }
 
 export const textOptionsFallback: ModelOptionsInfo = {
@@ -71,6 +72,12 @@ export const textOptionsFallback: ModelOptionsInfo = {
             type: OptionType.string_list,
             value: [],
             description: 'The generation will halt if one of the stop sequences is output',
+        },
+        {
+            name: 'include_thoughts',
+            type: OptionType.boolean,
+            default: true,
+            description: 'Include visible model reasoning as separate thoughts results.',
         },
     ],
 };

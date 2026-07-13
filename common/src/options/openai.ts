@@ -20,6 +20,7 @@ export interface OpenAiThinkingOptions {
     effort?: ReasoningEffort;
     reasoning_effort?: ReasoningEffort;
     image_detail?: 'low' | 'high' | 'auto';
+    include_thoughts?: boolean;
 }
 
 export interface OpenAiTextOptions {
@@ -31,6 +32,7 @@ export interface OpenAiTextOptions {
     frequency_penalty?: number;
     stop_sequence?: string[];
     image_detail?: 'low' | 'high' | 'auto';
+    include_thoughts?: boolean;
 }
 export interface OpenAiDalleOptions {
     _option_id: 'openai-dalle';
@@ -50,6 +52,12 @@ export interface OpenAiGptImageOptions {
 }
 
 export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOptionsInfo {
+    const thoughtVisibilityOption: ModelOptionInfoItem = {
+        name: 'include_thoughts',
+        type: OptionType.boolean,
+        default: true,
+        description: 'Include visible model reasoning as separate thoughts results.',
+    };
     const visionOptions: ModelOptionInfoItem[] = isVisionModel(model)
         ? [
               {
@@ -226,7 +234,7 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
 
         return {
             _option_id: 'openai-thinking',
-            options: [...commonOptions, ...reasoningOptions, ...visionOptions],
+            options: [...commonOptions, ...reasoningOptions, thoughtVisibilityOption, ...visionOptions],
         };
     } else {
         let max_tokens_limit = 4096;
@@ -305,7 +313,7 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
 
         return {
             _option_id: 'openai-text',
-            options: [...commonOptions, ...visionOptions],
+            options: [...commonOptions, thoughtVisibilityOption, ...visionOptions],
         };
     }
 }

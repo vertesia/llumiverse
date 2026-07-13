@@ -399,7 +399,7 @@ function getGeminiThinkingOptionItems(model: string): ModelOptionInfoItem[] {
         {
             name: 'include_thoughts',
             type: OptionType.boolean,
-            default: false,
+            default: true,
             description: "Include the model's reasoning process in the response",
         },
         {
@@ -418,7 +418,14 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
         const isGemini3OrLater = isGeminiModelVersionGte(model, '3.0');
 
         const max_tokens_limit = getGeminiMaxTokensLimit(model);
-        const excludeOptions = ['max_tokens', 'presence_penalty', 'frequency_penalty', 'seed', 'top_k'];
+        const excludeOptions = [
+            'max_tokens',
+            'presence_penalty',
+            'frequency_penalty',
+            'seed',
+            'top_k',
+            'include_thoughts',
+        ];
         let commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
 
         // Set max temperature to 2.0
@@ -537,7 +544,7 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
         };
     }
     const max_tokens_limit = getGeminiMaxTokensLimit(model);
-    const excludeOptions = ['max_tokens'];
+    const excludeOptions = ['max_tokens', 'include_thoughts'];
     const commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
 
     const max_tokens: ModelOptionInfoItem[] = [
@@ -620,7 +627,7 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
             {
                 name: 'include_thoughts',
                 type: OptionType.boolean,
-                default: false,
+                default: true,
                 description: "Include the model's reasoning process in the response",
             },
             {
@@ -649,7 +656,7 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
 
 function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
     const max_tokens_limit = getClaudeMaxTokensLimit(model);
-    const excludeOptions = ['max_tokens', 'presence_penalty', 'frequency_penalty'];
+    const excludeOptions = ['max_tokens', 'presence_penalty', 'frequency_penalty', 'include_thoughts'];
     let commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
 
     // Opus 4.7+ models no longer support temperature, top_p, top_k (returns 400 error)

@@ -15,6 +15,7 @@ export interface BedrockMantleResponsesOptions {
     reasoning_effort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh';
     verbosity?: 'low' | 'medium' | 'high';
     image_detail?: 'low' | 'high' | 'auto';
+    include_thoughts?: boolean;
 }
 
 export interface BedrockMantleChatCompletionsOptions {
@@ -23,6 +24,7 @@ export interface BedrockMantleChatCompletionsOptions {
     temperature?: number;
     top_p?: number;
     stop_sequence?: string[];
+    include_thoughts?: boolean;
 }
 
 export interface BedrockMantleClaudeOptions {
@@ -158,7 +160,15 @@ function getResponsesOptions(model: string): ModelOptionsInfo {
         ? { none: 'none', low: 'low', medium: 'medium', high: 'high' }
         : { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh' };
     const reasoningEffortDefault = isGrok ? 'low' : 'medium';
-    const options: ModelOptionInfoItem[] = [maxTokensOption(model)];
+    const options: ModelOptionInfoItem[] = [
+        maxTokensOption(model),
+        {
+            name: 'include_thoughts',
+            type: OptionType.boolean,
+            default: true,
+            description: 'Include visible model reasoning as separate thoughts results.',
+        },
+    ];
 
     if (isGrok) {
         options.push(
@@ -225,7 +235,7 @@ function getResponsesOptions(model: string): ModelOptionsInfo {
 }
 
 function getChatCompletionsOptions(model: string): ModelOptionsInfo {
-    const allowedOptions = new Set(['max_tokens', 'temperature', 'top_p', 'stop_sequence']);
+    const allowedOptions = new Set(['max_tokens', 'temperature', 'top_p', 'stop_sequence', 'include_thoughts']);
     const maxOutputTokens = getBedrockModelKnowledge(model).max_output_tokens;
     return {
         _option_id: 'bedrock-mantle-chat-completions',
