@@ -15,8 +15,6 @@ import type {
     ChatCompletionResponse,
     CompletionChunk,
     ContentChunk,
-    TextChunk,
-    ThinkChunk,
 } from '@mistralai/mistralai/models/components';
 import {
     OpenAIChatCompletionsDriverBase,
@@ -145,7 +143,7 @@ function toMistralMessage(message: OpenAIChatCompletionsPayload['messages'][numb
         case 'assistant':
             return {
                 role: 'assistant',
-                content: getMistralReplayContent(message._provider_metadata) ?? textContent,
+                content: textContent,
                 toolCalls: message.tool_calls?.map((toolCall, index) => ({
                     id: toolCall.id,
                     index,
@@ -193,7 +191,6 @@ function toMistralTool(tool: NonNullable<OpenAIChatCompletionsPayload['tools']>[
 function normalizeMistralContent(content: string | ContentChunk[] | null | undefined): {
     content: string | null;
     reasoning?: string;
-    _provider_metadata?: MistralAssistantMetadata;
 } {
     if (typeof content === 'string' || content == null) {
         return { content: content ?? null };
@@ -213,57 +210,10 @@ function normalizeMistralContent(content: string | ContentChunk[] | null | undef
             );
         }
     }
-    const replayContent = content.filter(isMistralReplayContentChunk);
-    return {
-        content: text.join(''),
-        reasoning: reasoning.length ? reasoning.join('') : undefined,
-        ...(replayContent.length > 0 ? { _provider_metadata: { provider: 'mistral', content: replayContent } } : {}),
-    };
-}
-
-type MistralTextContentChunk = TextChunk & { type: 'text' };
-type MistralThinkingContentChunk = ThinkChunk & { type: 'thinking' };
-type MistralReplayContentChunk = MistralTextContentChunk | MistralThinkingContentChunk;
-
-interface MistralAssistantMetadata {
-    provider: 'mistral';
-    content: MistralReplayContentChunk[];
-}
-
-function isMistralReplayContentChunk(content: ContentChunk): content is MistralReplayContentChunk {
-    return content.type === 'text' || content.type === 'thinking';
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-    return typeof value === 'object' && value !== null;
-}
-
-function isMistralThinkingChunk(value: unknown): value is MistralThinkingContentChunk {
-    return (
-        isRecord(value) &&
-        value.type === 'thinking' &&
-        Array.isArray(value.thinking) &&
-        (value.signature === undefined || value.signature === null || typeof value.signature === 'string')
-    );
-}
-
-function isMistralTextChunk(value: unknown): value is MistralTextContentChunk {
-    return isRecord(value) && value.type === 'text' && typeof value.text === 'string';
-}
-
-function isMistralAssistantMetadata(value: unknown): value is MistralAssistantMetadata {
-    return (
-        isRecord(value) &&
-        value.provider === 'mistral' &&
-        Array.isArray(value.content) &&
-        value.content.every((item) => isMistralTextChunk(item) || isMistralThinkingChunk(item))
-    );
-}
-
-function getMistralReplayContent(metadata: unknown): MistralReplayContentChunk[] | undefined {
-    const entries = Array.isArray(metadata) ? metadata : [metadata];
-    const content = entries.flatMap((entry) => (isMistralAssistantMetadata(entry) ? entry.content : []));
-    return content.length > 0 ? content : undefined;
+    // TODO: Proper multi-turn thinking support must preserve SDK-native thinking chunks and their signatures.
+    // The shared Chat Completions stream currently reconstructs conversations from normalized text and tool calls,
+    // so Mistral reasoning is exposed as text here but signed thinking state is intentionally not replayed.
+    return { content: text.join(''), reasoning: reasoning.length ? reasoning.join('') : undefined };
 }
 
 function normalizeMistralResponse(response: ChatCompletionResponse): OpenAIChatCompletionsResponse {

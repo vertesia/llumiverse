@@ -50,8 +50,6 @@ export type OpenAIChatCompletionsMessage = {
      * Tool calls from assistant messages - stored and sent back with tool results.
      */
     tool_calls?: OpenAIChatCompletionsToolCall[];
-    /** @internal Opaque state interpreted only by the originating provider adapter. */
-    _provider_metadata?: unknown;
 };
 
 export type OpenAIChatCompletionsRequestMessage = {
@@ -59,7 +57,6 @@ export type OpenAIChatCompletionsRequestMessage = {
     content?: string | null | OpenAIChatCompletionsContentPart[];
     tool_call_id?: string;
     tool_calls?: OpenAIChatCompletionsToolCall[];
-    _provider_metadata?: unknown;
 };
 
 export type OpenAIChatCompletionsPayload = Omit<
@@ -83,7 +80,6 @@ type OpenAIChatCompletionsResponseMessage = Omit<
     reasoning_content?: string | null;
     reasoning?: string | null;
     tool_calls?: OpenAI.Chat.ChatCompletionMessageToolCall[];
-    _provider_metadata?: unknown;
 };
 type OpenAIChatCompletionsResponseChoice = Omit<
     OpenAI.Chat.ChatCompletion.Choice,
@@ -104,7 +100,6 @@ type OpenAIChatCompletionsStreamChoiceDelta = {
     content?: string | null | OpenAIChatCompletionsContentPart[];
     reasoning_content?: string | null;
     reasoning?: string | null;
-    _provider_metadata?: unknown;
     tool_calls?: Array<{
         index?: number;
         id?: string;
@@ -578,7 +573,6 @@ export function convertToOpenAIChatCompletionsMessages(
     for (const msg of messages) {
         const result: OpenAIChatCompletionsRequestMessage = {
             role: msg.role,
-            ...(msg._provider_metadata === undefined ? {} : { _provider_metadata: msg._provider_metadata }),
         };
 
         if (msg.tool_calls && msg.tool_calls.length > 0) {
@@ -635,7 +629,6 @@ export function buildOpenAIChatCompletionsStreamingConversation(
     result: unknown[],
     toolUse: unknown[] | undefined,
     options: ExecutionOptions,
-    providerMetadata?: unknown[],
 ): OpenAIChatCompletionsPrompt {
     const completionResults = result as CompletionResult[];
     const textContent = completionResults
@@ -652,9 +645,6 @@ export function buildOpenAIChatCompletionsStreamingConversation(
         .join('');
 
     const assistantMessage: OpenAIChatCompletionsMessage = { role: 'assistant' };
-    if (providerMetadata && providerMetadata.length > 0) {
-        assistantMessage._provider_metadata = providerMetadata;
-    }
     if (textContent) {
         assistantMessage.content = stripOpenAIChatCompletionsThinkBlocks(textContent);
     } else if (toolUse && toolUse.length > 0) {
@@ -875,7 +865,6 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         const assistantMessage: OpenAIChatCompletionsMessage = {
             role: 'assistant',
             content: text || null,
-            ...(message?._provider_metadata === undefined ? {} : { _provider_metadata: message._provider_metadata }),
         };
 
         if (tool_use && tool_use.length > 0 && message?.tool_calls) {
@@ -944,7 +933,6 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                 return {
                     result: [],
                     tool_use: toolUseChunks,
-                    provider_metadata: delta._provider_metadata,
                     finish_reason: choice?.finish_reason
                         ? normalizeOpenAIChatCompletionsFinishReason(choice.finish_reason, toolUseChunks.length > 0)
                         : undefined,
@@ -971,7 +959,6 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                     : '';
             return {
                 result: text || fallbackText ? [{ type: 'text', value: fallbackText || text }] : [],
-                provider_metadata: delta?._provider_metadata,
                 finish_reason: normalizeOpenAIChatCompletionsFinishReason(choice?.finish_reason),
                 token_usage: mapOpenAIChatCompletionsUsage(json.usage),
             } satisfies CompletionChunkObject;
@@ -1230,9 +1217,8 @@ export abstract class OpenAIChatCompletionsDriverBase<
         result: unknown[],
         toolUse: unknown[] | undefined,
         options: ExecutionOptions,
-        providerMetadata?: unknown[],
     ): OpenAIChatCompletionsPrompt {
-        return buildOpenAIChatCompletionsStreamingConversation(prompt, result, toolUse, options, providerMetadata);
+        return buildOpenAIChatCompletionsStreamingConversation(prompt, result, toolUse, options);
     }
 
     validateResult(result: Completion, options: ExecutionOptions) {
