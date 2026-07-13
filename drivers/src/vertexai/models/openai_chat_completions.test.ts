@@ -200,7 +200,7 @@ describe('OpenAIChatCompletionsModelDefinition', () => {
 
         const completion = await modelDef.requestTextCompletion(driver, prompt, options);
 
-        expect(completion.result).toEqual([{ type: 'text', value: 'fallback text' }]);
+        expect(completion.result).toEqual([{ type: 'thoughts', value: 'fallback text' }]);
     });
 
     it('reads text from non-streaming OpenAI content arrays', async () => {
@@ -243,10 +243,13 @@ describe('OpenAIChatCompletionsModelDefinition', () => {
 
         const completion = await modelDef.requestTextCompletion(driver, prompt, options);
 
-        expect(completion.result).toEqual([{ type: 'text', value: 'first\nsecond' }]);
+        expect(completion.result).toEqual([
+            { type: 'thoughts', value: 'hidden reasoning' },
+            { type: 'text', value: 'first\nsecond' },
+        ]);
     });
 
-    it('prefers normal content over reasoning fields in non-streaming responses', async () => {
+    it('keeps normal content and reasoning fields separate', async () => {
         const modelDef = new OpenAIChatCompletionsModelDefinition({
             modelName: 'zai-org/glm-5-maas',
             region: 'global',
@@ -283,7 +286,10 @@ describe('OpenAIChatCompletionsModelDefinition', () => {
 
         const completion = await modelDef.requestTextCompletion(driver, prompt, options);
 
-        expect(completion.result).toEqual([{ type: 'text', value: 'visible content' }]);
+        expect(completion.result).toEqual([
+            { type: 'thoughts', value: 'hidden reasoning' },
+            { type: 'text', value: 'visible content' },
+        ]);
     });
 
     it('uses response_format with normalized JSON schema for structured Vertex MaaS output', async () => {
@@ -517,7 +523,10 @@ describe('OpenAIChatCompletionsModelDefinition', () => {
 
         const chunks = await collectChunks(await modelDef.requestTextCompletionStream(driver, prompt, options));
 
-        expect(chunks.flatMap((chunk) => chunk.result)).toEqual([{ type: 'text', value: 'visible' }]);
+        expect(chunks.flatMap((chunk) => chunk.result)).toEqual([
+            { type: 'thoughts', value: 'hidden' },
+            { type: 'text', value: 'visible' },
+        ]);
     });
 
     it('uses buffered streaming reasoning as a fallback when no content deltas arrive', async () => {
@@ -578,6 +587,9 @@ describe('OpenAIChatCompletionsModelDefinition', () => {
 
         const chunks = await collectChunks(await modelDef.requestTextCompletionStream(driver, prompt, options));
 
-        expect(chunks.flatMap((chunk) => chunk.result)).toEqual([{ type: 'text', value: 'fallback text' }]);
+        expect(chunks.flatMap((chunk) => chunk.result)).toEqual([
+            { type: 'thoughts', value: 'fallback' },
+            { type: 'thoughts', value: ' text' },
+        ]);
     });
 });

@@ -466,7 +466,8 @@ describe('Bedrock Mantle Responses options', () => {
             expect.objectContaining({
                 model: 'openai.gpt-5.5',
                 max_output_tokens: 100,
-                reasoning: { effort: 'low' },
+                reasoning: { effort: 'low', summary: 'auto' },
+                include: ['reasoning.encrypted_content'],
                 text: expect.objectContaining({
                     verbosity: 'low',
                     format: expect.objectContaining({ type: 'json_schema', name: 'format_output' }),
@@ -495,7 +496,8 @@ describe('Bedrock Mantle Responses options', () => {
         expect(create).toHaveBeenCalledWith(
             expect.objectContaining({
                 model: 'xai.grok-4.3',
-                reasoning: { effort: 'none' },
+                reasoning: { effort: 'none', summary: 'auto' },
+                include: ['reasoning.encrypted_content'],
                 temperature: 0.4,
                 top_p: 0.9,
             }),

@@ -183,7 +183,8 @@ describe('AzureFoundryDriver protocol composition', () => {
             expect.objectContaining({
                 model: 'gpt-deployment',
                 stream: false,
-                reasoning: { effort: 'high' },
+                reasoning: { effort: 'high', summary: 'auto' },
+                include: ['reasoning.encrypted_content'],
                 temperature: undefined,
                 top_p: undefined,
                 tools: [expect.objectContaining({ type: 'function', name: 'lookup' })],
@@ -242,7 +243,7 @@ describe('AzureFoundryDriver protocol composition', () => {
                 ]),
             }),
         );
-        expect(completion.result).toEqual([{ type: 'text', value: 'Answer' }]);
+        expect(completion.result).toEqual([{ type: 'text', value: '<think>hidden</think>Answer' }]);
     });
 
     it('preserves Azure HTTP status and retryability in LlumiverseError', async () => {

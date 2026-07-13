@@ -11,7 +11,7 @@ import {
     type OpenAIChatCompletionsProtocolOptions,
     type OpenAIChatCompletionsResponse,
     parseOpenAIChatCompletionsToolCalls,
-    stripOpenAIChatCompletionsThinkBlocksFromCompletion,
+    prepareOpenAIChatCompletionsConversation,
 } from './openai_chat_completions.js';
 
 function createSSEStream(events: ServerSentEvent[]): ReadableStream<ServerSentEvent> {
@@ -224,10 +224,169 @@ describe('OpenAIChatCompletionsProtocol', () => {
 
         const completion = await model.requestTextCompletion(undefined, prompt, options);
 
-        expect(completion.result).toEqual([{ type: 'text', value: 'first\nsecond' }]);
+        expect(completion.result).toEqual([
+            { type: 'thoughts', value: 'hidden' },
+            { type: 'text', value: 'first\nsecond' },
+        ]);
     });
 
-    it('uses reasoning as a non-streaming fallback only when content is absent', async () => {
+    it('hides thoughts only when explicitly disabled and keeps native replay fields', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol({
+            id: 'chatcmpl-thoughts',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [
+                {
+                    index: 0,
+                    message: {
+                        role: 'assistant',
+                        content: 'answer',
+                        reasoning_content: 'signed-or-native-reasoning',
+                    },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+        });
+
+        const explicit = await model.requestTextCompletion(undefined, prompt, {
+            ...options,
+            model_options: { _option_id: 'text-fallback', include_thoughts: true },
+        });
+        expect(explicit.result).toEqual([
+            { type: 'thoughts', value: 'signed-or-native-reasoning' },
+            { type: 'text', value: 'answer' },
+        ]);
+
+        const hidden = await model.requestTextCompletion(undefined, prompt, {
+            ...options,
+            model_options: { _option_id: 'text-fallback', include_thoughts: false },
+        });
+        expect(hidden.result).toEqual([{ type: 'text', value: 'answer' }]);
+        expect(hidden.conversation).toMatchObject({
+            messages: expect.arrayContaining([
+                expect.objectContaining({ reasoning_content: 'signed-or-native-reasoning' }),
+            ]),
+        });
+    });
+
+    it('removes DeepSeek R1 reasoning from replay while still projecting it as thoughts', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol({
+            id: 'chatcmpl-r1',
+            object: 'chat.completion',
+            created: 1,
+            model: 'deepseek-r1-0528-maas',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: 'answer', reasoning_content: 'visible reasoning' },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+        });
+
+        const completion = await model.requestTextCompletion(undefined, prompt, {
+            ...options,
+            model: 'deepseek-ai/deepseek-r1-0528-maas',
+        });
+
+        expect(completion.result).toEqual([
+            { type: 'thoughts', value: 'visible reasoning' },
+            { type: 'text', value: 'answer' },
+        ]);
+        expect(JSON.stringify(completion.conversation)).not.toContain('visible reasoning');
+    });
+
+    it('replays DeepSeek V3.2 reasoning only within the current user tool turn', () => {
+        const currentTurn = prepareOpenAIChatCompletionsConversation(
+            {
+                messages: [
+                    { role: 'user', content: 'first question' },
+                    {
+                        role: 'assistant',
+                        content: null,
+                        reasoning_content: 'current reasoning',
+                        tool_calls: [
+                            {
+                                id: 'call-1',
+                                type: 'function',
+                                function: { name: 'lookup', arguments: '{}' },
+                            },
+                        ],
+                    },
+                    { role: 'tool', tool_call_id: 'call-1', content: 'result' },
+                ],
+            },
+            {
+                model: 'deepseek-ai/deepseek-v3.2-maas',
+                tools: [{ name: 'lookup', input_schema: { type: 'object' } }],
+            },
+        );
+        expect(currentTurn.messages[1].reasoning_content).toBe('current reasoning');
+
+        const nextTurn = prepareOpenAIChatCompletionsConversation(
+            { messages: [...currentTurn.messages, { role: 'user', content: 'next question' }] },
+            {
+                model: 'deepseek-ai/deepseek-v3.2-maas',
+                tools: [{ name: 'lookup', input_schema: { type: 'object' } }],
+            },
+        );
+        expect(nextTurn.messages[1].reasoning_content).toBeUndefined();
+    });
+
+    it('keeps DeepSeek V4 tool reasoning history immutable until checkpoint', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol({
+            id: 'chatcmpl-v4',
+            object: 'chat.completion',
+            created: 1,
+            model: 'deepseek-v4-pro',
+            choices: [
+                {
+                    index: 0,
+                    message: {
+                        role: 'assistant',
+                        content: null,
+                        reasoning_content: 'tool reasoning',
+                        tool_calls: [
+                            {
+                                id: 'call-1',
+                                type: 'function',
+                                function: { name: 'lookup', arguments: '{}' },
+                            },
+                        ],
+                    },
+                    finish_reason: 'tool_calls',
+                    logprobs: null,
+                },
+            ],
+        });
+        const imagePrompt: OpenAIChatCompletionsPrompt = {
+            messages: [
+                {
+                    role: 'user',
+                    content: [
+                        { type: 'text', text: 'question' },
+                        { type: 'image_url', image_url: { url: 'data:image/png;base64,aW1hZ2U=' } },
+                    ],
+                },
+            ],
+        };
+
+        const completion = await model.requestTextCompletion(undefined, imagePrompt, {
+            ...options,
+            model: 'deepseek-v4-pro',
+            tools: [{ name: 'lookup', input_schema: { type: 'object' } }],
+            stripImagesAfterTurns: 0,
+        });
+        const conversation = completion.conversation as OpenAIChatCompletionsPrompt;
+
+        expect(conversation.messages[0]).toEqual(imagePrompt.messages[0]);
+        expect(conversation.messages[1].reasoning_content).toBe('tool reasoning');
+    });
+
+    it('returns native reasoning separately whether or not answer content is present', async () => {
         const fallbackModel = new TestOpenAIChatCompletionsProtocol({
             id: 'chatcmpl-1',
             object: 'chat.completion',
@@ -258,14 +417,17 @@ describe('OpenAIChatCompletionsProtocol', () => {
         });
 
         await expect(fallbackModel.requestTextCompletion(undefined, prompt, options)).resolves.toMatchObject({
-            result: [{ type: 'text', value: 'fallback text' }],
+            result: [{ type: 'thoughts', value: 'fallback text' }],
         });
         await expect(contentModel.requestTextCompletion(undefined, prompt, options)).resolves.toMatchObject({
-            result: [{ type: 'text', value: 'visible' }],
+            result: [
+                { type: 'thoughts', value: 'hidden' },
+                { type: 'text', value: 'visible' },
+            ],
         });
     });
 
-    it('uses reasoning as a non-streaming fallback when content is blank after think-block stripping', async () => {
+    it('projects both native reasoning and embedded think blocks as thoughts', async () => {
         const model = new TestOpenAIChatCompletionsProtocol({
             id: 'chatcmpl-1',
             object: 'chat.completion',
@@ -287,10 +449,13 @@ describe('OpenAIChatCompletionsProtocol', () => {
 
         const completion = await model.requestTextCompletion(undefined, prompt, options);
 
-        expect(completion.result).toEqual([{ type: 'text', value: 'fallback text' }]);
+        expect(completion.result).toEqual([
+            { type: 'thoughts', value: 'fallback text' },
+            { type: 'thoughts', value: 'hidden' },
+        ]);
     });
 
-    it('strips provider-emitted think blocks from completed non-streaming output and conversation', async () => {
+    it('projects provider think blocks while preserving native conversation content', async () => {
         const model = new TestOpenAIChatCompletionsProtocol({
             id: 'chatcmpl-1',
             object: 'chat.completion',
@@ -311,9 +476,17 @@ describe('OpenAIChatCompletionsProtocol', () => {
 
         const completion = await model.requestTextCompletion(undefined, prompt, options);
 
-        expect(completion.result).toEqual([{ type: 'text', value: '{"answer":"Paris"}' }]);
+        expect(completion.result).toEqual([
+            { type: 'thoughts', value: 'hidden reasoning' },
+            { type: 'text', value: '{"answer":"Paris"}' },
+        ]);
         expect(completion.conversation).toMatchObject({
-            messages: expect.arrayContaining([{ role: 'assistant', content: '{"answer":"Paris"}' }]),
+            messages: expect.arrayContaining([
+                expect.objectContaining({
+                    role: 'assistant',
+                    content: '<think>hidden reasoning</think>\n\n{"answer":"Paris"}',
+                }),
+            ]),
         });
     });
 
@@ -361,25 +534,43 @@ describe('OpenAIChatCompletionsProtocol', () => {
         ]);
     });
 
-    it('strips provider-emitted think blocks from final accumulated completion objects', () => {
-        const completion = stripOpenAIChatCompletionsThinkBlocksFromCompletion({
-            result: [{ type: 'text', value: '<think>hidden</think>\n\nfinal answer' }],
-            conversation: {
-                _is_openai_chat_completions: true,
-                messages: [
-                    { role: 'user', content: 'Hello' },
-                    { role: 'assistant', content: '<think>hidden</think>\n\nfinal answer' },
-                ],
-            },
-        });
-
-        expect(completion.result).toEqual([{ type: 'text', value: 'final answer' }]);
-        expect(completion.conversation).toMatchObject({
-            messages: [
-                { role: 'user', content: 'Hello' },
-                { role: 'assistant', content: 'final answer' },
+    it('does not treat every compatible reasoning field as an immutable history chain', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol({
+            id: 'chatcmpl-reasoning',
+            object: 'chat.completion',
+            created: 1,
+            model: 'compatible-model',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: 'ok', reasoning_content: 'reasoning projection' },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
             ],
         });
+        const imagePrompt: OpenAIChatCompletionsPrompt = {
+            messages: [
+                {
+                    role: 'user',
+                    content: [
+                        { type: 'text', text: 'question' },
+                        { type: 'image_url', image_url: { url: 'data:image/png;base64,aW1hZ2U=' } },
+                    ],
+                },
+            ],
+        };
+
+        const completion = await model.requestTextCompletion(undefined, imagePrompt, {
+            ...options,
+            stripImagesAfterTurns: 0,
+            stripTextMaxTokens: 1,
+        });
+        const conversation = completion.conversation as OpenAIChatCompletionsPrompt;
+
+        expect(JSON.stringify(conversation.messages[0].content)).not.toContain('aW1hZ2U=');
+        expect(JSON.stringify(conversation.messages[0].content)).toContain('Content truncated');
+        expect(conversation.messages[1].reasoning_content).toContain('Content truncated');
     });
 
     it('reads streaming content arrays', async () => {
@@ -404,7 +595,7 @@ describe('OpenAIChatCompletionsProtocol', () => {
         expect(chunks.flatMap((chunk) => chunk.result)).toEqual([{ type: 'text', value: 'hello' }]);
     });
 
-    it('uses buffered streaming reasoning as a fallback only when no content arrives', async () => {
+    it('streams reasoning fields as thoughts', async () => {
         const model = new TestOpenAIChatCompletionsProtocol(
             undefined,
             createSSEStream([
@@ -433,10 +624,87 @@ describe('OpenAIChatCompletionsProtocol', () => {
 
         const chunks = await collectChunks(await model.requestTextCompletionStream(undefined, prompt, options));
 
-        expect(chunks.flatMap((chunk) => chunk.result)).toEqual([{ type: 'text', value: 'fallback text' }]);
+        expect(chunks.flatMap((chunk) => chunk.result)).toEqual([
+            { type: 'thoughts', value: 'fallback' },
+            { type: 'thoughts', value: ' text' },
+        ]);
     });
 
-    it('uses streaming reasoning fallback when content is blank after think-block stripping', async () => {
+    it('finalizes streaming conversation from native reasoning and tool-call deltas', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol(
+            undefined,
+            createSSEStream([
+                {
+                    type: 'event',
+                    data: JSON.stringify({
+                        id: 'chatcmpl-1',
+                        object: 'chat.completion.chunk',
+                        created: 1,
+                        model: 'test/model',
+                        choices: [
+                            {
+                                index: 0,
+                                delta: {
+                                    reasoning_content: 'plan',
+                                    tool_calls: [
+                                        {
+                                            index: 0,
+                                            id: 'call-1',
+                                            type: 'function',
+                                            function: { name: 'lookup', arguments: '{"city":' },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    }),
+                },
+                {
+                    type: 'event',
+                    data: JSON.stringify({
+                        id: 'chatcmpl-1',
+                        object: 'chat.completion.chunk',
+                        created: 1,
+                        model: 'test/model',
+                        choices: [
+                            {
+                                index: 0,
+                                finish_reason: 'tool_calls',
+                                delta: {
+                                    content: 'checking',
+                                    tool_calls: [{ index: 0, function: { arguments: '"Paris"}' } }],
+                                },
+                            },
+                        ],
+                    }),
+                },
+            ]),
+        );
+
+        const stream = await model.requestTextCompletionStream(undefined, prompt, options);
+        const results = [];
+        for await (const chunk of stream) results.push(...chunk.result);
+        const conversation = await stream.finalizeConversation?.({ result: results });
+
+        expect(conversation).toMatchObject({
+            messages: expect.arrayContaining([
+                expect.objectContaining({
+                    role: 'assistant',
+                    content: 'checking',
+                    reasoning_content: 'plan',
+                    tool_calls: [
+                        {
+                            id: 'call-1',
+                            type: 'function',
+                            function: { name: 'lookup', arguments: '{"city":"Paris"}' },
+                        },
+                    ],
+                }),
+            ]),
+        });
+    });
+
+    it('streams native and embedded reasoning as thoughts', async () => {
         const model = new TestOpenAIChatCompletionsProtocol(
             undefined,
             createSSEStream([
@@ -465,7 +733,10 @@ describe('OpenAIChatCompletionsProtocol', () => {
 
         const chunks = await collectChunks(await model.requestTextCompletionStream(undefined, prompt, options));
 
-        expect(chunks.flatMap((chunk) => chunk.result)).toEqual([{ type: 'text', value: 'fallback text' }]);
+        expect(chunks.flatMap((chunk) => chunk.result)).toEqual([
+            { type: 'thoughts', value: 'fallback text' },
+            { type: 'thoughts', value: 'hidden' },
+        ]);
     });
 
     it('normalizes non-streaming tool-call finish reasons', async () => {
