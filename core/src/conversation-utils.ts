@@ -147,6 +147,19 @@ function isSerializedBedrockVideoBlock(obj: unknown): boolean {
     return typeof bytes._base64 === 'string';
 }
 
+function isBedrockRedactedReasoningBlock(obj: unknown): boolean {
+    if (typeof obj !== 'object' || obj === null) return false;
+    const reasoningContent = (obj as Record<string, unknown>).reasoningContent;
+    if (typeof reasoningContent !== 'object' || reasoningContent === null) return false;
+    const redacted = (reasoningContent as Record<string, unknown>).redactedContent;
+    if (redacted instanceof Uint8Array) return true;
+    return (
+        typeof redacted === 'object' &&
+        redacted !== null &&
+        typeof (redacted as Record<string, unknown>)._base64 === 'string'
+    );
+}
+
 /**
  * Check if an object is an OpenAI image_url block with base64 data
  */
@@ -358,6 +371,12 @@ export function deserializeBinaryFromStorage(obj: unknown): unknown {
 
 function stripBinaryFromConversationInternal(obj: unknown): unknown {
     if (obj === null || obj === undefined) return obj;
+
+    // Bedrock redacted reasoning is encrypted protocol state, not disposable media.
+    // It must always survive storage even when image/document stripping is enabled.
+    if (isBedrockRedactedReasoningBlock(obj)) {
+        return serializeBinaryForStorage(obj);
+    }
 
     // Handle Uint8Array directly
     if (obj instanceof Uint8Array) {
