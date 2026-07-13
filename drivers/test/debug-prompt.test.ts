@@ -208,21 +208,24 @@ describe('debug prompt binary truncation', () => {
 
     test('truncates Groq chat image data URLs', () => {
         const driver = new GroqDriver({ apiKey: 'test' });
-        const result = driver.formatDebugPrompt([
-            {
-                role: 'user',
-                content: [
-                    {
-                        type: 'image_url',
-                        image_url: {
-                            url: `data:image/jpeg;base64,${'e'.repeat(80)}`,
+        const result = driver.formatDebugPrompt({
+            _is_openai_chat_completions: true,
+            messages: [
+                {
+                    role: 'user',
+                    content: [
+                        {
+                            type: 'image_url',
+                            image_url: {
+                                url: `data:image/jpeg;base64,${'e'.repeat(80)}`,
+                            },
                         },
-                    },
-                ],
-            },
-        ]);
+                    ],
+                },
+            ],
+        });
 
-        const content = result[0].content;
+        const content = result.messages[0].content;
 
         expect(Array.isArray(content) && content[0].type === 'image_url' ? content[0].image_url.url : undefined).toBe(
             `data:image/jpeg;base64,eeeeeeeeee${BINARY_TRUNCATED_MARKER}eeeeeeeeee`,

@@ -1,75 +1,43 @@
-import type {
-    AIModel,
-    Completion,
-    CompletionChunkObject,
-    DriverOptions,
-    EmbeddingsOptions,
-    EmbeddingsResult,
-    ExecutionOptions,
-    PromptSegment,
-    TextFallbackOptions,
-    ToolDefinition,
-    ToolUse,
-} from '@llumiverse/core';
-import { transformAsyncIterator } from '@llumiverse/core/async';
-import { AbstractDriver } from '@llumiverse/core/driver';
+import type { GroqDeepseekThinkingOptions } from '@llumiverse/common';
+import type { AIModel, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions } from '@llumiverse/core';
+import { Providers } from '@llumiverse/core';
 import Groq from 'groq-sdk';
-import type { ChatCompletionMessageParam, ChatCompletionTool } from 'groq-sdk/resources/chat/completions';
-import type { FunctionParameters } from 'groq-sdk/resources/shared';
-import type OpenAI from 'openai';
-import { convertResponseItemsToChatMessages, formatOpenAILikeMultimodalPrompt } from '../openai/openai_format.js';
+import type {
+    ChatCompletion,
+    ChatCompletionChunk,
+    ChatCompletionCreateParamsNonStreaming,
+    ChatCompletionCreateParamsStreaming,
+    ChatCompletionMessageParam,
+    ChatCompletionTool,
+} from 'groq-sdk/resources/chat/completions';
+import {
+    OpenAIChatCompletionsDriverBase,
+    type OpenAIChatCompletionsDriverOptions,
+    type OpenAIChatCompletionsPayload,
+    type OpenAIChatCompletionsPrompt,
+    type OpenAIChatCompletionsResponse,
+    type OpenAIChatCompletionsStreamResponse,
+    openAIChatCompletionsStreamToSSE,
+    preserveOpenAIChatCompletionsOriginalResponse,
+} from '../openai/openai_chat_completions.js';
 import { truncateDataUrlForDebug } from '../shared/debug-prompt.js';
 
-type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
-type GroqToolCallMessage = {
-    tool_calls?: Array<{
-        id: string;
-        function: {
-            name: string;
-            arguments?: string;
-        };
-    }>;
-};
-
-interface GroqDriverOptions extends DriverOptions {
+export interface GroqDriverOptions extends OpenAIChatCompletionsDriverOptions {
     apiKey: string;
     endpoint_url?: string;
 }
 
-type GroqTextContentPart = { type: 'text'; text: string };
-type GroqImageContentPart = { type: 'image_url'; image_url: { url: string; detail?: 'auto' | 'low' | 'high' } };
-type GroqContentPart = GroqTextContentPart | GroqImageContentPart;
-type GroqUserMessageWithArrayContent = Extract<ChatCompletionMessageParam, { role: 'user' }> & {
-    content: GroqContentPart[];
-};
-
-function hasGroqArrayContent(message: ChatCompletionMessageParam): message is GroqUserMessageWithArrayContent {
-    return message.role === 'user' && Array.isArray(message.content);
-}
-
-function formatGroqContentPartForDebug(part: GroqContentPart): GroqContentPart {
-    if (part.type !== 'image_url') {
-        return part;
-    }
-    return {
-        ...part,
-        image_url: {
-            ...part.image_url,
-            url: truncateDataUrlForDebug(part.image_url.url),
-        },
-    };
-}
-
-export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletionMessageParam[]> {
-    static PROVIDER = 'groq';
-    provider = GroqDriver.PROVIDER;
-    apiKey: string;
-    client: Groq;
-    endpointUrl?: string;
+export class GroqDriver extends OpenAIChatCompletionsDriverBase<GroqDriverOptions> {
+    static readonly PROVIDER = Providers.groq;
+    readonly provider = Providers.groq;
+    readonly apiKey: string;
+    readonly client: Groq;
+    readonly endpointUrl?: string;
 
     constructor(options: GroqDriverOptions) {
-        super(options);
+        super({ ...options, resultSchemaMode: 'prompt', toolSchemaMode: 'compatible' });
         this.apiKey = options.apiKey;
+        this.endpointUrl = options.endpoint_url;
         this.client = new Groq({
             apiKey: options.apiKey,
             baseURL: options.endpoint_url,
@@ -77,267 +45,229 @@ export class GroqDriver extends AbstractDriver<GroqDriverOptions, ChatCompletion
         });
     }
 
-    // protected canStream(options: ExecutionOptions): Promise<boolean> {
-    //     if (options.result_schema) {
-    //         // not yet streaming json responses
-    //         return Promise.resolve(false);
-    //     } else {
-    //         return Promise.resolve(true);
-    //     }
-    // }
-
-    getResponseFormat(_options: ExecutionOptions): undefined {
-        //TODO: when forcing json_object type the streaming is not supported.
-        // either implement canStream as above or comment the code below:
-        // const responseFormatJson: Groq.Chat.Completions.CompletionCreateParams.ResponseFormat = {
-        //     type: "json_object",
-        // }
-
-        // return _options.result_schema ? responseFormatJson : undefined;
-        return undefined;
-    }
-
-    protected async formatPrompt(
-        segments: PromptSegment[],
-        opts: ExecutionOptions,
-    ): Promise<ChatCompletionMessageParam[]> {
-        // Use OpenAI's multimodal formatter as base then convert to Groq types
-        const responseItems = await formatOpenAILikeMultimodalPrompt(segments, {
-            ...opts,
-            multimodal: true,
-        });
-
-        // Convert ResponseInputItem[] to Groq ChatCompletionMessageParam[]
-        return convertResponseItemsToGroqMessages(responseItems);
-    }
-
-    public formatDebugPrompt(messages: ChatCompletionMessageParam[]): ChatCompletionMessageParam[] {
-        return messages.map((message) => {
-            if (!hasGroqArrayContent(message)) {
-                return message;
-            }
-            return {
-                ...message,
-                content: message.content.map(formatGroqContentPartForDebug),
-            };
-        });
-    }
-
-    private getToolDefinitions(tools: ToolDefinition[] | undefined): ChatCompletionTool[] | undefined {
-        if (!tools || tools.length === 0) {
-            return undefined;
-        }
-
-        return tools.map((tool) => ({
-            type: 'function' as const,
-            function: {
-                name: tool.name,
-                description: tool.description,
-                parameters: tool.input_schema satisfies FunctionParameters,
-            },
-        }));
-    }
-
-    private extractToolUse(message: GroqToolCallMessage): ToolUse<unknown>[] | undefined {
-        if (!message.tool_calls || message.tool_calls.length === 0) {
-            return undefined;
-        }
-
-        return message.tool_calls.map((toolCall) => ({
-            id: toolCall.id,
-            tool_name: toolCall.function.name,
-            tool_input: JSON.parse(toolCall.function.arguments || '{}'),
-        }));
-    }
-
-    private sanitizeMessagesForGroq(messages: ChatCompletionMessageParam[]): ChatCompletionMessageParam[] {
-        return messages.map((message) => {
-            // Remove any reasoning field from message objects
-            const sanitizedMessage = { ...(message as unknown as Record<string, unknown>) };
-            delete sanitizedMessage.reasoning;
-
-            // If message has content array, filter out reasoning content types
-            const content = sanitizedMessage.content;
-            if (Array.isArray(content)) {
-                sanitizedMessage.content = content.filter((part) => {
-                    // Filter out any reasoning-related content parts
-                    const typedPart = part as { type?: string; reasoning?: unknown };
-                    return typedPart.type !== 'reasoning' && !('reasoning' in typedPart);
-                });
-            }
-
-            return sanitizedMessage as unknown as ChatCompletionMessageParam;
-        });
-    }
-
-    async requestTextCompletion(
-        messages: ChatCompletionMessageParam[],
-        options: ExecutionOptions,
-    ): Promise<Completion> {
-        if (
-            options.model_options?._option_id !== undefined &&
-            options.model_options?._option_id !== 'text-fallback' &&
-            options.model_options?._option_id !== 'groq-deepseek-thinking'
-        ) {
-            this.logger.debug({ options: options.model_options }, 'Unexpected option id');
-        }
-        options.model_options = options.model_options as TextFallbackOptions;
-
-        // Update conversation with current messages
-        let conversation = updateConversation(options.conversation as ChatCompletionMessageParam[], messages);
-
-        // Filter out any reasoning content that Groq doesn't support
-        conversation = this.sanitizeMessagesForGroq(conversation);
-
-        const tools = this.getToolDefinitions(options.tools);
-
-        const res = await this.client.chat.completions.create({
-            model: options.model,
-            messages: conversation,
-            max_completion_tokens: options.model_options?.max_tokens,
-            temperature: options.model_options?.temperature,
-            top_p: options.model_options?.top_p,
-            //top_logprobs: options.top_logprobs,       //Logprobs output currently not supported
-            //logprobs: options.top_logprobs ? true : false,
-            presence_penalty: options.model_options?.presence_penalty,
-            frequency_penalty: options.model_options?.frequency_penalty,
-            response_format: this.getResponseFormat(options),
-            tools: tools,
-        });
-
-        const choice = res.choices[0];
-        const result = choice.message.content;
-
-        // Extract tool use from the response
-        const tool_use = this.extractToolUse(choice.message);
-
-        // Update conversation with the response
-        conversation = updateConversation(conversation, [choice.message]);
-
-        let finish_reason = choice.finish_reason;
-        if (tool_use && tool_use.length > 0) {
-            finish_reason = 'tool_calls';
-        }
-
+    public formatDebugPrompt(prompt: OpenAIChatCompletionsPrompt): OpenAIChatCompletionsPrompt {
         return {
-            result: result ? [{ type: 'text', value: result }] : [],
-            token_usage: {
-                prompt: res.usage?.prompt_tokens,
-                result: res.usage?.completion_tokens,
-                total: res.usage?.total_tokens,
-            },
-            finish_reason: finish_reason,
-            original_response: options.include_original_response ? res : undefined,
-            conversation,
-            tool_use,
+            ...prompt,
+            messages: prompt.messages.map((message) => ({
+                ...message,
+                content: Array.isArray(message.content)
+                    ? message.content.map((part) =>
+                          part.type === 'image_url'
+                              ? {
+                                    ...part,
+                                    image_url: {
+                                        ...part.image_url,
+                                        url: truncateDataUrlForDebug(part.image_url.url),
+                                    },
+                                }
+                              : part,
+                      )
+                    : message.content,
+            })),
         };
     }
 
-    async requestTextCompletionStream(
-        messages: ChatCompletionMessageParam[],
+    async _postChatCompletion(
+        payload: OpenAIChatCompletionsPayload,
         options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>> {
-        if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== 'text-fallback') {
-            this.logger.debug({ options: options.model_options }, 'Unexpected option id');
-        }
-        options.model_options = options.model_options as TextFallbackOptions;
+    ): Promise<OpenAIChatCompletionsResponse> {
+        const request = toGroqRequest(payload, options, false);
+        const response = await this.client.chat.completions.create(request);
+        return preserveOpenAIChatCompletionsOriginalResponse(normalizeGroqResponse(response), response);
+    }
 
-        // Update conversation with current messages
-        let conversation = updateConversation(options.conversation as ChatCompletionMessageParam[], messages);
-
-        // Filter out any reasoning content that Groq doesn't support
-        conversation = this.sanitizeMessagesForGroq(conversation);
-
-        const tools = this.getToolDefinitions(options.tools);
-
-        const res = await this.client.chat.completions.create({
-            model: options.model,
-            messages: conversation,
-            max_completion_tokens: options.model_options?.max_tokens,
-            temperature: options.model_options?.temperature,
-            top_p: options.model_options?.top_p,
-            //top_logprobs: options.top_logprobs,       //Logprobs output currently not supported
-            //logprobs: options.top_logprobs ? true : false,
-            presence_penalty: options.model_options?.presence_penalty,
-            frequency_penalty: options.model_options?.frequency_penalty,
-            stream: true,
-            tools: tools,
-        });
-
-        return transformAsyncIterator(res, (chunk) => {
-            const choice = chunk.choices[0];
-            let finish_reason = choice.finish_reason;
-
-            // Check for tool calls in the delta
-            if (choice.delta.tool_calls && choice.delta.tool_calls.length > 0) {
-                finish_reason = 'tool_calls';
-            }
-
-            return {
-                result: choice.delta.content ? [{ type: 'text', value: choice.delta.content }] : [],
-                finish_reason: finish_reason ?? undefined,
-                token_usage: {
-                    prompt: chunk.x_groq?.usage?.prompt_tokens,
-                    result: chunk.x_groq?.usage?.completion_tokens,
-                    total: chunk.x_groq?.usage?.total_tokens,
-                },
-            } satisfies CompletionChunkObject;
-        });
+    async _postChatCompletionStream(
+        payload: OpenAIChatCompletionsPayload,
+        options: ExecutionOptions,
+    ): Promise<ReadableStream> {
+        const stream = await this.client.chat.completions.create(toGroqRequest(payload, options, true));
+        return openAIChatCompletionsStreamToSSE(normalizeGroqStream(stream));
     }
 
     async listModels(): Promise<AIModel<string>[]> {
         const models = await this.client.models.list();
-
-        if (!models.data) {
-            throw new Error('No models found');
-        }
-
-        const aiModels = models.data?.map((m) => {
-            if (!m.id) {
-                throw new Error('Model id is missing');
-            }
-            return {
-                id: m.id,
-                name: m.id,
-                description: undefined,
-                provider: this.provider,
-                owner: m.owned_by || '',
-            };
-        });
-
-        return aiModels;
+        return models.data.map((model) => ({
+            id: model.id,
+            name: model.id,
+            provider: this.provider,
+            owner: model.owned_by || '',
+        }));
     }
 
-    validateConnection(): Promise<boolean> {
-        throw new Error('Method not implemented.');
+    async validateConnection(): Promise<boolean> {
+        try {
+            await this.client.models.list();
+            return true;
+        } catch {
+            return false;
+        }
     }
 
     async generateEmbeddings(_options: EmbeddingsOptions): Promise<EmbeddingsResult> {
-        throw new Error('Method not implemented.');
+        throw new Error('Groq does not expose an embeddings transport.');
     }
 }
 
-/**
- * Update the conversation messages by combining existing conversation with new messages
- * @param conversation Existing conversation messages
- * @param messages New messages to add
- * @returns Combined conversation
- */
-function updateConversation(
-    conversation: ChatCompletionMessageParam[] | undefined,
-    messages: ChatCompletionMessageParam[],
-): ChatCompletionMessageParam[] {
-    return (conversation || []).concat(messages);
+function toGroqRequest(
+    payload: OpenAIChatCompletionsPayload,
+    options: ExecutionOptions,
+    stream: false,
+): ChatCompletionCreateParamsNonStreaming;
+function toGroqRequest(
+    payload: OpenAIChatCompletionsPayload,
+    options: ExecutionOptions,
+    stream: true,
+): ChatCompletionCreateParamsStreaming;
+function toGroqRequest(
+    payload: OpenAIChatCompletionsPayload,
+    options: ExecutionOptions,
+    stream: boolean,
+): ChatCompletionCreateParamsNonStreaming | ChatCompletionCreateParamsStreaming {
+    const modelOptions = options.model_options;
+    const reasoningFormat =
+        modelOptions?._option_id === 'groq-deepseek-thinking'
+            ? (modelOptions as GroqDeepseekThinkingOptions).reasoning_format
+            : undefined;
+    const request = {
+        model: payload.model,
+        messages: payload.messages.map(toGroqMessage),
+        max_completion_tokens: payload.max_tokens ?? undefined,
+        temperature: payload.temperature ?? undefined,
+        top_p: payload.top_p ?? undefined,
+        presence_penalty: payload.presence_penalty ?? undefined,
+        frequency_penalty: payload.frequency_penalty ?? undefined,
+        stop: payload.stop ?? undefined,
+        n: payload.n ?? undefined,
+        tools: payload.tools?.flatMap(toGroqTool),
+        reasoning_format: reasoningFormat,
+        extra_body: payload.extra_body,
+        stream,
+    } satisfies (ChatCompletionCreateParamsNonStreaming | ChatCompletionCreateParamsStreaming) & {
+        extra_body?: Record<string, unknown>;
+    };
+    return request;
 }
 
-/**
- * Convert ResponseInputItem[] to Groq ChatCompletionMessageParam[].
- *
- * Delegates to the shared Response->Chat-Completions converter in openai_format.ts.
- * The `as unknown as` cast bridges the structurally-identical `ChatCompletionMessageParam`
- * types from the `openai` and `groq-sdk` packages (same OpenAI wire format, distinct nominal
- * declarations).
- */
-function convertResponseItemsToGroqMessages(items: ResponseInputItem[]): ChatCompletionMessageParam[] {
-    return convertResponseItemsToChatMessages(items) as unknown as ChatCompletionMessageParam[];
+function toGroqMessage(message: OpenAIChatCompletionsPayload['messages'][number]): ChatCompletionMessageParam {
+    const textContent = typeof message.content === 'string' || message.content === null ? message.content : undefined;
+    switch (message.role) {
+        case 'system':
+        case 'developer':
+            return { role: 'system', content: textContent ?? '' };
+        case 'assistant':
+            return {
+                role: 'assistant',
+                content: textContent,
+                tool_calls: message.tool_calls?.map((toolCall) => ({
+                    id: toolCall.id,
+                    type: 'function',
+                    function: {
+                        name: toolCall.function.name,
+                        arguments: toolCall.function.arguments,
+                    },
+                })),
+            };
+        case 'tool':
+            return { role: 'tool', content: textContent ?? '', tool_call_id: message.tool_call_id ?? '' };
+        default:
+            return {
+                role: 'user',
+                content:
+                    typeof message.content === 'string'
+                        ? message.content
+                        : (message.content?.map((part) =>
+                              part.type === 'text'
+                                  ? { type: 'text' as const, text: part.text }
+                                  : { type: 'image_url' as const, image_url: part.image_url },
+                          ) ?? ''),
+            };
+    }
+}
+
+function toGroqTool(tool: NonNullable<OpenAIChatCompletionsPayload['tools']>[number]): ChatCompletionTool[] {
+    if (tool.type !== 'function') {
+        return [];
+    }
+    return [
+        {
+            type: 'function',
+            function: {
+                name: tool.function.name,
+                description: tool.function.description,
+                parameters: tool.function.parameters,
+            },
+        },
+    ];
+}
+
+function normalizeGroqResponse(response: ChatCompletion): OpenAIChatCompletionsResponse {
+    const usage = response.usage;
+    return {
+        id: response.id,
+        object: 'chat.completion',
+        created: response.created,
+        model: response.model,
+        choices: response.choices.map((choice) => ({
+            index: choice.index,
+            finish_reason: choice.finish_reason,
+            logprobs: choice.logprobs,
+            message: {
+                role: choice.message.role,
+                content: choice.message.content,
+                reasoning: choice.message.reasoning,
+                tool_calls: choice.message.tool_calls?.map((toolCall) => ({
+                    id: toolCall.id,
+                    type: 'function',
+                    function: {
+                        name: toolCall.function.name,
+                        arguments: toolCall.function.arguments,
+                    },
+                })),
+            },
+        })),
+        usage: usage
+            ? {
+                  prompt_tokens: usage.prompt_tokens,
+                  completion_tokens: usage.completion_tokens,
+                  total_tokens: usage.total_tokens,
+              }
+            : undefined,
+    };
+}
+
+async function* normalizeGroqStream(
+    stream: AsyncIterable<ChatCompletionChunk>,
+): AsyncIterable<OpenAIChatCompletionsStreamResponse> {
+    for await (const chunk of stream) {
+        const usage = chunk.x_groq?.usage;
+        yield {
+            id: chunk.id,
+            object: 'chat.completion.chunk',
+            created: chunk.created,
+            model: chunk.model,
+            choices: chunk.choices.map((choice) => ({
+                index: choice.index,
+                finish_reason: choice.finish_reason,
+                logprobs: choice.logprobs,
+                delta: {
+                    role: choice.delta.role,
+                    content: choice.delta.content,
+                    reasoning: choice.delta.reasoning,
+                    tool_calls: choice.delta.tool_calls?.map((toolCall) => ({
+                        index: toolCall.index,
+                        id: toolCall.id,
+                        type: toolCall.type,
+                        function: toolCall.function,
+                    })),
+                },
+            })),
+            usage: usage
+                ? {
+                      prompt_tokens: usage.prompt_tokens,
+                      completion_tokens: usage.completion_tokens,
+                      total_tokens: usage.total_tokens,
+                  }
+                : undefined,
+        };
+    }
 }

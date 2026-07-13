@@ -30,6 +30,14 @@ type FetchClientInternals = {
     _fetch: Promise<typeof fetch>;
 };
 
+type MistralClientInternals = {
+    _options: {
+        httpClient: {
+            fetcher: typeof fetch;
+        };
+    };
+};
+
 type BedrockRequestHandlerConfig = {
     requestTimeout: number;
     throwOnRequestTimeout: boolean;
@@ -198,7 +206,9 @@ describe('driver HTTP timeout wiring', () => {
 
     it('passes the driver fetch to FetchClient-backed drivers', async () => {
         const mistral = new MistralAIDriver({ apiKey: 'test-key' });
-        await expectFetchClientUsesDriverFetch(mistral, mistral.client);
+        expect(exposePrivate<MistralClientInternals>(mistral.client)._options.httpClient.fetcher).toBe(
+            driverFetch(mistral),
+        );
         mistral.destroy();
 
         const watsonx = new WatsonxDriver({

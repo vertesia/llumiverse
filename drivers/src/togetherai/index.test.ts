@@ -5,7 +5,7 @@ import { TogetherAIDriver } from './index.js';
 describe('TogetherAIDriver', () => {
     it('maps Together array-shaped model catalog responses', async () => {
         const driver = new TogetherAIDriver({ apiKey: 'test-key' });
-        const get = vi.fn(async () => [
+        const list = vi.fn(async () => [
             {
                 id: 'Qwen/Qwen3.5-9B',
                 display_name: 'Qwen3.5 9B',
@@ -19,11 +19,11 @@ describe('TogetherAIDriver', () => {
                 type: 'embedding',
             },
         ]);
-        driver.service = { get } as unknown as TogetherAIDriver['service'];
+        driver.service = { models: { list } } as unknown as TogetherAIDriver['service'];
 
         const models = await driver.listModels();
 
-        expect(get).toHaveBeenCalledWith('/models');
+        expect(list).toHaveBeenCalledOnce();
         expect(models).toEqual([
             expect.objectContaining({
                 id: 'Qwen/Qwen3.5-9B',

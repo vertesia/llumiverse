@@ -79,10 +79,10 @@ importers:
     dependencies:
       '@anthropic-ai/sdk':
         specifier: ^0.109.1
-        version: 0.109.1
+        version: 0.109.1(zod@4.4.3)
       '@anthropic-ai/vertex-sdk':
         specifier: ^0.19.0
-        version: 0.19.0
+        version: 0.19.0(zod@4.4.3)
       '@aws-sdk/client-bedrock':
         specifier: ^3.1078.0
         version: 3.1079.0
@@ -109,7 +109,7 @@ importers:
         version: 1.0.0-beta.6
       '@azure/ai-projects':
         specifier: ^2.3.0
-        version: 2.3.0(@aws-sdk/credential-provider-node@3.972.62)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.6.2)(ws@8.21.0)
+        version: 2.3.0(@aws-sdk/credential-provider-node@3.972.62)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.6.2)(ws@8.21.0)(zod@4.4.3)
       '@azure/core-auth':
         specifier: ^1.10.1
         version: 1.10.1
@@ -137,6 +137,9 @@ importers:
       '@llumiverse/core':
         specifier: workspace:*
         version: link:../core
+      '@mistralai/mistralai':
+        specifier: ^2.4.1
+        version: 2.4.1(@opentelemetry/api@1.9.1)
       '@vertesia/api-fetch-client':
         specifier: ^1.3.0
         version: 1.3.0
@@ -157,10 +160,13 @@ importers:
         version: 0.2.1
       openai:
         specifier: ^6.45.0
-        version: 6.45.0(@aws-sdk/credential-provider-node@3.972.62)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.6.2)(ws@8.21.0)
+        version: 6.45.0(@aws-sdk/credential-provider-node@3.972.62)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.6.2)(ws@8.21.0)(zod@4.4.3)
       replicate:
         specifier: ^1.4.0
         version: 1.4.0
+      together-ai:
+        specifier: ^0.40.0
+        version: 0.40.0
     devDependencies:
       dotenv:
         specifier: ^17.4.2
@@ -523,6 +529,14 @@ packages:
   '@js-sdsl/ordered-map@4.4.2':
     resolution: {integrity: sha512-iUKgm52T8HOE/makSxjqoWhe95ZJA1/G1sYsGev2JDKUSS14KAgg1LHb+Ba+IPow0xflbnSkOsZcO08C7w1gYw==}
 
+  '@mistralai/mistralai@2.4.1':
+    resolution: {integrity: sha512-vNpR2GR76aW7fK8Dcu1NRx3fdSPO1QruRDo4GbfXfkro2mvp194xIAvJ2BP4ZykzyWtJoDmBe+Qsk9D443aqlg==}
+    peerDependencies:
+      '@opentelemetry/api': ^1.9.0
+    peerDependenciesMeta:
+      '@opentelemetry/api':
+        optional: true
+
   '@napi-rs/wasm-runtime@1.1.5':
     resolution: {integrity: sha512-AWPoBRJ9tsnVhor4sjO7rkni+7p+2IAEFj6cx06UgP10jkQHqay/36uRV/bFkgrh18D9vb4cr8Q0Pthskgzy+Q==}
     peerDependencies:
@@ -535,6 +549,10 @@ packages:
   '@opentelemetry/api@1.9.1':
     resolution: {integrity: sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q==}
     engines: {node: '>=8.0.0'}
+
+  '@opentelemetry/semantic-conventions@1.43.0':
+    resolution: {integrity: sha512-eSYWTm620tTk45EKSedaUL8MFYI8hW164hIXsgIHyxu3VobUB3fFCu5t0hQby6OoWRPsG1KkKUG2M5UadiLiVg==}
+    engines: {node: '>=14'}
 
   '@oxc-project/types@0.133.0':
     resolution: {integrity: sha512-KzkdCd6Uxqnf6l3HOw1xfatAlUURA0g14cvBYFyJ5SaNOQbOUvBr9PKArcPcrNIeRsBdgcUzOGrhKveVpvOIGA==}
@@ -1435,6 +1453,10 @@ packages:
     resolution: {integrity: sha512-Bf+ILmBgretUrdJxzXM0SgXLZ3XfiaUuOj/IKQHuTXip+05Xn+uyEYdVg0kYDipTBcLrCVyUzAPz7QmArb0mmw==}
     engines: {node: '>=14.0.0'}
 
+  together-ai@0.40.0:
+    resolution: {integrity: sha512-7c1YeTTKpvQcDK1k+gN21LEpnbNEmyZfdndeC7aLNtJsIhixAyvvs1eHyhhe6AJecaOP0K0I1vnkEaMBLscRKA==}
+    hasBin: true
+
   ts-algebra@2.0.0:
     resolution: {integrity: sha512-FPAhNPFMrkwz76P7cdjdmiShwMynZYN6SgOujD1urY4oNm80Ou9oMdmbR45LotcKOXoy7wSmHkRFE6Mxbrhefw==}
 
@@ -1588,16 +1610,26 @@ packages:
     resolution: {integrity: sha512-7dSzzRQ++CKnNI/krKnYRV7JKKPUXMEh61soaHKg9mrWEhzFWhFnxPxGl+69cD1Ou63C13NUPCnmIcrvqCuM6w==}
     engines: {node: '>=12'}
 
+  zod-to-json-schema@3.25.2:
+    resolution: {integrity: sha512-O/PgfnpT1xKSDeQYSCfRI5Gy3hPf91mKVDuYLUHZJMiDFptvP41MSnWofm8dnCm0256ZNfZIM7DSzuSMAFnjHA==}
+    peerDependencies:
+      zod: ^3.25.28 || ^4
+
+  zod@4.4.3:
+    resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
+
 snapshots:
 
-  '@anthropic-ai/sdk@0.109.1':
+  '@anthropic-ai/sdk@0.109.1(zod@4.4.3)':
     dependencies:
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.0.0
+    optionalDependencies:
+      zod: 4.4.3
 
-  '@anthropic-ai/vertex-sdk@0.19.0':
+  '@anthropic-ai/vertex-sdk@0.19.0(zod@4.4.3)':
     dependencies:
-      '@anthropic-ai/sdk': 0.109.1
+      '@anthropic-ai/sdk': 0.109.1(zod@4.4.3)
       google-auth-library: 10.9.0
     transitivePeerDependencies:
       - supports-color
@@ -1913,7 +1945,7 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@azure/ai-projects@2.3.0(@aws-sdk/credential-provider-node@3.972.62)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.6.2)(ws@8.21.0)':
+  '@azure/ai-projects@2.3.0(@aws-sdk/credential-provider-node@3.972.62)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.6.2)(ws@8.21.0)(zod@4.4.3)':
     dependencies:
       '@azure-rest/core-client': 2.3.4
       '@azure/abort-controller': 2.1.2
@@ -1927,7 +1959,7 @@ snapshots:
       '@azure/logger': 1.1.4
       '@azure/storage-blob': 12.27.0
       '@opentelemetry/api': 1.9.1
-      openai: 6.45.0(@aws-sdk/credential-provider-node@3.972.62)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.6.2)(ws@8.21.0)
+      openai: 6.45.0(@aws-sdk/credential-provider-node@3.972.62)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.6.2)(ws@8.21.0)(zod@4.4.3)
       tslib: 2.8.1
     transitivePeerDependencies:
       - '@aws-sdk/credential-provider-node'
@@ -2171,6 +2203,18 @@ snapshots:
 
   '@js-sdsl/ordered-map@4.4.2': {}
 
+  '@mistralai/mistralai@2.4.1(@opentelemetry/api@1.9.1)':
+    dependencies:
+      '@opentelemetry/semantic-conventions': 1.43.0
+      ws: 8.21.0
+      zod: 4.4.3
+      zod-to-json-schema: 3.25.2(zod@4.4.3)
+    optionalDependencies:
+      '@opentelemetry/api': 1.9.1
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+
   '@napi-rs/wasm-runtime@1.1.5(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)':
     dependencies:
       '@emnapi/core': 1.10.0
@@ -2181,6 +2225,8 @@ snapshots:
   '@nodable/entities@2.1.0': {}
 
   '@opentelemetry/api@1.9.1': {}
+
+  '@opentelemetry/semantic-conventions@1.43.0': {}
 
   '@oxc-project/types@0.133.0': {}
 
@@ -2849,12 +2895,13 @@ snapshots:
       is-inside-container: 1.0.0
       is-wsl: 3.1.0
 
-  openai@6.45.0(@aws-sdk/credential-provider-node@3.972.62)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.6.2)(ws@8.21.0):
+  openai@6.45.0(@aws-sdk/credential-provider-node@3.972.62)(@smithy/hash-node@4.4.6)(@smithy/signature-v4@5.6.2)(ws@8.21.0)(zod@4.4.3):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.62
       '@smithy/hash-node': 4.4.6
       '@smithy/signature-v4': 5.6.2
       ws: 8.21.0
+      zod: 4.4.3
 
   p-retry@4.6.2:
     dependencies:
@@ -3029,6 +3076,8 @@ snapshots:
 
   tinyrainbow@3.1.0: {}
 
+  together-ai@0.40.0: {}
+
   ts-algebra@2.0.0: {}
 
   tslib@2.8.1: {}
@@ -3121,3 +3170,9 @@ snapshots:
       string-width: 4.2.3
       y18n: 5.0.8
       yargs-parser: 21.1.1
+
+  zod-to-json-schema@3.25.2(zod@4.4.3):
+    dependencies:
+      zod: 4.4.3
+
+  zod@4.4.3: {}

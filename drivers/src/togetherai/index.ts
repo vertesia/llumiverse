@@ -10,10 +10,24 @@ import {
     OPENAI_DEFAULT_EMBEDDING_MODEL,
     Providers,
 } from '@llumiverse/core';
-import OpenAI from 'openai';
+import Together from 'together-ai';
+import type {
+    ChatCompletion,
+    ChatCompletionChunk,
+    ChatCompletionMessageParam,
+    ChatCompletionTool,
+    CompletionCreateParamsNonStreaming,
+    CompletionCreateParamsStreaming,
+} from 'together-ai/resources/chat/completions';
+import type { Embedding, EmbeddingCreateParams } from 'together-ai/resources/embeddings';
 import {
     OpenAIChatCompletionsDriverBase,
     type OpenAIChatCompletionsDriverOptions,
+    type OpenAIChatCompletionsPayload,
+    type OpenAIChatCompletionsResponse,
+    type OpenAIChatCompletionsStreamResponse,
+    openAIChatCompletionsStreamToSSE,
+    preserveOpenAIChatCompletionsOriginalResponse,
 } from '../openai/openai_chat_completions.js';
 
 export interface TogetherAIDriverOptions extends OpenAIChatCompletionsDriverOptions {
@@ -21,17 +35,10 @@ export interface TogetherAIDriverOptions extends OpenAIChatCompletionsDriverOpti
     endpoint?: string;
 }
 
-interface TogetherModel {
-    id: string;
-    display_name?: string;
-    organization?: string;
-    type?: string;
-}
-
 export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAIDriverOptions> {
     static readonly PROVIDER = Providers.togetherai;
     readonly provider = Providers.togetherai;
-    service: OpenAI;
+    service: Together;
 
     constructor(opts: TogetherAIDriverOptions) {
         super({ ...opts, resultSchemaMode: 'prompt' });
@@ -40,11 +47,22 @@ export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAI
             throw new Error('apiKey is required');
         }
 
-        this.service = new OpenAI({
+        this.service = new Together({
             apiKey: opts.apiKey,
             baseURL: opts.endpoint ?? 'https://api.together.ai/v1',
             fetch: this.getDriverFetch(),
         });
+    }
+
+    async _postChatCompletion(payload: OpenAIChatCompletionsPayload): Promise<OpenAIChatCompletionsResponse> {
+        const request = toTogetherRequest(payload, false);
+        const response = await this.service.chat.completions.create(request);
+        return preserveOpenAIChatCompletionsOriginalResponse(normalizeTogetherResponse(response), response);
+    }
+
+    async _postChatCompletionStream(payload: OpenAIChatCompletionsPayload): Promise<ReadableStream> {
+        const stream = await this.service.chat.completions.create(toTogetherRequest(payload, true));
+        return openAIChatCompletionsStreamToSSE(normalizeTogetherStream(stream));
     }
 
     /**
@@ -73,12 +91,13 @@ export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAI
             return input.text;
         });
 
-        const response = await this.service.embeddings.create({
+        const request = {
             input: texts,
             model,
-            ...(normalized.dimensions ? { dimensions: normalized.dimensions } : {}),
             encoding_format: 'float',
-        });
+        } satisfies EmbeddingCreateParams & { encoding_format: 'float' };
+        const response: Embedding & { usage?: { prompt_tokens?: number; total_tokens?: number } } =
+            await this.service.embeddings.create(request);
         const ordered = [...response.data].sort((a, b) => a.index - b.index);
         const items = ordered.map((entry): EmbeddingResultItem => {
             if (!entry.embedding || entry.embedding.length === 0) {
@@ -86,15 +105,18 @@ export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAI
             }
             return { outputs: [{ values: entry.embedding, modality: 'text' }] };
         });
-        const usage = response.usage
-            ? { input_tokens: response.usage.prompt_tokens, input_text_tokens: response.usage.prompt_tokens }
-            : undefined;
-
-        return { model, results: items, usage };
+        const inputTokens = response.usage?.prompt_tokens ?? response.usage?.total_tokens;
+        return {
+            model,
+            results: items,
+            ...(inputTokens === undefined
+                ? {}
+                : { usage: { input_tokens: inputTokens, input_text_tokens: inputTokens } }),
+        };
     }
 
     async listModels(): Promise<AIModel[]> {
-        const result = await this.service.get<TogetherModel[]>('/models');
+        const result = await this.service.models.list();
         return result
             .flatMap((model) => {
                 const type = togetherModelType(model.type);
@@ -119,6 +141,157 @@ export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAI
             })
             .sort((a, b) => a.id.localeCompare(b.id));
     }
+}
+
+function toTogetherRequest(payload: OpenAIChatCompletionsPayload, stream: false): CompletionCreateParamsNonStreaming;
+function toTogetherRequest(payload: OpenAIChatCompletionsPayload, stream: true): CompletionCreateParamsStreaming;
+function toTogetherRequest(
+    payload: OpenAIChatCompletionsPayload,
+    stream: boolean,
+): CompletionCreateParamsNonStreaming | CompletionCreateParamsStreaming {
+    const request = {
+        model: payload.model,
+        messages: payload.messages.map(toTogetherMessage),
+        max_tokens: payload.max_tokens ?? undefined,
+        temperature: payload.temperature ?? undefined,
+        top_p: payload.top_p ?? undefined,
+        presence_penalty: payload.presence_penalty ?? undefined,
+        frequency_penalty: payload.frequency_penalty ?? undefined,
+        stop: Array.isArray(payload.stop) ? payload.stop : payload.stop ? [payload.stop] : undefined,
+        n: payload.n ?? undefined,
+        tools: payload.tools?.flatMap(toTogetherTool),
+        extra_body: payload.extra_body,
+        stream,
+    } satisfies (CompletionCreateParamsNonStreaming | CompletionCreateParamsStreaming) & {
+        extra_body?: Record<string, unknown>;
+    };
+    return request;
+}
+
+function toTogetherMessage(message: OpenAIChatCompletionsPayload['messages'][number]): ChatCompletionMessageParam {
+    const textContent = typeof message.content === 'string' || message.content === null ? message.content : undefined;
+    switch (message.role) {
+        case 'system':
+        case 'developer':
+            return { role: 'system', content: textContent ?? '' };
+        case 'assistant':
+            return {
+                role: 'assistant',
+                content: textContent,
+                tool_calls: message.tool_calls?.map((toolCall, index) => ({
+                    id: toolCall.id,
+                    index,
+                    type: 'function',
+                    function: {
+                        name: toolCall.function.name,
+                        arguments: toolCall.function.arguments,
+                    },
+                })),
+            };
+        case 'tool':
+            return { role: 'tool', content: textContent ?? '', tool_call_id: message.tool_call_id ?? '' };
+        default:
+            return {
+                role: 'user',
+                content:
+                    typeof message.content === 'string'
+                        ? message.content
+                        : (message.content?.map((part) =>
+                              part.type === 'text'
+                                  ? { type: 'text' as const, text: part.text }
+                                  : { type: 'image_url' as const, image_url: { ...part.image_url } },
+                          ) ?? ''),
+            };
+    }
+}
+
+type TogetherCompatibleTool = ChatCompletionTool & {
+    function: ChatCompletionTool['function'] & { strict: false };
+};
+
+function toTogetherTool(tool: NonNullable<OpenAIChatCompletionsPayload['tools']>[number]): TogetherCompatibleTool[] {
+    if (tool.type !== 'function') {
+        return [];
+    }
+    return [
+        {
+            type: 'function',
+            function: {
+                name: tool.function.name,
+                description: tool.function.description,
+                parameters: tool.function.parameters ?? undefined,
+                strict: false,
+            },
+        },
+    ];
+}
+
+function normalizeTogetherResponse(response: ChatCompletion): OpenAIChatCompletionsResponse {
+    return {
+        id: response.id,
+        object: 'chat.completion',
+        created: response.created,
+        model: response.model,
+        choices: response.choices.map((choice, index) => ({
+            index: choice.index ?? index,
+            message: {
+                role: choice.message?.role,
+                content: choice.message?.content,
+                reasoning: choice.message?.reasoning,
+                tool_calls: choice.message?.tool_calls?.map((tool) => ({
+                    id: tool.id,
+                    type: 'function',
+                    function: {
+                        name: tool.function.name,
+                        arguments: tool.function.arguments,
+                    },
+                })),
+            },
+            finish_reason: normalizeTogetherFinishReason(choice.finish_reason),
+            logprobs: choice.logprobs ?? null,
+        })),
+        usage: response.usage ?? undefined,
+    };
+}
+
+async function* normalizeTogetherStream(
+    stream: AsyncIterable<ChatCompletionChunk>,
+): AsyncIterable<OpenAIChatCompletionsStreamResponse> {
+    for await (const chunk of stream) {
+        yield {
+            id: chunk.id,
+            object: 'chat.completion.chunk',
+            created: chunk.created,
+            model: chunk.model,
+            choices: chunk.choices.map((choice) => ({
+                index: choice.index,
+                delta: {
+                    role: choice.delta.role,
+                    content: choice.delta.content,
+                    reasoning: choice.delta.reasoning,
+                    tool_calls: choice.delta.tool_calls?.map((tool, index) => ({
+                        index,
+                        id: tool.id,
+                        type: 'function',
+                        function: {
+                            name: tool.function.name,
+                            arguments: tool.function.arguments,
+                        },
+                    })),
+                },
+                finish_reason: normalizeTogetherFinishReason(choice.finish_reason),
+                logprobs: choice.logprobs ?? null,
+            })),
+            usage: chunk.usage ?? undefined,
+        };
+    }
+}
+
+function normalizeTogetherFinishReason(reason: string | null | undefined): string | null {
+    if (reason === 'eos') {
+        return 'stop';
+    }
+    return reason ?? null;
 }
 
 function togetherModelType(type?: string): ModelType {
