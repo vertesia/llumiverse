@@ -545,6 +545,24 @@ describe('OpenAIResponsesDriverBase Error Handling', () => {
             ).toBe(false);
         });
 
+        it('should classify insufficient quota as non-retryable even when the SDK reports a rate limit', () => {
+            const rateLimitError = new RateLimitError(
+                429,
+                { code: 'insufficient_quota', message: 'You exceeded your current quota' },
+                'You exceeded your current quota',
+                new Headers(),
+            );
+
+            expect(
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
+                    rateLimitError,
+                    429,
+                    'insufficient_quota',
+                    undefined,
+                ),
+            ).toBe(false);
+        });
+
         it('should classify error types correctly', () => {
             const apiError = new APIError(undefined, {}, 'Error', new Headers());
 

@@ -104,6 +104,23 @@ function isCompatibleErrorRetryable(
     errorCode: string | null | undefined,
     errorType: string | undefined,
 ): boolean | undefined {
+    if (errorCode) {
+        if (['timeout', 'server_error', 'service_unavailable', 'rate_limit_exceeded'].includes(errorCode)) return true;
+        if (
+            [
+                'invalid_api_key',
+                'invalid_request_error',
+                'model_not_found',
+                'insufficient_quota',
+                'invalid_model',
+            ].includes(errorCode) ||
+            errorCode.includes('invalid_')
+        ) {
+            return false;
+        }
+    }
+    if (errorType === 'invalid_request_error' || errorType === 'authentication_error') return false;
+
     if (
         error instanceof RateLimitError ||
         error instanceof InternalServerError ||
@@ -124,23 +141,6 @@ function isCompatibleErrorRetryable(
     ) {
         return false;
     }
-
-    if (errorCode) {
-        if (['timeout', 'server_error', 'service_unavailable', 'rate_limit_exceeded'].includes(errorCode)) return true;
-        if (
-            [
-                'invalid_api_key',
-                'invalid_request_error',
-                'model_not_found',
-                'insufficient_quota',
-                'invalid_model',
-            ].includes(errorCode) ||
-            errorCode.includes('invalid_')
-        ) {
-            return false;
-        }
-    }
-    if (errorType === 'invalid_request_error' || errorType === 'authentication_error') return false;
 
     if (httpStatusCode !== undefined) {
         if ([408, 429, 502, 503, 504, 529].includes(httpStatusCode)) return true;
