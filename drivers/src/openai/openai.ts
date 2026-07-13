@@ -18,6 +18,7 @@ export class OpenAIDriver extends OpenAIResponsesDriverBase {
         this.service = new OpenAI({
             apiKey: opts.apiKey,
             fetch: this.getDriverFetch(),
+            maxRetries: 0,
         });
     }
 }
