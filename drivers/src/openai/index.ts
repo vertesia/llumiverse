@@ -15,7 +15,6 @@ import {
     incrementConversationTurn,
     type JSONSchema,
     LlumiverseError,
-    type LlumiverseErrorContext,
     ModelType,
     modelModalitiesToArray,
     normalizeEmbeddingsOptions,
@@ -36,25 +35,9 @@ import {
     truncateLargeTextInConversation,
     unwrapConversationArray,
 } from '@llumiverse/core';
-import { AbstractDriver } from '@llumiverse/core/driver';
 import type OpenAI from 'openai';
 import type { AzureOpenAI } from 'openai';
-import {
-    APIConnectionError,
-    APIConnectionTimeoutError,
-    APIError,
-    AuthenticationError,
-    BadRequestError,
-    ConflictError,
-    ContentFilterFinishReasonError,
-    InternalServerError,
-    LengthFinishReasonError,
-    NotFoundError,
-    OpenAIError,
-    PermissionDeniedError,
-    RateLimitError,
-    UnprocessableEntityError,
-} from 'openai/error';
+import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAILikeMultimodalPrompt } from './openai_format.js';
 import { formatOpenAISchema } from './schema.js';
 
@@ -121,46 +104,10 @@ const supportFineTunning = new Set([
 
 export interface OpenAIResponsesDriverBaseOptions extends DriverOptions {}
 
-export abstract class OpenAIResponsesDriverBase extends AbstractDriver<
-    OpenAIResponsesDriverBaseOptions,
-    ResponseInputItem[]
-> {
-    abstract provider:
-        | Providers.openai
-        | Providers.azure_openai
-        | Providers.xai
-        | Providers.azure_foundry
-        | Providers.bedrock
-        | Providers.bedrock_mantle
-        | Providers.openai_compatible;
-    abstract service: OpenAI | AzureOpenAI;
-
-    constructor(opts: OpenAIResponsesDriverBaseOptions) {
-        super(opts);
-        this.formatPrompt = formatOpenAILikeMultimodalPrompt;
-    }
-
-    extractDataFromResponse(_options: ExecutionOptions, result: OpenAI.Responses.Response): Completion {
-        const tokenInfo = mapUsage(result.usage);
-
-        const tools = collectTools(result.output);
-        // Collect all parts in order (text and images)
-        const allResults = extractCompletionResults(result.output);
-
-        if (allResults.length === 0 && !tools) {
-            this.logger.error({ result }, '[OpenAI] Response is not valid');
-            throw new Error('Response is not valid: no data');
-        }
-
-        return {
-            result: allResults,
-            token_usage: tokenInfo,
-            finish_reason: responseFinishReason(result, tools),
-            tool_use: tools,
-        };
-    }
-
+/** Reusable Responses text protocol shared by OpenAI-compatible transports. */
+export class OpenAIResponsesProtocol {
     async requestTextCompletionStream(
+        driver: OpenAIResponsesDriverBase,
         prompt: ResponseInputItem[],
         options: ExecutionOptions,
     ): Promise<AsyncIterable<CompletionChunkObject>> {
@@ -171,7 +118,7 @@ export abstract class OpenAIResponsesDriverBase extends AbstractDriver<
             options.model_options?._option_id !== 'bedrock-mantle-responses' &&
             options.model_options?._option_id !== 'text-fallback'
         ) {
-            this.logger.debug({ options: options.model_options }, 'Unexpected option id');
+            driver.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
 
         // Include conversation history (same as non-streaming)
@@ -179,7 +126,7 @@ export abstract class OpenAIResponsesDriverBase extends AbstractDriver<
         let conversation = fixOrphanedToolResults(fixOrphanedToolUse(updateConversation(options.conversation, prompt)));
 
         const toolDefs = getToolDefinitions(options.tools);
-        const useTools: boolean = toolDefs ? supportsToolUse(options.model, this.provider, true) : false;
+        const useTools: boolean = toolDefs ? supportsToolUse(options.model, driver.provider, true) : false;
 
         // When no tools are provided but conversation contains function_call/function_call_output
         // items (e.g. checkpoint summary calls), convert them to text to avoid API errors
@@ -194,7 +141,7 @@ export abstract class OpenAIResponsesDriverBase extends AbstractDriver<
 
         let parsedSchema: JSONSchema | undefined;
         let strictMode = false;
-        if (options.result_schema && supportsSchema(options.model, this.provider)) {
+        if (options.result_schema && supportsSchema(options.model, driver.provider)) {
             const formattedSchema = formatOpenAISchema(options.result_schema);
             parsedSchema = formattedSchema.schema;
             strictMode = formattedSchema.strict;
@@ -203,7 +150,7 @@ export abstract class OpenAIResponsesDriverBase extends AbstractDriver<
         const isReasoningModel = isOpenAIReasoningModel(options.model);
         const reasoning = openAIReasoning(model_options?.effort ?? model_options?.reasoning_effort);
 
-        const stream = await this.service.responses.create({
+        const stream = await driver.service.responses.create({
             stream: true,
             model: options.model,
             input: conversation,
@@ -218,7 +165,11 @@ export abstract class OpenAIResponsesDriverBase extends AbstractDriver<
         return mapResponseStream(stream);
     }
 
-    async requestTextCompletion(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<Completion> {
+    async requestTextCompletion(
+        driver: OpenAIResponsesDriverBase,
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+    ): Promise<Completion> {
         if (
             options.model_options?._option_id !== undefined &&
             options.model_options?._option_id !== 'openai-text' &&
@@ -226,7 +177,7 @@ export abstract class OpenAIResponsesDriverBase extends AbstractDriver<
             options.model_options?._option_id !== 'bedrock-mantle-responses' &&
             options.model_options?._option_id !== 'text-fallback'
         ) {
-            this.logger.debug({ options: options.model_options }, 'Unexpected option id');
+            driver.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
 
         convertRoles(prompt, options.model);
@@ -235,7 +186,7 @@ export abstract class OpenAIResponsesDriverBase extends AbstractDriver<
         insert_image_detail(prompt, model_options?.image_detail ?? 'auto');
 
         const toolDefs = getToolDefinitions(options.tools);
-        const useTools: boolean = toolDefs ? supportsToolUse(options.model, this.provider) : false;
+        const useTools: boolean = toolDefs ? supportsToolUse(options.model, driver.provider) : false;
 
         // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
         let conversation = fixOrphanedToolResults(fixOrphanedToolUse(updateConversation(options.conversation, prompt)));
@@ -248,7 +199,7 @@ export abstract class OpenAIResponsesDriverBase extends AbstractDriver<
 
         let parsedSchema: JSONSchema | undefined;
         let strictMode = false;
-        if (options.result_schema && supportsSchema(options.model, this.provider)) {
+        if (options.result_schema && supportsSchema(options.model, driver.provider)) {
             const formattedSchema = formatOpenAISchema(options.result_schema);
             parsedSchema = formattedSchema.schema;
             strictMode = formattedSchema.strict;
@@ -257,9 +208,7 @@ export abstract class OpenAIResponsesDriverBase extends AbstractDriver<
         const isReasoningModel = isOpenAIReasoningModel(options.model);
         const reasoning = openAIReasoning(model_options?.effort ?? model_options?.reasoning_effort);
 
-        let completion: Completion;
-
-        const res = await this.service.responses.create({
+        const res = await driver.service.responses.create({
             stream: false,
             model: options.model,
             input: conversation,
@@ -271,7 +220,7 @@ export abstract class OpenAIResponsesDriverBase extends AbstractDriver<
             text: buildResponseTextConfig(parsedSchema, strictMode, model_options?.verbosity),
         });
 
-        completion = this.extractDataFromResponse(options, res);
+        const completion = driver.extractDataFromResponse(options, res);
         if (options.include_original_response) {
             completion.original_response = res;
         }
@@ -302,6 +251,59 @@ export abstract class OpenAIResponsesDriverBase extends AbstractDriver<
         completion.conversation = processedConversation;
 
         return completion;
+    }
+}
+
+export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBase<
+    OpenAIResponsesDriverBaseOptions,
+    ResponseInputItem[]
+> {
+    abstract provider:
+        | Providers.openai
+        | Providers.azure_openai
+        | Providers.xai
+        | Providers.azure_foundry
+        | Providers.bedrock
+        | Providers.bedrock_mantle
+        | Providers.openai_compatible;
+    abstract service: OpenAI | AzureOpenAI;
+    private readonly responsesProtocol: OpenAIResponsesProtocol;
+
+    constructor(opts: OpenAIResponsesDriverBaseOptions) {
+        super(opts);
+        this.responsesProtocol = new OpenAIResponsesProtocol();
+        this.formatPrompt = formatOpenAILikeMultimodalPrompt;
+    }
+
+    extractDataFromResponse(_options: ExecutionOptions, result: OpenAI.Responses.Response): Completion {
+        const tokenInfo = mapUsage(result.usage);
+
+        const tools = collectTools(result.output);
+        // Collect all parts in order (text and images)
+        const allResults = extractCompletionResults(result.output);
+
+        if (allResults.length === 0 && !tools) {
+            this.logger.error({ result }, '[OpenAI] Response is not valid');
+            throw new Error('Response is not valid: no data');
+        }
+
+        return {
+            result: allResults,
+            token_usage: tokenInfo,
+            finish_reason: responseFinishReason(result, tools),
+            tool_use: tools,
+        };
+    }
+
+    requestTextCompletionStream(
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+    ): Promise<AsyncIterable<CompletionChunkObject>> {
+        return this.responsesProtocol.requestTextCompletionStream(this, prompt, options);
+    }
+
+    requestTextCompletion(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<Completion> {
+        return this.responsesProtocol.requestTextCompletion(this, prompt, options);
     }
 
     protected canStream(_options: ExecutionOptions): Promise<boolean> {
@@ -643,200 +645,6 @@ export abstract class OpenAIResponsesDriverBase extends AbstractDriver<
                 },
             };
         }
-    }
-
-    /**
-     * Format OpenAI API errors into LlumiverseError with proper status codes and retryability.
-     *
-     * OpenAI API errors have a specific structure:
-     * - APIError.status: HTTP status code (400, 401, 403, 404, 409, 422, 429, 500+)
-     * - APIError.error: Error object with type, message, param, code
-     * - APIError.requestID: Request ID for support
-     * - APIError.code: Error code (e.g., 'invalid_api_key', 'rate_limit_exceeded')
-     * - APIError.param: Parameter that caused the error (optional)
-     * - APIError.type: Error type (optional)
-     *
-     * Common error types:
-     * - BadRequestError (400): Invalid request parameters
-     * - AuthenticationError (401): Invalid API key
-     * - PermissionDeniedError (403): Insufficient permissions
-     * - NotFoundError (404): Resource not found
-     * - ConflictError (409): Resource conflict
-     * - UnprocessableEntityError (422): Validation error
-     * - RateLimitError (429): Rate limit exceeded
-     * - InternalServerError (500+): Server-side errors
-     * - APIConnectionError: Connection issues (no status code)
-     * - APIConnectionTimeoutError: Request timeout (no status code)
-     * - LengthFinishReasonError: Response truncated due to length
-     * - ContentFilterFinishReasonError: Content filtered
-     *
-     * This implementation works for:
-     * - OpenAI API
-     * - Azure OpenAI
-     * - xAI (uses OpenAI-compatible API)
-     * - Azure Foundry (OpenAI-compatible)
-     * - Other OpenAI-compatible APIs
-     *
-     * @see https://platform.openai.com/docs/guides/error-codes
-     */
-    public formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
-        // Check if it's an OpenAI API error
-        const isOpenAIError = this.isOpenAIApiError(error);
-
-        if (!isOpenAIError) {
-            // Not an OpenAI API error, use default handling
-            throw error;
-        }
-
-        const apiError = error as APIError;
-        const httpStatusCode = apiError.status;
-
-        // Extract error message
-        const message = apiError.message || String(error);
-
-        // Extract additional error details (only available on APIError)
-        const errorCode = apiError.code;
-        const errorParam = apiError.param;
-        const errorType = apiError.type;
-
-        // Build user-facing message with status code
-        let userMessage = message;
-
-        // Include status code in message (for end-user visibility)
-        if (httpStatusCode) {
-            userMessage = `[${httpStatusCode}] ${userMessage}`;
-        }
-
-        // Add error code if available and not already in message
-        if (errorCode && !userMessage.includes(errorCode)) {
-            userMessage += ` (code: ${errorCode})`;
-        }
-
-        // Add parameter info if available and helpful
-        if (errorParam && !userMessage.toLowerCase().includes(errorParam.toLowerCase())) {
-            userMessage += ` [param: ${errorParam}]`;
-        }
-
-        // Add request ID if available (useful for OpenAI support)
-        if (apiError.requestID) {
-            userMessage += ` (Request ID: ${apiError.requestID})`;
-        }
-
-        // Determine retryability based on OpenAI error types
-        const retryable = this.isOpenAIErrorRetryable(error, httpStatusCode, errorCode, errorType);
-
-        // Use the error constructor name as the error name
-        const errorName = error.constructor?.name || 'OpenAIError';
-
-        return new LlumiverseError(
-            `[${context.provider}] ${userMessage}`,
-            retryable,
-            context,
-            error,
-            httpStatusCode,
-            errorName,
-        );
-    }
-
-    /**
-     * Type guard to check if error is an OpenAI API error or OpenAI-specific error.
-     */
-    private isOpenAIApiError(error: unknown): error is APIError | OpenAIError {
-        return (
-            error !== null && typeof error === 'object' && (error instanceof APIError || error instanceof OpenAIError)
-        );
-    }
-
-    /**
-     * Determine if an OpenAI API error is retryable.
-     *
-     * Retryable errors:
-     * - RateLimitError (429): Rate limit exceeded, retry with backoff
-     * - InternalServerError (500+): Server-side errors
-     * - APIConnectionTimeoutError: Request timeout
-     * - Error codes: 'timeout', 'server_error', 'service_unavailable'
-     * - Status codes: 408, 429, 502, 503, 504, 529, 5xx
-     *
-     * Non-retryable errors:
-     * - BadRequestError (400): Invalid request parameters
-     * - AuthenticationError (401): Invalid API key
-     * - PermissionDeniedError (403): Insufficient permissions
-     * - NotFoundError (404): Resource not found
-     * - ConflictError (409): Resource conflict
-     * - UnprocessableEntityError (422): Validation error
-     * - LengthFinishReasonError: Length limit reached
-     * - ContentFilterFinishReasonError: Content filtered
-     * - Error codes: 'invalid_api_key', 'invalid_request_error', 'model_not_found'
-     * - Other 4xx client errors
-     *
-     * @param error - The error object
-     * @param httpStatusCode - The HTTP status code if available
-     * @param errorCode - The error code if available
-     * @param errorType - The error type if available
-     * @returns True if retryable, false if not retryable, undefined if unknown
-     */
-    private isOpenAIErrorRetryable(
-        error: unknown,
-        httpStatusCode: number | undefined,
-        errorCode: string | null | undefined,
-        errorType: string | undefined,
-    ): boolean | undefined {
-        // Check specific OpenAI error types by class
-        if (error instanceof RateLimitError) return true;
-        if (error instanceof InternalServerError) return true;
-        if (error instanceof APIConnectionTimeoutError) return true;
-
-        // Non-retryable by error type
-        if (error instanceof BadRequestError) return false;
-        if (error instanceof AuthenticationError) return false;
-        if (error instanceof PermissionDeniedError) return false;
-        if (error instanceof NotFoundError) return false;
-        if (error instanceof ConflictError) return false;
-        if (error instanceof UnprocessableEntityError) return false;
-        if (error instanceof LengthFinishReasonError) return false;
-        if (error instanceof ContentFilterFinishReasonError) return false;
-
-        // Check error codes (OpenAI specific)
-        if (errorCode) {
-            // Retryable error codes
-            if (errorCode === 'timeout') return true;
-            if (errorCode === 'server_error') return true;
-            if (errorCode === 'service_unavailable') return true;
-            if (errorCode === 'rate_limit_exceeded') return true;
-
-            // Non-retryable error codes
-            if (errorCode === 'invalid_api_key') return false;
-            if (errorCode === 'invalid_request_error') return false;
-            if (errorCode === 'model_not_found') return false;
-            if (errorCode === 'insufficient_quota') return false;
-            if (errorCode === 'invalid_model') return false;
-            if (typeof errorCode === 'string' && errorCode.includes('invalid_')) return false;
-        }
-
-        // Check error type
-        if (errorType === 'invalid_request_error') return false;
-        if (errorType === 'authentication_error') return false;
-
-        // Use HTTP status code
-        if (httpStatusCode !== undefined) {
-            if (httpStatusCode === 429) return true; // Rate limit
-            if (httpStatusCode === 408) return true; // Request timeout
-            if (httpStatusCode === 502) return true; // Bad gateway
-            if (httpStatusCode === 503) return true; // Service unavailable
-            if (httpStatusCode === 504) return true; // Gateway timeout
-            if (httpStatusCode === 529) return true; // Overloaded
-            if (httpStatusCode >= 500 && httpStatusCode < 600) return true; // Server errors
-            if (httpStatusCode >= 400 && httpStatusCode < 500) return false; // Client errors
-        }
-
-        // Connection errors without status codes
-        if (error instanceof APIConnectionError && !(error instanceof APIConnectionTimeoutError)) {
-            // Generic connection errors might be retryable (network issues)
-            return true;
-        }
-
-        // Unknown error type - let consumer decide retry strategy
-        return undefined;
     }
 }
 
