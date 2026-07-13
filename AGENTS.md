@@ -174,6 +174,14 @@ When adding new features:
 2. Update the `AbstractDriver` class in `core/src/Driver.ts` if needed
 3. Implement the feature in the relevant drivers
 
+## Callable Driver Behavior
+
+Driver refactors must preserve callable behavior inherited or exposed by existing drivers. Do not remove methods or
+add provider capability guards merely because an operation is believed to be unsupported. When llumiverse can
+construct and transport the request, allow the provider SDK or API to answer and normalize its error clearly; this
+also supports compatible proxies, future provider rollout, and testing. Fail locally only when llumiverse cannot
+construct or transport the operation, and never silently no-op.
+
 ## Examples
 
 Examples demonstrating how to use Llumiverse can be found in the `examples/src` directory:

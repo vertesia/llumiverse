@@ -53,6 +53,7 @@ export class OpenAIResponsesDriver extends OpenAIResponsesDriverBase {
             baseURL: opts.endpoint,
             defaultHeaders: opts.default_headers,
             fetch: this.getDriverFetch(),
+            maxRetries: 0,
         });
     }
 

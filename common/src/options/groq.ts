@@ -15,6 +15,8 @@ export interface GroqDeepseekThinkingOptions {
     max_tokens?: number;
     temperature?: number;
     top_p?: number;
+    presence_penalty?: number;
+    frequency_penalty?: number;
     stop_sequence?: string[];
     reasoning_format: 'parsed' | 'raw' | 'hidden';
 }

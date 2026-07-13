@@ -383,16 +383,20 @@ describe('OpenAIResponsesDriverBase Error Handling', () => {
             expect(error.message).toContain('req_xyz789');
         });
 
-        it('should throw for non-OpenAI errors', () => {
+        it('should normalize non-OpenAI errors with llumiverse context', () => {
             const regularError = new Error('Regular error');
 
-            expect(() => {
-                driver.formatLlumiverseError(regularError, {
-                    provider: 'openai',
-                    model: 'gpt-4',
-                    operation: 'execute',
-                });
-            }).toThrow('Regular error');
+            const error = driver.formatLlumiverseError(regularError, {
+                provider: 'openai',
+                model: 'gpt-4',
+                operation: 'execute',
+            });
+
+            expect(error).toMatchObject({
+                name: 'Error',
+                context: { provider: 'openai', model: 'gpt-4', operation: 'execute' },
+                originalError: regularError,
+            });
         });
 
         it('should preserve original error for debugging', () => {
@@ -536,6 +540,24 @@ describe('OpenAIResponsesDriverBase Error Handling', () => {
                     apiError,
                     undefined,
                     'invalid_parameter',
+                    undefined,
+                ),
+            ).toBe(false);
+        });
+
+        it('should classify insufficient quota as non-retryable even when the SDK reports a rate limit', () => {
+            const rateLimitError = new RateLimitError(
+                429,
+                { code: 'insufficient_quota', message: 'You exceeded your current quota' },
+                'You exceeded your current quota',
+                new Headers(),
+            );
+
+            expect(
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
+                    rateLimitError,
+                    429,
+                    'insufficient_quota',
                     undefined,
                 ),
             ).toBe(false);

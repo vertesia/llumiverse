@@ -3,6 +3,8 @@ import type { ServerSentEvent } from '@vertesia/api-fetch-client';
 import type OpenAI from 'openai';
 import { describe, expect, it } from 'vitest';
 import {
+    normalizeOpenAIChatCompletionsResponse,
+    normalizeOpenAIChatCompletionsStream,
     type OpenAIChatCompletionsPayload,
     type OpenAIChatCompletionsPrompt,
     OpenAIChatCompletionsProtocol,
@@ -37,7 +39,7 @@ class TestOpenAIChatCompletionsProtocol extends OpenAIChatCompletionsProtocol<un
     constructor(
         private readonly response?: OpenAIChatCompletionsResponse,
         private readonly stream?: ReadableStream,
-        protocolOptions: OpenAIChatCompletionsProtocolOptions = {},
+        protocolOptions: Partial<OpenAIChatCompletionsProtocolOptions> = {},
     ) {
         super({ modelName: 'test/model', ...protocolOptions });
     }
@@ -76,6 +78,93 @@ const options: ExecutionOptions = {
 };
 
 describe('OpenAIChatCompletionsProtocol', () => {
+    it('preserves compatible reasoning fields at the OpenAI SDK transport boundary', async () => {
+        const response = {
+            id: 'chatcmpl-1',
+            object: 'chat.completion' as const,
+            created: 1,
+            model: 'compatible-model',
+            choices: [
+                {
+                    index: 0,
+                    finish_reason: 'stop' as const,
+                    logprobs: null,
+                    message: {
+                        role: 'assistant' as const,
+                        content: null,
+                        refusal: null,
+                        annotations: [],
+                        reasoning_content: 'blocking reasoning',
+                    },
+                },
+            ],
+        };
+        async function* stream() {
+            yield {
+                id: 'chatcmpl-1',
+                object: 'chat.completion.chunk' as const,
+                created: 1,
+                model: 'compatible-model',
+                choices: [
+                    {
+                        index: 0,
+                        finish_reason: 'stop' as const,
+                        logprobs: null,
+                        delta: { role: 'assistant' as const, reasoning: 'streaming reasoning' },
+                    },
+                ],
+            };
+        }
+
+        expect(normalizeOpenAIChatCompletionsResponse(response).choices[0].message.reasoning_content).toBe(
+            'blocking reasoning',
+        );
+        const chunks = [];
+        for await (const chunk of normalizeOpenAIChatCompletionsStream(stream())) chunks.push(chunk);
+        expect(chunks[0].choices[0].delta.reasoning).toBe('streaming reasoning');
+    });
+
+    it('forwards token fields, penalties, stop sequences, and extra_body to the transport', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol(
+            {
+                id: 'chatcmpl-1',
+                object: 'chat.completion',
+                created: 1,
+                model: 'test/model',
+                choices: [
+                    {
+                        index: 0,
+                        message: { role: 'assistant', content: 'ok' },
+                        finish_reason: 'stop',
+                        logprobs: null,
+                    },
+                ],
+            },
+            undefined,
+            { defaultMaxTokens: 64, extraBody: { google: { model_safety_settings: { enabled: false } } } },
+        );
+
+        await model.requestTextCompletion(undefined, prompt, {
+            ...options,
+            model_options: {
+                _option_id: 'text-fallback',
+                presence_penalty: 0.1,
+                frequency_penalty: 0.2,
+                stop_sequence: ['END'],
+            },
+        });
+
+        expect(model.payloads[0]).toEqual(
+            expect.objectContaining({
+                max_tokens: 64,
+                presence_penalty: 0.1,
+                frequency_penalty: 0.2,
+                stop: ['END'],
+                extra_body: { google: { model_safety_settings: { enabled: false } } },
+            }),
+        );
+    });
+
     it('ignores SDK custom tool calls that are not function tools', () => {
         const customToolCall = {
             id: 'custom-1',
@@ -447,6 +536,33 @@ describe('OpenAIChatCompletionsProtocol', () => {
                 tool_call_id: 'call_1',
                 content: '[Tool interrupted: The user stopped the operation before "lookup" could execute.]',
             },
+            { role: 'user', content: 'Hello' },
+        ]);
+    });
+
+    it('temporarily accepts legacy array-shaped conversations', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol({
+            id: 'chatcmpl-1',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: 'ok' },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+        });
+
+        await model.requestTextCompletion(undefined, prompt, {
+            ...options,
+            conversation: [{ role: 'assistant', content: 'legacy response' }],
+        });
+
+        expect(model.payloads[0].messages).toEqual([
+            { role: 'assistant', content: 'legacy response' },
             { role: 'user', content: 'Hello' },
         ]);
     });

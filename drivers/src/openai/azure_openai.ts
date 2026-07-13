@@ -49,6 +49,7 @@ export class AzureOpenAIDriver extends OpenAIResponsesDriverBase {
             apiVersion: opts.apiVersion ?? '2024-10-21',
             deployment: opts.deployment,
             fetch: this.getDriverFetch(),
+            maxRetries: 0,
         });
     }
 
