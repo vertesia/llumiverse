@@ -165,9 +165,9 @@ describe('driver.stream() — Bedrock tool use accumulation', () => {
 
         // Simulate what the fixed getExtractedStream emits for one tool call
         driver.chunks = [
-            { result: [], tool_use: [{ id: 'tool-1', tool_name: 'do_thing', tool_input: '' as unknown }] },
-            { result: [], tool_use: [{ id: 'tool-1', tool_name: '', tool_input: '{"param"' as unknown }] },
-            { result: [], tool_use: [{ id: 'tool-1', tool_name: '', tool_input: ':"hello"}' as unknown }] },
+            { result: [], tool_use: [{ id: 'tool-1', tool_name: 'do_thing', tool_input: '' }] },
+            { result: [], tool_use: [{ id: 'tool-1', tool_name: '', tool_input: '{"param"' }] },
+            { result: [], tool_use: [{ id: 'tool-1', tool_name: '', tool_input: ':"hello"}' }] },
             { result: [], finish_reason: 'tool_use' },
         ];
 
@@ -190,10 +190,10 @@ describe('driver.stream() — Bedrock tool use accumulation', () => {
         const options: ExecutionOptions = { model: 'test-model' };
 
         driver.chunks = [
-            { result: [], tool_use: [{ id: 'id-a', tool_name: 'tool_a', tool_input: '' as unknown }] },
-            { result: [], tool_use: [{ id: 'id-b', tool_name: 'tool_b', tool_input: '' as unknown }] },
-            { result: [], tool_use: [{ id: 'id-a', tool_name: '', tool_input: '{"x":1}' as unknown }] },
-            { result: [], tool_use: [{ id: 'id-b', tool_name: '', tool_input: '{"y":2}' as unknown }] },
+            { result: [], tool_use: [{ id: 'id-a', tool_name: 'tool_a', tool_input: '' }] },
+            { result: [], tool_use: [{ id: 'id-b', tool_name: 'tool_b', tool_input: '' }] },
+            { result: [], tool_use: [{ id: 'id-a', tool_name: '', tool_input: '{"x":1}' }] },
+            { result: [], tool_use: [{ id: 'id-b', tool_name: '', tool_input: '{"y":2}' }] },
             { result: [], finish_reason: 'tool_use' },
         ];
 
@@ -213,8 +213,8 @@ describe('driver.stream() — Bedrock tool use accumulation', () => {
         const options: ExecutionOptions = { model: 'test-model' };
 
         driver.chunks = [
-            { result: [], tool_use: [{ id: 'trunc', tool_name: 'tool_c', tool_input: '' as unknown }] },
-            { result: [], tool_use: [{ id: 'trunc', tool_name: '', tool_input: '{"incomplete' as unknown }] },
+            { result: [], tool_use: [{ id: 'trunc', tool_name: 'tool_c', tool_input: '' }] },
+            { result: [], tool_use: [{ id: 'trunc', tool_name: '', tool_input: '{"incomplete' }] },
             { result: [], finish_reason: 'length' },
         ];
 

@@ -1,4 +1,13 @@
-import type { Bedrock } from '@aws-sdk/client-bedrock';
+import {
+    Bedrock,
+    type FoundationModelSummary,
+    type ListCustomModelsCommandInput,
+    type ListCustomModelsCommandOutput,
+    type ListFoundationModelsCommandInput,
+    type ListFoundationModelsCommandOutput,
+    type ListInferenceProfilesCommandInput,
+    type ListInferenceProfilesCommandOutput,
+} from '@aws-sdk/client-bedrock';
 import { describe, expect, it, vi } from 'vitest';
 import { BedrockDriver } from './index.js';
 
@@ -23,25 +32,63 @@ const DISCOVERY_CASES = [
     { id: 'unverified.model-1', discoverable: false },
 ] as const;
 
+function foundationModel(modelId: string, modelName = modelId): FoundationModelSummary {
+    return {
+        modelArn: undefined,
+        modelId,
+        modelName,
+        providerName: modelId.split('.')[0],
+        inferenceTypesSupported: ['ON_DEMAND'],
+        inputModalities: ['TEXT'],
+        outputModalities: ['TEXT'],
+        responseStreamingSupported: true,
+    };
+}
+
+const emptyCustomModels = {
+    $metadata: {},
+    modelSummaries: [],
+} satisfies ListCustomModelsCommandOutput;
+
+const emptyInferenceProfiles = {
+    $metadata: {},
+    inferenceProfileSummaries: [],
+} satisfies ListInferenceProfilesCommandOutput;
+
+function createMockService(): Bedrock {
+    return new Bedrock({
+        region: 'us-east-2',
+        credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
+    });
+}
+
+function mockModelListingMethods(service: Bedrock, foundationModels: ListFoundationModelsCommandOutput): void {
+    const listFoundationModels = vi.fn(
+        async (_input: ListFoundationModelsCommandInput): Promise<ListFoundationModelsCommandOutput> =>
+            foundationModels,
+    );
+    const listCustomModels = vi.fn(
+        async (_input: ListCustomModelsCommandInput): Promise<ListCustomModelsCommandOutput> => emptyCustomModels,
+    );
+    const listInferenceProfiles = vi.fn(
+        async (_input: ListInferenceProfilesCommandInput): Promise<ListInferenceProfilesCommandOutput> =>
+            emptyInferenceProfiles,
+    );
+    Reflect.set(service, 'listFoundationModels', listFoundationModels);
+    Reflect.set(service, 'listCustomModels', listCustomModels);
+    Reflect.set(service, 'listInferenceProfiles', listInferenceProfiles);
+}
+
 describe('Bedrock Converse model discovery', () => {
     it('inherits discovery support for future models from known publishers', async () => {
         const driver = new BedrockDriver({ region: 'us-east-2' });
-        const service = {
-            listFoundationModels: vi.fn(async () => ({
-                modelSummaries: DISCOVERY_CASES.map(({ id: modelId }) => ({
-                    modelId,
-                    modelName: modelId,
-                    providerName: modelId.split('.')[0],
-                    inferenceTypesSupported: ['ON_DEMAND'],
-                    inputModalities: ['TEXT'],
-                    outputModalities: ['TEXT'],
-                    responseStreamingSupported: true,
-                })),
-            })),
-            listCustomModels: vi.fn(async () => ({ modelSummaries: [] })),
-            listInferenceProfiles: vi.fn(async () => ({ inferenceProfileSummaries: [] })),
-        };
-        vi.spyOn(driver, 'getService').mockReturnValue(service as unknown as Bedrock);
+        const service = createMockService();
+        const foundationModels = {
+            $metadata: {},
+            modelSummaries: DISCOVERY_CASES.map(({ id }) => foundationModel(id)),
+        } satisfies ListFoundationModelsCommandOutput;
+        mockModelListingMethods(service, foundationModels);
+        vi.spyOn(driver, 'getService').mockReturnValue(service);
 
         const discoveredIds = (await driver.listModels()).map((model) => model.id);
 
@@ -56,23 +103,18 @@ describe('Bedrock Converse model discovery', () => {
 
     it('uses the AWS model name without repeating the publisher', async () => {
         const driver = new BedrockDriver({ region: 'us-east-2' });
-        const service = {
-            listFoundationModels: vi.fn(async () => ({
-                modelSummaries: [
-                    {
-                        modelId: 'deepseek.v3.2',
-                        modelName: 'DeepSeek V3.2',
-                        providerName: 'DeepSeek',
-                        inferenceTypesSupported: ['ON_DEMAND'],
-                        inputModalities: ['TEXT'],
-                        outputModalities: ['TEXT'],
-                    },
-                ],
-            })),
-            listCustomModels: vi.fn(async () => ({ modelSummaries: [] })),
-            listInferenceProfiles: vi.fn(async () => ({ inferenceProfileSummaries: [] })),
-        };
-        vi.spyOn(driver, 'getService').mockReturnValue(service as unknown as Bedrock);
+        const service = createMockService();
+        const foundationModels = {
+            $metadata: {},
+            modelSummaries: [
+                {
+                    ...foundationModel('deepseek.v3.2', 'DeepSeek V3.2'),
+                    providerName: 'DeepSeek',
+                },
+            ],
+        } satisfies ListFoundationModelsCommandOutput;
+        mockModelListingMethods(service, foundationModels);
+        vi.spyOn(driver, 'getService').mockReturnValue(service);
 
         expect(await driver.listModels()).toEqual([
             expect.objectContaining({ name: 'DeepSeek V3.2', owner: 'DeepSeek' }),

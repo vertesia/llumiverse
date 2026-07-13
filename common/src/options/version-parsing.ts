@@ -57,6 +57,10 @@ export interface ClaudeVersion {
     variant: 'opus' | 'sonnet' | 'haiku' | 'fable' | 'mythos';
 }
 
+function isClaudeVariant(value: string): value is ClaudeVersion['variant'] {
+    return value === 'opus' || value === 'sonnet' || value === 'haiku' || value === 'fable' || value === 'mythos';
+}
+
 /**
  * Parse Claude model version from a model string.
  *
@@ -78,18 +82,20 @@ export function parseClaudeVersion(modelString: string): ClaudeVersion | null {
     // The minor version is limited to 1-2 digits to avoid matching dates (YYYYMMDD format)
     const match = modelString.match(/claude-(opus|sonnet|haiku|fable|mythos)-?(\d+)(?:-(\d{1,2}))?(?:-|\b)/i);
     if (match) {
-        const variant = match[1].toLowerCase() as ClaudeVersion['variant'];
+        const variant = match[1].toLowerCase();
+        if (!isClaudeVariant(variant)) return null;
         const major = parseInt(match[2], 10);
         const minor = match[3] ? parseInt(match[3], 10) : 0;
         return { major, minor, variant };
     }
 
     // Fallback for older format: claude-3-7-sonnet-20250219
-    const fallbackMatch = modelString.match(/claude-(\d+)-(\d+)-(\w+)/i);
+    const fallbackMatch = modelString.match(/claude-(\d+)-(\d+)-(opus|sonnet|haiku|fable|mythos)(?:-|\b)/i);
     if (fallbackMatch) {
         const major = parseInt(fallbackMatch[1], 10);
         const minor = parseInt(fallbackMatch[2], 10);
-        const variant = fallbackMatch[3].toLowerCase() as ClaudeVersion['variant'];
+        const variant = fallbackMatch[3].toLowerCase();
+        if (!isClaudeVariant(variant)) return null;
         return { major, minor, variant };
     }
 

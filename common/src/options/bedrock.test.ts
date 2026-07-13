@@ -108,6 +108,7 @@ describe('Bedrock Mantle metadata', () => {
             minor: 0,
             variant: 'mythos',
         });
+        expect(parseClaudeVersion('anthropic.claude-3-7-unknown-20250219')).toBeNull();
         expect(supportsAdaptiveThinking('anthropic.claude-fable-5')).toBe(true);
         expect(hasSamplingParameterRestriction('anthropic.claude-mythos-preview')).toBe(true);
     });

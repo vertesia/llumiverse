@@ -1,5 +1,6 @@
 import { type CompletionChunkObject, type ExecutionOptions, getConversationMeta } from '@llumiverse/core';
 import type { ServerSentEvent } from '@vertesia/api-fetch-client';
+import type OpenAI from 'openai';
 import { describe, expect, it } from 'vitest';
 import {
     type OpenAIChatCompletionsPayload,
@@ -7,6 +8,7 @@ import {
     OpenAIChatCompletionsProtocol,
     type OpenAIChatCompletionsProtocolOptions,
     type OpenAIChatCompletionsResponse,
+    parseOpenAIChatCompletionsToolCalls,
     stripOpenAIChatCompletionsThinkBlocksFromCompletion,
 } from './openai_chat_completions.js';
 
@@ -74,6 +76,16 @@ const options: ExecutionOptions = {
 };
 
 describe('OpenAIChatCompletionsProtocol', () => {
+    it('ignores SDK custom tool calls that are not function tools', () => {
+        const customToolCall = {
+            id: 'custom-1',
+            type: 'custom',
+            custom: { name: 'shell', input: 'echo hello' },
+        } satisfies OpenAI.Chat.ChatCompletionMessageCustomToolCall;
+
+        expect(parseOpenAIChatCompletionsToolCalls([customToolCall])).toBeUndefined();
+    });
+
     it('keeps the default tool choice implicit', async () => {
         const model = new TestOpenAIChatCompletionsProtocol({
             id: 'chatcmpl-1',

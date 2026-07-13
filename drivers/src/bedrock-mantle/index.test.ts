@@ -6,6 +6,7 @@ import type OpenAI from 'openai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BedrockDriver } from '../bedrock/index.js';
 import { OpenAIResponsesDriverBase } from '../openai/index.js';
+import type { OpenAIChatCompletionsPrompt } from '../openai/openai_chat_completions.js';
 import { BedrockMantleDriver, isBedrockMantleModel } from './index.js';
 
 vi.mock('@aws/bedrock-token-generator', () => ({
@@ -20,6 +21,13 @@ type ChatCreate = (
 type ResponsesCreate = (
     params: OpenAI.Responses.ResponseCreateParamsNonStreaming,
 ) => Promise<OpenAI.Responses.Response>;
+type ModelsListResult = Pick<Awaited<ReturnType<OpenAI['models']['list']>>, 'data'>;
+type ModelsList = (...args: Parameters<OpenAI['models']['list']>) => Promise<ModelsListResult>;
+type ClaudeStreamResult = Pick<ReturnType<Anthropic['messages']['stream']>, 'finalMessage'>;
+type ClaudeStream = (
+    params: Parameters<Anthropic['messages']['stream']>[0],
+    options?: Parameters<Anthropic['messages']['stream']>[1],
+) => ClaudeStreamResult;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -215,7 +223,7 @@ describe('BedrockMantleDriver model listing', () => {
             { id: 'google.gemma-5-70b', object: 'model', created: 1783669008, owned_by: 'system' },
             { id: 'zai.glm-5', object: 'model', created: 1783669008, owned_by: 'system' },
         ] satisfies OpenAI.Models.Model[];
-        const list = vi.fn(async () => ({ data: modelFixtures }));
+        const list = vi.fn<ModelsList>(async () => ({ data: modelFixtures }));
         Reflect.set(driver, 'service', { models: { list } });
 
         const models = await driver.listModels();
@@ -273,6 +281,18 @@ describe('BedrockMantleDriver model listing', () => {
 });
 
 describe('BedrockMantleDriver protocol execution', () => {
+    it('rejects prompts that do not match the selected model protocol', () => {
+        const driver = new BedrockMantleDriver({ region: 'us-west-2' });
+        const chatPrompt = {
+            _is_openai_chat_completions: true,
+            messages: [{ role: 'user', content: 'hello' }],
+        } satisfies OpenAIChatCompletionsPrompt;
+
+        expect(() => driver.requestTextCompletion(chatPrompt, { model: 'openai.gpt-5.5' })).toThrow(
+            'Responses models require an OpenAI Responses prompt',
+        );
+    });
+
     it('executes Chat Completions through the shared OpenAI SDK protocol', async () => {
         const driver = new BedrockMantleDriver({ region: 'us-west-2' });
         const create = vi.fn<ChatCreate>(async () => createChatCompletion('google.gemma-3-4b-it'));
@@ -385,9 +405,10 @@ describe('BedrockMantleDriver protocol execution', () => {
                 service_tier: null,
             },
         } satisfies Anthropic.Message;
-        const finalMessage = vi.fn(async () => message);
-        const stream = vi.fn(() => ({ finalMessage }));
-        Reflect.set(driver, 'anthropicService', { messages: { stream } });
+        const finalMessage = vi.fn<ClaudeStreamResult['finalMessage']>(async () => message);
+        const stream = vi.fn<ClaudeStream>(() => ({ finalMessage }));
+        const messagesClient = { messages: { stream } };
+        Reflect.set(driver, 'anthropicService', messagesClient);
         const prompt = await driver.createPrompt(promptSegments, { model: 'anthropic.claude-haiku-4-5' });
 
         const completion = await driver.requestTextCompletion(prompt, {

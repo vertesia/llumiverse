@@ -1,4 +1,4 @@
-import { AnthropicBedrockMantle } from '@anthropic-ai/bedrock-sdk';
+import { AnthropicBedrockMantle, type BedrockMantleClientOptions } from '@anthropic-ai/bedrock-sdk';
 import { getTokenProvider } from '@aws/bedrock-token-generator';
 import type { AwsCredentialIdentity, Provider } from '@aws-sdk/types';
 import {
@@ -75,6 +75,27 @@ function isChatCompletionsPrompt(prompt: BedrockMantlePrompt): prompt is OpenAIC
     );
 }
 
+function requireResponsesPrompt(prompt: BedrockMantlePrompt): BedrockMantleResponsesPrompt {
+    if (!isResponsesPrompt(prompt)) {
+        throw new TypeError('Bedrock Mantle Responses models require an OpenAI Responses prompt');
+    }
+    return prompt;
+}
+
+function requireChatCompletionsPrompt(prompt: BedrockMantlePrompt): OpenAIChatCompletionsPrompt {
+    if (!isChatCompletionsPrompt(prompt)) {
+        throw new TypeError('Bedrock Mantle Chat Completions models require a Chat Completions prompt');
+    }
+    return prompt;
+}
+
+function requireClaudePrompt(prompt: BedrockMantlePrompt): ClaudePrompt {
+    if (isResponsesPrompt(prompt) || isChatCompletionsPrompt(prompt)) {
+        throw new TypeError('Bedrock Mantle Claude models require an Anthropic Messages prompt');
+    }
+    return prompt;
+}
+
 export function isBedrockMantleModel(model: string): boolean {
     return getBedrockMantleProtocol(model) !== undefined;
 }
@@ -119,14 +140,15 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
             toolSchemaMode: 'compatible',
         });
 
-        const credentialOptions =
-            typeof opts.credentials === 'function'
-                ? { providerChainResolver: async () => opts.credentials as Provider<AwsCredentialIdentity> }
-                : opts.credentials
+        const credentials = opts.credentials;
+        const credentialOptions: BedrockMantleClientOptions =
+            typeof credentials === 'function'
+                ? { providerChainResolver: async () => credentials }
+                : credentials
                   ? {
-                        awsAccessKey: opts.credentials.accessKeyId,
-                        awsSecretAccessKey: opts.credentials.secretAccessKey,
-                        awsSessionToken: opts.credentials.sessionToken,
+                        awsAccessKey: credentials.accessKeyId,
+                        awsSecretAccessKey: credentials.secretAccessKey,
+                        awsSessionToken: credentials.sessionToken,
                     }
                   : {};
         this.anthropicService = new AnthropicBedrockMantle({
@@ -164,15 +186,15 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
     requestTextCompletion(prompt: BedrockMantlePrompt, options: ExecutionOptions): Promise<Completion> {
         switch (getBedrockMantleProtocol(options.model)) {
             case 'responses':
-                return this.responsesDelegate.requestTextCompletion(prompt as BedrockMantleResponsesPrompt, options);
+                return this.responsesDelegate.requestTextCompletion(requireResponsesPrompt(prompt), options);
             case 'chat_completions':
                 return this.getChatCompletionsProtocol(options.model).requestTextCompletion(
                     this,
-                    prompt as OpenAIChatCompletionsPrompt,
+                    requireChatCompletionsPrompt(prompt),
                     options,
                 );
             case 'messages':
-                return executeClaudeCompletion(this.anthropicService, prompt as ClaudePrompt, options);
+                return executeClaudeCompletion(this.anthropicService, requireClaudePrompt(prompt), options);
             default:
                 throw new Error(`Unsupported Bedrock Mantle model: ${options.model}`);
         }
@@ -184,18 +206,15 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
     ): Promise<AsyncIterable<CompletionChunkObject>> {
         switch (getBedrockMantleProtocol(options.model)) {
             case 'responses':
-                return this.responsesDelegate.requestTextCompletionStream(
-                    prompt as BedrockMantleResponsesPrompt,
-                    options,
-                );
+                return this.responsesDelegate.requestTextCompletionStream(requireResponsesPrompt(prompt), options);
             case 'chat_completions':
                 return this.getChatCompletionsProtocol(options.model).requestTextCompletionStream(
                     this,
-                    prompt as OpenAIChatCompletionsPrompt,
+                    requireChatCompletionsPrompt(prompt),
                     options,
                 );
             case 'messages':
-                return streamClaudeCompletion(this.anthropicService, prompt as ClaudePrompt, options);
+                return streamClaudeCompletion(this.anthropicService, requireClaudePrompt(prompt), options);
             default:
                 throw new Error(`Unsupported Bedrock Mantle model: ${options.model}`);
         }
@@ -210,20 +229,20 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
         switch (getBedrockMantleProtocol(options.model)) {
             case 'responses':
                 return this.responsesDelegate.buildStreamingConversation(
-                    prompt as BedrockMantleResponsesPrompt,
+                    requireResponsesPrompt(prompt),
                     result,
                     toolUse,
                     options,
                 );
             case 'chat_completions':
                 return buildOpenAIChatCompletionsStreamingConversation(
-                    prompt as OpenAIChatCompletionsPrompt,
+                    requireChatCompletionsPrompt(prompt),
                     result,
                     toolUse,
                     options,
                 );
             case 'messages':
-                return buildClaudeStreamingConversation(prompt as ClaudePrompt, result, toolUse, options);
+                return buildClaudeStreamingConversation(requireClaudePrompt(prompt), result, toolUse, options);
             default:
                 return undefined;
         }

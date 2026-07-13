@@ -932,7 +932,7 @@ export async function streamClaudeCompletion(
                             {
                                 id: streamEvent.content_block.id,
                                 tool_name: streamEvent.content_block.name,
-                                tool_input: '' as unknown as JSONObject,
+                                tool_input: '',
                             },
                         ],
                     } satisfies CompletionChunkObject;
@@ -962,7 +962,7 @@ export async function streamClaudeCompletion(
                                     {
                                         id: currentToolUse.id,
                                         tool_name: '',
-                                        tool_input: streamEvent.delta.partial_json as unknown as JSONObject,
+                                        tool_input: streamEvent.delta.partial_json,
                                     },
                                 ],
                             } satisfies CompletionChunkObject;
