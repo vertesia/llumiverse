@@ -96,6 +96,7 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
         this.chunks = 0;
         const accumulatedResults: CompletionResult[] = []; // Accumulate CompletionResult[] from chunks
         const accumulatedToolUse: Map<string, StreamingToolUse> = new Map(); // Accumulate tool_use by id
+        const providerMetadata: unknown[] = [];
 
         this.driver.logger.debug(`[${this.driver.provider}] Streaming Execution of ${this.options.model} with prompt`);
 
@@ -150,6 +151,9 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
                             for (const tool of chunk.tool_use) {
                                 accumulateToolUseChunk(accumulatedToolUse, tool);
                             }
+                        }
+                        if (chunk.provider_metadata !== undefined) {
+                            providerMetadata.push(chunk.provider_metadata);
                         }
                         if (Array.isArray(chunk.result) && chunk.result.length > 0) {
                             // Process each result in the chunk, combining consecutive text/JSON
@@ -320,6 +324,7 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
             accumulatedResults,
             toolUseArray,
             this.options,
+            providerMetadata.length > 0 ? providerMetadata : undefined,
         );
         if (conversation !== undefined) {
             this.completion.conversation = conversation;

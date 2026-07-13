@@ -94,8 +94,9 @@ export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAI
         const request = {
             input: texts,
             model,
+            ...(normalized.dimensions !== undefined ? { dimensions: normalized.dimensions } : {}),
             encoding_format: 'float',
-        } satisfies EmbeddingCreateParams & { encoding_format: 'float' };
+        } satisfies EmbeddingCreateParams & { dimensions?: number; encoding_format: 'float' };
         const response: Embedding & { usage?: { prompt_tokens?: number; total_tokens?: number } } =
             await this.service.embeddings.create(request);
         const ordered = [...response.data].sort((a, b) => a.index - b.index);
@@ -269,8 +270,8 @@ async function* normalizeTogetherStream(
                     role: choice.delta.role,
                     content: choice.delta.content,
                     reasoning: choice.delta.reasoning,
-                    tool_calls: choice.delta.tool_calls?.map((tool, index) => ({
-                        index,
+                    tool_calls: choice.delta.tool_calls?.map((tool) => ({
+                        index: tool.index,
                         id: tool.id,
                         type: 'function',
                         function: {

@@ -321,6 +321,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
      * @param result - The completion results from the streamed response
      * @param toolUse - The tool calls from the streamed response (if any)
      * @param options - The execution options
+     * @param providerMetadata - Opaque streamed state for the originating provider adapter
      * @returns The updated conversation context, or undefined if not supported
      */
     buildStreamingConversation(
@@ -328,6 +329,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         _result: unknown[],
         _toolUse: unknown[] | undefined,
         _options: ExecutionOptions,
+        _providerMetadata?: unknown[],
     ): unknown | undefined {
         // Default implementation returns undefined - drivers can override
         return undefined;

@@ -418,6 +418,12 @@ export interface CompletionChunkObject {
     token_usage?: ExecutionTokenUsage;
     finish_reason?: 'stop' | 'length' | string;
     /**
+     * Opaque provider-native state required to continue a streamed conversation.
+     * Shared stream handling carries this through without interpreting it; the
+     * originating provider adapter must validate it before reuse.
+     */
+    provider_metadata?: unknown;
+    /**
      * Tool calls returned by the model during streaming.
      * Each chunk may contain partial tool call information that needs to be aggregated.
      * Typed with `unknown` params because streamed chunks carry partial (often string)

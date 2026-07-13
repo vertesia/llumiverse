@@ -50,6 +50,8 @@ export type OpenAIChatCompletionsMessage = {
      * Tool calls from assistant messages - stored and sent back with tool results.
      */
     tool_calls?: OpenAIChatCompletionsToolCall[];
+    /** @internal Opaque state interpreted only by the originating provider adapter. */
+    _provider_metadata?: unknown;
 };
 
 export type OpenAIChatCompletionsRequestMessage = {
@@ -57,6 +59,7 @@ export type OpenAIChatCompletionsRequestMessage = {
     content?: string | null | OpenAIChatCompletionsContentPart[];
     tool_call_id?: string;
     tool_calls?: OpenAIChatCompletionsToolCall[];
+    _provider_metadata?: unknown;
 };
 
 export type OpenAIChatCompletionsPayload = Omit<
@@ -80,6 +83,7 @@ type OpenAIChatCompletionsResponseMessage = Omit<
     reasoning_content?: string | null;
     reasoning?: string | null;
     tool_calls?: OpenAI.Chat.ChatCompletionMessageToolCall[];
+    _provider_metadata?: unknown;
 };
 type OpenAIChatCompletionsResponseChoice = Omit<
     OpenAI.Chat.ChatCompletion.Choice,
@@ -100,6 +104,7 @@ type OpenAIChatCompletionsStreamChoiceDelta = {
     content?: string | null | OpenAIChatCompletionsContentPart[];
     reasoning_content?: string | null;
     reasoning?: string | null;
+    _provider_metadata?: unknown;
     tool_calls?: Array<{
         index?: number;
         id?: string;
@@ -185,6 +190,8 @@ export function normalizeOpenAIChatCompletionsResponse(
             message: {
                 role: choice.message.role,
                 content: choice.message.content,
+                reasoning_content: getOptionalString(choice.message, 'reasoning_content'),
+                reasoning: getOptionalString(choice.message, 'reasoning'),
                 tool_calls: choice.message.tool_calls?.flatMap((toolCall) =>
                     toolCall.type === 'function' ? [toolCall] : [],
                 ),
@@ -212,6 +219,8 @@ export async function* normalizeOpenAIChatCompletionsStream(
                 delta: {
                     role: choice.delta.role,
                     content: choice.delta.content,
+                    reasoning_content: getOptionalString(choice.delta, 'reasoning_content'),
+                    reasoning: getOptionalString(choice.delta, 'reasoning'),
                     tool_calls: choice.delta.tool_calls?.map((toolCall) => ({
                         index: toolCall.index,
                         id: toolCall.id,
@@ -223,6 +232,12 @@ export async function* normalizeOpenAIChatCompletionsStream(
             usage: chunk.usage ?? undefined,
         };
     }
+}
+
+function getOptionalString(value: object, key: string): string | null | undefined {
+    if (!(key in value)) return undefined;
+    const candidate = (value as Record<string, unknown>)[key];
+    return typeof candidate === 'string' || candidate === null ? candidate : undefined;
 }
 
 type StreamChunk = string | Uint8Array;
@@ -238,10 +253,11 @@ async function streamToString(stream: ReadableAsyncStream): Promise<string> {
 }
 
 export function updateOpenAIChatCompletionsConversation(
-    conversation: OpenAIChatCompletionsPrompt | undefined | null,
+    conversation: OpenAIChatCompletionsPrompt | OpenAIChatCompletionsMessage[] | undefined | null,
     prompt: OpenAIChatCompletionsPrompt,
 ): OpenAIChatCompletionsPrompt {
-    const baseMessages = conversation ? conversation.messages : [];
+    // TODO: Remove legacy array-shaped conversation compatibility after 2026-07-27.
+    const baseMessages = Array.isArray(conversation) ? conversation : (conversation?.messages ?? []);
     return {
         _is_openai_chat_completions: true,
         messages: [...baseMessages, ...(prompt.messages || [])],
@@ -562,6 +578,7 @@ export function convertToOpenAIChatCompletionsMessages(
     for (const msg of messages) {
         const result: OpenAIChatCompletionsRequestMessage = {
             role: msg.role,
+            ...(msg._provider_metadata === undefined ? {} : { _provider_metadata: msg._provider_metadata }),
         };
 
         if (msg.tool_calls && msg.tool_calls.length > 0) {
@@ -618,6 +635,7 @@ export function buildOpenAIChatCompletionsStreamingConversation(
     result: unknown[],
     toolUse: unknown[] | undefined,
     options: ExecutionOptions,
+    providerMetadata?: unknown[],
 ): OpenAIChatCompletionsPrompt {
     const completionResults = result as CompletionResult[];
     const textContent = completionResults
@@ -634,6 +652,9 @@ export function buildOpenAIChatCompletionsStreamingConversation(
         .join('');
 
     const assistantMessage: OpenAIChatCompletionsMessage = { role: 'assistant' };
+    if (providerMetadata && providerMetadata.length > 0) {
+        assistantMessage._provider_metadata = providerMetadata;
+    }
     if (textContent) {
         assistantMessage.content = stripOpenAIChatCompletionsThinkBlocks(textContent);
     } else if (toolUse && toolUse.length > 0) {
@@ -854,6 +875,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         const assistantMessage: OpenAIChatCompletionsMessage = {
             role: 'assistant',
             content: text || null,
+            ...(message?._provider_metadata === undefined ? {} : { _provider_metadata: message._provider_metadata }),
         };
 
         if (tool_use && tool_use.length > 0 && message?.tool_calls) {
@@ -922,6 +944,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                 return {
                     result: [],
                     tool_use: toolUseChunks,
+                    provider_metadata: delta._provider_metadata,
                     finish_reason: choice?.finish_reason
                         ? normalizeOpenAIChatCompletionsFinishReason(choice.finish_reason, toolUseChunks.length > 0)
                         : undefined,
@@ -948,6 +971,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                     : '';
             return {
                 result: text || fallbackText ? [{ type: 'text', value: fallbackText || text }] : [],
+                provider_metadata: delta?._provider_metadata,
                 finish_reason: normalizeOpenAIChatCompletionsFinishReason(choice?.finish_reason),
                 token_usage: mapOpenAIChatCompletionsUsage(json.usage),
             } satisfies CompletionChunkObject;
@@ -1206,8 +1230,9 @@ export abstract class OpenAIChatCompletionsDriverBase<
         result: unknown[],
         toolUse: unknown[] | undefined,
         options: ExecutionOptions,
+        providerMetadata?: unknown[],
     ): OpenAIChatCompletionsPrompt {
-        return buildOpenAIChatCompletionsStreamingConversation(prompt, result, toolUse, options);
+        return buildOpenAIChatCompletionsStreamingConversation(prompt, result, toolUse, options, providerMetadata);
     }
 
     validateResult(result: Completion, options: ExecutionOptions) {
