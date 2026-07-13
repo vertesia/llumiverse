@@ -1,3 +1,4 @@
+import { getBedrockModelKnowledge } from '../capability/bedrock-models.js';
 import { type ModelOptionInfoItem, type ModelOptions, type ModelOptionsInfo, OptionType } from '../types.js';
 import {
     buildClaudeCacheOptions,
@@ -92,6 +93,9 @@ export interface TwelvelabsPegasusOptions {
 }
 
 export function getMaxTokensLimitBedrock(model: string): number | undefined {
+    const documentedLimit = getBedrockModelKnowledge(model).max_output_tokens;
+    if (documentedLimit) return documentedLimit;
+
     // Claude models — delegate to shared limit logic (128K for 3.7 and Opus 4.7+)
     if (model.includes('claude')) {
         return getClaudeMaxTokensLimit(model);
@@ -155,9 +159,7 @@ export function getMaxTokensLimitBedrock(model: string): number | undefined {
         }
     }
     // OpenAI gpt-oss models
-    if (model.includes('gpt-oss')) {
-        return 8192;
-    }
+    if (model.includes('gpt-oss')) return 16_384;
     // TwelveLabs models
     else if (model.includes('twelvelabs')) {
         if (model.includes('pegasus')) {

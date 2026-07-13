@@ -14,6 +14,7 @@ import { describe, expect, test } from 'vitest';
 import {
     AzureOpenAIDriver,
     BedrockDriver,
+    BedrockMantleDriver,
     GroqDriver,
     MistralAIDriver,
     OpenAIDriver,
@@ -127,6 +128,16 @@ if (process.env.BEDROCK_REGION) {
     });
 } else {
     console.warn('Bedrock tests are skipped: BEDROCK_REGION environment variable is not set');
+}
+
+if (process.env.BEDROCK_MANTLE_REGION) {
+    drivers.push({
+        name: 'bedrock-mantle',
+        driver: new BedrockMantleDriver({ region: process.env.BEDROCK_MANTLE_REGION }),
+        models: ['openai.gpt-oss-20b', 'google.gemma-3-4b-it', 'anthropic.claude-haiku-4-5'],
+    });
+} else {
+    console.warn('Bedrock Mantle tests are skipped: BEDROCK_MANTLE_REGION environment variable is not set');
 }
 
 if (process.env.GROQ_API_KEY) {

@@ -1,12 +1,12 @@
 /**
  * Shared utilities for Anthropic SDK-based drivers.
  *
- * Used by both the native AnthropicDriver (drivers/src/anthropic/) and the
- * VertexAI Claude pathway (drivers/src/vertexai/models/claude.ts).  Both use
- * the same Anthropic Messages API surface — the only difference is the client
- * (Anthropic vs AnthropicVertex) and how auth is wired up.
+ * Used by the native Anthropic driver, Vertex AI Claude, and Bedrock Mantle
+ * Claude pathways. All use the same Anthropic Messages API surface; only the
+ * client and authentication wiring differ.
  */
 
+import type { AnthropicBedrockMantle } from '@anthropic-ai/bedrock-sdk';
 import type Anthropic from '@anthropic-ai/sdk';
 import {
     AnthropicError,
@@ -155,8 +155,10 @@ type ClaudeMessagesStreamClient = {
     };
 };
 
+type ClaudeMessagesClient = Anthropic | AnthropicVertex | AnthropicBedrockMantle;
+
 function streamClaudeMessages(
-    client: Anthropic | AnthropicVertex,
+    client: ClaudeMessagesClient,
     payload: MessageStreamParams,
     requestOptions: RequestOptions | undefined,
 ): Promise<ClaudeMessageStream> {
@@ -840,10 +842,10 @@ export function buildClaudeStreamingConversation(
 
 /**
  * Execute a non-streaming Claude completion.
- * Works with any Anthropic-compatible client (Anthropic or AnthropicVertex).
+ * Works with the Anthropic, Vertex AI, and Bedrock Mantle SDK clients.
  */
 export async function executeClaudeCompletion(
-    client: Anthropic | AnthropicVertex,
+    client: ClaudeMessagesClient,
     prompt: ClaudePrompt,
     options: ExecutionOptions,
 ): Promise<Completion> {
@@ -886,10 +888,10 @@ export async function executeClaudeCompletion(
 
 /**
  * Execute a streaming Claude completion.
- * Works with any Anthropic-compatible client (Anthropic or AnthropicVertex).
+ * Works with the Anthropic, Vertex AI, and Bedrock Mantle SDK clients.
  */
 export async function streamClaudeCompletion(
-    client: Anthropic | AnthropicVertex,
+    client: ClaudeMessagesClient,
     prompt: ClaudePrompt,
     options: ExecutionOptions,
 ): Promise<AsyncIterable<CompletionChunkObject>> {
@@ -930,7 +932,7 @@ export async function streamClaudeCompletion(
                             {
                                 id: streamEvent.content_block.id,
                                 tool_name: streamEvent.content_block.name,
-                                tool_input: '' as unknown as JSONObject,
+                                tool_input: '',
                             },
                         ],
                     } satisfies CompletionChunkObject;
@@ -960,7 +962,7 @@ export async function streamClaudeCompletion(
                                     {
                                         id: currentToolUse.id,
                                         tool_name: '',
-                                        tool_input: streamEvent.delta.partial_json as unknown as JSONObject,
+                                        tool_input: streamEvent.delta.partial_json,
                                     },
                                 ],
                             } satisfies CompletionChunkObject;
