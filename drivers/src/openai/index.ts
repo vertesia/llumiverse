@@ -4,6 +4,7 @@ import {
     type CompletionChunkObject,
     type CompletionResult,
     type DataSource,
+    type DriverCompletionStream,
     type DriverOptions,
     type EmbeddingResultItem,
     type EmbeddingsOptions,
@@ -21,7 +22,7 @@ import {
     OPENAI_DEFAULT_EMBEDDING_MODEL,
     type OpenAiDalleOptions,
     type OpenAiGptImageOptions,
-    type Providers,
+    Providers,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
     supportsToolUse,
@@ -49,6 +50,7 @@ type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
     effort?: string;
     reasoning_effort?: string;
     verbosity?: 'low' | 'medium' | 'high';
+    include_thoughts?: boolean;
 };
 type OpenAIErrorWithStatus = Error & { status?: unknown };
 type OpenAIUsageWithProviderDetails = OpenAI.Responses.ResponseUsage & {
@@ -85,12 +87,27 @@ function isOpenAIReasoningModel(model: string): boolean {
     );
 }
 
-function openAIReasoning(effort: string | undefined): OpenAI.Responses.ResponseCreateParams['reasoning'] {
-    if (!effort) {
+function openAIReasoning(
+    effort: string | undefined,
+    isReasoningModel: boolean,
+    preserveCurrentTurn: boolean,
+): OpenAI.Responses.ResponseCreateParams['reasoning'] {
+    if (!effort && !isReasoningModel) {
         return undefined;
     }
-    // Forward provider-native values unchanged so the provider can return an authoritative validation error.
-    return { effort } as OpenAI.Responses.ResponseCreateParams['reasoning'];
+    // Request a visible summary independently from result projection. The encrypted
+    // provider-native item is retained separately for stateless replay.
+    return {
+        effort,
+        summary: 'auto',
+        ...(preserveCurrentTurn && { context: 'current_turn' }),
+    } as OpenAI.Responses.ResponseCreateParams['reasoning'];
+}
+
+function supportsOpenAICurrentTurnReasoning(provider: Providers, model: string): boolean {
+    if (provider !== Providers.openai) return false;
+    const modelId = model.toLowerCase().split('/').pop() ?? '';
+    return /^gpt-5\.(?:4|5|6)(?:$|-)/.test(modelId);
 }
 
 //TODO: Do we need a list?, replace with if statements and modernize?
@@ -110,7 +127,7 @@ export class OpenAIResponsesProtocol {
         driver: OpenAIResponsesDriverBase,
         prompt: ResponseInputItem[],
         options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>> {
+    ): Promise<DriverCompletionStream> {
         if (
             options.model_options?._option_id !== undefined &&
             options.model_options?._option_id !== 'openai-text' &&
@@ -148,13 +165,19 @@ export class OpenAIResponsesProtocol {
         }
 
         const isReasoningModel = isOpenAIReasoningModel(options.model);
-        const reasoning = openAIReasoning(model_options?.effort ?? model_options?.reasoning_effort);
+        const reasoning = openAIReasoning(
+            model_options?.effort ?? model_options?.reasoning_effort,
+            isReasoningModel,
+            supportsOpenAICurrentTurnReasoning(driver.provider, options.model),
+        );
+        const includeThoughts = model_options?.include_thoughts !== false;
 
         const stream = await driver.service.responses.create({
             stream: true,
             model: driver.getResponsesRequestModel(options.model),
             input: conversation,
             reasoning,
+            include: reasoning ? ['reasoning.encrypted_content'] : undefined,
             temperature: isReasoningModel ? undefined : model_options?.temperature,
             top_p: isReasoningModel ? undefined : model_options?.top_p,
             max_output_tokens: model_options?.max_tokens,
@@ -162,7 +185,9 @@ export class OpenAIResponsesProtocol {
             text: buildResponseTextConfig(parsedSchema, strictMode, model_options?.verbosity),
         });
 
-        return mapResponseStream(stream);
+        return mapResponseStream(stream, includeThoughts, (response) =>
+            finalizeOpenAIResponsesConversation(conversation, response.output, options),
+        );
     }
 
     async requestTextCompletion(
@@ -206,13 +231,18 @@ export class OpenAIResponsesProtocol {
         }
 
         const isReasoningModel = isOpenAIReasoningModel(options.model);
-        const reasoning = openAIReasoning(model_options?.effort ?? model_options?.reasoning_effort);
+        const reasoning = openAIReasoning(
+            model_options?.effort ?? model_options?.reasoning_effort,
+            isReasoningModel,
+            supportsOpenAICurrentTurnReasoning(driver.provider, options.model),
+        );
 
         const res = await driver.service.responses.create({
             stream: false,
             model: driver.getResponsesRequestModel(options.model),
             input: conversation,
             reasoning,
+            include: reasoning ? ['reasoning.encrypted_content'] : undefined,
             temperature: isReasoningModel ? undefined : model_options?.temperature,
             top_p: isReasoningModel ? undefined : model_options?.top_p,
             max_output_tokens: model_options?.max_tokens, //TODO: use max_tokens for older models, currently relying on OpenAI to handle it
@@ -225,30 +255,7 @@ export class OpenAIResponsesProtocol {
             completion.original_response = res;
         }
 
-        conversation = updateConversation(conversation, createAssistantMessageFromCompletion(completion));
-
-        // Increment turn counter for deferred stripping
-        conversation = incrementConversationTurn(conversation) as ResponseInputItem[];
-
-        // Strip large base64 image data based on options.stripImagesAfterTurns
-        const currentTurn = getConversationMeta(conversation).turnNumber;
-        const stripOptions = {
-            keepForTurns: options.stripImagesAfterTurns ?? Infinity,
-            currentTurn,
-            textMaxTokens: options.stripTextMaxTokens,
-        };
-        let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions);
-
-        // Truncate large text content if configured
-        processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
-
-        // Strip old heartbeat status messages
-        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
-            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
-            currentTurn,
-        });
-
-        completion.conversation = processedConversation;
+        completion.conversation = finalizeOpenAIResponsesConversation(conversation, res.output, options);
 
         return completion;
     }
@@ -285,9 +292,11 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 
         const tools = collectTools(result.output);
         // Collect all parts in order (text and images)
-        const allResults = extractCompletionResults(result.output);
+        const includeThoughts =
+            (_options.model_options as OpenAIRequestOptions | undefined)?.include_thoughts !== false;
+        const allResults = extractCompletionResults(result.output, includeThoughts);
 
-        if (allResults.length === 0 && !tools) {
+        if (result.output.length === 0 && !tools) {
             this.logger.error({ result }, '[OpenAI] Response is not valid');
             throw new Error('Response is not valid: no data');
         }
@@ -303,7 +312,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
     requestTextCompletionStream(
         prompt: ResponseInputItem[],
         options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>> {
+    ): Promise<DriverCompletionStream> {
         return this.responsesProtocol.requestTextCompletionStream(this, prompt, options);
     }
 
@@ -703,6 +712,8 @@ function completionResultsToText(completionResults: CompletionResult[] | undefin
             switch (r.type) {
                 case 'text':
                     return r.value;
+                case 'thoughts':
+                    return '';
                 case 'json':
                     return typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
                 case 'image':
@@ -740,40 +751,13 @@ function buildResponseTextConfig(
     };
 }
 
-function createAssistantMessageFromCompletion(completion: Completion): ResponseInputItem[] {
-    const textContent = completionResultsToText(completion.result);
-    const result: ResponseInputItem[] = [];
-
-    // Add assistant text message if present
-    if (textContent) {
-        const assistantMessage: EasyInputMessage = {
-            type: 'message',
-            role: 'assistant',
-            content: textContent,
-        };
-        result.push(assistantMessage);
-    }
-
-    // Add function calls as separate items (Response API format)
-    if (completion.tool_use && completion.tool_use.length > 0) {
-        for (const t of completion.tool_use) {
-            const functionCall: OpenAI.Responses.ResponseFunctionToolCall = {
-                type: 'function_call',
-                call_id: t.id,
-                name: t.tool_name,
-                arguments: typeof t.tool_input === 'string' ? t.tool_input : JSON.stringify(t.tool_input ?? {}),
-            };
-            result.push(functionCall);
-        }
-    }
-
-    return result;
-}
-
 export function mapResponseStream(
     stream: AsyncIterable<OpenAI.Responses.ResponseStreamEvent>,
-): AsyncIterable<CompletionChunkObject> {
+    includeThoughts = true,
+    finalize?: (response: OpenAI.Responses.Response) => unknown | Promise<unknown>,
+): DriverCompletionStream {
     const toolCallMetadata = new Map<string, { syntheticId: string; callId?: string; name?: string }>();
+    let finalResponse: OpenAI.Responses.Response | undefined;
 
     return {
         async *[Symbol.asyncIterator]() {
@@ -840,6 +824,15 @@ export function mapResponseStream(
                             result: textToCompletionResult(event.text),
                         } satisfies CompletionChunkObject;
                     }
+                } else if (
+                    event.type === 'response.reasoning_summary_text.delta' ||
+                    event.type === 'response.reasoning_text.delta'
+                ) {
+                    if (includeThoughts && event.delta) {
+                        yield {
+                            result: [{ type: 'thoughts', value: event.delta }],
+                        } satisfies CompletionChunkObject;
+                    }
                 } else if (event.type === 'response.refusal.delta') {
                     refusalText += event.delta;
                 } else if (event.type === 'response.refusal.done') {
@@ -854,6 +847,7 @@ export function mapResponseStream(
                     event.type === 'response.incomplete' ||
                     event.type === 'response.failed'
                 ) {
+                    finalResponse = event.response;
                     const finalTools = collectTools(event.response.output);
                     yield {
                         result: [],
@@ -863,6 +857,14 @@ export function mapResponseStream(
                 }
             }
         },
+        finalizeConversation: finalize
+            ? () => {
+                  if (!finalResponse) {
+                      throw new Error('OpenAI Responses stream ended without a final response');
+                  }
+                  return finalize(finalResponse);
+              }
+            : undefined,
     };
 }
 
@@ -1010,18 +1012,65 @@ export function collectTools(output?: OpenAI.Responses.ResponseOutputItem[]): To
     return tools.length > 0 ? tools : undefined;
 }
 
+function finalizeOpenAIResponsesConversation(
+    conversation: ResponseInputItem[],
+    output: OpenAI.Responses.ResponseOutputItem[],
+    options: ExecutionOptions,
+): ResponseInputItem[] {
+    // ResponseOutputItem is the provider-native replay shape accepted in a subsequent
+    // Responses input. Preserve the returned objects and their ordering verbatim.
+    let completed = updateConversation(conversation, output as ResponseInputItem[]);
+    completed = incrementConversationTurn(completed) as ResponseInputItem[];
+    const completedItems =
+        unwrapConversationArray<ResponseInputItem>(completed) ?? (Array.isArray(completed) ? completed : []);
+
+    if (
+        completedItems.some(
+            (item) =>
+                (item as { type?: string }).type === 'reasoning' &&
+                !!(item as { encrypted_content?: string | null }).encrypted_content,
+        )
+    ) {
+        return completed;
+    }
+
+    const currentTurn = getConversationMeta(completed).turnNumber;
+    const stripOptions = {
+        keepForTurns: options.stripImagesAfterTurns ?? Infinity,
+        currentTurn,
+        textMaxTokens: options.stripTextMaxTokens,
+    };
+    let processed = stripBase64ImagesFromConversation(completed, stripOptions);
+    processed = truncateLargeTextInConversation(processed, stripOptions);
+    processed = stripHeartbeatsFromConversation(processed, {
+        keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+        currentTurn,
+    });
+    return processed as ResponseInputItem[];
+}
+
 /**
  * Collect all parts (text and images) from response output in order.
  * This preserves the original ordering of text and image parts.
  */
-function extractCompletionResults(output?: OpenAI.Responses.ResponseOutputItem[]): CompletionResult[] {
+function extractCompletionResults(
+    output?: OpenAI.Responses.ResponseOutputItem[],
+    includeThoughts = true,
+): CompletionResult[] {
     if (!output) {
         return [];
     }
 
     const results: CompletionResult[] = [];
     for (const item of output) {
-        if (item.type === 'message') {
+        if (item.type === 'reasoning' && includeThoughts) {
+            const visibleParts = item.content?.length ? item.content : item.summary;
+            for (const part of visibleParts ?? []) {
+                if (part.text) {
+                    results.push({ type: 'thoughts', value: part.text });
+                }
+            }
+        } else if (item.type === 'message') {
             // Extract text from message content
             for (const part of item.content) {
                 if (part.type === 'output_text' && part.text) {
