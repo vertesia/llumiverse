@@ -41,6 +41,7 @@ import {
     type Completion,
     type CompletionChunkObject,
     type CompletionResult,
+    type DriverCompletionStream,
     type ExecutionOptions,
     type ExecutionTokenUsage,
     getConversationMeta,
@@ -219,29 +220,17 @@ export function collectClaudeTools(content: ContentBlock[]): ToolUse[] | undefin
     return out.length > 0 ? out : undefined;
 }
 
-export function collectAllTextContent(content: ContentBlock[], includeThoughts = false): string {
-    const textParts: string[] = [];
-
-    if (includeThoughts) {
-        for (const block of content) {
-            if (block.type === 'thinking' && block.thinking) {
-                textParts.push(block.thinking);
-            } else if (block.type === 'redacted_thinking' && block.data) {
-                textParts.push(`[Redacted thinking: ${block.data}]`);
-            }
-        }
-        if (textParts.length > 0) {
-            textParts.push('');
-        }
-    }
-
+export function collectClaudeResults(content: ContentBlock[], includeThoughts = true): CompletionResult[] {
+    const results: CompletionResult[] = [];
     for (const block of content) {
+        if (block.type === 'thinking' && block.thinking && includeThoughts) {
+            results.push({ type: 'thoughts', value: block.thinking });
+        }
         if (block.type === 'text' && block.text) {
-            textParts.push(block.text);
+            results.push({ type: 'text', value: block.text });
         }
     }
-
-    return textParts.join('\n');
+    return results;
 }
 
 // ============================================================================
@@ -836,6 +825,64 @@ export function buildClaudeStreamingConversation(
     return processed as ClaudePrompt;
 }
 
+function finalizeClaudeConversation(
+    conversation: ClaudePrompt,
+    result: Message,
+    options: ExecutionOptions,
+): ClaudePrompt {
+    let completedConversation = updateClaudeConversation(conversation, createPromptFromResponse(result));
+    completedConversation = incrementConversationTurn(completedConversation) as ClaudePrompt;
+    completedConversation = pruneClaudeThinking(completedConversation);
+    const currentTurn = getConversationMeta(completedConversation).turnNumber;
+    const stripOpts = {
+        keepForTurns: options.stripImagesAfterTurns ?? Infinity,
+        currentTurn,
+        textMaxTokens: options.stripTextMaxTokens,
+    };
+    if (hasClaudeThinking(completedConversation)) {
+        return completedConversation;
+    }
+    let processedConversation = stripBase64ImagesFromConversation(completedConversation, stripOpts);
+    processedConversation = truncateLargeTextInConversation(processedConversation, stripOpts);
+    processedConversation = stripHeartbeatsFromConversation(processedConversation, {
+        keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+        currentTurn,
+    });
+    return processedConversation as ClaudePrompt;
+}
+
+function hasClaudeThinking(conversation: ClaudePrompt): boolean {
+    return conversation.messages.some(
+        (message) =>
+            Array.isArray(message.content) &&
+            message.content.some((block) => block.type === 'thinking' || block.type === 'redacted_thinking'),
+    );
+}
+
+export function pruneClaudeThinking(conversation: ClaudePrompt): ClaudePrompt {
+    let activeAssistantIndex = -1;
+    for (let index = conversation.messages.length - 1; index >= 0; index--) {
+        const message = conversation.messages[index];
+        if (message.role === 'assistant') {
+            if (Array.isArray(message.content) && message.content.some((block) => block.type === 'tool_use')) {
+                activeAssistantIndex = index;
+            }
+            break;
+        }
+    }
+
+    const messages = conversation.messages.map((message, index): MessageParam => {
+        if (index === activeAssistantIndex || message.role !== 'assistant' || !Array.isArray(message.content)) {
+            return message;
+        }
+        const content = message.content.filter(
+            (block) => block.type !== 'thinking' && block.type !== 'redacted_thinking',
+        );
+        return content.length === message.content.length ? message : { ...message, content };
+    });
+    return { ...conversation, messages };
+}
+
 // ============================================================================
 // Execution helpers (standalone, take a client parameter)
 // ============================================================================
@@ -851,34 +898,20 @@ export async function executeClaudeCompletion(
 ): Promise<Completion> {
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
 
-    let conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
+    const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
 
     const { payload, requestOptions } = getClaudePayload(options, conversation);
 
     const responseStream = await streamClaudeMessages(client, payload as MessageStreamParams, requestOptions);
     const result = await responseStream.finalMessage();
 
-    const includeThoughts = model_options?.include_thoughts ?? false;
-    const text = collectAllTextContent(result.content, includeThoughts);
+    const includeThoughts = model_options?.include_thoughts !== false;
+    const completionResults = collectClaudeResults(result.content, includeThoughts);
     const tool_use = collectClaudeTools(result.content);
-
-    conversation = updateClaudeConversation(conversation, createPromptFromResponse(result));
-    conversation = incrementConversationTurn(conversation) as ClaudePrompt;
-    const currentTurn = getConversationMeta(conversation).turnNumber;
-    const stripOpts = {
-        keepForTurns: options.stripImagesAfterTurns ?? Infinity,
-        currentTurn,
-        textMaxTokens: options.stripTextMaxTokens,
-    };
-    let processedConversation = stripBase64ImagesFromConversation(conversation, stripOpts);
-    processedConversation = truncateLargeTextInConversation(processedConversation, stripOpts);
-    processedConversation = stripHeartbeatsFromConversation(processedConversation, {
-        keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
-        currentTurn,
-    });
+    const processedConversation = finalizeClaudeConversation(conversation, result, options);
 
     return {
-        result: text ? [{ type: 'text', value: text }] : [{ type: 'text', value: '' }],
+        result: completionResults,
         tool_use,
         token_usage: anthropicUsageToTokenUsage(result.usage),
         finish_reason: tool_use ? 'tool_use' : claudeFinishReason(result?.stop_reason ?? ''),
@@ -894,7 +927,7 @@ export async function streamClaudeCompletion(
     client: ClaudeMessagesClient,
     prompt: ClaudePrompt,
     options: ExecutionOptions,
-): Promise<AsyncIterable<CompletionChunkObject>> {
+): Promise<DriverCompletionStream> {
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
     const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
 
@@ -903,8 +936,8 @@ export async function streamClaudeCompletion(
 
     const response_stream = await streamClaudeMessages(client, streamingPayload, requestOptions);
 
-    let currentToolUse: { id: string; name: string; inputJson: string } | null = null;
-    let pendingSpacing = false;
+    const currentToolUses = new Map<number, { id: string; name: string }>();
+    const includeThoughts = model_options?.include_thoughts !== false;
 
     const stream = asyncMap(response_stream, async (streamEvent: RawMessageStreamEvent) => {
         switch (streamEvent.type) {
@@ -921,11 +954,10 @@ export async function streamClaudeCompletion(
                 } satisfies CompletionChunkObject;
             case 'content_block_start':
                 if (streamEvent.content_block.type === 'tool_use') {
-                    currentToolUse = {
+                    currentToolUses.set(streamEvent.index, {
                         id: streamEvent.content_block.id,
                         name: streamEvent.content_block.name,
-                        inputJson: '',
-                    };
+                    });
                     return {
                         result: [],
                         tool_use: [
@@ -937,24 +969,16 @@ export async function streamClaudeCompletion(
                         ],
                     } satisfies CompletionChunkObject;
                 }
-                if (streamEvent.content_block.type === 'redacted_thinking' && model_options?.include_thoughts) {
-                    return {
-                        result: [{ type: 'text', value: `[Redacted thinking: ${streamEvent.content_block.data}]` }],
-                    } satisfies CompletionChunkObject;
-                }
                 break;
             case 'content_block_delta':
                 switch (streamEvent.delta.type) {
                     case 'text_delta': {
-                        const prefix = pendingSpacing ? '\n\n' : '';
-                        pendingSpacing = false;
                         return {
-                            result: streamEvent.delta.text
-                                ? [{ type: 'text', value: prefix + streamEvent.delta.text }]
-                                : [],
+                            result: streamEvent.delta.text ? [{ type: 'text', value: streamEvent.delta.text }] : [],
                         } satisfies CompletionChunkObject;
                     }
-                    case 'input_json_delta':
+                    case 'input_json_delta': {
+                        const currentToolUse = currentToolUses.get(streamEvent.index);
                         if (currentToolUse && streamEvent.delta.partial_json) {
                             return {
                                 result: [],
@@ -968,34 +992,35 @@ export async function streamClaudeCompletion(
                             } satisfies CompletionChunkObject;
                         }
                         break;
+                    }
                     case 'thinking_delta':
-                        if (model_options?.include_thoughts) {
+                        if (includeThoughts) {
                             return {
                                 result: streamEvent.delta.thinking
-                                    ? [{ type: 'text', value: streamEvent.delta.thinking }]
+                                    ? [{ type: 'thoughts', value: streamEvent.delta.thinking }]
                                     : [],
                             } satisfies CompletionChunkObject;
                         }
                         break;
                     case 'signature_delta':
-                        if (model_options?.include_thoughts) {
-                            pendingSpacing = true;
-                        }
                         break;
                 }
                 break;
             case 'content_block_stop':
-                if (currentToolUse) {
-                    currentToolUse = null;
-                    pendingSpacing = false;
-                }
+                currentToolUses.delete(streamEvent.index);
                 break;
         }
 
         return { result: [] } satisfies CompletionChunkObject;
     });
 
-    return stream;
+    return {
+        [Symbol.asyncIterator]: () => stream[Symbol.asyncIterator](),
+        finalizeConversation: async () => {
+            const finalMessage = await response_stream.finalMessage();
+            return finalizeClaudeConversation(conversation, finalMessage, options);
+        },
+    };
 }
 
 // ============================================================================
