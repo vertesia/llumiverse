@@ -80,7 +80,7 @@ describe('ClaudeModelDefinition streaming spacing', () => {
         expect(toolChunks[1]).toMatchObject({ id: 'tool-1', tool_name: '', tool_input: '{"city":"Paris"}' });
     });
 
-    it('flushes deferred spacing into the first text delta after thinking', async () => {
+    it('keeps thinking and answer text as separate results without injected spacing', async () => {
         const modelDef = new ClaudeModelDefinition('claude-sonnet-4-5');
         const driver = {
             logger: { warn: () => {}, info: () => {}, error: () => {} },
@@ -121,7 +121,7 @@ describe('ClaudeModelDefinition streaming spacing', () => {
         const chunks = await collectChunks(stream);
 
         const textParts = chunks.flatMap((chunk) => chunk.result ?? []).map((part) => part.value);
-        expect(textParts).toEqual(['Thinking...', '\n\nAnswer']);
+        expect(textParts).toEqual(['Thinking...', 'Answer']);
     });
 
     it('does not reintroduce deferred spacing when text arrives after a tool call', async () => {
