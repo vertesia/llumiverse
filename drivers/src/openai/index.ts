@@ -101,6 +101,25 @@ export function openAIReasoningEffort(model: string, effort: string | undefined)
         : undefined;
 }
 
+function openAIReasoning(
+    effort: string | undefined,
+    isReasoningModel: boolean,
+    preserveCurrentTurn: boolean,
+): OpenAI.Responses.ResponseCreateParams['reasoning'] {
+    if (!effort && !isReasoningModel) return undefined;
+    return {
+        effort,
+        summary: 'auto',
+        ...(preserveCurrentTurn && { context: 'current_turn' }),
+    } as OpenAI.Responses.ResponseCreateParams['reasoning'];
+}
+
+function supportsOpenAICurrentTurnReasoning(provider: Providers, model: string): boolean {
+    if (provider !== Providers.openai) return false;
+    const modelId = model.toLowerCase().split('/').pop() ?? '';
+    return /^gpt-5\.(?:4|5|6)(?:$|-)/.test(modelId);
+}
+
 function hasExplicitPromptCacheBreakpoint(item: ResponseInputItem): boolean {
     if (!('content' in item) || !Array.isArray(item.content)) {
         return false;
@@ -215,10 +234,12 @@ export class OpenAIResponsesProtocol {
         }
 
         const isReasoningModel = isOpenAIReasoningModel(options.model);
-        const effort = openAIReasoningEffort(options.model, model_options?.effort ?? model_options?.reasoning_effort);
-        // The SDK can lag newly documented effort values (for example `max`).
-        // Preserve caller input and let the provider validate model-specific support.
-        const reasoning = effort ? ({ effort } as unknown as OpenAIReasoning) : undefined;
+        const reasoning = openAIReasoning(
+            openAIReasoningEffort(options.model, model_options?.effort ?? model_options?.reasoning_effort),
+            isReasoningModel,
+            supportsOpenAICurrentTurnReasoning(driver.provider, options.model),
+        );
+        const includeThoughts = model_options?.include_thoughts ?? false;
 
         const promptCache = configureOpenAIPromptCaching(
             conversation,
@@ -232,6 +253,7 @@ export class OpenAIResponsesProtocol {
             prompt_cache_options: promptCache.options,
             input: promptCache.input,
             reasoning,
+            include: reasoning ? ['reasoning.encrypted_content'] : undefined,
             temperature: isReasoningModel ? undefined : model_options?.temperature,
             top_p: isReasoningModel ? undefined : model_options?.top_p,
             max_output_tokens: model_options?.max_tokens,
@@ -244,7 +266,9 @@ export class OpenAIResponsesProtocol {
             ),
         });
 
-        return mapResponseStream(stream);
+        return mapResponseStream(stream, includeThoughts, (response) =>
+            finalizeOpenAIResponsesConversation(conversation, response.output, options),
+        );
     }
 
     async requestTextCompletion(
@@ -292,8 +316,11 @@ export class OpenAIResponsesProtocol {
         }
 
         const isReasoningModel = isOpenAIReasoningModel(options.model);
-        const effort = openAIReasoningEffort(options.model, model_options?.effort ?? model_options?.reasoning_effort);
-        const reasoning = effort ? ({ effort } as unknown as OpenAIReasoning) : undefined;
+        const reasoning = openAIReasoning(
+            openAIReasoningEffort(options.model, model_options?.effort ?? model_options?.reasoning_effort),
+            isReasoningModel,
+            supportsOpenAICurrentTurnReasoning(driver.provider, options.model),
+        );
 
         const promptCache = configureOpenAIPromptCaching(
             conversation,
@@ -307,6 +334,7 @@ export class OpenAIResponsesProtocol {
             prompt_cache_options: promptCache.options,
             input: promptCache.input,
             reasoning,
+            include: reasoning ? ['reasoning.encrypted_content'] : undefined,
             temperature: isReasoningModel ? undefined : model_options?.temperature,
             top_p: isReasoningModel ? undefined : model_options?.top_p,
             max_output_tokens: model_options?.max_tokens, //TODO: use max_tokens for older models, currently relying on OpenAI to handle it
