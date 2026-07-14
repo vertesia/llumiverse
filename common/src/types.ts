@@ -627,6 +627,13 @@ export interface StatelessExecutionOptions extends PromptOptions {
     model_options?: ModelOptions;
 
     /**
+     * Stable identity for prompt caching. Providers with cache routing keys receive the value directly;
+     * providers with cache breakpoints use its presence to cache the stable prefix before the final dynamic block.
+     * Providers with fully implicit caching still require an identical prompt prefix.
+     */
+    prompt_cache_key?: string;
+
+    /**
      * Per-call HTTP timeouts for upstream LLM-provider calls. These override
      * the driver's default `DriverOptions.httpTimeout` for this execution only.
      */

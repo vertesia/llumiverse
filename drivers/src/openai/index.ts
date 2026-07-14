@@ -21,6 +21,8 @@ import {
     OPENAI_DEFAULT_EMBEDDING_MODEL,
     type OpenAiDalleOptions,
     type OpenAiGptImageOptions,
+    type PromptOptions,
+    type PromptSegment,
     type Providers,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
@@ -53,8 +55,10 @@ type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
 type OpenAIErrorWithStatus = Error & { status?: unknown };
 type OpenAIUsageWithProviderDetails = OpenAI.Responses.ResponseUsage & {
     cached_tokens?: number | null;
+    cache_write_tokens?: number | null;
     prompt_tokens_details?: {
         cached_tokens?: number | null;
+        cache_write_tokens?: number | null;
     } | null;
 };
 type MutableRoleItem = { role: 'user' | 'developer' | 'system' | 'assistant' };
@@ -153,6 +157,7 @@ export class OpenAIResponsesProtocol {
         const stream = await driver.service.responses.create({
             stream: true,
             model: driver.getResponsesRequestModel(options.model),
+            prompt_cache_key: options.prompt_cache_key,
             input: conversation,
             reasoning,
             temperature: isReasoningModel ? undefined : model_options?.temperature,
@@ -211,6 +216,7 @@ export class OpenAIResponsesProtocol {
         const res = await driver.service.responses.create({
             stream: false,
             model: driver.getResponsesRequestModel(options.model),
+            prompt_cache_key: options.prompt_cache_key,
             input: conversation,
             reasoning,
             temperature: isReasoningModel ? undefined : model_options?.temperature,
@@ -272,7 +278,11 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
     constructor(opts: OpenAIResponsesDriverBaseOptions) {
         super(opts);
         this.responsesProtocol = new OpenAIResponsesProtocol();
-        this.formatPrompt = formatOpenAILikeMultimodalPrompt;
+    }
+
+    protected async formatPrompt(segments: PromptSegment[], options: PromptOptions): Promise<ResponseInputItem[]> {
+        const resultSchema = supportsSchema(options.model, this.provider) ? undefined : options.result_schema;
+        return formatOpenAILikeMultimodalPrompt(segments, { ...options, result_schema: resultSchema });
     }
 
     /** @internal Resolve the model identifier sent to the Responses transport. */
@@ -685,11 +695,16 @@ function mapUsage(usage?: OpenAIUsageWithProviderDetails | null): ExecutionToken
     }
     const cachedTokens =
         usage.input_tokens_details?.cached_tokens ?? usage.prompt_tokens_details?.cached_tokens ?? usage.cached_tokens;
+    const cacheWriteTokens =
+        usage.input_tokens_details?.cache_write_tokens ??
+        usage.prompt_tokens_details?.cache_write_tokens ??
+        usage.cache_write_tokens;
     return {
         prompt: usage.input_tokens,
         result: usage.output_tokens,
         total: usage.total_tokens,
         prompt_cached: cachedTokens ?? undefined,
+        prompt_cache_write: cacheWriteTokens ?? undefined,
         prompt_new: usage.input_tokens - (cachedTokens ?? 0),
     };
 }

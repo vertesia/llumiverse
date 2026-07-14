@@ -1,4 +1,4 @@
-import { LlumiverseError, Providers } from '@llumiverse/core';
+import { LlumiverseError, PromptRole, Providers } from '@llumiverse/core';
 import OpenAI from 'openai';
 import {
     APIConnectionError,
@@ -15,7 +15,7 @@ import {
     RateLimitError,
     UnprocessableEntityError,
 } from 'openai/error';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { exposePrivate, getProp } from '../../test/__helpers__/test-utils.js';
 import { OpenAIResponsesDriverBase } from './index.js';
 
@@ -40,7 +40,7 @@ class TestOpenAIResponsesDriver extends OpenAIResponsesDriverBase {
 }
 
 describe('OpenAIResponsesDriverBase usage mapping', () => {
-    it('maps Together flat cached_tokens usage into prompt_cached', () => {
+    it('maps cache read and write usage', () => {
         const driver = new TestOpenAIResponsesDriver();
         const response = {
             status: 'completed',
@@ -56,6 +56,10 @@ describe('OpenAIResponsesDriverBase usage mapping', () => {
                 output_tokens: 20,
                 total_tokens: 120,
                 cached_tokens: 45,
+                input_tokens_details: {
+                    cached_tokens: 45,
+                    cache_write_tokens: 30,
+                },
             },
         } as unknown as OpenAI.Responses.Response;
 
@@ -66,8 +70,93 @@ describe('OpenAIResponsesDriverBase usage mapping', () => {
             result: 20,
             total: 120,
             prompt_cached: 45,
+            prompt_cache_write: 30,
             prompt_new: 55,
         });
+    });
+});
+
+describe('OpenAIResponsesDriverBase prompt caching', () => {
+    it('passes prompt_cache_key to blocking Responses requests', async () => {
+        const driver = new TestOpenAIResponsesDriver();
+        const create = vi.fn().mockResolvedValue({
+            status: 'completed',
+            output: [
+                {
+                    type: 'message',
+                    role: 'assistant',
+                    content: [{ type: 'output_text', text: 'ok', annotations: [] }],
+                },
+            ],
+            usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+        });
+        driver.service = { responses: { create } } as unknown as OpenAI;
+
+        await driver.requestTextCompletion([{ role: 'user', content: 'hello' }], {
+            model: 'gpt-5.6',
+            prompt_cache_key: 'document-prefix',
+        });
+
+        expect(create).toHaveBeenCalledWith(expect.objectContaining({ prompt_cache_key: 'document-prefix' }));
+    });
+
+    it('passes prompt_cache_key to streaming Responses requests', async () => {
+        const driver = new TestOpenAIResponsesDriver();
+        const create = vi.fn().mockResolvedValue(
+            (async function* () {
+                yield { type: 'response.completed' };
+            })(),
+        );
+        driver.service = { responses: { create } } as unknown as OpenAI;
+
+        await driver.requestTextCompletionStream([{ role: 'user', content: 'hello' }], {
+            model: 'gpt-5.6',
+            prompt_cache_key: 'document-prefix',
+        });
+
+        expect(create).toHaveBeenCalledWith(expect.objectContaining({ prompt_cache_key: 'document-prefix' }));
+    });
+
+    it('does not duplicate schemas in the prompt when native structured output is supported', async () => {
+        const driver = new TestOpenAIResponsesDriver();
+        const create = vi.fn().mockResolvedValue({
+            status: 'completed',
+            output: [
+                {
+                    type: 'message',
+                    role: 'assistant',
+                    content: [{ type: 'output_text', text: '{"value":"ok"}', annotations: [] }],
+                },
+            ],
+            usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+        });
+        driver.service = { responses: { create } } as unknown as OpenAI;
+        const options = {
+            model: 'gpt-5.6',
+            result_schema: { type: 'object' as const, properties: { value: { type: 'string' as const } } },
+        };
+        const segments = [{ role: PromptRole.user, content: 'extract' }];
+        const prompt = await driver.createPrompt(segments, options);
+        await driver.requestTextCompletion(prompt, options);
+
+        expect(JSON.stringify(prompt)).not.toContain('<response_schema>');
+        expect(create).toHaveBeenCalledWith(
+            expect.objectContaining({
+                text: expect.objectContaining({
+                    format: expect.objectContaining({ type: 'json_schema' }),
+                }),
+            }),
+        );
+    });
+
+    it('keeps the schema prompt fallback when native structured output is unavailable', async () => {
+        const driver = new TestOpenAIResponsesDriver();
+        const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'extract' }], {
+            model: 'gpt-realtime',
+            result_schema: { type: 'object', properties: { value: { type: 'string' } } },
+        });
+
+        expect(JSON.stringify(prompt)).toContain('<response_schema>');
     });
 });
 

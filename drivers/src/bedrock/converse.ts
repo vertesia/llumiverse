@@ -410,7 +410,20 @@ export async function formatConversePrompt(
         } else {
             schemaText = `The answer must be a JSON object using the following JSON Schema:\n${JSON.stringify(options.result_schema, undefined, 2)}`;
         }
-        system.push({ text: `IMPORTANT: ${schemaText}` });
+        const schemaInstruction = `IMPORTANT: ${schemaText}`;
+        const taskMessage = messages[messages.length - 1];
+        const taskBlock = taskMessage?.content?.[taskMessage.content.length - 1];
+        if (
+            options.prompt_cache_key !== undefined &&
+            options.model.includes('claude') &&
+            taskBlock &&
+            'text' in taskBlock &&
+            taskBlock.text
+        ) {
+            taskBlock.text = `${taskBlock.text}\n\n${schemaInstruction}`;
+        } else {
+            system.push({ text: schemaInstruction });
+        }
     }
 
     // Safety messages are user messages that should be included at the end.
