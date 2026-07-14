@@ -331,7 +331,7 @@ function prepareMistralConversation(
     if (conversation && typeof conversation === 'object' && 'messages' in conversation) {
         const stored = conversation as { messages?: unknown[]; _is_openai_chat_completions?: boolean };
         if (Array.isArray(stored.messages)) {
-            // TODO: Remove after the persisted-conversation migration reports zero
+            // TODO: Remove after 2026-08-14 once migration telemetry reports zero
             // `_is_openai_chat_completions` Mistral records for one full release cycle.
             existing = stored._is_openai_chat_completions
                 ? (stored.messages as OpenAIChatCompletionsPrompt['messages']).map(legacyOpenAIMessageToMistral)
@@ -481,27 +481,33 @@ function finalizeMistralConversation(
     options: ExecutionOptions,
 ): MistralPrompt {
     let completed = incrementConversationTurn({ messages: [...conversation.messages, message] }) as MistralPrompt;
-    const hasSignedThinking = completed.messages.some(
-        (storedMessage) =>
-            Array.isArray(storedMessage.content) &&
-            storedMessage.content.some((part) => part.type === 'thinking' && !!part.signature),
-    );
-    if (hasSignedThinking) {
-        // Mistral does not document a safe way to rewrite history covered by a
-        // signed thinking chunk. Retain the complete chain conservatively.
-        return completed;
-    }
     const currentTurn = getConversationMeta(completed).turnNumber;
+    const preserveSubtree = (value: unknown): boolean => {
+        if (!value || typeof value !== 'object') return false;
+        const content = (value as { content?: unknown }).content;
+        return (
+            Array.isArray(content) &&
+            content.some(
+                (part) =>
+                    !!part &&
+                    typeof part === 'object' &&
+                    (part as { type?: unknown }).type === 'thinking' &&
+                    !!(part as { signature?: unknown }).signature,
+            )
+        );
+    };
     const stripOptions = {
         keepForTurns: options.stripImagesAfterTurns ?? Infinity,
         currentTurn,
         textMaxTokens: options.stripTextMaxTokens,
+        preserveSubtree,
     };
     completed = stripBase64ImagesFromConversation(completed, stripOptions) as MistralPrompt;
     completed = truncateLargeTextInConversation(completed, stripOptions) as MistralPrompt;
     completed = stripHeartbeatsFromConversation(completed, {
         keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
         currentTurn,
+        preserveSubtree,
     }) as MistralPrompt;
     return completed;
 }

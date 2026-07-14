@@ -21,6 +21,8 @@ export interface OpenAiThinkingOptions {
     reasoning_effort?: ReasoningEffort;
     image_detail?: 'low' | 'high' | 'auto';
     include_thoughts?: boolean;
+    prompt_cache_key?: string;
+    prompt_cache_retention?: 'in_memory' | '24h';
 }
 
 export interface OpenAiTextOptions {
@@ -33,6 +35,8 @@ export interface OpenAiTextOptions {
     stop_sequence?: string[];
     image_detail?: 'low' | 'high' | 'auto';
     include_thoughts?: boolean;
+    prompt_cache_key?: string;
+    prompt_cache_retention?: 'in_memory' | '24h';
 }
 export interface OpenAiDalleOptions {
     _option_id: 'openai-dalle';

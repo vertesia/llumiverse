@@ -257,7 +257,8 @@ export function updateOpenAIChatCompletionsConversation(
     conversation: OpenAIChatCompletionsPrompt | OpenAIChatCompletionsMessage[] | undefined | null,
     prompt: OpenAIChatCompletionsPrompt,
 ): OpenAIChatCompletionsPrompt {
-    // TODO: Remove legacy array-shaped conversation compatibility after 2026-07-27.
+    // TODO: Remove legacy array-shaped conversation compatibility after 2026-08-14,
+    // once all resumable conversations written before the native container migration have expired.
     const baseMessages = Array.isArray(conversation) ? conversation : (conversation?.messages ?? []);
     return {
         _is_openai_chat_completions: true,

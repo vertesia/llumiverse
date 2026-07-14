@@ -157,6 +157,9 @@ type ClaudeMessagesStreamClient = {
 };
 
 type ClaudeMessagesClient = Anthropic | AnthropicVertex | AnthropicBedrockMantle;
+export interface ClaudeExecutionSettings {
+    cacheMode?: 'automatic' | 'explicit';
+}
 
 function streamClaudeMessages(
     client: ClaudeMessagesClient,
@@ -667,6 +670,7 @@ function stripClaudeCacheControlFromTools(
 export function getClaudePayload(
     options: ExecutionOptions,
     prompt: ClaudePrompt,
+    settings: ClaudeExecutionSettings = {},
 ): { payload: MessageCreateParamsBase; requestOptions: RequestOptions | undefined } {
     const modelName = options.model;
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
@@ -709,7 +713,8 @@ export function getClaudePayload(
         : undefined;
 
     const cacheEnabled = model_options?.cache_enabled === true;
-    if (cacheEnabled) {
+    const useAutomaticCache = cacheEnabled && settings.cacheMode === 'automatic';
+    if (cacheEnabled && !useAutomaticCache) {
         const cacheTtl = model_options?.cache_ttl as '5m' | '1h' | undefined;
         const cacheControl = { type: 'ephemeral' as const, ...(cacheTtl && { ttl: cacheTtl }) };
 
@@ -761,6 +766,12 @@ export function getClaudePayload(
         stop_sequences: model_options?.stop_sequence,
         thinking,
         stream: true,
+        cache_control: useAutomaticCache
+            ? {
+                  type: 'ephemeral',
+                  ...(model_options?.cache_ttl && { ttl: model_options.cache_ttl as '5m' | '1h' }),
+              }
+            : undefined,
         ...(outputConfig && { output_config: outputConfig }),
     };
 
@@ -834,32 +845,34 @@ function finalizeClaudeConversation(
     completedConversation = incrementConversationTurn(completedConversation) as ClaudePrompt;
     completedConversation = pruneClaudeThinking(completedConversation);
     const currentTurn = getConversationMeta(completedConversation).turnNumber;
+    const activeTurnStart = findClaudeActiveTurnStart(completedConversation);
+    const protectedMessages = new Set(
+        activeTurnStart >= 0 ? completedConversation.messages.slice(activeTurnStart) : [],
+    );
+    const preserveSubtree = (value: unknown): boolean => {
+        if (!value || typeof value !== 'object') return false;
+        if (protectedMessages.has(value as MessageParam)) return true;
+        const type = (value as { type?: unknown }).type;
+        return type === 'thinking' || type === 'redacted_thinking';
+    };
     const stripOpts = {
         keepForTurns: options.stripImagesAfterTurns ?? Infinity,
         currentTurn,
         textMaxTokens: options.stripTextMaxTokens,
+        preserveSubtree,
     };
-    if (hasClaudeThinking(completedConversation)) {
-        return completedConversation;
-    }
     let processedConversation = stripBase64ImagesFromConversation(completedConversation, stripOpts);
     processedConversation = truncateLargeTextInConversation(processedConversation, stripOpts);
     processedConversation = stripHeartbeatsFromConversation(processedConversation, {
         keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
         currentTurn,
+        preserveSubtree,
     });
     return processedConversation as ClaudePrompt;
 }
 
-function hasClaudeThinking(conversation: ClaudePrompt): boolean {
-    return conversation.messages.some(
-        (message) =>
-            Array.isArray(message.content) &&
-            message.content.some((block) => block.type === 'thinking' || block.type === 'redacted_thinking'),
-    );
-}
-
 export function pruneClaudeThinking(conversation: ClaudePrompt): ClaudePrompt {
+    const activeTurnStart = findClaudeActiveTurnStart(conversation);
     let activeAssistantIndex = -1;
     for (let index = conversation.messages.length - 1; index >= 0; index--) {
         const message = conversation.messages[index];
@@ -872,7 +885,11 @@ export function pruneClaudeThinking(conversation: ClaudePrompt): ClaudePrompt {
     }
 
     const messages = conversation.messages.map((message, index): MessageParam => {
-        if (index === activeAssistantIndex || message.role !== 'assistant' || !Array.isArray(message.content)) {
+        if (
+            (activeAssistantIndex >= 0 && index >= activeTurnStart && index <= activeAssistantIndex) ||
+            message.role !== 'assistant' ||
+            !Array.isArray(message.content)
+        ) {
             return message;
         }
         const content = message.content.filter(
@@ -881,6 +898,28 @@ export function pruneClaudeThinking(conversation: ClaudePrompt): ClaudePrompt {
         return content.length === message.content.length ? message : { ...message, content };
     });
     return { ...conversation, messages };
+}
+
+function findClaudeActiveTurnStart(conversation: ClaudePrompt): number {
+    let activeAssistantIndex = -1;
+    for (let index = conversation.messages.length - 1; index >= 0; index--) {
+        const message = conversation.messages[index];
+        if (message.role !== 'assistant') continue;
+        if (Array.isArray(message.content) && message.content.some((block) => block.type === 'tool_use')) {
+            activeAssistantIndex = index;
+        }
+        break;
+    }
+    if (activeAssistantIndex < 0) return -1;
+
+    for (let index = activeAssistantIndex - 1; index >= 0; index--) {
+        const message = conversation.messages[index];
+        if (message.role !== 'user') continue;
+        const isToolResult =
+            Array.isArray(message.content) && message.content.some((block) => block.type === 'tool_result');
+        if (!isToolResult) return index + 1;
+    }
+    return 0;
 }
 
 // ============================================================================
@@ -895,13 +934,19 @@ export async function executeClaudeCompletion(
     client: ClaudeMessagesClient,
     prompt: ClaudePrompt,
     options: ExecutionOptions,
+    settings: ClaudeExecutionSettings = {},
 ): Promise<Completion> {
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
 
     const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
 
-    const { payload, requestOptions } = getClaudePayload(options, conversation);
+    const { payload, requestOptions } = getClaudePayload(options, conversation, settings);
 
+    // Intentional: Llumiverse's blocking API waits for a complete result, but the
+    // Llumiverse -> Anthropic transport still uses Messages streaming. Anthropic
+    // recommends streaming for long requests to avoid intermediary/network timeouts;
+    // finalMessage() preserves blocking caller semantics and the authoritative SDK Message.
+    // See https://platform.claude.com/docs/en/api/errors#long-requests
     const responseStream = await streamClaudeMessages(client, payload as MessageStreamParams, requestOptions);
     const result = await responseStream.finalMessage();
 
@@ -927,11 +972,12 @@ export async function streamClaudeCompletion(
     client: ClaudeMessagesClient,
     prompt: ClaudePrompt,
     options: ExecutionOptions,
+    settings: ClaudeExecutionSettings = {},
 ): Promise<DriverCompletionStream> {
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
     const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
 
-    const { payload, requestOptions } = getClaudePayload(options, conversation);
+    const { payload, requestOptions } = getClaudePayload(options, conversation, settings);
     const streamingPayload: MessageStreamParams = { ...payload, stream: true };
 
     const response_stream = await streamClaudeMessages(client, streamingPayload, requestOptions);

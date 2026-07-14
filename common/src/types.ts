@@ -1,3 +1,4 @@
+import type { AnthropicClaudeOptions } from './options/anthropic.js';
 import type { BedrockOptions } from './options/bedrock.js';
 import type { BedrockMantleOptions } from './options/bedrock_mantle.js';
 import type { TextFallbackOptions } from './options/fallback.js';
@@ -749,6 +750,7 @@ export type ReasoningEffort = 'low' | 'medium' | 'high';
  */
 export type ModelOptions =
     | TextFallbackOptions
+    | AnthropicClaudeOptions
     | VertexAIOptions
     | BedrockOptions
     | BedrockMantleOptions

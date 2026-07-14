@@ -242,27 +242,31 @@ function finalizeGeminiConversation(
 ): GenerateContentPrompt['contents'] {
     let completed = assistantContent ? updateConversation(conversation, [assistantContent]) : conversation;
     completed = incrementConversationTurn(completed) as Content[];
-    const completedContents =
-        unwrapConversationArray<Content>(completed) ?? (Array.isArray(completed) ? completed : []);
-    if (completedContents.some((content) => content.parts?.some((part) => !!part.thoughtSignature))) {
-        // Gemini signatures are position-sensitive and belong to the exact Part.
-        // Keep the full signed chain rather than rewriting any covered prefix.
-        // TODO: Vertex AI does not currently expose the Interactions API. If provider-managed
-        // conversation state becomes available on Vertex, evaluate it as an optimization while
-        // retaining durable Content.parts replay for persisted conversations.
-        return storeSystemInConversation(completed, system) as Content[];
-    }
     const currentTurn = getConversationMeta(completed).turnNumber;
+    const preserveSubtree = (value: unknown): boolean => {
+        if (!value || typeof value !== 'object') return false;
+        if ((value as { thoughtSignature?: unknown }).thoughtSignature) return true;
+        const parts = (value as { parts?: unknown }).parts;
+        return (
+            Array.isArray(parts) &&
+            parts.some(
+                (part) =>
+                    !!part && typeof part === 'object' && !!(part as { thoughtSignature?: unknown }).thoughtSignature,
+            )
+        );
+    };
     const stripOptions = {
         keepForTurns: options.stripImagesAfterTurns ?? Infinity,
         currentTurn,
         textMaxTokens: options.stripTextMaxTokens,
+        preserveSubtree,
     };
     let processed = stripBase64ImagesFromConversation(completed, stripOptions);
     processed = truncateLargeTextInConversation(processed, stripOptions);
     processed = stripHeartbeatsFromConversation(processed, {
         keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
         currentTurn,
+        preserveSubtree,
     });
     return storeSystemInConversation(processed, system) as Content[];
 }
@@ -274,11 +278,11 @@ function appendGeminiStreamParts(target: Part[], incoming: Part[]): void {
             typeof part.text === 'string' &&
             part.text.length > 0 &&
             typeof previous?.text === 'string' &&
+            !part.thoughtSignature &&
             !previous.thoughtSignature &&
             !!previous.thought === !!part.thought;
         if (canMergeText && previous) {
             previous.text = (previous.text ?? '') + part.text;
-            if (part.thoughtSignature) previous.thoughtSignature = part.thoughtSignature;
         } else {
             // Signatures, empty terminal parts, function calls, and all structured
             // parts remain on the exact Part and at the exact position received.

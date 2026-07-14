@@ -51,6 +51,8 @@ type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
     reasoning_effort?: string;
     verbosity?: 'low' | 'medium' | 'high';
     include_thoughts?: boolean;
+    prompt_cache_key?: string;
+    prompt_cache_retention?: 'in_memory' | '24h';
 };
 type OpenAIErrorWithStatus = Error & { status?: unknown };
 type OpenAIUsageWithProviderDetails = OpenAI.Responses.ResponseUsage & {
@@ -171,6 +173,7 @@ export class OpenAIResponsesProtocol {
             supportsOpenAICurrentTurnReasoning(driver.provider, options.model),
         );
         const includeThoughts = model_options?.include_thoughts !== false;
+        const useOpenAICacheControls = driver.provider === Providers.openai;
 
         const stream = await driver.service.responses.create({
             stream: true,
@@ -178,6 +181,8 @@ export class OpenAIResponsesProtocol {
             input: conversation,
             reasoning,
             include: reasoning ? ['reasoning.encrypted_content'] : undefined,
+            prompt_cache_key: useOpenAICacheControls ? model_options?.prompt_cache_key : undefined,
+            prompt_cache_retention: useOpenAICacheControls ? model_options?.prompt_cache_retention : undefined,
             temperature: isReasoningModel ? undefined : model_options?.temperature,
             top_p: isReasoningModel ? undefined : model_options?.top_p,
             max_output_tokens: model_options?.max_tokens,
@@ -236,6 +241,7 @@ export class OpenAIResponsesProtocol {
             isReasoningModel,
             supportsOpenAICurrentTurnReasoning(driver.provider, options.model),
         );
+        const useOpenAICacheControls = driver.provider === Providers.openai;
 
         const res = await driver.service.responses.create({
             stream: false,
@@ -243,6 +249,8 @@ export class OpenAIResponsesProtocol {
             input: conversation,
             reasoning,
             include: reasoning ? ['reasoning.encrypted_content'] : undefined,
+            prompt_cache_key: useOpenAICacheControls ? model_options?.prompt_cache_key : undefined,
+            prompt_cache_retention: useOpenAICacheControls ? model_options?.prompt_cache_retention : undefined,
             temperature: isReasoningModel ? undefined : model_options?.temperature,
             top_p: isReasoningModel ? undefined : model_options?.top_p,
             max_output_tokens: model_options?.max_tokens, //TODO: use max_tokens for older models, currently relying on OpenAI to handle it
@@ -1021,30 +1029,24 @@ function finalizeOpenAIResponsesConversation(
     // Responses input. Preserve the returned objects and their ordering verbatim.
     let completed = updateConversation(conversation, output as ResponseInputItem[]);
     completed = incrementConversationTurn(completed) as ResponseInputItem[];
-    const completedItems =
-        unwrapConversationArray<ResponseInputItem>(completed) ?? (Array.isArray(completed) ? completed : []);
-
-    if (
-        completedItems.some(
-            (item) =>
-                (item as { type?: string }).type === 'reasoning' &&
-                !!(item as { encrypted_content?: string | null }).encrypted_content,
-        )
-    ) {
-        return completed;
-    }
-
     const currentTurn = getConversationMeta(completed).turnNumber;
+    const preserveSubtree = (value: unknown): boolean =>
+        !!value &&
+        typeof value === 'object' &&
+        (value as { type?: unknown }).type === 'reasoning' &&
+        !!(value as { encrypted_content?: unknown }).encrypted_content;
     const stripOptions = {
         keepForTurns: options.stripImagesAfterTurns ?? Infinity,
         currentTurn,
         textMaxTokens: options.stripTextMaxTokens,
+        preserveSubtree,
     };
     let processed = stripBase64ImagesFromConversation(completed, stripOptions);
     processed = truncateLargeTextInConversation(processed, stripOptions);
     processed = stripHeartbeatsFromConversation(processed, {
         keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
         currentTurn,
+        preserveSubtree,
     });
     return processed as ResponseInputItem[];
 }
