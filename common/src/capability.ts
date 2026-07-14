@@ -20,8 +20,8 @@ export function getModelCapabilities(model: string, provider?: string | Provider
     capabilities.input.audio = false;
     capabilities.output.audio = false;
     capabilities.output.video = false;
-    // Preserve tool_support_streaming from provider-specific capabilities if set,
-    // otherwise default to false for providers that haven't been verified
+    // tool_support_streaming is optional: when omitted, supportsToolUse falls back to tool_support.
+    // Only set it explicitly to false for models that can tool-call but not while streaming.
     return capabilities;
 }
 
@@ -51,12 +51,12 @@ function _getModelCapabilities(model: string, provider?: string | Providers): Mo
             // model families TogetherAI hosts so is_multimodal is reported correctly.
             return getModelCapabilitiesTogetherAI(model);
         case Providers.xai:
-            // xAI (Grok) models support tool use and are text-based
+            // xAI (Grok) uses the OpenAI Responses API; tool use matches OpenAI-compatible defaults.
+            // Do not set tool_support_streaming — leave it unset so it defaults to tool_support.
             return {
                 input: { text: true, image: model.includes('vision') },
                 output: { text: true },
                 tool_support: true,
-                tool_support_streaming: false, // Conservative - may work but not tested
             };
         default:
             // Guess the provider based on the model name
@@ -65,12 +65,11 @@ function _getModelCapabilities(model: string, provider?: string | Providers): Mo
             } else if (model.startsWith('claude')) {
                 return getModelCapabilitiesAnthropic(model);
             } else if (model.startsWith('grok')) {
-                // xAI Grok models
+                // xAI Grok models (provider omitted — same as Providers.xai)
                 return {
                     input: { text: true, image: model.includes('vision') },
                     output: { text: true },
                     tool_support: true,
-                    tool_support_streaming: false,
                 };
             } else if (model.startsWith('publishers/')) {
                 return getModelCapabilitiesVertexAI(model);
@@ -134,7 +133,12 @@ function getModelCapabilitiesTogetherAI(model: string): ModelCapabilities {
 
 export function supportsToolUse(model: string, provider?: string | Providers, streaming: boolean = false): boolean {
     const capabilities = getModelCapabilities(model, provider);
-    return streaming ? !!capabilities.tool_support_streaming : !!capabilities.tool_support;
+    if (!streaming) {
+        return !!capabilities.tool_support;
+    }
+    // Unset tool_support_streaming means "same as tool_support" (OpenAI-compatible default).
+    // Only an explicit false opts out of tools-while-streaming.
+    return !!(capabilities.tool_support_streaming ?? capabilities.tool_support);
 }
 
 export function modelModalitiesToArray(modalities: ModelModalities): string[] {
