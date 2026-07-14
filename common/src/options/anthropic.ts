@@ -26,7 +26,7 @@ export interface AnthropicClaudeOptions {
 
 export function getAnthropicOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
     const max_tokens_limit = getClaudeMaxTokensLimit(model);
-    const excludeOptions = ['max_tokens', 'presence_penalty', 'frequency_penalty'];
+    const excludeOptions = ['max_tokens', 'presence_penalty', 'frequency_penalty', 'include_thoughts'];
     let commonOptions = textOptionsFallback.options.filter((o) => !excludeOptions.includes(o.name));
 
     const hasSamplingRestriction = hasSamplingParameterRestriction(model);

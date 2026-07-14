@@ -3,6 +3,7 @@ import {
     type Completion,
     type CompletionChunkObject,
     type CompletionResult,
+    type DriverCompletionStream,
     type DriverOptions,
     type EmbeddingResultItem,
     type EmbeddingsOptions,
@@ -50,6 +51,9 @@ export type OpenAIChatCompletionsMessage = {
      * Tool calls from assistant messages - stored and sent back with tool results.
      */
     tool_calls?: OpenAIChatCompletionsToolCall[];
+    /** Provider-native reasoning fields used by OpenAI-compatible APIs for replay. */
+    reasoning_content?: string | null;
+    reasoning?: string | null;
 };
 
 export type OpenAIChatCompletionsRequestMessage = {
@@ -57,6 +61,8 @@ export type OpenAIChatCompletionsRequestMessage = {
     content?: string | null | OpenAIChatCompletionsContentPart[];
     tool_call_id?: string;
     tool_calls?: OpenAIChatCompletionsToolCall[];
+    reasoning_content?: string | null;
+    reasoning?: string | null;
 };
 
 export type OpenAIChatCompletionsPayload = Omit<
@@ -251,7 +257,8 @@ export function updateOpenAIChatCompletionsConversation(
     conversation: OpenAIChatCompletionsPrompt | OpenAIChatCompletionsMessage[] | undefined | null,
     prompt: OpenAIChatCompletionsPrompt,
 ): OpenAIChatCompletionsPrompt {
-    // TODO: Remove legacy array-shaped conversation compatibility after 2026-07-27.
+    // TODO: Remove legacy array-shaped conversation compatibility after 2026-08-14,
+    // once all resumable conversations written before the native container migration have expired.
     const baseMessages = Array.isArray(conversation) ? conversation : (conversation?.messages ?? []);
     return {
         _is_openai_chat_completions: true,
@@ -261,15 +268,51 @@ export function updateOpenAIChatCompletionsConversation(
 
 export function prepareOpenAIChatCompletionsConversation(
     conversation: OpenAIChatCompletionsPrompt,
-    options: Pick<ExecutionOptions, 'tools'>,
+    options: Pick<ExecutionOptions, 'tools'> & Partial<Pick<ExecutionOptions, 'model'>>,
 ): OpenAIChatCompletionsPrompt {
     let messages = fixOrphanedOpenAIChatCompletionsToolResults(
         fixOrphanedOpenAIChatCompletionsToolUse(conversation.messages),
     );
+    messages = prepareOpenAIChatCompletionsReasoning(messages, options.model);
     if (!options.tools || options.tools.length === 0) {
         messages = convertOpenAIChatCompletionsToolMessagesToText(messages);
     }
     return { ...conversation, messages };
+}
+
+type OpenAIChatReasoningReplayPolicy = 'none' | 'omit' | 'active_tool_turn' | 'full_tool_history';
+
+function getOpenAIChatReasoningReplayPolicy(model: string | undefined): OpenAIChatReasoningReplayPolicy {
+    const modelId = model?.toLowerCase() ?? '';
+    if (/deepseek-(?:r1|reasoner)|deepseek\.r1/.test(modelId)) return 'omit';
+    if (/deepseek-v4(?:-|$)/.test(modelId)) return 'full_tool_history';
+    if (/deepseek-v3\.2(?:-|$)/.test(modelId)) return 'active_tool_turn';
+    return 'none';
+}
+
+function withoutOpenAIChatReasoning(message: OpenAIChatCompletionsMessage): OpenAIChatCompletionsMessage {
+    if (message.reasoning_content === undefined && message.reasoning === undefined) return message;
+    const { reasoning_content: _reasoningContent, reasoning: _reasoning, ...rest } = message;
+    return rest;
+}
+
+function prepareOpenAIChatCompletionsReasoning(
+    messages: OpenAIChatCompletionsMessage[],
+    model: string | undefined,
+): OpenAIChatCompletionsMessage[] {
+    const policy = getOpenAIChatReasoningReplayPolicy(model);
+    if (policy === 'omit') return messages.map(withoutOpenAIChatReasoning);
+    if (policy !== 'active_tool_turn') return messages;
+
+    let currentTurnStart = -1;
+    for (let index = messages.length - 1; index >= 0; index--) {
+        if (messages[index].role === 'user') {
+            currentTurnStart = index;
+            break;
+        }
+    }
+    if (currentTurnStart <= 0) return messages;
+    return messages.map((message, index) => (index < currentTurnStart ? withoutOpenAIChatReasoning(message) : message));
 }
 
 export function parseOpenAIChatCompletionsToolCalls(
@@ -447,64 +490,122 @@ export function stripOpenAIChatCompletionsThinkBlocks(value: string): string {
     return value.replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, '').trim();
 }
 
-export function stripOpenAIChatCompletionsThinkBlocksFromCompletion(completion: Completion): Completion {
-    completion.result = completion.result.map((result): CompletionResult => {
-        if (result.type === 'text') {
-            return { ...result, value: stripOpenAIChatCompletionsThinkBlocks(result.value) };
-        }
-        if (result.type === 'json' && typeof result.value === 'string') {
-            return { ...result, value: stripOpenAIChatCompletionsThinkBlocks(result.value) };
-        }
-        return result;
-    });
-
-    const conversation = completion.conversation as OpenAIChatCompletionsPrompt | undefined;
-    if (conversation?._is_openai_chat_completions && Array.isArray(conversation.messages)) {
-        completion.conversation = {
-            ...conversation,
-            messages: conversation.messages.map((message) => {
-                if (typeof message.content === 'string') {
-                    return { ...message, content: stripOpenAIChatCompletionsThinkBlocks(message.content) };
-                }
-                if (Array.isArray(message.content)) {
-                    return {
-                        ...message,
-                        content: message.content.map((part) =>
-                            part.type === 'text'
-                                ? { ...part, text: stripOpenAIChatCompletionsThinkBlocks(part.text) }
-                                : part,
-                        ),
-                    };
-                }
-                return message;
-            }),
-        };
-    }
-
-    return completion;
-}
-
-export function extractOpenAIChatCompletionsText(
+export function extractOpenAIChatCompletionsResults(
     source:
         | Pick<OpenAIChatCompletionsResponseChoice['message'], 'content' | 'reasoning_content' | 'reasoning'>
         | Pick<OpenAIChatCompletionsStreamChoiceDelta, 'content' | 'reasoning_content' | 'reasoning'>
         | undefined,
-    includeThoughts: boolean,
-): string {
-    if (!source) return '';
+    includeThoughts = true,
+): CompletionResult[] {
+    if (!source) return [];
 
-    const content = stripOpenAIChatCompletionsThinkBlocks(extractOpenAIChatCompletionsContentText(source.content));
+    const results = splitOpenAIChatCompletionsThinkBlocks(
+        extractOpenAIChatCompletionsContentText(source.content),
+        includeThoughts,
+    );
     const reasoning = extractOpenAIChatCompletionsReasoningText(source);
-
     if (includeThoughts && reasoning) {
-        return content ? `${reasoning}\n\n${content}` : reasoning;
+        results.unshift({ type: 'thoughts', value: reasoning });
+    }
+    return results;
+}
+
+export function splitOpenAIChatCompletionsThinkBlocks(value: string, includeThoughts = true): CompletionResult[] {
+    const results: CompletionResult[] = [];
+    const pattern = /<think\b[^>]*>([\s\S]*?)(?:<\/think>|$)/gi;
+    let offset = 0;
+    for (const match of value.matchAll(pattern)) {
+        const index = match.index ?? 0;
+        if (index > offset) {
+            const text = value.slice(offset, index).trim();
+            if (text) results.push({ type: 'text', value: text });
+        }
+        if (includeThoughts && match[1]) {
+            results.push({ type: 'thoughts', value: match[1] });
+        }
+        offset = index + match[0].length;
+    }
+    if (offset < value.length) {
+        const text = value.slice(offset).trim();
+        if (text) results.push({ type: 'text', value: text });
+    }
+    return results;
+}
+
+class OpenAIThinkStreamProjector {
+    private buffer = '';
+    private inThoughts = false;
+    private trimNextTextStart = false;
+
+    push(value: string, final = false): CompletionResult[] {
+        this.buffer += value;
+        const results: CompletionResult[] = [];
+
+        while (this.buffer) {
+            if (this.inThoughts) {
+                const closeIndex = this.buffer.toLowerCase().indexOf('</think>');
+                if (closeIndex >= 0) {
+                    this.append(results, 'thoughts', this.buffer.slice(0, closeIndex));
+                    this.buffer = this.buffer.slice(closeIndex + '</think>'.length);
+                    this.inThoughts = false;
+                    this.trimNextTextStart = true;
+                    continue;
+                }
+                if (final) {
+                    this.append(results, 'thoughts', this.buffer);
+                    this.buffer = '';
+                    break;
+                }
+                const retained = this.partialTagSuffixLength('</think>');
+                this.append(results, 'thoughts', this.buffer.slice(0, this.buffer.length - retained));
+                this.buffer = this.buffer.slice(this.buffer.length - retained);
+                break;
+            }
+
+            const open = /<think\b[^>]*>/i.exec(this.buffer);
+            if (open?.index !== undefined) {
+                this.append(results, 'text', this.buffer.slice(0, open.index).trimEnd());
+                this.buffer = this.buffer.slice(open.index + open[0].length);
+                this.inThoughts = true;
+                continue;
+            }
+            if (final) {
+                this.append(results, 'text', this.buffer);
+                this.buffer = '';
+                break;
+            }
+
+            const lower = this.buffer.toLowerCase();
+            const lastOpen = lower.lastIndexOf('<');
+            const candidate = lastOpen >= 0 ? lower.slice(lastOpen) : '';
+            const retainCandidate =
+                candidate.length > 0 &&
+                ('<think'.startsWith(candidate) || (candidate.startsWith('<think') && !candidate.includes('>')));
+            const retained = retainCandidate ? candidate.length : 0;
+            this.append(results, 'text', this.buffer.slice(0, this.buffer.length - retained));
+            this.buffer = this.buffer.slice(this.buffer.length - retained);
+            break;
+        }
+
+        return results;
     }
 
-    // Some OpenAI-compatible model servers can emit thinking-only chunks or messages
-    // using reasoning_content/reasoning. Use those fields only as a fallback so normal
-    // assistant content remains the visible output whenever it exists after provider
-    // <think>...</think> blocks and whitespace-only output are removed.
-    return content || stripOpenAIChatCompletionsThinkBlocks(reasoning);
+    private partialTagSuffixLength(tag: string): number {
+        const lower = this.buffer.toLowerCase();
+        for (let length = Math.min(lower.length, tag.length - 1); length > 0; length--) {
+            if (tag.startsWith(lower.slice(-length))) return length;
+        }
+        return 0;
+    }
+
+    private append(results: CompletionResult[], type: 'text' | 'thoughts', value: string): void {
+        if (type === 'text' && this.trimNextTextStart) {
+            value = value.trimStart();
+            if (value) this.trimNextTextStart = false;
+        }
+        if (type === 'text' && !value.trim()) return;
+        if (value) results.push({ type, value });
+    }
 }
 
 export function extractOpenAIChatCompletionsReasoningText(
@@ -514,9 +615,8 @@ export function extractOpenAIChatCompletionsReasoningText(
         | undefined,
 ): string {
     if (!source) return '';
-    return [source.reasoning_content, source.reasoning]
-        .filter((value): value is string => typeof value === 'string' && value.length > 0)
-        .join('');
+    const value = source.reasoning_content ?? source.reasoning;
+    return typeof value === 'string' ? value : '';
 }
 
 export function extractOpenAIChatCompletionsContentText(
@@ -577,6 +677,12 @@ export function convertToOpenAIChatCompletionsMessages(
 
         if (msg.tool_calls && msg.tool_calls.length > 0) {
             result.tool_calls = msg.tool_calls;
+        }
+        if (msg.reasoning_content !== undefined) {
+            result.reasoning_content = msg.reasoning_content;
+        }
+        if (msg.reasoning !== undefined) {
+            result.reasoning = msg.reasoning;
         }
 
         if (msg.content === null) {
@@ -686,6 +792,29 @@ function finalizeOpenAIChatCompletionsConversation(
     options: ExecutionOptions,
 ): OpenAIChatCompletionsPrompt {
     conversation = incrementConversationTurn(conversation) as OpenAIChatCompletionsPrompt;
+    const reasoningPolicy = getOpenAIChatReasoningReplayPolicy(options.model);
+    if (reasoningPolicy === 'omit') {
+        conversation = { ...conversation, messages: conversation.messages.map(withoutOpenAIChatReasoning) };
+    }
+
+    const latestAssistant = conversation.messages.findLast((message) => message.role === 'assistant');
+    const hasActiveReasoningToolTurn =
+        reasoningPolicy === 'active_tool_turn' &&
+        !!latestAssistant?.tool_calls?.length &&
+        (latestAssistant.reasoning_content != null || latestAssistant.reasoning != null);
+    const hasReasoningToolHistory =
+        reasoningPolicy === 'full_tool_history' &&
+        conversation.messages.some(
+            (message) =>
+                !!message.tool_calls?.length && (message.reasoning_content != null || message.reasoning != null),
+        );
+    if (hasActiveReasoningToolTurn || hasReasoningToolHistory) {
+        return conversation;
+    }
+
+    if (reasoningPolicy === 'active_tool_turn') {
+        conversation = { ...conversation, messages: conversation.messages.map(withoutOpenAIChatReasoning) };
+    }
     const currentTurn = getConversationMeta(conversation).turnNumber;
     const stripOptions = {
         keepForTurns: options.stripImagesAfterTurns ?? Infinity,
@@ -847,27 +976,30 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             prompt,
         );
         conversation = prepareOpenAIChatCompletionsConversation(conversation, options);
-        const includeThoughts = (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })
-            ?.include_thoughts;
+        const includeThoughts =
+            (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
         const payload = this.buildPayload(conversation, options, false);
         const result = await this.postChatCompletion(driver, payload, options);
 
         const choice = result?.choices?.[0];
         const message = choice?.message;
-        const text = stripOpenAIChatCompletionsThinkBlocks(
-            extractOpenAIChatCompletionsText(message, includeThoughts ?? false),
-        );
+        const completionResults = extractOpenAIChatCompletionsResults(message, includeThoughts);
         const tool_use = parseOpenAIChatCompletionsToolCalls(message?.tool_calls);
-        if (!text && (!tool_use || tool_use.length === 0)) {
+        if (
+            !message ||
+            (completionResults.length === 0 && !extractOpenAIChatCompletionsReasoningText(message) && !tool_use?.length)
+        ) {
             throw new Error('Chat Completions response is not valid: no data');
         }
 
         const assistantMessage: OpenAIChatCompletionsMessage = {
             role: 'assistant',
-            content: text || null,
+            content: message.content ?? null,
+            reasoning_content: message.reasoning_content,
+            reasoning: message.reasoning,
         };
 
-        if (tool_use && tool_use.length > 0 && message?.tool_calls) {
+        if (tool_use && tool_use.length > 0 && message.tool_calls) {
             assistantMessage.tool_calls = message.tool_calls.filter(
                 (toolCall): toolCall is OpenAI.Chat.ChatCompletionMessageFunctionToolCall =>
                     toolCall.type === 'function',
@@ -880,7 +1012,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         conversation = finalizeOpenAIChatCompletionsConversation(conversation, options);
 
         return {
-            result: text ? [{ type: 'text', value: text }] : [],
+            result: completionResults,
             tool_use,
             token_usage: mapOpenAIChatCompletionsUsage(result.usage),
             finish_reason: normalizeOpenAIChatCompletionsFinishReason(choice?.finish_reason, !!tool_use?.length),
@@ -895,29 +1027,66 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         driver: DriverT,
         prompt: OpenAIChatCompletionsPrompt,
         options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>> {
+    ): Promise<DriverCompletionStream> {
         let conversation = updateOpenAIChatCompletionsConversation(
             options.conversation as OpenAIChatCompletionsPrompt,
             prompt,
         );
         conversation = prepareOpenAIChatCompletionsConversation(conversation, options);
-        const includeThoughts = (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })
-            ?.include_thoughts;
+        const includeThoughts =
+            (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
         const payload = this.buildPayload(conversation, options, true);
         const responseStream = await this.postChatCompletionStream(driver, payload, options);
 
-        let emittedContent = false;
-        let reasoningFallback = '';
+        const projector = new OpenAIThinkStreamProjector();
+        let nativeContent = '';
+        let nativeReasoningContent: string | undefined;
+        let nativeReasoning: string | undefined;
+        const nativeToolCalls = new Map<
+            number,
+            { id: string; type: 'function'; function: { name: string; arguments: string } }
+        >();
 
-        return transformSSEStream(responseStream, (data: string) => {
+        const stream = transformSSEStream(responseStream, (data: string) => {
             const json = JSON.parse(data) as OpenAIChatCompletionsStreamResponse;
             const choice = json.choices?.[0];
             const delta = choice?.delta;
+            const chunkResults: CompletionResult[] = [];
+            const content = extractOpenAIChatCompletionsContentText(delta?.content);
+            if (content) {
+                nativeContent += content;
+                chunkResults.push(...projector.push(content, !!choice?.finish_reason));
+            } else if (choice?.finish_reason) {
+                chunkResults.push(...projector.push('', true));
+            }
 
+            if (typeof delta?.reasoning_content === 'string') {
+                nativeReasoningContent = (nativeReasoningContent ?? '') + delta.reasoning_content;
+                if (includeThoughts && delta.reasoning_content) {
+                    chunkResults.unshift({ type: 'thoughts', value: delta.reasoning_content });
+                }
+            } else if (typeof delta?.reasoning === 'string') {
+                nativeReasoning = (nativeReasoning ?? '') + delta.reasoning;
+                if (includeThoughts && delta.reasoning) {
+                    chunkResults.unshift({ type: 'thoughts', value: delta.reasoning });
+                }
+            }
+
+            let toolUseChunks: StreamingOpenAIToolUse[] | undefined;
             if (delta?.tool_calls && delta.tool_calls.length > 0) {
-                const toolUseChunks: StreamingOpenAIToolUse[] = delta.tool_calls.map((tc) => {
+                toolUseChunks = delta.tool_calls.map((tc) => {
+                    const index = tc.index ?? 0;
+                    const native = nativeToolCalls.get(index) ?? {
+                        id: '',
+                        type: 'function' as const,
+                        function: { name: '', arguments: '' },
+                    };
+                    if (tc.id) native.id = tc.id;
+                    if (tc.function?.name) native.function.name += tc.function.name;
+                    if (tc.function?.arguments) native.function.arguments += tc.function.arguments;
+                    nativeToolCalls.set(index, native);
                     const toolUse: StreamingOpenAIToolUse = {
-                        id: `tool_${tc.index ?? 0}`,
+                        id: `tool_${index}`,
                         tool_name: tc.function?.name ?? '',
                         tool_input:
                             typeof tc.function?.arguments === 'string' && tc.function.arguments.length > 0
@@ -929,39 +1098,36 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                     }
                     return toolUse;
                 });
-
-                return {
-                    result: [],
-                    tool_use: toolUseChunks,
-                    finish_reason: choice?.finish_reason
-                        ? normalizeOpenAIChatCompletionsFinishReason(choice.finish_reason, toolUseChunks.length > 0)
-                        : undefined,
-                    token_usage: mapOpenAIChatCompletionsUsage(json.usage),
-                } satisfies CompletionChunkObject;
             }
-
-            const content = extractOpenAIChatCompletionsContentText(delta?.content);
-            const reasoning = extractOpenAIChatCompletionsReasoningText(delta);
-            const visibleContent = stripOpenAIChatCompletionsThinkBlocks(content);
-            if (visibleContent) {
-                emittedContent = true;
-            } else if (reasoning) {
-                reasoningFallback += reasoning;
-            }
-
-            const text = includeThoughts ? reasoning + content : content;
-            // Intentionally stream provider <think> blocks as they arrive. The final
-            // accumulated Completion/conversation strips them in validateResult();
-            // for fallback purposes they do not count as normal content.
-            const fallbackText =
-                !includeThoughts && choice?.finish_reason && !emittedContent
-                    ? stripOpenAIChatCompletionsThinkBlocks(reasoningFallback)
-                    : '';
             return {
-                result: text || fallbackText ? [{ type: 'text', value: fallbackText || text }] : [],
-                finish_reason: normalizeOpenAIChatCompletionsFinishReason(choice?.finish_reason),
+                result: includeThoughts ? chunkResults : chunkResults.filter((result) => result.type !== 'thoughts'),
+                tool_use: toolUseChunks,
+                finish_reason: normalizeOpenAIChatCompletionsFinishReason(
+                    choice?.finish_reason,
+                    !!toolUseChunks?.length,
+                ),
                 token_usage: mapOpenAIChatCompletionsUsage(json.usage),
             } satisfies CompletionChunkObject;
+        });
+
+        return Object.assign(stream, {
+            finalizeConversation: () => {
+                const assistantMessage: OpenAIChatCompletionsMessage = {
+                    role: 'assistant',
+                    content: nativeContent || null,
+                    ...(nativeReasoningContent !== undefined && { reasoning_content: nativeReasoningContent }),
+                    ...(nativeReasoning !== undefined && { reasoning: nativeReasoning }),
+                    ...(nativeToolCalls.size > 0 && {
+                        tool_calls: [...nativeToolCalls.entries()]
+                            .sort(([left], [right]) => left - right)
+                            .map(([, toolCall]) => toolCall),
+                    }),
+                };
+                return finalizeOpenAIChatCompletionsConversation(
+                    updateOpenAIChatCompletionsConversation(conversation, { messages: [assistantMessage] }),
+                    options,
+                );
+            },
         });
     }
 
@@ -1091,7 +1257,9 @@ function toOpenAISDKMessage(message: OpenAIChatCompletionsRequestMessage): OpenA
                 role: 'assistant',
                 content: typeof message.content === 'string' || message.content === null ? message.content : textParts,
                 tool_calls: message.tool_calls,
-            };
+                reasoning_content: message.reasoning_content,
+                reasoning: message.reasoning,
+            } as OpenAI.Chat.ChatCompletionAssistantMessageParam;
         case 'developer':
         case 'system':
             return {
@@ -1208,7 +1376,7 @@ export abstract class OpenAIChatCompletionsDriverBase<
     requestTextCompletionStream(
         prompt: OpenAIChatCompletionsPrompt,
         options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>> {
+    ): Promise<DriverCompletionStream> {
         return this.chatCompletionsProtocol.requestTextCompletionStream(this, prompt, options);
     }
 
@@ -1219,10 +1387,6 @@ export abstract class OpenAIChatCompletionsDriverBase<
         options: ExecutionOptions,
     ): OpenAIChatCompletionsPrompt {
         return buildOpenAIChatCompletionsStreamingConversation(prompt, result, toolUse, options);
-    }
-
-    validateResult(result: Completion, options: ExecutionOptions) {
-        super.validateResult(stripOpenAIChatCompletionsThinkBlocksFromCompletion(result), options);
     }
 }
 

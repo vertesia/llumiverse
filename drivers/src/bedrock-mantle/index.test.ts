@@ -23,12 +23,6 @@ type ResponsesCreate = (
 ) => Promise<OpenAI.Responses.Response>;
 type ModelsListResult = Pick<Awaited<ReturnType<OpenAI['models']['list']>>, 'data'>;
 type ModelsList = (...args: Parameters<OpenAI['models']['list']>) => Promise<ModelsListResult>;
-type ClaudeStreamResult = Pick<ReturnType<Anthropic['messages']['stream']>, 'finalMessage'>;
-type ClaudeStream = (
-    params: Parameters<Anthropic['messages']['stream']>[0],
-    options?: Parameters<Anthropic['messages']['stream']>[1],
-) => ClaudeStreamResult;
-
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -405,8 +399,8 @@ describe('BedrockMantleDriver protocol execution', () => {
                 service_tier: null,
             },
         } satisfies Anthropic.Message;
-        const finalMessage = vi.fn<ClaudeStreamResult['finalMessage']>(async () => message);
-        const stream = vi.fn<ClaudeStream>(() => ({ finalMessage }));
+        const finalMessage = vi.fn(async () => message);
+        const stream = vi.fn(() => ({ finalMessage }));
         const messagesClient = { messages: { stream } };
         Reflect.set(driver, 'anthropicService', messagesClient);
         const prompt = await driver.createPrompt(promptSegments, { model: 'anthropic.claude-haiku-4-5' });
@@ -466,7 +460,8 @@ describe('Bedrock Mantle Responses options', () => {
             expect.objectContaining({
                 model: 'openai.gpt-5.5',
                 max_output_tokens: 100,
-                reasoning: { effort: 'low' },
+                reasoning: { effort: 'low', summary: 'auto' },
+                include: ['reasoning.encrypted_content'],
                 text: expect.objectContaining({
                     verbosity: 'low',
                     format: expect.objectContaining({ type: 'json_schema', name: 'format_output' }),
@@ -495,7 +490,8 @@ describe('Bedrock Mantle Responses options', () => {
         expect(create).toHaveBeenCalledWith(
             expect.objectContaining({
                 model: 'xai.grok-4.3',
-                reasoning: { effort: 'none' },
+                reasoning: { effort: 'none', summary: 'auto' },
+                include: ['reasoning.encrypted_content'],
                 temperature: 0.4,
                 top_p: 0.9,
             }),

@@ -31,6 +31,11 @@ export interface ConversationMeta {
  */
 export interface StripOptions {
     /**
+     * Provider hook for native protocol units that must remain byte-for-byte unchanged.
+     * When true, generic media, text, and heartbeat cleanup does not descend into the value.
+     */
+    preserveSubtree?: (value: unknown) => boolean;
+    /**
      * Number of turns to keep images before stripping.
      * - Infinity or undefined: Never strip (default — callers must opt in)
      * - 0: Strip immediately
@@ -145,6 +150,19 @@ function isSerializedBedrockVideoBlock(obj: unknown): boolean {
     if (!src.bytes || typeof src.bytes !== 'object') return false;
     const bytes = src.bytes as Record<string, unknown>;
     return typeof bytes._base64 === 'string';
+}
+
+function isBedrockRedactedReasoningBlock(obj: unknown): boolean {
+    if (typeof obj !== 'object' || obj === null) return false;
+    const reasoningContent = (obj as Record<string, unknown>).reasoningContent;
+    if (typeof reasoningContent !== 'object' || reasoningContent === null) return false;
+    const redacted = (reasoningContent as Record<string, unknown>).redactedContent;
+    if (redacted instanceof Uint8Array) return true;
+    return (
+        typeof redacted === 'object' &&
+        redacted !== null &&
+        typeof (redacted as Record<string, unknown>)._base64 === 'string'
+    );
 }
 
 /**
@@ -359,6 +377,12 @@ export function deserializeBinaryFromStorage(obj: unknown): unknown {
 function stripBinaryFromConversationInternal(obj: unknown): unknown {
     if (obj === null || obj === undefined) return obj;
 
+    // Bedrock redacted reasoning is encrypted protocol state, not disposable media.
+    // It must always survive storage even when image/document stripping is enabled.
+    if (isBedrockRedactedReasoningBlock(obj)) {
+        return serializeBinaryForStorage(obj);
+    }
+
     // Handle Uint8Array directly
     if (obj instanceof Uint8Array) {
         return IMAGE_PLACEHOLDER;
@@ -427,11 +451,15 @@ export function stripBase64ImagesFromConversation(obj: unknown, options?: StripO
         return obj;
     }
 
-    return stripBase64ImagesFromConversationInternal(obj);
+    return stripBase64ImagesFromConversationInternal(obj, options?.preserveSubtree);
 }
 
-function stripBase64ImagesFromConversationInternal(obj: unknown): unknown {
+function stripBase64ImagesFromConversationInternal(
+    obj: unknown,
+    preserveSubtree?: (value: unknown) => boolean,
+): unknown {
     if (obj === null || obj === undefined) return obj;
+    if (preserveSubtree?.(obj)) return obj;
 
     // Handle base64 data URL string directly
     if (typeof obj === 'string' && obj.startsWith('data:image/') && obj.includes(';base64,')) {
@@ -456,7 +484,7 @@ function stripBase64ImagesFromConversationInternal(obj: unknown): unknown {
             if (isAnthropicBase64DocumentBlock(item)) {
                 return { type: 'text', text: DOCUMENT_PLACEHOLDER };
             }
-            return stripBase64ImagesFromConversationInternal(item);
+            return stripBase64ImagesFromConversationInternal(item, preserveSubtree);
         });
     }
 
@@ -467,7 +495,7 @@ function stripBase64ImagesFromConversationInternal(obj: unknown): unknown {
             if (key === META_KEY) {
                 result[key] = value;
             } else {
-                result[key] = stripBase64ImagesFromConversationInternal(value);
+                result[key] = stripBase64ImagesFromConversationInternal(value, preserveSubtree);
             }
         }
         return result;
@@ -513,7 +541,9 @@ export function truncateLargeTextInConversation(obj: unknown, options?: StripOpt
         const messages = getConversationMessages(obj);
         if (messages && messages.length > keepRecent) {
             const cutoff = messages.length - keepRecent;
-            const truncated = messages.map((m, i) => (i < cutoff ? truncateLargeTextInternal(m, maxChars) : m));
+            const truncated = messages.map((m, i) =>
+                i < cutoff ? truncateLargeTextInternal(m, maxChars, options?.preserveSubtree) : m,
+            );
             return setConversationMessages(obj, truncated);
         }
         // No identifiable messages array, or short conversation: leave it full.
@@ -521,7 +551,7 @@ export function truncateLargeTextInConversation(obj: unknown, options?: StripOpt
     }
 
     // Legacy path: truncate every large string in the conversation.
-    return truncateLargeTextInternal(obj, maxChars);
+    return truncateLargeTextInternal(obj, maxChars, options?.preserveSubtree);
 }
 
 /**
@@ -589,8 +619,13 @@ function shouldPreserveMediaPayload(obj: unknown): boolean {
     return false;
 }
 
-function truncateLargeTextInternal(obj: unknown, maxChars: number): unknown {
+function truncateLargeTextInternal(
+    obj: unknown,
+    maxChars: number,
+    preserveSubtree?: (value: unknown) => boolean,
+): unknown {
     if (obj === null || obj === undefined) return obj;
+    if (preserveSubtree?.(obj)) return obj;
 
     // Truncate large strings
     if (typeof obj === 'string') {
@@ -615,7 +650,7 @@ function truncateLargeTextInternal(obj: unknown, maxChars: number): unknown {
     }
 
     if (Array.isArray(obj)) {
-        return obj.map((item) => truncateLargeTextInternal(item, maxChars));
+        return obj.map((item) => truncateLargeTextInternal(item, maxChars, preserveSubtree));
     }
 
     if (typeof obj === 'object') {
@@ -625,16 +660,35 @@ function truncateLargeTextInternal(obj: unknown, maxChars: number): unknown {
         const result: Record<string, unknown> = {};
         for (const [key, value] of Object.entries(obj)) {
             // Preserve metadata without truncation
-            if (key === META_KEY) {
+            if (key === META_KEY || isProtocolIdentifierField(key)) {
                 result[key] = value;
             } else {
-                result[key] = truncateLargeTextInternal(value, maxChars);
+                result[key] = truncateLargeTextInternal(value, maxChars, preserveSubtree);
             }
         }
         return result;
     }
 
     return obj;
+}
+
+const PROTOCOL_IDENTIFIER_FIELDS = new Set([
+    'role',
+    'type',
+    'id',
+    'name',
+    'modelId',
+    'tool_use_id',
+    'toolUseId',
+    'call_id',
+    'signature',
+    'thoughtSignature',
+    'encrypted_content',
+    '_base64',
+]);
+
+function isProtocolIdentifierField(key: string): boolean {
+    return PROTOCOL_IDENTIFIER_FIELDS.has(key);
 }
 
 const HEARTBEAT_OPEN_TAG = '<heartbeat>';
@@ -669,11 +723,12 @@ export function stripHeartbeatsFromConversation(obj: unknown, options?: StripOpt
         return obj;
     }
 
-    return stripHeartbeatsInternal(obj);
+    return stripHeartbeatsInternal(obj, options?.preserveSubtree);
 }
 
-function stripHeartbeatsInternal(obj: unknown): unknown {
+function stripHeartbeatsInternal(obj: unknown, preserveSubtree?: (value: unknown) => boolean): unknown {
     if (obj === null || obj === undefined) return obj;
+    if (preserveSubtree?.(obj)) return obj;
 
     // Replace heartbeat-tagged strings with placeholder
     if (typeof obj === 'string') {
@@ -684,7 +739,7 @@ function stripHeartbeatsInternal(obj: unknown): unknown {
     }
 
     if (Array.isArray(obj)) {
-        return obj.map((item) => stripHeartbeatsInternal(item));
+        return obj.map((item) => stripHeartbeatsInternal(item, preserveSubtree));
     }
 
     if (typeof obj === 'object') {
@@ -694,7 +749,7 @@ function stripHeartbeatsInternal(obj: unknown): unknown {
             if (key === META_KEY) {
                 result[key] = value;
             } else {
-                result[key] = stripHeartbeatsInternal(value);
+                result[key] = stripHeartbeatsInternal(value, preserveSubtree);
             }
         }
         return result;

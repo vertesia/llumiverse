@@ -1,7 +1,7 @@
 import type {
     AIModel,
     Completion,
-    CompletionChunkObject,
+    DriverCompletionStream,
     ExecutionOptions,
     LlumiverseError,
     LlumiverseErrorContext,
@@ -27,7 +27,7 @@ export interface ModelDefinition<PromptT = VertexAIPrompt> {
         driver: VertexAIDriver,
         prompt: PromptT,
         options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>>;
+    ): Promise<DriverCompletionStream>;
     preValidationProcessing?(
         result: Completion,
         options: ExecutionOptions,

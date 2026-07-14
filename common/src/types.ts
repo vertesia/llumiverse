@@ -1,3 +1,4 @@
+import type { AnthropicClaudeOptions } from './options/anthropic.js';
 import type { BedrockOptions } from './options/bedrock.js';
 import type { BedrockMantleOptions } from './options/bedrock_mantle.js';
 import type { TextFallbackOptions } from './options/fallback.js';
@@ -388,12 +389,24 @@ export class LlumiverseError extends Error {
 // ============== Result Types ===============
 
 export interface BaseResult {
-    type: 'text' | 'json' | 'image';
+    type: 'text' | 'thoughts' | 'json' | 'image';
     value: unknown;
 }
 
 export interface TextResult extends BaseResult {
     type: 'text';
+    value: string;
+}
+
+/**
+ * A visible projection of model reasoning.
+ *
+ * This result never contains provider signatures, encrypted reasoning, redacted
+ * blocks, or other conversation replay state. Those remain exclusively in the
+ * provider-native conversation returned with the completion.
+ */
+export interface ThoughtsResult extends BaseResult {
+    type: 'thoughts';
     value: string;
 }
 
@@ -410,7 +423,7 @@ export interface ImageResult extends BaseResult {
 /**
  * @discriminator type
  */
-export type CompletionResult = TextResult | JsonResult | ImageResult;
+export type CompletionResult = TextResult | ThoughtsResult | JsonResult | ImageResult;
 
 //Internal structure used in driver implementation.
 export interface CompletionChunkObject {
@@ -424,6 +437,27 @@ export interface CompletionChunkObject {
      * tool_input that is only parsed into a JSONObject once fully accumulated.
      */
     tool_use?: ToolUse<unknown>[];
+}
+
+/**
+ * Final generic state supplied to a provider stream after shared accumulation.
+ * Provider implementations may use it to reconcile incomplete tool calls while
+ * finalizing their request-local native conversation state.
+ */
+export interface StreamingCompletionFinalization {
+    result: CompletionResult[];
+    tool_use?: ToolUse<unknown>[];
+    finish_reason?: string;
+}
+
+/**
+ * Internal provider stream contract.
+ *
+ * Native protocol adapters attach a request-local finalizer when conversation
+ * replay requires information that cannot be reconstructed from generic results.
+ */
+export interface DriverCompletionStream extends AsyncIterable<CompletionChunkObject> {
+    finalizeConversation?: (completion: StreamingCompletionFinalization) => unknown | Promise<unknown>;
 }
 
 /**
@@ -716,6 +750,7 @@ export type ReasoningEffort = 'low' | 'medium' | 'high';
  */
 export type ModelOptions =
     | TextFallbackOptions
+    | AnthropicClaudeOptions
     | VertexAIOptions
     | BedrockOptions
     | BedrockMantleOptions

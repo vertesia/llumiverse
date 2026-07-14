@@ -1,11 +1,10 @@
-import { type AIModel, type Completion, type ExecutionOptions, ModelType } from '@llumiverse/core';
+import { type AIModel, ModelType } from '@llumiverse/core';
 import {
     type OpenAIChatCompletionsPayload,
     type OpenAIChatCompletionsPrompt,
     OpenAIChatCompletionsProtocol,
     type OpenAIChatCompletionsProtocolOptions,
     type OpenAIChatCompletionsResponse,
-    stripOpenAIChatCompletionsThinkBlocksFromCompletion,
 } from '../../openai/openai_chat_completions.js';
 import type { VertexAIDriver } from '../index.js';
 import type { ModelDefinition } from '../models.js';
@@ -72,13 +71,6 @@ export class OpenAIChatCompletionsModelDefinition
             payload,
             reader: 'sse',
         })) as ReadableStream;
-    }
-
-    preValidationProcessing(
-        result: Completion,
-        options: ExecutionOptions,
-    ): { result: Completion; options: ExecutionOptions } {
-        return { result: stripOpenAIChatCompletionsThinkBlocksFromCompletion(result), options };
     }
 
     private getClient(driver: VertexAIDriver) {

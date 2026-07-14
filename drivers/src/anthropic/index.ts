@@ -3,7 +3,7 @@ import type { AnthropicClaudeOptions } from '@llumiverse/common';
 import {
     type AIModel,
     type Completion,
-    type CompletionChunkObject,
+    type DriverCompletionStream,
     type DriverOptions,
     type EmbeddingsOptions,
     type EmbeddingsResult,
@@ -60,18 +60,18 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
         if (model_options?._option_id !== undefined && model_options?._option_id !== 'anthropic-claude') {
             this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
-        return executeClaudeCompletion(this.client, prompt, options);
+        return executeClaudeCompletion(this.client, prompt, options, { cacheMode: 'automatic' });
     }
 
     async requestTextCompletionStream(
         prompt: ClaudePrompt,
         options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>> {
+    ): Promise<DriverCompletionStream> {
         const model_options = options.model_options as AnthropicClaudeOptions | undefined;
         if (model_options?._option_id !== undefined && model_options?._option_id !== 'anthropic-claude') {
             this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
-        return streamClaudeCompletion(this.client, prompt, options);
+        return streamClaudeCompletion(this.client, prompt, options, { cacheMode: 'automatic' });
     }
 
     async listModels(_params?: ModelSearchPayload): Promise<AIModel[]> {

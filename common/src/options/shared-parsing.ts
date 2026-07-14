@@ -124,7 +124,7 @@ export function buildClaudeIncludeThoughtsOption(model: string): ModelOptionInfo
         {
             name: 'include_thoughts',
             type: OptionType.boolean,
-            default: false,
+            default: true,
             description: "Include the model's thinking content in the response.",
         },
     ];

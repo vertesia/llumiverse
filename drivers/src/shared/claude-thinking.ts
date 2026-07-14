@@ -8,7 +8,7 @@ import { hasSamplingParameterRestriction, isClaudeVersionGTE, supportsAdaptiveTh
 export interface ClaudeThinkingInput {
     thinking_budget_tokens?: number;
     effort?: NonNullable<OutputConfig['effort']>;
-    /** Controls whether thinking content is included in the response. Does not enable thinking. */
+    /** Controls only llumiverse result projection. Does not change provider thinking configuration. */
     include_thoughts?: boolean;
 }
 
@@ -31,7 +31,7 @@ export interface ClaudeThinkingResult {
  *
  * - Extended thinking: enabled by setting `thinking_budget_tokens`.
  * - Adaptive thinking: enabled by setting `effort` on models that support it (Opus 4.6+, Sonnet 4.6+).
- * - `include_thoughts`: display-only; does not enable thinking.
+ * - `include_thoughts`: llumiverse output-only; does not alter provider thinking.
  *
  * @param model - The model identifier string
  * @param options - User-provided Claude options (thinking_budget_tokens, effort, include_thoughts)
@@ -60,10 +60,9 @@ export function resolveClaudeThinking(model: string, options?: ClaudeThinkingInp
         };
     } else if (supportsAdaptive) {
         // Adaptive models: enable when effort is set, omit otherwise (thinking is OFF by default).
-        // display controls whether thinking blocks are returned; defaults to omitted.
-        thinking = adaptiveEnabled
-            ? { type: 'adaptive' as const, display: options?.include_thoughts ? 'summarized' : 'omitted' }
-            : undefined;
+        // Always request the provider summary. include_thoughts controls only whether llumiverse
+        // projects that summary into CompletionResult; native replay state must remain identical.
+        thinking = adaptiveEnabled ? { type: 'adaptive' as const, display: 'summarized' } : undefined;
     } else {
         // Older thinking models (3.7, 4.5): no adaptive support, thinking is always disabled
         // unless an explicit budget is provided (handled above).

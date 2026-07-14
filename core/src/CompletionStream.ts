@@ -2,6 +2,7 @@ import {
     type CompletionChunkObject,
     type CompletionResult,
     type CompletionStream,
+    type DriverCompletionStream,
     type DriverOptions,
     type ExecutionOptions,
     type ExecutionResponse,
@@ -12,6 +13,26 @@ import {
 import type { AbstractDriver } from './Driver.js';
 
 type StreamingToolUse = ToolUse<unknown> & { _actual_id?: string };
+
+function completionResultToStreamText(result: CompletionResult, padImage = true): string {
+    switch (result.type) {
+        case 'text':
+        case 'thoughts':
+            return result.value;
+        case 'json':
+            return JSON.stringify(result.value);
+        case 'image': {
+            const truncatedValue =
+                typeof result.value === 'string' ? result.value.slice(0, 10) : String(result.value).slice(0, 10);
+            const placeholder = `[Image: ${truncatedValue}...]`;
+            return padImage ? `\n${placeholder}\n` : placeholder;
+        }
+        default: {
+            const _exhaustive: never = result;
+            return String(_exhaustive);
+        }
+    }
+}
 
 /**
  * Merge a single streamed `tool_use` fragment into the accumulator map keyed by tool id.
@@ -108,12 +129,12 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
         let promptNewTokens: number | undefined;
         const httpScope = this.driver.createExecutionHttpAgentScope(this.options);
         let sourceIterator: AsyncIterator<CompletionChunkObject> | undefined;
+        let stream: DriverCompletionStream | undefined;
         let streamCompleted = false;
+        let previousStreamedResultType: CompletionResult['type'] | undefined;
 
         try {
-            const stream = await httpScope.run(() =>
-                this.driver.requestTextCompletionStream(this.prompt, this.options),
-            );
+            stream = await httpScope.run(() => this.driver.requestTextCompletionStream(this.prompt, this.options));
             const iterator = stream[Symbol.asyncIterator]();
             sourceIterator = iterator;
             while (true) {
@@ -125,8 +146,10 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
                 const chunk = next.value;
                 if (chunk) {
                     if (typeof chunk === 'string') {
+                        const prefix = previousStreamedResultType === 'thoughts' ? '\n' : '';
+                        previousStreamedResultType = 'text';
                         this.chunks++;
-                        yield chunk;
+                        yield prefix + chunk;
                     } else {
                         if (chunk.finish_reason) {
                             //Do not replace non-null values with null values
@@ -160,10 +183,11 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
                                 if (
                                     lastResult &&
                                     ((lastResult.type === 'text' && result.type === 'text') ||
+                                        (lastResult.type === 'thoughts' && result.type === 'thoughts') ||
                                         (lastResult.type === 'json' && result.type === 'json'))
                                 ) {
                                     // Combine consecutive text or JSON results
-                                    if (result.type === 'text') {
+                                    if (result.type === 'text' || result.type === 'thoughts') {
                                         lastResult.value += result.value;
                                     } else if (result.type === 'json') {
                                         // For JSON, combine the parsed objects directly
@@ -203,27 +227,14 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
 
                             // Convert CompletionResult[] to string for streaming
                             // Only yield if we have results to show
-                            const resultText = chunk.result
-                                .map((r) => {
-                                    switch (r.type) {
-                                        case 'text':
-                                            return r.value;
-                                        case 'json':
-                                            return JSON.stringify(r.value);
-                                        case 'image': {
-                                            const truncatedValue =
-                                                typeof r.value === 'string'
-                                                    ? r.value.slice(0, 10)
-                                                    : String(r.value).slice(0, 10);
-                                            return `\n[Image: ${truncatedValue}...]\n`;
-                                        }
-                                        default: {
-                                            const _exhaustive: never = r;
-                                            return String(_exhaustive);
-                                        }
-                                    }
-                                })
-                                .join('');
+                            let resultText = '';
+                            for (const result of chunk.result) {
+                                if (previousStreamedResultType === 'thoughts' && result.type !== 'thoughts') {
+                                    resultText += '\n';
+                                }
+                                resultText += completionResultToStreamText(result);
+                                previousStreamedResultType = result.type;
+                            }
 
                             if (resultText) {
                                 this.chunks++;
@@ -315,12 +326,13 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
         };
 
         // Build conversation context for multi-turn support
-        const conversation = this.driver.buildStreamingConversation(
-            this.prompt,
-            accumulatedResults,
-            toolUseArray,
-            this.options,
-        );
+        const conversation = stream?.finalizeConversation
+            ? await stream.finalizeConversation({
+                  result: accumulatedResults,
+                  tool_use: toolUseArray,
+                  finish_reason,
+              })
+            : this.driver.buildStreamingConversation(this.prompt, accumulatedResults, toolUseArray, this.options);
         if (conversation !== undefined) {
             this.completion.conversation = conversation;
         }
@@ -360,26 +372,16 @@ export class FallbackCompletionStream<PromptT = unknown> implements CompletionSt
         );
         try {
             const completion = await this.driver._execute(this.prompt, this.options);
-            // For fallback streaming, yield the text content but keep the original completion
-            const content = completion.result
-                .map((r) => {
-                    switch (r.type) {
-                        case 'text':
-                            return r.value;
-                        case 'json':
-                            return JSON.stringify(r.value);
-                        case 'image': {
-                            const truncatedValue =
-                                typeof r.value === 'string' ? r.value.slice(0, 10) : String(r.value).slice(0, 10);
-                            return `[Image: ${truncatedValue}...]`;
-                        }
-                        default: {
-                            const _exhaustive: never = r;
-                            return String(_exhaustive);
-                        }
-                    }
-                })
-                .join('');
+            // For fallback streaming, yield the visible content while keeping the typed completion intact.
+            let previousResultType: CompletionResult['type'] | undefined;
+            let content = '';
+            for (const result of completion.result) {
+                if (previousResultType === 'thoughts' && result.type !== 'thoughts') {
+                    content += '\n';
+                }
+                content += completionResultToStreamText(result, false);
+                previousResultType = result.type;
+            }
             yield content;
             this.completion = completion; // Return the original completion with untouched CompletionResult[]
         } catch (error: unknown) {

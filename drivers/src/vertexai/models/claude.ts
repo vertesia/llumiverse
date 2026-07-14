@@ -1,7 +1,7 @@
 import {
     type AIModel,
     type Completion,
-    type CompletionChunkObject,
+    type DriverCompletionStream,
     type ExecutionOptions,
     type LlumiverseError,
     type LlumiverseErrorContext,
@@ -90,7 +90,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         driver: VertexAIDriver,
         prompt: ClaudePrompt,
         options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>> {
+    ): Promise<DriverCompletionStream> {
         const { region, options: resolvedOptions } = resolveVertexAIModelPath(options);
         const client = await driver.getAnthropicClient(region, resolvedOptions.httpTimeout);
         const model_options = resolvedOptions.model_options as VertexAIClaudeOptions | undefined;

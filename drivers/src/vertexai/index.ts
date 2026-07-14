@@ -4,8 +4,8 @@ import { PredictionServiceClient, v1beta1 } from '@google-cloud/aiplatform';
 import {
     type AIModel,
     type Completion,
-    type CompletionChunkObject,
     type CompletionResult,
+    type DriverCompletionStream,
     type DriverOptions,
     type EmbeddingsOptions,
     type EmbeddingsResult,
@@ -357,7 +357,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     async requestTextCompletionStream(
         prompt: VertexAIPrompt,
         options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>> {
+    ): Promise<DriverCompletionStream> {
         return getModelDefinition(options.model).requestTextCompletionStream(this, prompt, options);
     }
 
@@ -401,6 +401,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 switch (r.type) {
                     case 'text':
                         return r.value;
+                    case 'thoughts':
+                        return '';
                     case 'json':
                         return typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
                     case 'image':
@@ -502,6 +504,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 switch (r.type) {
                     case 'text':
                         return r.value;
+                    case 'thoughts':
+                        return '';
                     case 'json':
                         return typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
                     case 'image':
