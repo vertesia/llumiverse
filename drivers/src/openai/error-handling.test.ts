@@ -117,6 +117,92 @@ describe('OpenAIResponsesDriverBase prompt caching', () => {
         expect(create).toHaveBeenCalledWith(expect.objectContaining({ prompt_cache_key: 'document-prefix' }));
     });
 
+    it('places an explicit cache boundary before the changing final user message', async () => {
+        const driver = new TestOpenAIResponsesDriver();
+        const create = vi.fn().mockResolvedValue({
+            status: 'completed',
+            output: [
+                {
+                    type: 'message',
+                    role: 'assistant',
+                    content: [{ type: 'output_text', text: 'ok', annotations: [] }],
+                },
+            ],
+            usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+        });
+        driver.service = { responses: { create } } as unknown as OpenAI;
+        const prompt = [
+            { role: 'system' as const, content: 'review the extraction' },
+            {
+                role: 'user' as const,
+                content: [
+                    {
+                        type: 'input_image' as const,
+                        image_url: 'data:image/jpeg;base64,source',
+                        detail: 'auto' as const,
+                    },
+                    { type: 'input_text' as const, text: 'stable document blocks' },
+                ],
+            },
+            { role: 'user' as const, content: 'changing extraction JSON' },
+        ];
+
+        const completion = await driver.requestTextCompletion(prompt, {
+            model: 'gpt-5.6',
+            prompt_cache_key: 'document-prefix',
+        });
+
+        expect(create).toHaveBeenCalledWith(
+            expect.objectContaining({
+                prompt_cache_options: { mode: 'explicit' },
+                input: [
+                    prompt[0],
+                    {
+                        ...prompt[1],
+                        content: [
+                            {
+                                type: 'input_image',
+                                image_url: 'data:image/jpeg;base64,source',
+                                detail: 'auto',
+                            },
+                            {
+                                type: 'input_text',
+                                text: 'stable document blocks',
+                                prompt_cache_breakpoint: { mode: 'explicit' },
+                            },
+                        ],
+                    },
+                    prompt[2],
+                ],
+            }),
+        );
+        expect(prompt[1].content[1]).not.toHaveProperty('prompt_cache_breakpoint');
+        expect(JSON.stringify(completion.conversation)).not.toContain('prompt_cache_breakpoint');
+    });
+
+    it('keeps implicit caching when the prompt has no stable source and task split', async () => {
+        const driver = new TestOpenAIResponsesDriver();
+        const create = vi.fn().mockResolvedValue({
+            status: 'completed',
+            output: [
+                {
+                    type: 'message',
+                    role: 'assistant',
+                    content: [{ type: 'output_text', text: 'ok', annotations: [] }],
+                },
+            ],
+            usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+        });
+        driver.service = { responses: { create } } as unknown as OpenAI;
+
+        await driver.requestTextCompletion([{ role: 'user', content: 'single request' }], {
+            model: 'gpt-5.6',
+            prompt_cache_key: 'document-prefix',
+        });
+
+        expect(create).toHaveBeenCalledWith(expect.objectContaining({ prompt_cache_options: undefined }));
+    });
+
     it('does not duplicate schemas in the prompt when native structured output is supported', async () => {
         const driver = new TestOpenAIResponsesDriver();
         const create = vi.fn().mockResolvedValue({

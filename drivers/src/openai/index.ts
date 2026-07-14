@@ -69,6 +69,10 @@ type OpenAIFunctionItem = ResponseInputItem & {
     arguments?: string;
     output?: string;
 };
+type OpenAIPromptCacheConfig = {
+    input: ResponseInputItem[];
+    options?: OpenAI.Responses.ResponseCreateParams['prompt_cache_options'];
+};
 
 // Helper function to convert string to CompletionResult[]
 function textToCompletionResult(text: string): CompletionResult[] {
@@ -95,6 +99,53 @@ function openAIReasoning(effort: string | undefined): OpenAI.Responses.ResponseC
     }
     // Forward provider-native values unchanged so the provider can return an authoritative validation error.
     return { effort } as OpenAI.Responses.ResponseCreateParams['reasoning'];
+}
+
+function hasExplicitPromptCacheBreakpoint(item: ResponseInputItem): boolean {
+    if (!('content' in item) || !Array.isArray(item.content)) {
+        return false;
+    }
+    return item.content.some(
+        (content) => 'prompt_cache_breakpoint' in content && content.prompt_cache_breakpoint?.mode === 'explicit',
+    );
+}
+
+function configureOpenAIPromptCaching(
+    input: ResponseInputItem[],
+    model: string,
+    promptCacheKey: string | undefined,
+): OpenAIPromptCacheConfig {
+    if (!promptCacheKey || !model.toLowerCase().startsWith('gpt-5.6')) {
+        return { input };
+    }
+
+    if (input.some(hasExplicitPromptCacheBreakpoint)) {
+        return { input, options: { mode: 'explicit' } };
+    }
+
+    const userMessageIndexes = input.flatMap((item, index) => ('role' in item && item.role === 'user' ? [index] : []));
+    if (userMessageIndexes.length < 2) {
+        return { input };
+    }
+
+    const sourceIndex = userMessageIndexes.at(-2);
+    if (sourceIndex === undefined) {
+        return { input };
+    }
+    const source = input[sourceIndex] as EasyInputMessage;
+    const content =
+        typeof source.content === 'string'
+            ? [{ type: 'input_text' as const, text: source.content }]
+            : source.content.map((part) => ({ ...part }));
+    const lastContent = content.at(-1);
+    if (!lastContent) {
+        return { input };
+    }
+    lastContent.prompt_cache_breakpoint = { mode: 'explicit' };
+
+    const markedInput = [...input];
+    markedInput[sourceIndex] = { ...source, content };
+    return { input: markedInput, options: { mode: 'explicit' } };
 }
 
 //TODO: Do we need a list?, replace with if statements and modernize?
@@ -154,11 +205,17 @@ export class OpenAIResponsesProtocol {
         const isReasoningModel = isOpenAIReasoningModel(options.model);
         const reasoning = openAIReasoning(model_options?.effort ?? model_options?.reasoning_effort);
 
+        const promptCache = configureOpenAIPromptCaching(
+            conversation,
+            driver.getResponsesRequestModel(options.model),
+            options.prompt_cache_key,
+        );
         const stream = await driver.service.responses.create({
             stream: true,
             model: driver.getResponsesRequestModel(options.model),
             prompt_cache_key: options.prompt_cache_key,
-            input: conversation,
+            prompt_cache_options: promptCache.options,
+            input: promptCache.input,
             reasoning,
             temperature: isReasoningModel ? undefined : model_options?.temperature,
             top_p: isReasoningModel ? undefined : model_options?.top_p,
@@ -213,11 +270,17 @@ export class OpenAIResponsesProtocol {
         const isReasoningModel = isOpenAIReasoningModel(options.model);
         const reasoning = openAIReasoning(model_options?.effort ?? model_options?.reasoning_effort);
 
+        const promptCache = configureOpenAIPromptCaching(
+            conversation,
+            driver.getResponsesRequestModel(options.model),
+            options.prompt_cache_key,
+        );
         const res = await driver.service.responses.create({
             stream: false,
             model: driver.getResponsesRequestModel(options.model),
             prompt_cache_key: options.prompt_cache_key,
-            input: conversation,
+            prompt_cache_options: promptCache.options,
+            input: promptCache.input,
             reasoning,
             temperature: isReasoningModel ? undefined : model_options?.temperature,
             top_p: isReasoningModel ? undefined : model_options?.top_p,
