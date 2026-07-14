@@ -17,7 +17,7 @@ import { FinishReason } from '@google/genai';
 import { type DataSource, type ExecutionOptions, PromptRole, type PromptSegment } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
-import { convertGeminiFunctionPartsToText, GeminiModelDefinition } from './gemini.js';
+import { convertGeminiFunctionPartsToText, GeminiModelDefinition, getGeminiPayload } from './gemini.js';
 
 // ---------------------------------------------------------------------------
 // Pure function tests — no driver needed
@@ -91,6 +91,46 @@ describe('convertGeminiFunctionPartsToText', () => {
         const result = convertGeminiFunctionPartsToText(contents);
 
         expect(result[0].parts?.[0]).toBe(textPart);
+    });
+});
+
+describe('Gemini thinking configuration', () => {
+    const prompt = { contents: [{ role: 'user' as const, parts: [{ text: 'Hello' }] }] };
+
+    it('omits thinkingConfig when Gemini 2.5 Flash thinking is disabled by default', () => {
+        const payload = getGeminiPayload({ model: 'publishers/google/models/gemini-2.5-flash' }, prompt);
+
+        expect(payload.config?.thinkingConfig).toBeUndefined();
+    });
+
+    it('omits thinkingConfig when an explicit zero budget disables thinking', () => {
+        const payload = getGeminiPayload(
+            {
+                model: 'publishers/google/models/gemini-2.5-flash',
+                model_options: {
+                    _option_id: 'vertexai-gemini',
+                    thinking_budget_tokens: 0,
+                },
+            },
+            prompt,
+        );
+
+        expect(payload.config?.thinkingConfig).toBeUndefined();
+    });
+
+    it('includes thought summaries when Gemini thinking is enabled', () => {
+        const payload = getGeminiPayload(
+            {
+                model: 'publishers/google/models/gemini-2.5-flash',
+                model_options: {
+                    _option_id: 'vertexai-gemini',
+                    thinking_budget_tokens: 128,
+                },
+            },
+            prompt,
+        );
+
+        expect(payload.config?.thinkingConfig).toEqual({ includeThoughts: true, thinkingBudget: 128 });
     });
 });
 
