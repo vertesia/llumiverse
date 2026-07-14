@@ -461,6 +461,9 @@ function geminiThinkingConfig(option: StatelessExecutionOptions): ThinkingConfig
     // Always request thought summaries when thinking is active. The llumiverse
     // include_thoughts option controls only result projection, not native state.
     if (model_options?.thinking_budget_tokens !== undefined || model_options?.thinking_level) {
+        if (model_options.thinking_budget_tokens === 0 && !model_options.thinking_level) {
+            return undefined;
+        }
         return {
             includeThoughts: true,
             thinkingBudget: model_options.thinking_budget_tokens,
@@ -491,6 +494,10 @@ function geminiThinkingConfig(option: StatelessExecutionOptions): ThinkingConfig
     }
     if (isGeminiModelVersionGte(option.model, '2.5')) {
         const thinking_budget_tokens = geminiThinkingBudget(option) ?? 0;
+        // Vertex rejects includeThoughts when thinking is disabled with a zero budget.
+        if (thinking_budget_tokens === 0) {
+            return undefined;
+        }
         return {
             includeThoughts: true,
             thinkingBudget: thinking_budget_tokens,
