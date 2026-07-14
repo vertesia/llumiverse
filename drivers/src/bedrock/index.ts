@@ -1441,7 +1441,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
 
             const claudeOptions = model_options as unknown as BedrockClaudeOptions;
-            const cacheEnabled = claudeOptions?.cache_enabled === true;
+            const cacheEnabled = options.prompt_cache_key !== undefined || claudeOptions?.cache_enabled === true;
             if (cacheEnabled) {
                 const cacheTtl = claudeOptions?.cache_ttl;
                 const cachePointBlock = { type: 'default' as const, ...(cacheTtl && { ttl: cacheTtl }) };
@@ -1457,7 +1457,16 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     ];
                 }
 
-                if (request.messages && request.messages.length >= 4) {
+                if (options.prompt_cache_key !== undefined && request.messages && request.messages.length > 0) {
+                    const lastMessage = request.messages[request.messages.length - 1];
+                    if (lastMessage.content && lastMessage.content.length >= 2) {
+                        lastMessage.content = [
+                            ...lastMessage.content.slice(0, -1),
+                            { cachePoint: cachePointBlock },
+                            lastMessage.content[lastMessage.content.length - 1],
+                        ];
+                    }
+                } else if (request.messages && request.messages.length >= 4) {
                     const pivotMsg = request.messages[request.messages.length - 2];
                     if (pivotMsg.content && Array.isArray(pivotMsg.content) && pivotMsg.content.length > 0) {
                         pivotMsg.content = [...pivotMsg.content, { cachePoint: cachePointBlock }];

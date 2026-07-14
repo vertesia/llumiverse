@@ -333,12 +333,15 @@ export async function formatClaudePrompt(
         .filter((s) => s.role === PromptRole.system)
         .map((s) => ({ text: s.content, type: 'text' as const }));
 
+    let schemaText: string | undefined;
     if (options.result_schema) {
-        const schemaText =
+        schemaText =
             options.tools && options.tools.length > 0
                 ? `When not calling tools, the answer must be a JSON object using the following JSON Schema:\n${JSON.stringify(options.result_schema)}`
                 : `The answer must be a JSON object using the following JSON Schema:\n${JSON.stringify(options.result_schema)}`;
-        system.push({ text: schemaText, type: 'text' as const });
+        if (options.prompt_cache_key === undefined) {
+            system.push({ text: schemaText, type: 'text' as const });
+        }
     }
 
     let messages: MessageParam[] = [];
@@ -384,6 +387,18 @@ export async function formatClaudePrompt(
             } else {
                 messages.push(messageParam);
             }
+        }
+    }
+
+    if (schemaText && options.prompt_cache_key !== undefined) {
+        const taskMessage = messages[messages.length - 1];
+        const taskBlock = Array.isArray(taskMessage?.content)
+            ? taskMessage.content[taskMessage.content.length - 1]
+            : undefined;
+        if (taskBlock?.type === 'text') {
+            taskBlock.text = `${taskBlock.text}\n\n${schemaText}`;
+        } else {
+            system.push({ text: schemaText, type: 'text' as const });
         }
     }
 
@@ -719,7 +734,7 @@ export function getClaudePayload(
         ? stripClaudeCacheControlFromTools(options.tools as MessageCreateParamsBase['tools'])
         : undefined;
 
-    const cacheEnabled = model_options?.cache_enabled === true;
+    const cacheEnabled = options.prompt_cache_key !== undefined || model_options?.cache_enabled === true;
     if (cacheEnabled) {
         const cacheTtl = model_options?.cache_ttl as '5m' | '1h' | undefined;
         const cacheControl = { type: 'ephemeral' as const, ...(cacheTtl && { ttl: cacheTtl }) };
@@ -734,7 +749,21 @@ export function getClaudePayload(
             const lastTool = sanitizedTools[sanitizedTools.length - 1] as ClaudeTool & { cache_control?: unknown };
             lastTool.cache_control = cacheControl;
         }
-        if (sanitizedMessages.length >= 4) {
+        if (options.prompt_cache_key !== undefined) {
+            const lastMessage = sanitizedMessages[sanitizedMessages.length - 1];
+            if (lastMessage && Array.isArray(lastMessage.content) && lastMessage.content.length >= 2) {
+                const stablePrefixBlock = lastMessage.content[lastMessage.content.length - 2];
+                if (
+                    typeof stablePrefixBlock === 'object' &&
+                    stablePrefixBlock !== null &&
+                    'type' in stablePrefixBlock &&
+                    stablePrefixBlock.type !== 'thinking' &&
+                    stablePrefixBlock.type !== 'redacted_thinking'
+                ) {
+                    stablePrefixBlock.cache_control = cacheControl;
+                }
+            }
+        } else if (sanitizedMessages.length >= 4) {
             const pivotMsg = sanitizedMessages[sanitizedMessages.length - 2];
             if (Array.isArray(pivotMsg.content) && pivotMsg.content.length > 0) {
                 const lastBlock = pivotMsg.content[pivotMsg.content.length - 1];
