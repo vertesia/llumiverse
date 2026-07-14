@@ -9,14 +9,19 @@ import type {
     ModelSearchPayload,
 } from '@llumiverse/common';
 import { describe, expect, it } from 'vitest';
-import { DefaultCompletionStream } from './CompletionStream.js';
+import { DefaultCompletionStream, FallbackCompletionStream } from './CompletionStream.js';
 import { AbstractDriver } from './Driver.js';
 
 class ThoughtsStreamDriver extends AbstractDriver<DriverOptions, string> {
     provider = 'test';
 
     async requestTextCompletion(): Promise<Completion> {
-        throw new Error('not used');
+        return {
+            result: [
+                { type: 'thoughts', value: 'reason-fallback' },
+                { type: 'text', value: 'answer-fallback' },
+            ],
+        };
     }
 
     async requestTextCompletionStream(prompt: string): Promise<DriverCompletionStream> {
@@ -45,19 +50,33 @@ class ThoughtsStreamDriver extends AbstractDriver<DriverOptions, string> {
 }
 
 describe('DefaultCompletionStream thoughts', () => {
-    it('keeps the public string stream answer-only while exposing typed thoughts', async () => {
+    it('streams visible thoughts before the answer while preserving typed results', async () => {
         const driver = new ThoughtsStreamDriver({});
         const stream = new DefaultCompletionStream(driver, 'one', { model: 'test' });
 
         const visible: string[] = [];
         for await (const chunk of stream) visible.push(chunk);
 
-        expect(visible).toEqual(['answer-one']);
+        expect(visible).toEqual(['reason-one', '\nanswer-one']);
         expect(stream.completion?.result).toEqual([
             { type: 'thoughts', value: 'reason-one' },
             { type: 'text', value: 'answer-one' },
         ]);
         expect(stream.completion?.conversation).toEqual({ role: 'assistant', id: 'one' });
+    });
+
+    it('separates thoughts from the answer in the fallback string stream', async () => {
+        const driver = new ThoughtsStreamDriver({});
+        const stream = new FallbackCompletionStream(driver, 'fallback', { model: 'test' });
+
+        const visible: string[] = [];
+        for await (const chunk of stream) visible.push(chunk);
+
+        expect(visible).toEqual(['reason-fallback\nanswer-fallback']);
+        expect(stream.completion?.result).toEqual([
+            { type: 'thoughts', value: 'reason-fallback' },
+            { type: 'text', value: 'answer-fallback' },
+        ]);
     });
 
     it('isolates native finalizers across concurrent streams', async () => {

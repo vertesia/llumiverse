@@ -208,6 +208,8 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
                                     switch (r.type) {
                                         case 'text':
                                             return r.value;
+                                        case 'thoughts':
+                                            return '';
                                         case 'json':
                                             return JSON.stringify(r.value);
                                         case 'image': {
@@ -361,8 +363,10 @@ export class FallbackCompletionStream<PromptT = unknown> implements CompletionSt
             const content = completion.result
                 .map((r) => {
                     switch (r.type) {
-                        case 'text':
-                            return r.value;
+                    case 'text':
+                        return r.value;
+                    case 'thoughts':
+                        return '';
                         case 'json':
                             return JSON.stringify(r.value);
                         case 'image': {

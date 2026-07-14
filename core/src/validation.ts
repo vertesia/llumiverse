@@ -107,5 +107,20 @@ export function validateResult(data: CompletionResult[], schema: object): Comple
         }
     }
 
-    return [{ type: 'json', value: json }];
+    // Structured-output validation applies only to response content. Thoughts are
+    // separate first-class results and must remain available to callers.
+    const validatedResult: CompletionResult = { type: 'json', value: json };
+    const firstContentIndex = data.findIndex((part) => part.type !== 'thoughts');
+    if (firstContentIndex === -1) {
+        return [validatedResult];
+    }
+
+    return data.reduce<CompletionResult[]>((results, part, index) => {
+        if (part.type === 'thoughts') {
+            results.push(part);
+        } else if (index === firstContentIndex) {
+            results.push(validatedResult);
+        }
+        return results;
+    }, []);
 }
