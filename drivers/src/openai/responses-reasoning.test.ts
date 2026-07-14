@@ -157,4 +157,42 @@ describe('OpenAI Responses reasoning', () => {
         ]);
         expect(JSON.stringify(conversation)).toContain('encrypted-replay-state');
     });
+
+    it.each([false, true])('forwards OpenAI prompt cache controls when stream=%s', async (streaming) => {
+        const create = vi.fn(async (request: unknown) =>
+            (request as { stream?: boolean }).stream
+                ? (async function* () {
+                      yield { type: 'response.completed', sequence_number: 1, response: response() };
+                  })()
+                : response(),
+        );
+        const driver = new TestResponsesDriver(create);
+        const options = {
+            model: 'gpt-5',
+            model_options: {
+                _option_id: 'openai-thinking' as const,
+                prompt_cache_key: 'agent-cache-key',
+                prompt_cache_retention: '24h' as const,
+            },
+        };
+
+        if (streaming) {
+            const stream = await driver.requestTextCompletionStream(
+                [{ type: 'message', role: 'user', content: 'question' }],
+                options,
+            );
+            for await (const _chunk of stream) {
+                // Consume the provider stream.
+            }
+        } else {
+            await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], options);
+        }
+
+        expect(create).toHaveBeenCalledWith(
+            expect.objectContaining({
+                prompt_cache_key: 'agent-cache-key',
+                prompt_cache_retention: '24h',
+            }),
+        );
+    });
 });

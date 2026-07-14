@@ -340,6 +340,51 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
         });
     });
 
+    it('does not merge a signed streamed Part into an unsigned Part', async () => {
+        const modelDef = new GeminiModelDefinition('gemini-3-flash');
+        const driver = makeDriver({
+            generateContentStream: async () =>
+                (async function* () {
+                    yield {
+                        candidates: [{ content: { role: 'model', parts: [{ text: 'first ', thought: true }] } }],
+                    };
+                    yield {
+                        candidates: [
+                            {
+                                finishReason: FinishReason.STOP,
+                                content: {
+                                    role: 'model',
+                                    parts: [{ text: 'second', thought: true, thoughtSignature: 'signed-second' }],
+                                },
+                            },
+                        ],
+                    };
+                })(),
+        });
+
+        const stream = await modelDef.requestTextCompletionStream(
+            driver,
+            { contents: [{ role: 'user', parts: [{ text: 'question' }] }] },
+            { model: 'publishers/google/models/gemini-3-flash' },
+        );
+        for await (const _chunk of stream) {
+            // Consume the stream so native finalization has all Parts.
+        }
+        const conversation = await stream.finalizeConversation?.({ result: [] });
+
+        expect(conversation).toMatchObject({
+            _arrayConversation: expect.arrayContaining([
+                {
+                    role: 'model',
+                    parts: [
+                        { text: 'first ', thought: true },
+                        { text: 'second', thought: true, thoughtSignature: 'signed-second' },
+                    ],
+                },
+            ]),
+        });
+    });
+
     it('createPrompt uses DataSource URIs directly for Gemini file data', async () => {
         const modelDef = new GeminiModelDefinition('gemini-2.0-flash');
         const file: DataSource = {

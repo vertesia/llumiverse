@@ -33,6 +33,11 @@ export interface StripOptions {
     /** Native protocol unit that generic cleanup must not modify. */
     preserveSubtree?: (value: unknown) => boolean;
     /**
+     * Provider hook for native protocol units that must remain byte-for-byte unchanged.
+     * When true, generic media, text, and heartbeat cleanup does not descend into the value.
+     */
+    preserveSubtree?: (value: unknown) => boolean;
+    /**
      * Number of turns to keep images before stripping.
      * - Infinity or undefined: Never strip (default — callers must opt in)
      * - 0: Strip immediately
