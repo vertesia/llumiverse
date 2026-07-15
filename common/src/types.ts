@@ -615,6 +615,12 @@ export interface PromptOptions {
      */
     format?: PromptFormatter;
     result_schema?: JSONSchema;
+    /**
+     * Provider-specific opt-in to put the result schema after the cached prompt
+     * prefix instead of including it in native structured-output configuration.
+     * The returned JSON is still validated against result_schema by Llumiverse.
+     */
+    prompt_cache_schema_suffix?: boolean;
 }
 
 export interface StatelessExecutionOptions extends PromptOptions {

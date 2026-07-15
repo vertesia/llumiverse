@@ -203,6 +203,134 @@ describe('OpenAIResponsesDriverBase prompt caching', () => {
         expect(create).toHaveBeenCalledWith(expect.objectContaining({ prompt_cache_options: undefined }));
     });
 
+    it('puts a cacheable schema after the document boundary and uses JSON object mode', async () => {
+        const driver = new TestOpenAIResponsesDriver();
+        const create = vi.fn().mockResolvedValue({
+            status: 'completed',
+            output: [
+                {
+                    type: 'message',
+                    role: 'assistant',
+                    content: [{ type: 'output_text', text: '{"value":"ok"}', annotations: [] }],
+                },
+            ],
+            usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+        });
+        driver.service = { responses: { create } } as unknown as OpenAI;
+        const resultSchema = { type: 'object' as const, properties: { value: { type: 'string' as const } } };
+        const prompt = [
+            { role: 'system' as const, content: 'process the document' },
+            {
+                role: 'user' as const,
+                content: [
+                    {
+                        type: 'input_image' as const,
+                        image_url: 'data:image/jpeg;base64,source',
+                        detail: 'auto' as const,
+                    },
+                    { type: 'input_text' as const, text: 'stable document blocks' },
+                ],
+            },
+            { role: 'user' as const, content: 'phase-specific task' },
+            {
+                role: 'user' as const,
+                content: [
+                    {
+                        type: 'input_text' as const,
+                        text: `IMPORTANT: only answer using JSON. <response_schema>${JSON.stringify(resultSchema)}</response_schema>`,
+                    },
+                ],
+            },
+        ];
+
+        await driver.requestTextCompletion(prompt, {
+            model: 'gpt-5.6',
+            prompt_cache_key: 'document-prefix',
+            prompt_cache_schema_suffix: true,
+            result_schema: resultSchema,
+        });
+
+        expect(create).toHaveBeenCalledWith(
+            expect.objectContaining({
+                prompt_cache_options: { mode: 'explicit' },
+                input: [
+                    prompt[0],
+                    {
+                        ...prompt[1],
+                        content: [
+                            {
+                                type: 'input_image',
+                                image_url: 'data:image/jpeg;base64,source',
+                                detail: 'auto',
+                            },
+                            {
+                                type: 'input_text',
+                                text: 'stable document blocks',
+                                prompt_cache_breakpoint: { mode: 'explicit' },
+                            },
+                        ],
+                    },
+                    prompt[2],
+                    prompt[3],
+                ],
+                text: { format: { type: 'json_object' } },
+            }),
+        );
+    });
+
+    it('renders a cacheable result schema as the final prompt message', async () => {
+        const driver = new TestOpenAIResponsesDriver();
+        const prompt = await driver.createPrompt(
+            [
+                { role: PromptRole.system, content: 'system' },
+                { role: PromptRole.user, content: 'stable source' },
+                { role: PromptRole.user, content: 'dynamic task' },
+            ],
+            {
+                model: 'gpt-5.6',
+                prompt_cache_schema_suffix: true,
+                result_schema: { type: 'object', properties: { value: { type: 'string' } } },
+            },
+        );
+
+        expect(prompt).toHaveLength(4);
+        expect(prompt[3]).toMatchObject({ role: 'user' });
+        expect(JSON.stringify(prompt[3])).toContain('<response_schema>');
+    });
+
+    it('validates JSON object mode output against the result schema', async () => {
+        const driver = new TestOpenAIResponsesDriver();
+        const create = vi.fn().mockResolvedValue({
+            status: 'completed',
+            output: [
+                {
+                    type: 'message',
+                    role: 'assistant',
+                    content: [{ type: 'output_text', text: '{"unexpected":"value"}', annotations: [] }],
+                },
+            ],
+            usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+        });
+        driver.service = { responses: { create } } as unknown as OpenAI;
+
+        const completion = await driver.execute([{ role: PromptRole.user, content: 'Return the requested data.' }], {
+            model: 'gpt-5.6',
+            prompt_cache_schema_suffix: true,
+            result_schema: {
+                type: 'object',
+                properties: { value: { type: 'string' } },
+                required: ['value'],
+                additionalProperties: false,
+            },
+        });
+
+        expect(create).toHaveBeenCalledWith(expect.objectContaining({ text: { format: { type: 'json_object' } } }));
+        expect(completion.error).toMatchObject({
+            code: 'validation_error',
+            message: expect.stringContaining("must have required property 'value'"),
+        });
+    });
+
     it('does not duplicate schemas in the prompt when native structured output is supported', async () => {
         const driver = new TestOpenAIResponsesDriver();
         const create = vi.fn().mockResolvedValue({
