@@ -19,7 +19,7 @@ minimumReleaseAgeExclude:
   # Additional excludes, due to CVEs etc.
   # Nothing for now
 catalog:
-  "@types/node": "^24.13.2"
+  "@types/node": "^24.13.3"
   google-auth-library: "^10.9.0"
 overrides:
   # ============================
