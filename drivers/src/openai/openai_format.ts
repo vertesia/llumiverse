@@ -181,9 +181,10 @@ export async function formatOpenAILikeMultimodalPrompt(
     }
 
     if (opts.result_schema && !opts.useToolForFormatting) {
+        const schemaPosition = opts.resultSchemaPosition ?? 'system';
         const schemaMsg: EasyInputMessage = {
             type: 'message',
-            role: 'system',
+            role: schemaPosition === 'suffix' ? 'user' : 'system',
             content: [
                 {
                     type: 'input_text',
@@ -191,7 +192,11 @@ export async function formatOpenAILikeMultimodalPrompt(
                 },
             ],
         };
-        system.push(schemaMsg);
+        if (schemaPosition === 'suffix') {
+            others.push(schemaMsg);
+        } else {
+            system.push(schemaMsg);
+        }
     }
 
     // put system messages first and safety last
@@ -202,6 +207,7 @@ export interface OpenAIPromptFormatterOptions {
     multimodal?: boolean;
     useToolForFormatting?: boolean;
     schema?: object;
+    resultSchemaPosition?: 'system' | 'suffix';
 }
 
 // Chat Completions API types
