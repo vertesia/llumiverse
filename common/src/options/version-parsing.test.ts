@@ -5,6 +5,7 @@ import {
     getOpenAIReasoningEffortLevels,
     isClaudeVersionGTE,
     isGeminiModelVersionGte,
+    isModelFamilyVersionGTE,
     isOpenAIGptVersionGTE,
     parseClaudeVersion,
     parseOpenAIGptVersion,
@@ -17,6 +18,7 @@ describe('Claude model version parsing', () => {
         ['claude-sonnet-5', { major: 5, minor: 0, variant: 'sonnet' }],
         ['claude-fable-5-20260701', { major: 5, minor: 0, variant: 'fable' }],
         ['publishers/anthropic/models/claude-mythos-5@20260701', { major: 5, minor: 0, variant: 'mythos' }],
+        ['claude-mythos-preview', { major: 5, minor: 0, variant: 'mythos' }],
         ['us.anthropic.claude-opus-4-8-v1:0', { major: 4, minor: 8, variant: 'opus' }],
         ['claude-3-7-sonnet-20250219', { major: 3, minor: 7, variant: 'sonnet' }],
     ] as const)('parses %s', (model, expected) => {
@@ -27,6 +29,10 @@ describe('Claude model version parsing', () => {
         expect(isClaudeVersionGTE('claude-sonnet-5', 4, 7)).toBe(true);
         expect(isClaudeVersionGTE('claude-opus-4-10', 4, 8)).toBe(true);
         expect(isClaudeVersionGTE('claude-sonnet-4-6', 4, 7)).toBe(false);
+    });
+
+    it('does not infer behavior for an unknown Claude family', () => {
+        expect(parseClaudeVersion('claude-unknown-5')).toBeNull();
     });
 
     it.each([
@@ -53,6 +59,7 @@ describe('OpenAI GPT model version parsing', () => {
         ['gpt-5.6-sol', { major: 5, minor: 6 }],
         ['models/gpt-5.4-2026-03-05', { major: 5, minor: 4 }],
         ['gpt-5.7-pro-20270101', { major: 5, minor: 7 }],
+        ['us.openai.gpt-5.6-sol-v1:0', { major: 5, minor: 6 }],
         ['gpt-6', { major: 6, minor: 0 }],
     ] as const)('parses %s', (model, expected) => {
         expect(parseOpenAIGptVersion(model)).toEqual(expected);
@@ -82,6 +89,14 @@ describe('OpenAI GPT model version parsing', () => {
         ['gpt-5.4-pro', { Medium: 'medium', 'High (default)': 'high', 'Extra High': 'xhigh' }],
     ] as const)('advertises documented effort levels for %s', (model, expected) => {
         expect(getOpenAIReasoningEffortLevels(model)).toEqual(expected);
+    });
+});
+
+describe('generic model-family version parsing', () => {
+    it('matches provider-qualified current and future versions', () => {
+        expect(isModelFamilyVersionGTE('us.openai.gpt-5.6-sol-v1:0', 'openai.gpt-', 5, 4)).toBe(true);
+        expect(isModelFamilyVersionGTE('xai.grok-4.10', 'grok-', 4, 3)).toBe(true);
+        expect(isModelFamilyVersionGTE('deepseek.v3.2', 'deepseek.v', 3, 2)).toBe(true);
     });
 });
 

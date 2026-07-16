@@ -6,6 +6,7 @@ describe('Claude context window limits', () => {
         'claude-sonnet-5',
         'claude-fable-5',
         'claude-mythos-5',
+        'claude-mythos-preview',
         'claude-sonnet-5-20260701',
         'publishers/anthropic/models/claude-sonnet-5@20260701',
         'us.anthropic.claude-sonnet-5-v1:0',
@@ -37,6 +38,11 @@ describe('OpenAI context window limits', () => {
     ])('uses current and future GPT-5 context limits for %s', (model) => {
         expect(getMaxOutputTokens(model)).toBe(128_000);
         expect(getContextWindowSize(model)).toBe(1_050_000);
+    });
+
+    it('recognizes provider-qualified GPT versions', () => {
+        expect(getMaxOutputTokens('us.openai.gpt-5.6-sol-v1:0')).toBe(128_000);
+        expect(getContextWindowSize('us.openai.gpt-5.6-sol-v1:0')).toBe(1_050_000);
     });
 
     it('preserves the larger GPT-5 Pro output limit and o-series limits', () => {
