@@ -45,6 +45,7 @@ describe('Bedrock native reasoning replay', () => {
             { model: MODEL, conversation: persisted },
         );
         const replay = converse.mock.calls[1][0] as ConverseRequest;
+        expect(replay.messages?.[0]?.content?.[0]?.text).toBe('question');
         expect(replay.messages).toContainEqual(response.output?.message);
         expect(replay.messages?.[1]?.content?.[1].reasoningContent?.redactedContent).toEqual(redacted);
     });
@@ -121,6 +122,37 @@ describe('Bedrock native reasoning replay', () => {
                 toolUse: expect.objectContaining({ toolUseId: 'call-truncated' }),
             }),
         );
+    });
+
+    it('applies caller stripping to unsigned reasoning without modifying the reasoning block', async () => {
+        const reasoningContent = { reasoningText: { text: 'unsigned reasoning text' } };
+        const response: ConverseResponse = {
+            output: {
+                message: {
+                    role: 'assistant',
+                    content: [{ reasoningContent }, { text: 'answer' }],
+                },
+            },
+            stopReason: 'end_turn',
+            usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 },
+            metrics: { latencyMs: 1 },
+        };
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        Object.defineProperty(driver, 'getExecutor', {
+            value: () => ({ converse: vi.fn(async () => response), destroy: vi.fn() }),
+        });
+
+        const result = await driver.requestTextCompletion(
+            {
+                modelId: MODEL,
+                messages: [{ role: 'user', content: [{ text: 'a deliberately long prior message' }] }],
+            },
+            { model: MODEL, stripTextMaxTokens: 1 },
+        );
+        const conversation = result.conversation as ConverseRequest;
+
+        expect(conversation.messages?.[0]?.content?.[0]?.text).toContain('[Content truncated');
+        expect(conversation.messages?.at(-1)?.content?.[0]).toEqual({ reasoningContent });
     });
 
     it('keeps the DeepSeek replay exclusion narrow', () => {

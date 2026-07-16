@@ -134,9 +134,17 @@ export function excludesBedrockReasoningReplay(model: string): boolean {
     return /^(?:(?:us|eu|apac)\.)?deepseek\.r1-v1(?::\d+)?$/.test(modelId);
 }
 
-function hasBedrockReasoningContent(conversation: ConverseRequest): boolean {
+function isBedrockReasoningBlock(value: unknown): boolean {
+    return typeof value === 'object' && value !== null && 'reasoningContent' in value;
+}
+
+function hasBedrockReasoningSignature(conversation: ConverseRequest): boolean {
     return !!conversation.messages?.some((message) =>
-        message.content?.some((block) => 'reasoningContent' in block && !!block.reasoningContent),
+        message.content?.some(
+            (block) =>
+                block.reasoningContent?.reasoningText?.signature !== undefined &&
+                block.reasoningContent.reasoningText.signature.length > 0,
+        ),
     );
 }
 
@@ -158,7 +166,9 @@ function finalizeBedrockConversation(
     completed = incrementConversationTurn(completed) as ConverseRequest;
     const currentTurn = getConversationMeta(completed).turnNumber;
 
-    if (hasBedrockReasoningContent(completed)) {
+    // Bedrock signatures hash every prior message. Applying any caller cleanup to a signed
+    // chain makes the next Converse request fail, so only storage-safe serialization is valid.
+    if (hasBedrockReasoningSignature(completed)) {
         return stripBinaryFromConversation(completed, {
             keepForTurns: Infinity,
             currentTurn,
@@ -169,6 +179,7 @@ function finalizeBedrockConversation(
         keepForTurns: options.stripImagesAfterTurns ?? Infinity,
         currentTurn,
         textMaxTokens: options.stripTextMaxTokens,
+        preserveSubtree: isBedrockReasoningBlock,
     };
     let processed = stripBinaryFromConversation(completed, stripOptions);
     processed = truncateLargeTextInConversation(processed, stripOptions);
