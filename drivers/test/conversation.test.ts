@@ -192,7 +192,7 @@ function getTextOptions(model: string): ExecutionOptions {
               }
             : {
                   _option_id: 'text-fallback',
-                  max_tokens: 256,
+                  max_tokens: 1000,
                   temperature: 0.3,
               },
     };
@@ -506,8 +506,8 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)(
             const result1 = await driver.execute(prompt1, options);
             expect(result1.result.length).toBeGreaterThan(0);
             const text1 = result1.result.map(completionResultToString).join('').toLowerCase();
-            expect(text1).toMatch(/google/);
-            expect(text1).toMatch(/github/);
+            expect(text1).toContain('google');
+            expect(text1).toContain('github');
             expect(result1.conversation).toBeDefined();
 
             // Critical test: Verify conversation with multiple images is serializable
