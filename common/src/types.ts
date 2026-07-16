@@ -707,7 +707,7 @@ export enum OptionType {
     string_list = 'string_list',
 }
 
-export type ReasoningEffort = 'low' | 'medium' | 'high';
+export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 // ============== Model Options ===============
 

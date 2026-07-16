@@ -1,8 +1,8 @@
 /**
- * Version parsing utilities for Claude and Gemini models.
+ * Version parsing utilities for Claude, OpenAI, and Gemini models.
  *
  * Provides version detection helpers that are forward-compatible with future
- * model releases (e.g., Haiku 4.7, Sonnet 4.7, Opus 4.8, Opus 5).
+ * model releases (e.g., Fable 5, Mythos 5, GPT-5.6, and Gemini 3.5).
  *
  * These helpers are used to:
  * - Control option visibility in the UI
@@ -24,8 +24,8 @@ export interface ClaudeVersion {
     major: number;
     /** Minor version number (e.g., 5, 6, 7) */
     minor: number;
-    /** Model variant: opus, sonnet, or haiku */
-    variant: 'opus' | 'sonnet' | 'haiku';
+    /** Model family, for example opus, sonnet, haiku, fable, or mythos. */
+    variant: string;
 }
 
 /**
@@ -43,9 +43,9 @@ export interface ClaudeVersion {
 export function parseClaudeVersion(modelString: string): ClaudeVersion | null {
     // Match pattern: claude-[variant-]-{major}-[optional minor]
     // The minor version is limited to 1-2 digits to avoid matching dates (YYYYMMDD format)
-    const match = modelString.match(/claude-(opus|sonnet|haiku)-?(\d+)(?:-(\d{1,2}))?(?:-|\b)/i);
+    const match = modelString.match(/claude-([a-z][a-z0-9]*)-?(\d+)(?:-(\d{1,2}))?(?:-|\b)/i);
     if (match) {
-        const variant = match[1].toLowerCase() as 'opus' | 'sonnet' | 'haiku';
+        const variant = match[1].toLowerCase();
         const major = parseInt(match[2], 10);
         const minor = match[3] ? parseInt(match[3], 10) : 0;
         return { major, minor, variant };
@@ -56,7 +56,7 @@ export function parseClaudeVersion(modelString: string): ClaudeVersion | null {
     if (fallbackMatch) {
         const major = parseInt(fallbackMatch[1], 10);
         const minor = parseInt(fallbackMatch[2], 10);
-        const variant = fallbackMatch[3].toLowerCase() as 'opus' | 'sonnet' | 'haiku';
+        const variant = fallbackMatch[3].toLowerCase();
         return { major, minor, variant };
     }
 
@@ -89,7 +89,7 @@ export function isClaudeVersionGTE(modelString: string, targetMajor: number, tar
  * Check if a Claude variant model version is greater than or equal to a target version.
  *
  * @param modelString - The model identifier string
- * @param variant - Model variant: "opus" or "sonnet"
+ * @param variant - Model family: "opus" or "sonnet"
  * @param targetMajor - Target major version
  * @param targetMinor - Target minor version
  * @returns true if the model matches the variant and version >= target
@@ -104,6 +104,10 @@ function isClaudeVariantVersionGTE(
     if (!version) return false;
     if (version.variant.toLowerCase() !== variant) return false;
     return version.major > targetMajor || (version.major === targetMajor && version.minor >= targetMinor);
+}
+
+function isClaudeMythosPreview(modelString: string): boolean {
+    return /(?:^|[./])claude-mythos-preview(?:$|[-:@])/i.test(modelString);
 }
 
 /**
@@ -148,7 +152,12 @@ export function requiresAdaptiveThinking(modelString: string): boolean {
  * @returns true if the model supports adaptive thinking
  */
 export function supportsAdaptiveThinking(modelString: string): boolean {
-    return requiresAdaptiveThinking(modelString) || isClaudeVariantVersionGTE(modelString, 'sonnet', 4, 6);
+    return (
+        hasSamplingParameterRestriction(modelString) ||
+        requiresAdaptiveThinking(modelString) ||
+        isClaudeVariantVersionGTE(modelString, 'sonnet', 4, 6) ||
+        isClaudeMythosPreview(modelString)
+    );
 }
 
 /**
@@ -176,7 +185,7 @@ export function isExtendedThinkingDeprecated(modelString: string): boolean {
  * @returns true if extended thinking is removed (returns 400 error)
  */
 export function requiresAdaptiveThinkingOnly(modelString: string): boolean {
-    return hasSamplingParameterRestriction(modelString);
+    return hasSamplingParameterRestriction(modelString) || isClaudeMythosPreview(modelString);
 }
 
 /**
@@ -235,6 +244,9 @@ export function supportsEffort(modelString: string): boolean {
     if (hasSamplingParameterRestriction(modelString)) {
         return true;
     }
+    if (isClaudeMythosPreview(modelString)) {
+        return true;
+    }
     // Opus 4.5+ supports effort
     if (isClaudeVariantVersionGTE(modelString, 'opus', 4, 5)) {
         return true;
@@ -249,13 +261,70 @@ export function supportsEffort(modelString: string): boolean {
 /**
  * Check if a model supports the xhigh effort level.
  *
- * xhigh is only available on Opus 4.7+.
+ * xhigh is available on the sampling-restricted Claude generation and Mythos Preview.
  *
  * @param modelString - The model identifier string
  * @returns true if the model supports xhigh effort
  */
 export function supportsXHighEffort(modelString: string): boolean {
-    return isClaudeVariantVersionGTE(modelString, 'opus', 4, 7);
+    return hasSamplingParameterRestriction(modelString) || isClaudeMythosPreview(modelString);
+}
+
+// ============================================================================
+// OpenAI GPT Version Parsing
+// ============================================================================
+
+export interface OpenAIGptVersion {
+    major: number;
+    minor: number;
+}
+
+/** Parse GPT family versions from bare IDs, snapshots, or provider-qualified paths. */
+export function parseOpenAIGptVersion(modelString: string): OpenAIGptVersion | null {
+    const modelName = modelString.toLowerCase().split('/').pop() ?? modelString.toLowerCase();
+    const match = modelName.match(/^gpt-(\d+)(?:\.(\d+))?(?:-|$)/);
+    if (!match) return null;
+    return { major: Number(match[1]), minor: Number(match[2] ?? '0') };
+}
+
+export function isOpenAIGptVersionGTE(modelString: string, targetMajor: number, targetMinor: number): boolean {
+    const version = parseOpenAIGptVersion(modelString);
+    if (!version) return false;
+    return version.major > targetMajor || (version.major === targetMajor && version.minor >= targetMinor);
+}
+
+export function isOpenAIGptProModel(modelString: string): boolean {
+    const modelName = modelString.toLowerCase().split('/').pop() ?? modelString.toLowerCase();
+    return /^gpt-\d+(?:\.\d+)?-pro(?:-|$)/.test(modelName);
+}
+
+/** Current reasoning-effort metadata, expressed with version thresholds for future GPT releases. */
+export function getOpenAIReasoningEffortLevels(modelString: string): Record<string, string> | null {
+    if (!isOpenAIGptVersionGTE(modelString, 5, 0)) return null;
+
+    if (isOpenAIGptProModel(modelString)) {
+        if (isOpenAIGptVersionGTE(modelString, 5, 2)) {
+            return { Medium: 'medium', 'High (default)': 'high', 'Extra High': 'xhigh' };
+        }
+        return { 'High (only)': 'high' };
+    }
+    if (isOpenAIGptVersionGTE(modelString, 5, 6)) {
+        return {
+            None: 'none',
+            Low: 'low',
+            Medium: 'medium',
+            High: 'high',
+            'Extra High': 'xhigh',
+            Max: 'max',
+        };
+    }
+    if (isOpenAIGptVersionGTE(modelString, 5, 2)) {
+        return { None: 'none', Low: 'low', Medium: 'medium', High: 'high', 'Extra High': 'xhigh' };
+    }
+    if (isOpenAIGptVersionGTE(modelString, 5, 1)) {
+        return { None: 'none', Low: 'low', Medium: 'medium', High: 'high' };
+    }
+    return { Minimal: 'minimal', Low: 'low', Medium: 'medium', High: 'high' };
 }
 
 /**
