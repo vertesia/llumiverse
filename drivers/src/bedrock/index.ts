@@ -67,6 +67,7 @@ import { AbstractDriver } from '@llumiverse/core/driver';
 import { formatNovaPrompt, type NovaMessagesPrompt } from '@llumiverse/core/formatters';
 import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
 import { LRUCache } from 'mnemonist';
+import { logClaudeTruncation } from '../shared/claude-messages.js';
 import { resolveClaudeThinking } from '../shared/claude-thinking.js';
 import { truncateBinaryForDebug, uint8ArrayToBase64ForDebug } from '../shared/debug-prompt.js';
 import {
@@ -741,6 +742,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         let resultText = '';
         let reasoning = '';
 
+        if (options?.model.toLowerCase().includes('claude')) {
+            logClaudeTruncation(this.logger, result.stopReason, { provider: this.provider, model: options.model });
+        }
+
         if (result.output?.message?.content) {
             for (const content of result.output.message.content) {
                 // Get text output
@@ -892,6 +897,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         if (result.messageStop) {
             stop_reason = result.messageStop.stopReason ?? '';
+            if (options?.model.toLowerCase().includes('claude')) {
+                logClaudeTruncation(this.logger, stop_reason, { provider: this.provider, model: options.model });
+            }
         }
 
         if (result.metadata) {

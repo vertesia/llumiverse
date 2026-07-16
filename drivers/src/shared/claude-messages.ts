@@ -49,6 +49,7 @@ import {
     type JSONObject,
     LlumiverseError,
     type LlumiverseErrorContext,
+    type Logger,
     PromptRole,
     type PromptSegment,
     readStreamAsBase64,
@@ -198,6 +199,29 @@ export function claudeFinishReason(reason: string | undefined): string | undefin
             return 'length';
         default:
             return reason; // stop_sequence, tool_use
+    }
+}
+
+/**
+ * Keep Claude's provider-native truncation reason visible after both variants
+ * are normalized to `length` for cross-provider control flow.
+ */
+export function logClaudeTruncation(
+    logger: Logger | undefined,
+    reason: string | null | undefined,
+    context: { provider: string; model: string },
+): void {
+    if (!logger) return;
+
+    const details = {
+        ...context,
+        finish_reason: 'length',
+        provider_finish_reason: reason,
+    };
+    if (reason === 'max_tokens') {
+        logger.warn(details, '[Claude] Completion stopped at the output token limit');
+    } else if (reason === 'model_context_window_exceeded') {
+        logger.warn(details, '[Claude] Completion exceeded the model context window');
     }
 }
 
@@ -933,6 +957,8 @@ export async function executeClaudeCompletion(
     client: Anthropic | AnthropicVertex,
     prompt: ClaudePrompt,
     options: ExecutionOptions,
+    logger?: Logger,
+    provider = 'anthropic',
 ): Promise<Completion> {
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
 
@@ -942,6 +968,7 @@ export async function executeClaudeCompletion(
 
     const responseStream = await streamClaudeMessages(client, payload as MessageStreamParams, requestOptions);
     const result = await responseStream.finalMessage();
+    logClaudeTruncation(logger, result.stop_reason, { provider, model: options.model });
 
     const includeThoughts = model_options?.include_thoughts ?? false;
     const text = collectAllTextContent(result.content, includeThoughts);
@@ -966,6 +993,8 @@ export async function streamClaudeCompletion(
     client: Anthropic | AnthropicVertex,
     prompt: ClaudePrompt,
     options: ExecutionOptions,
+    logger?: Logger,
+    provider = 'anthropic',
 ): Promise<DriverCompletionStream> {
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
     const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
@@ -986,6 +1015,7 @@ export async function streamClaudeCompletion(
                     token_usage: anthropicUsageToTokenUsage(streamEvent.message.usage as AnthropicUsageLike),
                 } satisfies CompletionChunkObject;
             case 'message_delta':
+                logClaudeTruncation(logger, streamEvent.delta.stop_reason, { provider, model: options.model });
                 return {
                     result: [{ type: 'text', value: '' }],
                     token_usage: { result: streamEvent.usage.output_tokens },

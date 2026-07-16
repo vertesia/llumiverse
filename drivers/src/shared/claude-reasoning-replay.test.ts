@@ -4,6 +4,7 @@ import {
     type ClaudePrompt,
     claudeFinishReason,
     executeClaudeCompletion,
+    logClaudeTruncation,
     pruneClaudeThinking,
     streamClaudeCompletion,
 } from './claude-messages.js';
@@ -45,6 +46,38 @@ describe('Claude native reasoning replay', () => {
     it('normalizes both Claude truncation stop reasons to length', () => {
         expect(claudeFinishReason('max_tokens')).toBe('length');
         expect(claudeFinishReason('model_context_window_exceeded')).toBe('length');
+    });
+
+    it('logs distinct provider-native truncation causes after normalization', () => {
+        const logger = {
+            debug: vi.fn(),
+            info: vi.fn(),
+            warn: vi.fn(),
+            error: vi.fn(),
+        };
+
+        logClaudeTruncation(logger, 'max_tokens', { provider: 'anthropic', model: 'claude-sonnet-4-6' });
+        logClaudeTruncation(logger, 'model_context_window_exceeded', {
+            provider: 'vertexai',
+            model: 'claude-sonnet-4-6',
+        });
+
+        expect(logger.warn).toHaveBeenNthCalledWith(
+            1,
+            expect.objectContaining({
+                finish_reason: 'length',
+                provider_finish_reason: 'max_tokens',
+            }),
+            '[Claude] Completion stopped at the output token limit',
+        );
+        expect(logger.warn).toHaveBeenNthCalledWith(
+            2,
+            expect.objectContaining({
+                finish_reason: 'length',
+                provider_finish_reason: 'model_context_window_exceeded',
+            }),
+            '[Claude] Completion exceeded the model context window',
+        );
     });
 
     it('persists ordered native blocks for blocking responses without exposing thoughts by default', async () => {
