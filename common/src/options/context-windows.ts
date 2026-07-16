@@ -1,3 +1,5 @@
+import { isClaudeVersionGTE } from './version-parsing.js';
+
 /**
  * Returns the max output tokens for a given model (provider-agnostic).
  * When a model's limits vary by provider, returns a conservative value
@@ -6,7 +8,7 @@
 export function getMaxOutputTokens(model: string): number {
     // Claude models
     if (model.includes('claude')) {
-        if (model.includes('opus-4-7')) return 128_000;
+        if (isClaudeVersionGTE(model, 4, 7)) return 128_000;
         if (model.includes('opus-4-6')) return 128_000;
         if (model.includes('opus-4-5')) return 64_000;
         if (model.includes('opus-')) return 32_768; // Opus 4.0, 4.1
@@ -58,7 +60,7 @@ export function getMaxInputTokens(model: string): number {
 export function getContextWindowSize(model: string): number {
     // Claude models
     if (model.includes('claude')) {
-        // All Claude models use 200K (1M requires beta header, handled separately later)
+        if (isClaudeVersionGTE(model, 4, 7)) return 1_000_000;
         return 200_000;
     }
     // Gemini models
