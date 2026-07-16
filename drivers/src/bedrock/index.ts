@@ -67,7 +67,7 @@ import { AbstractDriver } from '@llumiverse/core/driver';
 import { formatNovaPrompt, type NovaMessagesPrompt } from '@llumiverse/core/formatters';
 import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
 import { LRUCache } from 'mnemonist';
-import { logClaudeTruncation } from '../shared/claude-messages.js';
+import { logClaudeTruncation } from '../shared/claude-stop-reason.js';
 import { resolveClaudeThinking } from '../shared/claude-thinking.js';
 import { truncateBinaryForDebug, uint8ArrayToBase64ForDebug } from '../shared/debug-prompt.js';
 import {
@@ -250,15 +250,17 @@ function collectBedrockNativeStreamBlock(blocks: Map<number, ContentBlock>, even
 function finalizeBedrockNativeBlocks(blocks: Map<number, ContentBlock>): ContentBlock[] {
     return [...blocks.entries()]
         .sort(([left], [right]) => left - right)
-        .map(([, block]) => {
+        .flatMap(([, block]) => {
             if ('toolUse' in block && block.toolUse && typeof block.toolUse.input === 'string') {
                 try {
-                    return { toolUse: { ...block.toolUse, input: JSON.parse(block.toolUse.input) as JSONObject } };
+                    return [{ toolUse: { ...block.toolUse, input: JSON.parse(block.toolUse.input) as JSONObject } }];
                 } catch {
-                    return { toolUse: { ...block.toolUse, input: {} } };
+                    // Invalid streamed JSON is not a complete tool call. Do not put it in native
+                    // replay, where it would require a tool_result the workflow cannot produce.
+                    return [];
                 }
             }
-            return block;
+            return [block];
         });
 }
 

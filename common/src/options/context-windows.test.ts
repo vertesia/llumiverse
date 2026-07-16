@@ -48,6 +48,7 @@ describe('OpenAI context window limits', () => {
     it('preserves the larger GPT-5 Pro output limit and o-series limits', () => {
         expect(getMaxOutputTokens('gpt-5-pro')).toBe(272_000);
         expect(getMaxOutputTokens('gpt-5.4-pro')).toBe(128_000);
+        expect(getMaxOutputTokens('gpt-6-pro')).toBe(128_000);
         expect(getMaxOutputTokens('o4-mini')).toBe(100_000);
     });
 });

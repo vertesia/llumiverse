@@ -71,10 +71,17 @@ describe('Bedrock native reasoning replay', () => {
             {
                 contentBlockStart: {
                     contentBlockIndex: 3,
+                    start: { toolUse: { toolUseId: 'call-truncated', name: 'lookup' } },
+                },
+            },
+            { contentBlockDelta: { contentBlockIndex: 3, delta: { toolUse: { input: '{"city":' } } } },
+            {
+                contentBlockStart: {
+                    contentBlockIndex: 4,
                     start: { reasoningContent: { redactedContent: new Uint8Array([9, 8]) } },
                 },
             } as unknown as ConverseStreamOutput,
-            { messageStop: { stopReason: 'tool_use' } },
+            { messageStop: { stopReason: 'max_tokens' } },
             { metadata: { usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 }, metrics: { latencyMs: 1 } } },
         ];
         const driver = new BedrockDriver({ region: 'us-east-1' });
@@ -108,6 +115,12 @@ describe('Bedrock native reasoning replay', () => {
                 },
             ]),
         });
+        const persistedContent = (conversation as ConverseRequest).messages?.at(-1)?.content;
+        expect(persistedContent).not.toContainEqual(
+            expect.objectContaining({
+                toolUse: expect.objectContaining({ toolUseId: 'call-truncated' }),
+            }),
+        );
     });
 
     it('keeps the DeepSeek replay exclusion narrow', () => {

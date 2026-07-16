@@ -24,7 +24,6 @@ import {
     type OpenAiDalleOptions,
     type OpenAiGptImageOptions,
     type Providers,
-    type ReasoningEffort,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
     supportsToolUse,
@@ -103,8 +102,8 @@ function isOpenAIReasoningModel(model: string): boolean {
     );
 }
 
-export function openAIReasoningEffort(model: string, effort: string | undefined): ReasoningEffort | undefined {
-    return effort && isOpenAIReasoningModel(model) ? (effort as ReasoningEffort) : undefined;
+export function openAIReasoningEffort(model: string, effort: string | undefined): string | undefined {
+    return effort && isOpenAIReasoningModel(model) ? effort : undefined;
 }
 
 //TODO: Do we need a list?, replace with if statements and modernize?

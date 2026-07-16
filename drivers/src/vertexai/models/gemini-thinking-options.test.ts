@@ -24,6 +24,17 @@ describe('Gemini thinking configuration', () => {
         });
     });
 
+    it('passes through caller effort even when advisory metadata does not offer it', () => {
+        expect(geminiThinkingConfig(options('gemini-3.1-flash-image', { effort: 'low' }))).toEqual({
+            includeThoughts: false,
+            thinkingLevel: ThinkingLevel.LOW,
+        });
+        expect(geminiThinkingConfig(options('gemini-3-pro-image', { effort: 'minimal' }))).toEqual({
+            includeThoughts: false,
+            thinkingLevel: ThinkingLevel.MINIMAL,
+        });
+    });
+
     it('preserves explicitly requested thought inclusion without imposing a thinking level', () => {
         expect(geminiThinkingConfig(options('gemini-3.5-flash', { include_thoughts: true }))).toEqual({
             includeThoughts: true,

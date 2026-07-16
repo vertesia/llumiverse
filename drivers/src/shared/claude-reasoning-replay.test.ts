@@ -2,12 +2,11 @@ import type { Message, RawMessageStreamEvent } from '@anthropic-ai/sdk/resources
 import { describe, expect, it, vi } from 'vitest';
 import {
     type ClaudePrompt,
-    claudeFinishReason,
     executeClaudeCompletion,
-    logClaudeTruncation,
     pruneClaudeThinking,
     streamClaudeCompletion,
 } from './claude-messages.js';
+import { claudeFinishReason, logClaudeTruncation } from './claude-stop-reason.js';
 
 function sdkStream(events: RawMessageStreamEvent[], finalMessage: Message) {
     return {

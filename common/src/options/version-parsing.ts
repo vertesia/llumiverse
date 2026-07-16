@@ -13,35 +13,6 @@
  */
 
 // ============================================================================
-// Generic Model-Family Version Parsing
-// ============================================================================
-
-/**
- * Check a numeric model-family suffix using major/minor ordering.
- *
- * The family includes the stable part immediately before the version, for
- * example `openai.gpt-`, `xai.grok-`, or `deepseek.v`. This deliberately
- * accepts later versions so new models inherit the newest known behavior.
- */
-export function isModelFamilyVersionGTE(
-    modelString: string,
-    family: string,
-    targetMajor: number,
-    targetMinor: number,
-): boolean {
-    const normalized = modelString.toLowerCase();
-    const familyIndex = normalized.indexOf(family.toLowerCase());
-    if (familyIndex === -1) return false;
-
-    const version = normalized.slice(familyIndex + family.length).match(/^(\d+)(?:[.-](\d+))?/);
-    if (!version) return false;
-
-    const major = Number(version[1]);
-    const minor = Number(version[2] ?? 0);
-    return major > targetMajor || (major === targetMajor && minor >= targetMinor);
-}
-
-// ============================================================================
 // Claude Version Parsing
 // ============================================================================
 

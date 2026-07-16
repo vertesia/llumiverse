@@ -33,7 +33,8 @@ export function getMaxOutputTokens(model: string): number {
     if (model.includes('o1')) return 100_000;
     if (model.includes('o3') || model.includes('o4')) return 100_000;
     // GPT models
-    if (isOpenAIGptProModel(model) && parseOpenAIGptVersion(model)?.minor === 0) return 272_000;
+    const gptVersion = parseOpenAIGptVersion(model);
+    if (isOpenAIGptProModel(model) && gptVersion?.major === 5 && gptVersion.minor === 0) return 272_000;
     if (isOpenAIGptVersionGTE(model, 5, 0)) return 128_000;
     if (model.includes('gpt-4o')) return 16_384;
     if (model.includes('gpt-4')) return 8_192;

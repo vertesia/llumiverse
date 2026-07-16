@@ -5,7 +5,6 @@ import {
     getOpenAIReasoningEffortLevels,
     isClaudeVersionGTE,
     isGeminiModelVersionGte,
-    isModelFamilyVersionGTE,
     isOpenAIGptVersionGTE,
     parseClaudeVersion,
     parseOpenAIGptVersion,
@@ -68,6 +67,7 @@ describe('OpenAI GPT model version parsing', () => {
     it('uses numeric GTE comparisons rather than string ordering', () => {
         expect(isOpenAIGptVersionGTE('gpt-5.10', 5, 6)).toBe(true);
         expect(isOpenAIGptVersionGTE('gpt-5.2', 5, 6)).toBe(false);
+        expect(parseOpenAIGptVersion('notgpt-6')).toBeNull();
     });
 
     it.each([
@@ -89,14 +89,6 @@ describe('OpenAI GPT model version parsing', () => {
         ['gpt-5.4-pro', { Medium: 'medium', 'High (default)': 'high', 'Extra High': 'xhigh' }],
     ] as const)('advertises documented effort levels for %s', (model, expected) => {
         expect(getOpenAIReasoningEffortLevels(model)).toEqual(expected);
-    });
-});
-
-describe('generic model-family version parsing', () => {
-    it('matches provider-qualified current and future versions', () => {
-        expect(isModelFamilyVersionGTE('us.openai.gpt-5.6-sol-v1:0', 'openai.gpt-', 5, 4)).toBe(true);
-        expect(isModelFamilyVersionGTE('xai.grok-4.10', 'grok-', 4, 3)).toBe(true);
-        expect(isModelFamilyVersionGTE('deepseek.v3.2', 'deepseek.v', 3, 2)).toBe(true);
     });
 });
 

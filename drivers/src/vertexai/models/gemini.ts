@@ -338,16 +338,7 @@ const recoverableToolCallReasons = [
     'UNEXPECTED_TOOL_CALL', // Model called an undeclared tool
 ];
 
-function geminiThinkingLevelForEffort(
-    model: string,
-    effort: VertexAIGeminiOptions['effort'],
-): ThinkingLevel | undefined {
-    if (model.includes('gemini-3-pro-image')) {
-        return ThinkingLevel.HIGH;
-    }
-    if (model.includes('gemini-3.1-flash-image')) {
-        return effort === 'minimal' ? ThinkingLevel.MINIMAL : ThinkingLevel.HIGH;
-    }
+function geminiThinkingLevelForEffort(effort: VertexAIGeminiOptions['effort']): ThinkingLevel | undefined {
     switch (effort) {
         case 'minimal':
             return ThinkingLevel.MINIMAL;
@@ -403,7 +394,7 @@ export function geminiThinkingConfig(option: StatelessExecutionOptions): Thinkin
         if (isGeminiModelVersionGte(option.model, '3.0')) {
             return {
                 includeThoughts: include_thoughts,
-                thinkingLevel: geminiThinkingLevelForEffort(option.model, model_options.effort),
+                thinkingLevel: geminiThinkingLevelForEffort(model_options.effort),
             };
         }
         return {
