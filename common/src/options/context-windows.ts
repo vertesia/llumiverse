@@ -1,3 +1,10 @@
+import {
+    isClaudeVersionGTE,
+    isOpenAIGptProModel,
+    isOpenAIGptVersionGTE,
+    parseOpenAIGptVersion,
+} from './version-parsing.js';
+
 /**
  * Returns the max output tokens for a given model (provider-agnostic).
  * When a model's limits vary by provider, returns a conservative value
@@ -6,7 +13,7 @@
 export function getMaxOutputTokens(model: string): number {
     // Claude models
     if (model.includes('claude')) {
-        if (model.includes('opus-4-7')) return 128_000;
+        if (isClaudeVersionGTE(model, 4, 7)) return 128_000;
         if (model.includes('opus-4-6')) return 128_000;
         if (model.includes('opus-4-5')) return 64_000;
         if (model.includes('opus-')) return 32_768; // Opus 4.0, 4.1
@@ -26,7 +33,9 @@ export function getMaxOutputTokens(model: string): number {
     if (model.includes('o1')) return 100_000;
     if (model.includes('o3') || model.includes('o4')) return 100_000;
     // GPT models
-    if (model.includes('gpt-5')) return 128_000;
+    const gptVersion = parseOpenAIGptVersion(model);
+    if (isOpenAIGptProModel(model) && gptVersion?.major === 5 && gptVersion.minor === 0) return 272_000;
+    if (isOpenAIGptVersionGTE(model, 5, 0)) return 128_000;
     if (model.includes('gpt-4o')) return 16_384;
     if (model.includes('gpt-4')) return 8_192;
     if (model.includes('gpt-3.5')) return 4_096;
@@ -58,7 +67,7 @@ export function getMaxInputTokens(model: string): number {
 export function getContextWindowSize(model: string): number {
     // Claude models
     if (model.includes('claude')) {
-        // All Claude models use 200K (1M requires beta header, handled separately later)
+        if (isClaudeVersionGTE(model, 4, 7)) return 1_000_000;
         return 200_000;
     }
     // Gemini models
@@ -69,7 +78,8 @@ export function getContextWindowSize(model: string): number {
     // OpenAI o-series (check before gpt-4 to avoid false matches)
     if (model.includes('o1') || model.includes('o3') || model.includes('o4')) return 200_000;
     // GPT models — check specific variants before generic gpt-4
-    if (model.includes('gpt-5')) return 400_000;
+    if (isOpenAIGptVersionGTE(model, 5, 4)) return 1_050_000;
+    if (isOpenAIGptVersionGTE(model, 5, 0)) return 400_000;
     if (model.includes('gpt-4.1') || model.includes('gpt-4-1')) return 1_000_000;
     if (model.includes('gpt-4-turbo') || model.includes('gpt-4o')) return 128_000;
     if (model.includes('gpt-4')) return 8_000;

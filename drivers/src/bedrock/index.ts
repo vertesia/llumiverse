@@ -31,6 +31,7 @@ import {
     type CompletionChunkObject,
     type CompletionResult,
     type DataSource,
+    type DriverCompletionStream,
     type DriverOptions,
     deserializeBinaryFromStorage,
     type EmbeddingsOptions,
@@ -43,6 +44,7 @@ import {
     type HttpTimeoutOptions,
     incrementConversationTurn,
     isClaudeVersionGTE,
+    type JSONObject,
     LlumiverseError,
     type LlumiverseErrorContext,
     type ModelOptions,
@@ -65,6 +67,7 @@ import { AbstractDriver } from '@llumiverse/core/driver';
 import { formatNovaPrompt, type NovaMessagesPrompt } from '@llumiverse/core/formatters';
 import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
 import { LRUCache } from 'mnemonist';
+import { logClaudeTruncation } from '../shared/claude-stop-reason.js';
 import { resolveClaudeThinking } from '../shared/claude-thinking.js';
 import { truncateBinaryForDebug, uint8ArrayToBase64ForDebug } from '../shared/debug-prompt.js';
 import {
@@ -119,10 +122,157 @@ function converseFinishReason(reason: string | undefined) {
         case 'end_turn':
             return 'stop';
         case 'max_tokens':
+        case 'model_context_window_exceeded':
             return 'length';
         default:
             return reason;
     }
+}
+
+export function excludesBedrockReasoningReplay(model: string): boolean {
+    const modelId = model.toLowerCase().split('/').pop() ?? '';
+    return /^(?:(?:us|eu|apac)\.)?deepseek\.r1-v1(?::\d+)?$/.test(modelId);
+}
+
+function isBedrockReasoningBlock(value: unknown): boolean {
+    return typeof value === 'object' && value !== null && 'reasoningContent' in value;
+}
+
+function hasBedrockReasoningSignature(conversation: ConverseRequest): boolean {
+    return !!conversation.messages?.some((message) =>
+        message.content?.some(
+            (block) =>
+                block.reasoningContent?.reasoningText?.signature !== undefined &&
+                block.reasoningContent.reasoningText.signature.length > 0,
+        ),
+    );
+}
+
+function finalizeBedrockConversation(
+    conversation: ConverseRequest,
+    assistantMessage: Message,
+    options: ExecutionOptions,
+): ConverseRequest {
+    const replayMessage = excludesBedrockReasoningReplay(options.model)
+        ? {
+              ...assistantMessage,
+              content: assistantMessage.content?.filter((block) => !('reasoningContent' in block)),
+          }
+        : assistantMessage;
+    let completed = updateConversation(conversation, {
+        messages: [replayMessage],
+        modelId: conversation.modelId,
+    });
+    completed = incrementConversationTurn(completed) as ConverseRequest;
+    const currentTurn = getConversationMeta(completed).turnNumber;
+
+    // Bedrock signatures hash every prior message. Applying any caller cleanup to a signed
+    // chain makes the next Converse request fail, so only storage-safe serialization is valid.
+    if (hasBedrockReasoningSignature(completed)) {
+        return stripBinaryFromConversation(completed, {
+            keepForTurns: Infinity,
+            currentTurn,
+        }) as ConverseRequest;
+    }
+
+    const stripOptions = {
+        keepForTurns: options.stripImagesAfterTurns ?? Infinity,
+        currentTurn,
+        textMaxTokens: options.stripTextMaxTokens,
+        preserveSubtree: isBedrockReasoningBlock,
+    };
+    let processed = stripBinaryFromConversation(completed, stripOptions);
+    processed = truncateLargeTextInConversation(processed, stripOptions);
+    processed = stripHeartbeatsFromConversation(processed, {
+        keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+        currentTurn,
+    });
+    return processed as ConverseRequest;
+}
+
+function appendBytes(left: Uint8Array | undefined, right: Uint8Array): Uint8Array {
+    if (!left?.length) return new Uint8Array(right);
+    const combined = new Uint8Array(left.length + right.length);
+    combined.set(left);
+    combined.set(right, left.length);
+    return combined;
+}
+
+function collectBedrockNativeStreamBlock(blocks: Map<number, ContentBlock>, event: ConverseStreamOutput): void {
+    const start = event.contentBlockStart;
+    if (start?.start?.toolUse) {
+        blocks.set(start.contentBlockIndex ?? -1, {
+            toolUse: {
+                toolUseId: start.start.toolUse.toolUseId,
+                name: start.start.toolUse.name,
+                input: '' as unknown as JSONObject,
+            },
+        });
+    } else if (start?.start) {
+        const reasoningStart = start.start as unknown as {
+            reasoningContent?: { redactedContent?: Uint8Array };
+        };
+        if (reasoningStart.reasoningContent?.redactedContent) {
+            blocks.set(start.contentBlockIndex ?? -1, {
+                reasoningContent: { redactedContent: new Uint8Array(reasoningStart.reasoningContent.redactedContent) },
+            });
+        }
+    }
+
+    const blockDelta = event.contentBlockDelta;
+    const delta = blockDelta?.delta;
+    if (!delta) return;
+    const index = blockDelta.contentBlockIndex ?? -1;
+    if (delta.text !== undefined) {
+        const current = blocks.get(index);
+        const existingText = current && 'text' in current ? (current.text ?? '') : '';
+        blocks.set(index, { text: existingText + delta.text });
+    } else if (delta.toolUse?.input !== undefined) {
+        const current = blocks.get(index);
+        if (current && 'toolUse' in current && current.toolUse) {
+            current.toolUse.input =
+                `${String(current.toolUse.input ?? '')}${delta.toolUse.input}` as unknown as JSONObject;
+        }
+    } else if (delta.reasoningContent) {
+        const reasoning = delta.reasoningContent;
+        const current = blocks.get(index);
+        const existing =
+            current && 'reasoningContent' in current
+                ? (current.reasoningContent as {
+                      reasoningText?: { text: string; signature?: string };
+                      redactedContent?: Uint8Array;
+                  })
+                : undefined;
+        if (reasoning.redactedContent) {
+            blocks.set(index, {
+                reasoningContent: {
+                    redactedContent: appendBytes(existing?.redactedContent, reasoning.redactedContent),
+                },
+            });
+        } else {
+            const reasoningText = existing?.reasoningText ?? { text: '' };
+            if (reasoning.text) reasoningText.text += reasoning.text;
+            if (reasoning.signature) reasoningText.signature = (reasoningText.signature ?? '') + reasoning.signature;
+            blocks.set(index, { reasoningContent: { reasoningText } });
+        }
+    }
+}
+
+function finalizeBedrockNativeBlocks(blocks: Map<number, ContentBlock>): ContentBlock[] {
+    return [...blocks.entries()]
+        .sort(([left], [right]) => left - right)
+        .flatMap(([, block]) => {
+            if ('toolUse' in block && block.toolUse && typeof block.toolUse.input === 'string') {
+                try {
+                    return [{ toolUse: { ...block.toolUse, input: JSON.parse(block.toolUse.input) as JSONObject } }];
+                } catch {
+                    // Invalid streamed JSON is not a complete tool call. Do not put it in native
+                    // replay, where it would require a tool_result the workflow cannot produce.
+                    return [];
+                }
+            }
+            return [block];
+        });
 }
 
 function withBedrockRuntimeScope<T>(iterable: AsyncIterable<T>, scope: BedrockRuntimeExecutorScope): AsyncIterable<T> {
@@ -605,6 +755,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         let resultText = '';
         let reasoning = '';
 
+        if (options?.model.toLowerCase().includes('claude')) {
+            logClaudeTruncation(this.logger, result.stopReason, { provider: this.provider, model: options.model });
+        }
+
         if (result.output?.message?.content) {
             for (const content of result.output.message.content) {
                 // Get text output
@@ -756,6 +910,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         if (result.messageStop) {
             stop_reason = result.messageStop.stopReason ?? '';
+            if (options?.model.toLowerCase().includes('claude')) {
+                logClaudeTruncation(this.logger, stop_reason, { provider: this.provider, model: options.model });
+            }
         }
 
         if (result.metadata) {
@@ -973,7 +1130,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         // Deserialize any base64-encoded binary data back to Uint8Array before API call
         const incomingConversation = deserializeBinaryFromStorage(options.conversation) as ConverseRequest;
-        let conversation = updateConversation(incomingConversation, conversePrompt);
+        const conversation = updateConversation(incomingConversation, conversePrompt);
 
         const payload = this.preparePayload(conversation, options);
         const executorScope = this.getScopedNonStreamingExecutor(options);
@@ -987,20 +1144,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             executorScope.close();
         }
 
-        // Strip reasoningContent from assistant messages before storing in conversation
-        // (DeepSeek R1 returns reasoning blocks but rejects them in subsequent user turns)
         const assistantMsg = res.output?.message ?? { content: [{ text: '' }], role: 'assistant' };
-        if (assistantMsg.content) {
-            assistantMsg.content = assistantMsg.content.filter((c) => !('reasoningContent' in c));
-        }
-
-        conversation = updateConversation(conversation, {
-            messages: [assistantMsg],
-            modelId: conversePrompt.modelId,
-        });
-
-        // Increment turn counter for deferred stripping
-        conversation = incrementConversationTurn(conversation) as ConverseRequest;
+        const processedConversation = finalizeBedrockConversation(conversation, assistantMsg, options);
 
         let tool_use: ToolUse<unknown>[] | undefined;
         //Get tool requests, we check tool use regardless of finish reason, as you can hit length and still get a valid response.
@@ -1018,24 +1163,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if (tool_use && tool_use.length === 0) {
             tool_use = undefined;
         }
-
-        // Strip/serialize binary data based on options.stripImagesAfterTurns
-        const currentTurn = getConversationMeta(conversation).turnNumber;
-        const stripOptions = {
-            keepForTurns: options.stripImagesAfterTurns ?? Infinity,
-            currentTurn,
-            textMaxTokens: options.stripTextMaxTokens,
-        };
-        let processedConversation = stripBinaryFromConversation(conversation, stripOptions);
-
-        // Truncate large text content if configured
-        processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
-
-        // Strip old heartbeat status messages
-        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
-            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
-            currentTurn,
-        });
 
         const completion = {
             ...this.getExtractedExecution(res, conversePrompt, options),
@@ -1159,7 +1286,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     async requestTextCompletionStream(
         prompt: BedrockPrompt,
         options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>> {
+    ): Promise<DriverCompletionStream> {
         // Handle Twelvelabs Pegasus models
         if (options.model.includes('twelvelabs.pegasus')) {
             return this.requestTwelvelabsPegasusCompletionStream(prompt as TwelvelabsPegasusRequest, options);
@@ -1187,10 +1314,20 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 }
 
                 const streamingToolBlocks = new Map<number, { id: string; name: string }>();
+                const nativeBlocks = new Map<number, ContentBlock>();
                 const transformedStream = transformAsyncIterator(stream, (streamSegment: ConverseStreamOutput) => {
+                    collectBedrockNativeStreamBlock(nativeBlocks, streamSegment);
                     return this.getExtractedStream(streamSegment, conversePrompt, options, streamingToolBlocks);
                 });
-                return withBedrockRuntimeScope(transformedStream, executorScope);
+                const scoped = withBedrockRuntimeScope(transformedStream, executorScope);
+                return Object.assign(scoped, {
+                    finalizeConversation: () =>
+                        finalizeBedrockConversation(
+                            conversation,
+                            { role: 'assistant', content: finalizeBedrockNativeBlocks(nativeBlocks) },
+                            options,
+                        ),
+                });
             })
             .catch((err) => {
                 executorScope.close();

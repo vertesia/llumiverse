@@ -13,6 +13,7 @@ import {
     getConversationMeta,
     getModelCapabilities,
     incrementConversationTurn,
+    isOpenAIGptVersionGTE,
     type JSONSchema,
     LlumiverseError,
     type LlumiverseErrorContext,
@@ -60,6 +61,7 @@ import { formatOpenAILikeMultimodalPrompt } from './openai_format.js';
 // Response API types
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
+type OpenAIReasoning = NonNullable<OpenAI.Responses.ResponseCreateParams['reasoning']>;
 type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
     image_detail?: 'low' | 'high' | 'auto';
     effort?: string;
@@ -96,23 +98,12 @@ function isOpenAIReasoningModel(model: string): boolean {
         normalized.includes('o1') ||
         normalized.includes('o3') ||
         normalized.includes('o4') ||
-        normalized.includes('gpt-5')
+        isOpenAIGptVersionGTE(model, 5, 0)
     );
 }
 
-function isGpt5ProModel(model: string): boolean {
-    const modelName = model.toLowerCase().split('/').pop() ?? model.toLowerCase();
-    return /^gpt-5(?:\.\d+)?-pro/.test(modelName);
-}
-
-function openAIReasoningEffort(model: string, effort: string | undefined): 'low' | 'medium' | 'high' | undefined {
-    if (!effort || !isOpenAIReasoningModel(model)) {
-        return undefined;
-    }
-    if (isGpt5ProModel(model)) {
-        return 'high';
-    }
-    return effort === 'low' || effort === 'medium' || effort === 'high' ? effort : undefined;
+export function openAIReasoningEffort(model: string, effort: string | undefined): string | undefined {
+    return effort && isOpenAIReasoningModel(model) ? effort : undefined;
 }
 
 //TODO: Do we need a list?, replace with if statements and modernize?
@@ -206,7 +197,9 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
 
         const isReasoningModel = isOpenAIReasoningModel(options.model);
         const effort = openAIReasoningEffort(options.model, model_options?.effort ?? model_options?.reasoning_effort);
-        const reasoning = effort ? { effort } : undefined;
+        // The SDK can lag newly documented effort values (for example `max`).
+        // Preserve caller input and let the provider validate model-specific support.
+        const reasoning = effort ? ({ effort } as unknown as OpenAIReasoning) : undefined;
 
         const stream = await this.service.responses.create({
             stream: true,
@@ -273,7 +266,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
 
         const isReasoningModel = isOpenAIReasoningModel(options.model);
         const effort = openAIReasoningEffort(options.model, model_options?.effort ?? model_options?.reasoning_effort);
-        const reasoning = effort ? { effort } : undefined;
+        const reasoning = effort ? ({ effort } as unknown as OpenAIReasoning) : undefined;
 
         const res = await this.service.responses.create({
             stream: false,
