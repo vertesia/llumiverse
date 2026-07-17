@@ -2,6 +2,7 @@ import {
     type CompletionChunkObject,
     type CompletionResult,
     type CompletionStream,
+    type DriverCompletionStream,
     type DriverOptions,
     type ExecutionOptions,
     type ExecutionResponse,
@@ -108,12 +109,11 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
         let promptNewTokens: number | undefined;
         const httpScope = this.driver.createExecutionHttpAgentScope(this.options);
         let sourceIterator: AsyncIterator<CompletionChunkObject> | undefined;
+        let stream: DriverCompletionStream | undefined;
         let streamCompleted = false;
 
         try {
-            const stream = await httpScope.run(() =>
-                this.driver.requestTextCompletionStream(this.prompt, this.options),
-            );
+            stream = await httpScope.run(() => this.driver.requestTextCompletionStream(this.prompt, this.options));
             const iterator = stream[Symbol.asyncIterator]();
             sourceIterator = iterator;
             while (true) {
@@ -315,12 +315,9 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
         };
 
         // Build conversation context for multi-turn support
-        const conversation = this.driver.buildStreamingConversation(
-            this.prompt,
-            accumulatedResults,
-            toolUseArray,
-            this.options,
-        );
+        const conversation = stream?.finalizeConversation
+            ? await stream.finalizeConversation()
+            : this.driver.buildStreamingConversation(this.prompt, accumulatedResults, toolUseArray, this.options);
         if (conversation !== undefined) {
             this.completion.conversation = conversation;
         }
