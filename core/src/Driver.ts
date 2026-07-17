@@ -7,9 +7,9 @@
 import {
     type AIModel,
     type Completion,
-    type CompletionChunkObject,
     type CompletionStream,
     type DataSource,
+    type DriverCompletionStream,
     type DriverOptions,
     type EmbeddingsOptions,
     type EmbeddingsResult,
@@ -427,10 +427,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     abstract requestTextCompletion(prompt: PromptT, options: ExecutionOptions): Promise<Completion>;
 
-    abstract requestTextCompletionStream(
-        prompt: PromptT,
-        options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>>;
+    abstract requestTextCompletionStream(prompt: PromptT, options: ExecutionOptions): Promise<DriverCompletionStream>;
 
     async requestImageGeneration(_prompt: PromptT, _options: ExecutionOptions): Promise<Completion> {
         throw new Error('Image generation not implemented.');

@@ -53,10 +53,6 @@
         "@types/node": "catalog:",
         "rimraf": "^6.1.3",
         "typescript": "^6.0.3",
-<<<<<<< HEAD
         "vitest": "^4.1.10"
-=======
-        "vitest": "^4.1.9"
->>>>>>> 5484441 (chore: update dependencies for critical audit (#540))
     }
 }

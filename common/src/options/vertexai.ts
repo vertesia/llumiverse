@@ -102,7 +102,7 @@ export interface VertexAIGeminiOptions {
     presence_penalty?: number;
     frequency_penalty?: number;
     seed?: number;
-    effort?: 'low' | 'medium' | 'high';
+    effort?: 'minimal' | 'low' | 'medium' | 'high';
     include_thoughts?: boolean;
     thinking_budget_tokens?: number;
     thinking_level?: ThinkingLevel;
@@ -389,9 +389,12 @@ function getGeminiEffortOptions(model: string): Record<string, string> {
         return { High: 'high' };
     }
     if (model.includes('gemini-3.1-flash-image')) {
-        return { Low: 'low', High: 'high' };
+        return { Minimal: 'minimal', High: 'high' };
     }
-    return { Low: 'low', Medium: 'medium', High: 'high' };
+    if (model.includes('gemini-3.1-pro')) {
+        return { Low: 'low', Medium: 'medium', High: 'high' };
+    }
+    return { Minimal: 'minimal', Low: 'low', Medium: 'medium', High: 'high' };
 }
 
 function getGeminiThinkingOptionItems(model: string): ModelOptionInfoItem[] {
