@@ -198,7 +198,7 @@ describe('TogetherAIDriver Chat Completions transport', () => {
                 },
             },
         ]);
-        expect((completion.tool_use?.[0] as ToolUse).tool_input).toEqual({ city: 'Paris' });
+        expect((completion.tool_use as ToolUse[])[0].tool_input).toEqual({ city: 'Paris' });
         expect(completion.finish_reason).toBe('tool_use');
     });
 
