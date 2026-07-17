@@ -6,6 +6,8 @@ import {
     type ReasoningEffort,
     SharedOptions,
 } from '../types.js';
+import { getMaxOutputTokens } from './context-windows.js';
+import { getOpenAIReasoningEffortLevels, isOpenAIGptVersionGTE } from './version-parsing.js';
 
 // Union type of all OpenAI options
 /**
@@ -180,8 +182,10 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
             }
         } else if (model.includes('o3')) {
             max_tokens_limit = 100000;
-        } else if (model.includes('o4') || model.includes('gpt-5')) {
-            max_tokens_limit = 128000;
+        } else if (model.includes('o4')) {
+            max_tokens_limit = 100000;
+        } else if (isOpenAIGptVersionGTE(model, 5, 0)) {
+            max_tokens_limit = getMaxOutputTokens(model);
         }
 
         const commonOptions: ModelOptionInfoItem[] = [
@@ -201,28 +205,19 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
             },
         ];
 
-        const reasoningOptions: ModelOptionInfoItem[] = isGpt5ProModel(model)
-            ? [
-                  {
-                      name: SharedOptions.effort,
-                      type: OptionType.enum,
-                      enum: { High: 'high' },
-                      default: 'high',
-                      description: 'GPT-5 Pro only supports high reasoning effort.',
-                  },
-              ]
-            : model.includes('o3') || model.includes('o4') || model.includes('gpt-5') || isO1Full(model)
-              ? [
-                    {
-                        name: SharedOptions.effort,
-                        type: OptionType.enum,
-                        enum: { Low: 'low', Medium: 'medium', High: 'high' },
-                        default: 'medium',
-                        description:
-                            'How much effort the model should put into reasoning, lower values result in faster responses and less tokens used.',
-                    },
-                ]
-              : [];
+        const gptEffortLevels = getOpenAIReasoningEffortLevels(model);
+        const reasoningOptions: ModelOptionInfoItem[] =
+            gptEffortLevels || model.includes('o3') || model.includes('o4') || isO1Full(model)
+                ? [
+                      {
+                          name: SharedOptions.effort,
+                          type: OptionType.enum,
+                          enum: gptEffortLevels ?? { Low: 'low', Medium: 'medium', High: 'high' },
+                          description:
+                              'How much effort the model should put into reasoning, lower values result in faster responses and less tokens used.',
+                      },
+                  ]
+                : [];
 
         return {
             _option_id: 'openai-thinking',
@@ -326,13 +321,8 @@ function isReasoningModel(model: string): boolean {
         normalized.includes('o1') ||
         normalized.includes('o3') ||
         normalized.includes('o4') ||
-        normalized.includes('gpt-5')
+        isOpenAIGptVersionGTE(model, 5, 0)
     );
-}
-
-function isGpt5ProModel(model: string): boolean {
-    const modelName = model.toLowerCase().split('/').pop() ?? model.toLowerCase();
-    return /^gpt-5(?:\.\d+)?-pro/.test(modelName);
 }
 
 function isVisionModel(model: string): boolean {

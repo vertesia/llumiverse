@@ -1,8 +1,8 @@
 /**
- * Version parsing utilities for Claude and Gemini models.
+ * Version parsing utilities for Claude, OpenAI, and Gemini models.
  *
  * Provides version detection helpers that are forward-compatible with future
- * model releases (e.g., Haiku 4.7, Sonnet 4.7, Opus 4.8, Opus 5).
+ * model releases (e.g., Fable 5, Mythos 5, GPT-5.6, and Gemini 3.5).
  *
  * These helpers are used to:
  * - Control option visibility in the UI
@@ -53,7 +53,7 @@ export interface ClaudeVersion {
     major: number;
     /** Minor version number (e.g., 5, 6, 7) */
     minor: number;
-    /** Model variant: opus, sonnet, haiku, fable, or mythos */
+    /** Model family: opus, sonnet, haiku, fable, or mythos. */
     variant: 'opus' | 'sonnet' | 'haiku' | 'fable' | 'mythos';
 }
 
@@ -128,7 +128,7 @@ export function isClaudeVersionGTE(modelString: string, targetMajor: number, tar
  * Check if a Claude variant model version is greater than or equal to a target version.
  *
  * @param modelString - The model identifier string
- * @param variant - Model variant: "opus" or "sonnet"
+ * @param variant - Model family: "opus" or "sonnet"
  * @param targetMajor - Target major version
  * @param targetMinor - Target minor version
  * @returns true if the model matches the variant and version >= target
@@ -292,13 +292,68 @@ export function supportsEffort(modelString: string): boolean {
 /**
  * Check if a model supports the xhigh effort level.
  *
- * xhigh is only available on Opus 4.7+.
+ * xhigh is available on the sampling-restricted Claude generation and Mythos Preview.
  *
  * @param modelString - The model identifier string
  * @returns true if the model supports xhigh effort
  */
 export function supportsXHighEffort(modelString: string): boolean {
-    return isClaudeVariantVersionGTE(modelString, 'opus', 4, 7);
+    return hasSamplingParameterRestriction(modelString);
+}
+
+// ============================================================================
+// OpenAI GPT Version Parsing
+// ============================================================================
+
+export interface OpenAIGptVersion {
+    major: number;
+    minor: number;
+}
+
+/** Parse GPT family versions from bare IDs, snapshots, or provider-qualified paths. */
+export function parseOpenAIGptVersion(modelString: string): OpenAIGptVersion | null {
+    const match = modelString.toLowerCase().match(/(?:^|[./:])(?:openai\.)?gpt-(\d+)(?:\.(\d+))?(?:-|[.:@]|$)/);
+    if (!match) return null;
+    return { major: Number(match[1]), minor: Number(match[2] ?? '0') };
+}
+
+export function isOpenAIGptVersionGTE(modelString: string, targetMajor: number, targetMinor: number): boolean {
+    const version = parseOpenAIGptVersion(modelString);
+    if (!version) return false;
+    return version.major > targetMajor || (version.major === targetMajor && version.minor >= targetMinor);
+}
+
+export function isOpenAIGptProModel(modelString: string): boolean {
+    return /(?:^|[./:])(?:openai\.)?gpt-\d+(?:\.\d+)?-pro(?:-|[.:@]|$)/i.test(modelString);
+}
+
+/** Current reasoning-effort metadata, expressed with version thresholds for future GPT releases. */
+export function getOpenAIReasoningEffortLevels(modelString: string): Record<string, string> | null {
+    if (!isOpenAIGptVersionGTE(modelString, 5, 0)) return null;
+
+    if (isOpenAIGptProModel(modelString)) {
+        if (isOpenAIGptVersionGTE(modelString, 5, 2)) {
+            return { Medium: 'medium', 'High (default)': 'high', 'Extra High': 'xhigh' };
+        }
+        return { 'High (only)': 'high' };
+    }
+    if (isOpenAIGptVersionGTE(modelString, 5, 6)) {
+        return {
+            None: 'none',
+            Low: 'low',
+            Medium: 'medium',
+            High: 'high',
+            'Extra High': 'xhigh',
+            Max: 'max',
+        };
+    }
+    if (isOpenAIGptVersionGTE(modelString, 5, 2)) {
+        return { None: 'none', Low: 'low', Medium: 'medium', High: 'high', 'Extra High': 'xhigh' };
+    }
+    if (isOpenAIGptVersionGTE(modelString, 5, 1)) {
+        return { None: 'none', Low: 'low', Medium: 'medium', High: 'high' };
+    }
+    return { Minimal: 'minimal', Low: 'low', Medium: 'medium', High: 'high' };
 }
 
 /**

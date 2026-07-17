@@ -51,9 +51,13 @@ export function resolveClaudeThinking(model: string, options?: ClaudeThinkingInp
     if (!supportsThinking) {
         // Pre-3.7 models: no thinking support
         thinking = undefined;
+    } else if (adaptiveEnabled) {
+        // Prefer adaptive thinking when an effort level is supplied. This also
+        // ignores stale legacy budgets that may remain on a migrated model config.
+        thinking = { type: 'adaptive' as const, display: options?.include_thoughts ? 'summarized' : 'omitted' };
     } else if (extendedEnabled) {
-        // Explicit budget — use extended thinking regardless of adaptive support.
-        // On adaptive models this uses the deprecated path, but user input takes priority.
+        // Preserve explicitly budgeted configurations, including dual-mode models
+        // such as Sonnet 4.6 when no effort level was supplied.
         thinking = {
             type: 'enabled' as const,
             budget_tokens: budgetTokens,
@@ -61,9 +65,7 @@ export function resolveClaudeThinking(model: string, options?: ClaudeThinkingInp
     } else if (supportsAdaptive) {
         // Adaptive models: enable when effort is set, omit otherwise (thinking is OFF by default).
         // display controls whether thinking blocks are returned; defaults to omitted.
-        thinking = adaptiveEnabled
-            ? { type: 'adaptive' as const, display: options?.include_thoughts ? 'summarized' : 'omitted' }
-            : undefined;
+        thinking = undefined;
     } else {
         // Older thinking models (3.7, 4.5): no adaptive support, thinking is always disabled
         // unless an explicit budget is provided (handled above).

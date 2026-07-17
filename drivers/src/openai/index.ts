@@ -13,6 +13,7 @@ import {
     getConversationMeta,
     getModelCapabilities,
     incrementConversationTurn,
+    isOpenAIGptVersionGTE,
     type JSONSchema,
     LlumiverseError,
     ModelType,
@@ -21,6 +22,8 @@ import {
     OPENAI_DEFAULT_EMBEDDING_MODEL,
     type OpenAiDalleOptions,
     type OpenAiGptImageOptions,
+    type PromptOptions,
+    type PromptSegment,
     type Providers,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
@@ -44,6 +47,7 @@ import { formatOpenAISchema } from './schema.js';
 // Response API types
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
+type OpenAIReasoning = NonNullable<OpenAI.Responses.ResponseCreateParams['reasoning']>;
 type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
     image_detail?: 'low' | 'high' | 'auto';
     effort?: string;
@@ -53,8 +57,10 @@ type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
 type OpenAIErrorWithStatus = Error & { status?: unknown };
 type OpenAIUsageWithProviderDetails = OpenAI.Responses.ResponseUsage & {
     cached_tokens?: number | null;
+    cache_write_tokens?: number | null;
     prompt_tokens_details?: {
         cached_tokens?: number | null;
+        cache_write_tokens?: number | null;
     } | null;
 };
 type MutableRoleItem = { role: 'user' | 'developer' | 'system' | 'assistant' };
@@ -64,6 +70,10 @@ type OpenAIFunctionItem = ResponseInputItem & {
     name?: string;
     arguments?: string;
     output?: string;
+};
+type OpenAIPromptCacheConfig = {
+    input: ResponseInputItem[];
+    options?: OpenAI.Responses.ResponseCreateParams['prompt_cache_options'];
 };
 
 // Helper function to convert string to CompletionResult[]
@@ -81,16 +91,69 @@ function isOpenAIReasoningModel(model: string): boolean {
         normalized.includes('o1') ||
         normalized.includes('o3') ||
         normalized.includes('o4') ||
-        normalized.includes('gpt-5')
+        isOpenAIGptVersionGTE(model, 5, 0)
     );
 }
 
-function openAIReasoning(effort: string | undefined): OpenAI.Responses.ResponseCreateParams['reasoning'] {
-    if (!effort) {
-        return undefined;
+export function openAIReasoningEffort(model: string, effort: string | undefined): string | undefined {
+    return effort && (isOpenAIReasoningModel(model) || model.toLowerCase().startsWith('xai.grok-'))
+        ? effort
+        : undefined;
+}
+
+function hasExplicitPromptCacheBreakpoint(item: ResponseInputItem): boolean {
+    if (!('content' in item) || !Array.isArray(item.content)) {
+        return false;
     }
-    // Forward provider-native values unchanged so the provider can return an authoritative validation error.
-    return { effort } as OpenAI.Responses.ResponseCreateParams['reasoning'];
+    return item.content.some(
+        (content) => 'prompt_cache_breakpoint' in content && content.prompt_cache_breakpoint?.mode === 'explicit',
+    );
+}
+
+function configureOpenAIPromptCaching(
+    input: ResponseInputItem[],
+    model: string,
+    promptCacheKey: string | undefined,
+): OpenAIPromptCacheConfig {
+    if (!promptCacheKey || !model.toLowerCase().startsWith('gpt-5.6')) {
+        return { input };
+    }
+
+    if (input.some(hasExplicitPromptCacheBreakpoint)) {
+        return { input, options: { mode: 'explicit' } };
+    }
+
+    const userMessageIndexes = input.flatMap((item, index) => ('role' in item && item.role === 'user' ? [index] : []));
+    if (userMessageIndexes.length < 2) {
+        return { input };
+    }
+
+    const sourceIndex =
+        userMessageIndexes.findLast((index) => {
+            const item = input[index];
+            return (
+                'content' in item &&
+                Array.isArray(item.content) &&
+                item.content.some((part) => part.type === 'input_image' || part.type === 'input_file')
+            );
+        }) ?? userMessageIndexes.at(-2);
+    if (sourceIndex === undefined) {
+        return { input };
+    }
+    const source = input[sourceIndex] as EasyInputMessage;
+    const content =
+        typeof source.content === 'string'
+            ? [{ type: 'input_text' as const, text: source.content }]
+            : source.content.map((part) => ({ ...part }));
+    const lastContent = content.at(-1);
+    if (!lastContent) {
+        return { input };
+    }
+    lastContent.prompt_cache_breakpoint = { mode: 'explicit' };
+
+    const markedInput = [...input];
+    markedInput[sourceIndex] = { ...source, content };
+    return { input: markedInput, options: { mode: 'explicit' } };
 }
 
 //TODO: Do we need a list?, replace with if statements and modernize?
@@ -141,25 +204,44 @@ export class OpenAIResponsesProtocol {
 
         let parsedSchema: JSONSchema | undefined;
         let strictMode = false;
-        if (options.result_schema && supportsSchema(options.model, driver.provider)) {
+        if (
+            options.result_schema &&
+            supportsSchema(options.model, driver.provider) &&
+            options.prompt_cache_schema_suffix !== true
+        ) {
             const formattedSchema = formatOpenAISchema(options.result_schema);
             parsedSchema = formattedSchema.schema;
             strictMode = formattedSchema.strict;
         }
 
         const isReasoningModel = isOpenAIReasoningModel(options.model);
-        const reasoning = openAIReasoning(model_options?.effort ?? model_options?.reasoning_effort);
+        const effort = openAIReasoningEffort(options.model, model_options?.effort ?? model_options?.reasoning_effort);
+        // The SDK can lag newly documented effort values (for example `max`).
+        // Preserve caller input and let the provider validate model-specific support.
+        const reasoning = effort ? ({ effort } as unknown as OpenAIReasoning) : undefined;
 
+        const promptCache = configureOpenAIPromptCaching(
+            conversation,
+            driver.getResponsesRequestModel(options.model),
+            options.prompt_cache_key,
+        );
         const stream = await driver.service.responses.create({
             stream: true,
             model: driver.getResponsesRequestModel(options.model),
-            input: conversation,
+            prompt_cache_key: options.prompt_cache_key,
+            prompt_cache_options: promptCache.options,
+            input: promptCache.input,
             reasoning,
             temperature: isReasoningModel ? undefined : model_options?.temperature,
             top_p: isReasoningModel ? undefined : model_options?.top_p,
             max_output_tokens: model_options?.max_tokens,
             tools: useTools ? toolDefs : undefined,
-            text: buildResponseTextConfig(parsedSchema, strictMode, model_options?.verbosity),
+            text: buildResponseTextConfig(
+                parsedSchema,
+                strictMode,
+                model_options?.verbosity,
+                options.prompt_cache_schema_suffix === true && !!options.result_schema,
+            ),
         });
 
         return mapResponseStream(stream);
@@ -199,25 +281,42 @@ export class OpenAIResponsesProtocol {
 
         let parsedSchema: JSONSchema | undefined;
         let strictMode = false;
-        if (options.result_schema && supportsSchema(options.model, driver.provider)) {
+        if (
+            options.result_schema &&
+            supportsSchema(options.model, driver.provider) &&
+            options.prompt_cache_schema_suffix !== true
+        ) {
             const formattedSchema = formatOpenAISchema(options.result_schema);
             parsedSchema = formattedSchema.schema;
             strictMode = formattedSchema.strict;
         }
 
         const isReasoningModel = isOpenAIReasoningModel(options.model);
-        const reasoning = openAIReasoning(model_options?.effort ?? model_options?.reasoning_effort);
+        const effort = openAIReasoningEffort(options.model, model_options?.effort ?? model_options?.reasoning_effort);
+        const reasoning = effort ? ({ effort } as unknown as OpenAIReasoning) : undefined;
 
+        const promptCache = configureOpenAIPromptCaching(
+            conversation,
+            driver.getResponsesRequestModel(options.model),
+            options.prompt_cache_key,
+        );
         const res = await driver.service.responses.create({
             stream: false,
             model: driver.getResponsesRequestModel(options.model),
-            input: conversation,
+            prompt_cache_key: options.prompt_cache_key,
+            prompt_cache_options: promptCache.options,
+            input: promptCache.input,
             reasoning,
             temperature: isReasoningModel ? undefined : model_options?.temperature,
             top_p: isReasoningModel ? undefined : model_options?.top_p,
             max_output_tokens: model_options?.max_tokens, //TODO: use max_tokens for older models, currently relying on OpenAI to handle it
             tools: useTools ? toolDefs : undefined,
-            text: buildResponseTextConfig(parsedSchema, strictMode, model_options?.verbosity),
+            text: buildResponseTextConfig(
+                parsedSchema,
+                strictMode,
+                model_options?.verbosity,
+                options.prompt_cache_schema_suffix === true && !!options.result_schema,
+            ),
         });
 
         const completion = driver.extractDataFromResponse(options, res);
@@ -272,7 +371,17 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
     constructor(opts: OpenAIResponsesDriverBaseOptions) {
         super(opts);
         this.responsesProtocol = new OpenAIResponsesProtocol();
-        this.formatPrompt = formatOpenAILikeMultimodalPrompt;
+    }
+
+    protected async formatPrompt(segments: PromptSegment[], options: PromptOptions): Promise<ResponseInputItem[]> {
+        const schemaSuffix = options.prompt_cache_schema_suffix === true && !!options.result_schema;
+        const resultSchema =
+            supportsSchema(options.model, this.provider) && !schemaSuffix ? undefined : options.result_schema;
+        return formatOpenAILikeMultimodalPrompt(segments, {
+            ...options,
+            result_schema: resultSchema,
+            resultSchemaPosition: schemaSuffix ? 'suffix' : undefined,
+        });
     }
 
     /** @internal Resolve the model identifier sent to the Responses transport. */
@@ -685,11 +794,16 @@ function mapUsage(usage?: OpenAIUsageWithProviderDetails | null): ExecutionToken
     }
     const cachedTokens =
         usage.input_tokens_details?.cached_tokens ?? usage.prompt_tokens_details?.cached_tokens ?? usage.cached_tokens;
+    const cacheWriteTokens =
+        usage.input_tokens_details?.cache_write_tokens ??
+        usage.prompt_tokens_details?.cache_write_tokens ??
+        usage.cache_write_tokens;
     return {
         prompt: usage.input_tokens,
         result: usage.output_tokens,
         total: usage.total_tokens,
         prompt_cached: cachedTokens ?? undefined,
+        prompt_cache_write: cacheWriteTokens ?? undefined,
         prompt_new: usage.input_tokens - (cachedTokens ?? 0),
     };
 }
@@ -721,8 +835,9 @@ function buildResponseTextConfig(
     schema: JSONSchema | undefined,
     strict: boolean,
     verbosity: OpenAIRequestOptions['verbosity'] | undefined,
+    jsonObject: boolean = false,
 ): OpenAI.Responses.ResponseTextConfig | undefined {
-    if (!schema && !verbosity) {
+    if (!schema && !verbosity && !jsonObject) {
         return undefined;
     }
     return {
@@ -735,7 +850,9 @@ function buildResponseTextConfig(
                       strict,
                   },
               }
-            : {}),
+            : jsonObject
+              ? { format: { type: 'json_object' as const } }
+              : {}),
         ...(verbosity ? { verbosity } : {}),
     };
 }

@@ -427,6 +427,16 @@ export interface CompletionChunkObject {
 }
 
 /**
+ * Internal provider stream contract.
+ *
+ * Native protocol adapters attach a request-local finalizer when conversation
+ * replay requires information that cannot be reconstructed from generic results.
+ */
+export interface DriverCompletionStream extends AsyncIterable<CompletionChunkObject> {
+    finalizeConversation?: () => unknown | Promise<unknown>;
+}
+
+/**
  * Tool definition for LLM tool use.
  * The input_schema uses a permissive type to support both:
  * - AJV's JSONSchemaType<T> for type-safe schema generation
@@ -615,6 +625,12 @@ export interface PromptOptions {
      */
     format?: PromptFormatter;
     result_schema?: JSONSchema;
+    /**
+     * Provider-specific opt-in to put the result schema after the cached prompt
+     * prefix instead of including it in native structured-output configuration.
+     * The returned JSON is still validated against result_schema by Llumiverse.
+     */
+    prompt_cache_schema_suffix?: boolean;
 }
 
 export interface StatelessExecutionOptions extends PromptOptions {
@@ -625,6 +641,13 @@ export interface StatelessExecutionOptions extends PromptOptions {
      */
     include_original_response?: boolean;
     model_options?: ModelOptions;
+
+    /**
+     * Stable identity for prompt caching. Providers with cache routing keys receive the value directly;
+     * providers with cache breakpoints use its presence to cache the stable prefix before the final dynamic block.
+     * Providers with fully implicit caching still require an identical prompt prefix.
+     */
+    prompt_cache_key?: string;
 
     /**
      * Per-call HTTP timeouts for upstream LLM-provider calls. These override
@@ -707,7 +730,7 @@ export enum OptionType {
     string_list = 'string_list',
 }
 
-export type ReasoningEffort = 'low' | 'medium' | 'high';
+export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 // ============== Model Options ===============
 
