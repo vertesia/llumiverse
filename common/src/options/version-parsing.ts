@@ -53,11 +53,7 @@ export interface ClaudeVersion {
     major: number;
     /** Minor version number (e.g., 5, 6, 7) */
     minor: number;
-<<<<<<< HEAD
-    /** Model variant: opus, sonnet, haiku, fable, or mythos */
-=======
     /** Model family: opus, sonnet, haiku, fable, or mythos. */
->>>>>>> 49b427d (fix: improve Claude reasoning and truncation reliability (#539))
     variant: 'opus' | 'sonnet' | 'haiku' | 'fable' | 'mythos';
 }
 
@@ -316,7 +312,7 @@ export interface OpenAIGptVersion {
 
 /** Parse GPT family versions from bare IDs, snapshots, or provider-qualified paths. */
 export function parseOpenAIGptVersion(modelString: string): OpenAIGptVersion | null {
-    const match = modelString.toLowerCase().match(/(?:^|[./])(?:openai\.)?gpt-(\d+)(?:\.(\d+))?(?:-|[.:@]|$)/);
+    const match = modelString.toLowerCase().match(/(?:^|[./:])(?:openai\.)?gpt-(\d+)(?:\.(\d+))?(?:-|[.:@]|$)/);
     if (!match) return null;
     return { major: Number(match[1]), minor: Number(match[2] ?? '0') };
 }
@@ -328,7 +324,7 @@ export function isOpenAIGptVersionGTE(modelString: string, targetMajor: number, 
 }
 
 export function isOpenAIGptProModel(modelString: string): boolean {
-    return /(?:^|[./])(?:openai\.)?gpt-\d+(?:\.\d+)?-pro(?:-|[.:@]|$)/i.test(modelString);
+    return /(?:^|[./:])(?:openai\.)?gpt-\d+(?:\.\d+)?-pro(?:-|[.:@]|$)/i.test(modelString);
 }
 
 /** Current reasoning-effort metadata, expressed with version thresholds for future GPT releases. */

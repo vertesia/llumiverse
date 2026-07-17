@@ -1,17 +1,14 @@
-<<<<<<< HEAD
-import { isClaudeVersionGTE, isModelFamilyVersionGTE } from './version-parsing.js';
-
-function isDeepSeekV32OrLater(model: string): boolean {
-    return isModelFamilyVersionGTE(model, 'deepseek.v', 3, 2) || isModelFamilyVersionGTE(model, 'deepseek-v', 3, 2);
-}
-=======
 import {
     isClaudeVersionGTE,
+    isModelFamilyVersionGTE,
     isOpenAIGptProModel,
     isOpenAIGptVersionGTE,
     parseOpenAIGptVersion,
 } from './version-parsing.js';
->>>>>>> 49b427d (fix: improve Claude reasoning and truncation reliability (#539))
+
+function isDeepSeekV32OrLater(model: string): boolean {
+    return isModelFamilyVersionGTE(model, 'deepseek.v', 3, 2) || isModelFamilyVersionGTE(model, 'deepseek-v', 3, 2);
+}
 
 /**
  * Returns the max output tokens for a given model (provider-agnostic).
@@ -41,15 +38,10 @@ export function getMaxOutputTokens(model: string): number {
     if (model.includes('o1')) return 100_000;
     if (model.includes('o3') || model.includes('o4')) return 100_000;
     // GPT models
-<<<<<<< HEAD
-    if (isModelFamilyVersionGTE(model, 'openai.gpt-', 5, 4)) return 128_000;
-    if (model.includes('gpt-5')) return 128_000;
-    if (model.includes('gpt-oss')) return 16_384;
-=======
     const gptVersion = parseOpenAIGptVersion(model);
     if (isOpenAIGptProModel(model) && gptVersion?.major === 5 && gptVersion.minor === 0) return 272_000;
     if (isOpenAIGptVersionGTE(model, 5, 0)) return 128_000;
->>>>>>> 49b427d (fix: improve Claude reasoning and truncation reliability (#539))
+    if (model.includes('gpt-oss')) return 16_384;
     if (model.includes('gpt-4o')) return 16_384;
     if (model.includes('gpt-4')) return 8_192;
     if (model.includes('gpt-3.5')) return 4_096;
@@ -108,14 +100,11 @@ export function getContextWindowSize(model: string): number {
     // OpenAI o-series (check before gpt-4 to avoid false matches)
     if (model.includes('o1') || model.includes('o3') || model.includes('o4')) return 200_000;
     // GPT models — check specific variants before generic gpt-4
-<<<<<<< HEAD
+    // Bedrock Mantle exposes its GPT models with an openai.gpt-* identifier and a smaller context window.
     if (isModelFamilyVersionGTE(model, 'openai.gpt-', 5, 4)) return 272_000;
-    if (model.includes('gpt-5')) return 400_000;
-    if (model.includes('gpt-oss')) return 131_072;
-=======
     if (isOpenAIGptVersionGTE(model, 5, 4)) return 1_050_000;
     if (isOpenAIGptVersionGTE(model, 5, 0)) return 400_000;
->>>>>>> 49b427d (fix: improve Claude reasoning and truncation reliability (#539))
+    if (model.includes('gpt-oss')) return 131_072;
     if (model.includes('gpt-4.1') || model.includes('gpt-4-1')) return 1_000_000;
     if (model.includes('gpt-4-turbo') || model.includes('gpt-4o')) return 128_000;
     if (model.includes('gpt-4')) return 8_000;

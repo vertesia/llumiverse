@@ -59,6 +59,7 @@ describe('OpenAI GPT model version parsing', () => {
         ['models/gpt-5.4-2026-03-05', { major: 5, minor: 4 }],
         ['gpt-5.7-pro-20270101', { major: 5, minor: 7 }],
         ['us.openai.gpt-5.6-sol-v1:0', { major: 5, minor: 6 }],
+        ['gpt-deployment::gpt-5', { major: 5, minor: 0 }],
         ['gpt-6', { major: 6, minor: 0 }],
     ] as const)('parses %s', (model, expected) => {
         expect(parseOpenAIGptVersion(model)).toEqual(expected);

@@ -95,13 +95,10 @@ function isOpenAIReasoningModel(model: string): boolean {
     );
 }
 
-<<<<<<< HEAD
-function openAIReasoning(effort: string | undefined): OpenAI.Responses.ResponseCreateParams['reasoning'] {
-    if (!effort) {
-        return undefined;
-    }
-    // Forward provider-native values unchanged so the provider can return an authoritative validation error.
-    return { effort } as OpenAI.Responses.ResponseCreateParams['reasoning'];
+export function openAIReasoningEffort(model: string, effort: string | undefined): string | undefined {
+    return effort && (isOpenAIReasoningModel(model) || model.toLowerCase().startsWith('xai.grok-'))
+        ? effort
+        : undefined;
 }
 
 function hasExplicitPromptCacheBreakpoint(item: ResponseInputItem): boolean {
@@ -157,10 +154,6 @@ function configureOpenAIPromptCaching(
     const markedInput = [...input];
     markedInput[sourceIndex] = { ...source, content };
     return { input: markedInput, options: { mode: 'explicit' } };
-=======
-export function openAIReasoningEffort(model: string, effort: string | undefined): string | undefined {
-    return effort && isOpenAIReasoningModel(model) ? effort : undefined;
->>>>>>> 49b427d (fix: improve Claude reasoning and truncation reliability (#539))
 }
 
 //TODO: Do we need a list?, replace with if statements and modernize?
@@ -222,14 +215,10 @@ export class OpenAIResponsesProtocol {
         }
 
         const isReasoningModel = isOpenAIReasoningModel(options.model);
-<<<<<<< HEAD
-        const reasoning = openAIReasoning(model_options?.effort ?? model_options?.reasoning_effort);
-=======
         const effort = openAIReasoningEffort(options.model, model_options?.effort ?? model_options?.reasoning_effort);
         // The SDK can lag newly documented effort values (for example `max`).
         // Preserve caller input and let the provider validate model-specific support.
         const reasoning = effort ? ({ effort } as unknown as OpenAIReasoning) : undefined;
->>>>>>> 49b427d (fix: improve Claude reasoning and truncation reliability (#539))
 
         const promptCache = configureOpenAIPromptCaching(
             conversation,
@@ -303,12 +292,8 @@ export class OpenAIResponsesProtocol {
         }
 
         const isReasoningModel = isOpenAIReasoningModel(options.model);
-<<<<<<< HEAD
-        const reasoning = openAIReasoning(model_options?.effort ?? model_options?.reasoning_effort);
-=======
         const effort = openAIReasoningEffort(options.model, model_options?.effort ?? model_options?.reasoning_effort);
         const reasoning = effort ? ({ effort } as unknown as OpenAIReasoning) : undefined;
->>>>>>> 49b427d (fix: improve Claude reasoning and truncation reliability (#539))
 
         const promptCache = configureOpenAIPromptCaching(
             conversation,
