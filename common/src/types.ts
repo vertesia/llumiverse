@@ -427,6 +427,16 @@ export interface CompletionChunkObject {
 }
 
 /**
+ * Internal provider stream contract.
+ *
+ * Native protocol adapters attach a request-local finalizer when conversation
+ * replay requires information that cannot be reconstructed from generic results.
+ */
+export interface DriverCompletionStream extends AsyncIterable<CompletionChunkObject> {
+    finalizeConversation?: () => unknown | Promise<unknown>;
+}
+
+/**
  * Tool definition for LLM tool use.
  * The input_schema uses a permissive type to support both:
  * - AJV's JSONSchemaType<T> for type-safe schema generation
@@ -720,7 +730,7 @@ export enum OptionType {
     string_list = 'string_list',
 }
 
-export type ReasoningEffort = 'low' | 'medium' | 'high';
+export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 // ============== Model Options ===============
 
