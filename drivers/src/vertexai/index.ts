@@ -40,6 +40,8 @@ import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } fro
 import { getModelDefinition, trimModelName } from './models.js';
 import { getListedVertexOpenMaaSModels } from './open-maas-models.js';
 
+const DEFAULT_GEMINI_REQUEST_TIMEOUT_MS = 10 * 60_000;
+
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
     region: string;
@@ -137,8 +139,11 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     private getGoogleGenAIHttpOptions(flex: boolean, httpTimeout?: HttpTimeoutOptions) {
+        const configuredTimeout = mergeDriverHttpTimeoutOptions(this.options.httpTimeout, httpTimeout);
+        const hasRequestTimeout =
+            configuredTimeout?.headersTimeout !== undefined || configuredTimeout?.bodyTimeout !== undefined;
         return {
-            timeout: this.getSdkRequestTimeoutMs(httpTimeout),
+            timeout: hasRequestTimeout ? this.getSdkRequestTimeoutMs(httpTimeout) : DEFAULT_GEMINI_REQUEST_TIMEOUT_MS,
             ...(flex
                 ? {
                       headers: {
