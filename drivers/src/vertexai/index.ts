@@ -36,7 +36,7 @@ import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } fro
 import type { LLamaPrompt } from './models/llama.js';
 import { getModelDefinition, trimModelName } from './models.js';
 
-const DEFAULT_GEMINI_REQUEST_TIMEOUT_MS = 5 * 60_000;
+const DEFAULT_GEMINI_REQUEST_TIMEOUT_MS = 10 * 60_000;
 
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;

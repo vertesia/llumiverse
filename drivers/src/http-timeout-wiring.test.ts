@@ -317,7 +317,7 @@ describe('driver HTTP timeout wiring', () => {
         driver.destroy();
     });
 
-    it('allows five minutes for Gemini requests by default', () => {
+    it('allows ten minutes for Gemini requests by default', () => {
         const driver = new VertexAIDriver({
             project: 'project',
             region: 'us-central1',
@@ -335,8 +335,8 @@ describe('driver HTTP timeout wiring', () => {
             getGoogleGenAIHttpOptions: (flex: boolean) => { timeout: number };
         }>(connectOnlyDriver);
 
-        expect(internals.getGoogleGenAIHttpOptions(false).timeout).toBe(300_000);
-        expect(connectOnlyInternals.getGoogleGenAIHttpOptions(false).timeout).toBe(300_000);
+        expect(internals.getGoogleGenAIHttpOptions(false).timeout).toBe(600_000);
+        expect(connectOnlyInternals.getGoogleGenAIHttpOptions(false).timeout).toBe(600_000);
         expect(internals.getAnthropicVertexClientOptions('global', {}).timeout).toBe(60_000);
 
         connectOnlyDriver.destroy();
