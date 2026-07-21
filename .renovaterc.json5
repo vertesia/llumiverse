@@ -46,13 +46,15 @@
       "addLabels": ["renovate-automerge"]
     },
     {
-      "groupName": "node deps",
+      "groupName": "node dependencies",
+      "assignees": ["michaelva"],
       "matchManagers": ["npm", "nvm", "nodenv"],
       "rangeStrategy": "bump",
       "schedule": "* * * * 3" // Wednesday
     },
     {
       "groupName": "biome",
+      "assignees": ["michaelva"],
       "matchManagers": [
         "npm"
       ],
@@ -84,11 +86,14 @@
         "@aws-sdk/**",
         "@anthropic-ai/**"
       ],
+      // Owner: LeonRuggiero maintains the model-provider client SDKs.
+      "assignees": ["LeonRuggiero"],
       "rangeStrategy": "bump",
       "schedule": "* * * * 4" // Thursday
     },
     {
       "groupName": "Vertesia libraries",
+      "assignees": ["LeonRuggiero"],
       "matchManagers": [
         "npm"
       ],
@@ -114,6 +119,8 @@
         "npm",
         "pnpm"
       ],
+      // Owner: LeonRuggiero.
+      "assignees": ["LeonRuggiero"],
       "rangeStrategy": "bump",
       "schedule": "* * * * 2" // Tuesday
     },
@@ -162,6 +169,14 @@
         "pnpm-workspace.overrides"
       ],
       "enabled": false
+    },
+    // Ownership: assign GitHub Actions dependency PRs to their maintainer.
+    {
+      "description": "Assign GitHub Actions dependency PRs to mincong-h",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "assignees": ["mincong-h"]
     }
   ]
 }
