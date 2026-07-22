@@ -192,7 +192,7 @@ function getTextOptions(model: string): ExecutionOptions {
               }
             : {
                   _option_id: 'text-fallback',
-                  max_tokens: 256,
+                  max_tokens: 1000,
                   temperature: 0.3,
               },
     };
@@ -417,8 +417,10 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)(
         );
 
         test.skipIf(!visionModel)(`${name}: multi-turn conversation with image`, { timeout: TIMEOUT }, async () => {
-            // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
-            const options = getTextOptions(visionModel!);
+            if (!visionModel) {
+                throw new Error(`Expected vision model for ${name}`);
+            }
+            const options = getTextOptions(visionModel);
 
             // Turn 1: Send an image as base64 (like Studio does)
             // Using Google logo as a simple, accessible test image
@@ -483,8 +485,10 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)(
         });
 
         test.skipIf(!visionModel)(`${name}: conversation with multiple images`, { timeout: TIMEOUT }, async () => {
-            // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
-            const options = getTextOptions(visionModel!);
+            if (!visionModel) {
+                throw new Error(`Expected vision model for ${name}`);
+            }
+            const options = getTextOptions(visionModel);
 
             // Turn 1: Send two images as base64 (like Studio does)
             const googleLogoUrl = 'https://www.google.com/images/branding/googlelogo/2x/googlelogo_color_272x92dp.png';
@@ -506,8 +510,8 @@ describe.skipIf(!hasDrivers).concurrent.each(drivers)(
             const result1 = await driver.execute(prompt1, options);
             expect(result1.result.length).toBeGreaterThan(0);
             const text1 = result1.result.map(completionResultToString).join('').toLowerCase();
-            expect(text1).toMatch(/google/);
-            expect(text1).toMatch(/github/);
+            expect(text1).toContain('google');
+            expect(text1).toContain('github');
             expect(result1.conversation).toBeDefined();
 
             // Critical test: Verify conversation with multiple images is serializable

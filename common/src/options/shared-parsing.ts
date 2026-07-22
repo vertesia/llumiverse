@@ -8,7 +8,7 @@
 
 import { type ModelOptionInfoItem, OptionType } from '../types.js';
 import { getMaxOutputTokens } from './context-windows.js';
-import { getAvailableEffortLevels, isClaudeVersionGTE, supportsAdaptiveThinking } from './version-parsing.js';
+import { getAvailableEffortLevels, isClaudeVersionGTE, requiresAdaptiveThinkingOnly } from './version-parsing.js';
 
 // ============================================================================
 // Max tokens
@@ -23,7 +23,7 @@ import { getAvailableEffortLevels, isClaudeVersionGTE, supportsAdaptiveThinking 
  */
 export function getClaudeMaxTokensLimit(model: string): number {
     if (model.includes('-3-7')) return 128000;
-    if (model.includes('opus-4-7')) return 128000;
+    if (isClaudeVersionGTE(model, 4, 7)) return 128000;
     return getMaxOutputTokens(model);
 }
 
@@ -88,17 +88,14 @@ export function buildClaudeEffortOptions(model: string): ModelOptionInfoItem[] {
 // ============================================================================
 
 /**
- * Thinking budget option — shown for non-adaptive Claude thinking models (3.7, 4.5).
+ * Thinking budget option — shown for Claude models that still accept extended thinking.
  * Setting this enables extended thinking with the given token budget.
  *
- * Returns an empty array for models that don't support extended thinking or that
- * use adaptive thinking instead (where effort is the control knob).
+ * Dual-mode 4.6 models retain the legacy budget control for compatibility.
+ * Models at 4.7+ use adaptive thinking only and do not expose a budget.
  */
 export function buildClaudeThinkingBudgetOption(model: string): ModelOptionInfoItem[] {
-    // Adaptive-only models (Opus 4.7+) don't accept budget_tokens at all.
-    // Adaptive models (Opus/Sonnet 4.6) still accept budget_tokens but it's deprecated;
-    // those models should use effort instead. Show budget only for non-adaptive thinking models.
-    if (!isClaudeVersionGTE(model, 3, 7) || supportsAdaptiveThinking(model)) return [];
+    if (!isClaudeVersionGTE(model, 3, 7) || requiresAdaptiveThinkingOnly(model)) return [];
     return [
         {
             name: 'thinking_budget_tokens',

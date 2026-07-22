@@ -8,7 +8,7 @@ import { HuggingFaceIEDriver } from './huggingface_ie.js';
 import { MistralAIDriver } from './mistral/index.js';
 import { AzureOpenAIDriver } from './openai/azure_openai.js';
 import { OpenAIDriver } from './openai/openai.js';
-import { OpenAICompatibleDriver } from './openai/openai_compatible.js';
+import { OpenAIResponsesDriver } from './openai/openai_responses.js';
 import { ReplicateDriver } from './replicate.js';
 import { TogetherAIDriver } from './togetherai/index.js';
 import { VertexAIDriver } from './vertexai/index.js';
@@ -28,6 +28,14 @@ type SdkFetchHolder = {
 
 type FetchClientInternals = {
     _fetch: Promise<typeof fetch>;
+};
+
+type MistralClientInternals = {
+    _options: {
+        httpClient: {
+            fetcher: typeof fetch;
+        };
+    };
 };
 
 type BedrockRequestHandlerConfig = {
@@ -99,6 +107,62 @@ describe('driver HTTP timeout wiring', () => {
         driver.destroy();
     });
 
+    it('uses a longer Bedrock timeout default for non-streaming text execution', () => {
+        const driver = new BedrockDriver({
+            region: 'us-east-1',
+        });
+
+        const internals = exposePrivate<{
+            getBedrockRequestHandlerConfig: (httpTimeout?: HttpTimeoutOptions) => BedrockRequestHandlerConfig;
+            getBedrockNonStreamingHttpTimeout: (httpTimeout?: HttpTimeoutOptions) => HttpTimeoutOptions;
+        }>(driver);
+
+        expect(internals.getBedrockRequestHandlerConfig()).toEqual({
+            requestTimeout: 60_000,
+            throwOnRequestTimeout: true,
+            connectionTimeout: 10_000,
+            socketTimeout: 60_000,
+        });
+        expect(internals.getBedrockRequestHandlerConfig(internals.getBedrockNonStreamingHttpTimeout())).toEqual({
+            requestTimeout: 900_000,
+            throwOnRequestTimeout: true,
+            connectionTimeout: 10_000,
+            socketTimeout: 900_000,
+        });
+
+        driver.destroy();
+    });
+
+    it('keeps explicit Bedrock non-streaming timeout overrides field-by-field', () => {
+        const driver = new BedrockDriver({
+            region: 'us-east-1',
+            httpTimeout: {
+                bodyTimeout: 120_000,
+                connectTimeout: 1_000,
+            },
+        });
+
+        const internals = exposePrivate<{
+            getBedrockRequestHandlerConfig: (httpTimeout?: HttpTimeoutOptions) => BedrockRequestHandlerConfig;
+            getBedrockNonStreamingHttpTimeout: (httpTimeout?: HttpTimeoutOptions) => HttpTimeoutOptions;
+        }>(driver);
+
+        expect(
+            internals.getBedrockRequestHandlerConfig(
+                internals.getBedrockNonStreamingHttpTimeout({
+                    headersTimeout: 180_000,
+                }),
+            ),
+        ).toEqual({
+            requestTimeout: 180_000,
+            throwOnRequestTimeout: true,
+            connectionTimeout: 1_000,
+            socketTimeout: 120_000,
+        });
+
+        driver.destroy();
+    });
+
     it('passes the driver fetch to SDK clients that accept a custom fetch implementation', () => {
         const openai = new OpenAIDriver({ apiKey: 'test-key' });
         expectSdkUsesDriverFetch(openai, openai.service);
@@ -112,7 +176,7 @@ describe('driver HTTP timeout wiring', () => {
         expectSdkUsesDriverFetch(azure, azure.service);
         azure.destroy();
 
-        const compatible = new OpenAICompatibleDriver({
+        const compatible = new OpenAIResponsesDriver({
             apiKey: 'test-key',
             endpoint: 'https://example.test/v1',
         });
@@ -142,7 +206,9 @@ describe('driver HTTP timeout wiring', () => {
 
     it('passes the driver fetch to FetchClient-backed drivers', async () => {
         const mistral = new MistralAIDriver({ apiKey: 'test-key' });
-        await expectFetchClientUsesDriverFetch(mistral, mistral.client);
+        expect(exposePrivate<MistralClientInternals>(mistral.client)._options.httpClient.fetcher).toBe(
+            driverFetch(mistral),
+        );
         mistral.destroy();
 
         const watsonx = new WatsonxDriver({
@@ -172,7 +238,7 @@ describe('driver HTTP timeout wiring', () => {
         });
 
         await expectFetchClientUsesDriverFetch(driver, driver.getFetchClient());
-        await expectFetchClientUsesDriverFetch(driver, driver.getLLamaClient());
+        await expectFetchClientUsesDriverFetch(driver, driver.getFetchClientForRegion('us-east5'));
 
         driver.destroy();
     });
@@ -258,6 +324,32 @@ describe('driver HTTP timeout wiring', () => {
         expect(overrideGoogleClient).not.toBe(defaultGoogleClient);
         expect(driver.getGoogleGenAIClient()).toBe(defaultGoogleClient);
 
+        driver.destroy();
+    });
+
+    it('allows ten minutes for Gemini requests by default', () => {
+        const driver = new VertexAIDriver({
+            project: 'project',
+            region: 'us-central1',
+        });
+        const internals = exposePrivate<{
+            getGoogleGenAIHttpOptions: (flex: boolean) => { timeout: number };
+            getAnthropicVertexClientOptions: (region: string, authClient: unknown) => { timeout: number };
+        }>(driver);
+        const connectOnlyDriver = new VertexAIDriver({
+            project: 'project',
+            region: 'us-central1',
+            httpTimeout: { connectTimeout: 1_000 },
+        });
+        const connectOnlyInternals = exposePrivate<{
+            getGoogleGenAIHttpOptions: (flex: boolean) => { timeout: number };
+        }>(connectOnlyDriver);
+
+        expect(internals.getGoogleGenAIHttpOptions(false).timeout).toBe(600_000);
+        expect(connectOnlyInternals.getGoogleGenAIHttpOptions(false).timeout).toBe(600_000);
+        expect(internals.getAnthropicVertexClientOptions('global', {}).timeout).toBe(60_000);
+
+        connectOnlyDriver.destroy();
         driver.destroy();
     });
 });

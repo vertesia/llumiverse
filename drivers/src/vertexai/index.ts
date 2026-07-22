@@ -28,13 +28,19 @@ import { AbstractDriver } from '@llumiverse/core/driver';
 import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
 import { type FETCH_FN, FetchClient } from '@vertesia/api-fetch-client';
 import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from 'google-auth-library';
+import {
+    buildOpenAIChatCompletionsStreamingConversation,
+    type OpenAIChatCompletionsPrompt,
+} from '../openai/openai_chat_completions.js';
 import { type ClaudePrompt, formatClaudeDebugPrompt } from '../shared/claude-messages.js';
 import { generateVertexAiEmbeddings } from './embeddings/embed.js';
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
 import { formatGeminiDebugPrompt } from './models/gemini.js';
 import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
-import type { LLamaPrompt } from './models/llama.js';
 import { getModelDefinition, trimModelName } from './models.js';
+import { getListedVertexOpenMaaSModels } from './open-maas-models.js';
+
+const DEFAULT_GEMINI_REQUEST_TIMEOUT_MS = 10 * 60_000;
 
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
@@ -66,7 +72,7 @@ function isClaudeStreamingPrompt(prompt: unknown): prompt is ClaudeStreamingProm
 }
 
 //General Prompt type for VertexAI
-export type VertexAIPrompt = ImagenPrompt | GenerateContentPrompt | ClaudePrompt | LLamaPrompt;
+export type VertexAIPrompt = ImagenPrompt | GenerateContentPrompt | ClaudePrompt | OpenAIChatCompletionsPrompt;
 
 export { trimModelName };
 
@@ -77,10 +83,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     aiplatform: v1beta1.ModelServiceClient | undefined;
     anthropicClient: AnthropicVertex | undefined;
     fetchClient: FetchClient | undefined;
+    private regionOverrideClients: Map<string, FetchClient> = new Map();
     googleGenAI: GoogleGenAI | undefined;
     googleGenAIRegion: string | undefined;
     googleGenAIFlex: boolean | undefined;
-    llamaClient: (FetchClient & { region?: string }) | undefined;
     modelGarden: v1beta1.ModelGardenServiceClient | undefined;
     imagenClient: PredictionServiceClient | undefined;
     predictionClient: PredictionServiceClient | undefined;
@@ -98,7 +104,6 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         this.googleGenAIRegion = undefined;
         this.googleGenAIFlex = undefined;
         this.modelGarden = undefined;
-        this.llamaClient = undefined;
         this.imagenClient = undefined;
         this.predictionClient = undefined;
 
@@ -134,8 +139,11 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     private getGoogleGenAIHttpOptions(flex: boolean, httpTimeout?: HttpTimeoutOptions) {
+        const configuredTimeout = mergeDriverHttpTimeoutOptions(this.options.httpTimeout, httpTimeout);
+        const hasRequestTimeout =
+            configuredTimeout?.headersTimeout !== undefined || configuredTimeout?.bodyTimeout !== undefined;
         return {
-            timeout: this.getSdkRequestTimeoutMs(httpTimeout),
+            timeout: hasRequestTimeout ? this.getSdkRequestTimeoutMs(httpTimeout) : DEFAULT_GEMINI_REQUEST_TIMEOUT_MS,
             ...(flex
                 ? {
                       headers: {
@@ -202,22 +210,27 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return this.fetchClient;
     }
 
-    public getLLamaClient(region: string = 'us-central1'): FetchClient {
-        //Lazy initialization
-        if (!this.llamaClient || this.llamaClient.region !== region) {
-            this.llamaClient = createFetchClient({
+    /**
+     * Get a fetch client with an overridden region. Useful when a model only exists
+     * in a specific region (e.g., "global" for xAI models).
+     */
+    public getFetchClientForRegion(region: string, apiVersion = 'v1', endpointRegion?: string): FetchClient {
+        const cacheKey = `${region}:${endpointRegion ?? region}:${apiVersion}:${this.options.project}`;
+        let client = this.regionOverrideClients.get(cacheKey);
+        if (!client) {
+            client = createFetchClient({
                 region: region,
                 project: this.options.project,
-                apiVersion: 'v1beta1',
+                apiVersion,
+                endpointRegion,
                 fetchImpl: this.getDriverFetch(),
             }).withAuthCallback(async () => {
                 const token = await this.googleAuth.getAccessToken();
                 return `Bearer ${token}`;
             });
-            // Store the region for potential client reuse
-            this.llamaClient.region = region;
+            this.regionOverrideClients.set(cacheKey, client);
         }
-        return this.llamaClient;
+        return client;
     }
 
     public async getAnthropicClient(
@@ -364,6 +377,17 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         toolUse: unknown[] | undefined,
         options: ExecutionOptions,
     ): Content[] | unknown | undefined {
+        // Handle OpenAI Chat Completions prompts (xAI Grok, Meta Llama via Vertex AI MaaS)
+        // IMPORTANT: check this BEFORE the Claude check — both have a `messages` array
+        if ('_is_openai_chat_completions' in prompt && prompt._is_openai_chat_completions) {
+            return buildOpenAIChatCompletionsStreamingConversation(
+                prompt as unknown as OpenAIChatCompletionsPrompt,
+                result,
+                toolUse,
+                options,
+            );
+        }
+
         // Handle Claude-style prompts (has 'messages' array)
         if (isClaudeStreamingPrompt(prompt)) {
             return this.buildClaudeStreamingConversation(prompt, result, toolUse, options);
@@ -585,40 +609,39 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
         let models: AIModel<string>[] = [];
 
-        //Model Garden Publisher models - Pretrained models
-        const publishers = ['google', 'anthropic', 'meta'];
-        // Meta "maas" models are LLama Models-As-A-Service. Non-maas models are not pre-deployed.
-        const supportedModels = { google: ['gemini', 'imagen'], anthropic: ['claude'], meta: ['maas'] };
-        // Additional models not in the listings, but we want to include
-        // TODO: Remove once the models are available in the listing API, or no longer needed
-        const additionalModels = {
-            google: ['imagen-3.0-fast-generate-001'],
-            anthropic: [],
-            meta: [
-                'llama-4-maverick-17b-128e-instruct-maas',
-                'llama-4-scout-17b-16e-instruct-maas',
-                'llama-3.3-70b-instruct-maas',
-                'llama-3.2-90b-vision-instruct-maas',
-                'llama-3.1-405b-instruct-maas',
-                'llama-3.1-70b-instruct-maas',
-                'llama-3.1-8b-instruct-maas',
-            ],
-        };
+        // Model Garden publisher listings for families that are reliably returned by the API.
+        // Open MaaS-only families are appended from VERTEX_OPEN_MAAS_MODELS below to avoid
+        // extra listPublisherModels calls for publishers whose MaaS models do not appear there.
+        const publisherConfig = {
+            google: {
+                families: ['gemini', 'imagen'],
+                excluded: [
+                    'gemini-pro',
+                    'gemini-ultra',
+                    'imagen-product-recontext-preview',
+                    'embedding',
+                    'embed',
+                    'gemini-live-2.5-flash-preview-native-audio',
+                    'computer-use-preview',
+                ],
+                /** Additional models not in the listings, but we want to include.
+                 * TODO: Remove once available in listing API. */
+                additional: ['imagen-3.0-fast-generate-001'],
+            },
+            anthropic: {
+                families: ['claude'],
+                excluded: [],
+                additional: [],
+            },
+            xai: {
+                families: ['grok'],
+                excluded: [],
+                additional: [],
+            },
+        } as const;
 
-        //Used to exclude retired models that are still in the listing API but not available for use.
-        //Or models we do not support yet
-        const unsupportedModelsByPublisher = {
-            google: [
-                'gemini-pro',
-                'gemini-ultra',
-                'imagen-product-recontext-preview',
-                'embedding',
-                'gemini-live-2.5-flash-preview-native-audio',
-                'computer-use-preview',
-            ],
-            anthropic: [],
-            meta: [],
-        };
+        type Publisher = keyof typeof publisherConfig;
+        const publishers: readonly Publisher[] = Object.keys(publisherConfig) as Publisher[];
 
         // Start all network requests in parallel
         const aiplatformPromise = aiplatform.listModels({
@@ -641,6 +664,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             ...publisherPromises,
         ]);
 
+        models = models.concat(getListedVertexOpenMaaSModels(this.options.region));
+
         // Process aiplatform models, project specific models
         const [response] = aiplatformResult;
         models = models.concat(
@@ -652,33 +677,38 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         );
 
         // Process global google models from GenAI
+        // Exclude embedding, retired and or unsupported models
+        const excludedModels = publisherConfig.google.excluded;
         models = models.concat(
-            globalGoogleResult.map((model) => {
-                const modelCapability = getModelCapabilities(model.name ?? '', 'vertexai');
-                return {
-                    id: `locations/global/${model.name}`,
-                    name: `Global ${model.name?.split('/').pop()}`,
-                    provider: 'vertexai',
-                    owner: 'google',
-                    input_modalities: modelModalitiesToArray(modelCapability.input),
-                    output_modalities: modelModalitiesToArray(modelCapability.output),
-                    tool_support: modelCapability.tool_support,
-                };
-            }),
+            globalGoogleResult
+                .filter((model) => !excludedModels.some((excludedModel) => (model.name ?? '').includes(excludedModel)))
+                .map((model) => {
+                    const modelCapability = getModelCapabilities(model.name ?? '', 'vertexai');
+                    return {
+                        id: `locations/global/${model.name}`,
+                        name: `Global ${model.name?.split('/').pop()}`,
+                        provider: 'vertexai',
+                        owner: 'google',
+                        input_modalities: modelModalitiesToArray(modelCapability.input),
+                        output_modalities: modelModalitiesToArray(modelCapability.output),
+                        tool_support: modelCapability.tool_support,
+                    };
+                }),
         );
 
         // Process publisher models
         for (const result of publisherResults) {
-            const { publisher, response } = result;
-            const modelFamily = supportedModels[publisher as keyof typeof supportedModels];
-            const retiredModels = unsupportedModelsByPublisher[publisher as keyof typeof unsupportedModelsByPublisher];
+            const { publisher, response } = result as { publisher: string; response: Array<{ name?: string }> };
+            const config = publisherConfig[publisher as Publisher];
+            const modelFamily = config.families;
+            const excludedModels = config.excluded;
 
             models = models.concat(
                 response
                     .filter((model) => {
                         const modelName = model.name ?? '';
-                        // Exclude retired models
-                        if (retiredModels.some((retiredModel) => modelName.includes(retiredModel))) {
+                        // Exclude embedding, retired and or unsupported models
+                        if (excludedModels.some((retiredModel) => modelName.includes(retiredModel))) {
                             return false;
                         }
                         // Check if the model belongs to the supported model families
@@ -688,10 +718,15 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                         return false;
                     })
                     .map((model) => {
-                        const modelCapability = getModelCapabilities(model.name ?? '', 'vertexai');
+                        const rawModelId = model.name ?? '';
+                        const isGlobalOnlyPublisher = publisher === 'xai';
+                        const listedModelId = isGlobalOnlyPublisher ? `locations/global/${rawModelId}` : rawModelId;
+                        const modelCapability = getModelCapabilities(listedModelId, 'vertexai');
                         return {
-                            id: model.name ?? '',
-                            name: model.name?.split('/').pop() ?? '',
+                            id: listedModelId,
+                            name: isGlobalOnlyPublisher
+                                ? `Global ${rawModelId.split('/').pop()}`
+                                : (rawModelId.split('/').pop() ?? ''),
                             provider: 'vertexai',
                             owner: publisher,
                             input_modalities: modelModalitiesToArray(modelCapability.input),
@@ -706,7 +741,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 const globalGeminiModels = response
                     .filter((model) => {
                         const modelName = model.name ?? '';
-                        if (retiredModels.some((retiredModel) => modelName.includes(retiredModel))) {
+                        if (excludedModels.some((retiredModel) => modelName.includes(retiredModel))) {
                             return false;
                         }
                         if (modelFamily.some((family) => modelName.includes(family))) {
@@ -748,7 +783,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 const globalAnthropicModels = response
                     .filter((model) => {
                         const modelName = model.name ?? '';
-                        if (retiredModels.some((retiredModel) => modelName.includes(retiredModel))) {
+                        if (excludedModels.some((retiredModel) => modelName.includes(retiredModel))) {
                             return false;
                         }
                         if (modelFamily.some((family) => modelName.includes(family))) {
@@ -778,7 +813,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             }
 
             // Add additional models that are not in the listing
-            for (const additionalModel of additionalModels[publisher as keyof typeof additionalModels]) {
+            for (const additionalModel of publisherConfig[publisher as Publisher].additional) {
                 const publisherModelName = `publishers/${publisher}/models/${additionalModel}`;
                 const modelCapability = getModelCapabilities(additionalModel, 'vertexai');
                 models.push({
@@ -841,20 +876,26 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
 //'us-central1-aiplatform.googleapis.com',
 const API_BASE_PATH = 'aiplatform.googleapis.com';
-function createFetchClient({
+export function createFetchClient({
     region,
     project,
     apiEndpoint,
     apiVersion = 'v1',
+    endpointRegion,
     fetchImpl,
 }: {
     region: string;
     project: string;
     apiEndpoint?: string;
     apiVersion?: string;
+    endpointRegion?: string;
     fetchImpl?: FETCH_FN;
-}) {
-    const vertexBaseEndpoint = apiEndpoint ?? `${region}-${API_BASE_PATH}`;
+}): FetchClient {
+    // For the "global" region, use aiplatform.googleapis.com without any prefix.
+    // Regional endpoints use ${region}-aiplatform.googleapis.com (e.g., us-central1-aiplatform.googleapis.com).
+    const hostRegion = endpointRegion ?? region;
+    const vertexBaseEndpoint =
+        apiEndpoint ?? (hostRegion === 'global' ? API_BASE_PATH : `${hostRegion}-${API_BASE_PATH}`);
     return new FetchClient(
         `https://${vertexBaseEndpoint}/${apiVersion}/projects/${project}/locations/${region}`,
         fetchImpl,

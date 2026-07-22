@@ -1,0 +1,237 @@
+name: (backport) automerge clean backport PRs
+run-name: >-
+  ${{
+    github.event.workflow_run.pull_requests[0].number
+    && format(
+      '(backport) automerge clean backport PR #{0}',
+      github.event.workflow_run.pull_requests[0].number
+    )
+    || format(
+      '(backport) automerge clean backport PR ({0})',
+      github.event.workflow_run.head_branch
+    )
+  }}
+
+on:
+  # zizmor: ignore[dangerous-triggers] This intentionally chains after successful
+  # backport-branch CI, then re-checks the exact head SHA before merging.
+  workflow_run:
+    workflows:
+      - "(test) Build and test"
+      - "(lint) Lint codebase"
+    types:
+      - completed
+    branches:
+      - "backport-*"
+
+permissions:
+  actions: read # required to inspect workflow run status for the exact backport head SHA
+  contents: read # required for repository metadata access through gh
+  pull-requests: read # required to inspect PR metadata, labels, and commits
+
+jobs:
+  approve-and-merge:
+    name: >-
+      ${{
+        github.event.workflow_run.pull_requests[0].number
+        && format(
+          'Approve and merge clean backport PR #{0}',
+          github.event.workflow_run.pull_requests[0].number
+        )
+        || format(
+          'Approve and merge clean backport PR for {0}',
+          github.event.workflow_run.head_branch
+        )
+      }}
+    if: |
+      github.event.workflow_run.event == 'push' &&
+      startsWith(github.event.workflow_run.head_branch, 'backport-')
+    runs-on: ubuntu-latest
+    environment: renovate-automerge
+    timeout-minutes: 5
+    concurrency:
+      group: backport-automerge-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: false
+    steps:
+      - name: Check automerge eligibility
+        id: eligibility
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          {
+            echo "should_merge=false"
+            echo "pr_url="
+          } >> "$GITHUB_OUTPUT"
+
+          prs_json="$(gh pr list \
+            --repo "$REPO" \
+            --head "$HEAD_BRANCH" \
+            --state open \
+            --json number,url,author,isDraft,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository,labels,mergeStateStatus,commits \
+            --limit 10)"
+
+          pr_count="$(jq 'length' <<< "$prs_json")"
+          if [[ "$pr_count" == "0" ]]; then
+            echo "No open PR found for $HEAD_BRANCH."
+            exit 0
+          fi
+          if [[ "$pr_count" != "1" ]]; then
+            echo "Expected exactly one open PR for $HEAD_BRANCH, found $pr_count." >&2
+            exit 1
+          fi
+
+          pr_number="$(jq -r '.[0].number' <<< "$prs_json")"
+          pr_url="$(jq -r '.[0].url' <<< "$prs_json")"
+          author_login="$(jq -r '.[0].author.login // ""' <<< "$prs_json")"
+          base_ref="$(jq -r '.[0].baseRefName' <<< "$prs_json")"
+          head_ref="$(jq -r '.[0].headRefName' <<< "$prs_json")"
+          head_sha="$(jq -r '.[0].headRefOid' <<< "$prs_json")"
+          head_repo="$(jq -r '.[0].headRepository.nameWithOwner // ""' <<< "$prs_json")"
+          head_owner="$(jq -r '.[0].headRepositoryOwner.login // ""' <<< "$prs_json")"
+          is_cross_repo="$(jq -r '.[0].isCrossRepository' <<< "$prs_json")"
+          is_draft="$(jq -r '.[0].isDraft' <<< "$prs_json")"
+          merge_state="$(jq -r '.[0].mergeStateStatus // ""' <<< "$prs_json")"
+          commit_count="$(jq '.[0].commits | length' <<< "$prs_json")"
+          repo_owner="${REPO%%/*}"
+
+          # Backport PRs are opened by the release-bot App (see .github/bin/backport.sh).
+          # This must stay distinct from the automerge App that approves below, otherwise
+          # the approval would not count under branch protection.
+          if [[ "$author_login" != "app/vertesia-release-bot" && "$author_login" != "vertesia-release-bot[bot]" ]]; then
+            echo "Skipping PR #$pr_number: author is $author_login, not the release-bot."
+            exit 0
+          fi
+          if [[ "$head_ref" != "$HEAD_BRANCH" ]]; then
+            echo "Skipping PR #$pr_number: PR head branch $head_ref does not match workflow branch $HEAD_BRANCH."
+            exit 0
+          fi
+          # backport.sh names branches backport-<PR>-to-<sanitized-target>.
+          if [[ ! "$head_ref" =~ ^backport-[0-9]+-to-.+$ ]]; then
+            echo "Skipping PR #$pr_number: head branch $head_ref is not a backport branch."
+            exit 0
+          fi
+          if [[ "$is_cross_repo" != "false" ]]; then
+            echo "Skipping PR #$pr_number: PR is from a fork."
+            exit 0
+          fi
+          if [[ "$head_repo" != "$REPO" ]]; then
+            echo "Skipping PR #$pr_number: head repository is $head_repo, not $REPO."
+            exit 0
+          fi
+          if [[ "$head_owner" != "$repo_owner" ]]; then
+            echo "Skipping PR #$pr_number: head repository owner is $head_owner, not $repo_owner."
+            exit 0
+          fi
+          # backport.sh only targets main or release/X.Y; both are eligible for automerge.
+          if [[ "$base_ref" != "main" && ! "$base_ref" =~ ^release/[0-9]+\.[0-9]+$ ]]; then
+            echo "Skipping PR #$pr_number: base branch is $base_ref, not main or release/X.Y."
+            exit 0
+          fi
+          # Conflicted backports open as drafts; never auto-merge them.
+          if [[ "$is_draft" != "false" ]]; then
+            echo "Skipping PR #$pr_number: PR is draft (conflicted backport awaiting manual resolution)."
+            exit 0
+          fi
+          if [[ "$head_sha" != "$HEAD_SHA" ]]; then
+            echo "Skipping PR #$pr_number: workflow SHA $HEAD_SHA does not match current PR head $head_sha."
+            exit 0
+          fi
+          if ! jq -e '.[0].labels | any(.name == "backport")' <<< "$prs_json" >/dev/null; then
+            echo "Skipping PR #$pr_number: missing backport label."
+            exit 0
+          fi
+          # A clean backport is exactly one cherry-pick commit on top of the target (the
+          # repo squash-merges, so the source is a single commit). More than one commit
+          # means the branch was pushed to after creation -> leave it for manual review.
+          # NOTE: unlike the renovate/sync automerge flows there is no file whitelist (a
+          # backport carries an arbitrary, already-reviewed diff) and no commit-author
+          # check (git cherry-pick preserves the original author). Integrity rests on the
+          # author/branch/label/commit-count gates here plus the head-SHA match and the
+          # required-CI checks below.
+          if [[ "$commit_count" != "1" ]]; then
+            echo "Skipping PR #$pr_number: expected exactly 1 commit, found $commit_count."
+            exit 0
+          fi
+
+          if [[ "$merge_state" == "DIRTY" ]]; then
+            echo "Skipping PR #$pr_number: merge state is DIRTY (target advanced into a conflict); leaving for manual resolution."
+            exit 0
+          fi
+
+          echo "PR #$pr_number by $author_login is eligible for automerge after workflow checks pass."
+
+          required_workflows=(
+            "build-and-test.yml"
+            "lint.yml"
+          )
+
+          for workflow in "${required_workflows[@]}"; do
+            runs_json="$(gh run list \
+              --repo "$REPO" \
+              --workflow "$workflow" \
+              --branch "$HEAD_BRANCH" \
+              --commit "$HEAD_SHA" \
+              --json databaseId,status,conclusion,event,headSha,url \
+              --limit 20)"
+            run_json="$(jq -c --arg sha "$HEAD_SHA" '[.[] | select(.headSha == $sha and .event == "push")] | sort_by(.databaseId) | last // empty' <<< "$runs_json")"
+
+            if [[ -z "$run_json" ]]; then
+              echo "Waiting for $workflow to run for $HEAD_SHA."
+              exit 0
+            fi
+
+            status="$(jq -r '.status' <<< "$run_json")"
+            conclusion="$(jq -r '.conclusion // ""' <<< "$run_json")"
+            url="$(jq -r '.url' <<< "$run_json")"
+
+            if [[ "$status" != "completed" ]]; then
+              echo "Waiting for $workflow to complete for $HEAD_SHA: $url"
+              exit 0
+            fi
+            if [[ "$conclusion" != "success" ]]; then
+              echo "Not merging PR #$pr_number: $workflow concluded '$conclusion': $url"
+              exit 0
+            fi
+
+            echo "$workflow passed for $HEAD_SHA: $url"
+          done
+
+          {
+            echo "should_merge=true"
+            echo "pr_url=$pr_url"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Generate automerge token
+        if: steps.eligibility.outputs.should_merge == 'true'
+        id: generate-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.APP_VERTESIA_RENOVATE_AUTOMERGE_ID }}
+          private-key: ${{ secrets.APP_VERTESIA_RENOVATE_AUTOMERGE_PEM }}
+          permission-actions: read
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Approve and merge clean backport PR
+        if: steps.eligibility.outputs.should_merge == 'true'
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          PR_URL: ${{ steps.eligibility.outputs.pr_url }}
+        run: |
+          set -euo pipefail
+
+          gh pr review "$PR_URL" \
+            --approve \
+            --body "Auto-approved clean backport after build/test and lint passed for ${HEAD_SHA}."
+          gh pr merge "$PR_URL" \
+            --repo "$REPO" \
+            --squash \
+            --delete-branch \
+            --match-head-commit "$HEAD_SHA"

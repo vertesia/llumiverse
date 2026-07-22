@@ -2,6 +2,7 @@ import {
     type CompletionChunkObject,
     type CompletionResult,
     type CompletionStream,
+    type DriverCompletionStream,
     type DriverOptions,
     type ExecutionOptions,
     type ExecutionResponse,
@@ -48,17 +49,17 @@ export function accumulateToolUseChunk(
     }
     // Merge tool input (for streaming where arguments come as string pieces)
     if (tool.tool_input !== null && tool.tool_input !== undefined) {
-        const existingInput = existing.tool_input as unknown;
-        const newInput = tool.tool_input as unknown;
+        const existingInput = existing.tool_input;
+        const newInput = tool.tool_input;
         if (typeof existingInput === 'string' && typeof newInput === 'string') {
             // Concatenate string arguments
-            existing.tool_input = (existingInput + newInput) as typeof existing.tool_input;
+            existing.tool_input = existingInput + newInput;
         } else if (existingInput && typeof existingInput === 'object' && newInput && typeof newInput === 'object') {
             // Merge objects
             existing.tool_input = {
-                ...(existingInput as Record<string, unknown>),
-                ...(newInput as Record<string, unknown>),
-            } as typeof existing.tool_input;
+                ...existingInput,
+                ...newInput,
+            };
         } else {
             existing.tool_input = tool.tool_input;
         }
@@ -108,12 +109,11 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
         let promptNewTokens: number | undefined;
         const httpScope = this.driver.createExecutionHttpAgentScope(this.options);
         let sourceIterator: AsyncIterator<CompletionChunkObject> | undefined;
+        let stream: DriverCompletionStream | undefined;
         let streamCompleted = false;
 
         try {
-            const stream = await httpScope.run(() =>
-                this.driver.requestTextCompletionStream(this.prompt, this.options),
-            );
+            stream = await httpScope.run(() => this.driver.requestTextCompletionStream(this.prompt, this.options));
             const iterator = stream[Symbol.asyncIterator]();
             sourceIterator = iterator;
             while (true) {
@@ -148,7 +148,7 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
                         // Note: During streaming, tool_input comes as string chunks that need concatenation
                         if (chunk.tool_use && chunk.tool_use.length > 0) {
                             for (const tool of chunk.tool_use) {
-                                accumulateToolUseChunk(accumulatedToolUse, tool as StreamingToolUse);
+                                accumulateToolUseChunk(accumulatedToolUse, tool);
                             }
                         }
                         if (Array.isArray(chunk.result) && chunk.result.length > 0) {
@@ -315,12 +315,9 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
         };
 
         // Build conversation context for multi-turn support
-        const conversation = this.driver.buildStreamingConversation(
-            this.prompt,
-            accumulatedResults,
-            toolUseArray,
-            this.options,
-        );
+        const conversation = stream?.finalizeConversation
+            ? await stream.finalizeConversation()
+            : this.driver.buildStreamingConversation(this.prompt, accumulatedResults, toolUseArray, this.options);
         if (conversation !== undefined) {
             this.completion.conversation = conversation;
         }

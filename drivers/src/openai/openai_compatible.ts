@@ -1,91 +1,153 @@
+import { type DriverOptions, LlumiverseError, type LlumiverseErrorContext } from '@llumiverse/core';
+import { AbstractDriver } from '@llumiverse/core/driver';
 import {
-    type AIModel,
-    type DriverOptions,
-    getModelCapabilities,
-    ModelType,
-    modelModalitiesToArray,
-    Providers,
-} from '@llumiverse/core';
-import OpenAI from 'openai';
-import { BaseOpenAIDriver } from './index.js';
+    APIConnectionError,
+    APIConnectionTimeoutError,
+    APIError,
+    AuthenticationError,
+    BadRequestError,
+    ConflictError,
+    ContentFilterFinishReasonError,
+    InternalServerError,
+    LengthFinishReasonError,
+    NotFoundError,
+    OpenAIError,
+    PermissionDeniedError,
+    RateLimitError,
+    UnprocessableEntityError,
+} from 'openai/error';
 
-export interface OpenAICompatibleDriverOptions extends DriverOptions {
-    /**
-     * The API key for the OpenAI-compatible service
-     */
-    apiKey: string;
+export type CompatibleAPIError = Error & {
+    status?: number;
+    statusCode?: number;
+    code?: string | null;
+    param?: string | null;
+    type?: string;
+    requestID?: string;
+    requestId?: string;
+};
 
-    /**
-     * The base URL of the OpenAI-compatible API endpoint
-     * Example: https://api.example.com/v1
-     */
-    endpoint: string;
+/** Shared behavior for drivers backed by OpenAI-compatible wire protocols. */
+export abstract class OpenAICompatibleDriverBase<
+    OptionsT extends DriverOptions = DriverOptions,
+    PromptT = unknown,
+> extends AbstractDriver<OptionsT, PromptT> {
+    public formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
+        if (!this.isCompatibleAPIError(error)) {
+            return super.formatLlumiverseError(error, context);
+        }
 
-    /**
-     * Custom headers to include in every request.
-     * Useful for Apigee proxies or custom auth schemes.
-     */
-    default_headers?: Record<string, string>;
+        const httpStatusCode = error.status ?? error.statusCode;
+        const errorCode = error.code;
+        const errorParam = error.param;
+        const errorType = error.type;
+        let userMessage = error.message || String(error);
+
+        if (httpStatusCode) {
+            userMessage = `[${httpStatusCode}] ${userMessage}`;
+        }
+        if (errorCode && !userMessage.includes(errorCode)) {
+            userMessage += ` (code: ${errorCode})`;
+        }
+        if (errorParam && !userMessage.toLowerCase().includes(errorParam.toLowerCase())) {
+            userMessage += ` [param: ${errorParam}]`;
+        }
+        const requestId = error.requestID ?? error.requestId;
+        if (requestId) {
+            userMessage += ` (Request ID: ${requestId})`;
+        }
+
+        return new LlumiverseError(
+            `[${context.provider}] ${userMessage}`,
+            this.isOpenAIErrorRetryable(error, httpStatusCode, errorCode, errorType),
+            context,
+            error,
+            httpStatusCode,
+            error.constructor?.name || 'OpenAICompatibleError',
+        );
+    }
+
+    protected isOpenAIErrorRetryable(
+        error: unknown,
+        httpStatusCode: number | undefined,
+        errorCode: string | null | undefined,
+        errorType: string | undefined,
+    ): boolean | undefined {
+        return isCompatibleErrorRetryable(error, httpStatusCode, errorCode, errorType);
+    }
+
+    /** Provider SDKs can extend compatible error recognition without weakening the shared structural checks. */
+    protected isCompatibleAPIError(error: unknown): error is CompatibleAPIError {
+        return isCompatibleAPIError(error);
+    }
 }
 
-/**
- * A generic driver for OpenAI-compatible APIs.
- * This can be used with any service that implements the OpenAI API spec,
- * such as xAI (Grok), LM Studio, Ollama, vLLM, LocalAI, etc.
- */
-export class OpenAICompatibleDriver extends BaseOpenAIDriver {
-    service: OpenAI;
-    readonly provider = Providers.openai_compatible;
+function isCompatibleAPIError(error: unknown): error is CompatibleAPIError {
+    if (!(error instanceof Error)) {
+        return false;
+    }
+    if (error instanceof APIError || error instanceof OpenAIError) {
+        return true;
+    }
+    const candidate = error as CompatibleAPIError;
+    return (
+        typeof candidate.status === 'number' ||
+        typeof candidate.statusCode === 'number' ||
+        typeof candidate.code === 'string' ||
+        ['RequestTimeoutError', 'ConnectionError'].includes(error.constructor.name)
+    );
+}
 
-    constructor(opts: OpenAICompatibleDriverOptions) {
-        super(opts);
+function isCompatibleErrorRetryable(
+    error: unknown,
+    httpStatusCode: number | undefined,
+    errorCode: string | null | undefined,
+    errorType: string | undefined,
+): boolean | undefined {
+    if (error instanceof RateLimitError) return errorCode !== 'insufficient_quota';
 
-        if (!opts.apiKey) {
-            throw new Error('apiKey is required');
-        }
-
-        if (!opts.endpoint) {
-            throw new Error('endpoint is required for OpenAI-compatible driver');
-        }
-
-        this.service = new OpenAI({
-            apiKey: opts.apiKey,
-            baseURL: opts.endpoint,
-            defaultHeaders: opts.default_headers,
-            fetch: this.getDriverFetch(),
-        });
+    if (
+        error instanceof InternalServerError ||
+        error instanceof APIConnectionTimeoutError ||
+        (error instanceof Error && ['RequestTimeoutError', 'ConnectionError'].includes(error.constructor.name))
+    ) {
+        return true;
+    }
+    if (
+        error instanceof BadRequestError ||
+        error instanceof AuthenticationError ||
+        error instanceof PermissionDeniedError ||
+        error instanceof NotFoundError ||
+        error instanceof ConflictError ||
+        error instanceof UnprocessableEntityError ||
+        error instanceof LengthFinishReasonError ||
+        error instanceof ContentFilterFinishReasonError
+    ) {
+        return false;
     }
 
-    async listModels(): Promise<AIModel[]> {
-        try {
-            const result = (await this.service.models.list()).data;
-
-            const models = result
-                .map((m) => {
-                    const modelCapability = getModelCapabilities(m.id, 'openai');
-                    let owner = m.owned_by;
-                    if (owner === 'system') {
-                        owner = 'unknown';
-                    }
-                    return {
-                        id: m.id,
-                        name: m.id,
-                        provider: this.provider,
-                        owner: owner,
-                        type: ModelType.Text,
-                        can_stream: true,
-                        is_multimodal: false,
-                        input_modalities: modelModalitiesToArray(modelCapability.input),
-                        output_modalities: modelModalitiesToArray(modelCapability.output),
-                        tool_support: modelCapability.tool_support,
-                    } satisfies AIModel<string>;
-                })
-                .sort((a, b) => a.id.localeCompare(b.id));
-
-            return models;
-        } catch (error) {
-            this.logger.warn({ error }, '[OpenAICompatible] Failed to list models, returning empty list');
-            return [];
+    if (errorCode) {
+        if (['timeout', 'server_error', 'service_unavailable', 'rate_limit_exceeded'].includes(errorCode)) return true;
+        if (
+            [
+                'invalid_api_key',
+                'invalid_request_error',
+                'model_not_found',
+                'insufficient_quota',
+                'invalid_model',
+            ].includes(errorCode) ||
+            errorCode.includes('invalid_')
+        ) {
+            return false;
         }
     }
+    if (errorType === 'invalid_request_error' || errorType === 'authentication_error') return false;
+
+    if (httpStatusCode !== undefined) {
+        if ([408, 429, 502, 503, 504, 529].includes(httpStatusCode)) return true;
+        if (httpStatusCode >= 500 && httpStatusCode < 600) return true;
+        if (httpStatusCode >= 400 && httpStatusCode < 500) return false;
+    }
+    if (error instanceof APIConnectionError) return true;
+    return undefined;
 }

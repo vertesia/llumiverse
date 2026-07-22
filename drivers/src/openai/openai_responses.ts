@@ -1,0 +1,92 @@
+import {
+    type AIModel,
+    type DriverOptions,
+    getModelCapabilities,
+    ModelType,
+    modelModalitiesToArray,
+    Providers,
+} from '@llumiverse/core';
+import OpenAI from 'openai';
+import { OpenAIResponsesDriverBase } from './index.js';
+
+export interface OpenAIResponsesDriverOptions extends DriverOptions {
+    /**
+     * The API key for the OpenAI-compatible service
+     */
+    apiKey: string;
+
+    /**
+     * The base URL of the OpenAI-compatible API endpoint
+     * Example: https://api.example.com/v1
+     */
+    endpoint: string;
+
+    /**
+     * Custom headers to include in every request.
+     * Useful for Apigee proxies or custom auth schemes.
+     */
+    default_headers?: Record<string, string>;
+}
+
+/**
+ * A generic driver for OpenAI-compatible APIs.
+ * This can be used with any service that implements the OpenAI API spec,
+ * such as xAI (Grok), LM Studio, Ollama, vLLM, LocalAI, etc.
+ */
+export class OpenAIResponsesDriver extends OpenAIResponsesDriverBase {
+    service: OpenAI;
+    readonly provider = Providers.openai_compatible;
+
+    constructor(opts: OpenAIResponsesDriverOptions) {
+        super(opts);
+
+        if (!opts.apiKey) {
+            throw new Error('apiKey is required');
+        }
+
+        if (!opts.endpoint) {
+            throw new Error('endpoint is required for OpenAI-compatible driver');
+        }
+
+        this.service = new OpenAI({
+            apiKey: opts.apiKey,
+            baseURL: opts.endpoint,
+            defaultHeaders: opts.default_headers,
+            fetch: this.getDriverFetch(),
+            maxRetries: 0,
+        });
+    }
+
+    async listModels(): Promise<AIModel[]> {
+        try {
+            const result = (await this.service.models.list()).data;
+
+            const models = result
+                .map((m) => {
+                    const modelCapability = getModelCapabilities(m.id, 'openai');
+                    let owner = m.owned_by;
+                    if (owner === 'system') {
+                        owner = 'unknown';
+                    }
+                    return {
+                        id: m.id,
+                        name: m.id,
+                        provider: this.provider,
+                        owner: owner,
+                        type: ModelType.Text,
+                        can_stream: true,
+                        is_multimodal: false,
+                        input_modalities: modelModalitiesToArray(modelCapability.input),
+                        output_modalities: modelModalitiesToArray(modelCapability.output),
+                        tool_support: modelCapability.tool_support,
+                    } satisfies AIModel<string>;
+                })
+                .sort((a, b) => a.id.localeCompare(b.id));
+
+            return models;
+        } catch (error) {
+            this.logger.warn({ error }, '[OpenAIResponses] Failed to list models, returning empty list');
+            throw new Error(`Failed to list models: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+}

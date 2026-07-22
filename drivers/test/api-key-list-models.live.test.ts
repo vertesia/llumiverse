@@ -6,8 +6,11 @@ const TIMEOUT = 30_000;
 
 describe('List models using API keys', () => {
     test.skipIf(!process.env.GEMINI_API_KEY)('Gemini: list models with API key', { timeout: TIMEOUT }, async () => {
-        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
-        const client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+            throw new Error('GEMINI_API_KEY is required');
+        }
+        const client = new GoogleGenAI({ apiKey });
 
         const pager = await client.models.list({ config: { pageSize: 100 } });
         const models = [];

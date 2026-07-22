@@ -5,6 +5,7 @@ import {
     OptionType,
     SharedOptions,
 } from '../types.js';
+import { getMaxOutputTokens } from './context-windows.js';
 import { textOptionsFallback } from './fallback.js';
 import {
     buildClaudeCacheOptions,
@@ -20,7 +21,7 @@ import { hasSamplingParameterRestriction, isGeminiModelVersionGte } from './vers
 /**
  * @discriminator _option_id
  */
-export type VertexAIOptions = ImagenOptions | VertexAIClaudeOptions | VertexAIGeminiOptions;
+export type VertexAIOptions = ImagenOptions | VertexAIClaudeOptions | VertexAIGeminiOptions | VertexAIGrokOptions;
 
 export enum ImagenTaskType {
     TEXT_IMAGE = 'TEXT_IMAGE',
@@ -101,7 +102,7 @@ export interface VertexAIGeminiOptions {
     presence_penalty?: number;
     frequency_penalty?: number;
     seed?: number;
-    effort?: 'low' | 'medium' | 'high';
+    effort?: 'minimal' | 'low' | 'medium' | 'high';
     include_thoughts?: boolean;
     thinking_budget_tokens?: number;
     thinking_level?: ThinkingLevel;
@@ -113,6 +114,14 @@ export interface VertexAIGeminiOptions {
     prominent_people?: 'PROMINENT_PEOPLE_UNSPECIFIED' | 'ALLOW_PROMINENT_PEOPLE' | 'BLOCK_PROMINENT_PEOPLE';
     output_mime_type?: 'image/png' | 'image/jpeg';
     output_compression_quality?: number;
+}
+
+export interface VertexAIGrokOptions {
+    _option_id: 'vertexai-grok';
+    max_tokens?: number;
+    temperature?: number;
+    top_p?: number;
+    stop_sequence?: string[];
 }
 
 /** Models that support Flex processing (shared, cost-efficient tier). */
@@ -136,8 +145,8 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
         return getGeminiOptions(model, option);
     } else if (model.includes('claude')) {
         return getClaudeOptions(model, option);
-    } else if (model.includes('llama')) {
-        return getLlamaOptions(model);
+    } else if (isOpenMaaSChatModel(model)) {
+        return getOpenMaaSChatOptions(model);
     }
     return textOptionsFallback;
 }
@@ -380,9 +389,12 @@ function getGeminiEffortOptions(model: string): Record<string, string> {
         return { High: 'high' };
     }
     if (model.includes('gemini-3.1-flash-image')) {
-        return { Low: 'low', High: 'high' };
+        return { Minimal: 'minimal', High: 'high' };
     }
-    return { Low: 'low', Medium: 'medium', High: 'high' };
+    if (model.includes('gemini-3.1-pro')) {
+        return { Low: 'low', Medium: 'medium', High: 'high' };
+    }
+    return { Minimal: 'minimal', Low: 'low', Medium: 'medium', High: 'high' };
 }
 
 function getGeminiThinkingOptionItems(model: string): ModelOptionInfoItem[] {
@@ -681,9 +693,18 @@ function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInf
     };
 }
 
-function getLlamaOptions(model: string): ModelOptionsInfo {
-    const max_tokens_limit = getLlamaMaxTokensLimit(model);
-    const excludeOptions = ['max_tokens', 'presence_penalty', 'frequency_penalty', 'stop_sequence'];
+function isOpenMaaSChatModel(model: string): boolean {
+    const normalized = model.toLowerCase();
+    // Open MaaS chat option support is family-based on purpose: new model releases inherit the
+    // current OpenAI-compatible option surface unless a specific older model needs an exception.
+    return ['deepseek', 'gemma-', 'glm-', 'gpt-oss', 'grok', 'kimi', 'llama', 'minimax', 'qwen', 'zai-org'].some(
+        (modelPart) => normalized.includes(modelPart),
+    );
+}
+
+function getOpenMaaSChatOptions(model: string): ModelOptionsInfo {
+    const max_tokens_limit = getMaxOutputTokens(model);
+    const excludeOptions = ['max_tokens', 'top_k', 'presence_penalty', 'frequency_penalty'];
     let commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
     const max_tokens: ModelOptionInfoItem[] = [
         {
@@ -697,15 +718,18 @@ function getLlamaOptions(model: string): ModelOptionsInfo {
         },
     ];
 
-    // Set max temperature to 1.0 for Llama models
-    commonOptions = commonOptions.map((option) => {
-        if (option.name === SharedOptions.temperature && option.type === OptionType.numeric) {
+    commonOptions = commonOptions.map((commonOption) => {
+        if (
+            model.includes('llama') &&
+            commonOption.name === SharedOptions.temperature &&
+            commonOption.type === OptionType.numeric
+        ) {
             return {
-                ...option,
+                ...commonOption,
                 max: 1.0,
             };
         }
-        return option;
+        return commonOption;
     });
 
     return {
@@ -727,10 +751,6 @@ function getGeminiMaxTokensLimit(model: string): number {
     return 8192;
 }
 
-function getLlamaMaxTokensLimit(_model: string): number {
-    return 8192;
-}
-
 export function getMaxTokensLimitVertexAi(model: string): number {
     if (model.includes('imagen-')) {
         return 0; // Imagen models do not have a max tokens limit in the same way as text models
@@ -738,8 +758,8 @@ export function getMaxTokensLimitVertexAi(model: string): number {
         return getClaudeMaxTokensLimit(model);
     } else if (model.includes('gemini')) {
         return getGeminiMaxTokensLimit(model);
-    } else if (model.includes('llama')) {
-        return getLlamaMaxTokensLimit(model);
+    } else if (isOpenMaaSChatModel(model)) {
+        return getMaxOutputTokens(model);
     }
     return 8192; // Default fallback limit
 }

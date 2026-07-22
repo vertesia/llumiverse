@@ -10,7 +10,8 @@ import type {
 import type { VertexAIDriver, VertexAIPrompt } from './index.js';
 import { ClaudeModelDefinition } from './models/claude.js';
 import { GeminiModelDefinition } from './models/gemini.js';
-import { LLamaModelDefinition } from './models/llama.js';
+import { OpenAIChatCompletionsModelDefinition } from './models/openai_chat_completions.js';
+import { getVertexOpenMaaSRequestModel } from './open-maas-models.js';
 
 export function trimModelName(model: string): string {
     const i = model.lastIndexOf('@');
@@ -44,11 +45,16 @@ export function getModelDefinition(model: string): ModelDefinition {
     // Handle both formats: "publishers/anthropic/models/..." and "locations/.../publishers/anthropic/models/..."
     let publisher: string | undefined;
     let modelName: string;
+    let region: string | undefined;
 
     const publisherIndex = splits.indexOf('publishers');
+    const locationIndex = splits.indexOf('locations');
     if (publisherIndex !== -1 && publisherIndex + 1 < splits.length) {
         publisher = splits[publisherIndex + 1];
         modelName = trimModelName(splits[splits.length - 1]);
+        if (locationIndex !== -1 && locationIndex + 1 < splits.length) {
+            region = splits[locationIndex + 1];
+        }
     } else {
         // Fallback to old logic for backward compatibility
         publisher = splits[1];
@@ -57,10 +63,30 @@ export function getModelDefinition(model: string): ModelDefinition {
 
     if (publisher?.includes('anthropic')) {
         return new ClaudeModelDefinition(modelName);
+    } else {
+        const openMaaSModel = getVertexOpenMaaSRequestModel(publisher, modelName);
+        if (openMaaSModel) {
+            return new OpenAIChatCompletionsModelDefinition({
+                modelName: openMaaSModel.modelName,
+                region: region ?? openMaaSModel.region,
+                apiVersion: openMaaSModel.apiVersion,
+                endpointRegion: openMaaSModel.endpointRegion,
+                defaultMaxTokens: openMaaSModel.defaultMaxTokens,
+                extraBody: openMaaSModel.extraBody,
+            });
+        }
+    }
+
+    if (publisher === 'xai') {
+        // Use OpenAI-compatible endpoint for xAI Grok models via Vertex AI's openapi endpoint
+        // xAI/Grok models only exist in the "global" region, not regional endpoints
+        return new OpenAIChatCompletionsModelDefinition({ modelName: `xai/${modelName}`, region: 'global' });
+    }
+
+    if (publisher?.includes('google') && modelName.includes('gemini')) {
+        return new GeminiModelDefinition(modelName);
     } else if (publisher?.includes('google')) {
         return new GeminiModelDefinition(modelName);
-    } else if (publisher?.includes('meta')) {
-        return new LLamaModelDefinition(modelName);
     }
 
     //Fallback, assume it is Gemini.

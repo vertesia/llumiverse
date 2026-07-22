@@ -8,7 +8,7 @@ import {
 } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import { AzureOpenAI } from 'openai';
-import { BaseOpenAIDriver } from './index.js';
+import { OpenAIResponsesDriverBase } from './index.js';
 
 export interface AzureOpenAIDriverOptions extends DriverOptions {
     /**
@@ -25,7 +25,7 @@ export interface AzureOpenAIDriverOptions extends DriverOptions {
     deployment?: string;
 }
 
-export class AzureOpenAIDriver extends BaseOpenAIDriver {
+export class AzureOpenAIDriver extends OpenAIResponsesDriverBase {
     service: AzureOpenAI;
     readonly provider = Providers.azure_openai;
 
@@ -49,6 +49,7 @@ export class AzureOpenAIDriver extends BaseOpenAIDriver {
             apiVersion: opts.apiVersion ?? '2024-10-21',
             deployment: opts.deployment,
             fetch: this.getDriverFetch(),
+            maxRetries: 0,
         });
     }
 

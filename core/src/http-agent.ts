@@ -73,23 +73,16 @@ export function createDriverHttpAgent(opts?: HttpTimeoutOptions): Agent {
  * drop-in replacement for global `fetch` in drivers that make raw HTTP
  * calls.
  *
- * `@vertesia/api-fetch-client` builds requests with `globalThis.Request`,
- * while the undici package uses its own `Request` class. Calling
- * `undici.fetch` directly can parse a global Request as `"[object Request]"`.
- * Use `globalThis.fetch` (undici-backed in Node/Bun) and pass the undici
- * dispatcher extension through init so the Agent timeout behavior is still
- * applied without crossing Request/Response implementations.
+ * `@vertesia/api-fetch-client` builds requests with `globalThis.Request`.
+ * Keep that Request intact and pass the undici dispatcher extension through
+ * init so the Agent timeout behavior is applied without rebuilding streamed
+ * request bodies.
  */
 export function createAgentBackedFetch(agent: Agent): typeof fetch {
     return ((input: RequestInfo | URL, init?: RequestInit) => {
-        const requestInput =
-            typeof Request !== 'undefined' && input instanceof Request
-                ? normalizeRequestInput(input, init)
-                : { input, init };
-
         const dispatcher = scopedHttpAgent.getStore() ?? agent;
-        return globalThis.fetch(requestInput.input, {
-            ...(requestInput.init ?? {}),
+        return globalThis.fetch(input, {
+            ...(stripUndefinedRequestInit(init) ?? {}),
             dispatcher,
         } as RequestInit & { dispatcher?: unknown });
     }) as unknown as typeof fetch;
@@ -120,41 +113,6 @@ export function createDriverHttpAgentScope(
             await agent.close().catch(() => {
                 /* shutdown best-effort */
             });
-        },
-    };
-}
-
-type NormalizedRequestInput = {
-    input: RequestInfo | URL;
-    init?: RequestInit & { duplex?: 'half' };
-};
-
-function normalizeRequestInput(request: Request, init?: RequestInit): NormalizedRequestInput {
-    const overrides = stripUndefinedRequestInit(init);
-    const requestInit: RequestInit & { duplex?: 'half' } = {
-        method: request.method,
-        headers: request.headers,
-        body: request.body,
-        signal: request.signal,
-        cache: request.cache,
-        credentials: request.credentials,
-        integrity: request.integrity,
-        keepalive: request.keepalive,
-        mode: request.mode,
-        redirect: request.redirect,
-        referrer: request.referrer,
-        referrerPolicy: request.referrerPolicy,
-    };
-
-    if (request.body) {
-        requestInit.duplex = 'half';
-    }
-
-    return {
-        input: request.url,
-        init: {
-            ...requestInit,
-            ...overrides,
         },
     };
 }

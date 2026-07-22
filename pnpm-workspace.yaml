@@ -18,6 +18,10 @@ minimumReleaseAgeExclude:
   - undici@7.28.0
   # Additional excludes, due to CVEs etc.
   # Nothing for now
+catalog:
+  typescript: "7.0.2"
+  "@types/node": "^24.13.3"
+  google-auth-library: "^10.9.0"
 overrides:
   # ============================
   # Special Overrides
@@ -25,11 +29,13 @@ overrides:
   # We have these for more than simple CVE fixes, but may also do that. Or have complex requirements to track.
 
   # Pin single google-auth-library
-  google-auth-library: '10.7.0'
+  google-auth-library: 'catalog:'
 
-  # Single cross-spawn source, root package.json
-  cross-spawn: '$cross-spawn'
+  # Force Node 24 types.
+  "@types/node": 'catalog:'
+
   # ============================
   # Standard CVE overrides
   # ============================
-  # Nothing for now
+  # Dependabot alerts #77/#78: Vite dev-server Windows path disclosure issues.
+  vite: ^8.0.16

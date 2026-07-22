@@ -14,16 +14,18 @@ import { describe, expect, test } from 'vitest';
 import {
     AzureOpenAIDriver,
     BedrockDriver,
+    BedrockMantleDriver,
     GroqDriver,
     MistralAIDriver,
-    OpenAICompatibleDriver,
     OpenAIDriver,
+    OpenAIResponsesDriver,
     TogetherAIDriver,
     VertexAIDriver,
     WatsonxDriver,
     xAIDriver,
 } from '../src/index.js';
 import { assertCompletionOk, assertStreamingCompletionOk } from './assertions.js';
+import { selectLiveTestDrivers } from './live-model-selection.js';
 import {
     testPrompt_color,
     testPrompt_describeImage,
@@ -51,8 +53,7 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
         }),
         models: [
             'publishers/google/models/gemini-2.5-flash-lite',
-            'publishers/anthropic/models/claude-sonnet-4-5',
-            'publishers/anthropic/models/claude-opus-4-6',
+            'locations/global/publishers/anthropic/models/claude-sonnet-5',
         ],
     });
 } else {
@@ -66,7 +67,7 @@ if (process.env.MISTRAL_API_KEY) {
             apiKey: process.env.MISTRAL_API_KEY as string,
             endpoint_url: (process.env.MISTRAL_ENDPOINT_URL as string) ?? undefined,
         }),
-        models: ['pixtral-large-latest', 'mistral-small-latest', 'mistral-large-latest'],
+        models: ['mistral-small-latest'],
     });
 } else {
     console.warn('MistralAI tests are skipped: MISTRAL_API_KEY environment variable is not set');
@@ -94,7 +95,7 @@ if (process.env.OPENAI_API_KEY) {
         driver: new OpenAIDriver({
             apiKey: process.env.OPENAI_API_KEY as string,
         }),
-        models: ['gpt-5.2', 'gpt-4o-mini'],
+        models: ['gpt-4o-mini', 'gpt-5.4-mini'],
     });
 } else {
     console.warn('OpenAI tests are skipped: OPENAI_API_KEY environment variable is not set');
@@ -123,14 +124,20 @@ if (process.env.BEDROCK_REGION) {
             region: process.env.BEDROCK_REGION as string,
         }),
         //Use foundation models and inference profiles to test the driver
-        models: [
-            'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
-            'us.amazon.nova-micro-v1:0',
-            'ai21.jamba-1-5-mini-v1:0',
-        ],
+        models: ['global.anthropic.claude-haiku-4-5-20251001-v1:0', 'us.amazon.nova-micro-v1:0'],
     });
 } else {
     console.warn('Bedrock tests are skipped: BEDROCK_REGION environment variable is not set');
+}
+
+if (process.env.BEDROCK_MANTLE_REGION) {
+    drivers.push({
+        name: 'bedrock-mantle',
+        driver: new BedrockMantleDriver({ region: process.env.BEDROCK_MANTLE_REGION }),
+        models: ['openai.gpt-oss-20b', 'google.gemma-3-4b-it', 'anthropic.claude-haiku-4-5'],
+    });
+} else {
+    console.warn('Bedrock Mantle tests are skipped: BEDROCK_MANTLE_REGION environment variable is not set');
 }
 
 if (process.env.GROQ_API_KEY) {
@@ -158,14 +165,7 @@ if (process.env.WATSONX_API_KEY) {
             projectId: process.env.WATSONX_PROJECT_ID as string,
             endpointUrl: process.env.WATSONX_ENDPOINT_URL as string,
         }),
-        models: [
-            'ibm/granite-3-2-8b-instruct',
-            'ibm/granite-3-2b-instruct',
-            //"ibm/granite-13b-instruct-v2" Does not work with schemas
-            //Non-ibm models don't work, may be account related
-            //"meta/llama-3-3-70b-instruct",
-            //"mistralai/pixtral-12b",
-        ],
+        models: ['ibm/granite-3-2b-instruct'],
     });
 } else {
     console.warn('Watsonx tests are skipped: WATSONX_API_KEY environment variable is not set');
@@ -174,7 +174,7 @@ if (process.env.WATSONX_API_KEY) {
 if (process.env.OPENROUTER_API_KEY) {
     drivers.push({
         name: 'openrouter',
-        driver: new OpenAICompatibleDriver({
+        driver: new OpenAIResponsesDriver({
             apiKey: process.env.OPENROUTER_API_KEY,
             endpoint: 'https://openrouter.ai/api/v1',
         }),
@@ -182,8 +182,7 @@ if (process.env.OPENROUTER_API_KEY) {
             'moonshotai/kimi-k2.5',
             'qwen/qwen3.5-35b-a3b',
             'minimax/minimax-m2.5',
-            'deepseek/deepseek-chat',
-            'google/gemini-3-flash-preview',
+            'google/gemini-3.1-flash-lite',
         ],
     });
 } else {
@@ -201,6 +200,11 @@ if (process.env.XAI_API_KEY) {
 } else {
     console.warn('xAI tests are skipped: XAI_API_KEY environment variable is not set');
 }
+
+const selectedDrivers = selectLiveTestDrivers(drivers, {
+    providers: process.env.LLUMIVERSE_LIVE_PROVIDERS,
+    models: process.env.LLUMIVERSE_LIVE_MODELS,
+});
 
 function getTestOptions(model: string): ExecutionOptions {
     if (model === 'o1-mini' || model === 'o3-mini') {
@@ -230,7 +234,7 @@ function getTestOptions(model: string): ExecutionOptions {
     };
 }
 
-describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => {
+describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
     let fetchedModels: AIModel[];
 
     test(`${name}: list models`, { timeout: TIMEOUT, retry: 1 }, async () => {
@@ -258,18 +262,6 @@ describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => 
     test.each(models)(`${name}: execute prompt on %s`, { timeout: TIMEOUT, retry: 2 }, async (model) => {
         const r = await driver.execute(testPrompt_color, getTestOptions(model));
         console.log(`Result for execute ${model}`, JSON.stringify(r));
-        assertCompletionOk(r, model, driver);
-    });
-
-    test.each(models)(`${name}: execute prompt with streaming on %s`, { timeout: TIMEOUT, retry: 2 }, async (model) => {
-        const r = await driver.stream(testPrompt_color, getTestOptions(model));
-        const out = await assertStreamingCompletionOk(r);
-        console.log(`Result for streaming ${model}`, JSON.stringify(out));
-    });
-
-    test.each(models)(`${name}: execute prompt with schema on %s`, { timeout: TIMEOUT, retry: 2 }, async (model) => {
-        const r = await driver.execute(testPrompt_color, { ...getTestOptions(model), result_schema: testSchema_color });
-        console.log(`Result for execute with schema ${model}`, JSON.stringify(r.result));
         assertCompletionOk(r, model, driver);
     });
 

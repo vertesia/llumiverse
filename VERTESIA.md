@@ -24,8 +24,9 @@ The main abstractions are:
 - **Build all packages**: `pnpm build`
 - **Build core package**: `cd core && pnpm build`
 - **Build drivers package**: `cd drivers && pnpm build`
-- **Run all tests**: `pnpm -r test`
-- **Run specific tests**: `cd drivers && pnpm test -- -t "pattern"`
+- **Run functional tests**: `pnpm exec vitest run --exclude '**/*.live.test.ts'`
+- **Run a targeted test**: `cd drivers && pnpm test -- <test-file>`
+- **Run all tests, including live provider tests**: `pnpm -r test`
 - **Run linting**: `pnpm lint`
 
 ## Code Style
@@ -55,7 +56,7 @@ Tests require API keys for the various LLM providers stored as environment varia
 - XAI_API_KEY
 
 Tests can be found in:
-- `drivers/test/all-models.test.ts` - Tests for all models across providers
+- `drivers/test/model-smoke.live.test.ts` - Curated live smoke coverage for a small set of models across providers
 - `drivers/test/tools.test.ts` - Tests for LLM tool functionality
 - `drivers/test/embeddings.test.ts` - Tests for embedding functionality
 - `drivers/test/image-gen.test.ts` - Tests for image generation

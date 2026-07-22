@@ -62,16 +62,16 @@ describe('Bedrock - convertToolBlocksToText', () => {
         const result = convertToolBlocksToText(messages);
 
         // Plain message unchanged
-        expect((result[0].content?.[0] as unknown as Tree).text).toBe('Search');
+        expect((result[0].content as unknown as Tree[])[0].text).toBe('Search');
         // Text block preserved, toolUse converted
-        expect((result[1].content?.[0] as unknown as Tree).text).toBe('Searching...');
-        expect((result[1].content?.[1] as unknown as Tree).text).toContain('[Tool call: search_docs');
-        expect((result[1].content?.[1] as unknown as Tree).text).toContain('query');
-        expect((result[1].content?.[1] as unknown as Tree).toolUse).toBeUndefined();
+        expect((result[1].content as unknown as Tree[])[0].text).toBe('Searching...');
+        expect((result[1].content as unknown as Tree[])[1].text).toContain('[Tool call: search_docs');
+        expect((result[1].content as unknown as Tree[])[1].text).toContain('query');
+        expect((result[1].content as unknown as Tree[])[1].toolUse).toBeUndefined();
         // toolResult converted
-        expect((result[2].content?.[0] as unknown as Tree).text).toContain('[Tool result:');
-        expect((result[2].content?.[0] as unknown as Tree).text).toContain('Found 3 docs');
-        expect((result[2].content?.[0] as unknown as Tree).toolResult).toBeUndefined();
+        expect((result[2].content as unknown as Tree[])[0].text).toContain('[Tool result:');
+        expect((result[2].content as unknown as Tree[])[0].text).toContain('Found 3 docs');
+        expect((result[2].content as unknown as Tree[])[0].toolResult).toBeUndefined();
     });
 
     test('truncates large inputs and results', () => {
@@ -83,10 +83,10 @@ describe('Bedrock - convertToolBlocksToText', () => {
             { role: 'user', content: [{ toolResult: { toolUseId: 't1', content: [{ text: 'y'.repeat(1000) }] } }] },
         ];
         const result = convertToolBlocksToText(messages);
-        expect((result[0].content?.[0] as unknown as Tree).text.length).toBeLessThan(700);
-        expect((result[0].content?.[0] as unknown as Tree).text).toContain('...');
-        expect((result[1].content?.[0] as unknown as Tree).text.length).toBeLessThan(700);
-        expect((result[1].content?.[0] as unknown as Tree).text).toContain('...');
+        expect((result[0].content as unknown as Tree[])[0].text.length).toBeLessThan(700);
+        expect((result[0].content as unknown as Tree[])[0].text).toContain('...');
+        expect((result[1].content as unknown as Tree[])[0].text.length).toBeLessThan(700);
+        expect((result[1].content as unknown as Tree[])[0].text).toContain('...');
     });
 
     test('preparePayload converts when tools=[] but preserves when tools provided', () => {
@@ -105,8 +105,10 @@ describe('Bedrock - convertToolBlocksToText', () => {
             tools: [],
         } as ExecutionOptions);
         expect(emptyTools.toolConfig).toBeUndefined();
-        expect((emptyTools.messages?.[1].content?.[0] as unknown as Tree).toolUse).toBeUndefined();
-        expect((emptyTools.messages?.[1].content?.[0] as unknown as Tree).text).toContain('[Tool call: think');
+        expect(((emptyTools.messages as Message[])[1].content as unknown as Tree[])[0].toolUse).toBeUndefined();
+        expect(((emptyTools.messages as Message[])[1].content as unknown as Tree[])[0].text).toContain(
+            '[Tool call: think',
+        );
 
         // tools provided → no conversion, toolConfig set
         const withTools = driver.preparePayload(
@@ -117,7 +119,7 @@ describe('Bedrock - convertToolBlocksToText', () => {
             } as ExecutionOptions,
         );
         expect(withTools.toolConfig).toBeDefined();
-        expect((withTools.messages?.[1].content?.[0] as unknown as Tree).toolUse).toBeDefined();
+        expect(((withTools.messages as Message[])[1].content as unknown as Tree[])[0].toolUse).toBeDefined();
     });
 
     test('no conversion when conversation has no tool blocks', () => {

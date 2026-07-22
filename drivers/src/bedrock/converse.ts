@@ -16,6 +16,42 @@ import {
 } from '@llumiverse/core';
 import { isAmazonS3Hostname, parseS3UrlToUri } from './s3.js';
 
+export function supportsConverseOutputConfig(model: string): boolean {
+    const normalized = model.toLowerCase();
+
+    // These Converse families reject outputConfig and must keep prompt-guided schemas.
+    if (
+        normalized.includes('claude') ||
+        normalized.includes('ai21.') ||
+        normalized.includes('amazon.nova') ||
+        normalized.includes('cohere.') ||
+        normalized.includes('meta.llama') ||
+        normalized.includes('deepseek.r1') ||
+        normalized.includes('writer.palmyra-x')
+    ) {
+        return false;
+    }
+
+    // Older Mistral generations reject outputConfig. New model families inherit
+    // the native structured-output behavior verified on the current generation.
+    if (
+        normalized.includes('mistral.mistral-7b-') ||
+        normalized.includes('mistral.mixtral-') ||
+        normalized.includes('mistral.mistral-large-2402') ||
+        normalized.includes('mistral.mistral-small-2402') ||
+        normalized.includes('mistral.pixtral-large-2502')
+    ) {
+        return false;
+    }
+
+    return !normalized.includes('google.gemma-3-4b');
+}
+
+export function shouldIncludeSchemaInConversePrompt(model: string): boolean {
+    const normalized = model.toLowerCase();
+    return !supportsConverseOutputConfig(normalized) || normalized.includes('minimax.minimax-m2.5');
+}
+
 function roleConversion(role: PromptRole): ConversationRole {
     return role === PromptRole.assistant ? ConversationRole.ASSISTANT : ConversationRole.USER;
 }
@@ -365,14 +401,29 @@ export async function formatConversePrompt(
         }
     }
 
-    if (options.result_schema) {
+    // Families that reject outputConfig keep prompt-guided schemas. MiniMax M2.5 accepts native
+    // structured output but also needs this alignment to produce consistently parseable JSON.
+    if (options.result_schema && shouldIncludeSchemaInConversePrompt(options.model)) {
         let schemaText: string;
         if (options.tools && options.tools.length > 0) {
             schemaText = `When not calling tools, the answer must be a JSON object using the following JSON Schema:\n${JSON.stringify(options.result_schema, undefined, 2)}`;
         } else {
             schemaText = `The answer must be a JSON object using the following JSON Schema:\n${JSON.stringify(options.result_schema, undefined, 2)}`;
         }
-        system.push({ text: `IMPORTANT: ${schemaText}` });
+        const schemaInstruction = `IMPORTANT: ${schemaText}`;
+        const taskMessage = messages[messages.length - 1];
+        const taskBlock = taskMessage?.content?.[taskMessage.content.length - 1];
+        if (
+            options.prompt_cache_key !== undefined &&
+            options.model.includes('claude') &&
+            taskBlock &&
+            'text' in taskBlock &&
+            taskBlock.text
+        ) {
+            taskBlock.text = `${taskBlock.text}\n\n${schemaInstruction}`;
+        } else {
+            system.push({ text: schemaInstruction });
+        }
     }
 
     // Safety messages are user messages that should be included at the end.

@@ -14,8 +14,11 @@ describe('Core Utilities', () => {
     test('parseJSON', () => {
         const url = new URL('./json.txt', import.meta.url);
         const text = readFileSync(url, 'utf8');
-        // biome-ignore lint/style/noNonNullAssertion: intentional non-null assertion; TS can't prove narrowing here
-        const json = parseJSON(text)!;
+        const json = parseJSON(text);
+        expect(json).toBeDefined();
+        if (!json) {
+            throw new Error('Expected json.txt to parse');
+        }
         expect((json as JSONObject).key1).toBe('value1 " test');
         expect((json as JSONObject).key2).toBe('value2');
         expect((json as JSONObject).key3).toBe('value3');

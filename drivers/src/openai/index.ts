@@ -13,15 +13,17 @@ import {
     getConversationMeta,
     getModelCapabilities,
     incrementConversationTurn,
+    isOpenAIGptVersionGTE,
     type JSONSchema,
     LlumiverseError,
-    type LlumiverseErrorContext,
     ModelType,
     modelModalitiesToArray,
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
     type OpenAiDalleOptions,
     type OpenAiGptImageOptions,
+    type PromptOptions,
+    type PromptSegment,
     type Providers,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
@@ -36,40 +38,29 @@ import {
     truncateLargeTextInConversation,
     unwrapConversationArray,
 } from '@llumiverse/core';
-import { AbstractDriver } from '@llumiverse/core/driver';
 import type OpenAI from 'openai';
 import type { AzureOpenAI } from 'openai';
-import {
-    APIConnectionError,
-    APIConnectionTimeoutError,
-    APIError,
-    AuthenticationError,
-    BadRequestError,
-    ConflictError,
-    ContentFilterFinishReasonError,
-    InternalServerError,
-    LengthFinishReasonError,
-    NotFoundError,
-    OpenAIError,
-    PermissionDeniedError,
-    RateLimitError,
-    UnprocessableEntityError,
-} from 'openai/error';
+import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAILikeMultimodalPrompt } from './openai_format.js';
+import { formatOpenAISchema } from './schema.js';
 
 // Response API types
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
+type OpenAIReasoning = NonNullable<OpenAI.Responses.ResponseCreateParams['reasoning']>;
 type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
     image_detail?: 'low' | 'high' | 'auto';
     effort?: string;
     reasoning_effort?: string;
+    verbosity?: 'low' | 'medium' | 'high';
 };
 type OpenAIErrorWithStatus = Error & { status?: unknown };
 type OpenAIUsageWithProviderDetails = OpenAI.Responses.ResponseUsage & {
     cached_tokens?: number | null;
+    cache_write_tokens?: number | null;
     prompt_tokens_details?: {
         cached_tokens?: number | null;
+        cache_write_tokens?: number | null;
     } | null;
 };
 type MutableRoleItem = { role: 'user' | 'developer' | 'system' | 'assistant' };
@@ -79,6 +70,10 @@ type OpenAIFunctionItem = ResponseInputItem & {
     name?: string;
     arguments?: string;
     output?: string;
+};
+type OpenAIPromptCacheConfig = {
+    input: ResponseInputItem[];
+    options?: OpenAI.Responses.ResponseCreateParams['prompt_cache_options'];
 };
 
 // Helper function to convert string to CompletionResult[]
@@ -96,23 +91,69 @@ function isOpenAIReasoningModel(model: string): boolean {
         normalized.includes('o1') ||
         normalized.includes('o3') ||
         normalized.includes('o4') ||
-        normalized.includes('gpt-5')
+        isOpenAIGptVersionGTE(model, 5, 0)
     );
 }
 
-function isGpt5ProModel(model: string): boolean {
-    const modelName = model.toLowerCase().split('/').pop() ?? model.toLowerCase();
-    return /^gpt-5(?:\.\d+)?-pro/.test(modelName);
+export function openAIReasoningEffort(model: string, effort: string | undefined): string | undefined {
+    return effort && (isOpenAIReasoningModel(model) || model.toLowerCase().startsWith('xai.grok-'))
+        ? effort
+        : undefined;
 }
 
-function openAIReasoningEffort(model: string, effort: string | undefined): 'low' | 'medium' | 'high' | undefined {
-    if (!effort || !isOpenAIReasoningModel(model)) {
-        return undefined;
+function hasExplicitPromptCacheBreakpoint(item: ResponseInputItem): boolean {
+    if (!('content' in item) || !Array.isArray(item.content)) {
+        return false;
     }
-    if (isGpt5ProModel(model)) {
-        return 'high';
+    return item.content.some(
+        (content) => 'prompt_cache_breakpoint' in content && content.prompt_cache_breakpoint?.mode === 'explicit',
+    );
+}
+
+function configureOpenAIPromptCaching(
+    input: ResponseInputItem[],
+    model: string,
+    promptCacheKey: string | undefined,
+): OpenAIPromptCacheConfig {
+    if (!promptCacheKey || !model.toLowerCase().startsWith('gpt-5.6')) {
+        return { input };
     }
-    return effort === 'low' || effort === 'medium' || effort === 'high' ? effort : undefined;
+
+    if (input.some(hasExplicitPromptCacheBreakpoint)) {
+        return { input, options: { mode: 'explicit' } };
+    }
+
+    const userMessageIndexes = input.flatMap((item, index) => ('role' in item && item.role === 'user' ? [index] : []));
+    if (userMessageIndexes.length < 2) {
+        return { input };
+    }
+
+    const sourceIndex =
+        userMessageIndexes.findLast((index) => {
+            const item = input[index];
+            return (
+                'content' in item &&
+                Array.isArray(item.content) &&
+                item.content.some((part) => part.type === 'input_image' || part.type === 'input_file')
+            );
+        }) ?? userMessageIndexes.at(-2);
+    if (sourceIndex === undefined) {
+        return { input };
+    }
+    const source = input[sourceIndex] as EasyInputMessage;
+    const content =
+        typeof source.content === 'string'
+            ? [{ type: 'input_text' as const, text: source.content }]
+            : source.content.map((part) => ({ ...part }));
+    const lastContent = content.at(-1);
+    if (!lastContent) {
+        return { input };
+    }
+    lastContent.prompt_cache_breakpoint = { mode: 'explicit' };
+
+    const markedInput = [...input];
+    markedInput[sourceIndex] = { ...source, content };
+    return { input: markedInput, options: { mode: 'explicit' } };
 }
 
 //TODO: Do we need a list?, replace with if statements and modernize?
@@ -124,44 +165,12 @@ const supportFineTunning = new Set([
     'gpt-4-0613',
 ]);
 
-export interface BaseOpenAIDriverOptions extends DriverOptions {}
+export interface OpenAIResponsesDriverBaseOptions extends DriverOptions {}
 
-export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOptions, ResponseInputItem[]> {
-    abstract provider:
-        | Providers.openai
-        | Providers.azure_openai
-        | Providers.xai
-        | Providers.azure_foundry
-        | Providers.togetherai
-        | Providers.openai_compatible;
-    abstract service: OpenAI | AzureOpenAI;
-
-    constructor(opts: BaseOpenAIDriverOptions) {
-        super(opts);
-        this.formatPrompt = formatOpenAILikeMultimodalPrompt;
-    }
-
-    extractDataFromResponse(_options: ExecutionOptions, result: OpenAI.Responses.Response): Completion {
-        const tokenInfo = mapUsage(result.usage);
-
-        const tools = collectTools(result.output);
-        // Collect all parts in order (text and images)
-        const allResults = extractCompletionResults(result.output);
-
-        if (allResults.length === 0 && !tools) {
-            this.logger.error({ result }, '[OpenAI] Response is not valid');
-            throw new Error('Response is not valid: no data');
-        }
-
-        return {
-            result: allResults,
-            token_usage: tokenInfo,
-            finish_reason: responseFinishReason(result, tools),
-            tool_use: tools,
-        };
-    }
-
+/** Reusable Responses text protocol shared by OpenAI-compatible transports. */
+export class OpenAIResponsesProtocol {
     async requestTextCompletionStream(
+        driver: OpenAIResponsesDriverBase,
         prompt: ResponseInputItem[],
         options: ExecutionOptions,
     ): Promise<AsyncIterable<CompletionChunkObject>> {
@@ -169,9 +178,10 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
             options.model_options?._option_id !== undefined &&
             options.model_options?._option_id !== 'openai-text' &&
             options.model_options?._option_id !== 'openai-thinking' &&
+            options.model_options?._option_id !== 'bedrock-mantle-responses' &&
             options.model_options?._option_id !== 'text-fallback'
         ) {
-            this.logger.debug({ options: options.model_options }, 'Unexpected option id');
+            driver.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
 
         // Include conversation history (same as non-streaming)
@@ -179,7 +189,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
         let conversation = fixOrphanedToolResults(fixOrphanedToolUse(updateConversation(options.conversation, prompt)));
 
         const toolDefs = getToolDefinitions(options.tools);
-        const useTools: boolean = toolDefs ? supportsToolUse(options.model, this.provider, true) : false;
+        const useTools: boolean = toolDefs ? supportsToolUse(options.model, driver.provider, true) : false;
 
         // When no tools are provided but conversation contains function_call/function_call_output
         // items (e.g. checkpoint summary calls), convert them to text to avoid API errors
@@ -194,52 +204,62 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
 
         let parsedSchema: JSONSchema | undefined;
         let strictMode = false;
-        if (options.result_schema && supportsSchema(options.model, this.provider)) {
-            try {
-                parsedSchema = openAISchemaFormat(options.result_schema);
-                strictMode = true;
-            } catch {
-                parsedSchema = limitedSchemaFormat(options.result_schema);
-                strictMode = false;
-            }
+        if (
+            options.result_schema &&
+            supportsSchema(options.model, driver.provider) &&
+            options.prompt_cache_schema_suffix !== true
+        ) {
+            const formattedSchema = formatOpenAISchema(options.result_schema);
+            parsedSchema = formattedSchema.schema;
+            strictMode = formattedSchema.strict;
         }
 
         const isReasoningModel = isOpenAIReasoningModel(options.model);
         const effort = openAIReasoningEffort(options.model, model_options?.effort ?? model_options?.reasoning_effort);
-        const reasoning = effort ? { effort } : undefined;
+        // The SDK can lag newly documented effort values (for example `max`).
+        // Preserve caller input and let the provider validate model-specific support.
+        const reasoning = effort ? ({ effort } as unknown as OpenAIReasoning) : undefined;
 
-        const stream = await this.service.responses.create({
+        const promptCache = configureOpenAIPromptCaching(
+            conversation,
+            driver.getResponsesRequestModel(options.model),
+            options.prompt_cache_key,
+        );
+        const stream = await driver.service.responses.create({
             stream: true,
-            model: options.model,
-            input: conversation,
+            model: driver.getResponsesRequestModel(options.model),
+            prompt_cache_key: options.prompt_cache_key,
+            prompt_cache_options: promptCache.options,
+            input: promptCache.input,
             reasoning,
             temperature: isReasoningModel ? undefined : model_options?.temperature,
             top_p: isReasoningModel ? undefined : model_options?.top_p,
             max_output_tokens: model_options?.max_tokens,
             tools: useTools ? toolDefs : undefined,
-            text: parsedSchema
-                ? {
-                      format: {
-                          type: 'json_schema',
-                          name: 'format_output',
-                          schema: parsedSchema,
-                          strict: strictMode,
-                      },
-                  }
-                : undefined,
+            text: buildResponseTextConfig(
+                parsedSchema,
+                strictMode,
+                model_options?.verbosity,
+                options.prompt_cache_schema_suffix === true && !!options.result_schema,
+            ),
         });
 
         return mapResponseStream(stream);
     }
 
-    async requestTextCompletion(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<Completion> {
+    async requestTextCompletion(
+        driver: OpenAIResponsesDriverBase,
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+    ): Promise<Completion> {
         if (
             options.model_options?._option_id !== undefined &&
             options.model_options?._option_id !== 'openai-text' &&
             options.model_options?._option_id !== 'openai-thinking' &&
+            options.model_options?._option_id !== 'bedrock-mantle-responses' &&
             options.model_options?._option_id !== 'text-fallback'
         ) {
-            this.logger.debug({ options: options.model_options }, 'Unexpected option id');
+            driver.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
 
         convertRoles(prompt, options.model);
@@ -248,7 +268,7 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
         insert_image_detail(prompt, model_options?.image_detail ?? 'auto');
 
         const toolDefs = getToolDefinitions(options.tools);
-        const useTools: boolean = toolDefs ? supportsToolUse(options.model, this.provider) : false;
+        const useTools: boolean = toolDefs ? supportsToolUse(options.model, driver.provider) : false;
 
         // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
         let conversation = fixOrphanedToolResults(fixOrphanedToolUse(updateConversation(options.conversation, prompt)));
@@ -261,42 +281,45 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
 
         let parsedSchema: JSONSchema | undefined;
         let strictMode = false;
-        if (options.result_schema && supportsSchema(options.model, this.provider)) {
-            try {
-                parsedSchema = openAISchemaFormat(options.result_schema);
-                strictMode = true;
-            } catch {
-                parsedSchema = limitedSchemaFormat(options.result_schema);
-                strictMode = false;
-            }
+        if (
+            options.result_schema &&
+            supportsSchema(options.model, driver.provider) &&
+            options.prompt_cache_schema_suffix !== true
+        ) {
+            const formattedSchema = formatOpenAISchema(options.result_schema);
+            parsedSchema = formattedSchema.schema;
+            strictMode = formattedSchema.strict;
         }
 
         const isReasoningModel = isOpenAIReasoningModel(options.model);
         const effort = openAIReasoningEffort(options.model, model_options?.effort ?? model_options?.reasoning_effort);
-        const reasoning = effort ? { effort } : undefined;
+        const reasoning = effort ? ({ effort } as unknown as OpenAIReasoning) : undefined;
 
-        const res = await this.service.responses.create({
+        const promptCache = configureOpenAIPromptCaching(
+            conversation,
+            driver.getResponsesRequestModel(options.model),
+            options.prompt_cache_key,
+        );
+        const res = await driver.service.responses.create({
             stream: false,
-            model: options.model,
-            input: conversation,
+            model: driver.getResponsesRequestModel(options.model),
+            prompt_cache_key: options.prompt_cache_key,
+            prompt_cache_options: promptCache.options,
+            input: promptCache.input,
             reasoning,
             temperature: isReasoningModel ? undefined : model_options?.temperature,
             top_p: isReasoningModel ? undefined : model_options?.top_p,
             max_output_tokens: model_options?.max_tokens, //TODO: use max_tokens for older models, currently relying on OpenAI to handle it
             tools: useTools ? toolDefs : undefined,
-            text: parsedSchema
-                ? {
-                      format: {
-                          type: 'json_schema',
-                          name: 'format_output',
-                          schema: parsedSchema,
-                          strict: strictMode,
-                      },
-                  }
-                : undefined,
+            text: buildResponseTextConfig(
+                parsedSchema,
+                strictMode,
+                model_options?.verbosity,
+                options.prompt_cache_schema_suffix === true && !!options.result_schema,
+            ),
         });
 
-        const completion = this.extractDataFromResponse(options, res);
+        const completion = driver.extractDataFromResponse(options, res);
         if (options.include_original_response) {
             completion.original_response = res;
         }
@@ -327,6 +350,74 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
         completion.conversation = processedConversation;
 
         return completion;
+    }
+}
+
+export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBase<
+    OpenAIResponsesDriverBaseOptions,
+    ResponseInputItem[]
+> {
+    abstract provider:
+        | Providers.openai
+        | Providers.azure_openai
+        | Providers.xai
+        | Providers.azure_foundry
+        | Providers.bedrock
+        | Providers.bedrock_mantle
+        | Providers.openai_compatible;
+    abstract service: OpenAI | AzureOpenAI;
+    private readonly responsesProtocol: OpenAIResponsesProtocol;
+
+    constructor(opts: OpenAIResponsesDriverBaseOptions) {
+        super(opts);
+        this.responsesProtocol = new OpenAIResponsesProtocol();
+    }
+
+    protected async formatPrompt(segments: PromptSegment[], options: PromptOptions): Promise<ResponseInputItem[]> {
+        const schemaSuffix = options.prompt_cache_schema_suffix === true && !!options.result_schema;
+        const resultSchema =
+            supportsSchema(options.model, this.provider) && !schemaSuffix ? undefined : options.result_schema;
+        return formatOpenAILikeMultimodalPrompt(segments, {
+            ...options,
+            result_schema: resultSchema,
+            resultSchemaPosition: schemaSuffix ? 'suffix' : undefined,
+        });
+    }
+
+    /** @internal Resolve the model identifier sent to the Responses transport. */
+    getResponsesRequestModel(model: string): string {
+        return model;
+    }
+
+    extractDataFromResponse(_options: ExecutionOptions, result: OpenAI.Responses.Response): Completion {
+        const tokenInfo = mapUsage(result.usage);
+
+        const tools = collectTools(result.output);
+        // Collect all parts in order (text and images)
+        const allResults = extractCompletionResults(result.output);
+
+        if (allResults.length === 0 && !tools) {
+            this.logger.error({ result }, '[OpenAI] Response is not valid');
+            throw new Error('Response is not valid: no data');
+        }
+
+        return {
+            result: allResults,
+            token_usage: tokenInfo,
+            finish_reason: responseFinishReason(result, tools),
+            tool_use: tools,
+        };
+    }
+
+    requestTextCompletionStream(
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+    ): Promise<AsyncIterable<CompletionChunkObject>> {
+        return this.responsesProtocol.requestTextCompletionStream(this, prompt, options);
+    }
+
+    requestTextCompletion(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<Completion> {
+        return this.responsesProtocol.requestTextCompletion(this, prompt, options);
     }
 
     protected canStream(_options: ExecutionOptions): Promise<boolean> {
@@ -669,200 +760,6 @@ export abstract class BaseOpenAIDriver extends AbstractDriver<BaseOpenAIDriverOp
             };
         }
     }
-
-    /**
-     * Format OpenAI API errors into LlumiverseError with proper status codes and retryability.
-     *
-     * OpenAI API errors have a specific structure:
-     * - APIError.status: HTTP status code (400, 401, 403, 404, 409, 422, 429, 500+)
-     * - APIError.error: Error object with type, message, param, code
-     * - APIError.requestID: Request ID for support
-     * - APIError.code: Error code (e.g., 'invalid_api_key', 'rate_limit_exceeded')
-     * - APIError.param: Parameter that caused the error (optional)
-     * - APIError.type: Error type (optional)
-     *
-     * Common error types:
-     * - BadRequestError (400): Invalid request parameters
-     * - AuthenticationError (401): Invalid API key
-     * - PermissionDeniedError (403): Insufficient permissions
-     * - NotFoundError (404): Resource not found
-     * - ConflictError (409): Resource conflict
-     * - UnprocessableEntityError (422): Validation error
-     * - RateLimitError (429): Rate limit exceeded
-     * - InternalServerError (500+): Server-side errors
-     * - APIConnectionError: Connection issues (no status code)
-     * - APIConnectionTimeoutError: Request timeout (no status code)
-     * - LengthFinishReasonError: Response truncated due to length
-     * - ContentFilterFinishReasonError: Content filtered
-     *
-     * This implementation works for:
-     * - OpenAI API
-     * - Azure OpenAI
-     * - xAI (uses OpenAI-compatible API)
-     * - Azure Foundry (OpenAI-compatible)
-     * - Other OpenAI-compatible APIs
-     *
-     * @see https://platform.openai.com/docs/guides/error-codes
-     */
-    public formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {
-        // Check if it's an OpenAI API error
-        const isOpenAIError = this.isOpenAIApiError(error);
-
-        if (!isOpenAIError) {
-            // Not an OpenAI API error, use default handling
-            throw error;
-        }
-
-        const apiError = error as APIError;
-        const httpStatusCode = apiError.status;
-
-        // Extract error message
-        const message = apiError.message || String(error);
-
-        // Extract additional error details (only available on APIError)
-        const errorCode = apiError.code;
-        const errorParam = apiError.param;
-        const errorType = apiError.type;
-
-        // Build user-facing message with status code
-        let userMessage = message;
-
-        // Include status code in message (for end-user visibility)
-        if (httpStatusCode) {
-            userMessage = `[${httpStatusCode}] ${userMessage}`;
-        }
-
-        // Add error code if available and not already in message
-        if (errorCode && !userMessage.includes(errorCode)) {
-            userMessage += ` (code: ${errorCode})`;
-        }
-
-        // Add parameter info if available and helpful
-        if (errorParam && !userMessage.toLowerCase().includes(errorParam.toLowerCase())) {
-            userMessage += ` [param: ${errorParam}]`;
-        }
-
-        // Add request ID if available (useful for OpenAI support)
-        if (apiError.requestID) {
-            userMessage += ` (Request ID: ${apiError.requestID})`;
-        }
-
-        // Determine retryability based on OpenAI error types
-        const retryable = this.isOpenAIErrorRetryable(error, httpStatusCode, errorCode, errorType);
-
-        // Use the error constructor name as the error name
-        const errorName = error.constructor?.name || 'OpenAIError';
-
-        return new LlumiverseError(
-            `[${context.provider}] ${userMessage}`,
-            retryable,
-            context,
-            error,
-            httpStatusCode,
-            errorName,
-        );
-    }
-
-    /**
-     * Type guard to check if error is an OpenAI API error or OpenAI-specific error.
-     */
-    private isOpenAIApiError(error: unknown): error is APIError | OpenAIError {
-        return (
-            error !== null && typeof error === 'object' && (error instanceof APIError || error instanceof OpenAIError)
-        );
-    }
-
-    /**
-     * Determine if an OpenAI API error is retryable.
-     *
-     * Retryable errors:
-     * - RateLimitError (429): Rate limit exceeded, retry with backoff
-     * - InternalServerError (500+): Server-side errors
-     * - APIConnectionTimeoutError: Request timeout
-     * - Error codes: 'timeout', 'server_error', 'service_unavailable'
-     * - Status codes: 408, 429, 502, 503, 504, 529, 5xx
-     *
-     * Non-retryable errors:
-     * - BadRequestError (400): Invalid request parameters
-     * - AuthenticationError (401): Invalid API key
-     * - PermissionDeniedError (403): Insufficient permissions
-     * - NotFoundError (404): Resource not found
-     * - ConflictError (409): Resource conflict
-     * - UnprocessableEntityError (422): Validation error
-     * - LengthFinishReasonError: Length limit reached
-     * - ContentFilterFinishReasonError: Content filtered
-     * - Error codes: 'invalid_api_key', 'invalid_request_error', 'model_not_found'
-     * - Other 4xx client errors
-     *
-     * @param error - The error object
-     * @param httpStatusCode - The HTTP status code if available
-     * @param errorCode - The error code if available
-     * @param errorType - The error type if available
-     * @returns True if retryable, false if not retryable, undefined if unknown
-     */
-    private isOpenAIErrorRetryable(
-        error: unknown,
-        httpStatusCode: number | undefined,
-        errorCode: string | null | undefined,
-        errorType: string | undefined,
-    ): boolean | undefined {
-        // Check specific OpenAI error types by class
-        if (error instanceof RateLimitError) return true;
-        if (error instanceof InternalServerError) return true;
-        if (error instanceof APIConnectionTimeoutError) return true;
-
-        // Non-retryable by error type
-        if (error instanceof BadRequestError) return false;
-        if (error instanceof AuthenticationError) return false;
-        if (error instanceof PermissionDeniedError) return false;
-        if (error instanceof NotFoundError) return false;
-        if (error instanceof ConflictError) return false;
-        if (error instanceof UnprocessableEntityError) return false;
-        if (error instanceof LengthFinishReasonError) return false;
-        if (error instanceof ContentFilterFinishReasonError) return false;
-
-        // Check error codes (OpenAI specific)
-        if (errorCode) {
-            // Retryable error codes
-            if (errorCode === 'timeout') return true;
-            if (errorCode === 'server_error') return true;
-            if (errorCode === 'service_unavailable') return true;
-            if (errorCode === 'rate_limit_exceeded') return true;
-
-            // Non-retryable error codes
-            if (errorCode === 'invalid_api_key') return false;
-            if (errorCode === 'invalid_request_error') return false;
-            if (errorCode === 'model_not_found') return false;
-            if (errorCode === 'insufficient_quota') return false;
-            if (errorCode === 'invalid_model') return false;
-            if (typeof errorCode === 'string' && errorCode.includes('invalid_')) return false;
-        }
-
-        // Check error type
-        if (errorType === 'invalid_request_error') return false;
-        if (errorType === 'authentication_error') return false;
-
-        // Use HTTP status code
-        if (httpStatusCode !== undefined) {
-            if (httpStatusCode === 429) return true; // Rate limit
-            if (httpStatusCode === 408) return true; // Request timeout
-            if (httpStatusCode === 502) return true; // Bad gateway
-            if (httpStatusCode === 503) return true; // Service unavailable
-            if (httpStatusCode === 504) return true; // Gateway timeout
-            if (httpStatusCode === 529) return true; // Overloaded
-            if (httpStatusCode >= 500 && httpStatusCode < 600) return true; // Server errors
-            if (httpStatusCode >= 400 && httpStatusCode < 500) return false; // Client errors
-        }
-
-        // Connection errors without status codes
-        if (error instanceof APIConnectionError && !(error instanceof APIConnectionTimeoutError)) {
-            // Generic connection errors might be retryable (network issues)
-            return true;
-        }
-
-        // Unknown error type - let consumer decide retry strategy
-        return undefined;
-    }
 }
 
 function jobInfo(job: OpenAI.FineTuning.Jobs.FineTuningJob): TrainingJob {
@@ -897,11 +794,16 @@ function mapUsage(usage?: OpenAIUsageWithProviderDetails | null): ExecutionToken
     }
     const cachedTokens =
         usage.input_tokens_details?.cached_tokens ?? usage.prompt_tokens_details?.cached_tokens ?? usage.cached_tokens;
+    const cacheWriteTokens =
+        usage.input_tokens_details?.cache_write_tokens ??
+        usage.prompt_tokens_details?.cache_write_tokens ??
+        usage.cache_write_tokens;
     return {
         prompt: usage.input_tokens,
         result: usage.output_tokens,
         total: usage.total_tokens,
         prompt_cached: cachedTokens ?? undefined,
+        prompt_cache_write: cacheWriteTokens ?? undefined,
         prompt_new: usage.input_tokens - (cachedTokens ?? 0),
     };
 }
@@ -927,6 +829,32 @@ function completionResultsToText(completionResults: CompletionResult[] | undefin
             }
         })
         .join('');
+}
+
+function buildResponseTextConfig(
+    schema: JSONSchema | undefined,
+    strict: boolean,
+    verbosity: OpenAIRequestOptions['verbosity'] | undefined,
+    jsonObject: boolean = false,
+): OpenAI.Responses.ResponseTextConfig | undefined {
+    if (!schema && !verbosity && !jsonObject) {
+        return undefined;
+    }
+    return {
+        ...(schema
+            ? {
+                  format: {
+                      type: 'json_schema' as const,
+                      name: 'format_output',
+                      schema,
+                      strict,
+                  },
+              }
+            : jsonObject
+              ? { format: { type: 'json_object' as const } }
+              : {}),
+        ...(verbosity ? { verbosity } : {}),
+    };
 }
 
 function createAssistantMessageFromCompletion(completion: Completion): ResponseInputItem[] {
@@ -1147,15 +1075,10 @@ function getToolDefinition(toolDef: ToolDefinition): OpenAI.Responses.FunctionTo
     let parsedSchema: JSONSchema | undefined;
     let strictMode = false;
     if (toolDef.input_schema) {
-        try {
-            //TODO: type assertion here is not safe, does not work with satisfies
-            parsedSchema = openAISchemaFormat(toolDef.input_schema as JSONSchema);
-            strictMode = true;
-        } catch {
-            //TODO: type assertion here is not safe, does not work with satisfies
-            parsedSchema = limitedSchemaFormat(toolDef.input_schema as JSONSchema);
-            strictMode = false;
-        }
+        // TODO: type assertion here is not safe, does not work with satisfies.
+        const formattedSchema = formatOpenAISchema(toolDef.input_schema as JSONSchema);
+        parsedSchema = formattedSchema.schema;
+        strictMode = formattedSchema.strict;
     }
 
     return {
@@ -1237,99 +1160,6 @@ function extractCompletionResults(output?: OpenAI.Responses.ResponseOutputItem[]
         }
     }
     return results;
-}
-
-//For strict mode false
-function limitedSchemaFormat(schema: JSONSchema): JSONSchema {
-    const formattedSchema: JSONSchema = { ...schema };
-
-    // Defaults not supported
-    delete formattedSchema.default;
-
-    // OpenAI requires type field even in non-strict mode
-    // If no type is specified, default to 'object' for properties with format/editor hints,
-    // otherwise 'string' as a safe fallback
-    if (!formattedSchema.type && formattedSchema.description) {
-        // Properties with format: "document" or editor hints are typically objects
-        if (formattedSchema.format === 'document' || formattedSchema.editor) {
-            formattedSchema.type = 'object';
-        } else {
-            formattedSchema.type = 'string';
-        }
-    }
-
-    if (formattedSchema?.properties) {
-        // Process each property recursively
-        for (const propName of Object.keys(formattedSchema.properties)) {
-            const property = formattedSchema.properties[propName];
-
-            // Recursively process properties
-            formattedSchema.properties[propName] = limitedSchemaFormat(property);
-
-            // Process arrays with items of type object
-            if (property?.type === 'array' && property.items && property.items?.type === 'object') {
-                formattedSchema.properties[propName] = {
-                    ...property,
-                    items: limitedSchemaFormat(property.items),
-                };
-            }
-        }
-    }
-
-    return formattedSchema;
-}
-
-//For strict mode true
-function openAISchemaFormat(schema: JSONSchema, nesting: number = 0): JSONSchema {
-    if (nesting > 5) {
-        throw new Error('OpenAI schema nesting too deep');
-    }
-
-    const formattedSchema: JSONSchema = { ...schema };
-
-    // Defaults not supported
-    delete formattedSchema.default;
-
-    // Additional properties not supported, required to be set.
-    if (formattedSchema?.type === 'object') {
-        formattedSchema.additionalProperties = false;
-    }
-
-    if (formattedSchema?.properties) {
-        // Set all properties as required
-        formattedSchema.required = Object.keys(formattedSchema.properties);
-
-        // Process each property recursively
-        for (const propName of Object.keys(formattedSchema.properties)) {
-            const property = formattedSchema.properties[propName];
-
-            // OpenAI strict mode requires all properties to have a type
-            if (!property?.type) {
-                throw new Error(`Property '${propName}' is missing required 'type' field for OpenAI strict mode`);
-            }
-
-            // Recursively process properties
-            formattedSchema.properties[propName] = openAISchemaFormat(property, nesting + 1);
-
-            // Process arrays with items of type object
-            if (property?.type === 'array' && property.items && property.items?.type === 'object') {
-                formattedSchema.properties[propName] = {
-                    ...property,
-                    items: openAISchemaFormat(property.items, nesting + 1),
-                };
-            }
-        }
-    }
-    if (
-        formattedSchema?.type === 'object' &&
-        (!formattedSchema?.properties || Object.keys(formattedSchema?.properties ?? {}).length === 0)
-    ) {
-        //If no properties are defined, then additionalProperties: true was set or the object would be empty.
-        //OpenAI does not support this on structured output/ strict mode.
-        throw new Error('OpenAI does not support empty objects or objects with additionalProperties set to true');
-    }
-
-    return formattedSchema;
 }
 
 function responseFinishReason(

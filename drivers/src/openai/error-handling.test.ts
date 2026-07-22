@@ -1,4 +1,4 @@
-import { LlumiverseError, Providers } from '@llumiverse/core';
+import { LlumiverseError, PromptRole, Providers } from '@llumiverse/core';
 import OpenAI from 'openai';
 import {
     APIConnectionError,
@@ -15,11 +15,11 @@ import {
     RateLimitError,
     UnprocessableEntityError,
 } from 'openai/error';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { exposePrivate, getProp } from '../../test/__helpers__/test-utils.js';
-import { BaseOpenAIDriver } from './index.js';
+import { OpenAIResponsesDriverBase } from './index.js';
 
-type BaseOpenAIDriverInternals = {
+type OpenAIResponsesDriverBaseInternals = {
     isOpenAIErrorRetryable: (
         error: unknown,
         httpStatusCode: number | undefined,
@@ -28,8 +28,8 @@ type BaseOpenAIDriverInternals = {
     ) => boolean | undefined;
 };
 
-// Test implementation of BaseOpenAIDriver
-class TestOpenAIDriver extends BaseOpenAIDriver {
+// Test implementation of OpenAIResponsesDriverBase
+class TestOpenAIResponsesDriver extends OpenAIResponsesDriverBase {
     provider: Providers.openai = Providers.openai;
     service: OpenAI;
 
@@ -39,9 +39,9 @@ class TestOpenAIDriver extends BaseOpenAIDriver {
     }
 }
 
-describe('BaseOpenAIDriver usage mapping', () => {
-    it('maps Together flat cached_tokens usage into prompt_cached', () => {
-        const driver = new TestOpenAIDriver();
+describe('OpenAIResponsesDriverBase usage mapping', () => {
+    it('maps cache read and write usage', () => {
+        const driver = new TestOpenAIResponsesDriver();
         const response = {
             status: 'completed',
             output: [
@@ -56,6 +56,10 @@ describe('BaseOpenAIDriver usage mapping', () => {
                 output_tokens: 20,
                 total_tokens: 120,
                 cached_tokens: 45,
+                input_tokens_details: {
+                    cached_tokens: 45,
+                    cache_write_tokens: 30,
+                },
             },
         } as unknown as OpenAI.Responses.Response;
 
@@ -66,16 +70,315 @@ describe('BaseOpenAIDriver usage mapping', () => {
             result: 20,
             total: 120,
             prompt_cached: 45,
+            prompt_cache_write: 30,
             prompt_new: 55,
         });
     });
 });
 
-describe('BaseOpenAIDriver Error Handling', () => {
-    let driver: TestOpenAIDriver;
+describe('OpenAIResponsesDriverBase prompt caching', () => {
+    it('passes prompt_cache_key to blocking Responses requests', async () => {
+        const driver = new TestOpenAIResponsesDriver();
+        const create = vi.fn().mockResolvedValue({
+            status: 'completed',
+            output: [
+                {
+                    type: 'message',
+                    role: 'assistant',
+                    content: [{ type: 'output_text', text: 'ok', annotations: [] }],
+                },
+            ],
+            usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+        });
+        driver.service = { responses: { create } } as unknown as OpenAI;
+
+        await driver.requestTextCompletion([{ role: 'user', content: 'hello' }], {
+            model: 'gpt-5.6',
+            prompt_cache_key: 'document-prefix',
+        });
+
+        expect(create).toHaveBeenCalledWith(expect.objectContaining({ prompt_cache_key: 'document-prefix' }));
+    });
+
+    it('passes prompt_cache_key to streaming Responses requests', async () => {
+        const driver = new TestOpenAIResponsesDriver();
+        const create = vi.fn().mockResolvedValue(
+            (async function* () {
+                yield { type: 'response.completed' };
+            })(),
+        );
+        driver.service = { responses: { create } } as unknown as OpenAI;
+
+        await driver.requestTextCompletionStream([{ role: 'user', content: 'hello' }], {
+            model: 'gpt-5.6',
+            prompt_cache_key: 'document-prefix',
+        });
+
+        expect(create).toHaveBeenCalledWith(expect.objectContaining({ prompt_cache_key: 'document-prefix' }));
+    });
+
+    it('places an explicit cache boundary before the changing final user message', async () => {
+        const driver = new TestOpenAIResponsesDriver();
+        const create = vi.fn().mockResolvedValue({
+            status: 'completed',
+            output: [
+                {
+                    type: 'message',
+                    role: 'assistant',
+                    content: [{ type: 'output_text', text: 'ok', annotations: [] }],
+                },
+            ],
+            usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+        });
+        driver.service = { responses: { create } } as unknown as OpenAI;
+        const prompt = [
+            { role: 'system' as const, content: 'review the extraction' },
+            {
+                role: 'user' as const,
+                content: [
+                    {
+                        type: 'input_image' as const,
+                        image_url: 'data:image/jpeg;base64,source',
+                        detail: 'auto' as const,
+                    },
+                    { type: 'input_text' as const, text: 'stable document blocks' },
+                ],
+            },
+            { role: 'user' as const, content: 'changing extraction JSON' },
+        ];
+
+        const completion = await driver.requestTextCompletion(prompt, {
+            model: 'gpt-5.6',
+            prompt_cache_key: 'document-prefix',
+        });
+
+        expect(create).toHaveBeenCalledWith(
+            expect.objectContaining({
+                prompt_cache_options: { mode: 'explicit' },
+                input: [
+                    prompt[0],
+                    {
+                        ...prompt[1],
+                        content: [
+                            {
+                                type: 'input_image',
+                                image_url: 'data:image/jpeg;base64,source',
+                                detail: 'auto',
+                            },
+                            {
+                                type: 'input_text',
+                                text: 'stable document blocks',
+                                prompt_cache_breakpoint: { mode: 'explicit' },
+                            },
+                        ],
+                    },
+                    prompt[2],
+                ],
+            }),
+        );
+        expect(prompt[1].content[1]).not.toHaveProperty('prompt_cache_breakpoint');
+        expect(JSON.stringify(completion.conversation)).not.toContain('prompt_cache_breakpoint');
+    });
+
+    it('keeps implicit caching when the prompt has no stable source and task split', async () => {
+        const driver = new TestOpenAIResponsesDriver();
+        const create = vi.fn().mockResolvedValue({
+            status: 'completed',
+            output: [
+                {
+                    type: 'message',
+                    role: 'assistant',
+                    content: [{ type: 'output_text', text: 'ok', annotations: [] }],
+                },
+            ],
+            usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+        });
+        driver.service = { responses: { create } } as unknown as OpenAI;
+
+        await driver.requestTextCompletion([{ role: 'user', content: 'single request' }], {
+            model: 'gpt-5.6',
+            prompt_cache_key: 'document-prefix',
+        });
+
+        expect(create).toHaveBeenCalledWith(expect.objectContaining({ prompt_cache_options: undefined }));
+    });
+
+    it('puts a cacheable schema after the document boundary and uses JSON object mode', async () => {
+        const driver = new TestOpenAIResponsesDriver();
+        const create = vi.fn().mockResolvedValue({
+            status: 'completed',
+            output: [
+                {
+                    type: 'message',
+                    role: 'assistant',
+                    content: [{ type: 'output_text', text: '{"value":"ok"}', annotations: [] }],
+                },
+            ],
+            usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+        });
+        driver.service = { responses: { create } } as unknown as OpenAI;
+        const resultSchema = { type: 'object' as const, properties: { value: { type: 'string' as const } } };
+        const prompt = [
+            { role: 'system' as const, content: 'process the document' },
+            {
+                role: 'user' as const,
+                content: [
+                    {
+                        type: 'input_image' as const,
+                        image_url: 'data:image/jpeg;base64,source',
+                        detail: 'auto' as const,
+                    },
+                    { type: 'input_text' as const, text: 'stable document blocks' },
+                ],
+            },
+            { role: 'user' as const, content: 'phase-specific task' },
+            {
+                role: 'user' as const,
+                content: [
+                    {
+                        type: 'input_text' as const,
+                        text: `IMPORTANT: only answer using JSON. <response_schema>${JSON.stringify(resultSchema)}</response_schema>`,
+                    },
+                ],
+            },
+        ];
+
+        await driver.requestTextCompletion(prompt, {
+            model: 'gpt-5.6',
+            prompt_cache_key: 'document-prefix',
+            prompt_cache_schema_suffix: true,
+            result_schema: resultSchema,
+        });
+
+        expect(create).toHaveBeenCalledWith(
+            expect.objectContaining({
+                prompt_cache_options: { mode: 'explicit' },
+                input: [
+                    prompt[0],
+                    {
+                        ...prompt[1],
+                        content: [
+                            {
+                                type: 'input_image',
+                                image_url: 'data:image/jpeg;base64,source',
+                                detail: 'auto',
+                            },
+                            {
+                                type: 'input_text',
+                                text: 'stable document blocks',
+                                prompt_cache_breakpoint: { mode: 'explicit' },
+                            },
+                        ],
+                    },
+                    prompt[2],
+                    prompt[3],
+                ],
+                text: { format: { type: 'json_object' } },
+            }),
+        );
+    });
+
+    it('renders a cacheable result schema as the final prompt message', async () => {
+        const driver = new TestOpenAIResponsesDriver();
+        const prompt = await driver.createPrompt(
+            [
+                { role: PromptRole.system, content: 'system' },
+                { role: PromptRole.user, content: 'stable source' },
+                { role: PromptRole.user, content: 'dynamic task' },
+            ],
+            {
+                model: 'gpt-5.6',
+                prompt_cache_schema_suffix: true,
+                result_schema: { type: 'object', properties: { value: { type: 'string' } } },
+            },
+        );
+
+        expect(prompt).toHaveLength(4);
+        expect(prompt[3]).toMatchObject({ role: 'user' });
+        expect(JSON.stringify(prompt[3])).toContain('<response_schema>');
+    });
+
+    it('validates JSON object mode output against the result schema', async () => {
+        const driver = new TestOpenAIResponsesDriver();
+        const create = vi.fn().mockResolvedValue({
+            status: 'completed',
+            output: [
+                {
+                    type: 'message',
+                    role: 'assistant',
+                    content: [{ type: 'output_text', text: '{"unexpected":"value"}', annotations: [] }],
+                },
+            ],
+            usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+        });
+        driver.service = { responses: { create } } as unknown as OpenAI;
+
+        const completion = await driver.execute([{ role: PromptRole.user, content: 'Return the requested data.' }], {
+            model: 'gpt-5.6',
+            prompt_cache_schema_suffix: true,
+            result_schema: {
+                type: 'object',
+                properties: { value: { type: 'string' } },
+                required: ['value'],
+                additionalProperties: false,
+            },
+        });
+
+        expect(create).toHaveBeenCalledWith(expect.objectContaining({ text: { format: { type: 'json_object' } } }));
+        expect(completion.error).toMatchObject({
+            code: 'validation_error',
+            message: expect.stringContaining("must have required property 'value'"),
+        });
+    });
+
+    it('does not duplicate schemas in the prompt when native structured output is supported', async () => {
+        const driver = new TestOpenAIResponsesDriver();
+        const create = vi.fn().mockResolvedValue({
+            status: 'completed',
+            output: [
+                {
+                    type: 'message',
+                    role: 'assistant',
+                    content: [{ type: 'output_text', text: '{"value":"ok"}', annotations: [] }],
+                },
+            ],
+            usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+        });
+        driver.service = { responses: { create } } as unknown as OpenAI;
+        const options = {
+            model: 'gpt-5.6',
+            result_schema: { type: 'object' as const, properties: { value: { type: 'string' as const } } },
+        };
+        const segments = [{ role: PromptRole.user, content: 'extract' }];
+        const prompt = await driver.createPrompt(segments, options);
+        await driver.requestTextCompletion(prompt, options);
+
+        expect(JSON.stringify(prompt)).not.toContain('<response_schema>');
+        expect(create).toHaveBeenCalledWith(
+            expect.objectContaining({
+                text: expect.objectContaining({
+                    format: expect.objectContaining({ type: 'json_schema' }),
+                }),
+            }),
+        );
+    });
+
+    it('keeps the schema prompt fallback when native structured output is unavailable', async () => {
+        const driver = new TestOpenAIResponsesDriver();
+        const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'extract' }], {
+            model: 'gpt-realtime',
+            result_schema: { type: 'object', properties: { value: { type: 'string' } } },
+        });
+
+        expect(JSON.stringify(prompt)).toContain('<response_schema>');
+    });
+});
+
+describe('OpenAIResponsesDriverBase Error Handling', () => {
+    let driver: TestOpenAIResponsesDriver;
 
     beforeEach(() => {
-        driver = new TestOpenAIDriver();
+        driver = new TestOpenAIResponsesDriver();
     });
 
     describe('formatLlumiverseError', () => {
@@ -383,16 +686,20 @@ describe('BaseOpenAIDriver Error Handling', () => {
             expect(error.message).toContain('req_xyz789');
         });
 
-        it('should throw for non-OpenAI errors', () => {
+        it('should normalize non-OpenAI errors with llumiverse context', () => {
             const regularError = new Error('Regular error');
 
-            expect(() => {
-                driver.formatLlumiverseError(regularError, {
-                    provider: 'openai',
-                    model: 'gpt-4',
-                    operation: 'execute',
-                });
-            }).toThrow('Regular error');
+            const error = driver.formatLlumiverseError(regularError, {
+                provider: 'openai',
+                model: 'gpt-4',
+                operation: 'execute',
+            });
+
+            expect(error).toMatchObject({
+                name: 'Error',
+                context: { provider: 'openai', model: 'gpt-4', operation: 'execute' },
+                originalError: regularError,
+            });
         });
 
         it('should preserve original error for debugging', () => {
@@ -417,7 +724,7 @@ describe('BaseOpenAIDriver Error Handling', () => {
             ];
 
             for (const error of retryableErrors) {
-                const result = exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                const result = exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
                     error,
                     error.status,
                     null,
@@ -441,7 +748,7 @@ describe('BaseOpenAIDriver Error Handling', () => {
 
             for (const error of nonRetryableErrors) {
                 const status = getProp<number>(error, 'status');
-                const result = exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                const result = exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
                     error,
                     status,
                     null,
@@ -455,7 +762,7 @@ describe('BaseOpenAIDriver Error Handling', () => {
             const apiError = new APIError(undefined, {}, 'Error', new Headers());
 
             expect(
-                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
                     apiError,
                     undefined,
                     'timeout',
@@ -463,7 +770,7 @@ describe('BaseOpenAIDriver Error Handling', () => {
                 ),
             ).toBe(true);
             expect(
-                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
                     apiError,
                     undefined,
                     'server_error',
@@ -471,7 +778,7 @@ describe('BaseOpenAIDriver Error Handling', () => {
                 ),
             ).toBe(true);
             expect(
-                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
                     apiError,
                     undefined,
                     'service_unavailable',
@@ -479,7 +786,7 @@ describe('BaseOpenAIDriver Error Handling', () => {
                 ),
             ).toBe(true);
             expect(
-                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
                     apiError,
                     undefined,
                     'rate_limit_exceeded',
@@ -492,7 +799,7 @@ describe('BaseOpenAIDriver Error Handling', () => {
             const apiError = new APIError(undefined, {}, 'Error', new Headers());
 
             expect(
-                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
                     apiError,
                     undefined,
                     'invalid_api_key',
@@ -500,7 +807,7 @@ describe('BaseOpenAIDriver Error Handling', () => {
                 ),
             ).toBe(false);
             expect(
-                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
                     apiError,
                     undefined,
                     'invalid_request_error',
@@ -508,7 +815,7 @@ describe('BaseOpenAIDriver Error Handling', () => {
                 ),
             ).toBe(false);
             expect(
-                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
                     apiError,
                     undefined,
                     'model_not_found',
@@ -516,7 +823,7 @@ describe('BaseOpenAIDriver Error Handling', () => {
                 ),
             ).toBe(false);
             expect(
-                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
                     apiError,
                     undefined,
                     'insufficient_quota',
@@ -524,7 +831,7 @@ describe('BaseOpenAIDriver Error Handling', () => {
                 ),
             ).toBe(false);
             expect(
-                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
                     apiError,
                     undefined,
                     'invalid_model',
@@ -532,10 +839,28 @@ describe('BaseOpenAIDriver Error Handling', () => {
                 ),
             ).toBe(false);
             expect(
-                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
                     apiError,
                     undefined,
                     'invalid_parameter',
+                    undefined,
+                ),
+            ).toBe(false);
+        });
+
+        it('should classify insufficient quota as non-retryable even when the SDK reports a rate limit', () => {
+            const rateLimitError = new RateLimitError(
+                429,
+                { code: 'insufficient_quota', message: 'You exceeded your current quota' },
+                'You exceeded your current quota',
+                new Headers(),
+            );
+
+            expect(
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
+                    rateLimitError,
+                    429,
+                    'insufficient_quota',
                     undefined,
                 ),
             ).toBe(false);
@@ -545,7 +870,7 @@ describe('BaseOpenAIDriver Error Handling', () => {
             const apiError = new APIError(undefined, {}, 'Error', new Headers());
 
             expect(
-                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
                     apiError,
                     undefined,
                     null,
@@ -553,7 +878,7 @@ describe('BaseOpenAIDriver Error Handling', () => {
                 ),
             ).toBe(false);
             expect(
-                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
                     apiError,
                     undefined,
                     null,
@@ -565,12 +890,17 @@ describe('BaseOpenAIDriver Error Handling', () => {
         it('should use HTTP status codes when available', () => {
             const apiError = new APIError(429, {}, 'Too many requests', new Headers());
             expect(
-                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, 429, null, undefined),
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
+                    apiError,
+                    429,
+                    null,
+                    undefined,
+                ),
             ).toBe(true);
 
             const apiError2 = new APIError(408, {}, 'Request timeout', new Headers());
             expect(
-                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
                     apiError2,
                     408,
                     null,
@@ -580,7 +910,7 @@ describe('BaseOpenAIDriver Error Handling', () => {
 
             const apiError3 = new APIError(502, {}, 'Bad gateway', new Headers());
             expect(
-                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
                     apiError3,
                     502,
                     null,
@@ -590,7 +920,7 @@ describe('BaseOpenAIDriver Error Handling', () => {
 
             const apiError4 = new APIError(503, {}, 'Service unavailable', new Headers());
             expect(
-                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
                     apiError4,
                     503,
                     null,
@@ -600,7 +930,7 @@ describe('BaseOpenAIDriver Error Handling', () => {
 
             const apiError5 = new APIError(504, {}, 'Gateway timeout', new Headers());
             expect(
-                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
                     apiError5,
                     504,
                     null,
@@ -610,7 +940,7 @@ describe('BaseOpenAIDriver Error Handling', () => {
 
             const apiError6 = new APIError(529, {}, 'Overloaded', new Headers());
             expect(
-                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
                     apiError6,
                     529,
                     null,
@@ -622,12 +952,17 @@ describe('BaseOpenAIDriver Error Handling', () => {
         it('should classify 4xx as non-retryable', () => {
             const apiError = new APIError(400, {}, 'Bad request', new Headers());
             expect(
-                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, 400, null, undefined),
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
+                    apiError,
+                    400,
+                    null,
+                    undefined,
+                ),
             ).toBe(false);
 
             const apiError2 = new APIError(403, {}, 'Forbidden', new Headers());
             expect(
-                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
                     apiError2,
                     403,
                     null,
@@ -639,12 +974,17 @@ describe('BaseOpenAIDriver Error Handling', () => {
         it('should classify 5xx as retryable', () => {
             const apiError = new APIError(500, {}, 'Internal error', new Headers());
             expect(
-                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(apiError, 500, null, undefined),
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
+                    apiError,
+                    500,
+                    null,
+                    undefined,
+                ),
             ).toBe(true);
 
             const apiError2 = new APIError(502, {}, 'Bad gateway', new Headers());
             expect(
-                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
                     apiError2,
                     502,
                     null,
@@ -656,7 +996,7 @@ describe('BaseOpenAIDriver Error Handling', () => {
         it('should classify APIConnectionError (non-timeout) as retryable', () => {
             const connectionError = new APIConnectionError({ message: 'Network failure' });
             expect(
-                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
                     connectionError,
                     undefined,
                     null,
@@ -668,7 +1008,7 @@ describe('BaseOpenAIDriver Error Handling', () => {
         it('should return undefined for unknown errors', () => {
             const apiError = new APIError(undefined, {}, 'Unknown error', undefined);
             expect(
-                exposePrivate<BaseOpenAIDriverInternals>(driver).isOpenAIErrorRetryable(
+                exposePrivate<OpenAIResponsesDriverBaseInternals>(driver).isOpenAIErrorRetryable(
                     apiError,
                     undefined,
                     null,

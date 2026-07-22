@@ -181,9 +181,10 @@ export async function formatOpenAILikeMultimodalPrompt(
     }
 
     if (opts.result_schema && !opts.useToolForFormatting) {
+        const schemaPosition = opts.resultSchemaPosition ?? 'system';
         const schemaMsg: EasyInputMessage = {
             type: 'message',
-            role: 'system',
+            role: schemaPosition === 'suffix' ? 'user' : 'system',
             content: [
                 {
                     type: 'input_text',
@@ -191,7 +192,11 @@ export async function formatOpenAILikeMultimodalPrompt(
                 },
             ],
         };
-        system.push(schemaMsg);
+        if (schemaPosition === 'suffix') {
+            others.push(schemaMsg);
+        } else {
+            system.push(schemaMsg);
+        }
     }
 
     // put system messages first and safety last
@@ -202,4 +207,130 @@ export interface OpenAIPromptFormatterOptions {
     multimodal?: boolean;
     useToolForFormatting?: boolean;
     schema?: object;
+    resultSchemaPosition?: 'system' | 'suffix';
+}
+
+// Chat Completions API types
+type ChatCompletionMessageParam = OpenAI.Chat.Completions.ChatCompletionMessageParam;
+type ChatCompletionContentPart = OpenAI.Chat.Completions.ChatCompletionContentPart;
+
+/**
+ * Convert Response API items (`ResponseInputItem[]`) into Chat Completions messages
+ * (`ChatCompletionMessageParam[]`).
+ *
+ * This is useful for adapters that start from Response API conversation items but must call an
+ * OpenAI Chat Completions-compatible endpoint. Crucially, images become `{ type: 'image_url', image_url: { url } }`
+ * (the Chat Completions shape) instead of the Responses `input_image` shape, which those
+ * providers silently ignore.
+ */
+export function convertResponseItemsToChatMessages(items: ResponseInputItem[]): ChatCompletionMessageParam[] {
+    const messages: ChatCompletionMessageParam[] = [];
+
+    for (const item of items) {
+        // Handle EasyInputMessage (has role and content)
+        if ('role' in item && 'content' in item) {
+            const msg = item as EasyInputMessage;
+            const role = msg.role;
+
+            // Handle system/developer messages
+            if (role === 'system' || role === 'developer') {
+                let content: string;
+                if (typeof msg.content === 'string') {
+                    content = msg.content;
+                } else if (Array.isArray(msg.content)) {
+                    content = msg.content
+                        .filter((part): part is OpenAI.Responses.ResponseInputText => part.type === 'input_text')
+                        .map((part) => part.text)
+                        .join('\n');
+                } else {
+                    content = '';
+                }
+                messages.push({ role: 'system', content });
+                continue;
+            }
+
+            // Handle user messages (text + images)
+            if (role === 'user') {
+                let content: string | ChatCompletionContentPart[];
+                if (typeof msg.content === 'string') {
+                    content = msg.content;
+                } else if (Array.isArray(msg.content)) {
+                    const parts: ChatCompletionContentPart[] = [];
+                    for (const part of msg.content) {
+                        if (part.type === 'input_text') {
+                            parts.push({ type: 'text', text: part.text });
+                        } else if (part.type === 'input_image') {
+                            const imgPart = part as OpenAI.Responses.ResponseInputImage;
+                            if (imgPart.image_url) {
+                                const image_url: { url: string; detail?: 'auto' | 'low' | 'high' } = {
+                                    url: imgPart.image_url,
+                                };
+                                // Chat Completions only accepts auto|low|high; the Responses-only
+                                // 'original' detail is dropped (TogetherAI ignores detail anyway).
+                                if (imgPart.detail && imgPart.detail !== 'original') {
+                                    image_url.detail = imgPart.detail;
+                                }
+                                parts.push({ type: 'image_url', image_url });
+                            }
+                        }
+                    }
+                    content = parts.length > 0 ? parts : '';
+                } else {
+                    content = '';
+                }
+                messages.push({ role: 'user', content });
+                continue;
+            }
+
+            // Handle assistant messages
+            if (role === 'assistant') {
+                let content: string | null;
+                if (typeof msg.content === 'string') {
+                    content = msg.content;
+                } else if (Array.isArray(msg.content)) {
+                    content =
+                        msg.content
+                            .filter((part): part is OpenAI.Responses.ResponseInputText => part.type === 'input_text')
+                            .map((part) => part.text)
+                            .join('\n') || null;
+                } else {
+                    content = null;
+                }
+                messages.push({ role: 'assistant', content });
+                continue;
+            }
+        }
+
+        // Handle function_call_output (tool response)
+        if ('type' in item && item.type === 'function_call_output') {
+            const output = item as OpenAI.Responses.ResponseInputItem.FunctionCallOutput;
+            messages.push({
+                role: 'tool',
+                tool_call_id: output.call_id,
+                content: typeof output.output === 'string' ? output.output : JSON.stringify(output.output),
+            });
+            continue;
+        }
+
+        // Handle function_call (assistant tool call)
+        if ('type' in item && item.type === 'function_call') {
+            const call = item as OpenAI.Responses.ResponseFunctionToolCall;
+            messages.push({
+                role: 'assistant',
+                content: null,
+                tool_calls: [
+                    {
+                        id: call.call_id,
+                        type: 'function',
+                        function: {
+                            name: call.name,
+                            arguments: call.arguments,
+                        },
+                    },
+                ],
+            });
+        }
+    }
+
+    return messages;
 }
