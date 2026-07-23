@@ -132,8 +132,8 @@ importers:
         specifier: ^6.9.0
         version: 6.9.0
       '@google/genai':
-        specifier: ^2.11.0
-        version: 2.11.0
+        specifier: ^2.12.0
+        version: 2.12.0
       '@huggingface/inference':
         specifier: ^4.13.23
         version: 4.13.23
@@ -526,8 +526,8 @@ packages:
     resolution: {integrity: sha512-T1LT/g2txHH6TyaJZCzMfTRiJgu0PBk1gEQFVecqlkwmvyWu5lJ31M3oJfuTLzWTWwZMZhj0SipsBcUBWdeJwA==}
     engines: {node: '>=18'}
 
-  '@google/genai@2.11.0':
-    resolution: {integrity: sha512-d2Csf29vS0GfHc52H0MG25ccY4FKvvbDgqDlEovLrPLF8sPegWr/GGO+LMOy85/1SnX0iV0zDAW7R8SsvWg8Vg==}
+  '@google/genai@2.12.0':
+    resolution: {integrity: sha512-LUr972DZosqPUhf9Mb3CIVu/B99woD3QW6ZJV1T9aNgxaoimAZARmo+IyyDsxIL+zouFiYSdA4hzfEWXc9oNIQ==}
     engines: {node: '>=20.0.0'}
     peerDependencies:
       '@modelcontextprotocol/sdk': ^1.25.2
@@ -2400,7 +2400,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@google/genai@2.11.0':
+  '@google/genai@2.12.0':
     dependencies:
       google-auth-library: 10.9.0
       p-retry: 4.6.2
