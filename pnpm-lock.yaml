@@ -144,8 +144,8 @@ importers:
         specifier: workspace:*
         version: link:../core
       '@mistralai/mistralai':
-        specifier: ^2.4.1
-        version: 2.4.1(@opentelemetry/api@1.9.1)
+        specifier: ^2.5.0
+        version: 2.5.0(@opentelemetry/api@1.9.1)
       '@vertesia/api-fetch-client':
         specifier: ^1.4.0
         version: 1.4.0
@@ -171,8 +171,8 @@ importers:
         specifier: ^1.4.0
         version: 1.4.0
       together-ai:
-        specifier: ^0.40.0
-        version: 0.40.0
+        specifier: ^0.43.0
+        version: 0.43.0
     devDependencies:
       dotenv:
         specifier: ^17.4.2
@@ -553,8 +553,8 @@ packages:
   '@js-sdsl/ordered-map@4.4.2':
     resolution: {integrity: sha512-iUKgm52T8HOE/makSxjqoWhe95ZJA1/G1sYsGev2JDKUSS14KAgg1LHb+Ba+IPow0xflbnSkOsZcO08C7w1gYw==}
 
-  '@mistralai/mistralai@2.4.1':
-    resolution: {integrity: sha512-vNpR2GR76aW7fK8Dcu1NRx3fdSPO1QruRDo4GbfXfkro2mvp194xIAvJ2BP4ZykzyWtJoDmBe+Qsk9D443aqlg==}
+  '@mistralai/mistralai@2.5.0':
+    resolution: {integrity: sha512-S/r6tkiUHblaDJGsb84WS0ePTF2YHVta2EoTi1NJqHNt5mfRRS2uE4v7hCYV134+an+fk6WgG3+aFfinJbQBjQ==}
     peerDependencies:
       '@opentelemetry/api': ^1.9.0
     peerDependenciesMeta:
@@ -1606,8 +1606,8 @@ packages:
     resolution: {integrity: sha512-Bf+ILmBgretUrdJxzXM0SgXLZ3XfiaUuOj/IKQHuTXip+05Xn+uyEYdVg0kYDipTBcLrCVyUzAPz7QmArb0mmw==}
     engines: {node: '>=14.0.0'}
 
-  together-ai@0.40.0:
-    resolution: {integrity: sha512-7c1YeTTKpvQcDK1k+gN21LEpnbNEmyZfdndeC7aLNtJsIhixAyvvs1eHyhhe6AJecaOP0K0I1vnkEaMBLscRKA==}
+  together-ai@0.43.0:
+    resolution: {integrity: sha512-tMbiK1kS5EeuORWyj4TKQakyk7Pcq2U2EUoxsHvmSY4ZN+X0ff6Wz1DM5A94hpJaB1UfpW8gK+SGMmweUm//Eg==}
     hasBin: true
 
   ts-algebra@2.0.0:
@@ -2400,7 +2400,7 @@ snapshots:
 
   '@js-sdsl/ordered-map@4.4.2': {}
 
-  '@mistralai/mistralai@2.4.1(@opentelemetry/api@1.9.1)':
+  '@mistralai/mistralai@2.5.0(@opentelemetry/api@1.9.1)':
     dependencies:
       '@opentelemetry/semantic-conventions': 1.43.0
       ws: 8.21.0
@@ -3468,7 +3468,7 @@ snapshots:
 
   tinyrainbow@3.1.0: {}
 
-  together-ai@0.40.0: {}
+  together-ai@0.43.0: {}
 
   ts-algebra@2.0.0: {}
 
