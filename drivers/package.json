@@ -133,7 +133,7 @@
         "@huggingface/inference": "^4.13.23",
         "@llumiverse/common": "workspace:*",
         "@llumiverse/core": "workspace:*",
-        "@mistralai/mistralai": "^2.4.1",
+        "@mistralai/mistralai": "^2.5.0",
         "@vertesia/api-fetch-client": "^1.4.0",
         "eventsource": "^4.1.0",
         "google-auth-library": "catalog:",
@@ -142,6 +142,6 @@
         "node-web-stream-adapters": "^0.2.1",
         "openai": "^6.47.0",
         "replicate": "^1.4.0",
-        "together-ai": "^0.40.0"
+        "together-ai": "^0.43.0"
     }
 }
