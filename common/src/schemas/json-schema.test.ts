@@ -5,12 +5,18 @@ import { JSONSchemaPropertiesSchema, JSONSchemaSchema } from './json-schema.js';
 /**
  * The emission these two components must keep producing.
  *
- * Vertesia publishes `JSONSchema` and `JSONSchemaProperties` as OpenAPI components, and its
- * generator refuses to build when a schema-backed component and the one it derives from the
- * TypeScript type disagree by a single byte — including key order. Sixty-three published components
- * still reach these through a type the generator derives, so this is a hard constraint rather than a
- * preference, and it is checked here so a change to the schema fails in llumiverse's own test run
- * rather than several packages downstream.
+ * Vertesia publishes `JSONSchema` and `JSONSchemaProperties` as OpenAPI components. Unlike the
+ * option types in this package, they are NOT short-circuited by its OpenAPI scanner — they keep a
+ * named TypeScript type, because a recursive schema cannot hand TypeScript a usable inferred one —
+ * so the scanner still derives them wherever an unconverted type reaches them, and twenty-seven
+ * published components do. A schema-backed component and the one derived from the TypeScript type
+ * have to agree, or the build fails several packages downstream.
+ *
+ * That agreement check is shape-based rather than literal: key order carries no meaning in JSON
+ * Schema, and `ts-json-schema-generator` is not self-consistent about it. The assertion below is
+ * stricter than the constraint on purpose. It pins the exact emission, so any change to the schema
+ * — including one that only moves a key — shows up here, in llumiverse's own test run, with the
+ * before and after side by side.
  */
 const EXPECTED_JSON_SCHEMA = {
     type: 'object',
@@ -34,7 +40,9 @@ describe('JSONSchemaSchema', () => {
             unknown
         >;
         const { $schema: _schema, $defs: _defs, additionalProperties, ...rest } = emitted;
-        // Byte-for-byte, so a reordered property is a failure and not just a shape mismatch.
+        // Compared as text, so a reordered property fails here too. Deliberately stricter than the
+        // agreement the generator enforces: this is the place a change to the emission should be
+        // read and approved, not discovered downstream.
         expect(JSON.stringify(rest)).toBe(JSON.stringify(EXPECTED_JSON_SCHEMA));
         // `looseObject` emits this; Vertesia's adapter drops it because `{}` and an absent
         // `additionalProperties` mean the same thing, which is how the component stays byte-identical

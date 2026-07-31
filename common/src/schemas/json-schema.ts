@@ -21,8 +21,8 @@ import { z } from 'zod';
 //    available failure, and it is invisible — the parse succeeds.
 //  - `type` is `z.any()`, not the `JSONSchemaTypeName | JSONSchemaTypeName[]` union it morally is —
 //    the one place in this file `any` is right. The published component has always emitted the
-//    unconstrained `{}` here, and a canonical component must stay byte-identical to the one the
-//    scanner derives for the slots that have not converted. The INTERFACE still states the union, so
+//    unconstrained `{}` here, and a canonical component must still agree with the one the scanner
+//    derives for the slots that have not converted. The NAMED TYPE still states the union, so
 //    TypeScript callers get the real type; only the emitted schema is loose. Tightening it is a
 //    contract change, possible once nothing derives these — at which point it is a one-line edit.
 export const JSONSchemaSchema: z.ZodType<JSONSchema> = z
@@ -47,7 +47,8 @@ export const JSONSchemaSchema: z.ZodType<JSONSchema> = z
 
 // A property map, written as an object with a catchall rather than `z.record`: `z.record` also emits
 // a `propertyNames: {type: 'string'}` — a no-op, since every JSON object key is a string, but not
-// what the index signature published, and these components are pinned byte-identical.
+// what the index signature published, and these components still have to agree with what the
+// scanner derives.
 export const JSONSchemaPropertiesSchema: z.ZodType<JSONSchemaProperties> = z
     .object({})
     .catchall(JSONSchemaSchema)
@@ -57,17 +58,24 @@ export const JSONSchemaPropertiesSchema: z.ZodType<JSONSchemaProperties> = z
 // leading `/** */` as the component's `description`. Rationale goes in `//` comments so it stays in
 // the source instead of shipping to every client generator.
 //
-// A BRIDGE, and a temporary one. It exists because the OpenAPI scanner still derives components from
-// TypeScript for every slot that has not converted, and `ts-json-schema-generator` resolves a
-// `z.infer<>` alias to nothing — aliasing this emptied 141 of the 1015 published components and
-// collapsed eight more to closed empty objects. It goes away as its dependants convert, not by
-// teaching the scanner to read Zod.
+// Every other type in this closure is now `z.infer` of its schema. This one is not, and the reason
+// is RECURSION, not the scanner: the scanner short-circuits a `z.infer` alias to the published
+// component rather than deriving it, so that obstacle is gone. What remains is TypeScript's own
+// limit — Zod 4 infers a recursive type from the getters below, but the inference bottoms out at
+// depth, so `items` degrades to `{}` a few levels down and driver code that walks a nested schema
+// stops compiling. A recursive schema has to be handed a named type.
 //
-// The known fields are split out from the index signature so the bridge can actually be CHECKED.
-// `z.ZodType<JSONSchema>` alone does not check much: every named field is optional and the type is
-// open, so `z.looseObject({})` — a schema declaring nothing at all — satisfies it. What catches a
-// field present on one side and missing from the other is {@link KnownFieldSchemas} below, which
-// requires the Zod shape to cover every key of `JSONSchemaKnownFields` exactly.
+// The exception is recorded, with this reason, in `packages/api-specs/canonical-aliases.json`, and
+// the gate there rejects it if it ever becomes inferable — so it cannot quietly outlive the
+// constraint. Because this type is NOT short-circuited, the scanner still derives it wherever an
+// unconverted type reaches it, and the derived result must still agree with the canonical component.
+//
+// The known fields are split out from the index signature so the named type can actually be CHECKED
+// against the schema. `z.ZodType<JSONSchema>` alone does not check much: every named field is
+// optional and the type is open, so `z.looseObject({})` — a schema declaring nothing at all —
+// satisfies it. What catches a field present on one side and missing from the other is
+// {@link KnownFieldSchemas} below, which requires the Zod shape to cover every key of
+// `JSONSchemaKnownFields` exactly.
 interface JSONSchemaKnownFields {
     type?: JSONSchemaTypeName | JSONSchemaTypeName[];
     description?: string;
@@ -92,7 +100,7 @@ type KnownFieldSchemas = {
     [K in keyof Required<JSONSchemaKnownFields>]-?: z.ZodType<JSONSchemaKnownFields[K]>;
 };
 
-// A property map. Same bridge reasoning as JSONSchema above.
+// A property map. Recursive through `JSONSchema`, so it keeps a named type for the same reason.
 export interface JSONSchemaProperties {
     [key: string]: JSONSchema;
 }
