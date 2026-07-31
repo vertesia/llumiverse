@@ -1,54 +1,17 @@
 import { z } from 'zod';
-import type {
-    BedrockAI21Options,
-    BedrockClaudeOptions,
-    BedrockCohereCommandOptions,
-    BedrockConverseOptions,
-    BedrockGptOssOptions,
-    BedrockMistralOptions,
-    BedrockNovaOptions,
-    BedrockPalmyraOptions,
-    NovaCanvasOptions,
-    TwelvelabsPegasusOptions,
-} from '../options/bedrock.js';
-import type {
-    BedrockMantleChatCompletionsOptions,
-    BedrockMantleClaudeOptions,
-    BedrockMantleResponsesOptions,
-} from '../options/bedrock_mantle.js';
-import type { TextFallbackOptions } from '../options/fallback.js';
-import type { GroqOptions } from '../options/groq.js';
-import type {
-    OpenAiDalleOptions,
-    OpenAiGptImageOptions,
-    OpenAiTextOptions,
-    OpenAiThinkingOptions,
-} from '../options/openai.js';
-import type {
-    ImagenOptions,
-    VertexAIClaudeOptions,
-    VertexAIGeminiOptions,
-    VertexAIGrokOptions,
-} from '../options/vertexai.js';
 import { ImagenMaskMode, ImagenTaskType, ThinkingLevel } from '../options/vertexai.js';
 
 // Runtime schemas for `ModelOptions` — the union of every driver's per-model options — and its
 // twenty-seven members.
 //
+// These are the SINGLE definition of each option set. The OpenAPI document publishes them, AJV
+// enforces them, and the public TypeScript types in `../options/*` are `z.infer` of them, so there
+// is no second declaration to drift from. The scanner short-circuits those aliases to the component
+// of the same name rather than trying to expand `z.infer`, which is what makes one definition
+// enough — see `canonical-alias-parser.ts` in the api-scanner package.
+//
 // `//` rather than `/** */` throughout: a JSDoc block immediately preceding an exported declaration is
 // picked up by Vertesia's OpenAPI scanner and published as that component's `description`.
-//
-// These are BRIDGES in the same sense as `./json-schema.js`, and for the same reason: the scanner
-// still derives components from TypeScript for every slot that has not converted, and it resolves a
-// `z.infer<>` alias to nothing. The interfaces in `../options/*` therefore stay the public types.
-// Unlike `JSONSchema`, none of these is recursive, so when nothing derives them any more the
-// interfaces can be deleted outright and the public types become `z.infer` of the schemas below.
-//
-// Every schema is checked against its interface by {@link FieldSchemas}, which is what makes a
-// generated schema honest: it requires the Zod shape to cover every field of the interface exactly,
-// so a field on one side and not the other fails to compile here. The annotation alone would not —
-// these interfaces have one required property and the rest optional, so a schema declaring only
-// `_option_id` would satisfy `z.ZodType<T>`.
 
 // `strictObject`, not `object`. The published component has always said `additionalProperties: false`,
 // and Zod's default would have PARSED an unknown option key by silently dropping it — so the document
@@ -56,12 +19,6 @@ import { ImagenMaskMode, ImagenTaskType, ThinkingLevel } from '../options/vertex
 // `additionalProperties: false` the component already carried, so the published and enforced contracts
 // are the same statement. (`JSONSchema` next door is the opposite case for the opposite reason: a JSON
 // Schema legitimately carries keywords the type never enumerated.)
-
-// Exact per-field coverage. `-?` is the load-bearing part: an optional key in the mapped type would
-// make this a subset check and let a missing property through.
-type FieldSchemas<T> = {
-    [K in keyof Required<T>]-?: z.ZodType<T[K]>;
-};
 
 // The four option enums that are published as their own components.
 export const ImagenMaskModeSchema = z.enum(ImagenMaskMode).meta({ id: 'ImagenMaskMode' });
@@ -86,7 +43,7 @@ export const TextFallbackOptionsSchema = z
         presence_penalty: z.number().optional(),
         frequency_penalty: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
-    } satisfies FieldSchemas<TextFallbackOptions>)
+    })
     .meta({ id: 'TextFallbackOptions' });
 
 // ===== groq =====
@@ -101,7 +58,7 @@ export const GroqOptionsSchema = z
         frequency_penalty: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
         reasoning_format: z.enum(['parsed', 'raw', 'hidden']),
-    } satisfies FieldSchemas<GroqOptions>)
+    })
     .meta({ id: 'GroqOptions' });
 
 // ===== bedrock =====
@@ -113,7 +70,7 @@ export const BedrockConverseOptionsSchema = z
         temperature: z.number().optional(),
         top_p: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
-    } satisfies FieldSchemas<BedrockConverseOptions>)
+    })
     .meta({ id: 'BedrockConverseOptions' });
 
 export const BedrockNovaOptionsSchema = z
@@ -123,7 +80,7 @@ export const BedrockNovaOptionsSchema = z
         temperature: z.number().optional(),
         top_p: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
-    } satisfies FieldSchemas<BedrockNovaOptions>)
+    })
     .meta({ id: 'BedrockNovaOptions' });
 
 export const BedrockMistralOptionsSchema = z
@@ -133,7 +90,7 @@ export const BedrockMistralOptionsSchema = z
         temperature: z.number().optional(),
         top_p: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
-    } satisfies FieldSchemas<BedrockMistralOptions>)
+    })
     .meta({ id: 'BedrockMistralOptions' });
 
 export const BedrockAI21OptionsSchema = z
@@ -143,7 +100,7 @@ export const BedrockAI21OptionsSchema = z
         temperature: z.number().optional(),
         top_p: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
-    } satisfies FieldSchemas<BedrockAI21Options>)
+    })
     .meta({ id: 'BedrockAI21Options' });
 
 export const BedrockCohereCommandOptionsSchema = z
@@ -153,7 +110,7 @@ export const BedrockCohereCommandOptionsSchema = z
         temperature: z.number().optional(),
         top_p: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
-    } satisfies FieldSchemas<BedrockCohereCommandOptions>)
+    })
     .meta({ id: 'BedrockCohereCommandOptions' });
 
 export const BedrockClaudeOptionsSchema = z
@@ -169,7 +126,7 @@ export const BedrockClaudeOptionsSchema = z
         effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
         cache_enabled: z.boolean().optional(),
         cache_ttl: z.enum(['5m', '1h']).optional(),
-    } satisfies FieldSchemas<BedrockClaudeOptions>)
+    })
     .meta({ id: 'BedrockClaudeOptions' });
 
 export const BedrockPalmyraOptionsSchema = z
@@ -183,7 +140,7 @@ export const BedrockPalmyraOptionsSchema = z
         seed: z.number().optional(),
         frequency_penalty: z.number().optional(),
         presence_penalty: z.number().optional(),
-    } satisfies FieldSchemas<BedrockPalmyraOptions>)
+    })
     .meta({ id: 'BedrockPalmyraOptions' });
 
 export const BedrockGptOssOptionsSchema = z
@@ -196,7 +153,7 @@ export const BedrockGptOssOptionsSchema = z
         reasoning_effort: z.enum(['low', 'medium', 'high']).optional(),
         frequency_penalty: z.number().optional(),
         presence_penalty: z.number().optional(),
-    } satisfies FieldSchemas<BedrockGptOssOptions>)
+    })
     .meta({ id: 'BedrockGptOssOptions' });
 
 export const TwelvelabsPegasusOptionsSchema = z
@@ -204,7 +161,7 @@ export const TwelvelabsPegasusOptionsSchema = z
         _option_id: z.literal('bedrock-twelvelabs-pegasus'),
         temperature: z.number().optional(),
         max_tokens: z.number().optional(),
-    } satisfies FieldSchemas<TwelvelabsPegasusOptions>)
+    })
     .meta({ id: 'TwelvelabsPegasusOptions' });
 
 export const NovaCanvasOptionsSchema = z
@@ -230,7 +187,7 @@ export const NovaCanvasOptionsSchema = z
         colors: z.array(z.string()).optional(),
         similarityStrength: z.number().optional(),
         outPaintingMode: z.enum(['DEFAULT', 'PRECISE']).optional(),
-    } satisfies FieldSchemas<NovaCanvasOptions>)
+    })
     .meta({ id: 'NovaCanvasOptions' });
 
 // ===== bedrock_mantle =====
@@ -245,7 +202,7 @@ export const BedrockMantleResponsesOptionsSchema = z
         reasoning_effort: z.enum(['none', 'low', 'medium', 'high', 'xhigh']).optional(),
         verbosity: z.enum(['low', 'medium', 'high']).optional(),
         image_detail: z.enum(['low', 'high', 'auto']).optional(),
-    } satisfies FieldSchemas<BedrockMantleResponsesOptions>)
+    })
     .meta({ id: 'BedrockMantleResponsesOptions' });
 
 export const BedrockMantleChatCompletionsOptionsSchema = z
@@ -255,7 +212,7 @@ export const BedrockMantleChatCompletionsOptionsSchema = z
         temperature: z.number().optional(),
         top_p: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
-    } satisfies FieldSchemas<BedrockMantleChatCompletionsOptions>)
+    })
     .meta({ id: 'BedrockMantleChatCompletionsOptions' });
 
 export const BedrockMantleClaudeOptionsSchema = z
@@ -271,7 +228,7 @@ export const BedrockMantleClaudeOptionsSchema = z
         include_thoughts: z.boolean().optional(),
         cache_enabled: z.boolean().optional(),
         cache_ttl: z.enum(['5m', '1h']).optional(),
-    } satisfies FieldSchemas<BedrockMantleClaudeOptions>)
+    })
     .meta({ id: 'BedrockMantleClaudeOptions' });
 
 // ===== openai =====
@@ -284,7 +241,7 @@ export const OpenAiThinkingOptionsSchema = z
         effort: ReasoningEffortSchema.optional(),
         reasoning_effort: ReasoningEffortSchema.optional(),
         image_detail: z.enum(['low', 'high', 'auto']).optional(),
-    } satisfies FieldSchemas<OpenAiThinkingOptions>)
+    })
     .meta({ id: 'OpenAiThinkingOptions' });
 
 export const OpenAiTextOptionsSchema = z
@@ -297,7 +254,7 @@ export const OpenAiTextOptionsSchema = z
         frequency_penalty: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
         image_detail: z.enum(['low', 'high', 'auto']).optional(),
-    } satisfies FieldSchemas<OpenAiTextOptions>)
+    })
     .meta({ id: 'OpenAiTextOptions' });
 
 export const OpenAiDalleOptionsSchema = z
@@ -308,7 +265,7 @@ export const OpenAiDalleOptionsSchema = z
         style: z.enum(['vivid', 'natural']).optional(),
         response_format: z.enum(['url', 'b64_json']).optional(),
         n: z.number().optional(),
-    } satisfies FieldSchemas<OpenAiDalleOptions>)
+    })
     .meta({ id: 'OpenAiDalleOptions' });
 
 export const OpenAiGptImageOptionsSchema = z
@@ -318,7 +275,7 @@ export const OpenAiGptImageOptionsSchema = z
         image_quality: z.enum(['low', 'medium', 'high', 'auto']).optional(),
         background: z.enum(['transparent', 'opaque', 'auto']).optional(),
         output_format: z.enum(['png', 'webp', 'jpeg']).optional(),
-    } satisfies FieldSchemas<OpenAiGptImageOptions>)
+    })
     .meta({ id: 'OpenAiGptImageOptions' });
 
 // ===== vertexai =====
@@ -348,7 +305,7 @@ export const ImagenOptionsSchema = z
         subjectType: z
             .enum(['SUBJECT_TYPE_PERSON', 'SUBJECT_TYPE_ANIMAL', 'SUBJECT_TYPE_PRODUCT', 'SUBJECT_TYPE_DEFAULT'])
             .optional(),
-    } satisfies FieldSchemas<ImagenOptions>)
+    })
     .meta({ id: 'ImagenOptions' });
 
 export const VertexAIClaudeOptionsSchema = z
@@ -364,7 +321,7 @@ export const VertexAIClaudeOptionsSchema = z
         include_thoughts: z.boolean().optional(),
         cache_enabled: z.boolean().optional(),
         cache_ttl: z.enum(['5m', '1h']).optional(),
-    } satisfies FieldSchemas<VertexAIClaudeOptions>)
+    })
     .meta({ id: 'VertexAIClaudeOptions' });
 
 export const VertexAIGeminiOptionsSchema = z
@@ -391,7 +348,7 @@ export const VertexAIGeminiOptionsSchema = z
             .optional(),
         output_mime_type: z.enum(['image/png', 'image/jpeg']).optional(),
         output_compression_quality: z.number().optional(),
-    } satisfies FieldSchemas<VertexAIGeminiOptions>)
+    })
     .meta({ id: 'VertexAIGeminiOptions' });
 
 export const VertexAIGrokOptionsSchema = z
@@ -401,7 +358,7 @@ export const VertexAIGrokOptionsSchema = z
         temperature: z.number().optional(),
         top_p: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
-    } satisfies FieldSchemas<VertexAIGrokOptions>)
+    })
     .meta({ id: 'VertexAIGrokOptions' });
 
 // The discriminated union. Member order is the order the derived component lists, which the adapter

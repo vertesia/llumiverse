@@ -22,16 +22,16 @@ const emitted = z.toJSONSchema(ModelOptionsSchema, { target: 'draft-2020-12', io
 const MEMBERS = (emitted.oneOf ?? emitted.anyOf ?? []).map((member) => member.$ref.replace('#/$defs/', ''));
 
 describe('ModelOptionsSchema', () => {
-    it('infers the public union exactly, so the bridge can be deleted rather than reconciled', () => {
-        // The per-member `satisfies FieldSchemas<T>` checks each option set field by field; this
-        // checks the UNION, which nothing else does — a member present in the TypeScript union and
-        // absent from `discriminatedUnion` type-checks everywhere else in the file.
-        //
-        // It is also the exit condition for the bridge. `ModelOptions` is not recursive, so once no
-        // derived component references these the interfaces go away and the public type becomes
-        // `z.infer<typeof ModelOptionsSchema>`. This asserts today that the swap is a rename.
+    it('is the only definition of the union — the public type is inferred from it', () => {
+        // Vacuous as an equality, and that is the point: `ModelOptions` in `../types.js` IS
+        // `z.infer` of this schema, so there is no second declaration for it to disagree with. The
+        // assertion is kept because it fails to COMPILE if the public type is ever redeclared as a
+        // hand-written union — which is the regression, not an inequality at runtime.
         assertType<Equals<ModelOptions, z.infer<typeof ModelOptionsSchema>>>(true);
-        expect(true).toBe(true);
+        // A real value, checked against the schema rather than only against the compiler.
+        expect(
+            ModelOptionsSchema.safeParse({ _option_id: 'vertexai-gemini', temperature: 0.2 } as ModelOptions).success,
+        ).toBe(true);
     });
 
     it('carries every driver option set, in the published order', () => {
@@ -81,7 +81,8 @@ describe('ModelOptionsSchema', () => {
     it('closes every member, so an unknown option is rejected rather than dropped', () => {
         // `z.object` would publish `additionalProperties: false` — the component has always said so —
         // while silently STRIPPING an unknown option at parse time. `strictObject` makes the enforced
-        // behaviour the published one.
+        // behaviour the published one, and since the public type is inferred from this schema, it is
+        // also what the compiler enforces.
         for (const name of MEMBERS) {
             expect((emitted.$defs[name] as { additionalProperties?: unknown }).additionalProperties, name).toBe(false);
         }

@@ -1,4 +1,17 @@
+import type { z } from 'zod';
 import { getBedrockModelKnowledge } from '../capability/bedrock-models.js';
+import type {
+    BedrockAI21OptionsSchema,
+    BedrockClaudeOptionsSchema,
+    BedrockCohereCommandOptionsSchema,
+    BedrockConverseOptionsSchema,
+    BedrockGptOssOptionsSchema,
+    BedrockMistralOptionsSchema,
+    BedrockNovaOptionsSchema,
+    BedrockPalmyraOptionsSchema,
+    NovaCanvasOptionsSchema,
+    TwelvelabsPegasusOptionsSchema,
+} from '../schemas/model-options.js';
 import { type ModelOptionInfoItem, type ModelOptions, type ModelOptionsInfo, OptionType } from '../types.js';
 import {
     buildClaudeCacheOptions,
@@ -9,6 +22,34 @@ import {
     getClaudeMaxTokensLimit,
 } from './shared-parsing.js';
 import { hasSamplingParameterRestriction } from './version-parsing.js';
+
+// The option shapes are DERIVED, not declared. Each schema in `../schemas/model-options.js` is the
+// single definition of its option set: it is what the OpenAPI document publishes, what AJV enforces,
+// and — through `z.infer` below — what TypeScript sees. There is nothing here to keep in step with
+// anything, because there is only one statement of the shape.
+//
+// The OpenAPI scanner short-circuits these aliases to the component of the same name rather than
+// trying to expand `z.infer`, which it cannot do. That is why the alias name, the schema variable
+// and the published component id must all agree; generation fails loudly if they do not.
+export type NovaCanvasOptions = z.infer<typeof NovaCanvasOptionsSchema>;
+export type BedrockConverseOptions = z.infer<typeof BedrockConverseOptionsSchema>;
+export type BedrockNovaOptions = z.infer<typeof BedrockNovaOptionsSchema>;
+export type BedrockMistralOptions = z.infer<typeof BedrockMistralOptionsSchema>;
+export type BedrockAI21Options = z.infer<typeof BedrockAI21OptionsSchema>;
+export type BedrockCohereCommandOptions = z.infer<typeof BedrockCohereCommandOptionsSchema>;
+export type BedrockClaudeOptions = z.infer<typeof BedrockClaudeOptionsSchema>;
+export type BedrockPalmyraOptions = z.infer<typeof BedrockPalmyraOptionsSchema>;
+export type BedrockGptOssOptions = z.infer<typeof BedrockGptOssOptionsSchema>;
+export type TwelvelabsPegasusOptions = z.infer<typeof TwelvelabsPegasusOptionsSchema>;
+
+/**
+ * The shared Converse shape, re-expressed over the schema-derived type so it states nothing of its
+ * own. Kept because it is a published `@llumiverse/common` export, and because it still says the
+ * true thing: the five plain Converse option sets differ only in their discriminator.
+ */
+export type BaseConverseOptions<TOptionId extends string = string> = Omit<BedrockConverseOptions, '_option_id'> & {
+    _option_id: TOptionId;
+};
 
 /**
  * Union type of all Bedrock options
@@ -26,71 +67,6 @@ export type BedrockOptions =
     | BedrockPalmyraOptions
     | BedrockGptOssOptions
     | TwelvelabsPegasusOptions;
-
-export interface NovaCanvasOptions {
-    _option_id: 'bedrock-nova-canvas';
-    taskType:
-        | 'TEXT_IMAGE'
-        | 'TEXT_IMAGE_WITH_IMAGE_CONDITIONING'
-        | 'COLOR_GUIDED_GENERATION'
-        | 'IMAGE_VARIATION'
-        | 'INPAINTING'
-        | 'OUTPAINTING'
-        | 'BACKGROUND_REMOVAL';
-    width?: number;
-    height?: number;
-    quality?: 'standard' | 'premium';
-    cfgScale?: number;
-    seed?: number;
-    numberOfImages?: number;
-    controlMode?: 'CANNY_EDGE' | 'SEGMENTATION';
-    controlStrength?: number;
-    colors?: string[];
-    similarityStrength?: number;
-    outPaintingMode?: 'DEFAULT' | 'PRECISE';
-}
-
-export interface BaseConverseOptions<TOptionId extends string = string> {
-    _option_id: TOptionId;
-    max_tokens?: number;
-    temperature?: number;
-    top_p?: number;
-    stop_sequence?: string[];
-}
-
-export type BedrockConverseOptions = BaseConverseOptions<'bedrock-converse'>;
-export type BedrockNovaOptions = BaseConverseOptions<'bedrock-nova'>;
-export type BedrockMistralOptions = BaseConverseOptions<'bedrock-mistral'>;
-export type BedrockAI21Options = BaseConverseOptions<'bedrock-ai21'>;
-export type BedrockCohereCommandOptions = BaseConverseOptions<'bedrock-cohere-command'>;
-
-export interface BedrockClaudeOptions extends BaseConverseOptions<'bedrock-claude'> {
-    top_k?: number;
-    thinking_budget_tokens?: number;
-    include_thoughts?: boolean;
-    effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-    cache_enabled?: boolean;
-    cache_ttl?: '5m' | '1h';
-}
-
-export interface BedrockPalmyraOptions extends BaseConverseOptions<'bedrock-palmyra'> {
-    min_tokens?: number;
-    seed?: number;
-    frequency_penalty?: number;
-    presence_penalty?: number;
-}
-
-export interface BedrockGptOssOptions extends BaseConverseOptions<'bedrock-gpt-oss'> {
-    reasoning_effort?: 'low' | 'medium' | 'high';
-    frequency_penalty?: number;
-    presence_penalty?: number;
-}
-
-export interface TwelvelabsPegasusOptions {
-    _option_id: 'bedrock-twelvelabs-pegasus';
-    temperature?: number;
-    max_tokens?: number;
-}
 
 export function getMaxTokensLimitBedrock(model: string): number | undefined {
     const documentedLimit = getBedrockModelKnowledge(model).max_output_tokens;

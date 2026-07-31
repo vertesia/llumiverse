@@ -1,10 +1,6 @@
-import type { BedrockOptions } from './options/bedrock.js';
-import type { BedrockMantleOptions } from './options/bedrock_mantle.js';
-import type { TextFallbackOptions } from './options/fallback.js';
-import type { GroqOptions } from './options/groq.js';
-import type { OpenAiOptions } from './options/openai.js';
-import type { VertexAIOptions } from './options/vertexai.js';
+import type { z } from 'zod';
 import type { JSONSchema } from './schemas/json-schema.js';
+import type { ModelOptionsSchema } from './schemas/model-options.js';
 
 // ============== Provider details ===============
 
@@ -715,16 +711,15 @@ export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | '
 
 // ============== Model Options ===============
 
-/**
- * @discriminator _option_id
- */
-export type ModelOptions =
-    | TextFallbackOptions
-    | VertexAIOptions
-    | BedrockOptions
-    | BedrockMantleOptions
-    | OpenAiOptions
-    | GroqOptions;
+// Derived from the schema, which is the single definition of the union — the OpenAPI component, the
+// AJV validator and this type are all it. The per-driver unions above (`VertexAIOptions`,
+// `BedrockOptions`, …) are groupings over the same schema-derived members and add no shape of their
+// own.
+//
+// No `@discriminator` tag: the scanner short-circuits this alias to the published `ModelOptions`
+// component rather than deriving it, and that component already carries the discriminator the
+// schema's `discriminatedUnion` produced.
+export type ModelOptions = z.infer<typeof ModelOptionsSchema>;
 
 // ============== Option Info ===============
 
