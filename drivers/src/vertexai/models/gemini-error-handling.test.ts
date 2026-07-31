@@ -138,6 +138,52 @@ describe('GeminiModelDefinition Error Handling', () => {
             expect(error.name).toBe('RESOURCE_EXHAUSTED');
         });
 
+        it('should preserve google.rpc.RetryInfo from the API error body', () => {
+            const googleError = {
+                status: 429,
+                message: JSON.stringify({
+                    error: {
+                        code: 429,
+                        status: 'RESOURCE_EXHAUSTED',
+                        message: 'Resource exhausted',
+                        details: [
+                            {
+                                '@type': 'type.googleapis.com/google.rpc.RetryInfo',
+                                retryDelay: '1.500s',
+                            },
+                        ],
+                    },
+                }),
+            };
+
+            const error = modelDef.formatLlumiverseError(driver, googleError, {
+                provider: 'vertexai',
+                model: 'gemini-2.0-flash',
+                operation: 'execute',
+            });
+
+            expect(error.retryAfterMs).toBe(1_500);
+            expect(error.toJSON().retryAfterMs).toBe(1_500);
+        });
+
+        it('should preserve Retry-After when the transport error exposes response headers', () => {
+            const googleError = {
+                status: 429,
+                message: 'RESOURCE_EXHAUSTED: Rate limit exceeded',
+                response: {
+                    headers: new Headers({ 'retry-after': '2' }),
+                },
+            };
+
+            const error = modelDef.formatLlumiverseError(driver, googleError, {
+                provider: 'vertexai',
+                model: 'gemini-2.0-flash',
+                operation: 'stream',
+            });
+
+            expect(error.retryAfterMs).toBe(2_000);
+        });
+
         it('should handle INTERNAL error (500) as retryable', () => {
             const googleError = {
                 status: 500,

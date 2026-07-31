@@ -323,6 +323,12 @@ export class LlumiverseError extends Error {
     readonly retryable?: boolean;
 
     /**
+     * Provider-supplied delay before the request should be retried, in milliseconds.
+     * Undefined when the provider did not return a usable retry hint.
+     */
+    readonly retryAfterMs?: number;
+
+    /**
      * Context about where and how the error occurred.
      * Includes provider, model, operation type.
      */
@@ -341,11 +347,13 @@ export class LlumiverseError extends Error {
         originalError: unknown,
         code?: number,
         name?: string,
+        retryAfterMs?: number,
     ) {
         super(message);
         this.name = name || 'LlumiverseError';
         this.code = code;
         this.retryable = retryable;
+        this.retryAfterMs = retryAfterMs;
         this.context = context;
         this.originalError = originalError;
 
@@ -365,6 +373,7 @@ export class LlumiverseError extends Error {
             message: this.message,
             code: this.code,
             retryable: this.retryable,
+            retryAfterMs: this.retryAfterMs,
             context: this.context,
             stack: this.stack,
             // Include original error message if available

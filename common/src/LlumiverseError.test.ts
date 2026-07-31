@@ -18,6 +18,7 @@ describe('LlumiverseError', () => {
                 originalError,
                 429,
                 'RateLimitError',
+                1_500,
             );
 
             expect(error).toBeInstanceOf(Error);
@@ -26,6 +27,7 @@ describe('LlumiverseError', () => {
             expect(error.message).toBe('Test error message');
             expect(error.code).toBe(429);
             expect(error.retryable).toBe(true);
+            expect(error.retryAfterMs).toBe(1_500);
             expect(error.context).toEqual(mockContext);
             expect(error.originalError).toBe(originalError);
         });
@@ -64,7 +66,15 @@ describe('LlumiverseError', () => {
     describe('toJSON', () => {
         it('should serialize to JSON', () => {
             const originalError = new Error('Original error');
-            const error = new LlumiverseError('Test error', true, mockContext, originalError, 429, 'RateLimitError');
+            const error = new LlumiverseError(
+                'Test error',
+                true,
+                mockContext,
+                originalError,
+                429,
+                'RateLimitError',
+                1_500,
+            );
 
             const json = error.toJSON();
 
@@ -72,6 +82,7 @@ describe('LlumiverseError', () => {
             expect(json).toHaveProperty('message', 'Test error');
             expect(json).toHaveProperty('code', 429);
             expect(json).toHaveProperty('retryable', true);
+            expect(json).toHaveProperty('retryAfterMs', 1_500);
             expect(json).toHaveProperty('context', mockContext);
             expect(json).toHaveProperty('stack');
             expect(json).toHaveProperty('originalErrorMessage', 'Original error');

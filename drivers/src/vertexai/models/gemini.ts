@@ -49,7 +49,95 @@ import { truncateBinaryForDebug } from '../../shared/debug-prompt.js';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
 import type { ModelDefinition } from '../models.js';
 
-type GoogleApiErrorLike = Pick<ApiError, 'status' | 'message'>;
+type GoogleApiErrorLike = Pick<ApiError, 'status' | 'message'> & {
+    headers?: unknown;
+    response?: { headers?: unknown };
+    retryAfterMs?: unknown;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return value !== null && typeof value === 'object';
+}
+
+function nonNegativeNumber(value: unknown): number | undefined {
+    const number =
+        typeof value === 'number'
+            ? value
+            : typeof value === 'string' && value.trim() !== ''
+              ? Number(value)
+              : Number.NaN;
+    return Number.isFinite(number) && number >= 0 ? number : undefined;
+}
+
+function headerValue(headers: unknown, name: string): string | undefined {
+    if (headers instanceof Headers) {
+        return headers.get(name) ?? undefined;
+    }
+    if (!isRecord(headers)) return undefined;
+
+    const entry = Object.entries(headers).find(([key]) => key.toLowerCase() === name);
+    return typeof entry?.[1] === 'string' ? entry[1] : undefined;
+}
+
+function retryAfterHeaderToMs(value: string | undefined): number | undefined {
+    if (value === undefined) return undefined;
+    const seconds = nonNegativeNumber(value);
+    if (seconds !== undefined) return seconds * 1_000;
+
+    const retryAt = Date.parse(value);
+    return Number.isNaN(retryAt) ? undefined : Math.max(0, retryAt - Date.now());
+}
+
+function protobufDurationToMs(value: unknown): number | undefined {
+    if (typeof value === 'string') {
+        const match = /^(\d+)(?:\.(\d{1,9}))?s$/.exec(value);
+        if (!match) return undefined;
+        const seconds = Number(match[1]);
+        const nanos = Number((match[2] ?? '').padEnd(9, '0'));
+        return seconds * 1_000 + Math.ceil(nanos / 1_000_000);
+    }
+    if (!isRecord(value)) return undefined;
+
+    const parsedSeconds = nonNegativeNumber(value.seconds);
+    const parsedNanos = nonNegativeNumber(value.nanos);
+    if ('seconds' in value && parsedSeconds === undefined) return undefined;
+    if ('nanos' in value && (parsedNanos === undefined || parsedNanos >= 1_000_000_000)) return undefined;
+    if (parsedSeconds === undefined && parsedNanos === undefined) return undefined;
+    const seconds = parsedSeconds ?? 0;
+    const nanos = parsedNanos ?? 0;
+    return seconds * 1_000 + Math.ceil(nanos / 1_000_000);
+}
+
+function retryInfoToMs(message: string): number | undefined {
+    try {
+        const body: unknown = JSON.parse(message);
+        if (!isRecord(body)) return undefined;
+        const error = isRecord(body.error) ? body.error : body;
+        if (!Array.isArray(error.details)) return undefined;
+
+        for (const detail of error.details) {
+            if (!isRecord(detail)) continue;
+            const type = detail['@type'];
+            if (typeof type !== 'string' || !type.endsWith('google.rpc.RetryInfo')) continue;
+            const delay = protobufDurationToMs(detail.retryDelay);
+            if (delay !== undefined) return delay;
+        }
+    } catch {
+        // ApiError messages are not guaranteed to contain a JSON response body.
+    }
+    return undefined;
+}
+
+function getGoogleRetryAfterMs(error: GoogleApiErrorLike): number | undefined {
+    const direct = nonNegativeNumber(error.retryAfterMs);
+    if (direct !== undefined) return direct;
+
+    const headers = error.headers ?? error.response?.headers;
+    const exact = nonNegativeNumber(headerValue(headers, 'x-retry-after-ms'));
+    if (exact !== undefined) return exact;
+
+    return retryAfterHeaderToMs(headerValue(headers, 'retry-after')) ?? retryInfoToMs(error.message);
+}
 
 function supportsStructuredOutput(options: PromptOptions): boolean {
     // Gemini 1.0 Ultra does not support JSON output, 1.0 Pro does.
@@ -876,6 +964,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         // Extract error name/type from message if present
         const errorName = this.extractErrorName(message);
+        const retryAfterMs = getGoogleRetryAfterMs(apiError);
 
         return new LlumiverseError(
             `[${context.provider}] ${userMessage}`,
@@ -884,6 +973,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             error,
             httpStatusCode,
             errorName,
+            retryAfterMs,
         );
     }
 
