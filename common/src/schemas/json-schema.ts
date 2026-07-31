@@ -42,7 +42,7 @@ export const JSONSchemaSchema: z.ZodType<JSONSchema> = z
             return z.union([z.boolean(), JSONSchemaSchema]).optional();
         },
         required: z.array(z.string()).optional(),
-    })
+    } satisfies KnownFieldSchemas)
     .meta({ id: 'JSONSchema' });
 
 // A property map, written as an object with a catchall rather than `z.record`: `z.record` also emits
@@ -57,21 +57,18 @@ export const JSONSchemaPropertiesSchema: z.ZodType<JSONSchemaProperties> = z
 // leading `/** */` as the component's `description`. Rationale goes in `//` comments so it stays in
 // the source instead of shipping to every client generator.
 //
-// Written as an interface rather than as `z.infer<typeof JSONSchemaSchema>`, for two reasons, of
-// which only the second is a workaround:
+// A BRIDGE, and a temporary one. It exists because the OpenAPI scanner still derives components from
+// TypeScript for every slot that has not converted, and `ts-json-schema-generator` resolves a
+// `z.infer<>` alias to nothing — aliasing this emptied 141 of the 1015 published components and
+// collapsed eight more to closed empty objects. It goes away as its dependants convert, not by
+// teaching the scanner to read Zod.
 //
-//  1. A RECURSIVE Zod schema cannot infer its own type — the getters make the inference circular —
-//     so `z.ZodType<...>` has to be handed a named result. The interface therefore exists either
-//     way; `z.infer` would only change which name is the public one, not remove a declaration. What
-//     prevents drift is the annotation: add a property to one side and not the other and
-//     `z.ZodType<JSONSchema>` stops accepting the schema, at compile time, in this file.
-//  2. Even where it WOULD remove a declaration, the OpenAPI scanner cannot follow it yet.
-//     `ts-json-schema-generator` derives components from the TypeScript AST, and a `z.infer<>` alias
-//     resolves to nothing. Aliasing these two emptied 141 of the 1015 published components — every
-//     closure reaching `JSONSchema` through a component not yet converted — and collapsed eight more
-//     to closed empty objects. Until every referrer publishes a canonical component, a public type
-//     reachable from a derived one has to stay a declaration the scanner can read.
-export interface JSONSchema {
+// The known fields are split out from the index signature so the bridge can actually be CHECKED.
+// `z.ZodType<JSONSchema>` alone does not check much: every named field is optional and the type is
+// open, so `z.looseObject({})` — a schema declaring nothing at all — satisfies it. What catches a
+// field present on one side and missing from the other is {@link KnownFieldSchemas} below, which
+// requires the Zod shape to cover every key of `JSONSchemaKnownFields` exactly.
+interface JSONSchemaKnownFields {
     type?: JSONSchemaTypeName | JSONSchemaTypeName[];
     description?: string;
     properties?: JSONSchemaProperties;
@@ -81,10 +78,21 @@ export interface JSONSchema {
     default?: unknown;
     additionalProperties?: boolean | JSONSchema;
     required?: string[];
-    [k: string]: unknown;
 }
 
-// A property map. Same reasoning as JSONSchema above for why it is an interface.
+// The extras a JSON Schema carries that this type never enumerated — `enum`, `oneOf`, `minimum`,
+// `$ref`. They are why the object is open, and why `looseObject` rather than `object` is load-bearing
+// rather than cosmetic: Zod's default STRIPS them on parse.
+export type JSONSchema = JSONSchemaKnownFields & Record<string, unknown>;
+
+// `-?` is what makes this exact rather than a subset check: an optional key in the mapped type would
+// let a missing schema property pass. With it, dropping `description` from the shape above fails to
+// compile here rather than silently narrowing the published component.
+type KnownFieldSchemas = {
+    [K in keyof Required<JSONSchemaKnownFields>]-?: z.ZodType<JSONSchemaKnownFields[K]>;
+};
+
+// A property map. Same bridge reasoning as JSONSchema above.
 export interface JSONSchemaProperties {
     [key: string]: JSONSchema;
 }

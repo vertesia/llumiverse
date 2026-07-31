@@ -74,6 +74,27 @@ describe('JSONSchemaSchema', () => {
         expect(JSONSchemaPropertiesSchema.parse(nested.properties)).toEqual(nested.properties);
     });
 
+    it('declares exactly the known fields, no more and no less', () => {
+        // The compile-time guard is `satisfies KnownFieldSchemas` in the source, which is what a
+        // `typecheck` run enforces. This is its runtime mirror, so the coverage property survives
+        // even if someone loosens the mapped type: the emitted `properties` map IS the known-field
+        // list, and a field added to the interface without a schema (or the reverse) moves it.
+        const emitted = z.toJSONSchema(JSONSchemaSchema, { target: 'draft-2020-12', io: 'input' }) as {
+            properties: Record<string, unknown>;
+        };
+        expect(Object.keys(emitted.properties)).toEqual([
+            'type',
+            'description',
+            'properties',
+            'items',
+            'format',
+            'editor',
+            'default',
+            'additionalProperties',
+            'required',
+        ]);
+    });
+
     it('rejects a value that is not a schema at all', () => {
         expect(JSONSchemaSchema.safeParse('string').success).toBe(false);
         expect(JSONSchemaSchema.safeParse({ description: 42 }).success).toBe(false);
