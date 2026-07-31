@@ -1,6 +1,6 @@
 import type { z } from 'zod';
 import type { JSONSchema } from './schemas/json-schema.js';
-import type { ModelOptionsSchema } from './schemas/model-options.js';
+import type { ModelOptionsSchema, ReasoningEffortSchema } from './schemas/model-options.js';
 
 // ============== Provider details ===============
 
@@ -707,7 +707,11 @@ export enum OptionType {
     string_list = 'string_list',
 }
 
-export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+// Derived from the schema, like the option types that use it. Restating the seven values here made
+// this the one member of the `ModelOptions` closure still written twice: the schema is what the
+// OpenAPI component and the AJV validator come from, so a value added to one and not the other
+// would type-check on both sides and disagree at runtime.
+export type ReasoningEffort = z.infer<typeof ReasoningEffortSchema>;
 
 // ============== Model Options ===============
 
