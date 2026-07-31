@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import type { HttpTimeoutOptionsSchema } from './schemas/http-timeout.js';
 import type { JSONSchema } from './schemas/json-schema.js';
 import type { ModelOptionsSchema, ReasoningEffortSchema } from './schemas/model-options.js';
 
@@ -531,32 +532,7 @@ export interface Logger {
     error<T>(obj: T, msg?: T extends string ? never : string, ...args: (string | number | boolean)[]): void;
 }
 
-/**
- * HTTP timeouts applied to a driver's upstream LLM-provider calls.
- *
- * All values are in milliseconds. Drivers should map these onto whatever
- * HTTP client their SDK uses; the defaults applied in
- * `@llumiverse/core/createDriverHttpAgent` are:
- *   - headersTimeout:   60_000
- *   - bodyTimeout:      60_000
- *   - connectTimeout:   10_000
- *   - keepAliveTimeout: 30_000
- *
- * The defaults are deliberately tighter than Node's undici default
- * (5 minutes for headers/body) so a hung upstream surfaces quickly. Bump
- * `bodyTimeout` for streaming flows that have legitimate silent gaps
- * (e.g. tool-using agents).
- */
-export interface HttpTimeoutOptions {
-    /** Time (ms) to wait for the first response byte after the request is sent. */
-    headersTimeout?: number;
-    /** Time (ms) between body chunks once streaming has started. */
-    bodyTimeout?: number;
-    /** TCP/TLS connect timeout (ms). */
-    connectTimeout?: number;
-    /** Idle socket reuse timeout (ms). */
-    keepAliveTimeout?: number;
-}
+export type HttpTimeoutOptions = z.infer<typeof HttpTimeoutOptionsSchema>;
 
 export interface DriverOptions {
     logger?: Logger | 'console';
