@@ -4,6 +4,7 @@ import type { TextFallbackOptions } from './options/fallback.js';
 import type { GroqOptions } from './options/groq.js';
 import type { OpenAiOptions } from './options/openai.js';
 import type { VertexAIOptions } from './options/vertexai.js';
+import type { JSONSchema } from './schemas/json-schema.js';
 
 // ============== Provider details ===============
 
@@ -571,16 +572,6 @@ export interface DriverOptions {
     httpTimeout?: HttpTimeoutOptions;
 }
 
-export type JSONSchemaTypeName =
-    | 'string' //
-    | 'number'
-    | 'integer'
-    | 'boolean'
-    | 'object'
-    | 'array'
-    | 'null'
-    | 'any';
-
 export type JSONSchemaType =
     | string //
     | number
@@ -595,22 +586,12 @@ export interface JSONSchemaObject {
 
 export interface JSONSchemaArray extends Array<JSONSchemaType> {}
 
-export interface JSONSchemaProperties {
-    [key: string]: JSONSchema;
-}
-
-export interface JSONSchema {
-    type?: JSONSchemaTypeName | JSONSchemaTypeName[];
-    description?: string;
-    properties?: JSONSchemaProperties;
-    items?: JSONSchema;
-    format?: string;
-    editor?: unknown;
-    default?: unknown;
-    additionalProperties?: boolean | JSONSchema;
-    required?: string[];
-    [k: string]: unknown;
-}
+/**
+ * Declared beside their Zod schemas in `./schemas/json-schema.js` and re-exported here so every
+ * historical import path keeps working. The schemas are annotated with these interfaces, so the two
+ * cannot disagree without a compile error in that file.
+ */
+export type { JSONSchema, JSONSchemaProperties, JSONSchemaTypeName } from './schemas/json-schema.js';
 
 export type PromptFormatter<T = unknown> = (messages: PromptSegment[], schema?: JSONSchema) => T;
 
