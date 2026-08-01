@@ -43,7 +43,6 @@ import {
     getModelCapabilities,
     type HttpTimeoutOptions,
     incrementConversationTurn,
-    isClaudeVersionGTE,
     type JSONObject,
     LlumiverseError,
     type LlumiverseErrorContext,
@@ -320,7 +319,11 @@ export interface BedrockDriverOptions extends DriverOptions {
 function maxTokenFallbackClaude(option: StatelessExecutionOptions): number {
     const modelOptions = option.model_options as BedrockClaudeOptions | undefined;
     if (modelOptions && typeof modelOptions.max_tokens === 'number') {
-        return modelOptions.max_tokens;
+        // Clamp stored/user-provided values to the model's output limit: configs
+        // written for a larger-output model (or provider) otherwise pass through
+        // verbatim and Bedrock rejects the whole request with a ValidationException.
+        const limit = getMaxTokensLimitBedrock(option.model);
+        return limit ? Math.min(modelOptions.max_tokens, limit) : modelOptions.max_tokens;
     } else {
         let maxSupportedTokens = getMaxTokensLimitBedrock(option.model) ?? 8192; // Should always return a number for claude, 8192 is to satisfy the TypeScript type checker;
         // Fallback to the default max tokens limit for the model
@@ -1360,10 +1363,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
         } else if (options.model.includes('claude')) {
             const claude_options = model_options as ModelOptions as BedrockClaudeOptions;
-            // Thinking is active when extended (budget set) or adaptive (effort set) thinking is enabled.
-            // JSON prefill is incompatible with active thinking.
-            const thinkingActive = claudeThinking.thinking != null && claudeThinking.thinking.type !== 'disabled';
-            supportsJSONPrefill = !thinkingActive;
+            // Claude never uses JSON prefill: newer models (4.6+) reject assistant
+            // message prefill outright, and every supported Claude follows the
+            // schema instruction injected into the prompt — so the model-version
+            // gate this used to need is gone. Titan/Nova (above) keep prefill as
+            // they have no native JSON adherence.
 
             // Claude 3.7+ supports thinking — use shared helper for reasoning_config
             if (claudeThinking.supportsThinking) {
@@ -1392,14 +1396,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     output_config: claudeThinking.outputConfig,
                 };
             }
-            // Claude 4.6 and later versions don't support JSON prefill
-            if (isClaudeVersionGTE(options.model, 4, 6)) {
-                supportsJSONPrefill = false;
-            }
-            // Needs max_tokens to be set
-            if (!model_options.max_tokens) {
-                model_options.max_tokens = maxTokenFallbackClaude(options);
-            }
+            // Needs max_tokens to be set — and caller-provided values clamped to
+            // the model's output limit (both handled by maxTokenFallbackClaude).
+            model_options.max_tokens = maxTokenFallbackClaude(options);
             // Only models without sampling restrictions support top_k
             if (!hasSamplingRestriction) {
                 additionalField = { ...additionalField, top_k: model_options.top_k };
