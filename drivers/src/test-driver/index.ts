@@ -66,11 +66,11 @@ export class TestDriver implements Driver<PromptSegment[]> {
         }
     }
 
-    async listTrainableModels(): Promise<AIModel<string>[]> {
+    async listTrainableModels(): Promise<AIModel[]> {
         return [];
     }
 
-    async listModels(): Promise<AIModel<string>[]> {
+    async listModels(): Promise<AIModel[]> {
         return [
             {
                 id: TestDriverModels.executionError,

@@ -1754,7 +1754,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return true;
     }
 
-    async listTrainableModels(): Promise<AIModel<string>[]> {
+    async listTrainableModels(): Promise<AIModel[]> {
         this.logger.debug('[Bedrock] listing trainable models');
         return this._listModels((m) =>
             m.customizationsSupported ? m.customizationsSupported.includes('FINE_TUNING') : false,

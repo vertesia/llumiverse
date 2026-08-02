@@ -131,7 +131,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
         });
     }
 
-    async listModels(): Promise<AIModel<string>[]> {
+    async listModels(): Promise<AIModel[]> {
         const res = (await this.fetchClient
             .get(`/ml/v1/foundation_model_specs?version=${API_VERSION}`)
             .catch((err) => this.logger.warn(`Can't list models on Watsonx: ${err}`))) as WatsonxListModelResponse;

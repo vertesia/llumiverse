@@ -543,7 +543,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         }
     }
 
-    listTrainableModels(): Promise<AIModel<string>[]> {
+    listTrainableModels(): Promise<AIModel[]> {
         return this._listModels((m) => supportFineTunning.has(m.id));
     }
 
@@ -601,7 +601,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
                     input_modalities: modelModalitiesToArray(modelCapability.input),
                     output_modalities: modelModalitiesToArray(modelCapability.output),
                     tool_support: modelCapability.tool_support,
-                } satisfies AIModel<string>;
+                } satisfies AIModel;
             })
             .sort((a, b) => a.id.localeCompare(b.id));
 

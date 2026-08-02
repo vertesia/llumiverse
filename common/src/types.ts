@@ -1,6 +1,14 @@
 import type { z } from 'zod';
+import type {
+    EmbeddingOutputSchema,
+    EmbeddingResultItemSchema,
+    EmbeddingsResultSchema,
+    EmbeddingsTokenUsageSchema,
+    EmbeddingTaskTypeSchema,
+} from './schemas/embeddings.js';
 import type { HttpTimeoutOptionsSchema } from './schemas/http-timeout.js';
 import type { JSONSchema } from './schemas/json-schema.js';
+import type { AIModelSchema, ModelSearchPayloadSchema } from './schemas/model.js';
 import type { ModelOptionsSchema, ReasoningEffortSchema } from './schemas/model-options.js';
 
 // ============== Provider details ===============
@@ -144,13 +152,8 @@ export const ProviderList: Record<Providers, ProviderParams> = {
 
 // ============== Embeddings ===============
 
-/**
- * Semantic task type for embedding models. Drivers map these to provider-
- * specific values (e.g. "RETRIEVAL_QUERY" for Vertex, "search_query" for Cohere).
- * - "query"    — a search query to find relevant documents
- * - "document" — a document to be indexed and retrieved
- */
-export type EmbeddingTaskType = 'query' | 'document';
+// Inferred from `./schemas/embeddings.js`, which carries the description the document publishes.
+export type EmbeddingTaskType = z.infer<typeof EmbeddingTaskTypeSchema>;
 
 /**
  * One input to an embedding model. Discriminated by `type`.
@@ -209,43 +212,15 @@ export interface EmbeddingsOptions {
     dimensions?: number;
 }
 
-export interface EmbeddingsResult {
-    /** One result item per input, in the same order as EmbeddingsOptions.inputs. */
-    results: EmbeddingResultItem[];
-    /** The provider model id that produced the result. */
-    model: string;
-    /** Aggregate token usage when reported by the provider. */
-    usage?: EmbeddingsTokenUsage;
-}
+// The four result shapes are inferred from `./schemas/embeddings.js` — one definition each, which
+// the OpenAPI document publishes and AJV enforces. The per-property documentation moved with them.
+export type EmbeddingsResult = z.infer<typeof EmbeddingsResultSchema>;
 
-export interface EmbeddingResultItem {
-    /**
-     * One or more vectors produced for this input.
-     * Single vector for text/image; multiple for segmented video/audio or
-     * joint-multimodal models that return per-modality vectors.
-     */
-    outputs: EmbeddingOutput[];
-    /** Token count attributed to this input, when reported by the provider. */
-    input_tokens?: number;
-}
+export type EmbeddingResultItem = z.infer<typeof EmbeddingResultItemSchema>;
 
-export interface EmbeddingOutput {
-    values: number[];
-    /** Which modality this vector represents (useful for joint-multimodal results). */
-    modality?: 'text' | 'image' | 'video' | 'audio';
-    /** Segment start time for video/audio. */
-    start_sec?: number;
-    /** Segment end time for video/audio. */
-    end_sec?: number;
-    /** TwelveLabs Marengo: which view of the segment this vector represents. */
-    embedding_option?: string;
-}
+export type EmbeddingOutput = z.infer<typeof EmbeddingOutputSchema>;
 
-export interface EmbeddingsTokenUsage {
-    input_tokens?: number;
-    input_text_tokens?: number;
-    input_image_tokens?: number;
-}
+export type EmbeddingsTokenUsage = z.infer<typeof EmbeddingsTokenUsageSchema>;
 
 export interface ResultValidationError {
     code: 'validation_error' | 'json_error' | 'content_policy_violation';
@@ -822,24 +797,11 @@ export interface ModelCapabilities {
 
 // ============== AI MODEL ==============
 
-export interface AIModel<ProviderKeys = string> {
-    id: string; //id of the model known by the provider
-    name: string; //human readable name
-    provider: ProviderKeys; //provider name
-    description?: string;
-    version?: string; //if any version is specified
-    type?: ModelType; //type of the model
-    tags?: string[]; //tags for searching
-    owner?: string; //owner of the model
-    status?: AIModelStatus; //status of the model
-    can_stream?: boolean; //if the model's response can be streamed
-    is_custom?: boolean; //if the model is a custom model (a trained model)
-    is_multimodal?: boolean; //if the model support files and images
-    input_modalities?: string[]; //Input modalities supported by the model (e.g. text, image, video, audio)
-    output_modalities?: string[]; //Output modalities supported by the model (e.g. text, image, video, audio)
-    tool_support?: boolean; //if the model supports tool use
-    environment?: string; //the environment name
-}
+// Inferred from `./schemas/model.js`. The type parameter it used to carry (`AIModel<ProviderKeys =
+// string>`, narrowing `provider`) is gone: every instantiation in and out of this repo passed
+// `string`, which is what the published component has always said, and a canonical alias cannot
+// carry one. `AIModel` becomes `AIModel`.
+export type AIModel = z.infer<typeof AIModelSchema>;
 
 export enum AIModelStatus {
     Available = 'available',
@@ -850,19 +812,10 @@ export enum AIModelStatus {
     Legacy = 'legacy',
 }
 
-/**
- * payload to list available models for an environment
- * @param environmentId id of the environment
- * @param query text to search for in model name/description
- * @param type type of the model
- * @param tags tags for searching
- */
-export interface ModelSearchPayload {
-    text: string;
-    type?: ModelType;
-    tags?: string[];
-    owner?: string;
-}
+// The query `GET /environments/:envId/models` takes, inferred from `./schemas/model.js`. It reaches
+// the document as four expanded query parameters rather than as a component body, which is why no
+// `ModelSearchPayload` schema appears there.
+export type ModelSearchPayload = z.infer<typeof ModelSearchPayloadSchema>;
 
 export enum ModelType {
     Classifier = 'classifier',

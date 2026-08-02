@@ -86,7 +86,7 @@ export class GroqDriver extends OpenAIChatCompletionsDriverBase<GroqDriverOption
         return openAIChatCompletionsStreamToSSE(normalizeGroqStream(stream));
     }
 
-    async listModels(): Promise<AIModel<string>[]> {
+    async listModels(): Promise<AIModel[]> {
         const models = await this.client.models.list();
         return models.data.map((model) => ({
             id: model.id,
