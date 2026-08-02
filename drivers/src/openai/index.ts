@@ -185,7 +185,7 @@ export class OpenAIResponsesProtocol {
         }
 
         // Include conversation history (same as non-streaming)
-        // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
+        // Fix orphaned function_call items (for example after retries, compaction, or cancellation)
         let conversation = fixOrphanedToolResults(fixOrphanedToolUse(updateConversation(options.conversation, prompt)));
 
         const toolDefs = getToolDefinitions(options.tools);
@@ -270,7 +270,7 @@ export class OpenAIResponsesProtocol {
         const toolDefs = getToolDefinitions(options.tools);
         const useTools: boolean = toolDefs ? supportsToolUse(options.model, driver.provider) : false;
 
-        // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
+        // Fix orphaned function_call items (for example after retries, compaction, or cancellation)
         let conversation = fixOrphanedToolResults(fixOrphanedToolUse(updateConversation(options.conversation, prompt)));
 
         // When no tools are provided but conversation contains function_call/function_call_output
@@ -1184,12 +1184,12 @@ function responseFinishReason(
 /**
  * Fix orphaned function_call items in the OpenAI Responses API conversation.
  *
- * When an agent is stopped mid-tool-execution, the conversation may contain
- * function_call items without matching function_call_output items. The OpenAI
+ * Retries, conversation compaction, or cancellation may leave the conversation with
+ * function_call items that have no matching function_call_output items. The OpenAI
  * Responses API requires every function_call to have a matching function_call_output.
  *
- * This function detects such cases and injects synthetic function_call_output items
- * indicating the tools were interrupted, allowing the conversation to continue.
+ * This function detects such cases and injects neutral synthetic function_call_output
+ * items, allowing the conversation to continue without guessing why the result is missing.
  */
 export function fixOrphanedToolUse(items: ResponseInputItem[]): ResponseInputItem[] {
     if (items.length < 2) return items;
@@ -1223,7 +1223,7 @@ export function fixOrphanedToolUse(items: ResponseInputItem[]): ResponseInputIte
                     result.push({
                         type: 'function_call_output',
                         call_id: callId,
-                        output: `[Tool interrupted: The user stopped the operation before "${toolName}" could execute.]`,
+                        output: `[Tool result unavailable: no result was recorded for "${toolName}". Do not assume whether it ran; retry only if the operation is still needed and safe.]`,
                     });
                 }
                 pendingCalls.clear();
@@ -1238,7 +1238,7 @@ export function fixOrphanedToolUse(items: ResponseInputItem[]): ResponseInputIte
             result.push({
                 type: 'function_call_output',
                 call_id: callId,
-                output: `[Tool interrupted: The user stopped the operation before "${toolName}" could execute.]`,
+                output: `[Tool result unavailable: no result was recorded for "${toolName}". Do not assume whether it ran; retry only if the operation is still needed and safe.]`,
             });
         }
     }

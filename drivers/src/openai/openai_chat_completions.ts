@@ -324,18 +324,18 @@ function normalizeOpenAIChatCompletionsFinishReason(
     return reason || undefined;
 }
 
-function toolCallInterruptedMessage(id: string, toolName: string): OpenAIChatCompletionsMessage {
+function toolResultUnavailableMessage(id: string, toolName: string): OpenAIChatCompletionsMessage {
     return {
         role: 'tool',
         tool_call_id: id,
-        content: `[Tool interrupted: The user stopped the operation before "${toolName}" could execute.]`,
+        content: `[Tool result unavailable: no result was recorded for "${toolName}". Do not assume whether it ran; retry only if the operation is still needed and safe.]`,
     };
 }
 
 /**
  * Chat Completions requires every assistant tool call to be followed by a tool
- * response. If a run is stopped mid-tool-execution, synthesize a result so the
- * next request can continue instead of failing provider-side validation.
+ * response. If retries, compaction, or cancellation leave a call unanswered, synthesize
+ * a neutral result so the next request can continue instead of failing provider-side validation.
  */
 export function fixOrphanedOpenAIChatCompletionsToolUse(
     messages: OpenAIChatCompletionsMessage[],
@@ -370,7 +370,7 @@ export function fixOrphanedOpenAIChatCompletionsToolUse(
 
         if (pendingCalls.size > 0) {
             for (const [callId, toolName] of pendingCalls) {
-                result.push(toolCallInterruptedMessage(callId, toolName));
+                result.push(toolResultUnavailableMessage(callId, toolName));
             }
             pendingCalls.clear();
         }
@@ -379,7 +379,7 @@ export function fixOrphanedOpenAIChatCompletionsToolUse(
 
     if (pendingCalls.size > 0) {
         for (const [callId, toolName] of pendingCalls) {
-            result.push(toolCallInterruptedMessage(callId, toolName));
+            result.push(toolResultUnavailableMessage(callId, toolName));
         }
     }
 
