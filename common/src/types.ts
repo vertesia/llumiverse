@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import type { ExecutionTokenUsageSchema, StatelessExecutionOptionsSchema } from './schemas/completion.js';
 import type {
     EmbeddingOutputSchema,
     EmbeddingResultItemSchema,
@@ -561,7 +562,14 @@ export interface PromptOptions {
     prompt_cache_schema_suffix?: boolean;
 }
 
-export interface StatelessExecutionOptions extends PromptOptions {
+// `format` is NOT on this type, and its absence is deliberate. It lives on `PromptOptions`, which is
+// the in-process shape a driver takes; this one is PUBLISHED as an API component, and a
+// `PromptFormatter` is a function — the scanner used to emit it as an object with `namedArgs` and
+// `returns` that no caller could construct or send. `ExecutionOptions` below re-adds it, so the
+// drivers are unaffected.
+export type StatelessExecutionOptions = z.infer<typeof StatelessExecutionOptionsSchema>;
+
+export interface ExecutionOptionsBase extends PromptOptions {
     /**
      * If set to true the original response from the target LLM will be included in the response under the original_response field.
      * This is useful for debugging and for some advanced use cases.
@@ -589,7 +597,7 @@ export interface StatelessExecutionOptions extends PromptOptions {
     output_modality?: Modalities;
 }
 
-export interface ExecutionOptions extends StatelessExecutionOptions {
+export interface ExecutionOptions extends ExecutionOptionsBase {
     /**
      * Available tools for the request
      */
@@ -752,22 +760,7 @@ export interface PromptSegment {
     files?: DataSource[];
 }
 
-export interface ExecutionTokenUsage {
-    prompt?: number;
-    result?: number;
-    total?: number;
-    /**
-     * Number of input tokens read from prompt cache (discounted rate).
-     */
-    prompt_cached?: number;
-    /**
-     * Number of input tokens written to prompt cache.
-     */
-    prompt_cache_write?: number;
-
-    /* Number of new input tokens not from cache. This is useful for providers with prompt caching to understand how many tokens were actually newly processed in the prompt, separate from any cached tokens. Calculated as prompt - prompt_cached. */
-    prompt_new?: number; // Number of new input tokens not from cache (calculated as prompt - prompt_cached)
-}
+export type ExecutionTokenUsage = z.infer<typeof ExecutionTokenUsageSchema>;
 
 /**
  * @deprecated This is deprecated. Use CompletionResult.type information instead.

@@ -7,6 +7,7 @@
  * calls. `@vertesia/common` splits `./api-schemas` off its own barrel for the same reason one layer
  * out — there, to keep ~34 ms of eager schema construction off packages that serve no HTTP.
  */
+export * from './completion.js';
 export * from './embeddings.js';
 export * from './http-timeout.js';
 export * from './json-schema.js';
