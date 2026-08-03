@@ -1,3 +1,10 @@
+import type { z } from 'zod';
+import type {
+    ImagenOptionsSchema,
+    VertexAIClaudeOptionsSchema,
+    VertexAIGeminiOptionsSchema,
+    VertexAIGrokOptionsSchema,
+} from '../schemas/model-options.js';
 import {
     type ModelOptionInfoItem,
     type ModelOptions,
@@ -16,6 +23,19 @@ import {
     getClaudeMaxTokensLimit,
 } from './shared-parsing.js';
 import { hasSamplingParameterRestriction, isGeminiModelVersionGte } from './version-parsing.js';
+
+// The option shapes are DERIVED, not declared. Each schema in `../schemas/model-options.js` is the
+// single definition of its option set: it is what the OpenAPI document publishes, what AJV enforces,
+// and — through `z.infer` below — what TypeScript sees. There is nothing here to keep in step with
+// anything, because there is only one statement of the shape.
+//
+// The OpenAPI scanner short-circuits these aliases to the component of the same name rather than
+// trying to expand `z.infer`, which it cannot do. That is why the alias name, the schema variable
+// and the published component id must all agree; generation fails loudly if they do not.
+export type ImagenOptions = z.infer<typeof ImagenOptionsSchema>;
+export type VertexAIClaudeOptions = z.infer<typeof VertexAIClaudeOptionsSchema>;
+export type VertexAIGeminiOptions = z.infer<typeof VertexAIGeminiOptionsSchema>;
+export type VertexAIGrokOptions = z.infer<typeof VertexAIGrokOptionsSchema>;
 
 // Union type of all VertexAI options
 /**
@@ -48,80 +68,6 @@ export enum ThinkingLevel {
     LOW = 'LOW',
     MINIMAL = 'MINIMAL',
     THINKING_LEVEL_UNSPECIFIED = 'THINKING_LEVEL_UNSPECIFIED',
-}
-
-export interface ImagenOptions {
-    _option_id: 'vertexai-imagen';
-
-    //General and generate options
-    number_of_images?: number;
-    seed?: number;
-    person_generation?: 'dont_allow' | 'allow_adults' | 'allow_all';
-    safety_setting?: 'block_none' | 'block_only_high' | 'block_medium_and_above' | 'block_low_and_above'; //The "off" option does not seem to work for Imagen 3, might be only for text models
-    image_file_type?: 'image/jpeg' | 'image/png';
-    jpeg_compression_quality?: number;
-    aspect_ratio?: '1:1' | '4:3' | '3:4' | '16:9' | '9:16';
-    add_watermark?: boolean;
-    enhance_prompt?: boolean;
-
-    //Capability options
-    edit_mode?: ImagenTaskType;
-    guidance_scale?: number;
-    edit_steps?: number;
-    mask_mode?: ImagenMaskMode;
-    mask_dilation?: number;
-    mask_class?: number[];
-
-    //Customization options
-    controlType?: 'CONTROL_TYPE_FACE_MESH' | 'CONTROL_TYPE_CANNY' | 'CONTROL_TYPE_SCRIBBLE';
-    controlImageComputation?: boolean;
-    subjectType?: 'SUBJECT_TYPE_PERSON' | 'SUBJECT_TYPE_ANIMAL' | 'SUBJECT_TYPE_PRODUCT' | 'SUBJECT_TYPE_DEFAULT';
-}
-
-export interface VertexAIClaudeOptions {
-    _option_id: 'vertexai-claude';
-    max_tokens?: number;
-    temperature?: number;
-    top_p?: number;
-    top_k?: number;
-    stop_sequence?: string[];
-    effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-    thinking_budget_tokens?: number;
-    include_thoughts?: boolean;
-    cache_enabled?: boolean;
-    cache_ttl?: '5m' | '1h';
-}
-
-export interface VertexAIGeminiOptions {
-    _option_id: 'vertexai-gemini';
-    max_tokens?: number;
-    temperature?: number;
-    top_p?: number;
-    top_k?: number;
-    stop_sequence?: string[];
-    presence_penalty?: number;
-    frequency_penalty?: number;
-    seed?: number;
-    effort?: 'minimal' | 'low' | 'medium' | 'high';
-    include_thoughts?: boolean;
-    thinking_budget_tokens?: number;
-    thinking_level?: ThinkingLevel;
-    flex?: boolean;
-    // ImageConfig properties
-    image_aspect_ratio?: '1:1' | '2:3' | '3:2' | '3:4' | '4:3' | '9:16' | '16:9' | '21:9';
-    image_size?: '1K' | '2K' | '4K';
-    person_generation?: 'ALLOW_ALL' | 'ALLOW_ADULT' | 'ALLOW_NONE';
-    prominent_people?: 'PROMINENT_PEOPLE_UNSPECIFIED' | 'ALLOW_PROMINENT_PEOPLE' | 'BLOCK_PROMINENT_PEOPLE';
-    output_mime_type?: 'image/png' | 'image/jpeg';
-    output_compression_quality?: number;
-}
-
-export interface VertexAIGrokOptions {
-    _option_id: 'vertexai-grok';
-    max_tokens?: number;
-    temperature?: number;
-    top_p?: number;
-    stop_sequence?: string[];
 }
 
 /** Models that support Flex processing (shared, cost-efficient tier). */

@@ -466,7 +466,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                     input_modalities: modelModalitiesToArray(modelCapability.input),
                     output_modalities: modelModalitiesToArray(modelCapability.output),
                     tool_support: modelCapability.tool_support,
-                } satisfies AIModel<string>;
+                } satisfies AIModel;
             })
             .sort((modelA, modelB) => modelA.id.localeCompare(modelB.id));
 

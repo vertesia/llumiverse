@@ -1,55 +1,38 @@
+import type { z } from 'zod';
+import type {
+    OpenAiDalleOptionsSchema,
+    OpenAiGptImageOptionsSchema,
+    OpenAiTextOptionsSchema,
+    OpenAiThinkingOptionsSchema,
+} from '../schemas/model-options.js';
 import {
     type ModelOptionInfoItem,
     type ModelOptions,
     type ModelOptionsInfo,
     OptionType,
-    type ReasoningEffort,
     SharedOptions,
 } from '../types.js';
 import { getMaxOutputTokens } from './context-windows.js';
 import { getOpenAIReasoningEffortLevels, isOpenAIGptVersionGTE } from './version-parsing.js';
+
+// The option shapes are DERIVED, not declared. Each schema in `../schemas/model-options.js` is the
+// single definition of its option set: it is what the OpenAPI document publishes, what AJV enforces,
+// and — through `z.infer` below — what TypeScript sees. There is nothing here to keep in step with
+// anything, because there is only one statement of the shape.
+//
+// The OpenAPI scanner short-circuits these aliases to the component of the same name rather than
+// trying to expand `z.infer`, which it cannot do. That is why the alias name, the schema variable
+// and the published component id must all agree; generation fails loudly if they do not.
+export type OpenAiThinkingOptions = z.infer<typeof OpenAiThinkingOptionsSchema>;
+export type OpenAiTextOptions = z.infer<typeof OpenAiTextOptionsSchema>;
+export type OpenAiDalleOptions = z.infer<typeof OpenAiDalleOptionsSchema>;
+export type OpenAiGptImageOptions = z.infer<typeof OpenAiGptImageOptionsSchema>;
 
 // Union type of all OpenAI options
 /**
  * @discriminator _option_id
  */
 export type OpenAiOptions = OpenAiThinkingOptions | OpenAiTextOptions | OpenAiDalleOptions | OpenAiGptImageOptions;
-
-export interface OpenAiThinkingOptions {
-    _option_id: 'openai-thinking';
-    max_tokens?: number;
-    stop_sequence?: string[];
-    effort?: ReasoningEffort;
-    reasoning_effort?: ReasoningEffort;
-    image_detail?: 'low' | 'high' | 'auto';
-}
-
-export interface OpenAiTextOptions {
-    _option_id: 'openai-text';
-    max_tokens?: number;
-    temperature?: number;
-    top_p?: number;
-    presence_penalty?: number;
-    frequency_penalty?: number;
-    stop_sequence?: string[];
-    image_detail?: 'low' | 'high' | 'auto';
-}
-export interface OpenAiDalleOptions {
-    _option_id: 'openai-dalle';
-    size?: '256x256' | '512x512' | '1024x1024' | '1792x1024' | '1024x1792';
-    image_quality?: 'standard' | 'hd';
-    style?: 'vivid' | 'natural';
-    response_format?: 'url' | 'b64_json';
-    n?: number;
-}
-
-export interface OpenAiGptImageOptions {
-    _option_id: 'openai-gpt-image';
-    size?: '1024x1024' | '1024x1536' | '1536x1024' | 'auto';
-    image_quality?: 'low' | 'medium' | 'high' | 'auto';
-    background?: 'transparent' | 'opaque' | 'auto';
-    output_format?: 'png' | 'webp' | 'jpeg';
-}
 
 export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOptionsInfo {
     const visionOptions: ModelOptionInfoItem[] = isVisionModel(model)

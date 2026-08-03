@@ -1,43 +1,28 @@
+import type { z } from 'zod';
 import { getBedrockModelKnowledge } from '../capability/bedrock-models.js';
+import type {
+    BedrockMantleChatCompletionsOptionsSchema,
+    BedrockMantleClaudeOptionsSchema,
+    BedrockMantleResponsesOptionsSchema,
+} from '../schemas/model-options.js';
 import { type ModelOptionInfoItem, type ModelOptions, type ModelOptionsInfo, OptionType } from '../types.js';
 import { getAnthropicOptions } from './anthropic.js';
 import { textOptionsFallback } from './fallback.js';
 import { isModelFamilyVersionGTE } from './version-parsing.js';
 
+// The option shapes are DERIVED, not declared. Each schema in `../schemas/model-options.js` is the
+// single definition of its option set: it is what the OpenAPI document publishes, what AJV enforces,
+// and — through `z.infer` below — what TypeScript sees. There is nothing here to keep in step with
+// anything, because there is only one statement of the shape.
+//
+// The OpenAPI scanner short-circuits these aliases to the component of the same name rather than
+// trying to expand `z.infer`, which it cannot do. That is why the alias name, the schema variable
+// and the published component id must all agree; generation fails loudly if they do not.
+export type BedrockMantleResponsesOptions = z.infer<typeof BedrockMantleResponsesOptionsSchema>;
+export type BedrockMantleChatCompletionsOptions = z.infer<typeof BedrockMantleChatCompletionsOptionsSchema>;
+export type BedrockMantleClaudeOptions = z.infer<typeof BedrockMantleClaudeOptionsSchema>;
+
 export type BedrockMantleProtocol = 'responses' | 'chat_completions' | 'messages';
-
-export interface BedrockMantleResponsesOptions {
-    _option_id: 'bedrock-mantle-responses';
-    max_tokens?: number;
-    temperature?: number;
-    top_p?: number;
-    effort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh';
-    reasoning_effort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh';
-    verbosity?: 'low' | 'medium' | 'high';
-    image_detail?: 'low' | 'high' | 'auto';
-}
-
-export interface BedrockMantleChatCompletionsOptions {
-    _option_id: 'bedrock-mantle-chat-completions';
-    max_tokens?: number;
-    temperature?: number;
-    top_p?: number;
-    stop_sequence?: string[];
-}
-
-export interface BedrockMantleClaudeOptions {
-    _option_id: 'bedrock-mantle-claude';
-    max_tokens?: number;
-    temperature?: number;
-    top_p?: number;
-    top_k?: number;
-    stop_sequence?: string[];
-    effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-    thinking_budget_tokens?: number;
-    include_thoughts?: boolean;
-    cache_enabled?: boolean;
-    cache_ttl?: '5m' | '1h';
-}
 
 /**
  * @discriminator _option_id

@@ -33,6 +33,10 @@
         ".": {
             "types": "./lib/index.d.ts",
             "default": "./lib/index.js"
+        },
+        "./schemas": {
+            "types": "./lib/schemas/index.d.ts",
+            "default": "./lib/schemas/index.js"
         }
     },
     "scripts": {
@@ -48,6 +52,9 @@
     "repository": {
         "type": "git",
         "url": "git+ssh://git@github.com/vertesia/llumiverse.git"
+    },
+    "dependencies": {
+        "zod": "^4.4.3"
     },
     "devDependencies": {
         "@types/node": "catalog:",

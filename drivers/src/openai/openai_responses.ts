@@ -79,7 +79,7 @@ export class OpenAIResponsesDriver extends OpenAIResponsesDriverBase {
                         input_modalities: modelModalitiesToArray(modelCapability.input),
                         output_modalities: modelModalitiesToArray(modelCapability.output),
                         tool_support: modelCapability.tool_support,
-                    } satisfies AIModel<string>;
+                    } satisfies AIModel;
                 })
                 .sort((a, b) => a.id.localeCompare(b.id));
 
