@@ -59,16 +59,13 @@ export const JSONSchemaPropertiesSchema: z.ZodType<JSONSchemaProperties> = z
 // the source instead of shipping to every client generator.
 //
 // Every other type in this closure is now `z.infer` of its schema. This one is not, and the reason
-// is RECURSION, not the scanner: the scanner short-circuits a `z.infer` alias to the published
-// component rather than deriving it, so that obstacle is gone. What remains is TypeScript's own
-// limit — Zod 4 infers a recursive type from the getters below, but the inference bottoms out at
+// is TypeScript recursion. Zod 4 infers a recursive type from the getters below, but the inference
+// bottoms out at
 // depth, so `items` degrades to `{}` a few levels down and driver code that walks a nested schema
 // stops compiling. A recursive schema has to be handed a named type.
 //
-// The exception is recorded, with this reason, in `packages/api-specs/canonical-aliases.json`, and
-// the gate there rejects it if it ever becomes inferable — so it cannot quietly outlive the
-// constraint. Because this type is NOT short-circuited, the scanner still derives it wherever an
-// unconverted type reaches it, and the derived result must still agree with the canonical component.
+// The named type is therefore an explicit recursion boundary; the runtime schema remains the JSON
+// contract published to OpenAPI and enforced by AJV.
 //
 // The known fields are split out from the index signature so the named type can actually be CHECKED
 // against the schema. `z.ZodType<JSONSchema>` alone does not check much: every named field is

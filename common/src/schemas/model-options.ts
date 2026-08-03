@@ -6,9 +6,7 @@ import { ImagenMaskMode, ImagenTaskType, ThinkingLevel } from '../options/vertex
 //
 // These are the SINGLE definition of each option set. The OpenAPI document publishes them, AJV
 // enforces them, and the public TypeScript types in `../options/*` are `z.infer` of them, so there
-// is no second declaration to drift from. The scanner short-circuits those aliases to the component
-// of the same name rather than trying to expand `z.infer`, which is what makes one definition
-// enough — see `canonical-alias-parser.ts` in the api-scanner package.
+// is no second declaration to drift from. OpenAPI publishes these registered schemas directly.
 //
 // `//` rather than `/** */` throughout: a JSDoc block immediately preceding an exported declaration is
 // picked up by Vertesia's OpenAPI scanner and published as that component's `description`.

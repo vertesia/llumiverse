@@ -13,7 +13,7 @@ import { JSONSchemaPropertiesSchema, JSONSchemaSchema } from './json-schema.js';
  * have to agree, or the build fails several packages downstream.
  *
  * That agreement check is shape-based rather than literal: key order carries no meaning in JSON
- * Schema, and `ts-json-schema-generator` is not self-consistent about it. The assertion below is
+ * Schema. The assertion below is
  * stricter than the constraint on purpose. It pins the exact emission, so any change to the schema
  * — including one that only moves a key — shows up here, in llumiverse's own test run, with the
  * before and after side by side.
