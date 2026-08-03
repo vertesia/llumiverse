@@ -122,6 +122,54 @@ describe('formatClaudePrompt', () => {
         });
     });
 
+    it('appends a user turn when the conversation ends with an assistant message on no-prefill models', () => {
+        const options: ExecutionOptions = { model: 'claude-fable-5' };
+        const prompt = {
+            system: undefined,
+            messages: [
+                { role: 'user' as const, content: [{ type: 'text' as const, text: 'do the task' }] },
+                { role: 'assistant' as const, content: [{ type: 'text' as const, text: 'partial answer' }] },
+            ],
+        };
+
+        const { payload } = getClaudePayload(options, prompt);
+
+        const last = payload.messages[payload.messages.length - 1];
+        expect(last).toEqual({ role: 'user', content: [{ type: 'text', text: 'Continue.' }] });
+    });
+
+    it('preserves intentional assistant prefill on pre-4.6 models', () => {
+        const options: ExecutionOptions = { model: 'claude-3-5-sonnet-20241022' };
+        const prompt = {
+            system: undefined,
+            messages: [
+                { role: 'user' as const, content: [{ type: 'text' as const, text: 'answer as JSON' }] },
+                { role: 'assistant' as const, content: [{ type: 'text' as const, text: '{' }] },
+            ],
+        };
+
+        const { payload } = getClaudePayload(options, prompt);
+
+        const last = payload.messages[payload.messages.length - 1];
+        expect(last?.role).toBe('assistant');
+    });
+
+    it('does not touch conversations already ending with a user turn', () => {
+        const options: ExecutionOptions = { model: 'claude-fable-5' };
+        const prompt = {
+            system: undefined,
+            messages: [
+                { role: 'assistant' as const, content: [{ type: 'text' as const, text: 'previous reply' }] },
+                { role: 'user' as const, content: [{ type: 'text' as const, text: 'next instruction' }] },
+            ],
+        };
+
+        const { payload } = getClaudePayload(options, prompt);
+
+        expect(payload.messages).toHaveLength(2);
+        expect(payload.messages[payload.messages.length - 1]?.role).toBe('user');
+    });
+
     it('preserves model-option cache controls when no routing identity is supplied', () => {
         const options: ExecutionOptions = {
             model: 'claude-sonnet-4-6',

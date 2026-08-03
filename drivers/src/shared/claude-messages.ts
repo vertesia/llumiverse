@@ -46,6 +46,7 @@ import {
     type ExecutionTokenUsage,
     getConversationMeta,
     incrementConversationTurn,
+    isClaudeVersionGTE,
     type JSONObject,
     LlumiverseError,
     type LlumiverseErrorContext,
@@ -713,6 +714,24 @@ export function getClaudePayload(
     const hasTools = options.tools && options.tools.length > 0;
     if (!hasTools && claudeMessagesContainToolBlocks(sanitizedMessages)) {
         sanitizedMessages = convertClaudeToolBlocksToText(sanitizedMessages);
+    }
+
+    // Claude 4.6+ rejects requests whose conversation ends with an assistant
+    // message ("does not support assistant message prefill"). A trailing
+    // assistant turn can emerge from upstream retry edges — e.g. a re-sent
+    // resume whose tool results were stripped as orphans above, leaving the
+    // previous attempt's reply last. Appending a minimal user turn converts a
+    // guaranteed 400 into a graceful continue — the same behavior pre-4.6
+    // models applied implicitly by treating the trailing turn as prefill.
+    // Older models are left untouched: prefill there can be intentional.
+    if (isClaudeVersionGTE(modelName, 4, 6)) {
+        const lastMessage = sanitizedMessages[sanitizedMessages.length - 1];
+        if (lastMessage?.role === 'assistant') {
+            sanitizedMessages = [
+                ...sanitizedMessages,
+                { role: 'user', content: [{ type: 'text', text: 'Continue.' }] },
+            ];
+        }
     }
 
     sanitizedMessages = stripClaudeCacheControlFromMessages(sanitizedMessages);
