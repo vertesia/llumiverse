@@ -70,7 +70,7 @@ export class MistralAIDriver extends OpenAIChatCompletionsDriverBase<MistralAIDr
         return openAIChatCompletionsStreamToSSE(normalizeMistralStream(stream));
     }
 
-    async listModels(): Promise<AIModel<string>[]> {
+    async listModels(): Promise<AIModel[]> {
         const models = await this.client.models.list();
         return (models.data ?? []).flatMap((model) =>
             'id' in model
@@ -81,7 +81,7 @@ export class MistralAIDriver extends OpenAIChatCompletionsDriverBase<MistralAIDr
                           description: ('description' in model && model.description) || undefined,
                           provider: this.provider,
                           owner: 'ownedBy' in model ? model.ownedBy : '',
-                      } satisfies AIModel<string>,
+                      } satisfies AIModel,
                   ]
                 : [],
         );

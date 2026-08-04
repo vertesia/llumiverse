@@ -3,19 +3,17 @@ import { getModelCapabilities, supportsToolUse } from './capability.js';
 import { Providers } from './types.js';
 
 describe('xAI Grok tool capabilities', () => {
-    it.each([
-        'grok-2',
-        'grok-3',
-        'grok-4',
-        'grok-4-fast-reasoning',
-    ])('enables tool use for %s via Providers.xai without setting tool_support_streaming', (model) => {
-        const caps = getModelCapabilities(model, Providers.xai);
-        expect(caps.tool_support).toBe(true);
-        expect(caps.tool_support_streaming).toBeUndefined();
-        // Streaming agents must still attach tools when the flag is omitted
-        expect(supportsToolUse(model, Providers.xai, true)).toBe(true);
-        expect(supportsToolUse(model, Providers.xai, false)).toBe(true);
-    });
+    it.each(['grok-2', 'grok-3', 'grok-4', 'grok-4-fast-reasoning'])(
+        'enables tool use for %s via Providers.xai without setting tool_support_streaming',
+        (model) => {
+            const caps = getModelCapabilities(model, Providers.xai);
+            expect(caps.tool_support).toBe(true);
+            expect(caps.tool_support_streaming).toBeUndefined();
+            // Streaming agents must still attach tools when the flag is omitted
+            expect(supportsToolUse(model, Providers.xai, true)).toBe(true);
+            expect(supportsToolUse(model, Providers.xai, false)).toBe(true);
+        },
+    );
 
     it('enables streaming tool use when provider is omitted for grok-* models', () => {
         const caps = getModelCapabilities('grok-3');

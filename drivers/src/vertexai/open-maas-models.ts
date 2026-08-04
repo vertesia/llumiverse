@@ -188,7 +188,7 @@ export function getVertexOpenMaaSRequestModel(
     return undefined;
 }
 
-export function vertexOpenMaaSModelToAIModel(entry: VertexOpenMaaSModel, region: string): AIModel<string> {
+export function vertexOpenMaaSModelToAIModel(entry: VertexOpenMaaSModel, region: string): AIModel {
     const id = `locations/${region}/publishers/${entry.publisher}/models/${entry.model}`;
     const modelCapability = getModelCapabilities(entry.model, 'vertexai');
     return {
@@ -199,10 +199,10 @@ export function vertexOpenMaaSModelToAIModel(entry: VertexOpenMaaSModel, region:
         input_modalities: modelModalitiesToArray(modelCapability.input),
         output_modalities: modelModalitiesToArray(modelCapability.output),
         tool_support: modelCapability.tool_support,
-    } satisfies AIModel<string>;
+    } satisfies AIModel;
 }
 
-export function getListedVertexOpenMaaSModels(_region: string): AIModel<string>[] {
+export function getListedVertexOpenMaaSModels(_region: string): AIModel[] {
     return (VERTEX_OPEN_MAAS_MODELS as readonly VertexOpenMaaSModel[]).flatMap((entry) => {
         return entry.regions.map((listingRegion) => vertexOpenMaaSModelToAIModel(entry, listingRegion));
     });

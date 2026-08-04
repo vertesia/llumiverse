@@ -34,6 +34,55 @@ describe('Bedrock Converse structured output', () => {
         ]);
     });
 
+    it('never prefills an assistant JSON message for Claude models', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        for (const model of [
+            'anthropic.claude-3-5-sonnet-20241022-v2:0',
+            'anthropic.claude-sonnet-4-5',
+            'us.anthropic.claude-fable-5-20260115-v1:0',
+        ]) {
+            const payload = driver.preparePayload(
+                { modelId: undefined, messages: [{ role: 'user', content: [{ text: 'hello' }] }] },
+                { model, result_schema },
+            );
+            const last = payload.messages?.[payload.messages.length - 1];
+            expect(last?.role, model).toBe('user');
+        }
+    });
+
+    it('keeps the JSON prefill for Amazon models without native JSON adherence', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const payload = driver.preparePayload(
+            { modelId: undefined, messages: [{ role: 'user', content: [{ text: 'hello' }] }] },
+            { model: 'amazon.nova-pro-v1:0', result_schema },
+        );
+        const last = payload.messages?.[payload.messages.length - 1];
+        expect(last?.role).toBe('assistant');
+        expect(last?.content?.[0]?.text).toBe('```json');
+    });
+
+    it('clamps caller-provided max_tokens to the Claude model output limit', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const payload = driver.preparePayload(
+            { modelId: undefined, messages: [{ role: 'user', content: [{ text: 'hello' }] }] },
+            {
+                model: 'us.anthropic.claude-fable-5-20260115-v1:0',
+                model_options: { _option_id: 'bedrock-claude', max_tokens: 200_000 },
+            },
+        );
+        // Bedrock's bound for this family is exclusive at 128K (see bedrock-models.ts).
+        expect(payload.inferenceConfig?.maxTokens).toBe(127_999);
+    });
+
+    it('defaults max_tokens below Bedrock exclusive 128K bound when unset', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const payload = driver.preparePayload(
+            { modelId: undefined, messages: [{ role: 'user', content: [{ text: 'hello' }] }] },
+            { model: 'us.anthropic.claude-fable-5-20260115-v1:0' },
+        );
+        expect(payload.inferenceConfig?.maxTokens).toBe(127_999);
+    });
+
     it('uses outputConfig for non-Claude models', () => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
         const payload = driver.preparePayload(
