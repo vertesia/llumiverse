@@ -1,3 +1,5 @@
+import type { z } from 'zod';
+import type { GroqOptionsSchema } from '../schemas/model-options.js';
 import {
     type ModelOptionInfoItem,
     type ModelOptions,
@@ -7,19 +9,18 @@ import {
 } from '../types.js';
 import { textOptionsFallback } from './fallback.js';
 
-// Union type of all Bedrock options
-export type GroqOptions = GroqDeepseekThinkingOptions;
+// The option shapes are DERIVED, not declared. Each schema in `../schemas/model-options.js` is the
+// single definition of its option set: it is what the OpenAPI document publishes, what AJV enforces,
+// and — through `z.infer` below — what TypeScript sees. There is nothing here to keep in step with
+// anything, because there is only one statement of the shape.
+//
+// The OpenAPI scanner short-circuits these aliases to the component of the same name rather than
+// trying to expand `z.infer`, which it cannot do. That is why the alias name, the schema variable
+// and the published component id must all agree; generation fails loudly if they do not.
+export type GroqOptions = z.infer<typeof GroqOptionsSchema>;
 
-export interface GroqDeepseekThinkingOptions {
-    _option_id: 'groq-deepseek-thinking';
-    max_tokens?: number;
-    temperature?: number;
-    top_p?: number;
-    presence_penalty?: number;
-    frequency_penalty?: number;
-    stop_sequence?: string[];
-    reasoning_format: 'parsed' | 'raw' | 'hidden';
-}
+/** The only member of the Groq union today; kept as its own name because the driver narrows to it. */
+export type GroqDeepseekThinkingOptions = GroqOptions;
 
 export function getGroqOptions(model: string, _option?: ModelOptions): ModelOptionsInfo {
     if (model.includes('deepseek') && model.includes('r1')) {

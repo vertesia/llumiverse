@@ -601,13 +601,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return models;
     }
 
-    async listModels(_params?: ModelSearchPayload): Promise<AIModel<string>[]> {
+    async listModels(_params?: ModelSearchPayload): Promise<AIModel[]> {
         // Get clients
         const modelGarden = await this.getModelGardenClient();
         const aiplatform = await this.getAIPlatformClient();
         const globalGenAiClient = this.getGoogleGenAIClient('global');
 
-        let models: AIModel<string>[] = [];
+        let models: AIModel[] = [];
 
         // Model Garden publisher listings for families that are reliably returned by the API.
         // Open MaaS-only families are appended from VERTEX_OPEN_MAAS_MODELS below to avoid
@@ -732,7 +732,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                             input_modalities: modelModalitiesToArray(modelCapability.input),
                             output_modalities: modelModalitiesToArray(modelCapability.output),
                             tool_support: modelCapability.tool_support,
-                        } satisfies AIModel<string>;
+                        } satisfies AIModel;
                     }),
             );
 
@@ -772,7 +772,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                             input_modalities: modelModalitiesToArray(modelCapability.input),
                             output_modalities: modelModalitiesToArray(modelCapability.output),
                             tool_support: modelCapability.tool_support,
-                        } satisfies AIModel<string>;
+                        } satisfies AIModel;
                     });
 
                 models = models.concat(globalGeminiModels);
@@ -806,7 +806,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                             input_modalities: modelModalitiesToArray(modelCapability.input),
                             output_modalities: modelModalitiesToArray(modelCapability.output),
                             tool_support: modelCapability.tool_support,
-                        } satisfies AIModel<string>;
+                        } satisfies AIModel;
                     });
 
                 models = models.concat(globalAnthropicModels);
@@ -824,14 +824,14 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                     input_modalities: modelModalitiesToArray(modelCapability.input),
                     output_modalities: modelModalitiesToArray(modelCapability.output),
                     tool_support: modelCapability.tool_support,
-                } satisfies AIModel<string>);
+                } satisfies AIModel);
             }
         }
 
         //Remove duplicates
         const uniqueModels = Array.from(new Set(models.map((a) => a.id)))
             .map((id) => {
-                return models.find((a) => a.id === id) ?? ({} as AIModel<string>);
+                return models.find((a) => a.id === id) ?? ({} as AIModel);
             })
             .sort((a, b) => a.id.localeCompare(b.id));
 

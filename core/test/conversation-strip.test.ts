@@ -616,6 +616,14 @@ describe('turn-based stripping', () => {
 
 const TEXT_TRUNCATED_MARKER = '\n\n[Content truncated - exceeded token limit]';
 
+function expectString(value: unknown): string {
+    expect(typeof value).toBe('string');
+    if (typeof value !== 'string') {
+        throw new TypeError('Expected a string value');
+    }
+    return value;
+}
+
 describe('truncateLargeTextInConversation', () => {
     test('should not truncate when textMaxTokens is not set', () => {
         const input = {
@@ -649,7 +657,7 @@ describe('truncateLargeTextInConversation', () => {
         // Should be truncated to ~40000 chars + marker
         expect(result.content[0].text.length).toBeLessThan(50000);
         expect(result.content[0].text).toContain(TEXT_TRUNCATED_MARKER);
-        expect((result.content[0].text as unknown as string).substring(0, 40000)).toBe('a'.repeat(40000));
+        expect(expectString(result.content[0].text).substring(0, 40000)).toBe('a'.repeat(40000));
     });
 
     test('should not truncate text within token limit', () => {

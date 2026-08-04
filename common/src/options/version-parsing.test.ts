@@ -34,22 +34,20 @@ describe('Claude model version parsing', () => {
         expect(parseClaudeVersion('claude-unknown-5')).toBeNull();
     });
 
-    it.each([
-        'claude-fable-5',
-        'claude-mythos-5',
-        'claude-sonnet-5',
-        'claude-opus-4-8',
-    ])('advertises adaptive thinking and current effort levels for %s', (model) => {
-        expect(supportsAdaptiveThinking(model)).toBe(true);
-        expect(supportsEffort(model)).toBe(true);
-        expect(getAvailableEffortLevels(model)).toEqual({
-            Low: 'low',
-            Medium: 'medium',
-            'High (default)': 'high',
-            'Extra High': 'xhigh',
-            Max: 'max',
-        });
-    });
+    it.each(['claude-fable-5', 'claude-mythos-5', 'claude-sonnet-5', 'claude-opus-4-8'])(
+        'advertises adaptive thinking and current effort levels for %s',
+        (model) => {
+            expect(supportsAdaptiveThinking(model)).toBe(true);
+            expect(supportsEffort(model)).toBe(true);
+            expect(getAvailableEffortLevels(model)).toEqual({
+                Low: 'low',
+                Medium: 'medium',
+                'High (default)': 'high',
+                'Extra High': 'xhigh',
+                Max: 'max',
+            });
+        },
+    );
 });
 
 describe('OpenAI GPT model version parsing', () => {

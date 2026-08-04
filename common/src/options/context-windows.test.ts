@@ -31,14 +31,13 @@ describe('OpenAI context window limits', () => {
         expect(getContextWindowSize(model)).toBe(400_000);
     });
 
-    it.each([
-        'gpt-5.4',
-        'gpt-5.6-sol',
-        'models/gpt-5.7-20270101',
-    ])('uses current and future GPT-5 context limits for %s', (model) => {
-        expect(getMaxOutputTokens(model)).toBe(128_000);
-        expect(getContextWindowSize(model)).toBe(1_050_000);
-    });
+    it.each(['gpt-5.4', 'gpt-5.6-sol', 'models/gpt-5.7-20270101'])(
+        'uses current and future GPT-5 context limits for %s',
+        (model) => {
+            expect(getMaxOutputTokens(model)).toBe(128_000);
+            expect(getContextWindowSize(model)).toBe(1_050_000);
+        },
+    );
 
     it.each(['openai.gpt-5.4', 'us.openai.gpt-5.6-sol-v1:0'])('uses Bedrock Mantle context limits for %s', (model) => {
         expect(getMaxOutputTokens(model)).toBe(128_000);
