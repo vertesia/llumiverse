@@ -51,26 +51,24 @@ function response() {
 }
 
 describe('OpenAI Responses reasoning', () => {
-    it.each([
-        'gpt-5.4',
-        'gpt-5.5',
-        'gpt-5.6',
-        'gpt-5.6-sol',
-    ])('uses current-turn reasoning context for %s', async (model) => {
-        const create = vi.fn(async (_request: unknown) => response());
-        const driver = new TestResponsesDriver(create);
+    it.each(['gpt-5.4', 'gpt-5.5', 'gpt-5.6', 'gpt-5.6-sol'])(
+        'uses current-turn reasoning context for %s',
+        async (model) => {
+            const create = vi.fn(async (_request: unknown) => response());
+            const driver = new TestResponsesDriver(create);
 
-        await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
-            model,
-            model_options: { _option_id: 'openai-thinking' },
-        });
+            await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
+                model,
+                model_options: { _option_id: 'openai-thinking' },
+            });
 
-        expect(create).toHaveBeenCalledWith(
-            expect.objectContaining({
-                reasoning: expect.objectContaining({ context: 'current_turn' }),
-            }),
-        );
-    });
+            expect(create).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    reasoning: expect.objectContaining({ context: 'current_turn' }),
+                }),
+            );
+        },
+    );
 
     it('does not request cross-turn reasoning controls for models without documented support', async () => {
         const create = vi.fn(async (_request: unknown) => response());
@@ -149,7 +147,7 @@ describe('OpenAI Responses reasoning', () => {
         );
         const results = [];
         for await (const chunk of stream) results.push(...chunk.result);
-        const conversation = await stream.finalizeConversation?.({ result: results });
+        const conversation = await stream.finalizeConversation?.();
 
         expect(results).toEqual([
             { type: 'thoughts', value: 'visible plan' },

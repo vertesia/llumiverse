@@ -684,7 +684,7 @@ describe('OpenAIChatCompletionsProtocol', () => {
         const stream = await model.requestTextCompletionStream(undefined, prompt, options);
         const results = [];
         for await (const chunk of stream) results.push(...chunk.result);
-        const conversation = await stream.finalizeConversation?.({ result: results });
+        const conversation = await stream.finalizeConversation?.();
 
         expect(conversation).toMatchObject({
             messages: expect.arrayContaining([

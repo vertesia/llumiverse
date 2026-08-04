@@ -1073,9 +1073,6 @@ export async function streamClaudeCompletion(
                         }
                         break;
                     case 'signature_delta':
-                        if (model_options?.include_thoughts) {
-                            pendingSpacing = true;
-                        }
                         break;
                 }
                 break;

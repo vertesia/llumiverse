@@ -30,8 +30,6 @@ export interface ConversationMeta {
  * Options for stripping functions
  */
 export interface StripOptions {
-    /** Native protocol unit that generic cleanup must not modify. */
-    preserveSubtree?: (value: unknown) => boolean;
     /**
      * Provider hook for native protocol units that must remain byte-for-byte unchanged.
      * When true, generic media, text, and heartbeat cleanup does not descend into the value.

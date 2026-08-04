@@ -15,22 +15,22 @@ describe('Gemini thinking configuration', () => {
 
     it('maps current Gemini 3 effort levels', () => {
         expect(geminiThinkingConfig(options('gemini-3.5-flash', { effort: 'minimal' }))).toEqual({
-            includeThoughts: false,
+            includeThoughts: true,
             thinkingLevel: ThinkingLevel.MINIMAL,
         });
         expect(geminiThinkingConfig(options('gemini-3.1-pro', { effort: 'medium' }))).toEqual({
-            includeThoughts: false,
+            includeThoughts: true,
             thinkingLevel: ThinkingLevel.MEDIUM,
         });
     });
 
     it('passes through caller effort even when advisory metadata does not offer it', () => {
         expect(geminiThinkingConfig(options('gemini-3.1-flash-image', { effort: 'low' }))).toEqual({
-            includeThoughts: false,
+            includeThoughts: true,
             thinkingLevel: ThinkingLevel.LOW,
         });
         expect(geminiThinkingConfig(options('gemini-3-pro-image', { effort: 'minimal' }))).toEqual({
-            includeThoughts: false,
+            includeThoughts: true,
             thinkingLevel: ThinkingLevel.MINIMAL,
         });
     });

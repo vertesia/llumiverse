@@ -122,7 +122,7 @@ describe('MistralAIDriver official SDK transport', () => {
         );
         const results = [];
         for await (const chunk of stream) results.push(...chunk.result);
-        const conversation = await stream.finalizeConversation?.({ result: results });
+        const conversation = await stream.finalizeConversation?.();
 
         expect(results).toEqual([
             { type: 'thoughts', value: 'plan' },

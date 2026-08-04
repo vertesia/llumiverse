@@ -313,7 +313,7 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
         );
         const results = [];
         for await (const chunk of stream) results.push(...chunk.result);
-        const conversation = await stream.finalizeConversation?.({ result: results });
+        const conversation = await stream.finalizeConversation?.();
 
         expect(results).toContainEqual({ type: 'thoughts', value: 'plan ' });
         expect(results).toContainEqual({ type: 'thoughts', value: 'continued' });
@@ -370,7 +370,7 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
         for await (const _chunk of stream) {
             // Consume the stream so native finalization has all Parts.
         }
-        const conversation = await stream.finalizeConversation?.({ result: [] });
+        const conversation = await stream.finalizeConversation?.();
 
         expect(conversation).toMatchObject({
             _arrayConversation: expect.arrayContaining([

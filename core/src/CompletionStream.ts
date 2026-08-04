@@ -111,6 +111,7 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
         let sourceIterator: AsyncIterator<CompletionChunkObject> | undefined;
         let stream: DriverCompletionStream | undefined;
         let streamCompleted = false;
+        let previousStreamedResultType: CompletionResult['type'] | undefined;
 
         try {
             stream = await httpScope.run(() => this.driver.requestTextCompletionStream(this.prompt, this.options));
@@ -205,11 +206,14 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
                             // Only yield if we have results to show
                             const resultText = chunk.result
                                 .map((r) => {
+                                    const prefix =
+                                        previousStreamedResultType === 'thoughts' && r.type !== 'thoughts' ? '\n' : '';
+                                    previousStreamedResultType = r.type;
                                     switch (r.type) {
                                         case 'text':
-                                            return r.value;
+                                            return prefix + r.value;
                                         case 'thoughts':
-                                            return '';
+                                            return r.value;
                                         case 'json':
                                             return JSON.stringify(r.value);
                                         case 'image': {
@@ -360,13 +364,16 @@ export class FallbackCompletionStream<PromptT = unknown> implements CompletionSt
         try {
             const completion = await this.driver._execute(this.prompt, this.options);
             // For fallback streaming, yield the text content but keep the original completion
+            let previousResultType: CompletionResult['type'] | undefined;
             const content = completion.result
                 .map((r) => {
+                    const prefix = previousResultType === 'thoughts' && r.type !== 'thoughts' ? '\n' : '';
+                    previousResultType = r.type;
                     switch (r.type) {
-                    case 'text':
-                        return r.value;
-                    case 'thoughts':
-                        return '';
+                        case 'text':
+                            return prefix + r.value;
+                        case 'thoughts':
+                            return r.value;
                         case 'json':
                             return JSON.stringify(r.value);
                         case 'image': {
