@@ -16,7 +16,7 @@ on:
 env:
   COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
-# Cancel superseded runs on the same branch (latest push wins).
+# Cancel superseded runs for the same event ref (latest push or PR update wins).
 concurrency:
   group: lint-${{ github.ref }}
   cancel-in-progress: true
@@ -32,6 +32,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ env.COMMIT_SHA }}
           persist-credentials: false
       - name: Install pnpm

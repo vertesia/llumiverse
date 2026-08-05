@@ -16,7 +16,7 @@ on:
 env:
   COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
-# Cancel superseded runs on the same branch (latest push wins).
+# Cancel superseded runs for the same event ref (latest push or PR update wins).
 concurrency:
   group: build-and-test-${{ github.ref }}
   cancel-in-progress: true
