@@ -2,9 +2,21 @@ name: (test) Build and test
 
 on:
   push:
+    branches:
+      - main
+      - preview
+      - "release/**"
+      - "production/**"
+      - "hotfix**"
+      - "repo-dispatch**"
+  pull_request:
+    types: [opened, reopened, synchronize]
   workflow_dispatch:
 
-# Cancel superseded runs on the same branch (latest push wins).
+env:
+  COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+# Cancel superseded runs for the same event ref (latest push or PR update wins).
 concurrency:
   group: build-and-test-${{ github.ref }}
   cancel-in-progress: true
@@ -16,6 +28,7 @@ jobs:
   build-and-test:
     name: Build and test
     runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     # Scopes provider API keys (OPENAI, MISTRAL, GROQ, TOGETHER, etc.) to a
     # dedicated environment (zizmor: secrets-outside-env).
     environment: build
@@ -29,6 +42,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.COMMIT_SHA }}
           persist-credentials: false
       - name: Install pnpm
         uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
@@ -85,7 +99,7 @@ jobs:
   notify-repo-composableai:
     name: Notify vertesia/composableai of new commit
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/preview' || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/repo-dispatch')
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/preview' || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/repo-dispatch'))
     needs:
       - build-and-test
     # Scopes the cross-repo dispatch token to a dedicated environment.
