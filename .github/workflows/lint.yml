@@ -2,7 +2,19 @@ name: (lint) Lint codebase
 
 on:
   push:
+    branches:
+      - main
+      - preview
+      - "release/**"
+      - "production/**"
+      - "hotfix**"
+      - "repo-dispatch**"
+  pull_request:
+    types: [opened, reopened, synchronize]
   workflow_dispatch:
+
+env:
+  COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 # Cancel superseded runs on the same branch (latest push wins).
 concurrency:
@@ -20,6 +32,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.COMMIT_SHA }}
           persist-credentials: false
       - name: Install pnpm
         uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
