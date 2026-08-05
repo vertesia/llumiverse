@@ -142,6 +142,6 @@
         "node-web-stream-adapters": "^0.2.1",
         "openai": "^6.49.0",
         "replicate": "^1.4.0",
-        "together-ai": "^0.43.0"
+        "together-ai": "^0.44.0"
     }
 }
