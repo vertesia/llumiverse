@@ -22,6 +22,18 @@ describe('current reasoning model options', () => {
         expect(effortValues('gpt-6', 'openai')).toEqual(['none', 'low', 'medium', 'high', 'xhigh', 'max']);
     });
 
+    it('advertises effort for models served through an OpenAI-compatible endpoint', () => {
+        expect(effortValues('custom-reasoning-model', 'openai_compatible')).toEqual([
+            'none',
+            'minimal',
+            'low',
+            'medium',
+            'high',
+            'xhigh',
+            'max',
+        ]);
+    });
+
     it('advertises current Gemini thinking levels without adding a default', () => {
         const flash = getOptions('gemini-3.5-flash', 'vertexai');
         const pro = getOptions('gemini-3.1-pro-preview', 'vertexai');

@@ -288,6 +288,34 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
     }
 }
 
+/** OpenAI-compatible endpoints own model capability detection, so expose effort for any text model. */
+export function getOpenAiCompatibleOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
+    const options = getOpenAiOptions(model, option);
+    if (options.options.some((item) => item.name === SharedOptions.effort) || options._option_id !== 'openai-text') {
+        return options;
+    }
+    return {
+        ...options,
+        options: [
+            ...options.options,
+            {
+                name: SharedOptions.effort,
+                type: OptionType.enum,
+                enum: {
+                    None: 'none',
+                    Minimal: 'minimal',
+                    Low: 'low',
+                    Medium: 'medium',
+                    High: 'high',
+                    XHigh: 'xhigh',
+                    Max: 'max',
+                },
+                description: 'How much effort the model should put into reasoning, when supported by the endpoint.',
+            },
+        ],
+    };
+}
+
 function isO1Full(model: string): boolean {
     if (model.includes('o1')) {
         if (model.includes('mini') || model.includes('preview')) {

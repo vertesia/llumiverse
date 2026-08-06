@@ -4,11 +4,15 @@ import { describe, expect, it, vi } from 'vitest';
 import { OpenAIResponsesDriverBase } from './index.js';
 
 class TestResponsesDriver extends OpenAIResponsesDriverBase {
-    provider: Providers.openai = Providers.openai;
+    provider: Providers.openai | Providers.openai_compatible;
     service: OpenAI;
 
-    constructor(create: (request: unknown) => Promise<unknown>) {
+    constructor(
+        create: (request: unknown) => Promise<unknown>,
+        provider: Providers.openai | Providers.openai_compatible = Providers.openai,
+    ) {
         super({});
+        this.provider = provider;
         this.service = { responses: { create } } as unknown as OpenAI;
     }
 }
@@ -51,6 +55,23 @@ function response() {
 }
 
 describe('OpenAI Responses reasoning', () => {
+    it.each([
+        ['effort', { effort: 'high' as const }],
+        ['reasoning_effort', { reasoning_effort: 'high' as const }],
+    ])('passes explicit %s through an OpenAI-compatible endpoint', async (_name, effortOption) => {
+        const create = vi.fn(async (_request: unknown) => response());
+        const driver = new TestResponsesDriver(create, Providers.openai_compatible);
+
+        await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
+            model: 'custom-reasoning-model',
+            model_options: { _option_id: 'openai-text', ...effortOption, temperature: 0.7 },
+        });
+
+        expect(create).toHaveBeenCalledWith(
+            expect.objectContaining({ reasoning: { effort: 'high', summary: 'auto' }, temperature: 0.7 }),
+        );
+    });
+
     it.each(['gpt-5.4', 'gpt-5.5', 'gpt-5.6', 'gpt-5.6-sol'])(
         'uses current-turn reasoning context for %s',
         async (model) => {
