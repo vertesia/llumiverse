@@ -255,6 +255,8 @@ export const OpenAiTextOptionsSchema = z
     .strictObject({
         _option_id: z.literal('openai-text'),
         max_tokens: z.number().optional(),
+        effort: ReasoningEffortSchema.optional(),
+        reasoning_effort: ReasoningEffortSchema.optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
         presence_penalty: z.number().optional(),

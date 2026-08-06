@@ -97,10 +97,8 @@ function isOpenAIReasoningModel(model: string): boolean {
     );
 }
 
-export function openAIReasoningEffort(model: string, effort: string | undefined): string | undefined {
-    return effort && (isOpenAIReasoningModel(model) || model.toLowerCase().startsWith('xai.grok-'))
-        ? effort
-        : undefined;
+export function openAIReasoningEffort(effort: string | undefined): string | undefined {
+    return effort;
 }
 
 function openAIReasoning(
@@ -235,9 +233,10 @@ export class OpenAIResponsesProtocol {
             strictMode = formattedSchema.strict;
         }
 
+        const requestedEffort = openAIReasoningEffort(model_options?.effort ?? model_options?.reasoning_effort);
         const isReasoningModel = isOpenAIReasoningModel(options.model);
         const reasoning = openAIReasoning(
-            openAIReasoningEffort(options.model, model_options?.effort ?? model_options?.reasoning_effort),
+            requestedEffort,
             isReasoningModel,
             supportsOpenAICurrentTurnReasoning(driver.provider, options.model),
         );
@@ -320,9 +319,10 @@ export class OpenAIResponsesProtocol {
             strictMode = formattedSchema.strict;
         }
 
+        const requestedEffort = openAIReasoningEffort(model_options?.effort ?? model_options?.reasoning_effort);
         const isReasoningModel = isOpenAIReasoningModel(options.model);
         const reasoning = openAIReasoning(
-            openAIReasoningEffort(options.model, model_options?.effort ?? model_options?.reasoning_effort),
+            requestedEffort,
             isReasoningModel,
             supportsOpenAICurrentTurnReasoning(driver.provider, options.model),
         );
