@@ -55,13 +55,16 @@ function response() {
 }
 
 describe('OpenAI Responses reasoning', () => {
-    it('passes explicit effort through an OpenAI-compatible endpoint without classifying its model name', async () => {
+    it.each([
+        ['effort', { effort: 'high' as const }],
+        ['reasoning_effort', { reasoning_effort: 'high' as const }],
+    ])('passes explicit %s through an OpenAI-compatible endpoint', async (_name, effortOption) => {
         const create = vi.fn(async (_request: unknown) => response());
         const driver = new TestResponsesDriver(create, Providers.openai_compatible);
 
         await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
             model: 'custom-reasoning-model',
-            model_options: { _option_id: 'openai-text', effort: 'high', temperature: 0.7 },
+            model_options: { _option_id: 'openai-text', ...effortOption, temperature: 0.7 },
         });
 
         expect(create).toHaveBeenCalledWith(

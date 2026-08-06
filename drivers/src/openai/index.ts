@@ -97,10 +97,6 @@ function isOpenAIReasoningModel(model: string): boolean {
     );
 }
 
-export function openAIReasoningEffort(effort: string | undefined): string | undefined {
-    return effort;
-}
-
 function openAIReasoning(
     effort: string | undefined,
     isReasoningModel: boolean,
@@ -233,7 +229,7 @@ export class OpenAIResponsesProtocol {
             strictMode = formattedSchema.strict;
         }
 
-        const requestedEffort = openAIReasoningEffort(model_options?.effort ?? model_options?.reasoning_effort);
+        const requestedEffort = model_options?.effort ?? model_options?.reasoning_effort;
         const isReasoningModel = isOpenAIReasoningModel(options.model);
         const reasoning = openAIReasoning(
             requestedEffort,
@@ -319,7 +315,7 @@ export class OpenAIResponsesProtocol {
             strictMode = formattedSchema.strict;
         }
 
-        const requestedEffort = openAIReasoningEffort(model_options?.effort ?? model_options?.reasoning_effort);
+        const requestedEffort = model_options?.effort ?? model_options?.reasoning_effort;
         const isReasoningModel = isOpenAIReasoningModel(options.model);
         const reasoning = openAIReasoning(
             requestedEffort,
