@@ -362,12 +362,18 @@ export class LlumiverseError extends Error {
 // ============== Result Types ===============
 
 export interface BaseResult {
-    type: 'text' | 'json' | 'image';
+    type: 'text' | 'thoughts' | 'json' | 'image';
     value: unknown;
 }
 
 export interface TextResult extends BaseResult {
     type: 'text';
+    value: string;
+}
+
+/** A visible projection of model reasoning, separate from the answer text. */
+export interface ThoughtsResult extends BaseResult {
+    type: 'thoughts';
     value: string;
 }
 
@@ -384,7 +390,7 @@ export interface ImageResult extends BaseResult {
 /**
  * @discriminator type
  */
-export type CompletionResult = TextResult | JsonResult | ImageResult;
+export type CompletionResult = TextResult | ThoughtsResult | JsonResult | ImageResult;
 
 //Internal structure used in driver implementation.
 export interface CompletionChunkObject {

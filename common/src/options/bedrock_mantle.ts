@@ -210,7 +210,7 @@ function getResponsesOptions(model: string): ModelOptionsInfo {
 }
 
 function getChatCompletionsOptions(model: string): ModelOptionsInfo {
-    const allowedOptions = new Set(['max_tokens', 'temperature', 'top_p', 'stop_sequence']);
+    const allowedOptions = new Set(['max_tokens', 'temperature', 'top_p', 'stop_sequence', 'include_thoughts']);
     const maxOutputTokens = getBedrockModelKnowledge(model).max_output_tokens;
     return {
         _option_id: 'bedrock-mantle-chat-completions',

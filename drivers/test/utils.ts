@@ -17,6 +17,8 @@ export function completionResultToString(result: CompletionResult): string {
     switch (result.type) {
         case 'text':
             return result.value;
+        case 'thoughts':
+            return result.value;
         case 'json':
             return JSON.stringify(result.value, null, 2);
         case 'image':

@@ -41,6 +41,7 @@ export const TextFallbackOptionsSchema = z
         presence_penalty: z.number().optional(),
         frequency_penalty: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
+        include_thoughts: z.boolean().optional(),
     })
     .meta({ id: 'TextFallbackOptions' });
 
@@ -68,6 +69,7 @@ export const BedrockConverseOptionsSchema = z
         temperature: z.number().optional(),
         top_p: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
+        include_thoughts: z.boolean().optional(),
     })
     .meta({ id: 'BedrockConverseOptions' });
 
@@ -78,6 +80,7 @@ export const BedrockNovaOptionsSchema = z
         temperature: z.number().optional(),
         top_p: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
+        include_thoughts: z.boolean().optional(),
     })
     .meta({ id: 'BedrockNovaOptions' });
 
@@ -88,6 +91,7 @@ export const BedrockMistralOptionsSchema = z
         temperature: z.number().optional(),
         top_p: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
+        include_thoughts: z.boolean().optional(),
     })
     .meta({ id: 'BedrockMistralOptions' });
 
@@ -98,6 +102,7 @@ export const BedrockAI21OptionsSchema = z
         temperature: z.number().optional(),
         top_p: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
+        include_thoughts: z.boolean().optional(),
     })
     .meta({ id: 'BedrockAI21Options' });
 
@@ -108,6 +113,7 @@ export const BedrockCohereCommandOptionsSchema = z
         temperature: z.number().optional(),
         top_p: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
+        include_thoughts: z.boolean().optional(),
     })
     .meta({ id: 'BedrockCohereCommandOptions' });
 
@@ -200,6 +206,7 @@ export const BedrockMantleResponsesOptionsSchema = z
         reasoning_effort: z.enum(['none', 'low', 'medium', 'high', 'xhigh']).optional(),
         verbosity: z.enum(['low', 'medium', 'high']).optional(),
         image_detail: z.enum(['low', 'high', 'auto']).optional(),
+        include_thoughts: z.boolean().optional(),
     })
     .meta({ id: 'BedrockMantleResponsesOptions' });
 
@@ -210,6 +217,7 @@ export const BedrockMantleChatCompletionsOptionsSchema = z
         temperature: z.number().optional(),
         top_p: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
+        include_thoughts: z.boolean().optional(),
     })
     .meta({ id: 'BedrockMantleChatCompletionsOptions' });
 
@@ -239,6 +247,7 @@ export const OpenAiThinkingOptionsSchema = z
         effort: ReasoningEffortSchema.optional(),
         reasoning_effort: ReasoningEffortSchema.optional(),
         image_detail: z.enum(['low', 'high', 'auto']).optional(),
+        include_thoughts: z.boolean().optional(),
     })
     .meta({ id: 'OpenAiThinkingOptions' });
 
@@ -252,6 +261,7 @@ export const OpenAiTextOptionsSchema = z
         frequency_penalty: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
         image_detail: z.enum(['low', 'high', 'auto']).optional(),
+        include_thoughts: z.boolean().optional(),
     })
     .meta({ id: 'OpenAiTextOptions' });
 

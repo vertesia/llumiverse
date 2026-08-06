@@ -4,7 +4,7 @@ import type { AwsCredentialIdentity, Provider } from '@aws-sdk/types';
 import {
     type AIModel,
     type Completion,
-    type CompletionChunkObject,
+    type DriverCompletionStream,
     type DriverOptions,
     type EmbeddingsOptions,
     type EmbeddingsResult,
@@ -27,7 +27,6 @@ import {
     buildOpenAIChatCompletionsStreamingConversation,
     type OpenAIChatCompletionsPrompt,
     OpenAISDKChatCompletionsProtocol,
-    stripOpenAIChatCompletionsThinkBlocksFromCompletion,
 } from '../openai/openai_chat_completions.js';
 import { formatOpenAIDebugPrompt } from '../openai/openai_format.js';
 import {
@@ -203,7 +202,7 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
     requestTextCompletionStream(
         prompt: BedrockMantlePrompt,
         options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>> {
+    ): Promise<DriverCompletionStream> {
         switch (getBedrockMantleProtocol(options.model)) {
             case 'responses':
                 return this.responsesDelegate.requestTextCompletionStream(requireResponsesPrompt(prompt), options);
@@ -246,14 +245,6 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
             default:
                 return undefined;
         }
-    }
-
-    validateResult(result: Completion, options: ExecutionOptions): void {
-        const processedResult =
-            getBedrockMantleProtocol(options.model) === 'chat_completions'
-                ? stripOpenAIChatCompletionsThinkBlocksFromCompletion(result)
-                : result;
-        super.validateResult(processedResult, options);
     }
 
     formatLlumiverseError(error: unknown, context: LlumiverseErrorContext): LlumiverseError {

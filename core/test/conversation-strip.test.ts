@@ -162,6 +162,32 @@ describe('stripBinaryFromConversation', () => {
     });
 });
 
+describe('provider-protected pruning subtrees', () => {
+    test('keeps a signed native unit unchanged while pruning adjacent content', () => {
+        const signed = {
+            type: 'thinking',
+            thinking: 'signed reasoning that must remain unchanged',
+            signature: 'opaque-signature-that-must-remain-unchanged',
+        };
+        const conversation = {
+            messages: [
+                { role: 'assistant', content: [signed] },
+                { role: 'user', content: 'ordinary tool output that is intentionally long' },
+            ],
+        };
+        const preserveSubtree = (value: unknown) =>
+            !!value && typeof value === 'object' && (value as { type?: unknown }).type === 'thinking';
+
+        const result = truncateLargeTextInConversation(conversation, {
+            textMaxTokens: 2,
+            preserveSubtree,
+        }) as typeof conversation;
+
+        expect(result.messages[0].content).toEqual([signed]);
+        expect(result.messages[1].content).toContain('[Content truncated');
+    });
+});
+
 describe('stripBase64ImagesFromConversation', () => {
     test('should replace OpenAI image_url block with text block', () => {
         const input = {

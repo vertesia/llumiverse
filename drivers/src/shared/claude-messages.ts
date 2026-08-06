@@ -207,29 +207,16 @@ export function collectClaudeTools(content: ContentBlock[]): ToolUse[] | undefin
     return out.length > 0 ? out : undefined;
 }
 
-export function collectAllTextContent(content: ContentBlock[], includeThoughts = false): string {
-    const textParts: string[] = [];
-
-    if (includeThoughts) {
-        for (const block of content) {
-            if (block.type === 'thinking' && block.thinking) {
-                textParts.push(block.thinking);
-            } else if (block.type === 'redacted_thinking' && block.data) {
-                textParts.push(`[Redacted thinking: ${block.data}]`);
-            }
-        }
-        if (textParts.length > 0) {
-            textParts.push('');
-        }
-    }
-
+export function collectClaudeResults(content: ContentBlock[], includeThoughts = false): CompletionResult[] {
+    const results: CompletionResult[] = [];
     for (const block of content) {
-        if (block.type === 'text' && block.text) {
-            textParts.push(block.text);
+        if (block.type === 'thinking' && block.thinking && includeThoughts) {
+            results.push({ type: 'thoughts', value: block.thinking });
+        } else if (block.type === 'text' && block.text) {
+            results.push({ type: 'text', value: block.text });
         }
     }
-
-    return textParts.join('\n');
+    return results;
 }
 
 // ============================================================================
@@ -982,13 +969,13 @@ export async function executeClaudeCompletion(
     logClaudeTruncation(logger, result.stop_reason, { provider, model: options.model });
 
     const includeThoughts = model_options?.include_thoughts ?? false;
-    const text = collectAllTextContent(result.content, includeThoughts);
+    const completionResults = collectClaudeResults(result.content, includeThoughts);
     const tool_use = collectClaudeTools(result.content);
 
     const processedConversation = finalizeClaudeConversation(conversation, result, options);
 
     return {
-        result: text ? [{ type: 'text', value: text }] : [{ type: 'text', value: '' }],
+        result: completionResults.length > 0 ? completionResults : [{ type: 'text', value: '' }],
         tool_use,
         token_usage: anthropicUsageToTokenUsage(result.usage),
         finish_reason: tool_use ? 'tool_use' : claudeFinishReason(result?.stop_reason ?? ''),
@@ -1050,11 +1037,6 @@ export async function streamClaudeCompletion(
                         ],
                     } satisfies CompletionChunkObject;
                 }
-                if (streamEvent.content_block.type === 'redacted_thinking' && model_options?.include_thoughts) {
-                    return {
-                        result: [{ type: 'text', value: `[Redacted thinking: ${streamEvent.content_block.data}]` }],
-                    } satisfies CompletionChunkObject;
-                }
                 break;
             case 'content_block_delta':
                 switch (streamEvent.delta.type) {
@@ -1085,15 +1067,12 @@ export async function streamClaudeCompletion(
                         if (model_options?.include_thoughts) {
                             return {
                                 result: streamEvent.delta.thinking
-                                    ? [{ type: 'text', value: streamEvent.delta.thinking }]
+                                    ? [{ type: 'thoughts', value: streamEvent.delta.thinking }]
                                     : [],
                             } satisfies CompletionChunkObject;
                         }
                         break;
                     case 'signature_delta':
-                        if (model_options?.include_thoughts) {
-                            pendingSpacing = true;
-                        }
                         break;
                 }
                 break;

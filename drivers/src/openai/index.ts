@@ -4,6 +4,7 @@ import {
     type CompletionChunkObject,
     type CompletionResult,
     type DataSource,
+    type DriverCompletionStream,
     type DriverOptions,
     type EmbeddingResultItem,
     type EmbeddingsOptions,
@@ -24,7 +25,7 @@ import {
     type OpenAiGptImageOptions,
     type PromptOptions,
     type PromptSegment,
-    type Providers,
+    Providers,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
     supportsToolUse,
@@ -47,12 +48,13 @@ import { formatOpenAISchema } from './schema.js';
 // Response API types
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
-type OpenAIReasoning = NonNullable<OpenAI.Responses.ResponseCreateParams['reasoning']>;
 type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
     image_detail?: 'low' | 'high' | 'auto';
     effort?: string;
     reasoning_effort?: string;
     verbosity?: 'low' | 'medium' | 'high';
+    prompt_cache_key?: string;
+    prompt_cache_retention?: 'in_memory' | '24h';
 };
 type OpenAIErrorWithStatus = Error & { status?: unknown };
 type OpenAIUsageWithProviderDetails = OpenAI.Responses.ResponseUsage & {
@@ -99,6 +101,25 @@ export function openAIReasoningEffort(model: string, effort: string | undefined)
     return effort && (isOpenAIReasoningModel(model) || model.toLowerCase().startsWith('xai.grok-'))
         ? effort
         : undefined;
+}
+
+function openAIReasoning(
+    effort: string | undefined,
+    isReasoningModel: boolean,
+    preserveCurrentTurn: boolean,
+): OpenAI.Responses.ResponseCreateParams['reasoning'] {
+    if (!effort && !isReasoningModel) return undefined;
+    return {
+        effort,
+        summary: 'auto',
+        ...(preserveCurrentTurn && { context: 'current_turn' }),
+    } as OpenAI.Responses.ResponseCreateParams['reasoning'];
+}
+
+function supportsOpenAICurrentTurnReasoning(provider: Providers, model: string): boolean {
+    if (provider !== Providers.openai) return false;
+    const modelId = model.toLowerCase().split('/').pop() ?? '';
+    return /^gpt-5\.(?:4|5|6)(?:$|-)/.test(modelId);
 }
 
 function hasExplicitPromptCacheBreakpoint(item: ResponseInputItem): boolean {
@@ -173,7 +194,7 @@ export class OpenAIResponsesProtocol {
         driver: OpenAIResponsesDriverBase,
         prompt: ResponseInputItem[],
         options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>> {
+    ): Promise<DriverCompletionStream> {
         if (
             options.model_options?._option_id !== undefined &&
             options.model_options?._option_id !== 'openai-text' &&
@@ -215,23 +236,29 @@ export class OpenAIResponsesProtocol {
         }
 
         const isReasoningModel = isOpenAIReasoningModel(options.model);
-        const effort = openAIReasoningEffort(options.model, model_options?.effort ?? model_options?.reasoning_effort);
-        // The SDK can lag newly documented effort values (for example `max`).
-        // Preserve caller input and let the provider validate model-specific support.
-        const reasoning = effort ? ({ effort } as unknown as OpenAIReasoning) : undefined;
+        const reasoning = openAIReasoning(
+            openAIReasoningEffort(options.model, model_options?.effort ?? model_options?.reasoning_effort),
+            isReasoningModel,
+            supportsOpenAICurrentTurnReasoning(driver.provider, options.model),
+        );
+        const includeThoughts = model_options?.include_thoughts !== false;
+        const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
+        const promptCacheRetention = model_options?.prompt_cache_retention;
 
         const promptCache = configureOpenAIPromptCaching(
             conversation,
             driver.getResponsesRequestModel(options.model),
-            options.prompt_cache_key,
+            promptCacheKey,
         );
         const stream = await driver.service.responses.create({
             stream: true,
             model: driver.getResponsesRequestModel(options.model),
-            prompt_cache_key: options.prompt_cache_key,
+            prompt_cache_key: promptCacheKey,
+            prompt_cache_retention: promptCacheRetention,
             prompt_cache_options: promptCache.options,
             input: promptCache.input,
             reasoning,
+            include: reasoning ? ['reasoning.encrypted_content'] : undefined,
             temperature: isReasoningModel ? undefined : model_options?.temperature,
             top_p: isReasoningModel ? undefined : model_options?.top_p,
             max_output_tokens: model_options?.max_tokens,
@@ -244,7 +271,9 @@ export class OpenAIResponsesProtocol {
             ),
         });
 
-        return mapResponseStream(stream);
+        return mapResponseStream(stream, includeThoughts, (response) =>
+            finalizeOpenAIResponsesConversation(conversation, response.output, options),
+        );
     }
 
     async requestTextCompletion(
@@ -292,21 +321,28 @@ export class OpenAIResponsesProtocol {
         }
 
         const isReasoningModel = isOpenAIReasoningModel(options.model);
-        const effort = openAIReasoningEffort(options.model, model_options?.effort ?? model_options?.reasoning_effort);
-        const reasoning = effort ? ({ effort } as unknown as OpenAIReasoning) : undefined;
+        const reasoning = openAIReasoning(
+            openAIReasoningEffort(options.model, model_options?.effort ?? model_options?.reasoning_effort),
+            isReasoningModel,
+            supportsOpenAICurrentTurnReasoning(driver.provider, options.model),
+        );
+        const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
+        const promptCacheRetention = model_options?.prompt_cache_retention;
 
         const promptCache = configureOpenAIPromptCaching(
             conversation,
             driver.getResponsesRequestModel(options.model),
-            options.prompt_cache_key,
+            promptCacheKey,
         );
         const res = await driver.service.responses.create({
             stream: false,
             model: driver.getResponsesRequestModel(options.model),
-            prompt_cache_key: options.prompt_cache_key,
+            prompt_cache_key: promptCacheKey,
+            prompt_cache_retention: promptCacheRetention,
             prompt_cache_options: promptCache.options,
             input: promptCache.input,
             reasoning,
+            include: reasoning ? ['reasoning.encrypted_content'] : undefined,
             temperature: isReasoningModel ? undefined : model_options?.temperature,
             top_p: isReasoningModel ? undefined : model_options?.top_p,
             max_output_tokens: model_options?.max_tokens, //TODO: use max_tokens for older models, currently relying on OpenAI to handle it
@@ -324,30 +360,9 @@ export class OpenAIResponsesProtocol {
             completion.original_response = res;
         }
 
-        conversation = updateConversation(conversation, createAssistantMessageFromCompletion(completion));
-
-        // Increment turn counter for deferred stripping
-        conversation = incrementConversationTurn(conversation) as ResponseInputItem[];
-
-        // Strip large base64 image data based on options.stripImagesAfterTurns
-        const currentTurn = getConversationMeta(conversation).turnNumber;
-        const stripOptions = {
-            keepForTurns: options.stripImagesAfterTurns ?? Infinity,
-            currentTurn,
-            textMaxTokens: options.stripTextMaxTokens,
-        };
-        let processedConversation = stripBase64ImagesFromConversation(conversation, stripOptions);
-
-        // Truncate large text content if configured
-        processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
-
-        // Strip old heartbeat status messages
-        processedConversation = stripHeartbeatsFromConversation(processedConversation, {
-            keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
-            currentTurn,
-        });
-
-        completion.conversation = processedConversation;
+        completion.conversation = res.output.length
+            ? finalizeOpenAIResponsesConversation(conversation, res.output, options)
+            : updateConversation(conversation, createAssistantMessageFromCompletion(completion));
 
         return completion;
     }
@@ -394,7 +409,9 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 
         const tools = collectTools(result.output);
         // Collect all parts in order (text and images)
-        const allResults = extractCompletionResults(result.output);
+        const includeThoughts =
+            (_options.model_options as OpenAIRequestOptions | undefined)?.include_thoughts !== false;
+        const allResults = extractCompletionResults(result.output, includeThoughts);
 
         if (allResults.length === 0 && !tools) {
             this.logger.error({ result }, '[OpenAI] Response is not valid');
@@ -412,7 +429,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
     requestTextCompletionStream(
         prompt: ResponseInputItem[],
         options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>> {
+    ): Promise<DriverCompletionStream> {
         return this.responsesProtocol.requestTextCompletionStream(this, prompt, options);
     }
 
@@ -817,6 +834,8 @@ function completionResultsToText(completionResults: CompletionResult[] | undefin
             switch (r.type) {
                 case 'text':
                     return r.value;
+                case 'thoughts':
+                    return '';
                 case 'json':
                     return typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
                 case 'image':
@@ -889,8 +908,11 @@ function createAssistantMessageFromCompletion(completion: Completion): ResponseI
 
 export function mapResponseStream(
     stream: AsyncIterable<OpenAI.Responses.ResponseStreamEvent>,
-): AsyncIterable<CompletionChunkObject> {
+    includeThoughts = false,
+    finalize?: (response: OpenAI.Responses.Response) => unknown | Promise<unknown>,
+): DriverCompletionStream {
     const toolCallMetadata = new Map<string, { syntheticId: string; callId?: string; name?: string }>();
+    let finalResponse: OpenAI.Responses.Response | undefined;
 
     return {
         async *[Symbol.asyncIterator]() {
@@ -957,6 +979,13 @@ export function mapResponseStream(
                             result: textToCompletionResult(event.text),
                         } satisfies CompletionChunkObject;
                     }
+                } else if (
+                    event.type === 'response.reasoning_summary_text.delta' ||
+                    event.type === 'response.reasoning_text.delta'
+                ) {
+                    if (includeThoughts && event.delta) {
+                        yield { result: [{ type: 'thoughts', value: event.delta }] } satisfies CompletionChunkObject;
+                    }
                 } else if (event.type === 'response.refusal.delta') {
                     refusalText += event.delta;
                 } else if (event.type === 'response.refusal.done') {
@@ -971,6 +1000,7 @@ export function mapResponseStream(
                     event.type === 'response.incomplete' ||
                     event.type === 'response.failed'
                 ) {
+                    finalResponse = event.response;
                     const finalTools = collectTools(event.response.output);
                     yield {
                         result: [],
@@ -980,6 +1010,12 @@ export function mapResponseStream(
                 }
             }
         },
+        finalizeConversation: finalize
+            ? () => {
+                  if (!finalResponse) throw new Error('OpenAI Responses stream ended without a final response');
+                  return finalize(finalResponse);
+              }
+            : undefined,
     };
 }
 
@@ -1105,6 +1141,35 @@ function updateConversation(conversation: unknown, items: ResponseInputItem[]): 
     return [...convArray, ...items];
 }
 
+function finalizeOpenAIResponsesConversation(
+    conversation: ResponseInputItem[],
+    output: OpenAI.Responses.ResponseOutputItem[],
+    options: ExecutionOptions,
+): ResponseInputItem[] {
+    let completed = updateConversation(conversation, output as ResponseInputItem[]);
+    completed = incrementConversationTurn(completed) as ResponseInputItem[];
+    const currentTurn = getConversationMeta(completed).turnNumber;
+    const preserveSubtree = (value: unknown): boolean => {
+        if (!value || typeof value !== 'object') return false;
+        const encryptedContent = (value as { encrypted_content?: unknown }).encrypted_content;
+        return typeof encryptedContent === 'string' && encryptedContent.length > 0;
+    };
+    const stripOptions = {
+        keepForTurns: options.stripImagesAfterTurns ?? Infinity,
+        currentTurn,
+        textMaxTokens: options.stripTextMaxTokens,
+        preserveSubtree,
+    };
+    let processed = stripBase64ImagesFromConversation(completed, stripOptions);
+    processed = truncateLargeTextInConversation(processed, stripOptions);
+    processed = stripHeartbeatsFromConversation(processed, {
+        keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+        currentTurn,
+        preserveSubtree,
+    });
+    return processed as ResponseInputItem[];
+}
+
 export function collectTools(output?: OpenAI.Responses.ResponseOutputItem[]): ToolUse<unknown>[] | undefined {
     if (!output) {
         return undefined;
@@ -1131,13 +1196,22 @@ export function collectTools(output?: OpenAI.Responses.ResponseOutputItem[]): To
  * Collect all parts (text and images) from response output in order.
  * This preserves the original ordering of text and image parts.
  */
-function extractCompletionResults(output?: OpenAI.Responses.ResponseOutputItem[]): CompletionResult[] {
+function extractCompletionResults(
+    output?: OpenAI.Responses.ResponseOutputItem[],
+    includeThoughts = true,
+): CompletionResult[] {
     if (!output) {
         return [];
     }
 
     const results: CompletionResult[] = [];
     for (const item of output) {
+        if (item.type === 'reasoning' && includeThoughts) {
+            for (const summary of item.summary ?? []) {
+                if (summary.type === 'summary_text' && summary.text)
+                    results.push({ type: 'thoughts', value: summary.text });
+            }
+        }
         if (item.type === 'message') {
             // Extract text from message content
             for (const part of item.content) {

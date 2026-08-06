@@ -73,5 +73,11 @@ export const textOptionsFallback: ModelOptionsInfo = {
             value: [],
             description: 'The generation will halt if one of the stop sequences is output',
         },
+        {
+            name: 'include_thoughts',
+            type: OptionType.boolean,
+            default: true,
+            description: 'Include visible model reasoning as separate thoughts results.',
+        },
     ],
 };

@@ -1054,6 +1054,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 switch (r.type) {
                     case 'text':
                         return r.value;
+                    case 'thoughts':
+                        return '';
                     case 'json':
                         return typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
                     case 'image':
