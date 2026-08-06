@@ -241,21 +241,24 @@ function finalizeGeminiConversation(
 ): GenerateContentPrompt['contents'] {
     let completed = assistantContent ? updateConversation(conversation, [assistantContent]) : conversation;
     completed = incrementConversationTurn(completed) as Content[];
-    const contents = unwrapConversationArray<Content>(completed) ?? (Array.isArray(completed) ? completed : []);
-    if (contents.some((content) => content.parts?.some((part) => !!part.thoughtSignature))) {
-        return storeSystemInConversation(completed, system) as Content[];
-    }
     const currentTurn = getConversationMeta(completed).turnNumber;
+    const preserveSubtree = (value: unknown): boolean => {
+        if (!value || typeof value !== 'object') return false;
+        const thoughtSignature = (value as { thoughtSignature?: unknown }).thoughtSignature;
+        return typeof thoughtSignature === 'string' && thoughtSignature.length > 0;
+    };
     const stripOptions = {
         keepForTurns: options.stripImagesAfterTurns ?? Infinity,
         currentTurn,
         textMaxTokens: options.stripTextMaxTokens,
+        preserveSubtree,
     };
     let processed = stripBase64ImagesFromConversation(completed, stripOptions);
     processed = truncateLargeTextInConversation(processed, stripOptions);
     processed = stripHeartbeatsFromConversation(processed, {
         keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
         currentTurn,
+        preserveSubtree,
     });
     return storeSystemInConversation(processed, system) as Content[];
 }
@@ -272,7 +275,6 @@ function appendGeminiStreamParts(target: Part[], incoming: Part[]): void {
             !!previous.thought === !!part.thought;
         if (canMergeText && previous) {
             previous.text = (previous.text ?? '') + part.text;
-            if (part.thoughtSignature) previous.thoughtSignature = part.thoughtSignature;
         } else {
             target.push(structuredClone(part));
         }

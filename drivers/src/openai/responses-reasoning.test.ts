@@ -156,6 +156,53 @@ describe('OpenAI Responses reasoning', () => {
         expect(JSON.stringify(conversation)).toContain('encrypted-replay-state');
     });
 
+    it('prunes adjacent conversation content while preserving encrypted reasoning items', async () => {
+        const create = vi.fn(async (_request: unknown) => response());
+        const driver = new TestResponsesDriver(create);
+        const prompt = [
+            { type: 'message' as const, role: 'user' as const, content: 'old tool output that should be truncated' },
+        ] as OpenAI.Responses.ResponseInputItem[];
+
+        const completion = await driver.requestTextCompletion(prompt, {
+            model: 'gpt-5',
+            model_options: { _option_id: 'openai-thinking' },
+            stripImagesAfterTurns: 0,
+            stripTextMaxTokens: 1,
+        });
+
+        const serialized = JSON.stringify(completion.conversation);
+        expect(serialized).toContain('encrypted-replay-state');
+        expect(serialized).toContain('[Content truncated - exceeded token limit]');
+
+        const imageCompletion = await driver.requestTextCompletion(
+            [
+                {
+                    type: 'message',
+                    role: 'user',
+                    content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,aW1hZ2U=' } }],
+                } as unknown as OpenAI.Responses.ResponseInputItem,
+            ],
+            {
+                model: 'gpt-5',
+                model_options: { _option_id: 'openai-thinking' },
+                stripImagesAfterTurns: 0,
+            },
+        );
+        expect(JSON.stringify(imageCompletion.conversation)).toContain('[Image removed from conversation history]');
+
+        const heartbeatCompletion = await driver.requestTextCompletion(
+            [{ type: 'message', role: 'user', content: '<heartbeat>old status</heartbeat>' }],
+            {
+                model: 'gpt-5',
+                model_options: { _option_id: 'openai-thinking' },
+                stripHeartbeatsAfterTurns: 0,
+            },
+        );
+        expect(JSON.stringify(heartbeatCompletion.conversation)).toContain(
+            '[Heartbeat removed from conversation history]',
+        );
+    });
+
     it.each([false, true])('forwards OpenAI prompt cache controls when stream=%s', async (streaming) => {
         const create = vi.fn(async (request: unknown) =>
             (request as { stream?: boolean }).stream

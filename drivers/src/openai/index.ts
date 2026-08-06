@@ -1148,21 +1148,24 @@ function finalizeOpenAIResponsesConversation(
 ): ResponseInputItem[] {
     let completed = updateConversation(conversation, output as ResponseInputItem[]);
     completed = incrementConversationTurn(completed) as ResponseInputItem[];
-    const completedItems = unwrapConversationArray<ResponseInputItem>(completed) ?? [];
-    if (completedItems.some((item) => (item as { encrypted_content?: string | null }).encrypted_content))
-        return completed;
-
     const currentTurn = getConversationMeta(completed).turnNumber;
+    const preserveSubtree = (value: unknown): boolean => {
+        if (!value || typeof value !== 'object') return false;
+        const encryptedContent = (value as { encrypted_content?: unknown }).encrypted_content;
+        return typeof encryptedContent === 'string' && encryptedContent.length > 0;
+    };
     const stripOptions = {
         keepForTurns: options.stripImagesAfterTurns ?? Infinity,
         currentTurn,
         textMaxTokens: options.stripTextMaxTokens,
+        preserveSubtree,
     };
     let processed = stripBase64ImagesFromConversation(completed, stripOptions);
     processed = truncateLargeTextInConversation(processed, stripOptions);
     processed = stripHeartbeatsFromConversation(processed, {
         keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
         currentTurn,
+        preserveSubtree,
     });
     return processed as ResponseInputItem[];
 }

@@ -340,6 +340,78 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
         });
     });
 
+    it('prunes adjacent conversation content while preserving signed thought Parts', async () => {
+        const modelDef = new GeminiModelDefinition('gemini-3-flash');
+        const driver = makeDriver({
+            generateContent: async () => ({
+                usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
+                candidates: [
+                    {
+                        finishReason: FinishReason.STOP,
+                        content: {
+                            role: 'model',
+                            parts: [{ text: 'signed plan', thought: true, thoughtSignature: 'signed-plan' }],
+                        },
+                        safetyRatings: [],
+                    },
+                ],
+            }),
+        });
+
+        const completion = await modelDef.requestTextCompletion(
+            driver,
+            {
+                contents: [
+                    {
+                        role: 'user',
+                        parts: [{ text: 'old tool output that should be truncated' }],
+                    },
+                ],
+            },
+            {
+                model: 'publishers/google/models/gemini-3-flash',
+                stripTextMaxTokens: 1,
+                stripImagesAfterTurns: 0,
+            },
+        );
+
+        const serialized = JSON.stringify(completion.conversation);
+        expect(serialized).toContain('signed plan');
+        expect(serialized).toContain('signed-plan');
+        expect(serialized).toContain('[Content truncated - exceeded token limit]');
+
+        const imageCompletion = await modelDef.requestTextCompletion(
+            driver,
+            {
+                contents: [
+                    {
+                        role: 'user',
+                        parts: [{ inlineData: { data: 'a'.repeat(1001), mimeType: 'image/png' } }],
+                    },
+                ],
+            },
+            {
+                model: 'publishers/google/models/gemini-3-flash',
+                stripImagesAfterTurns: 0,
+            },
+        );
+        expect(JSON.stringify(imageCompletion.conversation)).toContain('[Image removed from conversation history]');
+
+        const heartbeatCompletion = await modelDef.requestTextCompletion(
+            driver,
+            {
+                contents: [{ role: 'user', parts: [{ text: '<heartbeat>old status</heartbeat>' }] }],
+            },
+            {
+                model: 'publishers/google/models/gemini-3-flash',
+                stripHeartbeatsAfterTurns: 0,
+            },
+        );
+        expect(JSON.stringify(heartbeatCompletion.conversation)).toContain(
+            '[Heartbeat removed from conversation history]',
+        );
+    });
+
     it('does not merge a signed streamed Part into an unsigned Part', async () => {
         const modelDef = new GeminiModelDefinition('gemini-3-flash');
         const driver = makeDriver({
