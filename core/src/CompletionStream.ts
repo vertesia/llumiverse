@@ -158,43 +158,46 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
                                 // Check if we can combine with the last accumulated result
                                 const lastResult = accumulatedResults[accumulatedResults.length - 1];
 
-                                if (
-                                    lastResult &&
-                                    ((lastResult.type === 'text' && result.type === 'text') ||
-                                        (lastResult.type === 'json' && result.type === 'json'))
-                                ) {
-                                    // Combine consecutive text or JSON results
-                                    if (result.type === 'text') {
-                                        lastResult.value += result.value;
-                                    } else if (result.type === 'json') {
-                                        // For JSON, combine the parsed objects directly
-                                        try {
-                                            const lastParsed = lastResult.value;
-                                            const currentParsed = result.value;
-                                            if (
-                                                lastParsed !== null &&
-                                                typeof lastParsed === 'object' &&
-                                                currentParsed !== null &&
-                                                typeof currentParsed === 'object'
-                                            ) {
-                                                const combined = { ...lastParsed, ...currentParsed };
-                                                lastResult.value = combined;
-                                            } else {
-                                                // If not objects, convert to string and concatenate
-                                                const lastStr =
-                                                    typeof lastParsed === 'string'
-                                                        ? lastParsed
-                                                        : JSON.stringify(lastParsed);
-                                                const currentStr =
-                                                    typeof currentParsed === 'string'
-                                                        ? currentParsed
-                                                        : JSON.stringify(currentParsed);
-                                                lastResult.value = lastStr + currentStr;
+                                if (lastResult?.type === result.type) {
+                                    switch (result.type) {
+                                        case 'text':
+                                        case 'thoughts':
+                                            lastResult.value = String(lastResult.value) + result.value;
+                                            break;
+                                        case 'json':
+                                            // For JSON, combine the parsed objects directly
+                                            try {
+                                                const lastParsed = lastResult.value;
+                                                const currentParsed = result.value;
+                                                if (
+                                                    lastParsed !== null &&
+                                                    typeof lastParsed === 'object' &&
+                                                    currentParsed !== null &&
+                                                    typeof currentParsed === 'object'
+                                                ) {
+                                                    const combined = { ...lastParsed, ...currentParsed };
+                                                    lastResult.value = combined;
+                                                } else {
+                                                    // If not objects, convert to string and concatenate
+                                                    const lastStr =
+                                                        typeof lastParsed === 'string'
+                                                            ? lastParsed
+                                                            : JSON.stringify(lastParsed);
+                                                    const currentStr =
+                                                        typeof currentParsed === 'string'
+                                                            ? currentParsed
+                                                            : JSON.stringify(currentParsed);
+                                                    lastResult.value = lastStr + currentStr;
+                                                }
+                                            } catch {
+                                                // If anything fails, just concatenate string representations
+                                                lastResult.value = String(lastResult.value) + String(result.value);
                                             }
-                                        } catch {
-                                            // If anything fails, just concatenate string representations
-                                            lastResult.value = String(lastResult.value) + String(result.value);
-                                        }
+                                            break;
+                                        case 'image':
+                                            // Images are discrete results and must retain their original boundaries.
+                                            accumulatedResults.push(result);
+                                            break;
                                     }
                                 } else {
                                     // Add as new result
@@ -202,8 +205,10 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
                                 }
                             }
 
-                            // Convert CompletionResult[] to string for streaming
-                            // Only yield if we have results to show
+                            // The async iterator is intentionally a flattened live-preview stream. It includes both
+                            // thoughts and answer content so long reasoning phases remain visibly active instead of
+                            // looking like a network stall. Canonical consumers must use `completion.result`, where
+                            // thoughts remain separately typed and are never merged into answer or structured output.
                             const resultText = chunk.result
                                 .map((r) => {
                                     const prefix =

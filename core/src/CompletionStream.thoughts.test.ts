@@ -28,7 +28,8 @@ class ThoughtsStreamDriver extends AbstractDriver<DriverOptions, string> {
         const nativeAssistant = { role: 'assistant', id: prompt };
         return {
             async *[Symbol.asyncIterator]() {
-                yield { result: [{ type: 'thoughts', value: `reason-${prompt}` }] };
+                yield { result: [{ type: 'thoughts', value: 'reason-' }] };
+                yield { result: [{ type: 'thoughts', value: prompt }] };
                 await Promise.resolve();
                 yield { result: [{ type: 'text', value: `answer-${prompt}` }], finish_reason: 'stop' };
             },
@@ -57,7 +58,7 @@ describe('DefaultCompletionStream thoughts', () => {
         const visible: string[] = [];
         for await (const chunk of stream) visible.push(chunk);
 
-        expect(visible).toEqual(['reason-one', '\nanswer-one']);
+        expect(visible).toEqual(['reason-', 'one', '\nanswer-one']);
         expect(stream.completion?.result).toEqual([
             { type: 'thoughts', value: 'reason-one' },
             { type: 'text', value: 'answer-one' },
