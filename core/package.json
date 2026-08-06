@@ -1,6 +1,6 @@
 {
     "name": "@llumiverse/core",
-    "version": "1.5.0-dev.20260725.065646Z",
+    "version": "1.5.0-dev.20260804.122431Z",
     "type": "module",
     "description": "Provide an universal API to LLMs. Support for existing LLMs can be added by writing a driver.",
     "files": [
@@ -68,7 +68,7 @@
     "devDependencies": {
         "@vertesia/api-fetch-client": "^1.4.1",
         "rimraf": "^6.1.3",
-        "typescript": "^6.0.3",
+        "typescript": "catalog:",
         "vitest": "^4.1.10"
     },
     "dependencies": {

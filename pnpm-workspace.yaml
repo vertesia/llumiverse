@@ -16,8 +16,9 @@ minimumReleaseAgeExclude:
   - '@llumiverse/*'
 
 catalog:
+  typescript: "7.0.2"
   "@types/node": "^24.13.3"
-  google-auth-library: "^10.9.0"
+  google-auth-library: "^10.9.1"
 overrides:
   # ============================
   # Special Overrides
