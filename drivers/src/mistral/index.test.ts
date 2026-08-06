@@ -215,6 +215,27 @@ describe('MistralAIDriver official SDK transport', () => {
         expect(completion.original_response).toBe(response);
     });
 
+    it('preserves the driver-level token default when using the native Mistral protocol', async () => {
+        const driver = new MistralAIDriver({
+            apiKey: 'test-key',
+            defaultMaxTokens: 2048,
+        });
+        const complete = vi.fn(async () => ({
+            choices: [{ index: 0, finishReason: 'stop', message: { role: 'assistant', content: 'done' } }],
+            usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+        }));
+        Object.defineProperty(driver.client.chat, 'complete', { value: complete });
+
+        await driver.requestTextCompletion(
+            { messages: [{ role: 'user', content: 'Hello' }] },
+            { model: 'caller-model' },
+        );
+
+        expect(complete).toHaveBeenCalledWith(
+            expect.objectContaining({ model: 'caller-model', maxTokens: 2048, stream: false }),
+        );
+    });
+
     it('uses the SDK for models, validation, embeddings, endpoint override, and fetch wiring', async () => {
         const driver = new MistralAIDriver({ apiKey: 'test-key', endpoint_url: 'https://mistral.example.test' });
         const list = vi.fn(async () => ({

@@ -85,7 +85,9 @@ export class MistralAIDriver extends OpenAICompatibleDriverBase<MistralAIDriverO
         options: ExecutionOptions,
     ): Promise<Completion> {
         const conversation = prepareMistralConversation(options.conversation, prompt);
-        const response = await this.client.chat.complete(buildMistralRequest(conversation, options, false));
+        const response = await this.client.chat.complete(
+            buildMistralRequest(conversation, options, false, this.options.defaultMaxTokens),
+        );
         const choice = response.choices[0];
         const message = choice?.message;
         if (!message) throw new Error('Mistral response is not valid: no assistant message');
@@ -111,7 +113,9 @@ export class MistralAIDriver extends OpenAICompatibleDriverBase<MistralAIDriverO
         options: ExecutionOptions,
     ): Promise<DriverCompletionStream> {
         const conversation = prepareMistralConversation(options.conversation, prompt);
-        const response = await this.client.chat.stream(buildMistralRequest(conversation, options, true));
+        const response = await this.client.chat.stream(
+            buildMistralRequest(conversation, options, true, this.options.defaultMaxTokens),
+        );
         const includeThoughts =
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
         const nativeContent: ContentChunk[] = [];
@@ -349,12 +353,13 @@ function buildMistralRequest(
     conversation: MistralPrompt,
     options: ExecutionOptions,
     stream: boolean,
+    defaultMaxTokens?: number,
 ): ChatCompletionRequest {
     const modelOptions = options.model_options as TextFallbackOptions;
     return {
         model: options.model,
         messages: conversation.messages,
-        maxTokens: modelOptions?.max_tokens,
+        maxTokens: modelOptions?.max_tokens ?? defaultMaxTokens,
         temperature: modelOptions?.temperature,
         topP: modelOptions?.top_p,
         presencePenalty: modelOptions?.presence_penalty,
