@@ -104,6 +104,10 @@ export const TextResultSchema = z
     .strictObject({ type: z.literal('text'), value: z.string() })
     .meta({ id: 'TextResult' });
 
+export const ThoughtsResultSchema = z
+    .strictObject({ type: z.literal('thoughts'), value: z.string() })
+    .meta({ id: 'ThoughtsResult' });
+
 export const JsonResultSchema = z
     .strictObject({ type: z.literal('json'), value: JSONValueSchema })
     .meta({ id: 'JsonResult' });
@@ -113,7 +117,7 @@ export const ImageResultSchema = z
     .meta({ id: 'ImageResult' });
 
 export const CompletionResultSchema = z
-    .discriminatedUnion('type', [TextResultSchema, JsonResultSchema, ImageResultSchema])
+    .discriminatedUnion('type', [TextResultSchema, ThoughtsResultSchema, JsonResultSchema, ImageResultSchema])
     .meta({ id: 'CompletionResult' });
 
 export const ExecutionTokenUsageSchema = z
