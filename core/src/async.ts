@@ -15,7 +15,8 @@ export function oneAsyncIterator<T>(value: T): AsyncIterable<T> {
 }
 
 /**
- * Given a ReadableStream of server sent events, tran
+ * Given a ReadableStream of server-sent events, transform each event's data
+ * payload into a {@link CompletionChunkObject} and return the resulting stream.
  */
 export function transformSSEStream(
     stream: ReadableStream<ServerSentEvent>,
@@ -116,27 +117,3 @@ export async function* transformAsyncIterator<T, V>(
         yield transform(value);
     }
 }
-
-//TODO move in a test file
-// const max = 10; let cnt = 0;
-// function feedStream(stream: EventStream<string>) {
-//     setTimeout(() => {
-//         cnt++;
-//         console.log('push: ', cnt, max);
-//         stream.push('event ' + cnt);
-//         if (cnt < max) {
-//             console.log('next: ', cnt, max);
-//             setTimeout(() => feedStream(stream), 1000);
-//         } else {
-//             console.log('end of stream');
-//             stream.close();
-//         }
-//     }, 1000);
-// }
-
-// const stream = new EventStream<string>();
-// feedStream(stream);
-
-// for await (const chunk of stream) {
-//     console.log('++++chunk:', chunk);
-// }
