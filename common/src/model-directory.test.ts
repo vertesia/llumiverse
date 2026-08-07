@@ -75,4 +75,20 @@ describe('central model directory', () => {
         expect(profile.capabilities.output.embed).toBe(true);
         expect(profile.capabilities.tool_support).toBe(false);
     });
+
+    it('classifies listing aliases and provider-qualified IDs without losing family semantics', () => {
+        expect(resolveModelProfile('~openai/gpt-latest', Providers.openai_compatible).capabilities).toMatchObject({
+            input: { text: true, image: true },
+            output: { text: true },
+            tool_support: true,
+        });
+        expect(resolveModelProfile('~google/gemini-flash-latest', Providers.openai_compatible).family).toBe('gemini');
+        expect(resolveModelProfile('google/gemma-4-E4B-it', Providers.openai_compatible).family).toBe('gemma');
+        expect(
+            resolveModelProfile(
+                'arn:aws:bedrock:us-east-1:381492301031:inference-profile/global.anthropic.claude-sonnet-4-6',
+                Providers.bedrock,
+            ).family,
+        ).toBe('claude');
+    });
 });

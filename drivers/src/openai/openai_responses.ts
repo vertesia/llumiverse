@@ -77,7 +77,7 @@ export class OpenAIResponsesDriver extends OpenAIResponsesDriverBase {
                         owner: owner,
                         type: ModelType.Text,
                         can_stream: true,
-                        is_multimodal: false,
+                        is_multimodal: !!modelCapability.input.image || !!modelCapability.input.video,
                         input_modalities: modelModalitiesToArray(modelCapability.input),
                         output_modalities: modelModalitiesToArray(modelCapability.output),
                         tool_support: modelCapability.tool_support,

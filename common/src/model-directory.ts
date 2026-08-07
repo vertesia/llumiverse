@@ -99,8 +99,23 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
             return getModelCapabilitiesVertexAI(model);
         case 'claude':
             return getModelCapabilitiesAnthropic(model);
-        case 'gpt':
-            return getModelCapabilitiesOpenAI(model);
+        case 'gpt': {
+            const capabilities = getModelCapabilitiesOpenAI(model);
+            return {
+                ...capabilities,
+                input: {
+                    ...capabilities.input,
+                    text: capabilities.input.text ?? true,
+                    image: capabilities.input.image ?? true,
+                },
+                output: {
+                    ...capabilities.output,
+                    text: capabilities.output.text ?? true,
+                },
+                tool_support: capabilities.tool_support ?? true,
+                tool_support_streaming: capabilities.tool_support_streaming ?? capabilities.tool_support ?? true,
+            };
+        }
         case 'embedding':
             return {
                 input: { text: true },
