@@ -18,14 +18,14 @@ describe('embedding model classification', () => {
         expect(isEmbeddingModel({ id: 'grok-4.3', output_modalities: ['text'] }, 'xai')).toBe(false);
     });
 
-    it('filters non-standard audio and moderation models from inference listings', () => {
-        expect(isEmbeddingModel({ id: 'whisper-large-v3' }, Providers.groq)).toBe(true);
-        expect(isEmbeddingModel({ id: 'canopylabs/orpheus-v1-english' }, Providers.groq)).toBe(true);
-        expect(isEmbeddingModel({ id: 'meta-llama/llama-prompt-guard-2-86m' }, Providers.groq)).toBe(true);
+    it('does not hide non-embedding models when capability metadata is incomplete', () => {
+        expect(isEmbeddingModel({ id: 'whisper-large-v3' }, Providers.groq)).toBe(false);
+        expect(isEmbeddingModel({ id: 'canopylabs/orpheus-v1-english' }, Providers.groq)).toBe(false);
+        expect(isEmbeddingModel({ id: 'meta-llama/llama-prompt-guard-2-86m' }, Providers.groq)).toBe(false);
         expect(isEmbeddingModel({ id: 'llama-3.3-70b-versatile' }, Providers.groq)).toBe(false);
         expect(isEmbeddingModel({ id: 'gpt-image-1' }, Providers.openai)).toBe(false);
         expect(isEmbeddingModel({ id: 'amazon.titan-image-generator-v3' }, Providers.bedrock)).toBe(false);
-        expect(isEmbeddingModel({ id: 'amazon.nova-reel-v1' }, Providers.bedrock)).toBe(true);
+        expect(isEmbeddingModel({ id: 'amazon.nova-reel-v1' }, Providers.bedrock)).toBe(false);
     });
 });
 
