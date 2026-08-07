@@ -9,6 +9,10 @@ function effortValues(model: string, provider: string): string[] {
 }
 
 describe('current reasoning model options', () => {
+    it.each(['azure_openai', 'mistralai', 'togetherai', 'xai'])('provides inference options for %s', (provider) => {
+        expect(getOptions('gpt-5.6-sol', provider).options.length).toBeGreaterThan(0);
+    });
+
     it('advertises forward-compatible Claude effort for all current families', () => {
         expect(effortValues('claude-fable-5', 'anthropic')).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
         expect(effortValues('claude-mythos-5', 'anthropic')).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);

@@ -1,4 +1,5 @@
 export * from './capability.js';
+export * from './model-directory.js';
 export * from './options/anthropic.js';
 export * from './options/bedrock.js';
 export * from './options/bedrock_mantle.js';

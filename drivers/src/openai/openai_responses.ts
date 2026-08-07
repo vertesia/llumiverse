@@ -2,6 +2,7 @@ import {
     type AIModel,
     type DriverOptions,
     getModelCapabilities,
+    isEmbeddingModel,
     ModelType,
     modelModalitiesToArray,
     Providers,
@@ -62,8 +63,9 @@ export class OpenAIResponsesDriver extends OpenAIResponsesDriverBase {
             const result = (await this.service.models.list()).data;
 
             const models = result
+                .filter((m) => !isEmbeddingModel({ id: m.id }, this.provider))
                 .map((m) => {
-                    const modelCapability = getModelCapabilities(m.id, 'openai');
+                    const modelCapability = getModelCapabilities(m.id, this.provider);
                     let owner = m.owned_by;
                     if (owner === 'system') {
                         owner = 'unknown';

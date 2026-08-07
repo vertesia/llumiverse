@@ -43,6 +43,7 @@ import {
     getModelCapabilities,
     type HttpTimeoutOptions,
     incrementConversationTurn,
+    isEmbeddingModel,
     type JSONObject,
     LlumiverseError,
     type LlumiverseErrorContext,
@@ -1942,7 +1943,18 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     this.provider,
                 );
 
-                if (providerName && shouldIncludeModel(profileId, providerName)) {
+                if (
+                    providerName &&
+                    shouldIncludeModel(profileId, providerName) &&
+                    !isEmbeddingModel(
+                        {
+                            id: p.inferenceProfileArn ?? p.inferenceProfileId,
+                            input_modalities: modelModalitiesToArray(modelCapability.input),
+                            output_modalities: modelModalitiesToArray(modelCapability.output),
+                        },
+                        this.provider,
+                    )
+                ) {
                     const model: AIModel = {
                         id: p.inferenceProfileArn ?? p.inferenceProfileId,
                         name: p.inferenceProfileName ?? p.inferenceProfileArn,

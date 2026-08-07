@@ -1,6 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { getModelCapabilities, supportsToolUse } from './capability.js';
+import { getModelCapabilities, isEmbeddingModel, supportsToolUse } from './capability.js';
 import { Providers } from './types.js';
+
+describe('embedding model classification', () => {
+    it.each([
+        [{ id: 'text-embedding-3-small' }, 'openai'],
+        [{ id: 'text-embedding-ada-002' }, 'azure_openai'],
+        [{ id: 'mistral-embed' }, 'mistralai'],
+        [{ id: 'embedding-model', output_modalities: ['vectors'] }, 'xai'],
+        [{ id: 'chat-model', type: 'embedding' }, 'togetherai'],
+    ] as const)('recognizes an embedding listing: %s', (model, provider) => {
+        expect(isEmbeddingModel(model, provider)).toBe(true);
+    });
+
+    it('does not classify normal inference models as embeddings', () => {
+        expect(isEmbeddingModel({ id: 'gpt-5.6-sol' }, 'openai')).toBe(false);
+        expect(isEmbeddingModel({ id: 'grok-4.3', output_modalities: ['text'] }, 'xai')).toBe(false);
+    });
+});
 
 describe('xAI Grok tool capabilities', () => {
     it.each(['grok-2', 'grok-3', 'grok-4', 'grok-4-fast-reasoning'])(

@@ -1,9 +1,5 @@
-import { getModelCapabilitiesAnthropic } from './capability/anthropic.js';
 import { getModelCapabilitiesAzureFoundry } from './capability/azure_foundry.js';
-import { getModelCapabilitiesBedrock } from './capability/bedrock.js';
-import { getModelCapabilitiesBedrockMantle } from './capability/bedrock_mantle.js';
-import { getModelCapabilitiesOpenAI } from './capability/openai.js';
-import { getModelCapabilitiesVertexAI } from './capability/vertexai.js';
+import { isModelDirectoryEmbedding, resolveModelProfile } from './model-directory.js';
 import { type ModelCapabilities, type ModelModalities, Providers } from './types.js';
 
 export function getModelCapabilities(model: string, provider?: string | Providers): ModelCapabilities {
@@ -28,107 +24,35 @@ export function getModelCapabilities(model: string, provider?: string | Provider
 function _getModelCapabilities(model: string, provider?: string | Providers): ModelCapabilities {
     switch (provider?.toLowerCase()) {
         case Providers.anthropic:
-            return getModelCapabilitiesAnthropic(model);
+            return resolveModelProfile(model, provider).capabilities;
         case Providers.vertexai:
-            return getModelCapabilitiesVertexAI(model);
+            return resolveModelProfile(model, provider).capabilities;
         case Providers.openai:
-            return getModelCapabilitiesOpenAI(model);
+            return resolveModelProfile(model, provider).capabilities;
+        case Providers.azure_openai:
+            return resolveModelProfile(model, provider).capabilities;
         case Providers.openai_compatible:
-            return getModelCapabilitiesOpenAICompatible(model);
+            return resolveModelProfile(model, provider).capabilities;
         case Providers.bedrock:
-            return getModelCapabilitiesBedrock(model);
+            return resolveModelProfile(model, provider).capabilities;
         case Providers.bedrock_mantle:
-            return getModelCapabilitiesBedrockMantle(model);
+            return resolveModelProfile(model, provider).capabilities;
         case Providers.azure_foundry:
             // Azure Foundry uses OpenAI capabilities
             return getModelCapabilitiesAzureFoundry(model);
         case Providers.groq:
         case Providers.mistralai:
             // These providers host text models that generally support tool use
-            return getModelCapabilitiesOpenAICompatible(model);
+            return resolveModelProfile(model, provider).capabilities;
         case Providers.togetherai:
-            // Same OpenAI-compatible tool-use default, but also flag the natively-multimodal
-            // model families TogetherAI hosts so is_multimodal is reported correctly.
-            return getModelCapabilitiesTogetherAI(model);
+            return resolveModelProfile(model, provider).capabilities;
         case Providers.xai:
             // xAI (Grok) uses the OpenAI Responses API; tool use matches OpenAI-compatible defaults.
             // Do not set tool_support_streaming — leave it unset so it defaults to tool_support.
-            return {
-                input: { text: true, image: model.includes('vision') },
-                output: { text: true },
-                tool_support: true,
-            };
+            return resolveModelProfile(model, provider).capabilities;
         default:
-            // Guess the provider based on the model name
-            if (model.startsWith('gpt')) {
-                return getModelCapabilitiesOpenAI(model);
-            } else if (model.startsWith('claude')) {
-                return getModelCapabilitiesAnthropic(model);
-            } else if (model.startsWith('grok')) {
-                // xAI Grok models (provider omitted — same as Providers.xai)
-                return {
-                    input: { text: true, image: model.includes('vision') },
-                    output: { text: true },
-                    tool_support: true,
-                };
-            } else if (model.startsWith('publishers/')) {
-                return getModelCapabilitiesVertexAI(model);
-            } else if (model.startsWith('arn:aws')) {
-                return getModelCapabilitiesBedrock(model);
-            }
-            // Fallback to a generic model with no capabilities
-            return { input: {}, output: {} } satisfies ModelCapabilities;
+            return resolveModelProfile(model, provider).capabilities;
     }
-}
-
-// Patterns for models known NOT to support tool use on OpenAI-compatible endpoints
-const NO_TOOL_SUPPORT_PATTERNS = ['image', 'embed', 'moderation', 'whisper', 'sora', 'dall-e', 'tts'];
-
-/**
- * For OpenAI-compatible endpoints (e.g., OpenRouter), try OpenAI capability lookup first.
- * If no explicit match is found, default to tool_support: true since most models
- * on these platforms support tool use. Blacklist known non-tool-supporting patterns.
- */
-function getModelCapabilitiesOpenAICompatible(model: string): ModelCapabilities {
-    const caps = getModelCapabilitiesOpenAI(model);
-    if (caps.tool_support !== undefined) {
-        return caps;
-    }
-    const normalized = model.toLowerCase();
-    const isNonToolModel = NO_TOOL_SUPPORT_PATTERNS.some((p) => normalized.includes(p));
-    return {
-        input: { text: true },
-        output: { text: true },
-        tool_support: !isNonToolModel,
-        tool_support_streaming: !isNonToolModel,
-    };
-}
-
-// TogetherAI vision-capable model families. Conservative on purpose: only families that are
-// natively multimodal when served on Together are listed, so text-only models are not falsely
-// flagged as multimodal. This list can be extended as Together adds vision models.
-const TOGETHER_VISION_PATTERNS = [
-    'vision', // meta-llama/Llama-3.2-*-Vision-Instruct
-    'llama-4', // Llama 4 Scout / Maverick are natively multimodal
-    'gemma-3', // Gemma 3 is multimodal (gemma-2 and earlier are text-only)
-    'qwen2-vl',
-    'qwen2.5-vl',
-    '-vl-', // generic Qwen*-VL / other *-VL-* naming
-];
-
-/**
- * TogetherAI capability resolver. Starts from the OpenAI-compatible defaults (tool_support, etc.)
- * and additionally marks `input.image: true` for known natively-multimodal families, so the
- * driver's `is_multimodal` flag is accurate. TogetherAI vision requests are sent via the shared
- * OpenAI Chat Completions driver path.
- */
-function getModelCapabilitiesTogetherAI(model: string): ModelCapabilities {
-    const caps = getModelCapabilitiesOpenAICompatible(model);
-    const normalized = model.toLowerCase();
-    if (TOGETHER_VISION_PATTERNS.some((p) => normalized.includes(p))) {
-        caps.input = { ...caps.input, image: true };
-    }
-    return caps;
 }
 
 export function supportsToolUse(model: string, provider?: string | Providers, streaming: boolean = false): boolean {
@@ -145,4 +69,25 @@ export function modelModalitiesToArray(modalities: ModelModalities): string[] {
     return Object.entries(modalities)
         .filter(([_, isSupported]) => isSupported)
         .map(([modality]) => modality);
+}
+
+export interface ModelListing {
+    id: string;
+    type?: string;
+    input_modalities?: readonly string[];
+    output_modalities?: readonly string[];
+}
+
+/** Embedding endpoints are not executable through the normal inference path. */
+export function isEmbeddingModel(model: ModelListing, provider?: string | Providers): boolean {
+    if (isModelDirectoryEmbedding(model.id, model)) return true;
+
+    const modalities = [...(model.input_modalities ?? []), ...(model.output_modalities ?? [])].map((modality) =>
+        modality.toLowerCase(),
+    );
+    if (modalities.some((modality) => modality === 'embed' || modality === 'embedding' || modality === 'vectors')) {
+        return true;
+    }
+
+    return getModelCapabilities(model.id, provider).output.embed === true;
 }

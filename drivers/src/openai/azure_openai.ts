@@ -3,6 +3,7 @@ import {
     type AIModel,
     type DriverOptions,
     getModelCapabilities,
+    isEmbeddingModel,
     modelModalitiesToArray,
     Providers,
 } from '@llumiverse/core';
@@ -86,6 +87,9 @@ export class AzureOpenAIDriver extends OpenAIResponsesDriverBase {
             this.logger.error({ error }, 'Failed to test model for Azure OpenAI listing :');
         }
         const modelCapability = getModelCapabilities(modelID, 'openai');
+        if (isEmbeddingModel({ id: modelID }, 'openai')) {
+            return [];
+        }
         return [
             {
                 id: modelID,

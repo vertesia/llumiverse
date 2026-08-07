@@ -95,14 +95,9 @@ function getLimits(model: string): Pick<BedrockModelKnowledge, 'context_window' 
     }
     if (model.includes('anthropic.claude')) {
         if (
-            includesAny(model, [
-                'claude-fable-5',
-                'claude-mythos',
-                'claude-sonnet-5',
-                'claude-opus-4-6',
-                'claude-opus-4-7',
-                'claude-opus-4-8',
-            ])
+            includesAny(model, ['claude-fable-5', 'claude-mythos']) ||
+            isFamilyVersionGte(model, 'claude-sonnet-', 5) ||
+            isFamilyVersionGte(model, 'claude-opus-', 4, 6)
         ) {
             // Bedrock enforces an EXCLUSIVE 128K bound for this family: it rejects
             // max_tokens >= 128000 with "Try again with a maximum tokens value that
@@ -171,7 +166,9 @@ function getLimits(model: string): Pick<BedrockModelKnowledge, 'context_window' 
         return { context_window: 256_000, max_output_tokens: model.includes('super') ? 32_768 : 8_192 };
     }
     if (model.includes('nvidia.nemotron-nano-')) return { context_window: 128_000, max_output_tokens: 8_192 };
-    if (model.startsWith('openai.gpt-5')) return { context_window: 272_000 };
+    if (isFamilyVersionGte(model, 'openai.gpt-', 5) && !model.includes('gpt-oss')) {
+        return { context_window: 272_000, max_output_tokens: 128_000 };
+    }
     if (model.includes('openai.gpt-oss')) return { context_window: 128_000, max_output_tokens: 16_384 };
     if (model.includes('qwen3-235b')) return { context_window: 256_000, max_output_tokens: 8_192 };
     if (model.includes('qwen3-32b')) return { context_window: 32_000, max_output_tokens: 8_192 };

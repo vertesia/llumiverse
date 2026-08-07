@@ -11,9 +11,13 @@ import {
     type ExecutionOptions,
     type ExecutionTokenUsage,
     getConversationMeta,
+    getModelCapabilities,
     incrementConversationTurn,
+    isEmbeddingModel,
     type JSONObject,
     type JSONSchema,
+    ModelType,
+    modelModalitiesToArray,
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
     type PromptOptions,
@@ -1426,12 +1430,21 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
     }
 
     async listModels(): Promise<AIModel[]> {
-        return (await this.service.models.list()).data.map((model) => ({
-            id: model.id,
-            name: model.id,
-            owner: model.owned_by,
-            provider: this.provider,
-        }));
+        return (await this.service.models.list()).data
+            .filter((model) => !isEmbeddingModel({ id: model.id }, this.provider))
+            .map((model) => {
+                const capabilities = getModelCapabilities(model.id, this.provider);
+                return {
+                    id: model.id,
+                    name: model.id,
+                    owner: model.owned_by,
+                    provider: this.provider,
+                    type: ModelType.Text,
+                    input_modalities: modelModalitiesToArray(capabilities.input),
+                    output_modalities: modelModalitiesToArray(capabilities.output),
+                    tool_support: capabilities.tool_support,
+                } satisfies AIModel;
+            });
     }
 
     async validateConnection(): Promise<boolean> {

@@ -1,6 +1,12 @@
 import type { GroqDeepseekThinkingOptions } from '@llumiverse/common';
-import type { AIModel, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions } from '@llumiverse/core';
-import { Providers } from '@llumiverse/core';
+import {
+    type AIModel,
+    type EmbeddingsOptions,
+    type EmbeddingsResult,
+    type ExecutionOptions,
+    isEmbeddingModel,
+    Providers,
+} from '@llumiverse/core';
 import Groq from 'groq-sdk';
 import { APIConnectionError, APIError, APIUserAbortError } from 'groq-sdk/error';
 import type {
@@ -88,12 +94,14 @@ export class GroqDriver extends OpenAIChatCompletionsDriverBase<GroqDriverOption
 
     async listModels(): Promise<AIModel[]> {
         const models = await this.client.models.list();
-        return models.data.map((model) => ({
-            id: model.id,
-            name: model.id,
-            provider: this.provider,
-            owner: model.owned_by || '',
-        }));
+        return models.data
+            .filter((model) => !isEmbeddingModel({ id: model.id }, this.provider))
+            .map((model) => ({
+                id: model.id,
+                name: model.id,
+                provider: this.provider,
+                owner: model.owned_by || '',
+            }));
     }
 
     async validateConnection(): Promise<boolean> {

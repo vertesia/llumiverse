@@ -77,11 +77,17 @@ const FLEX_SUPPORTED_GEMINI_MODELS = [
     'gemini-3.1-pro-preview',
     'gemini-3-flash-preview',
     'gemini-3-pro-image-preview',
+    'gemini-3.5-flash',
+    'gemini-3.5-flash-lite',
+    'gemini-3.6-flash',
 ] as const;
 
 export function isFlexSupportedGeminiModel(model: string): boolean {
     const modelName = model.split('/').pop() ?? model;
-    return FLEX_SUPPORTED_GEMINI_MODELS.some((m) => modelName.includes(m));
+    return (
+        FLEX_SUPPORTED_GEMINI_MODELS.some((m) => modelName.includes(m)) ||
+        (modelName.includes('flash') && !modelName.includes('image') && isGeminiModelVersionGte(modelName, '3.5'))
+    );
 }
 
 export function getVertexAiOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
@@ -337,7 +343,7 @@ function getGeminiEffortOptions(model: string): Record<string, string> {
     if (model.includes('gemini-3.1-flash-image')) {
         return { Minimal: 'minimal', High: 'high' };
     }
-    if (model.includes('gemini-3.1-pro')) {
+    if (model.includes('pro') && isGeminiModelVersionGte(model, '3.1')) {
         return { Low: 'low', Medium: 'medium', High: 'high' };
     }
     return { Minimal: 'minimal', Low: 'low', Medium: 'medium', High: 'high' };

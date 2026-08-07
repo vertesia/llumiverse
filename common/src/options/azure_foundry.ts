@@ -6,6 +6,7 @@ import {
     SharedOptions,
 } from '../types.js';
 import { getMaxOutputTokens } from './context-windows.js';
+import { isOpenAIGptVersionGTE } from './version-parsing.js';
 
 // Helper function to parse composite model IDs
 function parseAzureFoundryModelId(compositeId: string): { deploymentName: string; baseModel: string } {
@@ -107,7 +108,7 @@ export function getMaxTokensLimitAzureFoundry(model: string): number | undefined
     if (modelLower.includes('gpt-35') || modelLower.includes('gpt-3.5')) {
         return 4096;
     }
-    if (model.includes('gpt-5')) {
+    if (isOpenAIGptVersionGTE(model, 5, 0)) {
         return 128000;
     }
     // O-series models
