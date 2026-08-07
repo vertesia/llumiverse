@@ -8,10 +8,12 @@ import {
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
+    getModelCapabilities,
     LlumiverseError,
     type LlumiverseErrorContext,
     type ModelSearchPayload,
     ModelType,
+    modelModalitiesToArray,
     type PromptSegment,
     Providers,
 } from '@llumiverse/core';
@@ -84,6 +86,10 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
                     provider: Providers.anthropic,
                     type: ModelType.Text,
                     can_stream: true,
+                    is_multimodal: getModelCapabilities(m.id, this.provider).input.image === true,
+                    input_modalities: modelModalitiesToArray(getModelCapabilities(m.id, this.provider).input),
+                    output_modalities: modelModalitiesToArray(getModelCapabilities(m.id, this.provider).output),
+                    tool_support: getModelCapabilities(m.id, this.provider).tool_support,
                 }) satisfies AIModel,
         );
     }

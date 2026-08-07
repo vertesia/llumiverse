@@ -215,13 +215,13 @@ describe('Bedrock Mantle metadata', () => {
         });
     });
 
-    it('does not expose Mantle options or capabilities from the Bedrock provider', () => {
+    it('keeps Bedrock Runtime capabilities separate from Mantle options', () => {
         const options = getBedrockOptions('openai.gpt-5.5');
         const capabilities = getModelCapabilities('openai.gpt-5.5', Providers.bedrock);
 
         expect(options._option_id).toBe('bedrock-converse');
-        expect(capabilities.input.image).not.toBe(true);
-        expect(capabilities.tool_support).not.toBe(true);
+        expect(capabilities.input.image).toBe(true);
+        expect(capabilities.tool_support).toBe(true);
     });
 
     it('inherits Bedrock Runtime capabilities across newly discovered model families', () => {
@@ -252,13 +252,13 @@ describe('Bedrock Mantle metadata', () => {
         ['ai21.jamba-1-5-mini-v1:0', true],
         ['amazon.nova-premier-v1:0', true],
         ['amazon.nova-pro-v1:0', true],
-        ['deepseek.v3-v1:0', false],
-        ['deepseek.v3.2', false],
+        ['deepseek.v3-v1:0', true],
+        ['deepseek.v3.2', true],
         ['meta.llama3-2-90b-instruct-v1:0', true],
-        ['meta.llama4-scout-17b-instruct-v1:0', false],
+        ['meta.llama4-scout-17b-instruct-v1:0', true],
         ['mistral.mistral-large-3-675b-instruct', true],
-        ['qwen.qwen3-235b-a22b-2507-v1:0', false],
-        ['qwen.qwen3-32b-v1:0', false],
+        ['qwen.qwen3-235b-a22b-2507-v1:0', true],
+        ['qwen.qwen3-32b-v1:0', true],
         ['writer.palmyra-vision-7b', true],
     ] as const)('uses the Runtime execution tool capability for %s', (model, expected) => {
         expect(getModelCapabilities(model, Providers.bedrock).tool_support).toBe(expected);

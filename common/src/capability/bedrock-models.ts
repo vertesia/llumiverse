@@ -188,8 +188,16 @@ function getLimits(model: string): Pick<BedrockModelKnowledge, 'context_window' 
 }
 
 function getRuntimeToolSupport(model: string): Pick<ModelCapabilities, 'tool_support' | 'tool_support_streaming'> {
-    let toolSupport = false;
-    let streaming = false;
+    const nonToolModel = includesAny(model, [
+        'nova-canvas',
+        'nova-reel',
+        'titan-image-generator',
+        'embedding',
+        'embed',
+        'rerank',
+    ]);
+    let toolSupport = !nonToolModel;
+    let streaming = !nonToolModel;
 
     if (model.includes('anthropic.claude')) {
         toolSupport = true;
@@ -205,8 +213,15 @@ function getRuntimeToolSupport(model: string): Pick<ModelCapabilities, 'tool_sup
         streaming = true;
     } else if (model.includes('meta.llama3-1')) {
         toolSupport = true;
+        streaming = false;
     } else if (includesAny(model, ['meta.llama3-2-11b', 'meta.llama3-2-90b'])) {
         toolSupport = true;
+    } else if (model.includes('meta.llama4-')) {
+        toolSupport = true;
+        streaming = false;
+    } else if (includesAny(model, ['qwen.qwen3-235b', 'qwen.qwen3-32b'])) {
+        toolSupport = true;
+        streaming = false;
     } else if (includesAny(model, ['mistral.mistral-large', 'mistral.pixtral'])) {
         toolSupport = true;
     } else if (model.includes('twelvelabs.pegasus')) {
@@ -225,14 +240,6 @@ export function getBedrockModelKnowledge(model: string): BedrockModelKnowledge {
 
 export function getBedrockModelCapabilities(model: string, endpoint: BedrockEndpoint): ModelCapabilities {
     const modelId = normalizeBedrockModelId(model);
-    if (
-        endpoint === 'runtime' &&
-        ((modelId.startsWith('openai.gpt-') && !modelId.includes('gpt-oss')) ||
-            modelId.startsWith('xai.grok-') ||
-            isFamilyVersionGte(modelId, 'google.gemma-', 4))
-    ) {
-        return { input: {}, output: {} };
-    }
     const knowledge = getBedrockModelKnowledge(modelId);
     const toolSupport =
         endpoint === 'mantle' ? { tool_support: true, tool_support_streaming: true } : getRuntimeToolSupport(modelId);

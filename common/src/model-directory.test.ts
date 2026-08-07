@@ -91,4 +91,15 @@ describe('central model directory', () => {
             ).family,
         ).toBe('claude');
     });
+
+    it('uses open-model family semantics for Together and OpenAI-compatible catalogs', () => {
+        expect(resolveModelProfile('google/gemma-4-31B-it', Providers.togetherai).capabilities).toMatchObject({
+            input: { text: true, image: true },
+            output: { text: true },
+            tool_support: true,
+        });
+        expect(resolveModelProfile('google/gemma-3-1B-it', Providers.togetherai).capabilities.input.image).toBe(false);
+        expect(resolveModelProfile('llama-4-scout', Providers.openai_compatible).capabilities.input.image).toBe(true);
+        expect(resolveModelProfile('qwen3-vl-32b', Providers.openai_compatible).capabilities.input.image).toBe(true);
+    });
 });

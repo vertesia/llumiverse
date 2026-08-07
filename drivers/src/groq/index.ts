@@ -4,7 +4,10 @@ import {
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
+    getModelCapabilities,
     isEmbeddingModel,
+    ModelType,
+    modelModalitiesToArray,
     Providers,
 } from '@llumiverse/core';
 import Groq from 'groq-sdk';
@@ -96,12 +99,21 @@ export class GroqDriver extends OpenAIChatCompletionsDriverBase<GroqDriverOption
         const models = await this.client.models.list();
         return models.data
             .filter((model) => !isEmbeddingModel({ id: model.id }, this.provider))
-            .map((model) => ({
-                id: model.id,
-                name: model.id,
-                provider: this.provider,
-                owner: model.owned_by || '',
-            }));
+            .map((model) => {
+                const capabilities = getModelCapabilities(model.id, this.provider);
+                return {
+                    id: model.id,
+                    name: model.id,
+                    provider: this.provider,
+                    owner: model.owned_by || '',
+                    type: ModelType.Text,
+                    can_stream: true,
+                    is_multimodal: capabilities.input.image === true,
+                    input_modalities: modelModalitiesToArray(capabilities.input),
+                    output_modalities: modelModalitiesToArray(capabilities.output),
+                    tool_support: capabilities.tool_support,
+                } satisfies AIModel;
+            });
     }
 
     async validateConnection(): Promise<boolean> {

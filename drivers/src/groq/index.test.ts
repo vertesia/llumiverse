@@ -8,6 +8,28 @@ function setGroqCreate(driver: GroqDriver, create: ReturnType<typeof vi.fn>): vo
 }
 
 describe('GroqDriver shared Chat Completions transport', () => {
+    it('uses central capabilities when listing provider models', async () => {
+        const driver = new GroqDriver({ apiKey: 'test-key' });
+        const list = vi.fn(async () => ({
+            data: [
+                { id: 'llama-4-scout', owned_by: 'Meta' },
+                { id: 'text-embedding-test', owned_by: 'Groq' },
+            ],
+        }));
+        Object.defineProperty(driver.client.models, 'list', { value: list });
+
+        const models = await driver.listModels();
+
+        expect(models).toEqual([
+            expect.objectContaining({
+                id: 'llama-4-scout',
+                input_modalities: ['text', 'image'],
+                output_modalities: ['text'],
+                tool_support: true,
+            }),
+        ]);
+    });
+
     it('maps Groq request extensions and preserves the native response', async () => {
         const driver = new GroqDriver({ apiKey: 'test-key', endpoint_url: 'https://groq.example.test' });
         const response = {

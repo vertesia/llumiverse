@@ -138,6 +138,33 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
                 tool_support: true,
                 tool_support_streaming: true,
             };
+        case 'gemma': {
+            const normalized = model.toLowerCase();
+            const image =
+                (normalized.includes('gemma-3') &&
+                    !normalized.includes('gemma-3-1b') &&
+                    !normalized.includes('gemma-3-270m')) ||
+                normalized.includes('gemma-4');
+            return {
+                input: { text: true, image },
+                output: { text: true },
+                tool_support: true,
+                tool_support_streaming: true,
+            };
+        }
+        case 'qwen':
+            return {
+                input: { text: true, image: /qwen(?:2\.5|3)[^/]*[-.]vl|qwen3\.5/.test(model.toLowerCase()) },
+                output: { text: true },
+                tool_support: true,
+                tool_support_streaming: true,
+            };
+        case 'deepseek':
+        case 'mistral':
+        case 'kimi':
+        case 'minimax':
+        case 'glm':
+            return { input: { text: true }, output: { text: true }, tool_support: true, tool_support_streaming: true };
         default:
             return { ...GENERIC_CAPABILITIES, input: { ...GENERIC_CAPABILITIES.input } };
     }
