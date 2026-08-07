@@ -3,6 +3,17 @@
   // Default label applied to every Renovate PR (matches studio/composableai).
   // The automerge workflow's eligibility gate requires this label.
   "labels": ["dependencies"],
+  "customManagers": [
+    {
+      "description": "Update the zizmor version pinned in its GitHub Actions workflow",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/zizmor\\.ya?ml$/"],
+      "matchStrings": ["uvx\\s+zizmor@(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)"],
+      "depNameTemplate": "zizmor",
+      "datasourceTemplate": "pypi",
+      "versioningTemplate": "pep440"
+    }
+  ],
   // Bypass the 7-day minimum release age for security fixes.
   "vulnerabilityAlerts": {
     "enabled": true,

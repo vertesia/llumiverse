@@ -66,9 +66,7 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           cache: "pnpm"
 
-      # Ensure npm 11.5.1 or later is installed
-      - name: Update npm
-        run: npm install -g npm@latest
+      # Node.js 24 ships with npm 11.5.1 or later, as required for trusted publishing.
       - name: Verify npm version
         run: npm --version
 
