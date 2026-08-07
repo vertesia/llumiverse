@@ -287,7 +287,26 @@ export function resolveModelProfile(
 }
 
 export function isModelDirectoryEmbedding(model: string, metadata?: ModelDirectoryMetadata): boolean {
-    if (metadata?.type?.toLowerCase() === 'embedding') return true;
-    if (metadata?.output_modalities?.some((modality) => /embed|vector/i.test(modality))) return true;
-    return getModelAliases(model).some((alias) => /(^|[-_.:])(?:embed|embedding|vector)(?:[-_.:]|$)/.test(alias));
+    return isModelDirectoryNonInference(model, metadata, 'embedding');
+}
+
+export function isModelDirectoryNonInference(
+    model: string,
+    metadata?: ModelDirectoryMetadata,
+    kind?: 'embedding',
+): boolean {
+    const type = metadata?.type?.toLowerCase();
+    if (type === 'embedding' || type === 'audio' || type === 'image' || type === 'video' || type === 'moderation') {
+        return true;
+    }
+    if (metadata?.output_modalities?.some((modality) => /embed|vector|audio|image|video/i.test(modality))) return true;
+
+    const aliases = getModelAliases(model);
+    return aliases.some((alias) =>
+        kind === 'embedding'
+            ? /(^|[-_.:])(?:embed|embedding|vector)(?:[-_.:]|$)/.test(alias)
+            : /(?:embed|embedding|vector|whisper|speech|tts|audio|orpheus|prompt-guard|moderation|gpt-image|dall-e|imagen|nova-canvas|nova-reel|sora|veo|pegasus)/.test(
+                  alias,
+              ),
+    );
 }

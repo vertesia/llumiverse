@@ -1,5 +1,5 @@
 import { getModelCapabilitiesAzureFoundry } from './capability/azure_foundry.js';
-import { isModelDirectoryEmbedding, resolveModelProfile } from './model-directory.js';
+import { isModelDirectoryNonInference, resolveModelProfile } from './model-directory.js';
 import { type ModelCapabilities, type ModelModalities, Providers } from './types.js';
 
 export function getModelCapabilities(model: string, provider?: string | Providers): ModelCapabilities {
@@ -80,7 +80,7 @@ export interface ModelListing {
 
 /** Embedding endpoints are not executable through the normal inference path. */
 export function isEmbeddingModel(model: ModelListing, provider?: string | Providers): boolean {
-    if (isModelDirectoryEmbedding(model.id, model)) return true;
+    if (isModelDirectoryNonInference(model.id, model, 'embedding')) return true;
 
     const modalities = [...(model.input_modalities ?? []), ...(model.output_modalities ?? [])].map((modality) =>
         modality.toLowerCase(),
@@ -89,5 +89,7 @@ export function isEmbeddingModel(model: ModelListing, provider?: string | Provid
         return true;
     }
 
-    return getModelCapabilities(model.id, provider).output.embed === true;
+    return (
+        getModelCapabilities(model.id, provider).output.embed === true || isModelDirectoryNonInference(model.id, model)
+    );
 }

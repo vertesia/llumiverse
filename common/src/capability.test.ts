@@ -17,6 +17,13 @@ describe('embedding model classification', () => {
         expect(isEmbeddingModel({ id: 'gpt-5.6-sol' }, 'openai')).toBe(false);
         expect(isEmbeddingModel({ id: 'grok-4.3', output_modalities: ['text'] }, 'xai')).toBe(false);
     });
+
+    it('filters non-standard audio and moderation models from inference listings', () => {
+        expect(isEmbeddingModel({ id: 'whisper-large-v3' }, Providers.groq)).toBe(true);
+        expect(isEmbeddingModel({ id: 'canopylabs/orpheus-v1-english' }, Providers.groq)).toBe(true);
+        expect(isEmbeddingModel({ id: 'meta-llama/llama-prompt-guard-2-86m' }, Providers.groq)).toBe(true);
+        expect(isEmbeddingModel({ id: 'llama-3.3-70b-versatile' }, Providers.groq)).toBe(false);
+    });
 });
 
 describe('xAI Grok tool capabilities', () => {
