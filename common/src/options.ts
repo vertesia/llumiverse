@@ -1,3 +1,4 @@
+import { resolveModelProfile } from './model-directory.js';
 import { getAnthropicOptions } from './options/anthropic.js';
 import { getAzureFoundryOptions } from './options/azure_foundry.js';
 import { getBedrockOptions } from './options/bedrock.js';
@@ -22,17 +23,17 @@ export function getOptions(model: string, provider?: string | Providers, options
         case Providers.vertexai:
             return getVertexAiOptions(model, options);
         case Providers.openai:
-            return getOpenAiOptions(model, options);
+            return getOpenAiOptions(model, options, resolveModelProfile(model, provider));
         case Providers.azure_openai:
-            return getOpenAiOptions(model, options);
+            return getOpenAiOptions(model, options, resolveModelProfile(model, provider));
         case Providers.openai_compatible:
-            return getOpenAiCompatibleOptions(model, options);
+            return getOpenAiCompatibleOptions(model, options, resolveModelProfile(model, provider));
         case Providers.groq:
             return getGroqOptions(model, options);
         case Providers.mistralai:
         case Providers.togetherai:
         case Providers.xai:
-            return getOpenAiCompatibleOptions(model, options);
+            return getOpenAiCompatibleOptions(model, options, resolveModelProfile(model, provider));
         case Providers.azure_foundry:
             return getAzureFoundryOptions(model, options);
         default:

@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import { type ModelProfile, resolveModelProfile } from '../model-directory.js';
 import type {
     OpenAiDalleOptionsSchema,
     OpenAiGptImageOptionsSchema,
@@ -10,6 +11,7 @@ import {
     type ModelOptions,
     type ModelOptionsInfo,
     OptionType,
+    Providers,
     SharedOptions,
 } from '../types.js';
 import { getMaxOutputTokens } from './context-windows.js';
@@ -34,7 +36,11 @@ export type OpenAiGptImageOptions = z.infer<typeof OpenAiGptImageOptionsSchema>;
  */
 export type OpenAiOptions = OpenAiThinkingOptions | OpenAiTextOptions | OpenAiDalleOptions | OpenAiGptImageOptions;
 
-export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOptionsInfo {
+export function getOpenAiOptions(
+    model: string,
+    _option?: ModelOptions,
+    profile: ModelProfile = resolveModelProfile(model, Providers.openai),
+): ModelOptionsInfo {
     const visionOptions: ModelOptionInfoItem[] = isVisionModel(model)
         ? [
               {
@@ -168,7 +174,7 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
         } else if (model.includes('o4')) {
             max_tokens_limit = 100000;
         } else if (isOpenAIGptVersionGTE(model, 5, 0)) {
-            max_tokens_limit = getMaxOutputTokens(model);
+            max_tokens_limit = profile.max_output_tokens ?? getMaxOutputTokens(model);
         }
 
         const commonOptions: ModelOptionInfoItem[] = [
@@ -289,27 +295,50 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
 }
 
 /** OpenAI-compatible endpoints own model capability detection, so expose effort for any text model. */
-export function getOpenAiCompatibleOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
-    const options = getOpenAiOptions(model, option);
-    if (options.options.some((item) => item.name === SharedOptions.effort) || options._option_id !== 'openai-text') {
-        return options;
+export function getOpenAiCompatibleOptions(
+    model: string,
+    option?: ModelOptions,
+    profile: ModelProfile = resolveModelProfile(model, Providers.openai_compatible),
+): ModelOptionsInfo {
+    const options = getOpenAiOptions(model, option, profile);
+    const maxOutputTokens = profile.max_output_tokens;
+    const profileEffortLevels = profile.reasoning_effort_levels ? new Set(profile.reasoning_effort_levels) : undefined;
+    const profileOptions: ModelOptionInfoItem[] = options.options.map((item): ModelOptionInfoItem => {
+        if (item.name === SharedOptions.max_tokens && maxOutputTokens !== undefined) {
+            return { ...item, max: maxOutputTokens } as ModelOptionInfoItem;
+        }
+        if (item.name === SharedOptions.effort && item.type === OptionType.enum && profileEffortLevels) {
+            const enumValues = item.enum as Record<string, string>;
+            return {
+                ...item,
+                enum: Object.fromEntries(
+                    Object.entries(enumValues).filter(([, value]) => profileEffortLevels.has(value)),
+                ) as Record<string, string>,
+            } as ModelOptionInfoItem;
+        }
+        return item;
+    });
+    if (profileOptions.some((item) => item.name === SharedOptions.effort) || options._option_id !== 'openai-text') {
+        return { ...options, options: profileOptions };
     }
     return {
         ...options,
         options: [
-            ...options.options,
+            ...profileOptions,
             {
                 name: SharedOptions.effort,
                 type: OptionType.enum,
-                enum: {
-                    None: 'none',
-                    Minimal: 'minimal',
-                    Low: 'low',
-                    Medium: 'medium',
-                    High: 'high',
-                    XHigh: 'xhigh',
-                    Max: 'max',
-                },
+                enum: profileEffortLevels
+                    ? Object.fromEntries([...profileEffortLevels].map((value) => [value, value]))
+                    : {
+                          None: 'none',
+                          Minimal: 'minimal',
+                          Low: 'low',
+                          Medium: 'medium',
+                          High: 'high',
+                          XHigh: 'xhigh',
+                          Max: 'max',
+                      },
                 description: 'How much effort the model should put into reasoning, when supported by the endpoint.',
             },
         ],
