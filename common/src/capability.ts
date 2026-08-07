@@ -78,7 +78,7 @@ export interface ModelListing {
     output_modalities?: readonly string[];
 }
 
-/** Embedding endpoints are not executable through the normal inference path. */
+/** Models that are not executable through the standard text/multimodal inference path. */
 export function isEmbeddingModel(model: ModelListing, provider?: string | Providers): boolean {
     if (isModelDirectoryNonInference(model.id, model, 'embedding')) return true;
 

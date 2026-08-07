@@ -1823,7 +1823,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             'zai',
         ];
         const unsupportedModelsByPublisher = {
-            amazon: ['titan-image-generator', 'nova-reel', 'nova-sonic', 'rerank'],
+            amazon: ['nova-reel', 'nova-sonic', 'rerank'],
             anthropic: [],
             cohere: ['rerank', 'embed'],
             ai21: [],

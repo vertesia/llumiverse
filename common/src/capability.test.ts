@@ -23,6 +23,9 @@ describe('embedding model classification', () => {
         expect(isEmbeddingModel({ id: 'canopylabs/orpheus-v1-english' }, Providers.groq)).toBe(true);
         expect(isEmbeddingModel({ id: 'meta-llama/llama-prompt-guard-2-86m' }, Providers.groq)).toBe(true);
         expect(isEmbeddingModel({ id: 'llama-3.3-70b-versatile' }, Providers.groq)).toBe(false);
+        expect(isEmbeddingModel({ id: 'gpt-image-1' }, Providers.openai)).toBe(false);
+        expect(isEmbeddingModel({ id: 'amazon.titan-image-generator-v3' }, Providers.bedrock)).toBe(false);
+        expect(isEmbeddingModel({ id: 'amazon.nova-reel-v1' }, Providers.bedrock)).toBe(true);
     });
 });
 
