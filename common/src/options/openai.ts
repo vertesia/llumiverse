@@ -221,7 +221,7 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
             }
         } else if (model.includes('gpt-3-5')) {
             max_tokens_limit = 4096;
-        } else if (model.includes('gpt-5')) {
+        } else if (isOpenAIGptVersionGTE(model, 5, 0)) {
             max_tokens_limit = 128000;
         }
 

@@ -33,6 +33,8 @@ function _getModelCapabilities(model: string, provider?: string | Providers): Mo
             return getModelCapabilitiesVertexAI(model);
         case Providers.openai:
             return getModelCapabilitiesOpenAI(model);
+        case Providers.azure_openai:
+            return getModelCapabilitiesOpenAI(model);
         case Providers.openai_compatible:
             return getModelCapabilitiesOpenAICompatible(model);
         case Providers.bedrock:
@@ -145,4 +147,26 @@ export function modelModalitiesToArray(modalities: ModelModalities): string[] {
     return Object.entries(modalities)
         .filter(([_, isSupported]) => isSupported)
         .map(([modality]) => modality);
+}
+
+export interface ModelListing {
+    id: string;
+    type?: string;
+    input_modalities?: readonly string[];
+    output_modalities?: readonly string[];
+}
+
+/** Embedding endpoints are not executable through the normal inference path. */
+export function isEmbeddingModel(model: ModelListing, provider?: string | Providers): boolean {
+    if (model.type?.toLowerCase() === 'embedding') return true;
+    if (/(^|[-_.:/])(?:embed|embedding|vector)(?:[-_.:/]|$)/i.test(model.id)) return true;
+
+    const modalities = [...(model.input_modalities ?? []), ...(model.output_modalities ?? [])].map((modality) =>
+        modality.toLowerCase(),
+    );
+    if (modalities.some((modality) => modality === 'embed' || modality === 'embedding' || modality === 'vectors')) {
+        return true;
+    }
+
+    return getModelCapabilities(model.id, provider).output.embed === true;
 }

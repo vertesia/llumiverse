@@ -135,6 +135,31 @@ describe('Bedrock Mantle metadata', () => {
         });
     });
 
+    it.each(['openai.gpt-5.6-sol', 'openai.gpt-5.6-terra', 'openai.gpt-5.6-luna'])(
+        'advertises current GPT-5.6 Bedrock output limits for %s',
+        (model) => {
+            const maxTokens = getOptions(model, Providers.bedrock_mantle).options.find(
+                (option) => option.name === 'max_tokens',
+            );
+            expect(maxTokens).toMatchObject({ max: 128_000 });
+        },
+    );
+
+    it('carries GPT-5.6 reasoning options forward to future GPT releases', () => {
+        const options = getOptions('openai.gpt-6.1', Providers.bedrock_mantle);
+        expect(options.options.find((option) => option.name === 'effort')).toMatchObject({
+            enum: { none: 'none', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
+        });
+        expect(options.options.find((option) => option.name === 'max_tokens')).toMatchObject({ max: 128_000 });
+    });
+
+    it('carries modern Claude limits forward to newer Claude families', () => {
+        expect(getBedrockModelKnowledge('anthropic.claude-opus-5')).toMatchObject({
+            context_window: 1_000_000,
+            max_output_tokens: 127_999,
+        });
+    });
+
     it('sets GPT-5.5 Bedrock Mantle capabilities and context window', () => {
         const capabilities = getModelCapabilities('openai.gpt-5.5', Providers.bedrock_mantle);
 

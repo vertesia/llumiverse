@@ -23,10 +23,16 @@ export function getOptions(model: string, provider?: string | Providers, options
             return getVertexAiOptions(model, options);
         case Providers.openai:
             return getOpenAiOptions(model, options);
+        case Providers.azure_openai:
+            return getOpenAiOptions(model, options);
         case Providers.openai_compatible:
             return getOpenAiCompatibleOptions(model, options);
         case Providers.groq:
             return getGroqOptions(model, options);
+        case Providers.mistralai:
+        case Providers.togetherai:
+        case Providers.xai:
+            return getOpenAiCompatibleOptions(model, options);
         case Providers.azure_foundry:
             return getAzureFoundryOptions(model, options);
         default:

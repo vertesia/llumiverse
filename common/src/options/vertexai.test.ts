@@ -1,8 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { getModelCapabilities } from '../capability.js';
-import { getMaxTokensLimitVertexAi, getVertexAiOptions } from './vertexai.js';
+import { getMaxTokensLimitVertexAi, getVertexAiOptions, isFlexSupportedGeminiModel } from './vertexai.js';
 
 describe('Vertex AI MaaS metadata', () => {
+    it.each(['gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-4.0-flash'])(
+        'supports current Gemini Flash Flex inference for %s',
+        (model) => {
+            expect(isFlexSupportedGeminiModel(model)).toBe(true);
+            expect(getVertexAiOptions(model).options.map((option) => option.name)).toEqual(
+                expect.arrayContaining(['effort', 'include_thoughts', 'max_tokens', 'flex']),
+            );
+        },
+    );
+
     it('uses family capability prefixes for future open MaaS models', () => {
         const capabilities = getModelCapabilities(
             'locations/global/publishers/qwen/models/qwen4-new-instruct-maas',

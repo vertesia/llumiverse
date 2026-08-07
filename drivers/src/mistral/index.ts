@@ -10,6 +10,7 @@ import {
     type ExecutionTokenUsage,
     getConversationMeta,
     incrementConversationTurn,
+    isEmbeddingModel,
     type JSONObject,
     LlumiverseError,
     MISTRAL_DEFAULT_EMBEDDING_MODEL,
@@ -166,7 +167,7 @@ export class MistralAIDriver extends OpenAICompatibleDriverBase<MistralAIDriverO
     async listModels(): Promise<AIModel[]> {
         const models = await this.client.models.list();
         return (models.data ?? []).flatMap((model) =>
-            'id' in model
+            'id' in model && !isEmbeddingModel({ id: model.id }, this.provider)
                 ? [
                       {
                           id: model.id,

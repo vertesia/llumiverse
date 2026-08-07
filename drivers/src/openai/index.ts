@@ -113,7 +113,7 @@ function openAIReasoning(
 function supportsOpenAICurrentTurnReasoning(provider: Providers, model: string): boolean {
     if (provider !== Providers.openai) return false;
     const modelId = model.toLowerCase().split('/').pop() ?? '';
-    return /^gpt-5\.(?:4|5|6)(?:$|-)/.test(modelId);
+    return isOpenAIGptVersionGTE(modelId, 5, 4);
 }
 
 function hasExplicitPromptCacheBreakpoint(item: ResponseInputItem): boolean {
@@ -130,7 +130,7 @@ function configureOpenAIPromptCaching(
     model: string,
     promptCacheKey: string | undefined,
 ): OpenAIPromptCacheConfig {
-    if (!promptCacheKey || !model.toLowerCase().startsWith('gpt-5.6')) {
+    if (!promptCacheKey || !isOpenAIGptVersionGTE(model, 5, 6)) {
         return { input };
     }
 

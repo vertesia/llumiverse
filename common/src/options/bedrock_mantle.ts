@@ -8,7 +8,7 @@ import type {
 import { type ModelOptionInfoItem, type ModelOptions, type ModelOptionsInfo, OptionType } from '../types.js';
 import { getAnthropicOptions } from './anthropic.js';
 import { textOptionsFallback } from './fallback.js';
-import { isModelFamilyVersionGTE } from './version-parsing.js';
+import { getOpenAIReasoningEffortLevels, isModelFamilyVersionGTE } from './version-parsing.js';
 
 // The option shapes are DERIVED, not declared. Each schema in `../schemas/model-options.js` is the
 // single definition of its option set: it is what the OpenAPI document publishes, what AJV enforces,
@@ -139,9 +139,12 @@ function maxTokensOption(model: string): ModelOptionInfoItem {
 function getResponsesOptions(model: string): ModelOptionsInfo {
     const normalized = model.toLowerCase();
     const isGrok = normalized.startsWith('xai.grok-');
+    const openAiEffortLevels = getOpenAIReasoningEffortLevels(normalized);
     const reasoningEffortEnum: Record<string, string> = isGrok
         ? { none: 'none', low: 'low', medium: 'medium', high: 'high' }
-        : { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh' };
+        : openAiEffortLevels
+          ? Object.fromEntries(Object.values(openAiEffortLevels).map((value) => [value, value]))
+          : { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh' };
     const reasoningEffortDefault = isGrok ? 'low' : 'medium';
     const options: ModelOptionInfoItem[] = [maxTokensOption(model)];
 

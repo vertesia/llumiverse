@@ -72,7 +72,7 @@ describe('OpenAI Responses reasoning', () => {
         );
     });
 
-    it.each(['gpt-5.4', 'gpt-5.5', 'gpt-5.6', 'gpt-5.6-sol'])(
+    it.each(['gpt-5.4', 'gpt-5.5', 'gpt-5.6', 'gpt-5.6-sol', 'gpt-5.7'])(
         'uses current-turn reasoning context for %s',
         async (model) => {
             const create = vi.fn(async (_request: unknown) => response());
