@@ -254,11 +254,13 @@ describe('Bedrock Mantle metadata', () => {
         ['ai21.jamba-1-5-mini-v1:0', true],
         ['amazon.nova-premier-v1:0', true],
         ['amazon.nova-pro-v1:0', true],
+        ['deepseek.r1-v1:0', false],
         ['deepseek.v3-v1:0', true],
         ['deepseek.v3.2', true],
         ['meta.llama3-2-90b-instruct-v1:0', true],
         ['meta.llama4-scout-17b-instruct-v1:0', true],
         ['mistral.mistral-large-3-675b-instruct', true],
+        ['openai.gpt-oss-120b-1:0', true],
         ['qwen.qwen3-235b-a22b-2507-v1:0', true],
         ['qwen.qwen3-32b-v1:0', true],
         ['writer.palmyra-vision-7b', true],
@@ -272,6 +274,13 @@ describe('Bedrock Mantle metadata', () => {
 
         expect(llama).toMatchObject({ tool_support: true, tool_support_streaming: false });
         expect(nova).toMatchObject({ tool_support: true, tool_support_streaming: true });
+    });
+
+    it('does not assume tool support for an unknown Bedrock Runtime model', () => {
+        expect(getModelCapabilities('future-provider.unknown-chat-v1', Providers.bedrock)).toMatchObject({
+            tool_support: false,
+            tool_support_streaming: false,
+        });
     });
 
     it.each([

@@ -188,16 +188,8 @@ function getLimits(model: string): Pick<BedrockModelKnowledge, 'context_window' 
 }
 
 function getRuntimeToolSupport(model: string): Pick<ModelCapabilities, 'tool_support' | 'tool_support_streaming'> {
-    const nonToolModel = includesAny(model, [
-        'nova-canvas',
-        'nova-reel',
-        'titan-image-generator',
-        'embedding',
-        'embed',
-        'rerank',
-    ]);
-    let toolSupport = !nonToolModel;
-    let streaming = !nonToolModel;
+    let toolSupport = false;
+    let streaming = false;
 
     if (model.includes('anthropic.claude')) {
         toolSupport = true;
@@ -222,6 +214,12 @@ function getRuntimeToolSupport(model: string): Pick<ModelCapabilities, 'tool_sup
     } else if (includesAny(model, ['qwen.qwen3-235b', 'qwen.qwen3-32b'])) {
         toolSupport = true;
         streaming = false;
+    } else if (model.startsWith('deepseek.') && !model.includes('deepseek.r1')) {
+        toolSupport = true;
+        streaming = false;
+    } else if (model.startsWith('openai.gpt-') || model.startsWith('xai.grok-')) {
+        toolSupport = true;
+        streaming = true;
     } else if (includesAny(model, ['mistral.mistral-large', 'mistral.pixtral'])) {
         toolSupport = true;
     } else if (model.includes('twelvelabs.pegasus')) {
