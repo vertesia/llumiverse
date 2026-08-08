@@ -39,15 +39,20 @@ describe('OpenAI context window limits', () => {
         },
     );
 
-    it.each(['openai.gpt-5.4', 'us.openai.gpt-5.6-sol-v1:0'])('uses Bedrock Mantle context limits for %s', (model) => {
-        expect(getMaxOutputTokens(model)).toBe(128_000);
-        expect(getContextWindowSize(model)).toBe(272_000);
-    });
+    it.each(['openai.gpt-5.4', 'us.openai.gpt-5.6-sol-v1:0'])(
+        'does not infer transport limits from a source-qualified model ID for %s',
+        (model) => {
+            expect(getMaxOutputTokens(model)).toBe(128_000);
+            expect(getContextWindowSize(model)).toBe(1_050_000);
+        },
+    );
 
     it('preserves the larger GPT-5 Pro output limit and o-series limits', () => {
         expect(getMaxOutputTokens('gpt-5-pro')).toBe(272_000);
         expect(getMaxOutputTokens('gpt-5.4-pro')).toBe(128_000);
         expect(getMaxOutputTokens('gpt-6-pro')).toBe(128_000);
         expect(getMaxOutputTokens('o4-mini')).toBe(100_000);
+        expect(getMaxOutputTokens('~O5-PREVIEW')).toBe(100_000);
+        expect(getContextWindowSize('~O5-PREVIEW')).toBe(200_000);
     });
 });

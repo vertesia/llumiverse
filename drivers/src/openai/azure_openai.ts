@@ -86,8 +86,8 @@ export class AzureOpenAIDriver extends OpenAIResponsesDriverBase {
         } catch (error) {
             this.logger.error({ error }, 'Failed to test model for Azure OpenAI listing :');
         }
-        const modelCapability = getModelCapabilities(modelID, 'openai');
-        if (isEmbeddingModel({ id: modelID }, 'openai')) {
+        const modelCapability = getModelCapabilities(modelID, this.provider);
+        if (isEmbeddingModel({ id: modelID }, this.provider)) {
             return [];
         }
         return [

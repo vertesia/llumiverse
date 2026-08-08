@@ -19,6 +19,7 @@ import {
     type ModelSearchPayload,
     modelModalitiesToArray,
     type PromptSegment,
+    Providers,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
     type ToolUse,
@@ -77,7 +78,7 @@ export type VertexAIPrompt = ImagenPrompt | GenerateContentPrompt | ClaudePrompt
 export { trimModelName };
 
 export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, VertexAIPrompt> {
-    static PROVIDER = 'vertexai';
+    static readonly PROVIDER = Providers.vertexai;
     provider = VertexAIDriver.PROVIDER;
 
     aiplatform: v1beta1.ModelServiceClient | undefined;
@@ -687,7 +688,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             globalGoogleResult
                 .filter((model) => !excludedModels.some((excludedModel) => (model.name ?? '').includes(excludedModel)))
                 .map((model) => {
-                    const modelCapability = getModelCapabilities(model.name ?? '', 'vertexai');
+                    const modelCapability = getModelCapabilities(model.name ?? '', Providers.vertexai);
                     return {
                         id: `locations/global/${model.name}`,
                         name: `Global ${model.name?.split('/').pop()}`,
@@ -725,7 +726,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                         const rawModelId = model.name ?? '';
                         const isGlobalOnlyPublisher = publisher === 'xai';
                         const listedModelId = isGlobalOnlyPublisher ? `locations/global/${rawModelId}` : rawModelId;
-                        const modelCapability = getModelCapabilities(listedModelId, 'vertexai');
+                        const modelCapability = getModelCapabilities(listedModelId, Providers.vertexai);
                         return {
                             id: listedModelId,
                             name: isGlobalOnlyPublisher
@@ -767,7 +768,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                         return false;
                     })
                     .map((model) => {
-                        const modelCapability = getModelCapabilities(model.name ?? '', 'vertexai');
+                        const modelCapability = getModelCapabilities(model.name ?? '', Providers.vertexai);
                         return {
                             id: `locations/global/${model.name}`,
                             name: `Global ${model.name?.split('/').pop()}`,
@@ -801,7 +802,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                         return false;
                     })
                     .map((model) => {
-                        const modelCapability = getModelCapabilities(model.name ?? '', 'vertexai');
+                        const modelCapability = getModelCapabilities(model.name ?? '', Providers.vertexai);
                         return {
                             id: `locations/global/${model.name}`,
                             name: `Global ${model.name?.split('/').pop()}`,
@@ -819,7 +820,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             // Add additional models that are not in the listing
             for (const additionalModel of publisherConfig[publisher as Publisher].additional) {
                 const publisherModelName = `publishers/${publisher}/models/${additionalModel}`;
-                const modelCapability = getModelCapabilities(additionalModel, 'vertexai');
+                const modelCapability = getModelCapabilities(additionalModel, Providers.vertexai);
                 models.push({
                     id: publisherModelName,
                     name: additionalModel,

@@ -1,5 +1,5 @@
 import { getMaxOutputTokens } from '@llumiverse/common';
-import { type AIModel, getModelCapabilities, modelModalitiesToArray } from '@llumiverse/core';
+import { type AIModel, getModelCapabilities, modelModalitiesToArray, Providers } from '@llumiverse/core';
 
 export interface VertexOpenMaaSModel {
     publisher: string;
@@ -190,7 +190,7 @@ export function getVertexOpenMaaSRequestModel(
 
 export function vertexOpenMaaSModelToAIModel(entry: VertexOpenMaaSModel, region: string): AIModel {
     const id = `locations/${region}/publishers/${entry.publisher}/models/${entry.model}`;
-    const modelCapability = getModelCapabilities(entry.model, 'vertexai');
+    const modelCapability = getModelCapabilities(entry.model, Providers.vertexai);
     return {
         id,
         name: region === 'global' ? `Global ${entry.model}` : entry.model,

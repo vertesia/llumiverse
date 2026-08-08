@@ -98,7 +98,14 @@ export class GroqDriver extends OpenAIChatCompletionsDriverBase<GroqDriverOption
     async listModels(): Promise<AIModel[]> {
         const models = await this.client.models.list();
         return models.data
-            .filter((model) => !isEmbeddingModel({ id: model.id }, this.provider))
+            .filter((model) => {
+                const id = model.id.toLowerCase();
+                return (
+                    !isEmbeddingModel({ id: model.id }, this.provider) &&
+                    !/(^|[-_.:/])whisper(?:[-_.:/]|$)/.test(id) &&
+                    !/^canopylabs\/orpheus(?:[-_.:/]|$)/.test(id)
+                );
+            })
             .map((model) => {
                 const capabilities = getModelCapabilities(model.id, this.provider);
                 return {

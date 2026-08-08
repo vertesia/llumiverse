@@ -5,7 +5,6 @@ import {
     GetModelCustomizationJobCommand,
     type GetModelCustomizationJobCommandOutput,
     ModelCustomizationJobStatus,
-    ModelModality,
     StopModelCustomizationJobCommand,
 } from '@aws-sdk/client-bedrock';
 import {
@@ -51,6 +50,7 @@ import {
     modelModalitiesToArray,
     type NovaCanvasOptions,
     type PromptSegment,
+    Providers,
     type StatelessExecutionOptions,
     stripBinaryFromConversation,
     stripHeartbeatsFromConversation,
@@ -506,7 +506,7 @@ function formatTwelvelabsPromptForDebug(prompt: TwelvelabsPegasusRequest): Twelv
 }
 
 export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockPrompt> {
-    static PROVIDER = 'bedrock';
+    static readonly PROVIDER = Providers.bedrock;
 
     provider = BedrockDriver.PROVIDER;
 
@@ -1881,12 +1881,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 provider: this.provider,
                 owner: m.providerName,
                 can_stream: m.responseStreamingSupported ?? false,
-                input_modalities: m.inputModalities
-                    ? formatAmazonModalities(m.inputModalities)
-                    : modelModalitiesToArray(modelCapability.input),
-                output_modalities: m.outputModalities
-                    ? formatAmazonModalities(m.outputModalities)
-                    : modelModalitiesToArray(modelCapability.output),
+                input_modalities: modelModalitiesToArray(modelCapability.input),
+                output_modalities: modelModalitiesToArray(modelCapability.output),
                 tool_support: modelCapability.tool_support,
             };
 
@@ -1900,7 +1896,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     throw new Error('Model ID not found');
                 }
 
-                const modelCapability = getModelCapabilities(m.modelArn, this.provider);
+                const capabilityModelId = m.baseModelName ?? m.modelArn;
+                if (isEmbeddingModel({ id: capabilityModelId }, this.provider)) return;
+                const modelCapability = getModelCapabilities(capabilityModelId, this.provider);
 
                 const model: AIModel = {
                     id: m.modelArn,
@@ -2308,25 +2306,4 @@ export function fixOrphanedToolResults(messages: Message[]): Message[] {
         result.push(filtered.length === message.content.length ? message : { ...message, content: filtered });
     }
     return result;
-}
-
-function formatAmazonModalities(modalities: ModelModality[]): string[] {
-    const standardizedModalities: string[] = [];
-    for (const modality of modalities) {
-        if (modality === ModelModality.TEXT) {
-            standardizedModalities.push('text');
-        } else if (modality === ModelModality.IMAGE) {
-            standardizedModalities.push('image');
-        } else if (modality === ModelModality.EMBEDDING) {
-            standardizedModalities.push('embedding');
-        } else if (modality === 'SPEECH') {
-            standardizedModalities.push('audio');
-        } else if (modality === 'VIDEO') {
-            standardizedModalities.push('video');
-        } else {
-            // Handle other modalities as needed
-            standardizedModalities.push((modality as string).toString().toLowerCase());
-        }
-    }
-    return standardizedModalities;
 }

@@ -1,22 +1,16 @@
 import { getModelCapabilitiesAnthropic } from './capability/anthropic.js';
+import { getModelCapabilitiesAzureFoundry } from './capability/azure_foundry.js';
 import { getBedrockModelCapabilities, getBedrockModelKnowledge } from './capability/bedrock-models.js';
 import { getModelCapabilitiesOpenAI } from './capability/openai.js';
 import { getModelCapabilitiesVertexAI } from './capability/vertexai.js';
 import { getContextWindowSize, getMaxOutputTokens } from './options/context-windows.js';
-import { getOpenAIReasoningEffortLevels, isGeminiModelVersionGte } from './options/version-parsing.js';
-import type { ModelCapabilities, ModelModalities } from './types.js';
+import {
+    getOpenAIReasoningEffortLevels,
+    isGeminiModelVersionGte,
+    isModelFamilyVersionGTE,
+} from './options/version-parsing.js';
+import type { ModelCapabilities } from './types.js';
 import { Providers } from './types.js';
-
-export interface ModelDirectoryMetadata {
-    type?: string;
-    input_modalities?: readonly string[];
-    output_modalities?: readonly string[];
-    tool_support?: boolean;
-    tool_support_streaming?: boolean;
-    context_window?: number;
-    max_output_tokens?: number;
-    supported_parameters?: readonly string[];
-}
 
 export interface ModelProfile {
     model_id: string;
@@ -43,47 +37,36 @@ const EXACT_MODEL_OVERRIDES: Record<string, ModelProfileOverride> = {
     },
 };
 
-const PROVIDER_MODEL_OVERRIDES: Partial<Record<Providers, Record<string, ModelProfileOverride>>> = {
-    [Providers.bedrock_mantle]: {
-        'openai.gpt-5.5': { context_window: 272_000, max_output_tokens: 128_000 },
-        'openai.gpt-5.6': { context_window: 272_000, max_output_tokens: 128_000 },
-    },
-};
-
 const GENERIC_CAPABILITIES: ModelCapabilities = {
     input: { text: true },
     output: { text: true },
-    tool_support: true,
-    tool_support_streaming: true,
 };
 
-function normalizeModelId(model: string): string {
-    const normalized = model.trim().toLowerCase();
+function normalizeSourceModelId(model: string): string {
+    const normalized = model.trim().toLowerCase().replace(/^~/, '');
     const slash = normalized.lastIndexOf('/');
-    return slash === -1 ? normalized : normalized.slice(slash + 1);
+    const leaf = slash === -1 ? normalized : normalized.slice(slash + 1);
+    return leaf.replace(/^(?:global|us|eu|apac)\./, '').replace(/^(?:openai|anthropic|google|xai)\./, '');
 }
 
 function getModelAliases(model: string): string[] {
     const normalized = model.trim().toLowerCase();
-    const aliases = [normalized, normalizeModelId(normalized)];
-    const inferenceProfile = normalized.lastIndexOf('inference-profile/');
-    if (inferenceProfile !== -1) {
-        aliases.push(normalizeModelId(normalized.slice(inferenceProfile + 'inference-profile/'.length)));
-    }
+    const aliases = [normalized, normalizeSourceModelId(normalized)];
     return [...new Set(aliases)];
 }
 
 function inferFamily(model: string): { family: string; source_provider?: string } {
-    const normalized = normalizeModelId(model);
-    if (normalized.includes('embedding') || normalized.includes('embed') || normalized.includes('vector')) {
+    const normalized = normalizeSourceModelId(model);
+    if (/(^|[-_.:])(?:embed|embedding|vector)(?:[-_.:]|$)/.test(normalized)) {
         return { family: 'embedding' };
     }
+    if (normalized.includes('prompt-guard')) return { family: 'moderation' };
     if (normalized.includes('gpt-image') || normalized.includes('dall-e') || normalized.includes('imagen-')) {
         return { family: 'image', source_provider: normalized.includes('imagen') ? 'google' : 'openai' };
     }
     if (normalized.includes('gemini')) return { family: 'gemini', source_provider: 'google' };
     if (normalized.includes('claude')) return { family: 'claude', source_provider: 'anthropic' };
-    if (normalized.includes('gpt') || normalized.startsWith('o1') || normalized.startsWith('o3')) {
+    if (normalized.includes('gpt') || /^o\d+(?:[-_.]|$)/.test(normalized)) {
         return { family: 'gpt', source_provider: 'openai' };
     }
     if (normalized.includes('grok')) return { family: 'grok', source_provider: 'xai' };
@@ -123,11 +106,21 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
                 tool_support: false,
                 tool_support_streaming: false,
             };
+        case 'moderation':
+            return {
+                input: { text: true },
+                output: { text: true },
+                tool_support: false,
+                tool_support_streaming: false,
+            };
         case 'image':
             return { input: { text: true, image: true }, output: { image: true }, tool_support: false };
         case 'grok':
             return {
-                input: { text: true, image: model.includes('vision') },
+                input: {
+                    text: true,
+                    image: model.includes('vision') || isModelFamilyVersionGTE(model, 'grok-', 4, 3),
+                },
                 output: { text: true },
                 tool_support: true,
             };
@@ -172,17 +165,16 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
 
 function applyProviderOverlay(
     model: string,
-    provider: string | Providers | undefined,
-    family: string,
+    sourceModel: string,
+    provider: Providers,
     capabilities: ModelCapabilities,
 ): { capabilities: ModelCapabilities; context_window?: number; max_output_tokens?: number } {
-    const normalizedProvider = provider?.toLowerCase();
-    if (normalizedProvider === 'bedrock') {
+    if (provider === Providers.bedrock) {
         const bedrock = getBedrockModelCapabilities(model, 'runtime');
         const knowledge = getBedrockModelKnowledge(model);
         return { capabilities: bedrock, ...knowledge };
     }
-    if (normalizedProvider === 'bedrock_mantle') {
+    if (provider === Providers.bedrock_mantle) {
         const bedrock = getBedrockModelCapabilities(model, 'mantle');
         const knowledge = getBedrockModelKnowledge(model);
         return { capabilities: bedrock, ...knowledge };
@@ -190,123 +182,103 @@ function applyProviderOverlay(
 
     // OpenRouter and other OpenAI-compatible transports retain the source model's semantic
     // capabilities, but cannot expose provider-native fields such as Vertex Flex or thinking_level.
-    if (normalizedProvider === 'openai_compatible') {
+    if (provider === Providers.openai_compatible) {
         return {
             capabilities: {
                 ...capabilities,
                 tool_support_streaming: capabilities.tool_support_streaming ?? capabilities.tool_support,
             },
-            context_window: getContextWindowSize(model),
-            max_output_tokens: getMaxOutputTokens(model),
+            context_window: getContextWindowSize(sourceModel),
+            max_output_tokens: getMaxOutputTokens(sourceModel),
         };
     }
 
-    if (family === 'gpt' && normalizedProvider === 'azure_openai') {
+    if (provider === Providers.azure_foundry) {
         return {
-            capabilities,
-            context_window: getContextWindowSize(model),
-            max_output_tokens: getMaxOutputTokens(model),
+            capabilities: getModelCapabilitiesAzureFoundry(model),
+            context_window: getContextWindowSize(sourceModel),
+            max_output_tokens: getMaxOutputTokens(sourceModel),
         };
     }
-    return { capabilities, context_window: getContextWindowSize(model), max_output_tokens: getMaxOutputTokens(model) };
-}
 
-function applyListingMetadata(profile: ModelProfile, metadata?: ModelDirectoryMetadata): ModelProfile {
-    if (!metadata) return profile;
-    const input = metadata.input_modalities
-        ? Object.fromEntries(metadata.input_modalities.map((modality) => [modality, true]))
-        : profile.capabilities.input;
-    const output = metadata.output_modalities
-        ? Object.fromEntries(metadata.output_modalities.map((modality) => [modality, true]))
-        : profile.capabilities.output;
     return {
-        ...profile,
-        capabilities: {
-            ...profile.capabilities,
-            input: input as ModelModalities,
-            output: output as ModelModalities,
-            ...(metadata.tool_support !== undefined && { tool_support: metadata.tool_support }),
-            ...(metadata.tool_support_streaming !== undefined && {
-                tool_support_streaming: metadata.tool_support_streaming,
-            }),
-        },
-        ...(metadata.context_window !== undefined && { context_window: metadata.context_window }),
-        ...(metadata.max_output_tokens !== undefined && { max_output_tokens: metadata.max_output_tokens }),
+        capabilities,
+        context_window: getContextWindowSize(sourceModel),
+        max_output_tokens: getMaxOutputTokens(sourceModel),
     };
 }
 
-export function resolveModelProfile(
-    model: string,
-    provider?: string | Providers,
-    metadata?: ModelDirectoryMetadata,
-): ModelProfile {
-    const canonical_id = normalizeModelId(model);
+function getReasoningEffortLevels(model: string, family: string, provider: Providers): readonly string[] | undefined {
+    if (family === 'gpt') {
+        if (model.includes('gpt-oss')) {
+            return provider === Providers.togetherai || provider === Providers.openai_compatible
+                ? ['low', 'medium', 'high']
+                : undefined;
+        }
+        if (
+            provider === Providers.openai ||
+            provider === Providers.azure_openai ||
+            provider === Providers.openai_compatible
+        ) {
+            if (/^o\d+(?:[-_.]|$)/.test(model)) return ['low', 'medium', 'high'];
+            return Object.values(getOpenAIReasoningEffortLevels(model) ?? {});
+        }
+        return undefined;
+    }
+    if (family === 'gemini' && provider === Providers.openai_compatible && isGeminiModelVersionGte(model, '3.5')) {
+        return ['minimal', 'low', 'medium', 'high'];
+    }
+    if (provider === Providers.mistralai && /mistral-(?:small-latest|medium-3-5)/.test(model)) {
+        return ['none', 'high'];
+    }
+    if (provider === Providers.xai && family === 'grok') {
+        if (/grok-4\.20[^/]*multi-agent/.test(model)) return ['low', 'medium', 'high', 'xhigh'];
+        if (isSingleDigitGrokVersionGte(model, 4, 5)) return ['low', 'medium', 'high'];
+        if (isSingleDigitGrokVersionGte(model, 4, 3)) return ['none', 'low', 'medium', 'high'];
+    }
+    return undefined;
+}
+
+function isSingleDigitGrokVersionGte(model: string, targetMajor: number, targetMinor: number): boolean {
+    const match = model.match(/grok-(\d+)(?:\.(\d))?(?:[-_.]|$)/);
+    if (!match) return false;
+    const major = Number(match[1]);
+    const minor = Number(match[2] ?? 0);
+    return major > targetMajor || (major === targetMajor && minor >= targetMinor);
+}
+
+export function resolveModelProfile(model: string, provider: Providers): ModelProfile {
+    const canonical_id = normalizeSourceModelId(model);
     const exactOverride = EXACT_MODEL_OVERRIDES[canonical_id];
     const inferred = inferFamily(model);
     const family = exactOverride?.family ?? inferred.family;
     const source_provider = exactOverride?.source_provider ?? inferred.source_provider;
+    const canonicalCapabilities = getCanonicalCapabilities(canonical_id, family);
+    const vertexCapabilities = provider === Providers.vertexai ? getModelCapabilitiesVertexAI(model) : undefined;
+    const hasVertexCapabilities =
+        vertexCapabilities &&
+        (Object.values(vertexCapabilities.input).some((value) => value === true) ||
+            Object.values(vertexCapabilities.output).some((value) => value === true) ||
+            vertexCapabilities.tool_support !== undefined);
     const baseCapabilities = {
-        ...(provider?.toLowerCase() === Providers.vertexai
-            ? getModelCapabilitiesVertexAI(model)
-            : getCanonicalCapabilities(model, family)),
+        ...(hasVertexCapabilities ? vertexCapabilities : canonicalCapabilities),
         ...exactOverride?.capabilities,
     };
-    const overlay = applyProviderOverlay(model, provider, family, baseCapabilities);
-    const reasoningEffortLevels =
-        family === 'gpt'
-            ? Object.values(getOpenAIReasoningEffortLevels(model) ?? {}).map((value) => value)
-            : isGeminiModelVersionGte(model, '3.5')
-              ? ['minimal', 'low', 'medium', 'high']
-              : undefined;
-    const providerOverride = provider
-        ? PROVIDER_MODEL_OVERRIDES[provider.toLowerCase() as Providers]?.[canonical_id]
-        : undefined;
-    const profile = applyListingMetadata(
-        {
-            model_id: model,
-            canonical_id,
-            family,
-            source_provider,
-            capabilities: {
-                ...overlay.capabilities,
-                ...providerOverride?.capabilities,
-                ...(providerOverride?.capabilities?.input && {
-                    input: { ...overlay.capabilities.input, ...providerOverride.capabilities.input },
-                }),
-                ...(providerOverride?.capabilities?.output && {
-                    output: { ...overlay.capabilities.output, ...providerOverride.capabilities.output },
-                }),
-            },
-            context_window: providerOverride?.context_window ?? overlay.context_window,
-            max_output_tokens: providerOverride?.max_output_tokens ?? overlay.max_output_tokens,
-            reasoning_effort_levels: reasoningEffortLevels,
-        },
-        metadata,
-    );
-    return profile;
+    const overlay = applyProviderOverlay(model, canonical_id, provider, baseCapabilities);
+    const reasoningEffortLevels = getReasoningEffortLevels(canonical_id, family, provider);
+    return {
+        model_id: model,
+        canonical_id,
+        family,
+        source_provider,
+        capabilities: overlay.capabilities,
+        context_window: overlay.context_window,
+        max_output_tokens: overlay.max_output_tokens,
+        ...(reasoningEffortLevels?.length && { reasoning_effort_levels: reasoningEffortLevels }),
+    };
 }
 
-export function isModelDirectoryEmbedding(model: string, metadata?: ModelDirectoryMetadata): boolean {
-    return isModelDirectoryNonInference(model, metadata, 'embedding');
-}
-
-export function isModelDirectoryNonInference(
-    model: string,
-    metadata?: ModelDirectoryMetadata,
-    kind?: 'embedding',
-): boolean {
-    const type = metadata?.type?.toLowerCase();
-    if (type === 'embedding' || type === 'audio' || type === 'video' || type === 'moderation') {
-        return true;
-    }
-    if (metadata?.output_modalities?.some((modality) => /embed|vector|audio|video/i.test(modality))) return true;
-
+export function isModelDirectoryEmbedding(model: string): boolean {
     const aliases = getModelAliases(model);
-    return aliases.some((alias) =>
-        kind === 'embedding'
-            ? /(^|[-_.:])(?:embed|embedding|vector)(?:[-_.:]|$)/.test(alias)
-            : /(?:embed|embedding|vector|whisper|speech|tts|audio|orpheus|prompt-guard|moderation|nova-reel|sora|veo|pegasus)/.test(
-                  alias,
-              ),
-    );
+    return aliases.some((alias) => /(^|[-_.:])(?:embed|embedding|vector)(?:[-_.:]|$)/.test(alias));
 }

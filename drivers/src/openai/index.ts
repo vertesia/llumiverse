@@ -569,25 +569,12 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 
         //Some of these use the completions API instead of the chat completions API.
         //Others are for non-text input modalities. Therefore common to both.
-        const wordBlacklist = [
-            'embed',
-            'whisper',
-            'transcribe',
-            'audio',
-            'moderation',
-            'tts',
-            'realtime',
-            'babbage',
-            'davinci',
-            'codex',
-            'o1-pro',
-            'computer-use',
-            'sora',
-        ];
+        const unsupportedEndpointPattern =
+            /(?:^|[-_.:/])(?:embed|embeddings?|whisper|transcribe|audio|moderation|tts|realtime|babbage|davinci|computer[-_.:]use|sora)(?:[-_.:/]|$)/;
 
         //OpenAI has very little information, filtering based on name.
         result = result.filter((m) => {
-            return !wordBlacklist.some((word) => m.id.includes(word));
+            return !unsupportedEndpointPattern.test(m.id.toLowerCase());
         });
 
         const models = filter ? result.filter(filter) : result;
@@ -1058,7 +1045,7 @@ function convertRoles(items: ResponseInputItem[], model: string): ResponseInputI
 
 //Structured output support is typically aligned with tool use support
 //Not true for realtime models, which do not support structured output, but do support tool use.
-function supportsSchema(model: string, provider: string | Providers): boolean {
+function supportsSchema(model: string, provider: Providers): boolean {
     const realtimeModel = model.includes('realtime');
     if (realtimeModel) {
         return false;

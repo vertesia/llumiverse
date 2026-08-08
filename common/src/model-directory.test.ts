@@ -54,21 +54,6 @@ describe('central model directory', () => {
         expect(resolveModelProfile('anthropic/claude-opus-6', Providers.openai_compatible).family).toBe('claude');
     });
 
-    it('allows trusted listing metadata to override inferred endpoint behavior', () => {
-        const profile = resolveModelProfile('google/gemini-3.5-flash', Providers.openai_compatible, {
-            input_modalities: ['text'],
-            output_modalities: ['text'],
-            tool_support: false,
-            context_window: 128_000,
-            max_output_tokens: 8_192,
-        });
-
-        expect(profile.capabilities.input.image).toBeUndefined();
-        expect(profile.capabilities.tool_support).toBe(false);
-        expect(profile.context_window).toBe(128_000);
-        expect(profile.max_output_tokens).toBe(8_192);
-    });
-
     it('classifies embeddings as non-inference models', () => {
         const profile = resolveModelProfile('google/text-embedding-005', Providers.openai_compatible);
         expect(profile.family).toBe('embedding');
@@ -90,6 +75,12 @@ describe('central model directory', () => {
                 Providers.bedrock,
             ).family,
         ).toBe('claude');
+        expect(resolveModelProfile('OPENAI/GPT-5.6-SOL', Providers.openai_compatible).canonical_id).toBe('gpt-5.6-sol');
+        expect(resolveModelProfile('openai/gpt-oss-120b', Providers.openai_compatible).capabilities.input.image).toBe(
+            false,
+        );
+        expect(resolveModelProfile('o5-preview', Providers.openai).family).toBe('gpt');
+        expect(resolveModelProfile('openai/gpt-5.6-sol-batch', Providers.openai_compatible).family).toBe('gpt');
     });
 
     it('uses open-model family semantics for Together and OpenAI-compatible catalogs', () => {
@@ -101,5 +92,67 @@ describe('central model directory', () => {
         expect(resolveModelProfile('google/gemma-3-1B-it', Providers.togetherai).capabilities.input.image).toBe(false);
         expect(resolveModelProfile('llama-4-scout', Providers.openai_compatible).capabilities.input.image).toBe(true);
         expect(resolveModelProfile('qwen3-vl-32b', Providers.openai_compatible).capabilities.input.image).toBe(true);
+    });
+
+    it('keeps source identity separate from transport-specific limits', () => {
+        expect(resolveModelProfile('openai.gpt-5.6-sol', Providers.openai_compatible).context_window).toBe(1_050_000);
+        expect(resolveModelProfile('openai.gpt-5.6-sol', Providers.bedrock_mantle).context_window).toBe(272_000);
+    });
+
+    it('uses conservative capabilities and options for genuinely unknown models', () => {
+        const profile = resolveModelProfile('future-provider/new-capability-v1', Providers.openai_compatible);
+        expect(profile.capabilities).toMatchObject({ input: { text: true }, output: { text: true } });
+        expect(profile.capabilities.tool_support).toBeUndefined();
+        expect(
+            getOptions(profile.model_id, Providers.openai_compatible).options.map((option) => option.name),
+        ).not.toContain('effort');
+        expect(resolveModelProfile('future-provider/new-capability-v1', Providers.vertexai).capabilities).toMatchObject(
+            {
+                input: { text: true },
+                output: { text: true },
+            },
+        );
+        expect(resolveModelProfile('vectorized-chat-v1', Providers.openai_compatible).family).toBe('generic');
+    });
+
+    it('keeps moderation models executable without advertising tool use', () => {
+        const profile = resolveModelProfile('meta-llama/llama-prompt-guard-2-86m', Providers.groq);
+        expect(profile.family).toBe('moderation');
+        expect(profile.capabilities).toMatchObject({
+            input: { text: true },
+            output: { text: true },
+            tool_support: false,
+            tool_support_streaming: false,
+        });
+    });
+
+    it('exposes reasoning effort only when it is compatible with the transport', () => {
+        expect(resolveModelProfile('openai/gpt-oss-120b', Providers.togetherai).reasoning_effort_levels).toEqual([
+            'low',
+            'medium',
+            'high',
+        ]);
+        expect(resolveModelProfile('gpt-5.6-sol', Providers.togetherai).reasoning_effort_levels).toBeUndefined();
+        expect(resolveModelProfile('mistral-small-latest', Providers.mistralai).reasoning_effort_levels).toEqual([
+            'none',
+            'high',
+        ]);
+        expect(resolveModelProfile('grok-4.3', Providers.xai).reasoning_effort_levels).toEqual([
+            'none',
+            'low',
+            'medium',
+            'high',
+        ]);
+        expect(resolveModelProfile('grok-4.5', Providers.xai).reasoning_effort_levels).toEqual([
+            'low',
+            'medium',
+            'high',
+        ]);
+        expect(resolveModelProfile('grok-4.20-multi-agent', Providers.xai).reasoning_effort_levels).toEqual([
+            'low',
+            'medium',
+            'high',
+            'xhigh',
+        ]);
     });
 });

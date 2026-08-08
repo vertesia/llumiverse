@@ -169,9 +169,7 @@ export function getOpenAiOptions(
             } else {
                 max_tokens_limit = 100000;
             }
-        } else if (model.includes('o3')) {
-            max_tokens_limit = 100000;
-        } else if (model.includes('o4')) {
+        } else if (isOSeriesModel(model)) {
             max_tokens_limit = 100000;
         } else if (isOpenAIGptVersionGTE(model, 5, 0)) {
             max_tokens_limit = profile.max_output_tokens ?? getMaxOutputTokens(model);
@@ -196,7 +194,7 @@ export function getOpenAiOptions(
 
         const gptEffortLevels = getOpenAIReasoningEffortLevels(model);
         const reasoningOptions: ModelOptionInfoItem[] =
-            gptEffortLevels || model.includes('o3') || model.includes('o4') || isO1Full(model)
+            gptEffortLevels || isOSeriesModel(model)
                 ? [
                       {
                           name: SharedOptions.effort,
@@ -294,7 +292,7 @@ export function getOpenAiOptions(
     }
 }
 
-/** OpenAI-compatible endpoints own model capability detection, so expose effort for any text model. */
+/** Expose only effort values verified for the source model and this transport. */
 export function getOpenAiCompatibleOptions(
     model: string,
     option?: ModelOptions,
@@ -302,25 +300,31 @@ export function getOpenAiCompatibleOptions(
 ): ModelOptionsInfo {
     const options = getOpenAiOptions(model, option, profile);
     const maxOutputTokens = profile.max_output_tokens;
-    const profileEffortLevels = profile.reasoning_effort_levels ? new Set(profile.reasoning_effort_levels) : undefined;
-    const profileOptions: ModelOptionInfoItem[] = options.options.map((item): ModelOptionInfoItem => {
-        if (item.name === SharedOptions.max_tokens && maxOutputTokens !== undefined) {
-            return { ...item, max: maxOutputTokens } as ModelOptionInfoItem;
-        }
-        if (item.name === SharedOptions.effort && item.type === OptionType.enum && profileEffortLevels) {
-            const enumValues = item.enum as Record<string, string>;
-            return {
-                ...item,
-                enum: Object.fromEntries(
-                    Object.entries(enumValues).filter(([, value]) => profileEffortLevels.has(value)),
-                ) as Record<string, string>,
-            } as ModelOptionInfoItem;
-        }
-        return item;
-    });
+    const profileEffortLevels = profile.reasoning_effort_levels?.length
+        ? new Set(profile.reasoning_effort_levels)
+        : undefined;
+    const profileOptions: ModelOptionInfoItem[] = options.options
+        .map((item): ModelOptionInfoItem | null => {
+            if (item.name === SharedOptions.max_tokens && maxOutputTokens !== undefined) {
+                return { ...item, max: maxOutputTokens } as ModelOptionInfoItem;
+            }
+            if (item.name === SharedOptions.effort && item.type === OptionType.enum) {
+                if (!profileEffortLevels) return null;
+                const enumValues = item.enum as Record<string, string>;
+                return {
+                    ...item,
+                    enum: Object.fromEntries(
+                        Object.entries(enumValues).filter(([, value]) => profileEffortLevels.has(value)),
+                    ) as Record<string, string>,
+                } as ModelOptionInfoItem;
+            }
+            return item;
+        })
+        .filter((item): item is ModelOptionInfoItem => item !== null);
     if (profileOptions.some((item) => item.name === SharedOptions.effort) || options._option_id !== 'openai-text') {
         return { ...options, options: profileOptions };
     }
+    if (!profileEffortLevels) return { ...options, options: profileOptions };
     return {
         ...options,
         options: [
@@ -328,17 +332,7 @@ export function getOpenAiCompatibleOptions(
             {
                 name: SharedOptions.effort,
                 type: OptionType.enum,
-                enum: profileEffortLevels
-                    ? Object.fromEntries([...profileEffortLevels].map((value) => [value, value]))
-                    : {
-                          None: 'none',
-                          Minimal: 'minimal',
-                          Low: 'low',
-                          Medium: 'medium',
-                          High: 'high',
-                          XHigh: 'xhigh',
-                          Max: 'max',
-                      },
+                enum: Object.fromEntries([...profileEffortLevels].map((value) => [value, value])),
                 description: 'How much effort the model should put into reasoning, when supported by the endpoint.',
             },
         ],
@@ -356,13 +350,11 @@ function isO1Full(model: string): boolean {
 }
 
 function isReasoningModel(model: string): boolean {
-    const normalized = model.toLowerCase();
-    return (
-        normalized.includes('o1') ||
-        normalized.includes('o3') ||
-        normalized.includes('o4') ||
-        isOpenAIGptVersionGTE(model, 5, 0)
-    );
+    return isOSeriesModel(model) || isOpenAIGptVersionGTE(model, 5, 0);
+}
+
+function isOSeriesModel(model: string): boolean {
+    return /(?:^|[~/.])o\d+(?:[-_.]|$)/.test(model.toLowerCase());
 }
 
 function isVisionModel(model: string): boolean {

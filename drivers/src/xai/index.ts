@@ -1,7 +1,9 @@
 import {
     type AIModel,
     type DriverOptions,
+    getModelCapabilities,
     isEmbeddingModel,
+    modelModalitiesToArray,
     type PromptOptions,
     type PromptSegment,
     Providers,
@@ -71,17 +73,21 @@ export class xAIDriver extends OpenAIResponsesDriverBase {
         const models = lm.models
             .filter((model) => !isEmbeddingModel(model, this.provider))
             .map((model) => {
+                const capabilities = getModelCapabilities(model.id, this.provider);
+                const inputModalities = modelModalitiesToArray(capabilities.input);
+                const outputModalities = modelModalitiesToArray(capabilities.output);
                 return {
                     id: model.id,
                     provider: this.provider,
                     name: model.id,
                     description: `${model.id} by ${model.owned_by}`,
-                    is_multimodal: model.input_modalities.length > 1,
-                    input_modalities: model.input_modalities,
-                    output_modalities: model.output_modalities,
+                    is_multimodal: capabilities.input.image === true,
+                    input_modalities: inputModalities,
+                    output_modalities: outputModalities,
+                    tool_support: capabilities.tool_support,
                     tags: [
-                        ...model.input_modalities.map((m) => `i:${m}`),
-                        ...model.output_modalities.map((m) => `o:${m}`),
+                        ...inputModalities.map((modality) => `i:${modality}`),
+                        ...outputModalities.map((modality) => `o:${modality}`),
                     ],
                 } satisfies AIModel;
             });

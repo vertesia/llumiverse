@@ -9,11 +9,11 @@ import { getOpenAiCompatibleOptions, getOpenAiOptions } from './options/openai.j
 import { getVertexAiOptions } from './options/vertexai.js';
 import { type ModelOptions, type ModelOptionsInfo, Providers } from './types.js';
 
-export function getOptions(model: string, provider?: string | Providers, options?: ModelOptions): ModelOptionsInfo {
+export function getOptions(model: string, provider?: Providers, options?: ModelOptions): ModelOptionsInfo {
     if (!provider) {
         return textOptionsFallback;
     }
-    switch (provider.toLowerCase()) {
+    switch (provider) {
         case Providers.anthropic:
             return getAnthropicOptions(model, options);
         case Providers.bedrock:

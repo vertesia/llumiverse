@@ -4,18 +4,18 @@ import { Providers } from './types.js';
 
 describe('embedding model classification', () => {
     it.each([
-        [{ id: 'text-embedding-3-small' }, 'openai'],
-        [{ id: 'text-embedding-ada-002' }, 'azure_openai'],
-        [{ id: 'mistral-embed' }, 'mistralai'],
-        [{ id: 'embedding-model', output_modalities: ['vectors'] }, 'xai'],
-        [{ id: 'chat-model', type: 'embedding' }, 'togetherai'],
+        [{ id: 'text-embedding-3-small' }, Providers.openai],
+        [{ id: 'text-embedding-ada-002' }, Providers.azure_openai],
+        [{ id: 'mistral-embed' }, Providers.mistralai],
+        [{ id: 'embedding-model', output_modalities: ['vectors'] }, Providers.xai],
+        [{ id: 'chat-model', type: 'embedding' }, Providers.togetherai],
     ] as const)('recognizes an embedding listing: %s', (model, provider) => {
         expect(isEmbeddingModel(model, provider)).toBe(true);
     });
 
     it('does not classify normal inference models as embeddings', () => {
-        expect(isEmbeddingModel({ id: 'gpt-5.6-sol' }, 'openai')).toBe(false);
-        expect(isEmbeddingModel({ id: 'grok-4.3', output_modalities: ['text'] }, 'xai')).toBe(false);
+        expect(isEmbeddingModel({ id: 'gpt-5.6-sol' }, Providers.openai)).toBe(false);
+        expect(isEmbeddingModel({ id: 'grok-4.3', output_modalities: ['text'] }, Providers.xai)).toBe(false);
     });
 
     it('does not hide non-embedding models when capability metadata is incomplete', () => {
@@ -42,11 +42,17 @@ describe('xAI Grok tool capabilities', () => {
         },
     );
 
-    it('enables streaming tool use when provider is omitted for grok-* models', () => {
-        const caps = getModelCapabilities('grok-3');
-        expect(caps.tool_support).toBe(true);
-        expect(caps.tool_support_streaming).toBeUndefined();
-        expect(supportsToolUse('grok-3', undefined, true)).toBe(true);
+    it('carries verified image input support into current and future Grok 4 models', () => {
+        expect(getModelCapabilities('grok-4.20', Providers.xai).input.image).toBe(true);
+        expect(getModelCapabilities('grok-4.5', Providers.xai).input.image).toBe(true);
+    });
+
+    it('masks unsupported platform audio and video modalities without mutating source metadata', () => {
+        const caps = getModelCapabilities('future-audio-video-model', Providers.openai_compatible);
+        expect(caps.input.audio).toBe(false);
+        expect(caps.input.video).toBe(false);
+        expect(caps.output.audio).toBe(false);
+        expect(caps.output.video).toBe(false);
     });
 });
 

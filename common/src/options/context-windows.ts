@@ -36,7 +36,7 @@ export function getMaxOutputTokens(model: string): number {
     // OpenAI o-series
     if (model.includes('o1-mini')) return 65_536;
     if (model.includes('o1')) return 100_000;
-    if (model.includes('o3') || model.includes('o4')) return 100_000;
+    if (/(?:^|[~/.])o\d+(?:[-_.]|$)/.test(model.toLowerCase())) return 100_000;
     // GPT models
     const gptVersion = parseOpenAIGptVersion(model);
     if (isOpenAIGptProModel(model) && gptVersion?.major === 5 && gptVersion.minor === 0) return 272_000;
@@ -98,10 +98,8 @@ export function getContextWindowSize(model: string): number {
         return 1_000_000; // Gemini 1.5, 2.0, 2.5, 3 all support 1M
     }
     // OpenAI o-series (check before gpt-4 to avoid false matches)
-    if (model.includes('o1') || model.includes('o3') || model.includes('o4')) return 200_000;
-    // GPT models — check specific variants before generic gpt-4
-    // Bedrock Mantle exposes its GPT models with an openai.gpt-* identifier and a smaller context window.
-    if (isModelFamilyVersionGTE(model, 'openai.gpt-', 5, 4)) return 272_000;
+    if (/(?:^|[~/.])o\d+(?:[-_.]|$)/.test(model.toLowerCase())) return 200_000;
+    // GPT models — provider-specific limits are applied by the provider overlay.
     if (isOpenAIGptVersionGTE(model, 5, 4)) return 1_050_000;
     if (isOpenAIGptVersionGTE(model, 5, 0)) return 400_000;
     if (model.includes('gpt-oss')) return 131_072;

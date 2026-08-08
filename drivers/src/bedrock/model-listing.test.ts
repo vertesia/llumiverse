@@ -62,13 +62,17 @@ function createMockService(): Bedrock {
     });
 }
 
-function mockModelListingMethods(service: Bedrock, foundationModels: ListFoundationModelsCommandOutput): void {
+function mockModelListingMethods(
+    service: Bedrock,
+    foundationModels: ListFoundationModelsCommandOutput,
+    customModels: ListCustomModelsCommandOutput = emptyCustomModels,
+): void {
     const listFoundationModels = vi.fn(
         async (_input: ListFoundationModelsCommandInput): Promise<ListFoundationModelsCommandOutput> =>
             foundationModels,
     );
     const listCustomModels = vi.fn(
-        async (_input: ListCustomModelsCommandInput): Promise<ListCustomModelsCommandOutput> => emptyCustomModels,
+        async (_input: ListCustomModelsCommandInput): Promise<ListCustomModelsCommandOutput> => customModels,
     );
     const listInferenceProfiles = vi.fn(
         async (_input: ListInferenceProfilesCommandInput): Promise<ListInferenceProfilesCommandOutput> =>
@@ -118,6 +122,50 @@ describe('Bedrock Converse model discovery', () => {
 
         expect(await driver.listModels()).toEqual([
             expect.objectContaining({ name: 'DeepSeek V3.2', owner: 'DeepSeek' }),
+        ]);
+    });
+
+    it('excludes foundation embeddings using explicit AWS output modality metadata', async () => {
+        const driver = new BedrockDriver({ region: 'us-east-2' });
+        const service = createMockService();
+        const embedding = {
+            ...foundationModel('amazon.titan-embed-text-v2:0'),
+            outputModalities: ['EMBEDDING'],
+        } satisfies FoundationModelSummary;
+        const foundationModels = {
+            $metadata: {},
+            modelSummaries: [foundationModel('amazon.nova-pro-v1:0'), embedding],
+        } satisfies ListFoundationModelsCommandOutput;
+        mockModelListingMethods(service, foundationModels);
+        vi.spyOn(driver, 'getService').mockReturnValue(service);
+
+        expect((await driver.listModels()).map((model) => model.id)).toEqual(['amazon.nova-pro-v1:0']);
+    });
+
+    it('derives custom-model capabilities from the reported base model identity', async () => {
+        const driver = new BedrockDriver({ region: 'us-east-2' });
+        const service = createMockService();
+        const customModels = {
+            $metadata: {},
+            modelSummaries: [
+                {
+                    modelArn: 'arn:aws:bedrock:us-east-2:123456789012:custom-model/opaque-name',
+                    modelName: 'opaque-name',
+                    creationTime: new Date(0),
+                    baseModelArn: 'arn:aws:bedrock:us-east-2::foundation-model/openai.gpt-5.6-sol',
+                    baseModelName: 'openai.gpt-5.6-sol',
+                },
+            ],
+        } satisfies ListCustomModelsCommandOutput;
+        mockModelListingMethods(service, { $metadata: {}, modelSummaries: [] }, customModels);
+        vi.spyOn(driver, 'getService').mockReturnValue(service);
+
+        expect(await driver.listModels()).toEqual([
+            expect.objectContaining({
+                id: 'arn:aws:bedrock:us-east-2:123456789012:custom-model/opaque-name',
+                input_modalities: ['text', 'image'],
+                output_modalities: ['text'],
+            }),
         ]);
     });
 });

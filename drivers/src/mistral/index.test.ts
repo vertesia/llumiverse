@@ -4,6 +4,25 @@ import { describe, expect, it, vi } from 'vitest';
 import { MistralAIDriver } from './index.js';
 
 describe('MistralAIDriver official SDK transport', () => {
+    it('serializes verified reasoning effort through the native Mistral transport', async () => {
+        const driver = new MistralAIDriver({ apiKey: 'test-key' });
+        const complete = vi.fn(async () => ({
+            choices: [{ index: 0, finishReason: 'stop', message: { role: 'assistant', content: 'done' } }],
+            usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+        }));
+        Object.defineProperty(driver.client.chat, 'complete', { value: complete });
+
+        await driver.requestTextCompletion(
+            { messages: [{ role: 'user', content: 'Think' }] },
+            {
+                model: 'mistral-small-latest',
+                model_options: { _option_id: 'openai-text', effort: 'high' },
+            },
+        );
+
+        expect(complete).toHaveBeenCalledWith(expect.objectContaining({ reasoningEffort: 'high' }));
+    });
+
     it('preserves signed thinking for replay after JSON roundtrip while projecting thoughts by default', async () => {
         const driver = new MistralAIDriver({ apiKey: 'test-key' });
         const response = {

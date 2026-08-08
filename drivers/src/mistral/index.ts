@@ -356,7 +356,7 @@ function buildMistralRequest(
     stream: boolean,
     defaultMaxTokens?: number,
 ): ChatCompletionRequest {
-    const modelOptions = options.model_options as TextFallbackOptions;
+    const modelOptions = options.model_options as TextFallbackOptions & { effort?: string };
     return {
         model: options.model,
         messages: conversation.messages,
@@ -368,8 +368,10 @@ function buildMistralRequest(
         stop: modelOptions?.stop_sequence,
         n: 1,
         tools: options.tools?.map(toMistralTool),
+        reasoningEffort:
+            modelOptions?.effort === 'none' || modelOptions?.effort === 'high' ? modelOptions.effort : undefined,
         stream,
-    };
+    } satisfies ChatCompletionRequest & { reasoningEffort?: 'none' | 'high' };
 }
 
 function toMistralTool(tool: ToolDefinition): ChatCompletionRequestTool {

@@ -253,7 +253,7 @@ describe('BedrockMantleDriver model listing', () => {
                 expect.objectContaining({
                     id: 'google.gemma-4-31b',
                     owner: 'Google',
-                    input_modalities: ['text', 'image', 'video'],
+                    input_modalities: ['text', 'image'],
                 }),
                 expect.objectContaining({
                     id: 'openai.gpt-oss-120b',

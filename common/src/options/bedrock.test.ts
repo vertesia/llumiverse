@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { getBedrockModelKnowledge } from '../capability/bedrock-models.js';
 import { getModelCapabilities } from '../capability.js';
+import { resolveModelProfile } from '../model-directory.js';
 import { getOptions } from '../options.js';
 import { OptionType, Providers } from '../types.js';
 import { getBedrockOptions } from './bedrock.js';
@@ -168,8 +169,9 @@ describe('Bedrock Mantle metadata', () => {
         expect(capabilities.output.text).toBe(true);
         expect(capabilities.tool_support).toBe(true);
         expect(capabilities.tool_support_streaming).toBe(true);
-        expect(getContextWindowSize('openai.gpt-5.5')).toBe(272_000);
-        expect(getContextWindowSize('openai.gpt-6.1')).toBe(272_000);
+        expect(resolveModelProfile('openai.gpt-5.5', Providers.bedrock_mantle).context_window).toBe(272_000);
+        expect(resolveModelProfile('openai.gpt-6.1', Providers.bedrock_mantle).context_window).toBe(272_000);
+        expect(getContextWindowSize('openai.gpt-5.5')).toBe(1_050_000);
     });
 
     it('uses Responses options for Grok 4.3 under the Bedrock Mantle provider', () => {
@@ -243,8 +245,8 @@ describe('Bedrock Mantle metadata', () => {
             Providers.bedrock,
         );
 
-        expect(nova.input).toMatchObject({ text: true, image: true, video: true });
-        expect(pegasus.input).toMatchObject({ text: true, video: true });
+        expect(nova.input).toMatchObject({ text: true, image: true, video: false });
+        expect(pegasus.input).toMatchObject({ text: true, video: false });
     });
 
     it.each([
