@@ -14,6 +14,7 @@ import {
     getConversationMeta,
     getModelCapabilities,
     incrementConversationTurn,
+    isDedicatedInferenceModel,
     isOpenAIGptVersionGTE,
     type JSONSchema,
     LlumiverseError,
@@ -574,7 +575,9 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 
         //OpenAI has very little information, filtering based on name.
         result = result.filter((m) => {
-            return !unsupportedEndpointPattern.test(m.id.toLowerCase());
+            return (
+                !unsupportedEndpointPattern.test(m.id.toLowerCase()) && !isDedicatedInferenceModel(m.id, this.provider)
+            );
         });
 
         const models = filter ? result.filter(filter) : result;

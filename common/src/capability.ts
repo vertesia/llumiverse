@@ -42,6 +42,13 @@ export interface ModelListing {
     output_modalities?: readonly string[];
 }
 
+/** Dedicated endpoint models are not executable through the standard inference path. */
+export function isDedicatedInferenceModel(model: string, provider: Providers): boolean {
+    return ['embedding', 'moderation', 'image', 'transcription', 'speech', 'realtime', 'video'].includes(
+        resolveModelProfile(model, provider).family,
+    );
+}
+
 /** Embedding endpoints are not executable through the standard inference path. */
 export function isEmbeddingModel(model: ModelListing, provider: Providers): boolean {
     if (model.type?.toLowerCase() === 'embedding') return true;

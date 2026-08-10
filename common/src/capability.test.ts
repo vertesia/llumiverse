@@ -1,6 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { getModelCapabilities, isEmbeddingModel, supportsToolUse } from './capability.js';
+import { getModelCapabilities, isDedicatedInferenceModel, isEmbeddingModel, supportsToolUse } from './capability.js';
 import { Providers } from './types.js';
+
+describe('dedicated inference model classification', () => {
+    it.each(['gpt-image-1', 'text-embedding-3-small', 'whisper-1', 'sora-2'])(
+        'recognizes %s as a dedicated endpoint model',
+        (model) => {
+            expect(isDedicatedInferenceModel(model, Providers.openai)).toBe(true);
+        },
+    );
+
+    it('keeps unknown future models in normal inference listings', () => {
+        expect(isDedicatedInferenceModel('future-inference-model-v1', Providers.openai)).toBe(false);
+    });
+});
 
 describe('embedding model classification', () => {
     it.each([

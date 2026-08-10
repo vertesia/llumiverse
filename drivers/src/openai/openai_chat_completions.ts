@@ -13,6 +13,7 @@ import {
     getConversationMeta,
     getModelCapabilities,
     incrementConversationTurn,
+    isDedicatedInferenceModel,
     isEmbeddingModel,
     type JSONObject,
     type JSONSchema,
@@ -1437,7 +1438,11 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
 
     async listModels(): Promise<AIModel[]> {
         return (await this.service.models.list()).data
-            .filter((model) => !isEmbeddingModel({ id: model.id }, this.provider))
+            .filter(
+                (model) =>
+                    !isEmbeddingModel({ id: model.id }, this.provider) &&
+                    !isDedicatedInferenceModel(model.id, this.provider),
+            )
             .map((model) => {
                 const capabilities = getModelCapabilities(model.id, this.provider);
                 return {
