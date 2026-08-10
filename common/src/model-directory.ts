@@ -31,6 +31,12 @@ type ModelProfileOverride = Partial<
 };
 
 const EXACT_MODEL_OVERRIDES: Record<string, ModelProfileOverride> = {
+    'chat-latest': {
+        family: 'gpt',
+        source_provider: 'openai',
+        context_window: 400_000,
+        max_output_tokens: 128_000,
+    },
     // OpenAI image endpoints are not text inference models even though their IDs contain `gpt`.
     'gpt-image-1': {
         family: 'image',
@@ -40,6 +46,23 @@ const EXACT_MODEL_OVERRIDES: Record<string, ModelProfileOverride> = {
             tool_support: false,
             tool_support_streaming: false,
         },
+    },
+    'gpt-realtime-translate': {
+        family: 'realtime',
+        context_window: 16_000,
+        max_output_tokens: 2_000,
+        capabilities: {
+            input: { text: false, image: false, audio: true, video: false },
+            output: { text: true, image: false, audio: true, video: false },
+            tool_support: false,
+            tool_support_streaming: false,
+        },
+    },
+    'gpt-5-chat-latest': {
+        family: 'gpt',
+        source_provider: 'openai',
+        context_window: 128_000,
+        max_output_tokens: 16_384,
     },
 };
 
@@ -76,6 +99,7 @@ function inferFamily(model: string): { family: string; source_provider?: string 
     if (/(?:whisper|transcribe)/.test(normalized)) return { family: 'transcription', source_provider: 'openai' };
     if (/(?:^|[-_.])tts(?:[-_.]|$)/.test(normalized)) return { family: 'speech', source_provider: 'openai' };
     if (normalized.includes('realtime')) return { family: 'realtime', source_provider: 'openai' };
+    if (/(?:^|[-_.])audio(?:[-_.]|$)/.test(normalized)) return { family: 'audio', source_provider: 'openai' };
     if (normalized.includes('sora')) return { family: 'video', source_provider: 'openai' };
     if (normalized.includes('gemini')) return { family: 'gemini', source_provider: 'google' };
     if (normalized.includes('claude')) return { family: 'claude', source_provider: 'anthropic' };
@@ -83,6 +107,7 @@ function inferFamily(model: string): { family: string; source_provider?: string 
         return { family: 'gpt', source_provider: 'openai' };
     }
     if (normalized.includes('grok')) return { family: 'grok', source_provider: 'xai' };
+    if (normalized.includes('nemotron')) return { family: 'nemotron', source_provider: 'nvidia' };
     if (
         /(?:mistral|mixtral|ministral|magistral|voxtral|codestral|devstral|leanstral|mathstral|pixtral)/.test(
             normalized,
@@ -154,6 +179,13 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
                 tool_support: true,
                 tool_support_streaming: true,
             };
+        case 'audio':
+            return {
+                input: { text: true, audio: true },
+                output: { text: true, audio: true },
+                tool_support: true,
+                tool_support_streaming: true,
+            };
         case 'video':
             return {
                 input: { text: true, image: true, video: true },
@@ -217,6 +249,13 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
         case 'minimax':
         case 'glm':
             return { input: { text: true }, output: { text: true }, tool_support: true, tool_support_streaming: true };
+        case 'nemotron':
+            return {
+                input: { text: true, image: model.includes('nemotron-nano-12b') },
+                output: { text: true },
+                tool_support: true,
+                tool_support_streaming: true,
+            };
         case 'mistral':
             return getMistralModelKnowledge(model).capabilities;
         default:
@@ -246,6 +285,22 @@ function getCanonicalLimits(
     family: string,
 ): Pick<ModelProfile, 'context_window' | 'max_output_tokens'> {
     // Profiles only expose limits backed by known family data so option UIs do not present guesses as authoritative.
+    if (family === 'audio') return { context_window: 128_000, max_output_tokens: 16_384 };
+    if (family === 'realtime' && isModelFamilyVersionGTE(sourceModel, 'gpt-realtime-', 2, 0)) {
+        // Future Realtime generations inherit the latest documented family limits until a narrower rule is known.
+        return { context_window: 128_000, max_output_tokens: 32_000 };
+    }
+    if (family === 'gemini' && sourceModel.includes('gemini-3.1-flash-image')) {
+        return { context_window: 131_072, max_output_tokens: 32_768 };
+    }
+    if (family === 'nemotron') {
+        if (sourceModel.includes('nemotron-super-')) return { context_window: 256_000, max_output_tokens: 32_768 };
+        const generation = sourceModel.match(/nemotron-nano-(\d+)-/)?.[1];
+        return {
+            context_window: generation && Number(generation) >= 3 ? 256_000 : 128_000,
+            max_output_tokens: 8_192,
+        };
+    }
     if (
         ['generic', 'embedding', 'moderation', 'image', 'transcription', 'speech', 'realtime', 'video'].includes(family)
     ) {
@@ -295,9 +350,16 @@ function applyProviderOverlay(
         // deployment named like a GPT model cannot become text inference accidentally.
         const providerCapabilities = getModelCapabilitiesAzureFoundry(model);
         return {
-            capabilities: ['embedding', 'moderation', 'image', 'transcription', 'speech', 'realtime', 'video'].includes(
-                family,
-            )
+            capabilities: [
+                'embedding',
+                'moderation',
+                'image',
+                'transcription',
+                'speech',
+                'realtime',
+                'audio',
+                'video',
+            ].includes(family)
                 ? capabilities
                 : providerCapabilities,
             ...getCanonicalLimits(sourceModel, family),

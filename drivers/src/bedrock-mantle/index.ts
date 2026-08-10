@@ -11,12 +11,10 @@ import {
     type ExecutionOptions,
     getBedrockMantleModelInfo,
     getBedrockMantleProtocol,
-    getModelCapabilities,
     isEmbeddingModel,
     type LlumiverseError,
     type LlumiverseErrorContext,
     ModelType,
-    modelModalitiesToArray,
     type PromptSegment,
     Providers,
 } from '@llumiverse/core';
@@ -39,6 +37,7 @@ import {
     formatClaudePrompt,
     streamClaudeCompletion,
 } from '../shared/claude-messages.js';
+import { resolveModelListingMetadata } from '../shared/model-listing.js';
 
 type BedrockMantleResponsesPrompt = OpenAI.Responses.ResponseInputItem[];
 export type BedrockMantlePrompt = BedrockMantleResponsesPrompt | OpenAIChatCompletionsPrompt | ClaudePrompt;
@@ -266,7 +265,7 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
                 if (isEmbeddingModel(model, this.provider)) return [];
                 const info = getBedrockMantleModelInfo(model.id);
                 if (!info) return [];
-                const modelCapability = getModelCapabilities(model.id, this.provider);
+                const modelMetadata = resolveModelListingMetadata(model.id, this.provider);
                 return [
                     {
                         id: model.id,
@@ -275,9 +274,7 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
                         owner: info.owner,
                         type: ModelType.Text,
                         can_stream: true,
-                        input_modalities: modelModalitiesToArray(modelCapability.input),
-                        output_modalities: modelModalitiesToArray(modelCapability.output),
-                        tool_support: modelCapability.tool_support,
+                        ...modelMetadata,
                     } satisfies AIModel,
                 ];
             })

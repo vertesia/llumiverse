@@ -1,14 +1,13 @@
 import {
     type AIModel,
     type DriverOptions,
-    getModelCapabilities,
     isDedicatedInferenceModel,
     isEmbeddingModel,
     ModelType,
-    modelModalitiesToArray,
     Providers,
 } from '@llumiverse/core';
 import OpenAI from 'openai';
+import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { OpenAIResponsesDriverBase } from './index.js';
 
 export interface OpenAIResponsesDriverOptions extends DriverOptions {
@@ -70,7 +69,7 @@ export class OpenAIResponsesDriver extends OpenAIResponsesDriverBase {
                         !isDedicatedInferenceModel(m.id, this.provider),
                 )
                 .map((m) => {
-                    const modelCapability = getModelCapabilities(m.id, this.provider);
+                    const modelMetadata = resolveModelListingMetadata(m.id, this.provider);
                     let owner = m.owned_by;
                     if (owner === 'system') {
                         owner = 'unknown';
@@ -82,10 +81,8 @@ export class OpenAIResponsesDriver extends OpenAIResponsesDriverBase {
                         owner: owner,
                         type: ModelType.Text,
                         can_stream: true,
-                        is_multimodal: modelCapability.input.image === true,
-                        input_modalities: modelModalitiesToArray(modelCapability.input),
-                        output_modalities: modelModalitiesToArray(modelCapability.output),
-                        tool_support: modelCapability.tool_support,
+                        is_multimodal: modelMetadata.input_modalities.includes('image'),
+                        ...modelMetadata,
                     } satisfies AIModel;
                 })
                 .sort((a, b) => a.id.localeCompare(b.id));

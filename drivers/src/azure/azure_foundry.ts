@@ -21,11 +21,9 @@ import {
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
-    getModelCapabilities,
     type ImageEmbeddingInput,
     LlumiverseError,
     type LlumiverseErrorContext,
-    modelModalitiesToArray,
     normalizeEmbeddingsOptions,
     Providers,
     resolveModelProfile,
@@ -50,6 +48,7 @@ import {
     formatOpenAIDebugPrompt,
     formatOpenAILikeMultimodalPrompt,
 } from '../openai/openai_format.js';
+import { resolveModelListingMetadata } from '../shared/model-listing.js';
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type SSEMessage = { data?: string };
@@ -452,7 +451,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                 // Create composite ID: deployment_name::base_model
                 const compositeId = `${model.name}::${model.modelName}`;
 
-                const modelCapability = getModelCapabilities(model.modelName, Providers.azure_foundry);
+                const modelMetadata = resolveModelListingMetadata(model.modelName, Providers.azure_foundry);
                 return {
                     id: compositeId,
                     name: model.name,
@@ -460,9 +459,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                     version: model.modelVersion,
                     provider: this.provider,
                     owner: model.modelPublisher,
-                    input_modalities: modelModalitiesToArray(modelCapability.input),
-                    output_modalities: modelModalitiesToArray(modelCapability.output),
-                    tool_support: modelCapability.tool_support,
+                    ...modelMetadata,
                 } satisfies AIModel;
             })
             .sort((modelA, modelB) => modelA.id.localeCompare(modelB.id));

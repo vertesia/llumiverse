@@ -127,6 +127,41 @@ describe('Bedrock Converse model discovery', () => {
         ]);
     });
 
+    it('uses AWS modalities only when the catalog has no model information', async () => {
+        const driver = new BedrockDriver({ region: 'us-east-2' });
+        const service = createMockService();
+        const catalogedNemotron = {
+            ...foundationModel('nvidia.nemotron-nano-12b-v2-vl-bf16'),
+            inputModalities: ['TEXT'],
+            outputModalities: ['TEXT', 'IMAGE'],
+        } satisfies FoundationModelSummary;
+        const futureModel = {
+            ...foundationModel('nvidia.future-foundation-model'),
+            inputModalities: ['TEXT', 'IMAGE'],
+            outputModalities: ['TEXT'],
+        } satisfies FoundationModelSummary;
+        mockModelListingMethods(service, {
+            $metadata: {},
+            modelSummaries: [catalogedNemotron, futureModel],
+        });
+        vi.spyOn(driver, 'getService').mockReturnValue(service);
+
+        expect(await driver.listModels()).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    id: catalogedNemotron.modelId,
+                    input_modalities: ['text', 'image'],
+                    output_modalities: ['text'],
+                }),
+                expect.objectContaining({
+                    id: futureModel.modelId,
+                    input_modalities: ['text', 'image'],
+                    output_modalities: ['text'],
+                }),
+            ]),
+        );
+    });
+
     it('excludes foundation embeddings using explicit AWS output modality metadata', async () => {
         const driver = new BedrockDriver({ region: 'us-east-2' });
         const service = createMockService();

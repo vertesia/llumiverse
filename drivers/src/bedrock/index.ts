@@ -39,7 +39,6 @@ import {
     type ExecutionTokenUsage,
     getConversationMeta,
     getMaxTokensLimitBedrock,
-    getModelCapabilities,
     type HttpTimeoutOptions,
     incrementConversationTurn,
     isEmbeddingModel,
@@ -47,7 +46,6 @@ import {
     LlumiverseError,
     type LlumiverseErrorContext,
     type ModelOptions,
-    modelModalitiesToArray,
     type NovaCanvasOptions,
     type PromptSegment,
     Providers,
@@ -70,6 +68,7 @@ import { LRUCache } from 'mnemonist';
 import { logClaudeTruncation } from '../shared/claude-stop-reason.js';
 import { resolveClaudeThinking } from '../shared/claude-thinking.js';
 import { truncateBinaryForDebug, uint8ArrayToBase64ForDebug } from '../shared/debug-prompt.js';
+import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import {
     converseConcatMessages,
     converseJSONprefill,
@@ -1877,7 +1876,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 throw new Error('modelId not found');
             }
 
-            const modelCapability = getModelCapabilities(m.modelArn ?? m.modelId, this.provider);
+            const modelMetadata = resolveModelListingMetadata(m.modelArn ?? m.modelId, this.provider, {
+                input_modalities: m.inputModalities,
+                output_modalities: m.outputModalities,
+            });
 
             const model: AIModel = {
                 id: m.modelArn ?? m.modelId,
@@ -1885,9 +1887,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 provider: this.provider,
                 owner: m.providerName,
                 can_stream: m.responseStreamingSupported ?? false,
-                input_modalities: modelModalitiesToArray(modelCapability.input),
-                output_modalities: modelModalitiesToArray(modelCapability.output),
-                tool_support: modelCapability.tool_support,
+                ...modelMetadata,
             };
 
             return model;
@@ -1902,7 +1902,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
                 const capabilityModelId = m.baseModelName ?? m.modelArn;
                 if (isEmbeddingModel({ id: capabilityModelId }, this.provider)) return;
-                const modelCapability = getModelCapabilities(capabilityModelId, this.provider);
+                const modelMetadata = resolveModelListingMetadata(capabilityModelId, this.provider);
 
                 const model: AIModel = {
                     id: m.modelArn,
@@ -1911,9 +1911,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     owner: 'custom',
                     description: `Custom model from ${m.baseModelName}`,
                     is_custom: true,
-                    input_modalities: modelModalitiesToArray(modelCapability.input),
-                    output_modalities: modelModalitiesToArray(modelCapability.output),
-                    tool_support: modelCapability.tool_support,
+                    ...modelMetadata,
                 };
 
                 aiModels.push(model);
@@ -1940,7 +1938,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     }
                 }
 
-                const modelCapability = getModelCapabilities(
+                const modelMetadata = resolveModelListingMetadata(
                     p.inferenceProfileArn ?? p.inferenceProfileId,
                     this.provider,
                 );
@@ -1951,8 +1949,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     !isEmbeddingModel(
                         {
                             id: p.inferenceProfileArn ?? p.inferenceProfileId,
-                            input_modalities: modelModalitiesToArray(modelCapability.input),
-                            output_modalities: modelModalitiesToArray(modelCapability.output),
+                            input_modalities: modelMetadata.input_modalities,
+                            output_modalities: modelMetadata.output_modalities,
                         },
                         this.provider,
                     )
@@ -1962,9 +1960,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                         name: p.inferenceProfileName ?? p.inferenceProfileArn,
                         provider: this.provider,
                         owner: providerName,
-                        input_modalities: modelModalitiesToArray(modelCapability.input),
-                        output_modalities: modelModalitiesToArray(modelCapability.output),
-                        tool_support: modelCapability.tool_support,
+                        ...modelMetadata,
                     };
 
                     aiModels.push(model);

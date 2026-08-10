@@ -30,6 +30,11 @@ const RECORD_FAMILY_CAPABILITIES: Record<
         output: { text: true, image: false, video: false, audio: false, embed: false },
         tool_support: true,
     },
+    'gemini-3.1-flash-image': {
+        input: { text: true, image: true, video: true, audio: false, embed: false },
+        output: { text: true, image: true, video: false, audio: false, embed: false },
+        tool_support: false,
+    },
     'gemini-2.5-flash-image': {
         input: { text: true, image: true, video: false, audio: false, embed: false },
         output: { text: true, image: true, video: false, audio: false, embed: false },

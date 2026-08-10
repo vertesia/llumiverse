@@ -232,6 +232,10 @@ describe('Bedrock Mantle metadata', () => {
         expect(getModelCapabilities('moonshotai.kimi-k3', Providers.bedrock).input.image).toBe(true);
         expect(getModelCapabilities('nvidia.nemotron-nano-12b-v3', Providers.bedrock).input.image).toBe(true);
         expect(getModelCapabilities('nvidia.nemotron-super-4-180b', Providers.bedrock).input.image).toBe(false);
+        expect(getModelCapabilities('nvidia.nemotron-nano-9b-v2', Providers.bedrock_mantle)).toMatchObject({
+            tool_support: true,
+            tool_support_streaming: true,
+        });
         expect(getModelCapabilities('zai.glm-6', Providers.bedrock).output.text).toBe(true);
     });
 

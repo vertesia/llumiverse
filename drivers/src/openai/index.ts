@@ -12,14 +12,12 @@ import {
     type ExecutionOptions,
     type ExecutionTokenUsage,
     getConversationMeta,
-    getModelCapabilities,
     incrementConversationTurn,
     isDedicatedInferenceModel,
     isOpenAIGptVersionGTE,
     type JSONSchema,
     LlumiverseError,
     ModelType,
-    modelModalitiesToArray,
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
     type OpenAiDalleOptions,
@@ -42,6 +40,7 @@ import {
 } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import type { AzureOpenAI } from 'openai';
+import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAILikeMultimodalPrompt } from './openai_format.js';
 import { formatOpenAISchema } from './schema.js';
@@ -583,7 +582,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         const models = filter ? result.filter(filter) : result;
         const aiModels = models
             .map((m) => {
-                const modelCapability = getModelCapabilities(m.id, this.provider);
+                const modelMetadata = resolveModelListingMetadata(m.id, this.provider);
                 let owner = m.owned_by;
                 if (owner === 'system') {
                     owner = 'openai';
@@ -601,9 +600,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
                     provider: this.provider,
                     owner: owner,
                     type: modelType,
-                    input_modalities: modelModalitiesToArray(modelCapability.input),
-                    output_modalities: modelModalitiesToArray(modelCapability.output),
-                    tool_support: modelCapability.tool_support,
+                    ...modelMetadata,
                 } satisfies AIModel;
             })
             .sort((a, b) => a.id.localeCompare(b.id));

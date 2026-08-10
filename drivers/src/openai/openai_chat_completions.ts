@@ -11,14 +11,12 @@ import {
     type ExecutionOptions,
     type ExecutionTokenUsage,
     getConversationMeta,
-    getModelCapabilities,
     incrementConversationTurn,
     isDedicatedInferenceModel,
     isEmbeddingModel,
     type JSONObject,
     type JSONSchema,
     ModelType,
-    modelModalitiesToArray,
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
     type PromptOptions,
@@ -35,6 +33,7 @@ import {
 } from '@llumiverse/core';
 import { transformSSEStream } from '@llumiverse/core/async';
 import OpenAI from 'openai';
+import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAISchema, limitedSchemaFormat } from './schema.js';
 
@@ -1444,16 +1443,14 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
                     !isDedicatedInferenceModel(model.id, this.provider),
             )
             .map((model) => {
-                const capabilities = getModelCapabilities(model.id, this.provider);
+                const modelMetadata = resolveModelListingMetadata(model.id, this.provider);
                 return {
                     id: model.id,
                     name: model.id,
                     owner: model.owned_by,
                     provider: this.provider,
                     type: ModelType.Text,
-                    input_modalities: modelModalitiesToArray(capabilities.input),
-                    output_modalities: modelModalitiesToArray(capabilities.output),
-                    tool_support: capabilities.tool_support,
+                    ...modelMetadata,
                 } satisfies AIModel;
             });
     }

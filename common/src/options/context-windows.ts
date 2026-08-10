@@ -41,6 +41,7 @@ export function getMaxOutputTokens(model: string): number {
     if (/(?:^|[~/.])o\d+(?:[-_.]|$)/.test(model.toLowerCase())) return 100_000;
     // GPT models
     const gptVersion = parseOpenAIGptVersion(model);
+    if (model.includes('gpt-5-chat-latest')) return 16_384;
     if (isOpenAIGptProModel(model) && gptVersion?.major === 5 && gptVersion.minor === 0) return 272_000;
     if (isOpenAIGptVersionGTE(model, 5, 0)) return 128_000;
     if (model.includes('gpt-oss')) return 16_384;
@@ -105,6 +106,8 @@ export function getContextWindowSize(model: string): number | undefined {
     // OpenAI o-series (check before gpt-4 to avoid false matches)
     if (/(?:^|[~/.])o\d+(?:[-_.]|$)/.test(model.toLowerCase())) return 200_000;
     // GPT models — provider-specific limits are applied by the provider overlay.
+    if (model.includes('gpt-5-chat-latest')) return 128_000;
+    if (model.includes('gpt-5.4-mini') || model.includes('gpt-5.4-nano')) return 400_000;
     if (isOpenAIGptVersionGTE(model, 5, 4)) return 1_050_000;
     if (isOpenAIGptVersionGTE(model, 5, 0)) return 400_000;
     if (model.includes('gpt-oss')) return 131_072;

@@ -44,7 +44,7 @@ export interface ModelListing {
 
 /** Dedicated endpoint models are not executable through the standard inference path. */
 export function isDedicatedInferenceModel(model: string, provider: Providers): boolean {
-    return ['embedding', 'moderation', 'image', 'transcription', 'speech', 'realtime', 'video'].includes(
+    return ['embedding', 'moderation', 'image', 'transcription', 'speech', 'realtime', 'audio', 'video'].includes(
         resolveModelProfile(model, provider).family,
     );
 }

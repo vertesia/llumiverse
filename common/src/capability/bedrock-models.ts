@@ -165,8 +165,10 @@ function getLimits(model: string): Pick<BedrockModelKnowledge, 'context_window' 
     if (includesAny(model, ['moonshot.kimi-k2', 'moonshotai.kimi-k2'])) {
         return { context_window: 256_000, max_output_tokens: 16_384 };
     }
-    if (includesAny(model, ['nvidia.nemotron-nano-3', 'nvidia.nemotron-super-3'])) {
-        return { context_window: 256_000, max_output_tokens: model.includes('super') ? 32_768 : 8_192 };
+    if (model.includes('nvidia.nemotron-super-')) return { context_window: 256_000, max_output_tokens: 32_768 };
+    const nemotronNanoGeneration = model.match(/nvidia\.nemotron-nano-(\d+)-/)?.[1];
+    if (nemotronNanoGeneration && Number(nemotronNanoGeneration) >= 3) {
+        return { context_window: 256_000, max_output_tokens: 8_192 };
     }
     if (model.includes('nvidia.nemotron-nano-')) return { context_window: 128_000, max_output_tokens: 8_192 };
     if (isFamilyVersionGte(model, 'openai.gpt-', 5) && !model.includes('gpt-oss')) {
@@ -250,7 +252,11 @@ export function getBedrockModelKnowledge(model: string): BedrockModelKnowledge {
 export function getBedrockModelCapabilities(model: string, endpoint: BedrockEndpoint): ModelCapabilities {
     const modelId = normalizeBedrockModelId(model);
     const knowledge = getBedrockModelKnowledge(modelId);
-    const sourceToolSupport = getRuntimeToolSupport(modelId);
+    // AWS documents client-side tool calling for Nemotron on Mantle, but not Bedrock Runtime tool use.
+    const sourceToolSupport =
+        endpoint === 'mantle' && modelId.startsWith('nvidia.nemotron-')
+            ? { tool_support: true }
+            : getRuntimeToolSupport(modelId);
     // Mantle can stream tool calls, but its protocol alone does not give every hosted source model tool support.
     // Preserve false/unknown source semantics and relax only a known-positive runtime streaming restriction.
     const toolSupport =

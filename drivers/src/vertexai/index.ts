@@ -11,13 +11,11 @@ import {
     type EmbeddingsResult,
     type ExecutionOptions,
     getConversationMeta,
-    getModelCapabilities,
     type HttpTimeoutOptions,
     incrementConversationTurn,
     type LlumiverseError,
     type LlumiverseErrorContext,
     type ModelSearchPayload,
-    modelModalitiesToArray,
     type PromptSegment,
     Providers,
     stripBase64ImagesFromConversation,
@@ -34,6 +32,7 @@ import {
     type OpenAIChatCompletionsPrompt,
 } from '../openai/openai_chat_completions.js';
 import { type ClaudePrompt, formatClaudeDebugPrompt } from '../shared/claude-messages.js';
+import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { generateVertexAiEmbeddings } from './embeddings/embed.js';
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
 import { formatGeminiDebugPrompt } from './models/gemini.js';
@@ -679,11 +678,15 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         // Process aiplatform models, project specific models
         const [response] = aiplatformResult;
         models = models.concat(
-            response.map((model) => ({
-                id: model.name?.split('/').pop() ?? '',
-                name: model.displayName ?? '',
-                provider: 'vertexai',
-            })),
+            response.map((model) => {
+                const id = model.name?.split('/').pop() ?? '';
+                return {
+                    id,
+                    name: model.displayName ?? '',
+                    provider: 'vertexai',
+                    ...resolveModelListingMetadata(id, Providers.vertexai),
+                };
+            }),
         );
 
         // Process global google models from GenAI
@@ -697,15 +700,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                         isExecutableGoogleModel(model),
                 )
                 .map((model) => {
-                    const modelCapability = getModelCapabilities(model.name ?? '', Providers.vertexai);
+                    const modelMetadata = resolveModelListingMetadata(model.name ?? '', Providers.vertexai);
                     return {
                         id: `locations/global/${model.name}`,
                         name: `Global ${model.name?.split('/').pop()}`,
                         provider: 'vertexai',
                         owner: 'google',
-                        input_modalities: modelModalitiesToArray(modelCapability.input),
-                        output_modalities: modelModalitiesToArray(modelCapability.output),
-                        tool_support: modelCapability.tool_support,
+                        ...modelMetadata,
                     };
                 }),
         );
@@ -735,7 +736,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                         const rawModelId = model.name ?? '';
                         const isGlobalOnlyPublisher = publisher === 'xai';
                         const listedModelId = isGlobalOnlyPublisher ? `locations/global/${rawModelId}` : rawModelId;
-                        const modelCapability = getModelCapabilities(listedModelId, Providers.vertexai);
+                        const modelMetadata = resolveModelListingMetadata(listedModelId, Providers.vertexai);
                         return {
                             id: listedModelId,
                             name: isGlobalOnlyPublisher
@@ -743,9 +744,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                                 : (rawModelId.split('/').pop() ?? ''),
                             provider: 'vertexai',
                             owner: publisher,
-                            input_modalities: modelModalitiesToArray(modelCapability.input),
-                            output_modalities: modelModalitiesToArray(modelCapability.output),
-                            tool_support: modelCapability.tool_support,
+                            ...modelMetadata,
                         } satisfies AIModel;
                     }),
             );
@@ -777,15 +776,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                         return false;
                     })
                     .map((model) => {
-                        const modelCapability = getModelCapabilities(model.name ?? '', Providers.vertexai);
+                        const modelMetadata = resolveModelListingMetadata(model.name ?? '', Providers.vertexai);
                         return {
                             id: `locations/global/${model.name}`,
                             name: `Global ${model.name?.split('/').pop()}`,
                             provider: 'vertexai',
                             owner: publisher,
-                            input_modalities: modelModalitiesToArray(modelCapability.input),
-                            output_modalities: modelModalitiesToArray(modelCapability.output),
-                            tool_support: modelCapability.tool_support,
+                            ...modelMetadata,
                         } satisfies AIModel;
                     });
 
@@ -811,15 +808,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                         return false;
                     })
                     .map((model) => {
-                        const modelCapability = getModelCapabilities(model.name ?? '', Providers.vertexai);
+                        const modelMetadata = resolveModelListingMetadata(model.name ?? '', Providers.vertexai);
                         return {
                             id: `locations/global/${model.name}`,
                             name: `Global ${model.name?.split('/').pop()}`,
                             provider: 'vertexai',
                             owner: publisher,
-                            input_modalities: modelModalitiesToArray(modelCapability.input),
-                            output_modalities: modelModalitiesToArray(modelCapability.output),
-                            tool_support: modelCapability.tool_support,
+                            ...modelMetadata,
                         } satisfies AIModel;
                     });
 
@@ -829,15 +824,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             // Add additional models that are not in the listing
             for (const additionalModel of publisherConfig[publisher as Publisher].additional) {
                 const publisherModelName = `publishers/${publisher}/models/${additionalModel}`;
-                const modelCapability = getModelCapabilities(additionalModel, Providers.vertexai);
+                const modelMetadata = resolveModelListingMetadata(additionalModel, Providers.vertexai);
                 models.push({
                     id: publisherModelName,
                     name: additionalModel,
                     provider: 'vertexai',
                     owner: publisher,
-                    input_modalities: modelModalitiesToArray(modelCapability.input),
-                    output_modalities: modelModalitiesToArray(modelCapability.output),
-                    tool_support: modelCapability.tool_support,
+                    ...modelMetadata,
                 } satisfies AIModel);
             }
         }

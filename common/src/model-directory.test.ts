@@ -54,6 +54,29 @@ describe('central model directory', () => {
         expect(resolveModelProfile('anthropic/claude-opus-6', Providers.openai_compatible).family).toBe('claude');
     });
 
+    it('keeps documented OpenAI variant limits instead of applying the base-model limit', () => {
+        expect(resolveModelProfile('gpt-5.4-mini', Providers.openai)).toMatchObject({
+            context_window: 400_000,
+            max_output_tokens: 128_000,
+        });
+        expect(resolveModelProfile('gpt-5.4-nano', Providers.openai)).toMatchObject({
+            context_window: 400_000,
+            max_output_tokens: 128_000,
+        });
+        expect(resolveModelProfile('gpt-5-chat-latest', Providers.openai)).toMatchObject({
+            family: 'gpt',
+            context_window: 128_000,
+            max_output_tokens: 16_384,
+        });
+        expect(resolveModelProfile('chat-latest', Providers.openai)).toMatchObject({
+            family: 'gpt',
+            source_provider: 'openai',
+            context_window: 400_000,
+            max_output_tokens: 128_000,
+            capabilities: { input: { text: true, image: true }, output: { text: true }, tool_support: true },
+        });
+    });
+
     it('classifies embeddings as non-inference models', () => {
         const profile = resolveModelProfile('google/text-embedding-005', Providers.openai_compatible);
         expect(profile.family).toBe('embedding');
@@ -207,6 +230,61 @@ describe('central model directory', () => {
         expect(resolveModelProfile('speech-deployment::gpt-4o-mini-tts', Providers.azure_foundry).family).toBe(
             'speech',
         );
+    });
+
+    it('classifies current OpenAI audio models independently from text GPT models', () => {
+        expect(resolveModelProfile('gpt-audio-1.5', Providers.openai)).toMatchObject({
+            family: 'audio',
+            context_window: 128_000,
+            max_output_tokens: 16_384,
+            capabilities: {
+                input: { text: true, audio: true },
+                output: { text: true, audio: true },
+                tool_support: true,
+            },
+        });
+        expect(resolveModelProfile('gpt-realtime-3', Providers.openai)).toMatchObject({
+            family: 'realtime',
+            context_window: 128_000,
+            max_output_tokens: 32_000,
+        });
+        expect(resolveModelProfile('gpt-realtime-translate', Providers.openai)).toMatchObject({
+            family: 'realtime',
+            context_window: 16_000,
+            max_output_tokens: 2_000,
+            capabilities: {
+                input: { text: false, image: false, audio: true },
+                output: { text: true, audio: true },
+                tool_support: false,
+            },
+        });
+    });
+
+    it('uses image-generation metadata for Gemini 3.1 Flash Image', () => {
+        expect(resolveModelProfile('gemini-3.1-flash-image-preview', Providers.vertexai)).toMatchObject({
+            context_window: 131_072,
+            max_output_tokens: 32_768,
+            capabilities: {
+                input: { text: true, image: true, video: true, audio: false },
+                output: { text: true, image: true },
+                tool_support: false,
+            },
+        });
+    });
+
+    it('retains Nemotron family identity and newest family limits', () => {
+        expect(resolveModelProfile('nvidia.nemotron-nano-12b-v2-vl-bf16', Providers.bedrock)).toMatchObject({
+            family: 'nemotron',
+            source_provider: 'nvidia',
+            context_window: 128_000,
+            max_output_tokens: 8_192,
+            capabilities: { input: { text: true, image: true }, output: { text: true } },
+        });
+        expect(resolveModelProfile('nvidia.nemotron-super-4-180b', Providers.bedrock)).toMatchObject({
+            family: 'nemotron',
+            context_window: 256_000,
+            max_output_tokens: 32_768,
+        });
     });
 
     it('keeps moderation models executable without advertising tool use', () => {
