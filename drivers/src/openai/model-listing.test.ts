@@ -11,6 +11,10 @@ describe('OpenAI model listing', () => {
                 { id: 'o1-pro', object: 'model', created: 1, owned_by: 'system' },
                 { id: 'gpt-5-audiovisual', object: 'model', created: 1, owned_by: 'system' },
                 { id: 'text-embedding-3-small', object: 'model', created: 1, owned_by: 'system' },
+                { id: 'gpt-4o-mini-tts', object: 'model', created: 1, owned_by: 'system' },
+                { id: 'gpt-4o-transcribe', object: 'model', created: 1, owned_by: 'system' },
+                { id: 'omni-moderation-latest', object: 'model', created: 1, owned_by: 'system' },
+                { id: 'sora-3', object: 'model', created: 1, owned_by: 'system' },
             ],
         }));
         driver.service = { models: { list } } as unknown as OpenAIDriver['service'];

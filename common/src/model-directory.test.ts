@@ -103,9 +103,16 @@ describe('central model directory', () => {
         const profile = resolveModelProfile('future-provider/new-capability-v1', Providers.openai_compatible);
         expect(profile.capabilities).toMatchObject({ input: { text: true }, output: { text: true } });
         expect(profile.capabilities.tool_support).toBeUndefined();
+        expect(profile.context_window).toBeUndefined();
+        expect(profile.max_output_tokens).toBeUndefined();
         expect(
             getOptions(profile.model_id, Providers.openai_compatible).options.map((option) => option.name),
         ).not.toContain('effort');
+        expect(
+            getOptions(profile.model_id, Providers.openai_compatible).options.find(
+                (option) => option.name === 'max_tokens',
+            ),
+        ).toMatchObject({ max: 4_096 });
         expect(resolveModelProfile('future-provider/new-capability-v1', Providers.vertexai).capabilities).toMatchObject(
             {
                 input: { text: true },
@@ -113,6 +120,93 @@ describe('central model directory', () => {
             },
         );
         expect(resolveModelProfile('vectorized-chat-v1', Providers.openai_compatible).family).toBe('generic');
+    });
+
+    it('inherits the newest known Llama family behavior across transports', () => {
+        expect(resolveModelProfile('meta-llama/llama-5-scout', Providers.openai_compatible).capabilities).toMatchObject(
+            {
+                input: { text: true, image: true },
+                output: { text: true },
+                tool_support: true,
+                tool_support_streaming: true,
+            },
+        );
+        expect(resolveModelProfile('meta.llama5-scout', Providers.bedrock).capabilities).toMatchObject({
+            input: { text: true, image: true },
+            output: { text: true },
+            tool_support: true,
+            tool_support_streaming: false,
+        });
+        expect(resolveModelProfile('meta.llama5-scout', Providers.bedrock).context_window).toBe(10_000_000);
+        expect(resolveModelProfile('llama-5-scout-maas', Providers.vertexai).capabilities).toMatchObject({
+            input: { text: true, image: true },
+            output: { text: true },
+            tool_support: true,
+        });
+        expect(resolveModelProfile('llama-5-scout', Providers.azure_foundry).capabilities.input.image).toBe(true);
+        expect(resolveModelProfile('llama-5-scout', Providers.azure_foundry).context_window).toBe(10_000_000);
+        const azureOptions = getOptions('deployment::LLAMA-5-SCOUT', Providers.azure_foundry);
+        expect(azureOptions.options.find((option) => option.name === 'max_tokens')).toMatchObject({ max: 8_192 });
+        expect(azureOptions.options.map((option) => option.name)).toContain('image_detail');
+    });
+
+    it('uses current Mistral family rules without claiming an output limit', () => {
+        const small = resolveModelProfile('MISTRAL-SMALL-2603', Providers.mistralai);
+        expect(small).toMatchObject({
+            family: 'mistral',
+            source_provider: 'mistralai',
+            context_window: 256_000,
+            capabilities: { input: { text: true, image: true }, output: { text: true }, tool_support: true },
+            reasoning_effort_levels: ['none', 'high'],
+        });
+        expect(small.max_output_tokens).toBeUndefined();
+        expect(resolveModelProfile('mistral-medium-3.6', Providers.mistralai).reasoning_effort_levels).toEqual([
+            'none',
+            'high',
+        ]);
+        expect(resolveModelProfile('voxtral-small-latest', Providers.mistralai).capabilities.input.audio).toBe(true);
+        expect(resolveModelProfile('voxtral-mini-2507', Providers.mistralai).capabilities).toMatchObject({
+            input: { text: true, audio: true },
+            output: { text: true },
+            tool_support: false,
+        });
+        expect(resolveModelProfile('voxtral-mini-transcribe-2602', Providers.mistralai).capabilities).toMatchObject({
+            input: { audio: true },
+            output: { text: true },
+            tool_support: false,
+        });
+        expect(resolveModelProfile('mistral-tts-latest', Providers.mistralai).capabilities).toMatchObject({
+            input: { text: true },
+            output: { audio: true },
+            tool_support: false,
+        });
+        const maxTokens = getOptions('mistral-small-2603', Providers.mistralai).options.find(
+            (option) => option.name === 'max_tokens',
+        );
+        expect(maxTokens).not.toHaveProperty('max');
+        expect(resolveModelProfile('labs-leanstral-1-5', Providers.mistralai)).toMatchObject({
+            family: 'mistral',
+            context_window: 256_000,
+            capabilities: { tool_support: true },
+        });
+        const compatibleOptions = getOptions('mistralai/mistral-small-2603', Providers.openai_compatible);
+        expect(compatibleOptions._option_id).toBe('openai-text');
+        expect(compatibleOptions.options.map((option) => option.name)).not.toContain('safe_prompt');
+    });
+
+    it('reapplies exact source semantics after provider overlays', () => {
+        for (const provider of [Providers.openai, Providers.azure_foundry, Providers.bedrock]) {
+            expect(resolveModelProfile('gpt-image-1', provider).capabilities).toMatchObject({
+                input: { text: true, image: true },
+                output: { text: false, image: true },
+                tool_support: false,
+                tool_support_streaming: false,
+            });
+        }
+        expect(resolveModelProfile('image-deployment::gpt-image-1', Providers.azure_foundry).family).toBe('image');
+        expect(resolveModelProfile('speech-deployment::gpt-4o-mini-tts', Providers.azure_foundry).family).toBe(
+            'speech',
+        );
     });
 
     it('keeps moderation models executable without advertising tool use', () => {

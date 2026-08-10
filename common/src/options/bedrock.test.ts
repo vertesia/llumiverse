@@ -245,8 +245,8 @@ describe('Bedrock Mantle metadata', () => {
             Providers.bedrock,
         );
 
-        expect(nova.input).toMatchObject({ text: true, image: true, video: false });
-        expect(pegasus.input).toMatchObject({ text: true, video: false });
+        expect(nova.input).toMatchObject({ text: true, image: true, video: true });
+        expect(pegasus.input).toMatchObject({ text: true, video: true });
     });
 
     it.each([
@@ -277,10 +277,9 @@ describe('Bedrock Mantle metadata', () => {
     });
 
     it('does not assume tool support for an unknown Bedrock Runtime model', () => {
-        expect(getModelCapabilities('future-provider.unknown-chat-v1', Providers.bedrock)).toMatchObject({
-            tool_support: false,
-            tool_support_streaming: false,
-        });
+        const capabilities = getModelCapabilities('future-provider.unknown-chat-v1', Providers.bedrock);
+        expect(capabilities.tool_support).toBeUndefined();
+        expect(capabilities.tool_support_streaming).toBeUndefined();
     });
 
     it.each([
@@ -288,6 +287,8 @@ describe('Bedrock Mantle metadata', () => {
         ['anthropic.claude-haiku-4-5-20251001-v1:0', 200_000, 63_999],
         ['google.gemma-3-12b-it', 128_000, 8_192],
         ['meta.llama4-scout-17b-instruct-v1:0', 10_000_000, 8_192],
+        ['meta.llama5-scout-17b-instruct-v1:0', 10_000_000, 8_192],
+        ['meta.llama5-maverick-17b-instruct-v1:0', 1_000_000, 8_192],
         ['minimax.minimax-m2.5', 196_000, 8_192],
         ['mistral.magistral-small-2509', 128_000, 40_960],
         ['moonshotai.kimi-k2.5', 256_000, 16_384],

@@ -1,3 +1,4 @@
+import { getMistralModelKnowledge } from '../capability/mistral.js';
 import {
     isClaudeVersionGTE,
     isModelFamilyVersionGTE,
@@ -16,6 +17,7 @@ function isDeepSeekV32OrLater(model: string): boolean {
  * that works across all providers.
  */
 export function getMaxOutputTokens(model: string): number {
+    model = model.toLowerCase();
     // Claude models
     if (model.includes('claude')) {
         if (isClaudeVersionGTE(model, 4, 7)) return 128_000;
@@ -77,16 +79,19 @@ export function getMaxOutputTokens(model: string): number {
 }
 
 /**
- * Returns the max input tokens for a given model (context window minus max output).
+ * Returns the max input tokens for a known model (context window minus max output), or undefined when the context
+ * window is not known.
  */
-export function getMaxInputTokens(model: string): number {
-    return getContextWindowSize(model) - getMaxOutputTokens(model);
+export function getMaxInputTokens(model: string): number | undefined {
+    const contextWindow = getContextWindowSize(model);
+    return contextWindow === undefined ? undefined : contextWindow - getMaxOutputTokens(model);
 }
 
 /**
- * Returns the context window size (input + output) for a given model.
+ * Returns the known context window size (input + output), or undefined rather than guessing for an unknown model.
  */
-export function getContextWindowSize(model: string): number {
+export function getContextWindowSize(model: string): number | undefined {
+    model = model.toLowerCase();
     // Claude models
     if (model.includes('claude')) {
         if (isClaudeVersionGTE(model, 4, 7)) return 1_000_000;
@@ -114,8 +119,9 @@ export function getContextWindowSize(model: string): number {
     // Amazon Nova
     if (model.includes('nova')) return 300_000;
     // Mistral
-    if (model.includes('mistral-large')) return 128_000;
-    if (model.includes('mistral')) return 32_000;
+    if (/(?:mistral|mixtral|ministral|magistral|voxtral|codestral|devstral|leanstral|mathstral|pixtral)/.test(model)) {
+        return getMistralModelKnowledge(model).context_window;
+    }
     // DeepSeek
     if (isDeepSeekV32OrLater(model)) return 163_840;
     if (model.includes('deepseek-r1-0528')) return 163_840;
@@ -133,12 +139,14 @@ export function getContextWindowSize(model: string): number {
     // Gemma
     if (model.includes('gemma-4')) return 256_000;
     // Llama
-    if (model.includes('llama-4') || model.includes('llama4')) return 1_000_000;
+    if (isModelFamilyVersionGTE(model, 'llama-', 4, 0) || isModelFamilyVersionGTE(model, 'llama', 4, 0)) {
+        return model.includes('scout') ? 10_000_000 : 1_000_000;
+    }
     if (model.includes('llama-3.1') || model.includes('llama-3.2') || model.includes('llama-3.3')) return 128_000;
     if (model.includes('llama')) return 8_000;
     // Cohere
     if (model.includes('command-a')) return 256_000;
     if (model.includes('command')) return 128_000;
 
-    return 128_000; // conservative default
+    return undefined;
 }

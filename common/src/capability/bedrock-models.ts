@@ -60,7 +60,8 @@ function getModalities(model: string): Pick<BedrockModelKnowledge, 'input' | 'ou
         (model.includes('anthropic.claude') && !model.includes('claude-3-5-haiku')) ||
         (model.includes('amazon.nova') && !model.includes('nova-micro')) ||
         model.includes('google.gemma') ||
-        includesAny(model, ['meta.llama3-2-11b', 'meta.llama3-2-90b', 'meta.llama4']) ||
+        includesAny(model, ['meta.llama3-2-11b', 'meta.llama3-2-90b']) ||
+        isFamilyVersionGte(model, 'meta.llama', 4) ||
         includesAny(model, [
             'mistral.magistral-',
             'mistral.ministral-3-',
@@ -125,8 +126,10 @@ function getLimits(model: string): Pick<BedrockModelKnowledge, 'context_window' 
     }
     if (model.includes('google.gemma-4-e2b')) return { context_window: 128_000 };
     if (model.includes('google.gemma-3-')) return { context_window: 128_000, max_output_tokens: 8_192 };
-    if (model.includes('meta.llama4-scout')) return { context_window: 10_000_000, max_output_tokens: 8_192 };
-    if (model.includes('meta.llama4-maverick')) return { context_window: 1_000_000, max_output_tokens: 8_192 };
+    if (isFamilyVersionGte(model, 'meta.llama', 4)) {
+        // Future Llama releases inherit the latest provider limit family while retaining the documented Scout split.
+        return { context_window: model.includes('scout') ? 10_000_000 : 1_000_000, max_output_tokens: 8_192 };
+    }
     if (
         model.includes('meta.llama3-') &&
         !model.includes('llama3-1') &&
@@ -188,10 +191,12 @@ function getLimits(model: string): Pick<BedrockModelKnowledge, 'context_window' 
 }
 
 function getRuntimeToolSupport(model: string): Pick<ModelCapabilities, 'tool_support' | 'tool_support_streaming'> {
-    let toolSupport = false;
+    let toolSupport: boolean | undefined;
     let streaming = false;
 
-    if (model.includes('anthropic.claude')) {
+    if (model.includes('gpt-oss-safeguard') || model.includes('deepseek.r1')) {
+        toolSupport = false;
+    } else if (model.includes('anthropic.claude')) {
         toolSupport = true;
         streaming = !model.includes('claude-3-5-haiku');
     } else if (model.includes('ai21.jamba') && !model.includes('jamba-instruct')) {
@@ -208,7 +213,8 @@ function getRuntimeToolSupport(model: string): Pick<ModelCapabilities, 'tool_sup
         streaming = false;
     } else if (includesAny(model, ['meta.llama3-2-11b', 'meta.llama3-2-90b'])) {
         toolSupport = true;
-    } else if (model.includes('meta.llama4-')) {
+    } else if (isFamilyVersionGte(model, 'meta.llama', 4)) {
+        // Bedrock's Converse behavior is family-stable here; future Llama generations inherit Llama 4 tool support.
         toolSupport = true;
         streaming = false;
     } else if (includesAny(model, ['qwen.qwen3-235b', 'qwen.qwen3-32b'])) {
@@ -220,6 +226,10 @@ function getRuntimeToolSupport(model: string): Pick<ModelCapabilities, 'tool_sup
     } else if (model.startsWith('openai.gpt-') || model.startsWith('xai.grok-')) {
         toolSupport = true;
         streaming = true;
+    } else if (isFamilyVersionGte(model, 'google.gemma-', 4)) {
+        // Later Gemma generations inherit the newest verified Bedrock tool behavior.
+        toolSupport = true;
+        streaming = true;
     } else if (includesAny(model, ['mistral.mistral-large', 'mistral.pixtral'])) {
         toolSupport = true;
     } else if (model.includes('twelvelabs.pegasus')) {
@@ -228,6 +238,7 @@ function getRuntimeToolSupport(model: string): Pick<ModelCapabilities, 'tool_sup
         toolSupport = true;
     }
 
+    if (toolSupport === undefined) return {};
     return { tool_support: toolSupport, tool_support_streaming: toolSupport && streaming };
 }
 
@@ -239,8 +250,13 @@ export function getBedrockModelKnowledge(model: string): BedrockModelKnowledge {
 export function getBedrockModelCapabilities(model: string, endpoint: BedrockEndpoint): ModelCapabilities {
     const modelId = normalizeBedrockModelId(model);
     const knowledge = getBedrockModelKnowledge(modelId);
+    const sourceToolSupport = getRuntimeToolSupport(modelId);
+    // Mantle can stream tool calls, but its protocol alone does not give every hosted source model tool support.
+    // Preserve false/unknown source semantics and relax only a known-positive runtime streaming restriction.
     const toolSupport =
-        endpoint === 'mantle' ? { tool_support: true, tool_support_streaming: true } : getRuntimeToolSupport(modelId);
+        endpoint === 'mantle' && sourceToolSupport.tool_support === true
+            ? { ...sourceToolSupport, tool_support_streaming: true }
+            : sourceToolSupport;
     return {
         input: knowledge.input,
         output: knowledge.output,

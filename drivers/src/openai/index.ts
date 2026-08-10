@@ -567,8 +567,8 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
     async _listModels(filter?: (m: OpenAI.Models.Model) => boolean): Promise<AIModel[]> {
         let result = (await this.service.models.list()).data;
 
-        //Some of these use the completions API instead of the chat completions API.
-        //Others are for non-text input modalities. Therefore common to both.
+        // Intentional deny-list: OpenAI listing metadata does not describe execution capabilities. Exclude only
+        // deterministic dedicated/legacy endpoint families; unknown future IDs remain visible for normal inference.
         const unsupportedEndpointPattern =
             /(?:^|[-_.:/])(?:embed|embeddings?|whisper|transcribe|audio|moderation|tts|realtime|babbage|davinci|computer[-_.:]use|sora)(?:[-_.:/]|$)/;
 

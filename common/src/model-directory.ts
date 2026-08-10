@@ -1,6 +1,7 @@
 import { getModelCapabilitiesAnthropic } from './capability/anthropic.js';
 import { getModelCapabilitiesAzureFoundry } from './capability/azure_foundry.js';
 import { getBedrockModelCapabilities, getBedrockModelKnowledge } from './capability/bedrock-models.js';
+import { getMistralModelKnowledge } from './capability/mistral.js';
 import { getModelCapabilitiesOpenAI } from './capability/openai.js';
 import { getModelCapabilitiesVertexAI } from './capability/vertexai.js';
 import { getContextWindowSize, getMaxOutputTokens } from './options/context-windows.js';
@@ -33,7 +34,12 @@ const EXACT_MODEL_OVERRIDES: Record<string, ModelProfileOverride> = {
     // OpenAI image endpoints are not text inference models even though their IDs contain `gpt`.
     'gpt-image-1': {
         family: 'image',
-        capabilities: { input: { text: true, image: true }, output: { image: true }, tool_support: false },
+        capabilities: {
+            input: { text: true, image: true, audio: false, video: false },
+            output: { text: false, image: true, audio: false, video: false },
+            tool_support: false,
+            tool_support_streaming: false,
+        },
     },
 };
 
@@ -44,8 +50,11 @@ const GENERIC_CAPABILITIES: ModelCapabilities = {
 
 function normalizeSourceModelId(model: string): string {
     const normalized = model.trim().toLowerCase().replace(/^~/, '');
-    const slash = normalized.lastIndexOf('/');
-    const leaf = slash === -1 ? normalized : normalized.slice(slash + 1);
+    // Azure Foundry uses deployment::source-model. Resolve family semantics from the source half, not the
+    // customer-chosen deployment name, before applying transport behavior.
+    const sourceQualified = normalized.includes('::') ? (normalized.split('::').pop() ?? normalized) : normalized;
+    const slash = sourceQualified.lastIndexOf('/');
+    const leaf = slash === -1 ? sourceQualified : sourceQualified.slice(slash + 1);
     return leaf.replace(/^(?:global|us|eu|apac)\./, '').replace(/^(?:openai|anthropic|google|xai)\./, '');
 }
 
@@ -60,16 +69,27 @@ function inferFamily(model: string): { family: string; source_provider?: string 
     if (/(^|[-_.:])(?:embed|embedding|vector)(?:[-_.:]|$)/.test(normalized)) {
         return { family: 'embedding' };
     }
-    if (normalized.includes('prompt-guard')) return { family: 'moderation' };
+    if (/(?:prompt-guard|moderation|safeguard)/.test(normalized)) return { family: 'moderation' };
     if (normalized.includes('gpt-image') || normalized.includes('dall-e') || normalized.includes('imagen-')) {
         return { family: 'image', source_provider: normalized.includes('imagen') ? 'google' : 'openai' };
     }
+    if (/(?:whisper|transcribe)/.test(normalized)) return { family: 'transcription', source_provider: 'openai' };
+    if (/(?:^|[-_.])tts(?:[-_.]|$)/.test(normalized)) return { family: 'speech', source_provider: 'openai' };
+    if (normalized.includes('realtime')) return { family: 'realtime', source_provider: 'openai' };
+    if (normalized.includes('sora')) return { family: 'video', source_provider: 'openai' };
     if (normalized.includes('gemini')) return { family: 'gemini', source_provider: 'google' };
     if (normalized.includes('claude')) return { family: 'claude', source_provider: 'anthropic' };
     if (normalized.includes('gpt') || /^o\d+(?:[-_.]|$)/.test(normalized)) {
         return { family: 'gpt', source_provider: 'openai' };
     }
     if (normalized.includes('grok')) return { family: 'grok', source_provider: 'xai' };
+    if (
+        /(?:mistral|mixtral|ministral|magistral|voxtral|codestral|devstral|leanstral|mathstral|pixtral)/.test(
+            normalized,
+        )
+    ) {
+        return { family: 'mistral', source_provider: 'mistralai' };
+    }
     for (const family of ['llama', 'qwen', 'deepseek', 'gemma', 'mistral', 'kimi', 'minimax', 'glm']) {
         if (normalized.includes(family)) return { family };
     }
@@ -113,6 +133,34 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
                 tool_support: false,
                 tool_support_streaming: false,
             };
+        case 'transcription':
+            return {
+                input: { audio: true },
+                output: { text: true },
+                tool_support: false,
+                tool_support_streaming: false,
+            };
+        case 'speech':
+            return {
+                input: { text: true },
+                output: { audio: true },
+                tool_support: false,
+                tool_support_streaming: false,
+            };
+        case 'realtime':
+            return {
+                input: { text: true, image: true, audio: true },
+                output: { text: true, audio: true },
+                tool_support: true,
+                tool_support_streaming: true,
+            };
+        case 'video':
+            return {
+                input: { text: true, image: true, video: true },
+                output: { video: true, audio: true },
+                tool_support: false,
+                tool_support_streaming: false,
+            };
         case 'image':
             return { input: { text: true, image: true }, output: { image: true }, tool_support: false };
         case 'grok':
@@ -126,7 +174,9 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
             };
         case 'llama':
             return {
-                input: { text: true, image: model.includes('vision') || model.includes('llama-4') },
+                // Future Llama generations inherit the newest known family behavior until a provider documents
+                // a narrower exception.
+                input: { text: true, image: model.includes('vision') || isLlamaVersionGte(model, 4) },
                 output: { text: true },
                 tool_support: true,
                 tool_support_streaming: true,
@@ -153,19 +203,57 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
                 tool_support_streaming: true,
             };
         case 'deepseek':
-        case 'mistral':
         case 'kimi':
         case 'minimax':
         case 'glm':
             return { input: { text: true }, output: { text: true }, tool_support: true, tool_support_streaming: true };
+        case 'mistral':
+            return getMistralModelKnowledge(model).capabilities;
         default:
             return { ...GENERIC_CAPABILITIES, input: { ...GENERIC_CAPABILITIES.input } };
     }
 }
 
+function isLlamaVersionGte(model: string, targetMajor: number): boolean {
+    return (
+        isModelFamilyVersionGTE(model, 'llama-', targetMajor, 0) ||
+        isModelFamilyVersionGTE(model, 'llama', targetMajor, 0)
+    );
+}
+
+function mergeCapabilities(base: ModelCapabilities, override?: Partial<ModelCapabilities>): ModelCapabilities {
+    if (!override) return base;
+    return {
+        ...base,
+        ...override,
+        input: { ...base.input, ...override.input },
+        output: { ...base.output, ...override.output },
+    };
+}
+
+function getCanonicalLimits(
+    sourceModel: string,
+    family: string,
+): Pick<ModelProfile, 'context_window' | 'max_output_tokens'> {
+    // Profiles only expose limits backed by known family data so option UIs do not present guesses as authoritative.
+    if (
+        ['generic', 'embedding', 'moderation', 'image', 'transcription', 'speech', 'realtime', 'video'].includes(family)
+    ) {
+        return {};
+    }
+    if (family === 'mistral') {
+        return { context_window: getMistralModelKnowledge(sourceModel).context_window };
+    }
+    return {
+        context_window: getContextWindowSize(sourceModel),
+        max_output_tokens: getMaxOutputTokens(sourceModel),
+    };
+}
+
 function applyProviderOverlay(
     model: string,
     sourceModel: string,
+    family: string,
     provider: Providers,
     capabilities: ModelCapabilities,
 ): { capabilities: ModelCapabilities; context_window?: number; max_output_tokens?: number } {
@@ -188,37 +276,48 @@ function applyProviderOverlay(
                 ...capabilities,
                 tool_support_streaming: capabilities.tool_support_streaming ?? capabilities.tool_support,
             },
-            context_window: getContextWindowSize(sourceModel),
-            max_output_tokens: getMaxOutputTokens(sourceModel),
+            ...getCanonicalLimits(sourceModel, family),
         };
     }
 
     if (provider === Providers.azure_foundry) {
+        // Deployment metadata describes the transport. Dedicated source endpoints keep their source modalities so a
+        // deployment named like a GPT model cannot become text inference accidentally.
+        const providerCapabilities = getModelCapabilitiesAzureFoundry(model);
         return {
-            capabilities: getModelCapabilitiesAzureFoundry(model),
-            context_window: getContextWindowSize(sourceModel),
-            max_output_tokens: getMaxOutputTokens(sourceModel),
+            capabilities: ['embedding', 'moderation', 'image', 'transcription', 'speech', 'realtime', 'video'].includes(
+                family,
+            )
+                ? capabilities
+                : providerCapabilities,
+            ...getCanonicalLimits(sourceModel, family),
         };
     }
 
     return {
         capabilities,
-        context_window: getContextWindowSize(sourceModel),
-        max_output_tokens: getMaxOutputTokens(sourceModel),
+        ...getCanonicalLimits(sourceModel, family),
     };
 }
 
 function getReasoningEffortLevels(model: string, family: string, provider: Providers): readonly string[] | undefined {
     if (family === 'gpt') {
         if (model.includes('gpt-oss')) {
-            return provider === Providers.togetherai || provider === Providers.openai_compatible
+            return provider === Providers.togetherai ||
+                provider === Providers.openai_compatible ||
+                provider === Providers.vertexai ||
+                provider === Providers.bedrock ||
+                provider === Providers.bedrock_mantle ||
+                provider === Providers.azure_foundry
                 ? ['low', 'medium', 'high']
                 : undefined;
         }
         if (
             provider === Providers.openai ||
             provider === Providers.azure_openai ||
-            provider === Providers.openai_compatible
+            provider === Providers.openai_compatible ||
+            provider === Providers.azure_foundry ||
+            provider === Providers.bedrock_mantle
         ) {
             if (/^o\d+(?:[-_.]|$)/.test(model)) return ['low', 'medium', 'high'];
             return Object.values(getOpenAIReasoningEffortLevels(model) ?? {});
@@ -228,8 +327,8 @@ function getReasoningEffortLevels(model: string, family: string, provider: Provi
     if (family === 'gemini' && provider === Providers.openai_compatible && isGeminiModelVersionGte(model, '3.5')) {
         return ['minimal', 'low', 'medium', 'high'];
     }
-    if (provider === Providers.mistralai && /mistral-(?:small-latest|medium-3-5)/.test(model)) {
-        return ['none', 'high'];
+    if (provider === Providers.mistralai && family === 'mistral') {
+        return getMistralModelKnowledge(model).reasoning_effort_levels;
     }
     if (provider === Providers.xai && family === 'grok') {
         if (/grok-4\.20[^/]*multi-agent/.test(model)) return ['low', 'medium', 'high', 'xhigh'];
@@ -250,7 +349,9 @@ function isSingleDigitGrokVersionGte(model: string, targetMajor: number, targetM
 export function resolveModelProfile(model: string, provider: Providers): ModelProfile {
     const canonical_id = normalizeSourceModelId(model);
     const exactOverride = EXACT_MODEL_OVERRIDES[canonical_id];
-    const inferred = inferFamily(model);
+    // Family identity follows the normalized source model. Transport paths and customer deployment names must not
+    // accidentally select a different family rule.
+    const inferred = inferFamily(canonical_id);
     const family = exactOverride?.family ?? inferred.family;
     const source_provider = exactOverride?.source_provider ?? inferred.source_provider;
     const canonicalCapabilities = getCanonicalCapabilities(canonical_id, family);
@@ -260,20 +361,19 @@ export function resolveModelProfile(model: string, provider: Providers): ModelPr
         (Object.values(vertexCapabilities.input).some((value) => value === true) ||
             Object.values(vertexCapabilities.output).some((value) => value === true) ||
             vertexCapabilities.tool_support !== undefined);
-    const baseCapabilities = {
-        ...(hasVertexCapabilities ? vertexCapabilities : canonicalCapabilities),
-        ...exactOverride?.capabilities,
-    };
-    const overlay = applyProviderOverlay(model, canonical_id, provider, baseCapabilities);
+    const baseCapabilities = hasVertexCapabilities ? vertexCapabilities : canonicalCapabilities;
+    const overlay = applyProviderOverlay(model, canonical_id, family, provider, baseCapabilities);
     const reasoningEffortLevels = getReasoningEffortLevels(canonical_id, family, provider);
     return {
         model_id: model,
         canonical_id,
         family,
         source_provider,
-        capabilities: overlay.capabilities,
-        context_window: overlay.context_window,
-        max_output_tokens: overlay.max_output_tokens,
+        // Exact source-model semantics win after transport overlays. Provider inference must not turn a dedicated
+        // image or other non-chat endpoint into a text model merely because its ID resembles a known family.
+        capabilities: mergeCapabilities(overlay.capabilities, exactOverride?.capabilities),
+        context_window: exactOverride?.context_window ?? overlay.context_window,
+        max_output_tokens: exactOverride?.max_output_tokens ?? overlay.max_output_tokens,
         ...(reasoningEffortLevels?.length && { reasoning_effort_levels: reasoningEffortLevels }),
     };
 }

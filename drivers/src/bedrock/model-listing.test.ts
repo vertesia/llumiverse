@@ -28,7 +28,9 @@ const DISCOVERY_CASES = [
     { id: 'qwen.qwen4-coder', discoverable: true },
     { id: 'writer.palmyra-x6-v1:0', discoverable: true },
     { id: 'zai.glm-6', discoverable: true },
-    { id: 'amazon.titan-image-generator-v3', discoverable: true },
+    // Titan Image uses a different request schema; the current image execution path is Nova Canvas only.
+    { id: 'amazon.titan-image-generator-v3', discoverable: false },
+    { id: 'amazon.nova-canvas-v2:0', discoverable: true },
     { id: 'unverified.model-1', discoverable: false },
 ] as const;
 

@@ -1,11 +1,16 @@
+import type { z } from 'zod';
+import { resolveModelProfile } from '../model-directory.js';
+import type { AzureFoundryChatOptionsSchema } from '../schemas/model-options.js';
 import {
     type ModelOptionInfoItem,
     type ModelOptions,
     type ModelOptionsInfo,
     OptionType,
+    Providers,
     SharedOptions,
 } from '../types.js';
 import { getMaxOutputTokens } from './context-windows.js';
+import { getOpenAiOptions } from './openai.js';
 import { isOpenAIGptVersionGTE } from './version-parsing.js';
 
 // Helper function to parse composite model IDs
@@ -25,65 +30,7 @@ function parseAzureFoundryModelId(compositeId: string): { deploymentName: string
     };
 }
 
-// Union type of all Azure Foundry options
-export type AzureFoundryOptions =
-    | AzureFoundryOpenAIOptions
-    | AzureFoundryDeepSeekOptions
-    | AzureFoundryThinkingOptions
-    | AzureFoundryTextOptions
-    | AzureFoundryImageOptions;
-
-export interface AzureFoundryOpenAIOptions {
-    _option_id: 'azure-foundry-openai';
-    max_tokens?: number;
-    temperature?: number;
-    top_p?: number;
-    presence_penalty?: number;
-    frequency_penalty?: number;
-    stop_sequence?: string[];
-    image_detail?: 'low' | 'high' | 'auto';
-    reasoning_effort?: 'low' | 'medium' | 'high';
-}
-
-export interface AzureFoundryDeepSeekOptions {
-    _option_id: 'azure-foundry-deepseek';
-    max_tokens?: number;
-    temperature?: number;
-    top_p?: number;
-    stop_sequence?: string[];
-}
-
-export interface AzureFoundryThinkingOptions {
-    _option_id: 'azure-foundry-thinking';
-    max_tokens?: number;
-    temperature?: number;
-    top_p?: number;
-    stop_sequence?: string[];
-    reasoning_effort?: 'low' | 'medium' | 'high';
-    image_detail?: 'low' | 'high' | 'auto';
-}
-
-export interface AzureFoundryTextOptions {
-    _option_id: 'azure-foundry-text';
-    max_tokens?: number;
-    temperature?: number;
-    top_p?: number;
-    top_k?: number;
-    presence_penalty?: number;
-    frequency_penalty?: number;
-    stop_sequence?: string[];
-    seed?: number;
-}
-
-export interface AzureFoundryImageOptions {
-    _option_id: 'azure-foundry-image';
-    width?: number;
-    height?: number;
-    quality?: 'standard' | 'hd';
-    style?: 'vivid' | 'natural';
-    response_format?: 'url' | 'b64_json';
-    size?: '256x256' | '512x512' | '1024x1024' | '1792x1024' | '1024x1792';
-}
+export type AzureFoundryChatOptions = z.infer<typeof AzureFoundryChatOptionsSchema>;
 
 export function getMaxTokensLimitAzureFoundry(model: string): number | undefined {
     // Extract base model from composite ID (deployment::baseModel)
@@ -108,7 +55,7 @@ export function getMaxTokensLimitAzureFoundry(model: string): number | undefined
     if (modelLower.includes('gpt-35') || modelLower.includes('gpt-3.5')) {
         return 4096;
     }
-    if (isOpenAIGptVersionGTE(model, 5, 0)) {
+    if (isOpenAIGptVersionGTE(modelLower, 5, 0)) {
         return 128000;
     }
     // O-series models
@@ -145,13 +92,7 @@ export function getMaxTokensLimitAzureFoundry(model: string): number | undefined
     }
     // Llama models
     if (modelLower.includes('llama')) {
-        if (modelLower.includes('3.1') || modelLower.includes('3.3')) {
-            return 8192;
-        }
-        if (modelLower.includes('4')) {
-            return 1000000; // 1M context
-        }
-        return 8192;
+        return getMaxOutputTokens(modelLower);
     }
     // Mistral models
     if (modelLower.includes('mistral')) {
@@ -190,117 +131,27 @@ export function getAzureFoundryOptions(model: string, _option?: ModelOptions): M
     const { baseModel } = parseAzureFoundryModelId(model);
     const modelLower = baseModel.toLowerCase();
     const max_tokens_limit = getMaxTokensLimitAzureFoundry(model);
-    // Image generation models
-    if (modelLower.includes('dall-e') || modelLower.includes('gpt-image')) {
-        return {
-            _option_id: 'azure-foundry-image',
-            options: [
-                {
-                    name: 'size',
-                    type: OptionType.enum,
-                    enum: {
-                        '256x256': '256x256',
-                        '512x512': '512x512',
-                        '1024x1024': '1024x1024',
-                        '1792x1024': '1792x1024',
-                        '1024x1792': '1024x1792',
-                    },
-                    default: '1024x1024',
-                    description: 'The size of the generated image',
-                },
-                {
-                    name: 'quality',
-                    type: OptionType.enum,
-                    enum: { Standard: 'standard', HD: 'hd' },
-                    default: 'standard',
-                    description: 'The quality of the generated image',
-                },
-                {
-                    name: 'style',
-                    type: OptionType.enum,
-                    enum: { Vivid: 'vivid', Natural: 'natural' },
-                    default: 'vivid',
-                    description: 'The style of the generated image',
-                },
-                {
-                    name: 'response_format',
-                    type: OptionType.enum,
-                    enum: { URL: 'url', 'Base64 JSON': 'b64_json' },
-                    default: 'url',
-                    description: 'The format of the response',
-                },
-            ],
-        };
+    const profile = resolveModelProfile(model, Providers.azure_foundry);
+    if (modelLower.includes('gpt-') || modelLower.includes('dall-e') || /(?:^|[~/.])o\d+(?:[-_.]|$)/.test(modelLower)) {
+        return getOpenAiOptions(baseModel, _option, profile);
     }
     // Vision model options
-    const visionOptions: ModelOptionInfoItem[] = isVisionModel(modelLower)
-        ? [
-              {
-                  name: 'image_detail',
-                  type: OptionType.enum,
-                  enum: { Low: 'low', High: 'high', Auto: 'auto' },
-                  default: 'auto',
-                  description: 'Controls how the model processes input images',
-              },
-          ]
-        : [];
-    // O-series and thinking models
-    if (modelLower.includes('o1') || modelLower.includes('o3') || modelLower.includes('o4')) {
-        const reasoningOptions: ModelOptionInfoItem[] =
-            modelLower.includes('o3') || isO1Full(modelLower)
-                ? [
-                      {
-                          name: 'reasoning_effort',
-                          type: OptionType.enum,
-                          enum: { Low: 'low', Medium: 'medium', High: 'high' },
-                          default: 'medium',
-                          description: 'How much effort the model should put into reasoning',
-                      },
-                  ]
-                : [];
-        return {
-            _option_id: 'azure-foundry-thinking',
-            options: [
-                {
-                    name: SharedOptions.max_tokens,
-                    type: OptionType.numeric,
-                    min: 1,
-                    max: max_tokens_limit,
-                    integer: true,
-                    description: 'The maximum number of tokens to generate',
-                },
-                {
-                    name: SharedOptions.temperature,
-                    type: OptionType.numeric,
-                    min: 0.0,
-                    max: 2.0,
-                    default: 1.0,
-                    step: 0.1,
-                    description: 'Controls randomness in the output',
-                },
-                {
-                    name: SharedOptions.top_p,
-                    type: OptionType.numeric,
-                    min: 0,
-                    max: 1,
-                    step: 0.1,
-                    description: 'Nucleus sampling parameter',
-                },
-                {
-                    name: SharedOptions.stop_sequence,
-                    type: OptionType.string_list,
-                    value: [],
-                    description: 'Sequences where the model will stop generating',
-                },
-                ...reasoningOptions,
-                ...visionOptions,
-            ],
-        };
-    }
+    const visionOptions: ModelOptionInfoItem[] =
+        profile.capabilities.input.image === true
+            ? [
+                  {
+                      name: 'image_detail',
+                      type: OptionType.enum,
+                      enum: { Low: 'low', High: 'high', Auto: 'auto' },
+                      default: 'auto',
+                      description: 'Controls how the model processes input images',
+                  },
+              ]
+            : [];
     // DeepSeek R1 models
     if (modelLower.includes('deepseek') && modelLower.includes('r1')) {
         return {
-            _option_id: 'azure-foundry-deepseek',
+            _option_id: 'azure-foundry-chat',
             options: [
                 {
                     name: SharedOptions.max_tokens,
@@ -314,7 +165,7 @@ export function getAzureFoundryOptions(model: string, _option?: ModelOptions): M
                     name: SharedOptions.temperature,
                     type: OptionType.numeric,
                     min: 0.0,
-                    max: 2.0,
+                    max: 1.0,
                     default: 0.7,
                     step: 0.1,
                     description: 'Lower temperatures recommended for DeepSeek R1 (0.3-0.7)',
@@ -333,63 +184,18 @@ export function getAzureFoundryOptions(model: string, _option?: ModelOptions): M
                     value: [],
                     description: 'Sequences where the model will stop generating',
                 },
-            ],
-        };
-    }
-    // OpenAI models (GPT-4, GPT-4o, GPT-3.5)
-    if (modelLower.includes('gpt-')) {
-        return {
-            _option_id: 'azure-foundry-openai',
-            options: [
                 {
-                    name: SharedOptions.max_tokens,
+                    name: SharedOptions.seed,
                     type: OptionType.numeric,
-                    min: 1,
-                    max: max_tokens_limit,
                     integer: true,
-                    step: 200,
-                    description: 'The maximum number of tokens to generate',
+                    description: 'Random seed for reproducible generation',
                 },
                 {
-                    name: SharedOptions.temperature,
-                    type: OptionType.numeric,
-                    min: 0.0,
-                    max: 2.0,
-                    default: 0.7,
-                    step: 0.1,
-                    description: 'Controls randomness in the output',
+                    name: 'include_thoughts',
+                    type: OptionType.boolean,
+                    default: true,
+                    description: 'Include visible model reasoning as separate thoughts results',
                 },
-                {
-                    name: SharedOptions.top_p,
-                    type: OptionType.numeric,
-                    min: 0,
-                    max: 1,
-                    step: 0.1,
-                    description: 'Nucleus sampling parameter',
-                },
-                {
-                    name: SharedOptions.presence_penalty,
-                    type: OptionType.numeric,
-                    min: -2.0,
-                    max: 2.0,
-                    step: 0.1,
-                    description: 'Penalize new tokens based on their presence in the text',
-                },
-                {
-                    name: SharedOptions.frequency_penalty,
-                    type: OptionType.numeric,
-                    min: -2.0,
-                    max: 2.0,
-                    step: 0.1,
-                    description: 'Penalize new tokens based on their frequency in the text',
-                },
-                {
-                    name: SharedOptions.stop_sequence,
-                    type: OptionType.string_list,
-                    value: [],
-                    description: 'Sequences where the model will stop generating',
-                },
-                ...visionOptions,
             ],
         };
     }
@@ -408,7 +214,7 @@ export function getAzureFoundryOptions(model: string, _option?: ModelOptions): M
             name: SharedOptions.temperature,
             type: OptionType.numeric,
             min: 0.0,
-            max: 2.0,
+            max: 1.0,
             default: 0.7,
             step: 0.1,
             description: 'Controls randomness in the output',
@@ -430,18 +236,6 @@ export function getAzureFoundryOptions(model: string, _option?: ModelOptions): M
     ];
     // Add model-specific options
     const additionalOptions: ModelOptionInfoItem[] = [];
-    // Add top_k for certain models
-    if (modelLower.includes('claude') || modelLower.includes('mistral') || modelLower.includes('phi')) {
-        additionalOptions.push({
-            name: SharedOptions.top_k,
-            type: OptionType.numeric,
-            min: 1,
-            integer: true,
-            step: 1,
-            description: 'Limits token sampling to the top k tokens',
-        });
-    }
-
     // Add penalty options for certain models
     if (modelLower.includes('claude') || modelLower.includes('jamba') || modelLower.includes('cohere')) {
         additionalOptions.push(
@@ -463,36 +257,20 @@ export function getAzureFoundryOptions(model: string, _option?: ModelOptions): M
             },
         );
     }
-    // Add seed option for certain models
-    if (modelLower.includes('mistral') || modelLower.includes('phi') || modelLower.includes('gemini')) {
-        additionalOptions.push({
-            name: SharedOptions.seed,
-            type: OptionType.numeric,
-            integer: true,
-            description: 'Random seed for reproducible generation',
-        });
-    }
+    additionalOptions.push({
+        name: SharedOptions.seed,
+        type: OptionType.numeric,
+        integer: true,
+        description: 'Random seed for reproducible generation',
+    });
+    additionalOptions.push({
+        name: 'include_thoughts',
+        type: OptionType.boolean,
+        default: true,
+        description: 'Include visible model reasoning as separate thoughts results',
+    });
     return {
-        _option_id: 'azure-foundry-text',
+        _option_id: 'azure-foundry-chat',
         options: [...baseOptions, ...additionalOptions, ...visionOptions],
     };
-}
-
-function isVisionModel(modelLower: string): boolean {
-    return (
-        modelLower.includes('gpt-4o') ||
-        modelLower.includes('gpt-4-turbo') ||
-        modelLower.includes('claude-3') ||
-        modelLower.includes('llama-3.2') ||
-        modelLower.includes('llama-4') ||
-        modelLower.includes('gemini') ||
-        isO1Full(modelLower)
-    );
-}
-
-function isO1Full(modelLower: string): boolean {
-    if (modelLower.includes('o1')) {
-        return !modelLower.includes('mini') && !modelLower.includes('preview');
-    }
-    return false;
 }

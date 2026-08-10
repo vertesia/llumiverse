@@ -70,6 +70,8 @@ export class xAIDriver extends OpenAIResponsesDriverBase {
     async listModels(): Promise<AIModel[]> {
         const lm = (await this.xai_service.get('/language-models')) as xAIModelResponse;
 
+        // xAI listing modalities have been incomplete and occasionally describe endpoint artifacts rather than the
+        // language-model execution path. Prefer the curated family directory and use runtime data for availability.
         const models = lm.models
             .filter((model) => !isEmbeddingModel(model, this.provider))
             .map((model) => {

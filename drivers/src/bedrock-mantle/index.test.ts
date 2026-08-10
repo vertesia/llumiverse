@@ -216,6 +216,7 @@ describe('BedrockMantleDriver model listing', () => {
             { id: 'google.gemma-4-31b', object: 'model', created: 1783669008, owned_by: 'system' },
             { id: 'google.gemma-5-70b', object: 'model', created: 1783669008, owned_by: 'system' },
             { id: 'zai.glm-5', object: 'model', created: 1783669008, owned_by: 'system' },
+            { id: 'amazon.titan-embed-text-v2:0', object: 'model', created: 1783669008, owned_by: 'system' },
         ] satisfies OpenAI.Models.Model[];
         const list = vi.fn<ModelsList>(async () => ({ data: modelFixtures }));
         Reflect.set(driver, 'service', { models: { list } });
@@ -237,6 +238,7 @@ describe('BedrockMantleDriver model listing', () => {
             expect(modelIds).toContain(expectedModel);
         }
         expect(modelIds).not.toContain('unverified.model-1');
+        expect(modelIds).not.toContain('amazon.titan-embed-text-v2:0');
         expect(models).toEqual(
             expect.arrayContaining([
                 expect.objectContaining({
@@ -253,7 +255,7 @@ describe('BedrockMantleDriver model listing', () => {
                 expect.objectContaining({
                     id: 'google.gemma-4-31b',
                     owner: 'Google',
-                    input_modalities: ['text', 'image'],
+                    input_modalities: ['text', 'image', 'video'],
                 }),
                 expect.objectContaining({
                     id: 'openai.gpt-oss-120b',
@@ -267,7 +269,7 @@ describe('BedrockMantleDriver model listing', () => {
                     provider: Providers.bedrock_mantle,
                     can_stream: true,
                     output_modalities: ['text'],
-                    tool_support: true,
+                    tool_support: undefined,
                 }),
             ]),
         );

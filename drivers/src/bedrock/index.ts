@@ -1618,7 +1618,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     protected isImageModel(model: string): boolean {
-        return model.includes('titan-image') || model.includes('stable-diffusion') || model.includes('nova-canvas');
+        // This execution path serializes the Nova Canvas wire schema. Other image families need their own request path.
+        return model.includes('nova-canvas');
     }
 
     async requestImageGeneration(prompt: NovaMessagesPrompt, options: ExecutionOptions): Promise<Completion> {
@@ -1803,6 +1804,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             foundationModels = foundationModels.filter(foundationFilter);
         }
 
+        // Intentional allow-list: Bedrock spans several incompatible invocation schemas. Future versions from these
+        // known Converse-compatible publishers remain visible, but do not add a new publisher until its request path
+        // is verified. Per-model exclusions below are deterministic endpoint/schema incompatibilities, not guesses.
         const supportedPublishers = [
             'amazon',
             'anthropic',
@@ -1823,7 +1827,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             'zai',
         ];
         const unsupportedModelsByPublisher = {
-            amazon: ['nova-reel', 'nova-sonic', 'rerank'],
+            amazon: ['nova-reel', 'nova-sonic', 'titan-image-generator', 'rerank'],
             anthropic: [],
             cohere: ['rerank', 'embed'],
             ai21: [],

@@ -10,11 +10,11 @@ export function getModelCapabilities(model: string, provider: Providers): ModelC
         }
     }
     const capabilities = resolveModelProfile(model, provider).capabilities;
-    // Globally disable audio and video for all models, as we don't support them yet
-    // TODO: Remove this when we add support.
+    // The platform accepts audio/video inputs but cannot return those modalities yet. Keep source output metadata in
+    // the directory so enabling output support later only requires removing this execution-path mask.
     return {
         ...capabilities,
-        input: { ...capabilities.input, audio: false, video: false },
+        input: { ...capabilities.input },
         output: { ...capabilities.output, audio: false, video: false },
     };
 }

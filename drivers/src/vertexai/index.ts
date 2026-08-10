@@ -617,6 +617,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         // Model Garden publisher listings for families that are reliably returned by the API.
         // Open MaaS-only families are appended from VERTEX_OPEN_MAAS_MODELS below to avoid
         // extra listPublisherModels calls for publishers whose MaaS models do not appear there.
+        // Intentional allow-list: Vertex Model Garden spans endpoint contracts this driver does not implement. Future
+        // versions within these known executable families flow through automatically, but do not broaden this to every
+        // publisher merely because it appears in listing metadata; add a publisher only with a compatible request path.
         const publisherConfig = {
             google: {
                 families: ['gemini', 'imagen'],
@@ -626,7 +629,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                     'imagen-product-recontext-preview',
                     'embedding',
                     'embed',
-                    'gemini-live-2.5-flash-preview-native-audio',
+                    'gemini-live',
+                    'native-audio',
+                    '-tts',
                     'computer-use-preview',
                 ],
                 /** Additional models not in the listings, but we want to include.
@@ -686,7 +691,11 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         const excludedModels = publisherConfig.google.excluded;
         models = models.concat(
             globalGoogleResult
-                .filter((model) => !excludedModels.some((excludedModel) => (model.name ?? '').includes(excludedModel)))
+                .filter(
+                    (model) =>
+                        !excludedModels.some((excludedModel) => (model.name ?? '').includes(excludedModel)) &&
+                        isExecutableGoogleModel(model),
+                )
                 .map((model) => {
                     const modelCapability = getModelCapabilities(model.name ?? '', Providers.vertexai);
                     return {
@@ -877,6 +886,21 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         // Fall back to default AbstractDriver error handling
         return super.formatLlumiverseError(error, context);
     }
+}
+
+function isExecutableGoogleModel(model: Model): boolean {
+    const modelName = (model.name ?? '').toLowerCase();
+    // Intentional execution-path allow-list: Vertex uses separate methods for embeddings, Live/TTS, music and video.
+    // This driver currently implements generateContent and generateImages. Unknown actions are excluded only when
+    // Google supplies them; absent action metadata falls back to the known-family/name policy above.
+    if (!modelName.includes('gemini') && !modelName.includes('imagen')) return false;
+
+    if (model.supportedActions?.length) {
+        const actions = model.supportedActions.map((action) => action.toLowerCase().replace(/[^a-z]/g, ''));
+        return actions.some((action) => action === 'generatecontent' || action === 'generateimages');
+    }
+
+    return !/(?:embedding|embed|tts|live|native-audio|veo|lyria)/.test(modelName);
 }
 
 //'us-central1-aiplatform.googleapis.com',

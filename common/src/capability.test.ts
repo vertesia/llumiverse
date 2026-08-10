@@ -47,10 +47,10 @@ describe('xAI Grok tool capabilities', () => {
         expect(getModelCapabilities('grok-4.5', Providers.xai).input.image).toBe(true);
     });
 
-    it('masks unsupported platform audio and video modalities without mutating source metadata', () => {
-        const caps = getModelCapabilities('future-audio-video-model', Providers.openai_compatible);
-        expect(caps.input.audio).toBe(false);
-        expect(caps.input.video).toBe(false);
+    it('preserves supported audio and video inputs while masking unsupported outputs', () => {
+        const caps = getModelCapabilities('gemini-4.0-flash', Providers.vertexai);
+        expect(caps.input.audio).toBe(true);
+        expect(caps.input.video).toBe(true);
         expect(caps.output.audio).toBe(false);
         expect(caps.output.video).toBe(false);
     });
@@ -71,5 +71,11 @@ describe('supportsToolUse streaming default', () => {
         expect(caps.tool_support_streaming).toBe(false);
         expect(supportsToolUse('meta.llama3-1-70b-instruct-v1:0', Providers.bedrock, true)).toBe(false);
         expect(supportsToolUse('meta.llama3-1-70b-instruct-v1:0', Providers.bedrock, false)).toBe(true);
+    });
+
+    it('leaves genuinely unknown Bedrock tool support unset', () => {
+        const caps = getModelCapabilities('future-provider.unknown-chat-v1', Providers.bedrock);
+        expect(caps.tool_support).toBeUndefined();
+        expect(caps.tool_support_streaming).toBeUndefined();
     });
 });

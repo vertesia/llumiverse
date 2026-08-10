@@ -66,16 +66,25 @@ describe('Vertex AI MaaS metadata', () => {
     });
 
     it('uses OpenAI-compatible options for open MaaS chat families', () => {
-        const optionNames = getVertexAiOptions(
-            'locations/global/publishers/zai-org/models/glm-6-future-maas',
-        ).options.map((option) => option.name);
+        const options = getVertexAiOptions('locations/global/publishers/zai-org/models/glm-6-future-maas');
+        const optionNames = options.options.map((option) => option.name);
 
+        expect(options._option_id).toBe('openai-text');
         expect(optionNames).toContain('max_tokens');
         expect(optionNames).toContain('temperature');
         expect(optionNames).toContain('top_p');
         expect(optionNames).not.toContain('top_k');
         expect(optionNames).not.toContain('presence_penalty');
         expect(optionNames).not.toContain('frequency_penalty');
+    });
+
+    it('inherits verified GPT-OSS reasoning options on future Vertex MaaS versions', () => {
+        const options = getVertexAiOptions('locations/global/publishers/openai/models/gpt-oss-200b-maas');
+
+        expect(options._option_id).toBe('openai-text');
+        expect(options.options.find((option) => option.name === 'effort')).toMatchObject({
+            enum: { low: 'low', medium: 'medium', high: 'high' },
+        });
     });
 
     it('uses model-specific MaaS output token limits where known', () => {

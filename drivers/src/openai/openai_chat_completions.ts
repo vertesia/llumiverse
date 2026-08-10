@@ -1142,6 +1142,8 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
     ): OpenAIChatCompletionsPayload {
         const modelOptions = options.model_options as TextFallbackOptions & {
             effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+            reasoning_effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+            seed?: number;
         };
         const payload: OpenAIChatCompletionsPayload = {
             model: this.getModelName(options),
@@ -1155,7 +1157,8 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             frequency_penalty: modelOptions?.frequency_penalty,
             n: 1,
             stop: modelOptions?.stop_sequence,
-            reasoning_effort: modelOptions?.effort,
+            seed: modelOptions?.seed,
+            reasoning_effort: modelOptions?.effort ?? modelOptions?.reasoning_effort,
             stream,
         };
 

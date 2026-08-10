@@ -9,11 +9,15 @@ import {
     type ExecutionOptions,
     type ExecutionTokenUsage,
     getConversationMeta,
+    getModelCapabilities,
     incrementConversationTurn,
     isEmbeddingModel,
     type JSONObject,
     LlumiverseError,
     MISTRAL_DEFAULT_EMBEDDING_MODEL,
+    type MistralTextOptions,
+    ModelType,
+    modelModalitiesToArray,
     normalizeEmbeddingsOptions,
     type PromptOptions,
     PromptRole,
@@ -94,7 +98,7 @@ export class MistralAIDriver extends OpenAICompatibleDriverBase<MistralAIDriverO
         if (!message) throw new Error('Mistral response is not valid: no assistant message');
 
         const includeThoughts =
-            (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
+            (options.model_options as TextFallbackOptions | MistralTextOptions | undefined)?.include_thoughts !== false;
         const result = projectMistralContent(message.content, includeThoughts);
         const tool_use = collectMistralTools(message.toolCalls);
         const completed = finalizeMistralConversation(conversation, { ...message, role: 'assistant' }, options);
@@ -118,7 +122,7 @@ export class MistralAIDriver extends OpenAICompatibleDriverBase<MistralAIDriverO
             buildMistralRequest(conversation, options, true, this.options.defaultMaxTokens),
         );
         const includeThoughts =
-            (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
+            (options.model_options as TextFallbackOptions | MistralTextOptions | undefined)?.include_thoughts !== false;
         const nativeContent: ContentChunk[] = [];
         const nativeToolCalls = new Map<number, ToolCall>();
 
@@ -166,19 +170,28 @@ export class MistralAIDriver extends OpenAICompatibleDriverBase<MistralAIDriverO
 
     async listModels(): Promise<AIModel[]> {
         const models = await this.client.models.list();
-        return (models.data ?? []).flatMap((model) =>
-            'id' in model && !isEmbeddingModel({ id: model.id }, this.provider)
-                ? [
-                      {
-                          id: model.id,
-                          name: ('name' in model && model.name) || model.id,
-                          description: ('description' in model && model.description) || undefined,
-                          provider: this.provider,
-                          owner: 'ownedBy' in model ? model.ownedBy : '',
-                      } satisfies AIModel,
-                  ]
-                : [],
-        );
+        return (models.data ?? []).flatMap((model) => {
+            if (!('id' in model) || isEmbeddingModel({ id: model.id }, this.provider)) return [];
+            // The Models API explicitly identifies artifacts that cannot use Chat Completions. Keep entries with
+            // absent capability metadata visible because runtime metadata is incomplete for some valid chat models.
+            if ('capabilities' in model && model.capabilities?.completionChat === false) return [];
+            const capabilities = getModelCapabilities(model.id, this.provider);
+            return [
+                {
+                    id: model.id,
+                    name: ('name' in model && model.name) || model.id,
+                    description: ('description' in model && model.description) || undefined,
+                    provider: this.provider,
+                    owner: 'ownedBy' in model ? model.ownedBy : '',
+                    type: ModelType.Text,
+                    can_stream: true,
+                    is_multimodal: capabilities.input.image === true,
+                    input_modalities: modelModalitiesToArray(capabilities.input),
+                    output_modalities: modelModalitiesToArray(capabilities.output),
+                    tool_support: capabilities.tool_support,
+                } satisfies AIModel,
+            ];
+        });
     }
 
     async validateConnection(): Promise<boolean> {
@@ -311,6 +324,11 @@ async function formatMistralMessages(
                     type: 'image_url',
                     imageUrl: `data:${file.mime_type};base64,${await readStreamAsBase64(await file.getStream())}`,
                 });
+            } else if (file.mime_type?.startsWith('audio/')) {
+                parts.push({
+                    type: 'input_audio',
+                    inputAudio: await readStreamAsBase64(await file.getStream()),
+                });
             } else if (file.mime_type?.startsWith('text/')) {
                 const chunks: Buffer[] = [];
                 for await (const chunk of await file.getStream()) chunks.push(Buffer.from(chunk));
@@ -356,7 +374,13 @@ function buildMistralRequest(
     stream: boolean,
     defaultMaxTokens?: number,
 ): ChatCompletionRequest {
-    const modelOptions = options.model_options as TextFallbackOptions & { effort?: string };
+    // Continue reading effort from the previously advertised OpenAI-compatible shape so persisted configurations
+    // remain usable; Mistral-native fields are only accepted through the transport-specific discriminator.
+    const modelOptions = options.model_options as
+        | MistralTextOptions
+        | (TextFallbackOptions & { effort?: unknown })
+        | undefined;
+    const mistralOptions = modelOptions?._option_id === 'mistral-text' ? modelOptions : undefined;
     return {
         model: options.model,
         messages: conversation.messages,
@@ -366,6 +390,12 @@ function buildMistralRequest(
         presencePenalty: modelOptions?.presence_penalty,
         frequencyPenalty: modelOptions?.frequency_penalty,
         stop: modelOptions?.stop_sequence,
+        randomSeed: mistralOptions?.random_seed,
+        safePrompt: mistralOptions?.safe_prompt,
+        parallelToolCalls: mistralOptions?.parallel_tool_calls,
+        toolChoice: mistralOptions?.tool_choice,
+        promptMode: mistralOptions?.prompt_mode,
+        promptCacheKey: options.prompt_cache_key,
         n: 1,
         tools: options.tools?.map(toMistralTool),
         reasoningEffort:

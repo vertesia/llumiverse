@@ -1,3 +1,4 @@
+import { isModelFamilyVersionGTE } from '../options/version-parsing.js';
 import type { ModelModalities } from '../types.js';
 
 // Record of Vertex AI model capabilities keyed by model ID (last path segment, lowercased)
@@ -189,6 +190,11 @@ export function getModelCapabilitiesVertexAI(model: string): {
     const normalized = normalizeVertexAIModelName(model);
     const record = RECORD_MODEL_CAPABILITIES[normalized];
     if (record) return record;
+    if (isModelFamilyVersionGTE(normalized, 'llama-', 4, 0) || isModelFamilyVersionGTE(normalized, 'llama', 4, 0)) {
+        // New Llama generations inherit the latest known MaaS family capabilities until a model-specific exception
+        // is documented above.
+        return RECORD_FAMILY_CAPABILITIES['llama-4'];
+    }
     let bestFamilyKey: string | undefined;
     let bestFamilyLength = 0;
     for (const key of Object.keys(RECORD_FAMILY_CAPABILITIES)) {

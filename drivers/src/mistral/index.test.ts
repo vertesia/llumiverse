@@ -1,13 +1,114 @@
-import { PromptRole } from '@llumiverse/core';
+import { Base64DataSource, ModelType, PromptRole, Providers } from '@llumiverse/core';
 import { InvalidRequestError, RequestTimeoutError } from '@mistralai/mistralai/models/errors';
 import { describe, expect, it, vi } from 'vitest';
 import { MistralAIDriver } from './index.js';
 
 describe('MistralAIDriver official SDK transport', () => {
+    it('enriches standard inference listings through the shared model directory', async () => {
+        const driver = new MistralAIDriver({ apiKey: 'test-key' });
+        Object.defineProperty(driver.client.models, 'list', {
+            value: vi.fn(async () => ({
+                data: [
+                    {
+                        id: 'mistral-small-latest',
+                        name: 'Mistral Small',
+                        ownedBy: 'mistralai',
+                        capabilities: { completionChat: true },
+                    },
+                    { id: 'mistral-embed', name: 'Mistral Embed', ownedBy: 'mistralai' },
+                    { id: 'mistral-ocr-latest', capabilities: { completionChat: false } },
+                    { id: 'voxtral-mini-transcribe-2602', capabilities: { completionChat: false } },
+                    { id: 'voxtral-mini-2507', capabilities: { completionChat: true } },
+                    { id: 'future-chat-model' },
+                ],
+            })),
+        });
+
+        expect(await driver.listModels()).toEqual([
+            expect.objectContaining({
+                id: 'mistral-small-latest',
+                provider: Providers.mistralai,
+                type: ModelType.Text,
+                can_stream: true,
+                input_modalities: ['text', 'image'],
+                output_modalities: ['text'],
+                tool_support: true,
+            }),
+            expect.objectContaining({
+                id: 'voxtral-mini-2507',
+                input_modalities: ['text', 'audio'],
+                tool_support: false,
+            }),
+            expect.objectContaining({ id: 'future-chat-model', type: ModelType.Text }),
+        ]);
+    });
+
+    it('serializes speech input as a native Mistral audio chunk', async () => {
+        const driver = new MistralAIDriver({ apiKey: 'test-key' });
+        const prompt = await driver.createPrompt(
+            [
+                {
+                    role: PromptRole.user,
+                    content: 'Transcribe this',
+                    files: [new Base64DataSource('speech.mp3', 'audio/mpeg', 'AQID')],
+                },
+            ],
+            { model: 'voxtral-small-latest' },
+        );
+
+        expect(prompt.messages).toEqual([
+            {
+                role: 'user',
+                content: [
+                    { type: 'text', text: 'Transcribe this' },
+                    { type: 'input_audio', inputAudio: 'AQID' },
+                ],
+            },
+        ]);
+    });
+
     it('serializes verified reasoning effort through the native Mistral transport', async () => {
         const driver = new MistralAIDriver({ apiKey: 'test-key' });
         const complete = vi.fn(async () => ({
             choices: [{ index: 0, finishReason: 'stop', message: { role: 'assistant', content: 'done' } }],
+            usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+        }));
+        Object.defineProperty(driver.client.chat, 'complete', { value: complete });
+
+        await driver.requestTextCompletion(
+            { messages: [{ role: 'user', content: 'Think' }] },
+            {
+                model: 'mistral-small-latest',
+                model_options: {
+                    _option_id: 'mistral-text',
+                    effort: 'high',
+                    random_seed: 42,
+                    safe_prompt: true,
+                    parallel_tool_calls: false,
+                    tool_choice: 'required',
+                    prompt_mode: 'reasoning',
+                },
+                prompt_cache_key: 'agent-cache-key',
+            },
+        );
+
+        expect(complete).toHaveBeenCalledWith(
+            expect.objectContaining({
+                reasoningEffort: 'high',
+                randomSeed: 42,
+                safePrompt: true,
+                parallelToolCalls: false,
+                toolChoice: 'required',
+                promptMode: 'reasoning',
+                promptCacheKey: 'agent-cache-key',
+            }),
+        );
+    });
+
+    it('continues to read reasoning effort from persisted OpenAI-compatible options', async () => {
+        const driver = new MistralAIDriver({ apiKey: 'test-key' });
+        const complete = vi.fn(async () => ({
+            choices: [{ index: 0, finishReason: 'stop', message: { role: 'assistant' as const, content: 'Done' } }],
             usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
         }));
         Object.defineProperty(driver.client.chat, 'complete', { value: complete });

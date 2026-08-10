@@ -12,6 +12,7 @@ import {
     getBedrockMantleModelInfo,
     getBedrockMantleProtocol,
     getModelCapabilities,
+    isEmbeddingModel,
     type LlumiverseError,
     type LlumiverseErrorContext,
     ModelType,
@@ -262,6 +263,7 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
         const models = (await this.service.models.list()).data;
         return models
             .flatMap((model) => {
+                if (isEmbeddingModel(model, this.provider)) return [];
                 const info = getBedrockMantleModelInfo(model.id);
                 if (!info) return [];
                 const modelCapability = getModelCapabilities(model.id, this.provider);

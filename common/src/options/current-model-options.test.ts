@@ -42,6 +42,29 @@ describe('current reasoning model options', () => {
         ).not.toContain(SharedOptions.effort);
     });
 
+    it('advertises the native Mistral options that its transport serializes', () => {
+        const options = getOptions('mistral-small-latest', Providers.mistralai);
+        expect(options._option_id).toBe('mistral-text');
+        expect(options.options.map((option) => option.name)).toEqual(
+            expect.arrayContaining([
+                'max_tokens',
+                'temperature',
+                'top_p',
+                'presence_penalty',
+                'frequency_penalty',
+                'stop_sequence',
+                'effort',
+                'random_seed',
+                'safe_prompt',
+                'parallel_tool_calls',
+                'tool_choice',
+                'prompt_mode',
+                'include_thoughts',
+            ]),
+        );
+        expect(effortValues('mistral-small-latest', Providers.mistralai)).toEqual(['none', 'high']);
+    });
+
     it('advertises current Gemini thinking levels without adding a default', () => {
         const flash = getOptions('gemini-3.5-flash', Providers.vertexai);
         const pro = getOptions('gemini-3.1-pro-preview', Providers.vertexai);

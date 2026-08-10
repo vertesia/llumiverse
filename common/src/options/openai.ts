@@ -41,17 +41,21 @@ export function getOpenAiOptions(
     _option?: ModelOptions,
     profile: ModelProfile = resolveModelProfile(model, Providers.openai),
 ): ModelOptionsInfo {
-    const visionOptions: ModelOptionInfoItem[] = isVisionModel(model)
-        ? [
-              {
-                  name: 'image_detail',
-                  type: OptionType.enum,
-                  enum: { Low: 'low', High: 'high', Auto: 'auto' },
-                  default: 'auto',
-                  description: 'Controls how the model processes an input image.',
-              },
-          ]
-        : [];
+    // Option matching follows the resolved source ID so provider/path-qualified and uppercase IDs expose the same
+    // controls as their canonical model.
+    model = profile.canonical_id;
+    const visionOptions: ModelOptionInfoItem[] =
+        profile.capabilities.input.image === true
+            ? [
+                  {
+                      name: 'image_detail',
+                      type: OptionType.enum,
+                      enum: { Low: 'low', High: 'high', Auto: 'auto' },
+                      default: 'auto',
+                      description: 'Controls how the model processes an input image.',
+                  },
+              ]
+            : [];
 
     // Image generation models
     if (isImageModel(model)) {
@@ -339,26 +343,12 @@ export function getOpenAiCompatibleOptions(
     };
 }
 
-function isO1Full(model: string): boolean {
-    if (model.includes('o1')) {
-        if (model.includes('mini') || model.includes('preview')) {
-            return false;
-        }
-        return true;
-    }
-    return false;
-}
-
 function isReasoningModel(model: string): boolean {
     return isOSeriesModel(model) || isOpenAIGptVersionGTE(model, 5, 0);
 }
 
 function isOSeriesModel(model: string): boolean {
     return /(?:^|[~/.])o\d+(?:[-_.]|$)/.test(model.toLowerCase());
-}
-
-function isVisionModel(model: string): boolean {
-    return model.includes('gpt-4o') || isO1Full(model) || model.includes('gpt-4-turbo');
 }
 
 function isImageModel(model: string): boolean {
