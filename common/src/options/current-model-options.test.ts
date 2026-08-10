@@ -62,6 +62,7 @@ describe('current reasoning model options', () => {
                 'include_thoughts',
             ]),
         );
+        expect(options.options.map((option) => option.name)).not.toContain('image_detail');
         expect(effortValues('mistral-small-latest', Providers.mistralai)).toEqual(['none', 'high']);
     });
 

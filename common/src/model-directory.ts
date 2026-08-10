@@ -195,13 +195,23 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
                 tool_support_streaming: true,
             };
         }
-        case 'qwen':
+        case 'qwen': {
+            const normalized = model.toLowerCase();
+            const qwenVision =
+                normalized.includes('qwen3.5') ||
+                ['qwen2.5', 'qwen3'].some((familyPrefix) => {
+                    const familyIndex = normalized.indexOf(familyPrefix);
+                    if (familyIndex === -1) return false;
+                    const suffix = normalized.slice(familyIndex + familyPrefix.length);
+                    return suffix.includes('-vl') || suffix.includes('.vl');
+                });
             return {
-                input: { text: true, image: /qwen(?:2\.5|3)[^/]*[-.]vl|qwen3\.5/.test(model.toLowerCase()) },
+                input: { text: true, image: qwenVision },
                 output: { text: true },
                 tool_support: true,
                 tool_support_streaming: true,
             };
+        }
         case 'deepseek':
         case 'kimi':
         case 'minimax':
@@ -331,7 +341,10 @@ function getReasoningEffortLevels(model: string, family: string, provider: Provi
         return getMistralModelKnowledge(model).reasoning_effort_levels;
     }
     if (provider === Providers.xai && family === 'grok') {
-        if (/grok-4\.20[^/]*multi-agent/.test(model)) return ['low', 'medium', 'high', 'xhigh'];
+        const grok420Index = model.indexOf('grok-4.20');
+        if (grok420Index !== -1 && model.indexOf('multi-agent', grok420Index + 'grok-4.20'.length) !== -1) {
+            return ['low', 'medium', 'high', 'xhigh'];
+        }
         if (isSingleDigitGrokVersionGte(model, 4, 5)) return ['low', 'medium', 'high'];
         if (isSingleDigitGrokVersionGte(model, 4, 3)) return ['none', 'low', 'medium', 'high'];
     }
