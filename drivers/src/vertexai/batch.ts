@@ -203,10 +203,28 @@ export function parseBatchOutputLine(line: string, index: number): BatchInferenc
     }
     const request = obj.request as { labels?: Record<string, string> } | undefined;
     const custom_id = (obj.custom_id as string | undefined) ?? request?.labels?.custom_id ?? String(index);
+    const status = obj.status ?? (obj.error as { message?: string } | undefined)?.message;
+    const hasErrorStatus = typeof status === 'string' ? status.trim().length > 0 : status != null;
+    if (hasErrorStatus) {
+        let message = typeof status === 'string' ? status : JSON.stringify(status);
+        try {
+            const parsedStatus = typeof status === 'string' ? (JSON.parse(status) as { message?: unknown }) : status;
+            if (
+                parsedStatus &&
+                typeof parsedStatus === 'object' &&
+                'message' in parsedStatus &&
+                typeof parsedStatus.message === 'string'
+            ) {
+                message = parsedStatus.message;
+            }
+        } catch {
+            // Plain-text provider statuses are already useful as-is.
+        }
+        return { custom_id, error: message };
+    }
     const response = obj.response as GenerateContentResponse | undefined;
     if (response) {
         return { custom_id, ...parseGeminiBatchResponse(response) };
     }
-    const status = obj.status ?? (obj.error as { message?: string } | undefined)?.message;
-    return { custom_id, error: typeof status === 'string' ? status : 'no response in batch output' };
+    return { custom_id, error: 'no response in batch output' };
 }

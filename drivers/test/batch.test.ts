@@ -1,5 +1,12 @@
 import { BatchInferenceJobStatus } from '@llumiverse/common';
-import { describe, expect, it } from 'vitest';
+import {
+    type BatchBlobStore,
+    type BatchInferenceRequestItem,
+    type DataSource,
+    type ExecutionOptions,
+    PromptRole,
+} from '@llumiverse/core';
+import { describe, expect, it, vi } from 'vitest';
 import {
     mapModelInvocationJobStatus,
     parseBedrockBatchOutputLine,
@@ -12,6 +19,7 @@ import {
     parseGcsBucket,
     toRestGenerateContentRequest,
 } from '../src/vertexai/batch.js';
+import { VertexAIDriver } from '../src/vertexai/index.js';
 
 const manyTrailingSlashes = '/'.repeat(100_000);
 
@@ -64,6 +72,7 @@ describe('vertex batch helpers', () => {
         const line = JSON.stringify({
             custom_id: 'page-3',
             request: {},
+            status: '',
             response: {
                 candidates: [{ content: { parts: [{ text: '# Heading\ntext' }] }, finishReason: 'STOP' }],
                 usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 40, totalTokenCount: 140 },
@@ -82,9 +91,65 @@ describe('vertex batch helpers', () => {
         expect(item?.error).toBe('RESOURCE_EXHAUSTED');
     });
 
+    it('parseBatchOutputLine reports a structured item error even when Vertex emits an empty response', () => {
+        const item = parseBatchOutputLine(
+            JSON.stringify({
+                custom_id: 'image-1',
+                response: {},
+                status: JSON.stringify({ code: 7, message: 'storage.objects.get denied' }),
+            }),
+            0,
+        );
+        expect(item).toEqual({ custom_id: 'image-1', error: 'storage.objects.get denied' });
+    });
+
     it('parseBatchOutputLine ignores blank/invalid lines', () => {
         expect(parseBatchOutputLine('   ', 0)).toBeUndefined();
         expect(parseBatchOutputLine('not json', 0)).toBeUndefined();
+    });
+
+    it('startBatchInference serializes signed media URLs without reading their bytes', async () => {
+        const getStream = vi.fn().mockResolvedValue(new ReadableStream());
+        const getURL = vi.fn().mockResolvedValue('https://signed.example/image.jpg?signature=redacted');
+        const source: DataSource = {
+            name: 'image.jpg',
+            mime_type: 'image/jpeg',
+            getStream,
+            getURL,
+            getURI: vi.fn().mockResolvedValue('gs://tenant-bucket/image.jpg'),
+        };
+        const request: BatchInferenceRequestItem = {
+            custom_id: 'image-1',
+            segments: [{ role: PromptRole.user, content: 'Describe it.', files: [source] }],
+            options: {
+                model: 'publishers/google/models/gemini-2.5-flash',
+            } as ExecutionOptions,
+        };
+        const putText = vi.fn().mockResolvedValue('gs://tenant-bucket/batch/input.jsonl');
+        const blobStore: BatchBlobStore = {
+            putText,
+            readOutput: vi.fn().mockResolvedValue([]),
+        };
+        const driver = new VertexAIDriver({ project: 'test-project', region: 'us-central1' });
+        vi.spyOn(driver, 'getGoogleGenAIClient').mockReturnValue({
+            batches: {
+                create: vi.fn().mockResolvedValue({ name: 'batch-1', state: 'JOB_STATE_PENDING' }),
+            },
+        } as unknown as ReturnType<VertexAIDriver['getGoogleGenAIClient']>);
+
+        await driver.startBatchInference([request], { name: 'signed-media', blobStore });
+
+        expect(getURL).toHaveBeenCalledOnce();
+        expect(getStream).not.toHaveBeenCalled();
+        const input = JSON.parse(vi.mocked(putText).mock.calls[0][1]) as {
+            request: { contents: Array<{ parts: Array<{ fileData?: { fileUri: string } }> }> };
+        };
+        expect(input.request.contents[0].parts).toContainEqual({
+            fileData: {
+                fileUri: 'https://signed.example/image.jpg?signature=redacted',
+                mimeType: 'image/jpeg',
+            },
+        });
     });
 });
 

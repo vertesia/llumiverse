@@ -47,7 +47,7 @@ import {
 import { asyncMap } from '@llumiverse/core/async';
 import { truncateBinaryForDebug } from '../../shared/debug-prompt.js';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
-import type { ModelDefinition } from '../models.js';
+import type { ModelDefinition, VertexPromptOptions } from '../models.js';
 
 type GoogleApiErrorLike = Pick<ApiError, 'status' | 'message'>;
 
@@ -478,6 +478,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         _driver: VertexAIDriver,
         segments: PromptSegment[],
         options: ExecutionOptions,
+        promptOptions?: VertexPromptOptions,
     ): Promise<GenerateContentPrompt> {
         const splits = options.model.split('/');
         const modelName = splits[splits.length - 1];
@@ -534,11 +535,13 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 // File content handling
                 if (msg.files) {
                     for (const f of msg.files) {
-                        const fileUri = await f.getURI();
+                        const fileUri =
+                            promptOptions?.fileInputTransport === 'url' ? await f.getURL() : await f.getURI();
                         const isGsUri =
                             fileUri.startsWith('gs://') || fileUri.startsWith('https://storage.googleapis.com/');
+                        const isRemoteUrl = promptOptions?.fileInputTransport === 'url' && /^https?:\/\//.test(fileUri);
 
-                        if (isGsUri) {
+                        if (isGsUri || isRemoteUrl) {
                             parts.push({
                                 fileData: {
                                     fileUri,

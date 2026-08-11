@@ -407,7 +407,14 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
         const lines: string[] = [];
         for (const item of requests) {
-            const prompt = await this.createPrompt(item.segments, item.options);
+            const prompt = await getModelDefinition(item.options.model).createPrompt(
+                this,
+                item.segments,
+                item.options,
+                {
+                    fileInputTransport: 'url',
+                },
+            );
             if (!('contents' in prompt)) {
                 throw new Error('[vertexai] Batch inference currently supports Gemini (generateContent) models only');
             }
