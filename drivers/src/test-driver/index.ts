@@ -1,6 +1,9 @@
 import {
     type AIModel,
     AIModelStatus,
+    type BatchInferenceJob,
+    type BatchInferenceLimits,
+    type BatchInferenceResultItem,
     type CompletionStream,
     type Driver,
     type EmbeddingsResult,
@@ -39,6 +42,30 @@ export class TestDriver implements Driver<PromptSegment[]> {
 
     getTrainingJob(_jobId: string): Promise<TrainingJob> {
         throw new Error('Method not implemented.');
+    }
+
+    startBatchInference(): Promise<BatchInferenceJob> {
+        throw new Error('Method not implemented.');
+    }
+
+    getBatchInferenceJob(_jobId: string): Promise<BatchInferenceJob> {
+        throw new Error('Method not implemented.');
+    }
+
+    cancelBatchInference(_jobId: string): Promise<BatchInferenceJob> {
+        throw new Error('Method not implemented.');
+    }
+
+    getBatchInferenceResults(_jobId: string): Promise<BatchInferenceResultItem[]> {
+        throw new Error('Method not implemented.');
+    }
+
+    supportsBatchInference(): boolean {
+        return false;
+    }
+
+    getBatchInferenceLimits(): BatchInferenceLimits {
+        return { max_requests_per_job: 10_000 };
     }
 
     async createPrompt(segments: PromptSegment[], _opts: ExecutionOptions): Promise<PromptSegment[]> {

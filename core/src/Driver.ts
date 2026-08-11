@@ -6,6 +6,12 @@
 
 import {
     type AIModel,
+    type BatchBlobStore,
+    type BatchInferenceJob,
+    type BatchInferenceLimits,
+    type BatchInferenceOptions,
+    type BatchInferenceRequestItem,
+    type BatchInferenceResultItem,
     type Completion,
     type CompletionStream,
     type DataSource,
@@ -69,6 +75,48 @@ export interface Driver<PromptT = unknown> {
     cancelTraining(jobId: string): Promise<TrainingJob>;
 
     getTrainingJob(jobId: string): Promise<TrainingJob>;
+
+    /**
+     * Submit a batch of inference requests to the provider's asynchronous batch API.
+     * Each request is formatted with the driver's `createPrompt`, so batch output
+     * matches interactive output for the same model. Returns a job handle to poll.
+     * Only supported by drivers whose provider offers a batch API (Vertex, Bedrock, …).
+     */
+    startBatchInference(
+        requests: BatchInferenceRequestItem[],
+        options?: BatchInferenceOptions,
+    ): Promise<BatchInferenceJob>;
+
+    getBatchInferenceJob(jobId: string): Promise<BatchInferenceJob>;
+
+    cancelBatchInference(jobId: string): Promise<BatchInferenceJob>;
+
+    /**
+     * Fetch the results of a completed batch job, mapped back by `custom_id`.
+     * Pass `blobStore` to read the output through injected blob I/O (mirrors the store used at submit).
+     *
+     * NOTE: batch results are text-only today — every provider parser returns `text`
+     * completion results (plus token usage / finish reason). Function/tool calls and
+     * images produced by a batch request are not surfaced through this path.
+     */
+    getBatchInferenceResults(
+        jobId: string,
+        options?: { blobStore?: BatchBlobStore },
+    ): Promise<BatchInferenceResultItem[]>;
+
+    /**
+     * Whether this driver's provider offers a batch-inference API that this driver
+     * implements. Callers query this to decide whether to route work to the batch
+     * path or fall back to synchronous execution. Optionally refined per model.
+     */
+    supportsBatchInference(model?: string): boolean;
+
+    /**
+     * Provider-enforced sizing limits for a single batch job (request count, input
+     * bytes, …). Hosts use this to split an oversized request pool into several
+     * provider jobs before calling `startBatchInference`. Optionally refined per model.
+     */
+    getBatchInferenceLimits(model?: string): BatchInferenceLimits;
 
     //list models available for this environment
     listModels(params?: ModelSearchPayload): Promise<AIModel[]>;
@@ -170,6 +218,40 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     getTrainingJob(_jobId: string): Promise<TrainingJob> {
         throw new Error('Method not implemented.');
+    }
+
+    startBatchInference(
+        _requests: BatchInferenceRequestItem[],
+        _options?: BatchInferenceOptions,
+    ): Promise<BatchInferenceJob> {
+        throw new Error(`[${this.provider}] Batch inference is not supported by this driver.`);
+    }
+
+    getBatchInferenceJob(_jobId: string): Promise<BatchInferenceJob> {
+        throw new Error(`[${this.provider}] Batch inference is not supported by this driver.`);
+    }
+
+    cancelBatchInference(_jobId: string): Promise<BatchInferenceJob> {
+        throw new Error(`[${this.provider}] Batch inference is not supported by this driver.`);
+    }
+
+    getBatchInferenceResults(
+        _jobId: string,
+        _options?: { blobStore?: BatchBlobStore },
+    ): Promise<BatchInferenceResultItem[]> {
+        throw new Error(`[${this.provider}] Batch inference is not supported by this driver.`);
+    }
+
+    supportsBatchInference(_model?: string): boolean {
+        return false;
+    }
+
+    /**
+     * Conservative default batch-job limits. Drivers that implement batch inference
+     * override this with their provider's documented quotas.
+     */
+    getBatchInferenceLimits(_model?: string): BatchInferenceLimits {
+        return { max_requests_per_job: 10_000 };
     }
 
     validateResult(result: Completion, options: ExecutionOptions) {

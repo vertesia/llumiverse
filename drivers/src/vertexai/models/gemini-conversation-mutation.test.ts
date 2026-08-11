@@ -487,6 +487,33 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
         });
     });
 
+    it('createPrompt places signed URLs in batch file data without reading bytes', async () => {
+        const modelDef = new GeminiModelDefinition('gemini-2.0-flash');
+        const file: DataSource = {
+            name: 'image.jpg',
+            mime_type: 'image/jpeg',
+            getURI: vi.fn().mockResolvedValue('gs://test-bucket/image.jpg'),
+            getURL: vi.fn().mockResolvedValue('https://signed.example/image.jpg?signature=redacted'),
+            getStream: vi.fn().mockResolvedValue(new ReadableStream()),
+        };
+        const segments: PromptSegment[] = [{ role: PromptRole.user, files: [file] } as PromptSegment];
+        const options: ExecutionOptions = { model: 'publishers/google/models/gemini-2.0-flash' };
+
+        const prompt = await modelDef.createPrompt({} as VertexAIDriver, segments, options, {
+            fileInputTransport: 'url',
+        });
+
+        expect(file.getURL).toHaveBeenCalledTimes(1);
+        expect(file.getURI).not.toHaveBeenCalled();
+        expect(file.getStream).not.toHaveBeenCalled();
+        expect(prompt.contents[0].parts?.[0]).toEqual({
+            fileData: {
+                fileUri: 'https://signed.example/image.jpg?signature=redacted',
+                mimeType: 'image/jpeg',
+            },
+        });
+    });
+
     it('requestTextCompletion: does not mutate prompt.contents when tools=[] and conversation has function parts', async () => {
         const modelDef = new GeminiModelDefinition('gemini-2.0-flash');
         const originalContents = makeContentsWithFunctionParts();

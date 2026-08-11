@@ -873,6 +873,93 @@ export interface TrainingJob {
     model?: string; // the name of the fine tuned model which is created
 }
 
+// ============== batch inference =====================
+
+export enum BatchInferenceJobStatus {
+    queued = 'queued',
+    running = 'running',
+    succeeded = 'succeeded',
+    failed = 'failed',
+    cancelled = 'cancelled',
+}
+
+/**
+ * A single request in a batch. `custom_id` is echoed back on the matching result
+ * so callers can map a result to their own unit of work (e.g. a document page).
+ * `segments`/`options` are the SAME inputs the synchronous `execute()` takes, so the
+ * batch request is formatted by the driver's existing `createPrompt` — guaranteeing
+ * batch output matches interactive output for the same model.
+ */
+export interface BatchInferenceRequestItem {
+    custom_id: string;
+    segments: PromptSegment[];
+    options: ExecutionOptions;
+}
+
+/**
+ * Blob I/O for batch staging, injected by the caller so the driver does not need its own
+ * cloud-storage credentials. When provided, the driver delegates input upload + output read
+ * to it (e.g. a host that stages through its own storage service / tenant bucket) instead of
+ * writing/reading the object store directly. If absent, the driver uses its native staging
+ * (its own GCS/S3 client + configured bucket).
+ */
+export interface BatchBlobStore {
+    /** Write `content` at bucket-relative `path`; return the absolute URI written (gs://… or s3://…). */
+    putText(path: string, content: string): Promise<string>;
+    /** List objects under `outputUri` and return each output object's text content. */
+    readOutput(outputUri: string): Promise<string[]>;
+}
+
+/**
+ * Options controlling where the driver stages the batch input/output. If neither
+ * `input_uri` nor `blobStore` is provided, the driver falls back to a bucket configured
+ * in its driver options (e.g. `batch_bucket` for Vertex/Bedrock).
+ */
+export interface BatchInferenceOptions {
+    name?: string; // display name / job-name prefix
+    /**
+     * Staging bucket/prefix spec (`gs://bucket/prefix`, `s3://bucket/prefix`, `bucket/prefix`
+     * or bare `bucket`) under which the driver stages a fresh `input.jsonl` (and the job's
+     * output directory) for this run. Takes precedence over the driver-level `batch_bucket`
+     * option. Ignored when a `blobStore` is injected.
+     */
+    input_uri?: string;
+    blobStore?: BatchBlobStore; // inject blob I/O so the driver never needs its own storage credentials
+}
+
+/**
+ * Provider-enforced sizing limits for a single batch-inference job, surfaced so a host
+ * can split an oversized request pool into several provider jobs before submitting.
+ */
+export interface BatchInferenceLimits {
+    /** maximum requests per batch job */
+    max_requests_per_job: number;
+    /** maximum serialized input size per job in bytes, if the provider enforces one */
+    max_input_bytes?: number;
+    /** provider-enforced minimum requests per job, if any */
+    min_requests_per_job?: number;
+    /** maximum concurrently running batch jobs, if the provider documents one */
+    max_concurrent_jobs?: number;
+}
+
+export interface BatchInferenceJob {
+    id: string; // provider job resource name / id
+    status: BatchInferenceJobStatus;
+    details?: string; // status detail or error message
+    output_uri?: string; // location of the results once available (gs://… or s3://…)
+    request_count?: number; // number of requests submitted, when known
+    start_time?: number; // epoch millis
+    end_time?: number; // epoch millis
+}
+
+export interface BatchInferenceResultItem {
+    custom_id: string;
+    result?: CompletionResult[];
+    token_usage?: ExecutionTokenUsage;
+    finish_reason?: string;
+    error?: string;
+}
+
 export type JSONPrimitive = string | number | boolean | null;
 export type JSONArray = JSONValue[];
 export type JSONObject = { [key: string]: JSONValue };
