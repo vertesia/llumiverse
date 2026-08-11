@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import { getBedrockModelKnowledge } from '../capability/bedrock-models.js';
+import { getBedrockModelKnowledge, normalizeBedrockModelId } from '../capability/bedrock-models.js';
 import type {
     BedrockMantleChatCompletionsOptionsSchema,
     BedrockMantleClaudeOptionsSchema,
@@ -74,7 +74,7 @@ function supportsImageInput(model: string): boolean {
 }
 
 export function getBedrockMantleProtocol(model: string): BedrockMantleProtocol | undefined {
-    const normalized = model.toLowerCase();
+    const normalized = normalizeBedrockModelId(model);
     const publisher = getPublisher(normalized);
 
     if (publisher === 'anthropic' && normalized.includes('.claude-')) return 'messages';
@@ -100,7 +100,7 @@ export function getBedrockMantleProtocol(model: string): BedrockMantleProtocol |
 }
 
 export function getBedrockMantleModelInfo(model: string): BedrockMantleModelInfo | undefined {
-    const normalized = model.toLowerCase();
+    const normalized = normalizeBedrockModelId(model);
     const protocol = getBedrockMantleProtocol(normalized);
     if (!protocol) return undefined;
     const publisher = getPublisher(normalized);
@@ -118,7 +118,7 @@ export type BedrockMantleModelFamily = 'openai' | 'grok';
 
 export function getBedrockMantleModelFamily(model: string): BedrockMantleModelFamily | undefined {
     if (getBedrockMantleProtocol(model) !== 'responses') return undefined;
-    const normalized = model.toLowerCase();
+    const normalized = normalizeBedrockModelId(model);
     if (normalized.startsWith('openai.')) return 'openai';
     if (normalized.startsWith('xai.grok-')) return 'grok';
     return undefined;
@@ -137,7 +137,7 @@ function maxTokensOption(model: string): ModelOptionInfoItem {
 }
 
 function getResponsesOptions(model: string): ModelOptionsInfo {
-    const normalized = model.toLowerCase();
+    const normalized = normalizeBedrockModelId(model);
     const isGrok = normalized.startsWith('xai.grok-');
     const reasoningEffortEnum: Record<string, string> = isGrok
         ? { none: 'none', low: 'low', medium: 'medium', high: 'high' }

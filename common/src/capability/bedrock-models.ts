@@ -1,3 +1,4 @@
+import { parseClaudeVersion } from '../options/version-parsing.js';
 import type { ModelCapabilities, ModelModalities } from '../types.js';
 
 export type BedrockEndpoint = 'runtime' | 'mantle';
@@ -23,11 +24,18 @@ function isFamilyVersionGte(model: string, family: string, targetMajor: number, 
     return major > targetMajor || (major === targetMajor && minor >= targetMinor);
 }
 
+/**
+ * Geographic prefix carried by cross-region inference IDs (`us.`, `eu.`, `apac.`, `us-gov.`, `global.`).
+ * No publisher segment collides with these, so the prefix can be stripped wherever it appears — not
+ * only inside an inference-profile ARN, since callers also pass the bare `us.<publisher>.<model>` ID.
+ */
+const GEO_PREFIX = /^(?:[a-z]{2}(?:-gov)?|apac|global)\./;
+
 export function normalizeBedrockModelId(model: string): string {
     const normalized = model.toLowerCase();
     const slash = normalized.lastIndexOf('/');
     const modelId = slash === -1 ? normalized : normalized.slice(slash + 1);
-    return normalized.includes('inference-profile/') ? modelId.replace(/^[^.]+\./, '') : modelId;
+    return modelId.replace(GEO_PREFIX, '');
 }
 
 function getModalities(model: string): Pick<BedrockModelKnowledge, 'input' | 'output'> {
@@ -94,28 +102,35 @@ function getLimits(model: string): Pick<BedrockModelKnowledge, 'context_window' 
         return { context_window: 300_000, max_output_tokens: 5_120 };
     }
     if (model.includes('anthropic.claude')) {
-        if (
-            includesAny(model, [
-                'claude-fable-5',
-                'claude-mythos',
-                'claude-sonnet-5',
-                'claude-opus-4-6',
-                'claude-opus-4-7',
-                'claude-opus-4-8',
-            ])
-        ) {
-            // Bedrock enforces an EXCLUSIVE 128K bound for this family: it rejects
-            // max_tokens >= 128000 with "Try again with a maximum tokens value that
-            // is lower than 128000" (same exclusive-bound quirk as Haiku 4.5 below).
-            return { context_window: 1_000_000, max_output_tokens: 127_999 };
+        // Version rules rather than an ID list, so a newly released variant inherits the limits of the
+        // newest understood generation instead of silently reporting no limits at all.
+        const claude = parseClaudeVersion(model);
+        if (claude) {
+            const atLeast = (major: number, minor: number) =>
+                claude.major > major || (claude.major === major && claude.minor >= minor);
+            if (atLeast(4, 7) || (claude.variant === 'opus' && atLeast(4, 6))) {
+                // Bedrock enforces an EXCLUSIVE 128K bound for this family: it rejects
+                // max_tokens >= 128000 with "Try again with a maximum tokens value that
+                // is lower than 128000" (same exclusive-bound quirk as Haiku 4.5 below).
+                return { context_window: 1_000_000, max_output_tokens: 127_999 };
+            }
+            if (claude.variant === 'sonnet' && atLeast(4, 6)) {
+                return { context_window: 1_000_000, max_output_tokens: 65_536 };
+            }
+            if (atLeast(4, 5)) {
+                // Bedrock documents 64K for Haiku 4.5 but rejects max_tokens=64000; its bound is exclusive.
+                return {
+                    context_window: 200_000,
+                    max_output_tokens: claude.variant === 'haiku' ? 63_999 : 65_536,
+                };
+            }
+            if (atLeast(4, 0)) {
+                return {
+                    context_window: 200_000,
+                    max_output_tokens: claude.variant === 'opus' ? 32_000 : 65_536,
+                };
+            }
         }
-        if (model.includes('claude-sonnet-4-6')) return { context_window: 1_000_000, max_output_tokens: 65_536 };
-        // Bedrock documents 64K for Haiku 4.5 but rejects max_tokens=64000; its upper bound is exclusive.
-        if (model.includes('claude-haiku-4-5')) return { context_window: 200_000, max_output_tokens: 63_999 };
-        if (includesAny(model, ['claude-opus-4-5', 'claude-sonnet-4'])) {
-            return { context_window: 200_000, max_output_tokens: 65_536 };
-        }
-        if (model.includes('claude-opus-4-1')) return { context_window: 200_000, max_output_tokens: 32_000 };
         if (model.includes('claude-3-5-haiku')) return { context_window: 200_000, max_output_tokens: 8_192 };
         if (model.includes('claude-3-haiku')) return { context_window: 200_000, max_output_tokens: 4_096 };
     }
@@ -171,7 +186,7 @@ function getLimits(model: string): Pick<BedrockModelKnowledge, 'context_window' 
         return { context_window: 256_000, max_output_tokens: model.includes('super') ? 32_768 : 8_192 };
     }
     if (model.includes('nvidia.nemotron-nano-')) return { context_window: 128_000, max_output_tokens: 8_192 };
-    if (model.startsWith('openai.gpt-5')) return { context_window: 272_000 };
+    if (isFamilyVersionGte(model, 'openai.gpt-', 5)) return { context_window: 272_000 };
     if (model.includes('openai.gpt-oss')) return { context_window: 128_000, max_output_tokens: 16_384 };
     if (model.includes('qwen3-235b')) return { context_window: 256_000, max_output_tokens: 8_192 };
     if (model.includes('qwen3-32b')) return { context_window: 32_000, max_output_tokens: 8_192 };

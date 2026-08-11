@@ -3,7 +3,7 @@ import { getBedrockModelKnowledge } from '../capability/bedrock-models.js';
 import { getModelCapabilities } from '../capability.js';
 import { getOptions } from '../options.js';
 import { OptionType, Providers } from '../types.js';
-import { getBedrockOptions } from './bedrock.js';
+import { getBedrockOptions, getMaxTokensLimitBedrock } from './bedrock.js';
 import { getBedrockMantleProtocol } from './bedrock_mantle.js';
 import { getContextWindowSize } from './context-windows.js';
 import { getClaudeMaxTokensLimit } from './shared-parsing.js';
@@ -262,6 +262,52 @@ describe('Bedrock Mantle metadata', () => {
         expect(getBedrockModelKnowledge(model)).toMatchObject({
             context_window: contextWindow,
             max_output_tokens: maxOutputTokens,
+        });
+    });
+
+    it.each([
+        ['anthropic.claude-opus-5-v1:0', 1_000_000, 127_999],
+        ['anthropic.claude-fable-5-v1:0', 1_000_000, 127_999],
+        ['anthropic.claude-sonnet-5-20260701-v1:0', 1_000_000, 127_999],
+        ['anthropic.claude-mythos-preview-v1:0', 1_000_000, 127_999],
+        ['anthropic.claude-opus-4-8-v1:0', 1_000_000, 127_999],
+        ['anthropic.claude-haiku-4-7-v1:0', 1_000_000, 127_999],
+        ['anthropic.claude-opus-4-6-v1:0', 1_000_000, 127_999],
+        ['anthropic.claude-sonnet-4-6-v1:0', 1_000_000, 65_536],
+        ['anthropic.claude-haiku-4-5-20251001-v1:0', 200_000, 63_999],
+        ['anthropic.claude-opus-4-5-v1:0', 200_000, 65_536],
+        ['anthropic.claude-sonnet-4-20250514-v1:0', 200_000, 65_536],
+        ['anthropic.claude-opus-4-1-20250805-v1:0', 200_000, 32_000],
+    ] as const)('derives Claude limits from the model version for %s', (model, contextWindow, maxOutputTokens) => {
+        expect(getBedrockModelKnowledge(model)).toMatchObject({
+            context_window: contextWindow,
+            max_output_tokens: maxOutputTokens,
+        });
+    });
+
+    it('keeps Bedrock max_tokens below the exclusive 128K bound for the current Claude generation', () => {
+        expect(getMaxTokensLimitBedrock('anthropic.claude-opus-5-v1:0')).toBe(127_999);
+        expect(getMaxTokensLimitBedrock('anthropic.claude-fable-5-v1:0')).toBe(127_999);
+    });
+
+    it('resolves model knowledge through cross-region inference prefixes', () => {
+        expect(getBedrockModelKnowledge('us.anthropic.claude-opus-5-v1:0')).toMatchObject({
+            context_window: 1_000_000,
+            max_output_tokens: 127_999,
+        });
+        expect(getBedrockModelKnowledge('eu.openai.gpt-5.6-sol-v1:0')).toMatchObject({
+            context_window: 272_000,
+            input: { image: true },
+        });
+        expect(getBedrockModelKnowledge('apac.amazon.nova-pro-v1:0').context_window).toBe(300_000);
+        expect(getModelCapabilities('us.openai.gpt-5.6-sol-v1:0', Providers.bedrock_mantle).input.image).toBe(true);
+    });
+
+    it('inherits Mantle GPT context limits for later majors', () => {
+        expect(getBedrockModelKnowledge('openai.gpt-6-v1:0').context_window).toBe(272_000);
+        expect(getBedrockModelKnowledge('openai.gpt-oss-120b')).toMatchObject({
+            context_window: 128_000,
+            max_output_tokens: 16_384,
         });
     });
 
