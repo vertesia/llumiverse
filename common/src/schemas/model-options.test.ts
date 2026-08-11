@@ -94,4 +94,20 @@ describe('ModelOptionsSchema', () => {
         expect(ModelOptionsSchema.safeParse({ _option_id: 'text-fallback', nope: 1 }).success).toBe(false);
         expect(ModelOptionsSchema.safeParse({ _option_id: 'not-a-driver' }).success).toBe(false);
     });
+
+    it('accepts current and future service tiers for provider option schemas', () => {
+        expect(ModelOptionsSchema.safeParse({ _option_id: 'openai-text', service_tier: 'flex' }).success).toBe(true);
+        expect(ModelOptionsSchema.safeParse({ _option_id: 'openai-thinking', service_tier: 'priority' }).success).toBe(
+            true,
+        );
+        expect(
+            ModelOptionsSchema.safeParse({ _option_id: 'vertexai-gemini', service_tier: 'future-tier' }).success,
+        ).toBe(true);
+        expect(
+            ModelOptionsSchema.safeParse({ _option_id: 'bedrock-claude', service_tier: 'future-tier' }).success,
+        ).toBe(true);
+        expect(
+            ModelOptionsSchema.safeParse({ _option_id: 'bedrock-twelvelabs-pegasus', service_tier: 'flex' }).success,
+        ).toBe(true);
+    });
 });

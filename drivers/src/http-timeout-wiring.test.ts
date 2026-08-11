@@ -255,7 +255,7 @@ describe('driver HTTP timeout wiring', () => {
 
         const internals = exposePrivate<{
             getGoogleGenAIHttpOptions: (
-                flex: boolean,
+                serviceTier?: string,
                 httpTimeout?: HttpTimeoutOptions,
             ) => {
                 timeout: number;
@@ -273,18 +273,28 @@ describe('driver HTTP timeout wiring', () => {
             };
         }>(driver);
 
-        expect(internals.getGoogleGenAIHttpOptions(false)).toEqual({
+        expect(internals.getGoogleGenAIHttpOptions()).toEqual({
             timeout: 3_000,
         });
-        expect(internals.getGoogleGenAIHttpOptions(true)).toEqual({
+        expect(internals.getGoogleGenAIHttpOptions('flex')).toEqual({
             timeout: 3_000,
             headers: {
                 'X-Vertex-AI-LLM-Request-Type': 'shared',
                 'X-Vertex-AI-LLM-Shared-Request-Type': 'flex',
             },
         });
+        expect(internals.getGoogleGenAIHttpOptions('future-tier')).toEqual({
+            timeout: 3_000,
+            headers: {
+                'X-Vertex-AI-LLM-Request-Type': 'shared',
+                'X-Vertex-AI-LLM-Shared-Request-Type': 'future-tier',
+            },
+        });
+        expect(internals.getGoogleGenAIHttpOptions('default')).toEqual({
+            timeout: 3_000,
+        });
         expect(
-            internals.getGoogleGenAIHttpOptions(false, {
+            internals.getGoogleGenAIHttpOptions(undefined, {
                 headersTimeout: 10_000,
                 bodyTimeout: 20_000,
             }),
@@ -318,7 +328,7 @@ describe('driver HTTP timeout wiring', () => {
         });
 
         const defaultGoogleClient = driver.getGoogleGenAIClient();
-        const overrideGoogleClient = driver.getGoogleGenAIClient('us-central1', false, {
+        const overrideGoogleClient = driver.getGoogleGenAIClient('us-central1', undefined, {
             headersTimeout: 10_000,
         });
         expect(overrideGoogleClient).not.toBe(defaultGoogleClient);
@@ -333,7 +343,7 @@ describe('driver HTTP timeout wiring', () => {
             region: 'us-central1',
         });
         const internals = exposePrivate<{
-            getGoogleGenAIHttpOptions: (flex: boolean) => { timeout: number };
+            getGoogleGenAIHttpOptions: (serviceTier?: string) => { timeout: number };
             getAnthropicVertexClientOptions: (region: string, authClient: unknown) => { timeout: number };
         }>(driver);
         const connectOnlyDriver = new VertexAIDriver({
@@ -342,11 +352,11 @@ describe('driver HTTP timeout wiring', () => {
             httpTimeout: { connectTimeout: 1_000 },
         });
         const connectOnlyInternals = exposePrivate<{
-            getGoogleGenAIHttpOptions: (flex: boolean) => { timeout: number };
+            getGoogleGenAIHttpOptions: (serviceTier?: string) => { timeout: number };
         }>(connectOnlyDriver);
 
-        expect(internals.getGoogleGenAIHttpOptions(false).timeout).toBe(600_000);
-        expect(connectOnlyInternals.getGoogleGenAIHttpOptions(false).timeout).toBe(600_000);
+        expect(internals.getGoogleGenAIHttpOptions().timeout).toBe(600_000);
+        expect(connectOnlyInternals.getGoogleGenAIHttpOptions().timeout).toBe(600_000);
         expect(internals.getAnthropicVertexClientOptions('global', {}).timeout).toBe(60_000);
 
         connectOnlyDriver.destroy();

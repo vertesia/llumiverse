@@ -34,6 +34,19 @@ export type OpenAiGptImageOptions = z.infer<typeof OpenAiGptImageOptionsSchema>;
  */
 export type OpenAiOptions = OpenAiThinkingOptions | OpenAiTextOptions | OpenAiDalleOptions | OpenAiGptImageOptions;
 
+/** OpenAI model families with published Flex processing support. */
+export function isFlexSupportedOpenAIModel(model: string): boolean {
+    const modelName = (model.split('/').pop() ?? model).toLowerCase();
+    const unsupportedVariant = ['chat', 'codex', 'pro', 'deep-research'].some((variant) => modelName.includes(variant));
+    if (unsupportedVariant) return false;
+
+    return (
+        /^gpt-5(?:[.-]|$)/.test(modelName) ||
+        /^o3(?:-\d{4}|$)/.test(modelName) ||
+        /^o4-mini(?:-\d{4}|$)/.test(modelName)
+    );
+}
+
 export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOptionsInfo {
     const visionOptions: ModelOptionInfoItem[] = isVisionModel(model)
         ? [
@@ -46,6 +59,23 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
               },
           ]
         : [];
+    const serviceTiers: Record<string, string> = {
+        Auto: 'auto',
+        Default: 'default',
+        Priority: 'priority',
+    };
+    if (isFlexSupportedOpenAIModel(model)) {
+        serviceTiers.Flex = 'flex';
+    }
+    const serviceTierOptions: ModelOptionInfoItem[] = [
+        {
+            name: 'service_tier',
+            type: OptionType.enum,
+            enum: serviceTiers,
+            default: 'auto',
+            description: 'Select the OpenAI processing tier for this request.',
+        },
+    ];
 
     // Image generation models
     if (isImageModel(model)) {
@@ -204,7 +234,7 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
 
         return {
             _option_id: 'openai-thinking',
-            options: [...commonOptions, ...reasoningOptions, ...visionOptions],
+            options: [...commonOptions, ...reasoningOptions, ...visionOptions, ...serviceTierOptions],
         };
     } else {
         let max_tokens_limit = 4096;
@@ -283,21 +313,39 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
 
         return {
             _option_id: 'openai-text',
-            options: [...commonOptions, ...visionOptions],
+            options: [...commonOptions, ...visionOptions, ...serviceTierOptions],
         };
     }
+}
+
+/** Azure OpenAI currently documents request-level Default and Priority processing, selected through auto. */
+export function getAzureOpenAiOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
+    const options = getOpenAiOptions(model, option);
+    return {
+        ...options,
+        options: options.options.map((item) =>
+            item.name === 'service_tier' && item.type === OptionType.enum
+                ? {
+                      ...item,
+                      enum: { Auto: 'auto', Default: 'default', Priority: 'priority' },
+                      description: 'Select the Azure OpenAI processing tier for this request.',
+                  }
+                : item,
+        ),
+    };
 }
 
 /** OpenAI-compatible endpoints own model capability detection, so expose effort for any text model. */
 export function getOpenAiCompatibleOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
     const options = getOpenAiOptions(model, option);
-    if (options.options.some((item) => item.name === SharedOptions.effort) || options._option_id !== 'openai-text') {
-        return options;
+    const compatibleOptions = options.options.filter((item) => item.name !== 'service_tier');
+    if (compatibleOptions.some((item) => item.name === SharedOptions.effort) || options._option_id !== 'openai-text') {
+        return { ...options, options: compatibleOptions };
     }
     return {
         ...options,
         options: [
-            ...options.options,
+            ...compatibleOptions,
             {
                 name: SharedOptions.effort,
                 type: OptionType.enum,

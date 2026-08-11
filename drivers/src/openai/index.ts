@@ -48,6 +48,7 @@ import { formatOpenAISchema } from './schema.js';
 // Response API types
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type EasyInputMessage = OpenAI.Responses.EasyInputMessage;
+type OpenAIResponseServiceTier = OpenAI.Responses.ResponseCreateParams['service_tier'];
 type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
     image_detail?: 'low' | 'high' | 'auto';
     effort?: string;
@@ -55,7 +56,14 @@ type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
     verbosity?: 'low' | 'medium' | 'high';
     prompt_cache_key?: string;
     prompt_cache_retention?: 'in_memory' | '24h';
+    service_tier?: string;
 };
+
+function asOpenAIResponseServiceTier(serviceTier?: string): OpenAIResponseServiceTier {
+    // The public option deliberately accepts future provider values that may predate the installed SDK union.
+    return serviceTier as OpenAIResponseServiceTier;
+}
+
 type OpenAIErrorWithStatus = Error & { status?: unknown };
 type OpenAIUsageWithProviderDetails = OpenAI.Responses.ResponseUsage & {
     cached_tokens?: number | null;
@@ -257,6 +265,7 @@ export class OpenAIResponsesProtocol {
             temperature: isReasoningModel ? undefined : model_options?.temperature,
             top_p: isReasoningModel ? undefined : model_options?.top_p,
             max_output_tokens: model_options?.max_tokens,
+            service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
             tools: useTools ? toolDefs : undefined,
             text: buildResponseTextConfig(
                 parsedSchema,
@@ -342,6 +351,7 @@ export class OpenAIResponsesProtocol {
             temperature: isReasoningModel ? undefined : model_options?.temperature,
             top_p: isReasoningModel ? undefined : model_options?.top_p,
             max_output_tokens: model_options?.max_tokens, //TODO: use max_tokens for older models, currently relying on OpenAI to handle it
+            service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
             tools: useTools ? toolDefs : undefined,
             text: buildResponseTextConfig(
                 parsedSchema,

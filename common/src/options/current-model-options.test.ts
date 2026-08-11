@@ -34,6 +34,55 @@ describe('current reasoning model options', () => {
         ]);
     });
 
+    it('advertises provider-specific service tiers', () => {
+        const openAiTier = getOptions('gpt-5.6-sol', 'openai').options.find((option) => option.name === 'service_tier');
+        expect(openAiTier).toMatchObject({
+            type: OptionType.enum,
+            default: 'auto',
+            enum: { Auto: 'auto', Default: 'default', Flex: 'flex', Priority: 'priority' },
+        });
+
+        const unsupportedFlexTier = getOptions('gpt-4.1', 'openai').options.find(
+            (option) => option.name === 'service_tier',
+        );
+        expect(unsupportedFlexTier).toMatchObject({
+            enum: { Auto: 'auto', Default: 'default', Priority: 'priority' },
+        });
+        expect((unsupportedFlexTier as { enum?: Record<string, string> }).enum?.Flex).toBeUndefined();
+
+        const azureOpenAiTier = getOptions('gpt-5.6-sol', 'azure_openai').options.find(
+            (option) => option.name === 'service_tier',
+        );
+        expect(azureOpenAiTier).toMatchObject({
+            type: OptionType.enum,
+            default: 'auto',
+            enum: { Auto: 'auto', Default: 'default', Priority: 'priority' },
+        });
+        expect((azureOpenAiTier as { enum?: Record<string, string> }).enum?.Flex).toBeUndefined();
+
+        const bedrockTier = getOptions('anthropic.claude-sonnet-4-6-v1:0', 'bedrock').options.find(
+            (option) => option.name === 'service_tier',
+        );
+        expect(bedrockTier).toMatchObject({
+            type: OptionType.enum,
+            default: 'default',
+            enum: { Default: 'default', Flex: 'flex', Priority: 'priority', Reserved: 'reserved' },
+        });
+
+        const vertexTier = getOptions('gemini-3.1-pro-preview', 'vertexai').options.find(
+            (option) => option.name === 'service_tier',
+        );
+        expect(vertexTier).toMatchObject({
+            type: OptionType.enum,
+            default: 'default',
+            enum: { Default: 'default', Flex: 'flex' },
+        });
+
+        expect(
+            getOptions('gpt-5.6-sol', 'openai_compatible').options.some((option) => option.name === 'service_tier'),
+        ).toBe(false);
+    });
+
     it('advertises current Gemini thinking levels without adding a default', () => {
         const flash = getOptions('gemini-3.5-flash', 'vertexai');
         const pro = getOptions('gemini-3.1-pro-preview', 'vertexai');

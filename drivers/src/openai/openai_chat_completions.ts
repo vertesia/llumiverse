@@ -33,6 +33,13 @@ import OpenAI from 'openai';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAISchema, limitedSchemaFormat } from './schema.js';
 
+type OpenAIChatServiceTier = OpenAI.Chat.ChatCompletionCreateParams['service_tier'];
+
+function asOpenAIChatServiceTier(serviceTier?: string): OpenAIChatServiceTier {
+    // The public option deliberately accepts future provider values that may predate the installed SDK union.
+    return serviceTier as OpenAIChatServiceTier;
+}
+
 export type OpenAIChatCompletionsTextPart = OpenAI.Chat.ChatCompletionContentPartText;
 export type OpenAIChatCompletionsImageUrlPart = OpenAI.Chat.ChatCompletionContentPartImage;
 export type OpenAIChatCompletionsContentPart = OpenAIChatCompletionsTextPart | OpenAIChatCompletionsImageUrlPart;
@@ -1136,7 +1143,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         options: ExecutionOptions,
         stream: boolean,
     ): OpenAIChatCompletionsPayload {
-        const modelOptions = options.model_options as TextFallbackOptions;
+        const modelOptions = options.model_options as TextFallbackOptions & { service_tier?: string };
         const payload: OpenAIChatCompletionsPayload = {
             model: this.getModelName(options),
             messages: convertToOpenAIChatCompletionsMessages(conversation.messages),
@@ -1149,6 +1156,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             frequency_penalty: modelOptions?.frequency_penalty,
             n: 1,
             stop: modelOptions?.stop_sequence,
+            service_tier: asOpenAIChatServiceTier(modelOptions?.service_tier),
             stream,
         };
 

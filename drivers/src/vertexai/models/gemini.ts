@@ -681,7 +681,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         const model_options = options.model_options as VertexAIGeminiOptions | undefined;
         const includeThoughts = model_options?.include_thoughts !== false;
-        const client = driver.getGoogleGenAIClient(region, model_options?.flex ?? false, options.httpTimeout);
+        const client = driver.getGoogleGenAIClient(region, model_options?.service_tier, options.httpTimeout);
 
         const payload = getGeminiPayload(options, prompt);
         const response = await client.models.generateContent(payload);
@@ -787,7 +787,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         const model_options = options.model_options as VertexAIGeminiOptions | undefined;
         const includeThoughts = model_options?.include_thoughts !== false;
-        const client = driver.getGoogleGenAIClient(region, model_options?.flex ?? false, options.httpTimeout);
+        const client = driver.getGoogleGenAIClient(region, model_options?.service_tier, options.httpTimeout);
 
         const payload = getGeminiPayload(options, prompt);
         const response = await client.models.generateContentStream(payload);
