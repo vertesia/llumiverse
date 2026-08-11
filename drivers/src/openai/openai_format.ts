@@ -99,11 +99,15 @@ export async function formatOpenAILikeMultimodalPrompt(
         //generate the parts based on PromptSegment
         if (msg.files) {
             for (const file of msg.files) {
-                const stream = await file.getStream();
-                const data = await readStreamAsBase64(stream);
+                const imageUrl =
+                    opts.imageInputTransport === 'url'
+                        ? await file.getURL()
+                        : `data:${file.mime_type || 'image/jpeg'};base64,${await readStreamAsBase64(
+                              await file.getStream(),
+                          )}`;
                 parts.push({
                     type: 'input_image',
-                    image_url: `data:${file.mime_type || 'image/jpeg'};base64,${data}`,
+                    image_url: imageUrl,
                     detail: 'auto',
                 });
             }
@@ -208,6 +212,7 @@ export interface OpenAIPromptFormatterOptions {
     useToolForFormatting?: boolean;
     schema?: object;
     resultSchemaPosition?: 'system' | 'suffix';
+    imageInputTransport?: 'inline' | 'url';
 }
 
 // Chat Completions API types

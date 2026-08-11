@@ -403,6 +403,14 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
     }
 
     protected async formatPrompt(segments: PromptSegment[], options: PromptOptions): Promise<ResponseInputItem[]> {
+        return this.formatResponsesPrompt(segments, options);
+    }
+
+    private async formatResponsesPrompt(
+        segments: PromptSegment[],
+        options: PromptOptions,
+        imageInputTransport: 'inline' | 'url' = 'inline',
+    ): Promise<ResponseInputItem[]> {
         const schemaSuffix = options.prompt_cache_schema_suffix === true && !!options.result_schema;
         const resultSchema =
             supportsSchema(options.model, this.provider) && !schemaSuffix ? undefined : options.result_schema;
@@ -410,6 +418,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
             ...options,
             result_schema: resultSchema,
             resultSchemaPosition: schemaSuffix ? 'suffix' : undefined,
+            imageInputTransport,
         });
     }
 
@@ -560,7 +569,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         }
         const lines: string[] = [];
         for (const item of requests) {
-            const prompt = await this.createPrompt(item.segments, item.options);
+            const prompt = await this.formatResponsesPrompt(item.segments, item.options, 'url');
             const { stream: _stream, ...body } = this.buildResponsesBody(prompt, item.options);
             lines.push(JSON.stringify({ custom_id: item.custom_id, method: 'POST', url: '/v1/responses', body }));
         }
