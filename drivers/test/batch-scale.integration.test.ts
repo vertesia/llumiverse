@@ -27,6 +27,7 @@ import {
 } from '@llumiverse/core';
 import { describe, expect, it } from 'vitest';
 import { VertexAIDriver } from '../src/index.js';
+import { parseGcsBucket } from '../src/vertexai/batch.js';
 
 const PROJECT = process.env.GOOGLE_PROJECT_ID;
 const REGION = process.env.GOOGLE_REGION ?? 'us-central1';
@@ -41,14 +42,6 @@ const TIMEOUT_MS = 4 * 60 * 60 * 1000; // 4h
 const gated = Boolean(PROJECT && BUCKET && PDF && existsSync(PDF));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function parseBucket(spec: string): { bucket: string; prefix: string } {
-    const s = spec.replace(/^gs:\/\//, '');
-    const slash = s.indexOf('/');
-    return slash === -1
-        ? { bucket: s, prefix: '' }
-        : { bucket: s.slice(0, slash), prefix: s.slice(slash + 1).replace(/\/+$/, '') };
-}
-
 describe.skipIf(!gated)('Vertex batch scale — turnaround vs page count', () => {
     it(
         `batch-only at ${SCALE} pages (GCS-referenced images)`,
@@ -61,7 +54,7 @@ describe.skipIf(!gated)('Vertex batch scale — turnaround vs page count', () =>
                 .sort();
             expect(files.length).toBeGreaterThan(0);
 
-            const { bucket, prefix } = parseBucket(BUCKET as string);
+            const { bucket, prefix } = parseGcsBucket(BUCKET as string);
             const imgPrefix = `${prefix ? `${prefix}/` : ''}scale-imgs`;
             execFileSync('gcloud', [
                 'storage',
