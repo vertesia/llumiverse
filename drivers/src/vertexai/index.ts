@@ -45,6 +45,8 @@ import {
     mapBatchJobState,
     parseBatchOutputLine,
     parseGcsBucket,
+    parseVertexModelTarget,
+    parseVertexResourceLocation,
     toRestGenerateContentRequest,
 } from './batch.js';
 import { generateVertexAiEmbeddings } from './embeddings/embed.js';
@@ -401,7 +403,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         if (requests.length === 0) {
             throw new Error('[vertexai] startBatchInference called with no requests');
         }
-        const model = requests[0].options.model;
+        const modelTarget = parseVertexModelTarget(requests[0].options.model);
 
         const lines: string[] = [];
         for (const item of requests) {
@@ -438,9 +440,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             destUri = `gs://${bucket}/${base}/output`;
         }
 
-        const genai = this.getGoogleGenAIClient();
+        const genai = this.getGoogleGenAIClient(modelTarget.location ?? this.options.region);
         const job = await genai.batches.create({
-            model,
+            model: modelTarget.model,
             src: inputUri,
             config: { displayName: runId, dest: destUri },
         });
@@ -454,7 +456,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     async getBatchInferenceJob(jobId: string): Promise<BatchInferenceJob> {
-        const genai = this.getGoogleGenAIClient();
+        const genai = this.getGoogleGenAIClient(parseVertexResourceLocation(jobId) ?? this.options.region);
         const job = await genai.batches.get({ name: jobId });
         const destUri = typeof job.dest === 'string' ? job.dest : (job.dest?.gcsUri ?? undefined);
         return {
@@ -466,7 +468,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     async cancelBatchInference(jobId: string): Promise<BatchInferenceJob> {
-        const genai = this.getGoogleGenAIClient();
+        const genai = this.getGoogleGenAIClient(parseVertexResourceLocation(jobId) ?? this.options.region);
         await genai.batches.cancel({ name: jobId });
         return this.getBatchInferenceJob(jobId);
     }
@@ -475,7 +477,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         jobId: string,
         options?: { blobStore?: BatchBlobStore },
     ): Promise<BatchInferenceResultItem[]> {
-        const genai = this.getGoogleGenAIClient();
+        const genai = this.getGoogleGenAIClient(parseVertexResourceLocation(jobId) ?? this.options.region);
         const job = await genai.batches.get({ name: jobId });
         const destUri = typeof job.dest === 'string' ? job.dest : (job.dest?.gcsUri ?? undefined);
         if (!destUri) {

@@ -27,6 +27,35 @@ export interface GcsLocation {
     prefix: string;
 }
 
+export interface VertexModelTarget {
+    model: string;
+    location?: string;
+}
+
+/**
+ * Convert a catalog/resource model id into the form expected by the Google Gen AI
+ * batch client. Unlike generateContent, batches.create does not reliably accept the
+ * Vertesia catalog form (`locations/<region>/publishers/google/models/<model>`).
+ * The location belongs on the client and the request receives the bare model id.
+ */
+export function parseVertexModelTarget(resourceName: string): VertexModelTarget {
+    const parts = resourceName.split('/').filter(Boolean);
+    const modelIndex = parts.lastIndexOf('models');
+    const locationIndex = parts.lastIndexOf('locations');
+    return {
+        model:
+            modelIndex >= 0 && modelIndex + 1 < parts.length ? parts[modelIndex + 1] : (parts.at(-1) ?? resourceName),
+        location: locationIndex >= 0 && locationIndex + 1 < parts.length ? parts[locationIndex + 1] : undefined,
+    };
+}
+
+/** Extract the location embedded in a Vertex resource name such as a batch job id. */
+export function parseVertexResourceLocation(resourceName: string): string | undefined {
+    const parts = resourceName.split('/').filter(Boolean);
+    const locationIndex = parts.lastIndexOf('locations');
+    return locationIndex >= 0 && locationIndex + 1 < parts.length ? parts[locationIndex + 1] : undefined;
+}
+
 /** Parse "gs://bucket/prefix", "bucket/prefix" or "bucket" into {bucket, prefix}. */
 export function parseGcsBucket(spec: string): GcsLocation {
     let s = spec.trim();
