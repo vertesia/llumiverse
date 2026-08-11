@@ -5,6 +5,7 @@ import {
     type AIModel,
     type BatchBlobStore,
     type BatchInferenceJob,
+    type BatchInferenceLimits,
     type BatchInferenceOptions,
     type BatchInferenceRequestItem,
     type BatchInferenceResultItem,
@@ -396,6 +397,14 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return m.includes('gemini');
     }
 
+    getBatchInferenceLimits(_model?: string): BatchInferenceLimits {
+        // Vertex Gemini batch prediction: up to 200,000 requests per JSONL input job and a
+        // regional quota of 75 concurrent batch prediction jobs. See
+        // https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/batch-prediction-gemini
+        // and https://cloud.google.com/vertex-ai/docs/quotas (as of 2026-08).
+        return { max_requests_per_job: 200_000, max_concurrent_jobs: 75 };
+    }
+
     async startBatchInference(
         requests: BatchInferenceRequestItem[],
         options?: BatchInferenceOptions,
@@ -403,7 +412,14 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         if (requests.length === 0) {
             throw new Error('[vertexai] startBatchInference called with no requests');
         }
-        const modelTarget = parseVertexModelTarget(requests[0].options.model);
+        const batchModel = requests[0].options.model;
+        const mismatch = requests.find((r) => r.options.model !== batchModel);
+        if (mismatch) {
+            throw new Error(
+                `[vertexai] all requests in a batch must target the same model: got '${mismatch.options.model}' and '${batchModel}'`,
+            );
+        }
+        const modelTarget = parseVertexModelTarget(batchModel);
 
         const lines: string[] = [];
         for (const item of requests) {
@@ -420,6 +436,11 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             }
             const params = getGeminiPayload(item.options, prompt as GenerateContentPrompt);
             const request = toRestGenerateContentRequest(params);
+            // Mirror custom_id into the per-request labels so the output parser's
+            // `request.labels.custom_id` fallback is real when the backend does not
+            // echo the top-level `custom_id` on the output line.
+            const labels = (request.labels as Record<string, string> | undefined) ?? {};
+            request.labels = { ...labels, custom_id: item.custom_id };
             lines.push(JSON.stringify({ custom_id: item.custom_id, request }));
         }
 
@@ -471,6 +492,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             status: mapBatchJobState(job.state as string | undefined),
             details: (job as { error?: { message?: string } }).error?.message ?? undefined,
             output_uri: destUri,
+            start_time: job.createTime ? Date.parse(job.createTime) : undefined,
+            end_time: job.endTime ? Date.parse(job.endTime) : undefined,
         };
     }
 

@@ -1,6 +1,7 @@
 import {
     type AIModel,
     type BatchInferenceJob,
+    type BatchInferenceLimits,
     type BatchInferenceOptions,
     type BatchInferenceRequestItem,
     type BatchInferenceResultItem,
@@ -46,7 +47,7 @@ import {
 import type OpenAI from 'openai';
 import type { AzureOpenAI } from 'openai';
 import { toFile } from 'openai';
-import { mapOpenAIBatchStatus, parseOpenAIBatchOutputLine } from './batch.js';
+import { mapOpenAIBatchStatus, parseOpenAIBatchErrorLine, parseOpenAIBatchOutputLine } from './batch.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAILikeMultimodalPrompt } from './openai_format.js';
 import { formatOpenAISchema } from './schema.js';
@@ -560,12 +561,25 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         return true;
     }
 
+    getBatchInferenceLimits(_model?: string): BatchInferenceLimits {
+        // OpenAI Batch API: up to 50,000 requests per batch and a 200 MB input file.
+        // See https://platform.openai.com/docs/guides/batch (as of 2026-08).
+        return { max_requests_per_job: 50_000, max_input_bytes: 200 * 1024 * 1024 };
+    }
+
     async startBatchInference(
         requests: BatchInferenceRequestItem[],
         options?: BatchInferenceOptions,
     ): Promise<BatchInferenceJob> {
         if (requests.length === 0) {
             throw new Error('[openai] startBatchInference called with no requests');
+        }
+        const batchModel = requests[0].options.model;
+        const mismatch = requests.find((r) => r.options.model !== batchModel);
+        if (mismatch) {
+            throw new Error(
+                `[openai] all requests in a batch must target the same model: got '${mismatch.options.model}' and '${batchModel}'`,
+            );
         }
         const lines: string[] = [];
         for (const item of requests) {
@@ -608,16 +622,31 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 
     async getBatchInferenceResults(jobId: string): Promise<BatchInferenceResultItem[]> {
         const job = await this.service.batches.retrieve(jobId);
-        if (!job.output_file_id) {
-            throw new Error('[openai] batch job has no output file');
+        // Successful requests land in `output_file_id`; failed ones in a separate
+        // `error_file_id`. When every request failed, only the error file exists.
+        if (!job.output_file_id && !job.error_file_id) {
+            throw new Error('[openai] batch job has no output or error file');
         }
-        const content = await this.service.files.content(job.output_file_id);
-        const text = await content.text();
         const items: BatchInferenceResultItem[] = [];
-        for (const line of text.split('\n')) {
-            const parsed = parseOpenAIBatchOutputLine(line, items.length);
-            if (parsed) {
-                items.push(parsed);
+        if (job.output_file_id) {
+            const content = await this.service.files.content(job.output_file_id);
+            const text = await content.text();
+            for (const line of text.split('\n')) {
+                const parsed = parseOpenAIBatchOutputLine(line, items.length);
+                if (parsed) {
+                    items.push(parsed);
+                }
+            }
+        }
+        if (job.error_file_id) {
+            const seen = new Set(items.map((item) => item.custom_id));
+            const content = await this.service.files.content(job.error_file_id);
+            const text = await content.text();
+            for (const line of text.split('\n')) {
+                const parsed = parseOpenAIBatchErrorLine(line, items.length);
+                if (parsed && !seen.has(parsed.custom_id)) {
+                    items.push(parsed);
+                }
             }
         }
         return items;

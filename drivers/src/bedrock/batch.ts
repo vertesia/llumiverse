@@ -47,8 +47,34 @@ export async function s3DownloadText(s3: S3Client, bucket: string, key: string):
 }
 
 export async function s3List(s3: S3Client, bucket: string, prefix: string): Promise<string[]> {
-    const res = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix }));
-    return (res.Contents ?? []).map((o) => o.Key ?? '').filter(Boolean);
+    const keys: string[] = [];
+    let continuationToken: string | undefined;
+    do {
+        const res = await s3.send(
+            new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: continuationToken }),
+        );
+        for (const o of res.Contents ?? []) {
+            if (o.Key) {
+                keys.push(o.Key);
+            }
+        }
+        continuationToken = res.IsTruncated ? res.NextContinuationToken : undefined;
+    } while (continuationToken);
+    return keys;
+}
+
+/**
+ * Whether an S3 key under the job's output prefix is a record-output file to parse.
+ * Bedrock writes per-record output as `<input-file>.jsonl.out` plus a job-summary
+ * `manifest.json.out` — the manifest is NOT a record file and must be excluded, or it
+ * is ingested as a phantom failed record.
+ */
+export function isBedrockBatchOutputKey(key: string): boolean {
+    const name = key.split('/').pop() ?? key;
+    if (name.startsWith('manifest.')) {
+        return false;
+    }
+    return name.endsWith('.jsonl') || name.endsWith('.out');
 }
 
 // ---------------------------------------------------------------------------

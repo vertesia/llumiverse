@@ -897,11 +897,6 @@ export interface BatchInferenceRequestItem {
 }
 
 /**
- * Options controlling where the driver stages the batch input/output. If not
- * provided, the driver falls back to a bucket configured in its driver options
- * (e.g. `batch_bucket` for Vertex/Bedrock).
- */
-/**
  * Blob I/O for batch staging, injected by the caller so the driver does not need its own
  * cloud-storage credentials. When provided, the driver delegates input upload + output read
  * to it (e.g. a host that stages through its own storage service / tenant bucket) instead of
@@ -915,11 +910,36 @@ export interface BatchBlobStore {
     readOutput(outputUri: string): Promise<string[]>;
 }
 
+/**
+ * Options controlling where the driver stages the batch input/output. If neither
+ * `input_uri` nor `blobStore` is provided, the driver falls back to a bucket configured
+ * in its driver options (e.g. `batch_bucket` for Vertex/Bedrock).
+ */
 export interface BatchInferenceOptions {
     name?: string; // display name / job-name prefix
-    input_uri?: string; // pre-staged input JSONL location (gs://… or s3://…) — overrides driver staging
-    output_uri?: string; // output location (gs://… or s3://…) — overrides driver default
+    /**
+     * Staging bucket/prefix spec (`gs://bucket/prefix`, `s3://bucket/prefix`, `bucket/prefix`
+     * or bare `bucket`) under which the driver stages a fresh `input.jsonl` (and the job's
+     * output directory) for this run. Takes precedence over the driver-level `batch_bucket`
+     * option. Ignored when a `blobStore` is injected.
+     */
+    input_uri?: string;
     blobStore?: BatchBlobStore; // inject blob I/O so the driver never needs its own storage credentials
+}
+
+/**
+ * Provider-enforced sizing limits for a single batch-inference job, surfaced so a host
+ * can split an oversized request pool into several provider jobs before submitting.
+ */
+export interface BatchInferenceLimits {
+    /** maximum requests per batch job */
+    max_requests_per_job: number;
+    /** maximum serialized input size per job in bytes, if the provider enforces one */
+    max_input_bytes?: number;
+    /** provider-enforced minimum requests per job, if any */
+    min_requests_per_job?: number;
+    /** maximum concurrently running batch jobs, if the provider documents one */
+    max_concurrent_jobs?: number;
 }
 
 export interface BatchInferenceJob {

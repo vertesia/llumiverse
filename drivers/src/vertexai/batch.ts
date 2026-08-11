@@ -85,12 +85,20 @@ export async function gcsDownloadText(auth: AuthClient, bucket: string, name: st
 }
 
 export async function gcsList(auth: AuthClient, bucket: string, prefix: string): Promise<string[]> {
-    const url = `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(
-        bucket,
-    )}/o?prefix=${encodeURIComponent(prefix)}`;
-    const res = await auth.request({ url, method: 'GET' });
-    const data = res.data as { items?: Array<{ name: string }> };
-    return (data.items ?? []).map((i) => i.name);
+    const names: string[] = [];
+    let pageToken: string | undefined;
+    do {
+        const url = `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(
+            bucket,
+        )}/o?prefix=${encodeURIComponent(prefix)}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`;
+        const res = await auth.request({ url, method: 'GET' });
+        const data = res.data as { items?: Array<{ name: string }>; nextPageToken?: string };
+        for (const i of data.items ?? []) {
+            names.push(i.name);
+        }
+        pageToken = data.nextPageToken;
+    } while (pageToken);
+    return names;
 }
 
 // ---------------------------------------------------------------------------
@@ -101,6 +109,11 @@ export async function gcsList(auth: AuthClient, bucket: string, prefix: string):
 export function mapBatchJobState(state: string | undefined): BatchInferenceJobStatus {
     switch (state) {
         case 'JOB_STATE_SUCCEEDED':
+            return BatchInferenceJobStatus.succeeded;
+        case 'JOB_STATE_PARTIALLY_SUCCEEDED':
+            // Terminal: some records failed but the partial results are retrievable —
+            // item-level errors surface per-record in the output. Mapping it to
+            // 'running' would make pollers loop forever.
             return BatchInferenceJobStatus.succeeded;
         case 'JOB_STATE_FAILED':
         case 'JOB_STATE_EXPIRED':

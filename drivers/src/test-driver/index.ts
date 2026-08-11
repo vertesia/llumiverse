@@ -2,6 +2,7 @@ import {
     type AIModel,
     AIModelStatus,
     type BatchInferenceJob,
+    type BatchInferenceLimits,
     type BatchInferenceResultItem,
     type CompletionStream,
     type Driver,
@@ -61,6 +62,10 @@ export class TestDriver implements Driver<PromptSegment[]> {
 
     supportsBatchInference(): boolean {
         return false;
+    }
+
+    getBatchInferenceLimits(): BatchInferenceLimits {
+        return { max_requests_per_job: 10_000 };
     }
 
     async createPrompt(segments: PromptSegment[], _opts: ExecutionOptions): Promise<PromptSegment[]> {

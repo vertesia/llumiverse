@@ -27,8 +27,10 @@ import { S3Client } from '@aws-sdk/client-s3';
 import type { AwsCredentialIdentity, Provider } from '@aws-sdk/types';
 import {
     type AIModel,
+    type BatchBlobStore,
     type BatchInferenceJob,
     BatchInferenceJobStatus,
+    type BatchInferenceLimits,
     type BatchInferenceOptions,
     type BatchInferenceRequestItem,
     type BatchInferenceResultItem,
@@ -78,6 +80,7 @@ import { logClaudeTruncation } from '../shared/claude-stop-reason.js';
 import { resolveClaudeThinking } from '../shared/claude-thinking.js';
 import { truncateBinaryForDebug, uint8ArrayToBase64ForDebug } from '../shared/debug-prompt.js';
 import {
+    isBedrockBatchOutputKey,
     mapModelInvocationJobStatus,
     parseBedrockBatchOutputLine,
     parseS3Bucket,
@@ -1777,7 +1780,19 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     // ===================== Batch inference (Bedrock S3) =====================
 
     supportsBatchInference(_model?: string): boolean {
-        return true;
+        // Disabled: startBatchInference currently submits the Converse-shaped prompt as
+        // `modelInput`, but Bedrock batch requires the model-native InvokeModel body
+        // (e.g. Claude rejects records missing max_tokens/anthropic_version). The batch
+        // methods below stay callable for testing; mapping Converse → native request
+        // bodies is the follow-up that re-enables this.
+        return false;
+    }
+
+    getBatchInferenceLimits(_model?: string): BatchInferenceLimits {
+        // Bedrock batch inference quotas: up to 50,000 records per job (default quota)
+        // and a minimum of 100 records per job. See
+        // https://docs.aws.amazon.com/bedrock/latest/userguide/quotas.html (as of 2026-08).
+        return { max_requests_per_job: 50_000, min_requests_per_job: 100 };
     }
 
     async startBatchInference(
@@ -1787,7 +1802,20 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if (requests.length === 0) {
             throw new Error('[bedrock] startBatchInference called with no requests');
         }
+        if (options?.blobStore) {
+            // The methods below build their own S3 client from driver options; silently
+            // ignoring an injected blobStore would bypass the host's staging expectations.
+            throw new Error(
+                '[bedrock] injected blobStore staging is not supported yet — configure batch_bucket instead',
+            );
+        }
         const model = requests[0].options.model;
+        const mismatch = requests.find((r) => r.options.model !== model);
+        if (mismatch) {
+            throw new Error(
+                `[bedrock] all requests in a batch must target the same model: got '${mismatch.options.model}' and '${model}'`,
+            );
+        }
         const bucketSpec = options?.input_uri ?? this.options.batch_bucket ?? this.options.training_bucket;
         const roleArn = this.options.batch_role_arn ?? this.options.training_role_arn;
         if (!bucketSpec) {
@@ -1841,6 +1869,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             status: mapModelInvocationJobStatus(job.status),
             details: job.message ?? undefined,
             output_uri: job.outputDataConfig?.s3OutputDataConfig?.s3Uri,
+            start_time: job.submitTime?.getTime(),
+            end_time: job.endTime?.getTime(),
         };
     }
 
@@ -1850,7 +1880,16 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return this.getBatchInferenceJob(jobId);
     }
 
-    async getBatchInferenceResults(jobId: string): Promise<BatchInferenceResultItem[]> {
+    async getBatchInferenceResults(
+        jobId: string,
+        options?: { blobStore?: BatchBlobStore },
+    ): Promise<BatchInferenceResultItem[]> {
+        if (options?.blobStore) {
+            // Same rationale as startBatchInference: this method reads S3 directly.
+            throw new Error(
+                '[bedrock] injected blobStore staging is not supported yet — configure batch_bucket instead',
+            );
+        }
         const service = this.getService();
         const job = await service.send(new GetModelInvocationJobCommand({ jobIdentifier: jobId }));
         const outputUri = job.outputDataConfig?.s3OutputDataConfig?.s3Uri;
@@ -1859,7 +1898,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
         const { bucket, prefix } = parseS3Bucket(outputUri);
         const s3 = new S3Client({ region: this.options.region, credentials: this.options.credentials });
-        const keys = (await s3List(s3, bucket, prefix)).filter((k) => k.endsWith('.jsonl') || k.endsWith('.out'));
+        const keys = (await s3List(s3, bucket, prefix)).filter(isBedrockBatchOutputKey);
         const items: BatchInferenceResultItem[] = [];
         for (const key of keys) {
             const text = await s3DownloadText(s3, bucket, key);

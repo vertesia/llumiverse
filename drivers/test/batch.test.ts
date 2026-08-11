@@ -1,3 +1,4 @@
+import type { S3Client } from '@aws-sdk/client-s3';
 import { BatchInferenceJobStatus } from '@llumiverse/common';
 import {
     type BatchBlobStore,
@@ -6,14 +7,21 @@ import {
     type ExecutionOptions,
     PromptRole,
 } from '@llumiverse/core';
+import type { AuthClient } from 'google-auth-library';
 import { describe, expect, it, vi } from 'vitest';
 import {
+    isBedrockBatchOutputKey,
     mapModelInvocationJobStatus,
     parseBedrockBatchOutputLine,
     parseNativeModelOutput,
     parseS3Bucket,
+    s3List,
 } from '../src/bedrock/batch.js';
+import { BedrockDriver } from '../src/bedrock/index.js';
+import { OpenAIDriver } from '../src/openai/openai.js';
+import { TestDriver } from '../src/test-driver/index.js';
 import {
+    gcsList,
     mapBatchJobState,
     parseBatchOutputLine,
     parseGcsBucket,
@@ -42,6 +50,73 @@ describe('vertex batch helpers', () => {
         expect(mapBatchJobState('JOB_STATE_PENDING')).toBe(BatchInferenceJobStatus.queued);
         expect(mapBatchJobState('JOB_STATE_RUNNING')).toBe(BatchInferenceJobStatus.running);
         expect(mapBatchJobState(undefined)).toBe(BatchInferenceJobStatus.running);
+    });
+
+    it('mapBatchJobState treats JOB_STATE_PARTIALLY_SUCCEEDED as terminal (succeeded)', () => {
+        // Partial results are retrievable; item-level errors surface per-record.
+        // Mapping to 'running' would make pollers loop forever.
+        expect(mapBatchJobState('JOB_STATE_PARTIALLY_SUCCEEDED')).toBe(BatchInferenceJobStatus.succeeded);
+    });
+
+    it('gcsList follows nextPageToken pagination', async () => {
+        const request = vi
+            .fn()
+            .mockResolvedValueOnce({ data: { items: [{ name: 'a' }, { name: 'b' }], nextPageToken: 'page-2' } })
+            .mockResolvedValueOnce({ data: { items: [{ name: 'c' }] } });
+        const auth = { request } as unknown as AuthClient;
+        const names = await gcsList(auth, 'bucket', 'prefix');
+        expect(names).toEqual(['a', 'b', 'c']);
+        expect(request).toHaveBeenCalledTimes(2);
+        expect(vi.mocked(request).mock.calls[1][0].url).toContain('pageToken=page-2');
+    });
+
+    it('parseBatchOutputLine falls back to request.labels.custom_id when not echoed top-level', () => {
+        const line = JSON.stringify({
+            request: { labels: { custom_id: 'page-42' } },
+            response: { candidates: [{ content: { parts: [{ text: 'ok' }] } }] },
+        });
+        const item = parseBatchOutputLine(line, 0);
+        expect(item?.custom_id).toBe('page-42');
+    });
+
+    it('startBatchInference rejects requests targeting different models', async () => {
+        const driver = new VertexAIDriver({ project: 'test-project', region: 'us-central1' });
+        const mkItem = (custom_id: string, model: string): BatchInferenceRequestItem => ({
+            custom_id,
+            segments: [{ role: PromptRole.user, content: 'hi' }],
+            options: { model } as ExecutionOptions,
+        });
+        await expect(
+            driver.startBatchInference([
+                mkItem('a', 'publishers/google/models/gemini-2.5-flash'),
+                mkItem('b', 'publishers/google/models/gemini-2.5-pro'),
+            ]),
+        ).rejects.toThrow(/same model/);
+    });
+
+    it('startBatchInference mirrors custom_id into per-request labels', async () => {
+        const request: BatchInferenceRequestItem = {
+            custom_id: 'page-7',
+            segments: [{ role: PromptRole.user, content: 'hello' }],
+            options: { model: 'publishers/google/models/gemini-2.5-flash' } as ExecutionOptions,
+        };
+        const putText = vi.fn().mockResolvedValue('gs://tenant-bucket/batch/input.jsonl');
+        const blobStore: BatchBlobStore = { putText, readOutput: vi.fn().mockResolvedValue([]) };
+        const driver = new VertexAIDriver({ project: 'test-project', region: 'us-central1' });
+        vi.spyOn(driver, 'getGoogleGenAIClient').mockReturnValue({
+            batches: {
+                create: vi.fn().mockResolvedValue({ name: 'batch-1', state: 'JOB_STATE_PENDING' }),
+            },
+        } as unknown as ReturnType<VertexAIDriver['getGoogleGenAIClient']>);
+
+        await driver.startBatchInference([request], { name: 'labels', blobStore });
+
+        const input = JSON.parse(vi.mocked(putText).mock.calls[0][1]) as {
+            custom_id: string;
+            request: { labels?: Record<string, string> };
+        };
+        expect(input.custom_id).toBe('page-7');
+        expect(input.request.labels).toEqual({ custom_id: 'page-7' });
     });
 
     it('toRestGenerateContentRequest nests generation params under generationConfig and prunes undefined', () => {
@@ -202,5 +277,67 @@ describe('bedrock batch helpers', () => {
         const item = parseBedrockBatchOutputLine(line, 0);
         expect(item?.custom_id).toBe('p1');
         expect(item?.result).toEqual([{ type: 'text', value: 'x' }]);
+    });
+
+    it('isBedrockBatchOutputKey excludes the manifest job-summary file', () => {
+        expect(isBedrockBatchOutputKey('run/output/input.jsonl.out')).toBe(true);
+        expect(isBedrockBatchOutputKey('run/output/records.jsonl')).toBe(true);
+        expect(isBedrockBatchOutputKey('run/output/manifest.json.out')).toBe(false);
+        expect(isBedrockBatchOutputKey('run/output/results.csv')).toBe(false);
+    });
+
+    it('s3List follows ContinuationToken pagination', async () => {
+        const send = vi
+            .fn()
+            .mockResolvedValueOnce({
+                Contents: [{ Key: 'a' }, { Key: 'b' }],
+                IsTruncated: true,
+                NextContinuationToken: 'tok-2',
+            })
+            .mockResolvedValueOnce({ Contents: [{ Key: 'c' }], IsTruncated: false });
+        const s3 = { send } as unknown as S3Client;
+        const keys = await s3List(s3, 'bucket', 'prefix');
+        expect(keys).toEqual(['a', 'b', 'c']);
+        expect(send).toHaveBeenCalledTimes(2);
+        expect(vi.mocked(send).mock.calls[1][0].input).toMatchObject({ ContinuationToken: 'tok-2' });
+    });
+
+    it('supportsBatchInference is gated off until native modelInput mapping lands', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        expect(driver.supportsBatchInference()).toBe(false);
+    });
+
+    it('startBatchInference rejects an injected blobStore', async () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const blobStore: BatchBlobStore = {
+            putText: vi.fn().mockResolvedValue('s3://b/k'),
+            readOutput: vi.fn().mockResolvedValue([]),
+        };
+        const item: BatchInferenceRequestItem = {
+            custom_id: 'a',
+            segments: [{ role: PromptRole.user, content: 'hi' }],
+            options: { model: 'anthropic.claude-3-haiku' } as ExecutionOptions,
+        };
+        await expect(driver.startBatchInference([item], { blobStore })).rejects.toThrow(/blobStore/);
+    });
+});
+
+describe('batch inference limits', () => {
+    it('drivers report provider-documented job limits', () => {
+        const vertex = new VertexAIDriver({ project: 'p', region: 'us-central1' });
+        expect(vertex.getBatchInferenceLimits()).toEqual({ max_requests_per_job: 200_000, max_concurrent_jobs: 75 });
+
+        const openai = new OpenAIDriver({ apiKey: 'test-key' });
+        expect(openai.getBatchInferenceLimits()).toEqual({
+            max_requests_per_job: 50_000,
+            max_input_bytes: 200 * 1024 * 1024,
+        });
+
+        const bedrock = new BedrockDriver({ region: 'us-east-1' });
+        expect(bedrock.getBatchInferenceLimits()).toEqual({ max_requests_per_job: 50_000, min_requests_per_job: 100 });
+    });
+
+    it('drivers without a batch implementation report the conservative default', () => {
+        expect(new TestDriver().getBatchInferenceLimits()).toEqual({ max_requests_per_job: 10_000 });
     });
 });

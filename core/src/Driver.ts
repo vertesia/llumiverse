@@ -8,6 +8,7 @@ import {
     type AIModel,
     type BatchBlobStore,
     type BatchInferenceJob,
+    type BatchInferenceLimits,
     type BatchInferenceOptions,
     type BatchInferenceRequestItem,
     type BatchInferenceResultItem,
@@ -93,6 +94,10 @@ export interface Driver<PromptT = unknown> {
     /**
      * Fetch the results of a completed batch job, mapped back by `custom_id`.
      * Pass `blobStore` to read the output through injected blob I/O (mirrors the store used at submit).
+     *
+     * NOTE: batch results are text-only today — every provider parser returns `text`
+     * completion results (plus token usage / finish reason). Function/tool calls and
+     * images produced by a batch request are not surfaced through this path.
      */
     getBatchInferenceResults(
         jobId: string,
@@ -105,6 +110,13 @@ export interface Driver<PromptT = unknown> {
      * path or fall back to synchronous execution. Optionally refined per model.
      */
     supportsBatchInference(model?: string): boolean;
+
+    /**
+     * Provider-enforced sizing limits for a single batch job (request count, input
+     * bytes, …). Hosts use this to split an oversized request pool into several
+     * provider jobs before calling `startBatchInference`. Optionally refined per model.
+     */
+    getBatchInferenceLimits(model?: string): BatchInferenceLimits;
 
     //list models available for this environment
     listModels(params?: ModelSearchPayload): Promise<AIModel[]>;
@@ -232,6 +244,14 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     supportsBatchInference(_model?: string): boolean {
         return false;
+    }
+
+    /**
+     * Conservative default batch-job limits. Drivers that implement batch inference
+     * override this with their provider's documented quotas.
+     */
+    getBatchInferenceLimits(_model?: string): BatchInferenceLimits {
+        return { max_requests_per_job: 10_000 };
     }
 
     validateResult(result: Completion, options: ExecutionOptions) {

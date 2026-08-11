@@ -65,6 +65,37 @@ export function parseResponsesBody(body: ResponsesBody | undefined): {
     return { result, token_usage };
 }
 
+/**
+ * Parse a single line of an OpenAI batch **error file** (`Batch.error_file_id`) into a
+ * failed result item. Error-file lines carry the failure either as a top-level `error`
+ * object or as a non-2xx `response` whose body is `{ error: { message } }`.
+ */
+export function parseOpenAIBatchErrorLine(line: string, index: number): BatchInferenceResultItem | undefined {
+    const trimmed = line.trim();
+    if (!trimmed) {
+        return undefined;
+    }
+    let obj: {
+        custom_id?: string;
+        error?: unknown;
+        response?: { status_code?: number; body?: { error?: { message?: string } } };
+    };
+    try {
+        obj = JSON.parse(trimmed);
+    } catch {
+        return undefined;
+    }
+    const custom_id = obj.custom_id ?? String(index);
+    const bodyErrorMessage = obj.response?.body?.error?.message;
+    if (typeof bodyErrorMessage === 'string' && bodyErrorMessage.length > 0) {
+        return { custom_id, error: bodyErrorMessage };
+    }
+    if (obj.error) {
+        return { custom_id, error: typeof obj.error === 'string' ? obj.error : JSON.stringify(obj.error) };
+    }
+    return { custom_id, error: `request failed with status ${obj.response?.status_code ?? 'unknown'}` };
+}
+
 /** Parse a single OpenAI batch output JSONL line (`{ custom_id, response: { body }, error }`). */
 export function parseOpenAIBatchOutputLine(line: string, index: number): BatchInferenceResultItem | undefined {
     const trimmed = line.trim();
