@@ -17,6 +17,7 @@ import {
     type ExecutionTokenUsage,
 } from '@llumiverse/common';
 import type { AuthClient } from 'google-auth-library';
+import { parseBatchBucketLocation } from '../batch-location.js';
 
 // ---------------------------------------------------------------------------
 // GCS location parsing + I/O via the auth client (no @google-cloud/storage dep)
@@ -58,15 +59,7 @@ export function parseVertexResourceLocation(resourceName: string): string | unde
 
 /** Parse "gs://bucket/prefix", "bucket/prefix" or "bucket" into {bucket, prefix}. */
 export function parseGcsBucket(spec: string): GcsLocation {
-    let s = spec.trim();
-    if (s.startsWith('gs://')) {
-        s = s.slice('gs://'.length);
-    }
-    const slash = s.indexOf('/');
-    if (slash === -1) {
-        return { bucket: s, prefix: '' };
-    }
-    return { bucket: s.slice(0, slash), prefix: s.slice(slash + 1).replace(/\/+$/, '') };
+    return parseBatchBucketLocation(spec, 'gs');
 }
 
 export async function gcsUploadText(

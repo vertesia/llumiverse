@@ -13,11 +13,17 @@ import {
     toRestGenerateContentRequest,
 } from '../src/vertexai/batch.js';
 
+const manyTrailingSlashes = '/'.repeat(100_000);
+
 describe('vertex batch helpers', () => {
     it('parseGcsBucket handles gs://, bucket/prefix and bucket-only', () => {
         expect(parseGcsBucket('gs://my-bucket/pre/fix/')).toEqual({ bucket: 'my-bucket', prefix: 'pre/fix' });
         expect(parseGcsBucket('my-bucket/pre')).toEqual({ bucket: 'my-bucket', prefix: 'pre' });
         expect(parseGcsBucket('my-bucket')).toEqual({ bucket: 'my-bucket', prefix: '' });
+        expect(parseGcsBucket(`gs://my-bucket/prefix${manyTrailingSlashes}`)).toEqual({
+            bucket: 'my-bucket',
+            prefix: 'prefix',
+        });
     });
 
     it('mapBatchJobState maps Vertex JobState to provider-agnostic status', () => {
@@ -87,6 +93,10 @@ describe('bedrock batch helpers', () => {
         expect(parseS3Bucket('s3://b/p/q/')).toEqual({ bucket: 'b', prefix: 'p/q' });
         expect(parseS3Bucket('b/p')).toEqual({ bucket: 'b', prefix: 'p' });
         expect(parseS3Bucket('b')).toEqual({ bucket: 'b', prefix: '' });
+        expect(parseS3Bucket(`s3://b/prefix${manyTrailingSlashes}`)).toEqual({
+            bucket: 'b',
+            prefix: 'prefix',
+        });
     });
 
     it('mapModelInvocationJobStatus maps Bedrock statuses', () => {

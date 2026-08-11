@@ -20,6 +20,7 @@ import {
     type CompletionResult,
     type ExecutionTokenUsage,
 } from '@llumiverse/common';
+import { parseBatchBucketLocation } from '../batch-location.js';
 
 // ---------------------------------------------------------------------------
 // S3 text I/O
@@ -32,15 +33,7 @@ export interface S3Location {
 
 /** Parse "s3://bucket/prefix", "bucket/prefix" or "bucket" into {bucket, prefix}. */
 export function parseS3Bucket(spec: string): S3Location {
-    let s = spec.trim();
-    if (s.startsWith('s3://')) {
-        s = s.slice('s3://'.length);
-    }
-    const slash = s.indexOf('/');
-    if (slash === -1) {
-        return { bucket: s, prefix: '' };
-    }
-    return { bucket: s.slice(0, slash), prefix: s.slice(slash + 1).replace(/\/+$/, '') };
+    return parseBatchBucketLocation(spec, 's3');
 }
 
 export async function s3UploadText(s3: S3Client, bucket: string, key: string, text: string): Promise<string> {
