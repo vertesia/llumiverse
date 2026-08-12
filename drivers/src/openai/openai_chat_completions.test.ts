@@ -795,7 +795,7 @@ describe('OpenAIChatCompletionsProtocol', () => {
         expect(completion.finish_reason).toBe('tool_use');
     });
 
-    it('injects synthetic tool results for interrupted prior Chat Completions tool calls', async () => {
+    it('injects neutral synthetic results for orphaned prior Chat Completions tool calls', async () => {
         const model = new TestOpenAIChatCompletionsProtocol({
             id: 'chatcmpl-1',
             object: 'chat.completion',
@@ -830,7 +830,8 @@ describe('OpenAIChatCompletionsProtocol', () => {
             {
                 role: 'tool',
                 tool_call_id: 'call_1',
-                content: '[Tool interrupted: The user stopped the operation before "lookup" could execute.]',
+                content:
+                    '[Tool result unavailable: no result was recorded for "lookup". Do not assume whether it ran; retry only if the operation is still needed and safe.]',
             },
             { role: 'user', content: 'Hello' },
         ]);

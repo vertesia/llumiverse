@@ -2184,12 +2184,12 @@ function stripClaudeCachePointsFromTools(
 /**
  * Fix orphaned toolUse blocks in the conversation.
  *
- * When an agent is stopped mid-tool-execution, the assistant message contains toolUse blocks
- * but no corresponding toolResult was added. The AWS Converse API requires that every toolUse
+ * Retries, conversation compaction, or cancellation may leave assistant toolUse blocks
+ * without a corresponding toolResult. The AWS Converse API requires that every toolUse
  * must be followed by a toolResult in the next user message.
  *
- * This function detects such cases and injects synthetic toolResult blocks indicating
- * the tools were interrupted, allowing the conversation to continue.
+ * This function detects such cases and injects neutral synthetic toolResult blocks,
+ * allowing the conversation to continue without guessing why the result is missing.
  */
 export function fixOrphanedToolUse(messages: Message[]): Message[] {
     if (messages.length < 2) return messages;
@@ -2236,7 +2236,7 @@ export function fixOrphanedToolUse(messages: Message[]): Message[] {
                                 toolUseId: tu.toolUseId,
                                 content: [
                                     {
-                                        text: `[Tool interrupted: The user stopped the operation before "${tu.name}" could execute.]`,
+                                        text: `[Tool result unavailable: no result was recorded for "${tu.name}". Do not assume whether it ran; retry only if the operation is still needed and safe.]`,
                                     },
                                 ],
                             },
@@ -2259,7 +2259,7 @@ export function fixOrphanedToolUse(messages: Message[]): Message[] {
                             toolUseId: tu.toolUseId,
                             content: [
                                 {
-                                    text: `[Tool interrupted: The user stopped the operation before "${tu.name}" could execute.]`,
+                                    text: `[Tool result unavailable: no result was recorded for "${tu.name}". Do not assume whether it ran; retry only if the operation is still needed and safe.]`,
                                 },
                             ],
                         },

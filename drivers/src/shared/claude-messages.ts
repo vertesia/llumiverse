@@ -471,7 +471,7 @@ export function fixOrphanedToolUse(messages: MessageParam[]): MessageParam[] {
                         const syntheticResults: ToolResultBlockParam[] = orphaned.map((block) => ({
                             type: 'tool_result',
                             tool_use_id: block.id,
-                            content: `[Tool interrupted: The user stopped the operation before "${block.name}" could execute.]`,
+                            content: `[Tool result unavailable: no result was recorded for "${block.name}". Do not assume whether it ran; retry only if the operation is still needed and safe.]`,
                         }));
                         messages[i + 1] = { ...nextMessage, content: [...syntheticResults, ...nextMessage.content] };
                     }
@@ -479,7 +479,7 @@ export function fixOrphanedToolUse(messages: MessageParam[]): MessageParam[] {
                     const syntheticResults: ToolResultBlockParam[] = toolUseBlocks.map((block) => ({
                         type: 'tool_result',
                         tool_use_id: block.id,
-                        content: `[Tool interrupted: The user stopped the operation before "${block.name}" could execute.]`,
+                        content: `[Tool result unavailable: no result was recorded for "${block.name}". Do not assume whether it ran; retry only if the operation is still needed and safe.]`,
                     }));
                     const textContent: TextBlockParam =
                         typeof nextMessage.content === 'string'

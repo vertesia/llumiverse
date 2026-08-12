@@ -1,11 +1,11 @@
 /**
  * Unit tests for the fixOrphanedToolUse functions in Claude, Bedrock, and OpenAI drivers.
  *
- * These functions handle the case where an agent is stopped mid-tool-execution,
- * leaving tool_use/function_call blocks without corresponding tool_result/function_call_output blocks.
+ * These functions handle retries, conversation compaction, or cancellation leaving
+ * tool_use/function_call blocks without corresponding tool_result/function_call_output blocks.
  * The LLM APIs require every tool call to have a matching result.
  *
- * Bug context: When user stops an agent while tools are being executed,
+ * Bug context: When execution ends without recording one or more tool results,
  * the conversation has orphaned tool calls. Sending a new message
  * without fixing this causes API errors like:
  * - Anthropic: "tool_use ids were found without tool_result blocks immediately after"
@@ -97,7 +97,8 @@ describe('fixOrphanedToolUse - Claude', () => {
         expect(userContent).toHaveLength(2);
         expect(userContent[0].type).toBe('tool_result');
         expect(userContent[0].tool_use_id).toBe('tool_1');
-        expect(userContent[0].content).toContain('Tool interrupted');
+        expect(userContent[0].content).toContain('Tool result unavailable');
+        expect(userContent[0].content).not.toContain('user stopped');
         expect(userContent[0].content).toContain('search');
         expect(userContent[1].type).toBe('text');
         expect(userContent[1].text).toBe('Actually, stop that and do something else');
@@ -225,11 +226,13 @@ describe('fixOrphanedToolUse - Claude', () => {
 
         expect(lastUserContent[0].type).toBe('tool_result');
         expect(lastUserContent[0].tool_use_id).toBe('toolu_search');
-        expect(lastUserContent[0].content).toContain('user stopped');
+        expect(lastUserContent[0].content).toContain('Tool result unavailable');
+        expect(lastUserContent[0].content).not.toContain('user stopped');
 
         expect(lastUserContent[1].type).toBe('tool_result');
         expect(lastUserContent[1].tool_use_id).toBe('toolu_analyze');
-        expect(lastUserContent[1].content).toContain('user stopped');
+        expect(lastUserContent[1].content).toContain('Tool result unavailable');
+        expect(lastUserContent[1].content).not.toContain('user stopped');
 
         expect(lastUserContent[2].type).toBe('text');
     });
@@ -396,7 +399,8 @@ describe('fixOrphanedToolUse - Bedrock', () => {
         expect(userContent).toHaveLength(2);
         expect(userContent[0].toolResult).toBeDefined();
         expect(userContent[0].toolResult?.toolUseId).toBe('tool_1');
-        expect(userContent[0].toolResult?.content?.[0].text).toContain('Tool interrupted');
+        expect(userContent[0].toolResult?.content?.[0].text).toContain('Tool result unavailable');
+        expect(userContent[0].toolResult?.content?.[0].text).not.toContain('user stopped');
         expect(userContent[0].toolResult?.content?.[0].text).toContain('search');
         expect(userContent[1].text).toBe('Actually, stop that and do something else');
     });
@@ -493,10 +497,12 @@ describe('fixOrphanedToolUse - Bedrock', () => {
         expect(lastUserContent).toHaveLength(3); // 2 synthetic + 1 text
 
         expect(lastUserContent[0].toolResult?.toolUseId).toBe('toolu_search');
-        expect(lastUserContent[0].toolResult?.content?.[0].text).toContain('user stopped');
+        expect(lastUserContent[0].toolResult?.content?.[0].text).toContain('Tool result unavailable');
+        expect(lastUserContent[0].toolResult?.content?.[0].text).not.toContain('user stopped');
 
         expect(lastUserContent[1].toolResult?.toolUseId).toBe('toolu_analyze');
-        expect(lastUserContent[1].toolResult?.content?.[0].text).toContain('user stopped');
+        expect(lastUserContent[1].toolResult?.content?.[0].text).toContain('Tool result unavailable');
+        expect(lastUserContent[1].toolResult?.content?.[0].text).not.toContain('user stopped');
 
         expect(lastUserContent[2].text).toBe('Never mind, do something else instead');
     });
@@ -622,7 +628,8 @@ describe('fixOrphanedToolUse - OpenAI', () => {
         const synthetic = result[2] as OpenAI.Responses.ResponseInputItem.FunctionCallOutput;
         expect(synthetic.type).toBe('function_call_output');
         expect(synthetic.call_id).toBe('fc_1');
-        expect(synthetic.output).toContain('Tool interrupted');
+        expect(synthetic.output).toContain('Tool result unavailable');
+        expect(synthetic.output).not.toContain('user stopped');
         expect(synthetic.output).toContain('ask_user');
 
         expect(result[3]).toEqual({ role: 'user', content: 'Actually, stop that' });
@@ -677,7 +684,8 @@ describe('fixOrphanedToolUse - OpenAI', () => {
         // Synthetic output for fc_2 injected before user message
         expect((result[3] as unknown as Tree).type).toBe('function_call_output');
         expect((result[3] as unknown as Tree).call_id).toBe('fc_2');
-        expect((result[3] as unknown as Tree).output).toContain('Tool interrupted');
+        expect((result[3] as unknown as Tree).output).toContain('Tool result unavailable');
+        expect((result[3] as unknown as Tree).output).not.toContain('user stopped');
 
         expect((result[4] as unknown as Tree).role).toBe('user');
     });
@@ -729,7 +737,8 @@ describe('fixOrphanedToolUse - OpenAI', () => {
         const synthetic = result[4] as OpenAI.Responses.ResponseInputItem.FunctionCallOutput;
         expect(synthetic.type).toBe('function_call_output');
         expect(synthetic.call_id).toBe('fc_ask_user');
-        expect(synthetic.output).toContain('Tool interrupted');
+        expect(synthetic.output).toContain('Tool result unavailable');
+        expect(synthetic.output).not.toContain('user stopped');
         expect(synthetic.output).toContain('ask_user');
 
         // Last user message is preserved
