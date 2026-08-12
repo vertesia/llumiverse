@@ -8,9 +8,14 @@ describe('Vertex AI MaaS metadata', () => {
         'supports current Gemini Flash Flex inference for %s',
         (model) => {
             expect(isFlexSupportedGeminiModel(model)).toBe(true);
-            expect(getVertexAiOptions(model).options.map((option) => option.name)).toEqual(
-                expect.arrayContaining(['effort', 'include_thoughts', 'max_tokens', 'flex']),
+            const options = getVertexAiOptions(model).options;
+            expect(options.map((option) => option.name)).toEqual(
+                expect.arrayContaining(['effort', 'include_thoughts', 'max_tokens', 'service_tier']),
             );
+            expect(options.find((option) => option.name === 'service_tier')).toMatchObject({
+                default: 'default',
+                enum: { Default: 'default', Flex: 'flex' },
+            });
         },
     );
 

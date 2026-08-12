@@ -304,6 +304,13 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                 step: 200,
                 description: 'The maximum number of tokens to generate',
             },
+            {
+                name: 'service_tier',
+                type: OptionType.enum,
+                enum: { Default: 'default', Flex: 'flex', Priority: 'priority', Reserved: 'reserved' },
+                default: 'default',
+                description: 'Select the Amazon Bedrock processing tier for this request.',
+            },
         ];
 
         // Opus 4.7+ models don't support temperature, top_p
@@ -528,6 +535,13 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
         } else if (model.includes('twelvelabs')) {
             if (model.includes('pegasus')) {
                 const pegasusOptions: ModelOptionInfoItem[] = [
+                    {
+                        name: 'service_tier',
+                        type: OptionType.enum,
+                        enum: { Default: 'default', Flex: 'flex', Priority: 'priority', Reserved: 'reserved' },
+                        default: 'default',
+                        description: 'Select the Amazon Bedrock processing tier for this request.',
+                    },
                     {
                         name: 'temperature',
                         type: OptionType.numeric,

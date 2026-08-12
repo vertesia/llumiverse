@@ -17,11 +17,33 @@ import { FinishReason } from '@google/genai';
 import { type DataSource, type ExecutionOptions, PromptRole, type PromptSegment } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
-import { convertGeminiFunctionPartsToText, GeminiModelDefinition, getGeminiPayload } from './gemini.js';
+import {
+    convertGeminiFunctionPartsToText,
+    GeminiModelDefinition,
+    getGeminiPayload,
+    resolveVertexAIServiceTier,
+} from './gemini.js';
 
 // ---------------------------------------------------------------------------
 // Pure function tests — no driver needed
 // ---------------------------------------------------------------------------
+
+describe('resolveVertexAIServiceTier', () => {
+    it('uses the deprecated flex alias when service_tier is absent', () => {
+        expect(resolveVertexAIServiceTier({ _option_id: 'vertexai-gemini', flex: true })).toBe('flex');
+        expect(resolveVertexAIServiceTier({ _option_id: 'vertexai-gemini', flex: false })).toBeUndefined();
+    });
+
+    it('gives service_tier precedence over the deprecated flex alias', () => {
+        expect(
+            resolveVertexAIServiceTier({
+                _option_id: 'vertexai-gemini',
+                service_tier: 'future-tier',
+                flex: true,
+            }),
+        ).toBe('future-tier');
+    });
+});
 
 describe('convertGeminiFunctionPartsToText', () => {
     it('does not mutate the input array', () => {

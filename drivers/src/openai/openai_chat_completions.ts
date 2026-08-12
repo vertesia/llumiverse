@@ -37,6 +37,13 @@ import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAISchema, limitedSchemaFormat } from './schema.js';
 
+type OpenAIChatServiceTier = OpenAI.Chat.ChatCompletionCreateParams['service_tier'];
+
+function asOpenAIChatServiceTier(serviceTier?: string): OpenAIChatServiceTier {
+    // The public option deliberately accepts future provider values that may predate the installed SDK union.
+    return serviceTier as OpenAIChatServiceTier;
+}
+
 export type OpenAIChatCompletionsTextPart = OpenAI.Chat.ChatCompletionContentPartText;
 export type OpenAIChatCompletionsImageUrlPart = OpenAI.Chat.ChatCompletionContentPartImage;
 export type OpenAIChatCompletionsContentPart = OpenAIChatCompletionsTextPart | OpenAIChatCompletionsImageUrlPart;
@@ -1144,6 +1151,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
             reasoning_effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
             seed?: number;
+            service_tier?: string;
         };
         const payload: OpenAIChatCompletionsPayload = {
             model: this.getModelName(options),
@@ -1159,6 +1167,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             stop: modelOptions?.stop_sequence,
             seed: modelOptions?.seed,
             reasoning_effort: modelOptions?.effort ?? modelOptions?.reasoning_effort,
+            service_tier: asOpenAIChatServiceTier(modelOptions?.service_tier),
             stream,
         };
 

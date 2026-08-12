@@ -29,6 +29,11 @@ export const ReasoningEffortSchema = z
     .enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
     .meta({ id: 'ReasoningEffort' });
 
+const ServiceTierSchema = z
+    .string()
+    .min(1)
+    .describe('Provider-defined processing tier. Unknown non-empty values are preserved for forward compatibility.');
+
 // ===== fallback =====
 
 export const TextFallbackOptionsSchema = z
@@ -108,6 +113,7 @@ export const BedrockConverseOptionsSchema = z
         top_p: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
         include_thoughts: z.boolean().optional(),
+        service_tier: ServiceTierSchema.optional(),
     })
     .meta({ id: 'BedrockConverseOptions' });
 
@@ -119,6 +125,7 @@ export const BedrockNovaOptionsSchema = z
         top_p: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
         include_thoughts: z.boolean().optional(),
+        service_tier: ServiceTierSchema.optional(),
     })
     .meta({ id: 'BedrockNovaOptions' });
 
@@ -130,6 +137,7 @@ export const BedrockMistralOptionsSchema = z
         top_p: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
         include_thoughts: z.boolean().optional(),
+        service_tier: ServiceTierSchema.optional(),
     })
     .meta({ id: 'BedrockMistralOptions' });
 
@@ -141,6 +149,7 @@ export const BedrockAI21OptionsSchema = z
         top_p: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
         include_thoughts: z.boolean().optional(),
+        service_tier: ServiceTierSchema.optional(),
     })
     .meta({ id: 'BedrockAI21Options' });
 
@@ -152,6 +161,7 @@ export const BedrockCohereCommandOptionsSchema = z
         top_p: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
         include_thoughts: z.boolean().optional(),
+        service_tier: ServiceTierSchema.optional(),
     })
     .meta({ id: 'BedrockCohereCommandOptions' });
 
@@ -168,6 +178,7 @@ export const BedrockClaudeOptionsSchema = z
         effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
         cache_enabled: z.boolean().optional(),
         cache_ttl: z.enum(['5m', '1h']).optional(),
+        service_tier: ServiceTierSchema.optional(),
     })
     .meta({ id: 'BedrockClaudeOptions' });
 
@@ -182,6 +193,7 @@ export const BedrockPalmyraOptionsSchema = z
         seed: z.number().optional(),
         frequency_penalty: z.number().optional(),
         presence_penalty: z.number().optional(),
+        service_tier: ServiceTierSchema.optional(),
     })
     .meta({ id: 'BedrockPalmyraOptions' });
 
@@ -195,6 +207,7 @@ export const BedrockGptOssOptionsSchema = z
         reasoning_effort: z.enum(['low', 'medium', 'high']).optional(),
         frequency_penalty: z.number().optional(),
         presence_penalty: z.number().optional(),
+        service_tier: ServiceTierSchema.optional(),
     })
     .meta({ id: 'BedrockGptOssOptions' });
 
@@ -203,6 +216,7 @@ export const TwelvelabsPegasusOptionsSchema = z
         _option_id: z.literal('bedrock-twelvelabs-pegasus'),
         temperature: z.number().optional(),
         max_tokens: z.number().optional(),
+        service_tier: ServiceTierSchema.optional(),
     })
     .meta({ id: 'TwelvelabsPegasusOptions' });
 
@@ -288,6 +302,7 @@ export const OpenAiThinkingOptionsSchema = z
         reasoning_effort: ReasoningEffortSchema.optional(),
         image_detail: z.enum(['low', 'high', 'auto']).optional(),
         include_thoughts: z.boolean().optional(),
+        service_tier: ServiceTierSchema.optional(),
     })
     .meta({ id: 'OpenAiThinkingOptions' });
 
@@ -304,6 +319,7 @@ export const OpenAiTextOptionsSchema = z
         stop_sequence: z.array(z.string()).optional(),
         image_detail: z.enum(['low', 'high', 'auto']).optional(),
         include_thoughts: z.boolean().optional(),
+        service_tier: ServiceTierSchema.optional(),
     })
     .meta({ id: 'OpenAiTextOptions' });
 
@@ -389,7 +405,16 @@ export const VertexAIGeminiOptionsSchema = z
         include_thoughts: z.boolean().optional(),
         thinking_budget_tokens: z.number().optional(),
         thinking_level: ThinkingLevelSchema.optional(),
-        flex: z.boolean().optional(),
+        service_tier: ServiceTierSchema.optional(),
+        // TODO: Remove this deprecated alias after main's OpenAPI compatibility baseline advances past release/1.4.
+        flex: z
+            .boolean()
+            .meta({
+                description: 'Deprecated: Use service_tier="flex" instead.',
+                deprecated: true,
+                'x-deprecated-message': 'Use service_tier="flex" instead.',
+            })
+            .optional(),
         image_aspect_ratio: z.enum(['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9', '21:9']).optional(),
         image_size: z.enum(['1K', '2K', '4K']).optional(),
         person_generation: z.enum(['ALLOW_ALL', 'ALLOW_ADULT', 'ALLOW_NONE']).optional(),

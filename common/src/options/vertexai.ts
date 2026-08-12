@@ -525,14 +525,14 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
     };
 
     if (isGeminiModelVersionGte(model, '3.0')) {
-        const flexOptions: ModelOptionInfoItem[] = isFlexSupportedGeminiModel(model)
+        const serviceTierOptions: ModelOptionInfoItem[] = isFlexSupportedGeminiModel(model)
             ? [
                   {
-                      name: 'flex',
-                      type: OptionType.boolean,
-                      default: false,
-                      description:
-                          'Use Flex processing tier for cost-efficient, batch-style execution with relaxed latency.',
+                      name: 'service_tier',
+                      type: OptionType.enum,
+                      enum: { Default: 'default', Flex: 'flex' },
+                      default: 'default',
+                      description: 'Select the Vertex AI processing tier for this request.',
                   },
               ]
             : [];
@@ -543,7 +543,7 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
                 ...commonOptions,
                 seedOption,
                 ...getGeminiThinkingOptionItems(model),
-                ...flexOptions,
+                ...serviceTierOptions,
             ],
         };
     }

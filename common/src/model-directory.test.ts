@@ -15,7 +15,7 @@ describe('central model directory', () => {
         expect(capabilities.input.image).toBe(true);
         expect(capabilities.tool_support).toBe(true);
         expect(options._option_id).toBe('openai-text');
-        expect(options.options.map((option) => option.name)).not.toContain('flex');
+        expect(options.options.map((option) => option.name)).not.toContain('service_tier');
         expect(options.options.map((option) => option.name)).not.toContain('thinking_level');
         expect(options.options.find((option) => option.name === 'max_tokens')).toMatchObject({ max: 65_535 });
         expect(options.options.find((option) => option.name === 'effort')).toMatchObject({
@@ -29,7 +29,9 @@ describe('central model directory', () => {
 
         expect(profile.family).toBe('gemini');
         expect(options._option_id).toBe('vertexai-gemini');
-        expect(options.options.map((option) => option.name)).toContain('flex');
+        expect(options.options.find((option) => option.name === 'service_tier')).toMatchObject({
+            enum: { Default: 'default', Flex: 'flex' },
+        });
     });
 
     it('applies Bedrock Mantle overrides separately from direct OpenAI', () => {
