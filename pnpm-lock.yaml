@@ -11,7 +11,7 @@ catalogs:
       version: 7.0.2
 
 overrides:
-  google-auth-library: ^10.9.1
+  google-auth-library: ^11.0.0
   '@types/node': ^24.13.3
   vite: ^8.0.16
   brace-expansion@>=3.0.0 <5.0.8: 5.0.9
@@ -164,8 +164,8 @@ importers:
         specifier: ^4.1.0
         version: 4.1.0
       google-auth-library:
-        specifier: ^10.9.1
-        version: 10.9.1
+        specifier: ^11.0.0
+        version: 11.0.0
       groq-sdk:
         specifier: ^1.4.1
         version: 1.5.0
@@ -1326,9 +1326,9 @@ packages:
     resolution: {integrity: sha512-Wjlyrolmm8uDpm/ogGyXZXb1Z+Ca2B8NbJwqBVg0axK9GbBeoS7yGV6vjXnYdGm6X53iehEuxxbyiKp8QmN4Vw==}
     engines: {node: 18 || 20 || >=22}
 
-  google-auth-library@10.9.1:
-    resolution: {integrity: sha512-i1ydyHrqcIxXkWh/uBmVkzCvIuq5yiK2ATndIe5XxKholrG/MTYP9xGYka4sQhrbIAgGjL2B6NOE7rFaiF3fXw==}
-    engines: {node: '>=18'}
+  google-auth-library@11.0.0:
+    resolution: {integrity: sha512-WC5gkb2pElGhZKgGx9r799trH3ZUx90ecgIOIMmgiiHS/gzO3r4vvFoQWuKI0QmR2xU5uee2M4hDUxRZDh/x7w==}
+    engines: {node: '>=22'}
 
   google-gax@5.0.4:
     resolution: {integrity: sha512-HmQ6zIYBs2EikTk+kjeHmtHprNTEpsnVaKONw9cwZZwUNCkUb+D5RYrJpCxyjdvIDvJp3wLbVReolJLRZRms1g==}
@@ -1936,7 +1936,7 @@ snapshots:
   '@anthropic-ai/vertex-sdk@0.19.0(zod@4.4.3)':
     dependencies:
       '@anthropic-ai/sdk': 0.115.0(zod@4.4.3)
-      google-auth-library: 10.9.1
+      google-auth-library: 11.0.0
     transitivePeerDependencies:
       - supports-color
       - zod
@@ -2500,7 +2500,7 @@ snapshots:
 
   '@google/genai@2.15.0':
     dependencies:
-      google-auth-library: 10.9.1
+      google-auth-library: 11.0.0
       p-retry: 4.6.2
       protobufjs: 7.6.5
       ws: 8.21.0
@@ -3244,7 +3244,7 @@ snapshots:
       minipass: 7.1.3
       path-scurry: 2.0.2
 
-  google-auth-library@10.9.1:
+  google-auth-library@11.0.0:
     dependencies:
       base64-js: 1.5.1
       ecdsa-sig-formatter: 1.0.11
@@ -3260,7 +3260,7 @@ snapshots:
       '@grpc/grpc-js': 1.14.4
       '@grpc/proto-loader': 0.8.0
       duplexify: 4.1.3
-      google-auth-library: 10.9.1
+      google-auth-library: 11.0.0
       google-logging-utils: 1.1.3
       node-fetch: 3.3.2
       object-hash: 3.0.0

@@ -18,7 +18,7 @@ minimumReleaseAgeExclude:
 catalog:
   typescript: "7.0.2"
   "@types/node": "^24.13.3"
-  google-auth-library: "^10.9.1"
+  google-auth-library: "^11.0.0"
 overrides:
   # ============================
   # Special Overrides
