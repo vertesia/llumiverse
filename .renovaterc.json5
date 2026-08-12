@@ -103,6 +103,27 @@
       "schedule": "* * * * 4" // Thursday
     },
     {
+      "groupName": "google-cloud dependencies",
+      "assignees": ["cmorman89"],
+      "matchManagers": [
+        "npm"
+      ],
+      "matchDepTypes": [
+        "!overrides"
+      ],
+      "matchPackageNames": [
+        "@google-cloud/**",
+        "@googleapis/**",
+        "googleapis",
+        "googleapis/**",
+        "googleapis-common",
+        "google-auth-library",
+        "google-artifactregistry-auth"
+      ],
+      "rangeStrategy": "bump",
+      "schedule": "* * * * 2" // Tuesday
+    },
+    {
       "groupName": "Vertesia libraries",
       "assignees": ["LeonRuggiero"],
       "matchManagers": [
