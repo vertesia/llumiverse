@@ -8,7 +8,7 @@ import type {
 import { type ModelOptionInfoItem, type ModelOptions, type ModelOptionsInfo, OptionType } from '../types.js';
 import { getAnthropicOptions } from './anthropic.js';
 import { textOptionsFallback } from './fallback.js';
-import { isModelFamilyVersionGTE } from './version-parsing.js';
+import { getOpenAIReasoningEffortLevels, isModelFamilyVersionGTE } from './version-parsing.js';
 
 // The option shapes are DERIVED, not declared. Each schema in `../schemas/model-options.js` is the
 // single definition of its option set: it is what the OpenAPI document publishes, what AJV enforces,
@@ -77,6 +77,8 @@ export function getBedrockMantleProtocol(model: string): BedrockMantleProtocol |
     const normalized = normalizeBedrockModelId(model);
     const publisher = getPublisher(normalized);
 
+    // Intentional protocol allow-list: Mantle hosts families across three wire protocols. A new version of a known
+    // family inherits its latest rule; a brand-new family stays unclassified until its working endpoint is known.
     if (publisher === 'anthropic' && normalized.includes('.claude-')) return 'messages';
     if (publisher === 'openai') {
         // GPT-OSS works through Bedrock Runtime Converse, but on Bedrock Mantle the
@@ -139,10 +141,17 @@ function maxTokensOption(model: string): ModelOptionInfoItem {
 function getResponsesOptions(model: string): ModelOptionsInfo {
     const normalized = normalizeBedrockModelId(model);
     const isGrok = normalized.startsWith('xai.grok-');
-    const reasoningEffortEnum: Record<string, string> = isGrok
+    const isOpenAI = normalized.startsWith('openai.gpt-');
+    const isGemma4 = isModelFamilyVersionGTE(normalized, 'google.gemma-', 4, 0);
+    const openAiEffortLevels = getOpenAIReasoningEffortLevels(normalized);
+    const reasoningEffortEnum: Record<string, string> | undefined = isGrok
         ? { none: 'none', low: 'low', medium: 'medium', high: 'high' }
-        : { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh' };
-    const reasoningEffortDefault = isGrok ? 'low' : 'medium';
+        : isOpenAI && openAiEffortLevels
+          ? Object.fromEntries(Object.values(openAiEffortLevels).map((value) => [value, value]))
+          : isGemma4
+            ? { low: 'low', medium: 'medium', high: 'high' }
+            : undefined;
+    const reasoningEffortDefault = isGrok ? 'low' : isGemma4 ? 'high' : 'medium';
     const options: ModelOptionInfoItem[] = [maxTokensOption(model)];
 
     if (isGrok) {
@@ -169,24 +178,24 @@ function getResponsesOptions(model: string): ModelOptionsInfo {
         );
     }
 
-    options.push(
-        {
+    if (reasoningEffortEnum) {
+        options.push({
             name: 'effort',
             type: OptionType.enum,
             enum: reasoningEffortEnum,
             default: reasoningEffortDefault,
             description: 'The reasoning effort of the model, which affects the quality and speed of the response',
-        },
-        {
+        });
+        options.push({
             name: 'reasoning_effort',
             type: OptionType.enum,
             enum: reasoningEffortEnum,
             default: reasoningEffortDefault,
             description: 'Alias for effort; controls how much reasoning the model performs before responding',
-        },
-    );
+        });
+    }
 
-    if (!isGrok) {
+    if (isOpenAI) {
         options.push({
             name: 'verbosity',
             type: OptionType.enum,
@@ -212,11 +221,22 @@ function getResponsesOptions(model: string): ModelOptionsInfo {
 function getChatCompletionsOptions(model: string): ModelOptionsInfo {
     const allowedOptions = new Set(['max_tokens', 'temperature', 'top_p', 'stop_sequence', 'include_thoughts']);
     const maxOutputTokens = getBedrockModelKnowledge(model).max_output_tokens;
+    const options = textOptionsFallback.options
+        .filter((option) => allowedOptions.has(option.name))
+        .map((option) => (option.name === 'max_tokens' ? { ...option, max: maxOutputTokens } : option));
+    if (model.toLowerCase().includes('gpt-oss')) {
+        const effortOption: ModelOptionInfoItem = {
+            name: 'effort',
+            type: OptionType.enum,
+            enum: { low: 'low', medium: 'medium', high: 'high' },
+            default: 'medium',
+            description: 'Controls how much reasoning the model performs before responding',
+        };
+        options.push(effortOption, { ...effortOption, name: 'reasoning_effort' });
+    }
     return {
         _option_id: 'bedrock-mantle-chat-completions',
-        options: textOptionsFallback.options
-            .filter((option) => allowedOptions.has(option.name))
-            .map((option) => (option.name === 'max_tokens' ? { ...option, max: maxOutputTokens } : option)),
+        options,
     };
 }
 

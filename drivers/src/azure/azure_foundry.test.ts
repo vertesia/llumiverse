@@ -24,6 +24,31 @@ function createDriver(): AzureFoundryDriver {
 }
 
 describe('AzureFoundryDriver protocol composition', () => {
+    it('parses string capability flags and excludes dedicated endpoint deployments from inference listing', async () => {
+        const driver = createDriver();
+        const deployments = [
+            modelDeployment('future-chat', 'Future-Chat-7', {}),
+            modelDeployment('explicit-chat', 'Llama-5', { chat_completion: 'true' }),
+            modelDeployment('not-chat', 'Llama-4', { chat_completion: 'false' }),
+            modelDeployment('embedding', 'text-embedding-4', { chat_completion: 'true' }),
+            modelDeployment('speech', 'gpt-4o-mini-tts', { chat_completion: 'true' }),
+        ];
+        driver.service = {
+            deployments: {
+                list: () => ({
+                    async *byPage() {
+                        yield deployments;
+                    },
+                }),
+            },
+        } as unknown as AzureFoundryDriver['service'];
+
+        expect((await driver.listModels()).map((model) => model.id)).toEqual([
+            'explicit-chat::Llama-5',
+            'future-chat::Future-Chat-7',
+        ]);
+    });
+
     it('does not cache failed deployment lookups or silently route them to Chat', async () => {
         const driver = createDriver();
         const get = vi
@@ -77,11 +102,12 @@ describe('AzureFoundryDriver protocol composition', () => {
             model: 'llama-deployment::llama',
             include_original_response: true,
             model_options: {
-                _option_id: 'text-fallback',
+                _option_id: 'azure-foundry-chat',
                 max_tokens: 16,
                 presence_penalty: 0.1,
                 frequency_penalty: 0.2,
                 stop_sequence: ['END'],
+                seed: 42,
             },
             tools: [{ name: 'lookup', description: 'Lookup', input_schema: { type: 'object' } }],
         });
@@ -95,6 +121,7 @@ describe('AzureFoundryDriver protocol composition', () => {
                 presence_penalty: 0.1,
                 frequency_penalty: 0.2,
                 stop: ['END'],
+                seed: 42,
                 tools: [
                     {
                         type: 'function',
@@ -306,3 +333,14 @@ describe('AzureFoundryDriver protocol composition', () => {
         });
     });
 });
+
+function modelDeployment(name: string, modelName: string, capabilities: Record<string, string>) {
+    return {
+        type: 'ModelDeployment' as const,
+        name,
+        modelName,
+        modelVersion: '1',
+        modelPublisher: 'Meta',
+        capabilities,
+    };
+}

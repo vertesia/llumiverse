@@ -1,13 +1,8 @@
 import { DefaultAzureCredential, getBearerTokenProvider } from '@azure/identity';
-import {
-    type AIModel,
-    type DriverOptions,
-    getModelCapabilities,
-    modelModalitiesToArray,
-    Providers,
-} from '@llumiverse/core';
+import { type AIModel, type DriverOptions, isEmbeddingModel, Providers } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import { AzureOpenAI } from 'openai';
+import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { OpenAIResponsesDriverBase } from './index.js';
 
 export interface AzureOpenAIDriverOptions extends DriverOptions {
@@ -85,16 +80,17 @@ export class AzureOpenAIDriver extends OpenAIResponsesDriverBase {
         } catch (error) {
             this.logger.error({ error }, 'Failed to test model for Azure OpenAI listing :');
         }
-        const modelCapability = getModelCapabilities(modelID, 'openai');
+        const modelMetadata = resolveModelListingMetadata(modelID, this.provider);
+        if (isEmbeddingModel({ id: modelID }, this.provider)) {
+            return [];
+        }
         return [
             {
                 id: modelID,
                 name: this.service.deploymentName,
                 provider: this.provider,
                 owner: 'openai',
-                input_modalities: modelModalitiesToArray(modelCapability.input),
-                output_modalities: modelModalitiesToArray(modelCapability.output),
-                tool_support: modelCapability.tool_support,
+                ...modelMetadata,
             } satisfies AIModel,
         ];
     }

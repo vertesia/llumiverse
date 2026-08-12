@@ -21,13 +21,12 @@ import {
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
-    getModelCapabilities,
     type ImageEmbeddingInput,
     LlumiverseError,
     type LlumiverseErrorContext,
-    modelModalitiesToArray,
     normalizeEmbeddingsOptions,
     Providers,
+    resolveModelProfile,
     type TextEmbeddingInput,
 } from '@llumiverse/core';
 import { AbstractDriver } from '@llumiverse/core/driver';
@@ -49,6 +48,7 @@ import {
     formatOpenAIDebugPrompt,
     formatOpenAILikeMultimodalPrompt,
 } from '../openai/openai_format.js';
+import { resolveModelListingMetadata } from '../shared/model-listing.js';
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type SSEMessage = { data?: string };
@@ -219,7 +219,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             return cached === 'responses';
         }
         const deployment = (await this.service.deployments.get(deploymentName)) as ModelDeployment;
-        const protocol = deployment.modelPublisher === 'OpenAI' ? 'responses' : 'chat_completions';
+        const protocol = deployment.modelPublisher.toLowerCase() === 'openai' ? 'responses' : 'chat_completions';
         this.deploymentProtocols.set(deploymentName, protocol);
         this.logger.debug(`[Azure Foundry] Deployment ${deploymentName} uses ${protocol}`);
         return protocol === 'responses';
@@ -418,11 +418,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     }
 
     async listModels(): Promise<AIModel[]> {
-        const filter = (m: ModelDeployment) => {
-            // Only include models that support chat completions
-            return !!m.capabilities.chat_completion;
-        };
-        return this._listModels(filter);
+        return this._listModels(isStandardInferenceDeployment);
     }
 
     async _listModels(filter?: (m: ModelDeployment) => boolean): Promise<AIModel[]> {
@@ -455,7 +451,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                 // Create composite ID: deployment_name::base_model
                 const compositeId = `${model.name}::${model.modelName}`;
 
-                const modelCapability = getModelCapabilities(model.modelName, Providers.azure_foundry);
+                const modelMetadata = resolveModelListingMetadata(model.modelName, Providers.azure_foundry);
                 return {
                     id: compositeId,
                     name: model.name,
@@ -463,9 +459,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
                     version: model.modelVersion,
                     provider: this.provider,
                     owner: model.modelPublisher,
-                    input_modalities: modelModalitiesToArray(modelCapability.input),
-                    output_modalities: modelModalitiesToArray(modelCapability.output),
-                    tool_support: modelCapability.tool_support,
+                    ...modelMetadata,
                 } satisfies AIModel;
             })
             .sort((modelA, modelB) => modelA.id.localeCompare(modelB.id));
@@ -561,10 +555,46 @@ function toAzureInferenceRequest(
         frequency_penalty: payload.frequency_penalty ?? undefined,
         presence_penalty: payload.presence_penalty ?? undefined,
         stop: Array.isArray(payload.stop) ? payload.stop : payload.stop ? [payload.stop] : undefined,
+        seed: payload.seed ?? undefined,
         response_format: responseFormat,
         tools,
         stream,
     } satisfies GetChatCompletionsParameters['body'];
+}
+
+function parseCapabilityFlag(value: unknown): boolean | undefined {
+    if (typeof value === 'boolean') return value;
+    if (typeof value !== 'string') return undefined;
+    switch (value.trim().toLowerCase()) {
+        case 'true':
+        case '1':
+        case 'yes':
+            return true;
+        case 'false':
+        case '0':
+        case 'no':
+            return false;
+        default:
+            return undefined;
+    }
+}
+
+function isStandardInferenceDeployment(deployment: ModelDeployment): boolean {
+    const profile = resolveModelProfile(deployment.modelName, Providers.azure_foundry);
+    const sourceModel = deployment.modelName.toLowerCase();
+    // These source families use dedicated endpoint contracts, not Foundry chat or Responses inference.
+    if (
+        ['embedding', 'image', 'transcription', 'speech', 'realtime', 'video', 'moderation'].includes(profile.family) ||
+        /(?:^|[-_.:/])(?:embed|embeddings?|whisper|transcribe|tts|realtime|moderation|sora)(?:[-_.:/]|$)/.test(
+            sourceModel,
+        )
+    ) {
+        return false;
+    }
+
+    // Foundry capability values are strings. Only an explicit false is deterministic enough to hide a deployment;
+    // omitted and future capability values remain visible so the provider listing does not become an allow-list.
+    return parseCapabilityFlag(deployment.capabilities.chat_completion) !== false;
 }
 
 function toAzureInferenceMessage(message: OpenAIChatCompletionsPayload['messages'][number]): ChatRequestMessage {

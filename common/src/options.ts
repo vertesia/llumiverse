@@ -1,18 +1,21 @@
+import { resolveModelProfile } from './model-directory.js';
 import { getAnthropicOptions } from './options/anthropic.js';
 import { getAzureFoundryOptions } from './options/azure_foundry.js';
 import { getBedrockOptions } from './options/bedrock.js';
 import { getBedrockMantleOptions } from './options/bedrock_mantle.js';
 import { textOptionsFallback } from './options/fallback.js';
 import { getGroqOptions } from './options/groq.js';
+import { getMistralOptions } from './options/mistral.js';
 import { getOpenAiCompatibleOptions, getOpenAiOptions } from './options/openai.js';
 import { getVertexAiOptions } from './options/vertexai.js';
 import { type ModelOptions, type ModelOptionsInfo, Providers } from './types.js';
 
-export function getOptions(model: string, provider?: string | Providers, options?: ModelOptions): ModelOptionsInfo {
+export function getOptions(model: string, provider?: Providers, options?: ModelOptions): ModelOptionsInfo {
     if (!provider) {
         return textOptionsFallback;
     }
-    switch (provider.toLowerCase()) {
+    // Providers is intentionally an enum here: transport selection must be explicit before exposing an option schema.
+    switch (provider) {
         case Providers.anthropic:
             return getAnthropicOptions(model, options);
         case Providers.bedrock:
@@ -22,11 +25,20 @@ export function getOptions(model: string, provider?: string | Providers, options
         case Providers.vertexai:
             return getVertexAiOptions(model, options);
         case Providers.openai:
-            return getOpenAiOptions(model, options);
+            return getOpenAiOptions(model, options, resolveModelProfile(model, provider));
+        case Providers.azure_openai:
+            return getOpenAiOptions(model, options, resolveModelProfile(model, provider));
         case Providers.openai_compatible:
-            return getOpenAiCompatibleOptions(model, options);
+            return getOpenAiCompatibleOptions(model, options, resolveModelProfile(model, provider));
         case Providers.groq:
             return getGroqOptions(model, options);
+        case Providers.mistralai:
+            return getMistralOptions(model, options, resolveModelProfile(model, provider));
+        case Providers.togetherai:
+        case Providers.xai:
+            // These transports intentionally use the OpenAI-compatible option IDs because their request builders
+            // implement that wire surface; the resolved profile removes provider/model-specific unsupported effort.
+            return getOpenAiCompatibleOptions(model, options, resolveModelProfile(model, provider));
         case Providers.azure_foundry:
             return getAzureFoundryOptions(model, options);
         default:

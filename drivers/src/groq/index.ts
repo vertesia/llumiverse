@@ -1,6 +1,15 @@
 import type { GroqDeepseekThinkingOptions } from '@llumiverse/common';
-import type { AIModel, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions } from '@llumiverse/core';
-import { Providers } from '@llumiverse/core';
+import {
+    type AIModel,
+    type EmbeddingsOptions,
+    type EmbeddingsResult,
+    type ExecutionOptions,
+    getModelCapabilities,
+    isEmbeddingModel,
+    ModelType,
+    modelModalitiesToArray,
+    Providers,
+} from '@llumiverse/core';
 import Groq from 'groq-sdk';
 import { APIConnectionError, APIError, APIUserAbortError } from 'groq-sdk/error';
 import type {
@@ -88,12 +97,30 @@ export class GroqDriver extends OpenAIChatCompletionsDriverBase<GroqDriverOption
 
     async listModels(): Promise<AIModel[]> {
         const models = await this.client.models.list();
-        return models.data.map((model) => ({
-            id: model.id,
-            name: model.id,
-            provider: this.provider,
-            owner: model.owned_by || '',
-        }));
+        return models.data
+            .filter((model) => {
+                const id = model.id.toLowerCase();
+                return (
+                    !isEmbeddingModel({ id: model.id }, this.provider) &&
+                    !/(^|[-_.:/])whisper(?:[-_.:/]|$)/.test(id) &&
+                    !/^canopylabs\/orpheus(?:[-_.:/]|$)/.test(id)
+                );
+            })
+            .map((model) => {
+                const capabilities = getModelCapabilities(model.id, this.provider);
+                return {
+                    id: model.id,
+                    name: model.id,
+                    provider: this.provider,
+                    owner: model.owned_by || '',
+                    type: ModelType.Text,
+                    can_stream: true,
+                    is_multimodal: capabilities.input.image === true,
+                    input_modalities: modelModalitiesToArray(capabilities.input),
+                    output_modalities: modelModalitiesToArray(capabilities.output),
+                    tool_support: capabilities.tool_support,
+                } satisfies AIModel;
+            });
     }
 
     async validateConnection(): Promise<boolean> {

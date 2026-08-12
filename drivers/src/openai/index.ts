@@ -12,13 +12,12 @@ import {
     type ExecutionOptions,
     type ExecutionTokenUsage,
     getConversationMeta,
-    getModelCapabilities,
     incrementConversationTurn,
+    isDedicatedInferenceModel,
     isOpenAIGptVersionGTE,
     type JSONSchema,
     LlumiverseError,
     ModelType,
-    modelModalitiesToArray,
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
     type OpenAiDalleOptions,
@@ -41,6 +40,7 @@ import {
 } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import type { AzureOpenAI } from 'openai';
+import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAILikeMultimodalPrompt } from './openai_format.js';
 import { formatOpenAISchema } from './schema.js';
@@ -113,7 +113,7 @@ function openAIReasoning(
 function supportsOpenAICurrentTurnReasoning(provider: Providers, model: string): boolean {
     if (provider !== Providers.openai) return false;
     const modelId = model.toLowerCase().split('/').pop() ?? '';
-    return /^gpt-5\.(?:4|5|6)(?:$|-)/.test(modelId);
+    return isOpenAIGptVersionGTE(modelId, 5, 4);
 }
 
 function hasExplicitPromptCacheBreakpoint(item: ResponseInputItem): boolean {
@@ -130,7 +130,7 @@ function configureOpenAIPromptCaching(
     model: string,
     promptCacheKey: string | undefined,
 ): OpenAIPromptCacheConfig {
-    if (!promptCacheKey || !model.toLowerCase().startsWith('gpt-5.6')) {
+    if (!promptCacheKey || !isOpenAIGptVersionGTE(model, 5, 6)) {
         return { input };
     }
 
@@ -567,33 +567,22 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
     async _listModels(filter?: (m: OpenAI.Models.Model) => boolean): Promise<AIModel[]> {
         let result = (await this.service.models.list()).data;
 
-        //Some of these use the completions API instead of the chat completions API.
-        //Others are for non-text input modalities. Therefore common to both.
-        const wordBlacklist = [
-            'embed',
-            'whisper',
-            'transcribe',
-            'audio',
-            'moderation',
-            'tts',
-            'realtime',
-            'babbage',
-            'davinci',
-            'codex',
-            'o1-pro',
-            'computer-use',
-            'sora',
-        ];
+        // Intentional deny-list: OpenAI listing metadata does not describe execution capabilities. Exclude only
+        // deterministic dedicated/legacy endpoint families; unknown future IDs remain visible for normal inference.
+        const unsupportedEndpointPattern =
+            /(?:^|[-_.:/])(?:embed|embeddings?|whisper|transcribe|audio|moderation|tts|realtime|babbage|davinci|computer[-_.:]use|sora)(?:[-_.:/]|$)/;
 
         //OpenAI has very little information, filtering based on name.
         result = result.filter((m) => {
-            return !wordBlacklist.some((word) => m.id.includes(word));
+            return (
+                !unsupportedEndpointPattern.test(m.id.toLowerCase()) && !isDedicatedInferenceModel(m.id, this.provider)
+            );
         });
 
         const models = filter ? result.filter(filter) : result;
         const aiModels = models
             .map((m) => {
-                const modelCapability = getModelCapabilities(m.id, this.provider);
+                const modelMetadata = resolveModelListingMetadata(m.id, this.provider);
                 let owner = m.owned_by;
                 if (owner === 'system') {
                     owner = 'openai';
@@ -611,9 +600,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
                     provider: this.provider,
                     owner: owner,
                     type: modelType,
-                    input_modalities: modelModalitiesToArray(modelCapability.input),
-                    output_modalities: modelModalitiesToArray(modelCapability.output),
-                    tool_support: modelCapability.tool_support,
+                    ...modelMetadata,
                 } satisfies AIModel;
             })
             .sort((a, b) => a.id.localeCompare(b.id));
@@ -1058,7 +1045,7 @@ function convertRoles(items: ResponseInputItem[], model: string): ResponseInputI
 
 //Structured output support is typically aligned with tool use support
 //Not true for realtime models, which do not support structured output, but do support tool use.
-function supportsSchema(model: string, provider: string | Providers): boolean {
+function supportsSchema(model: string, provider: Providers): boolean {
     const realtimeModel = model.includes('realtime');
     if (realtimeModel) {
         return false;

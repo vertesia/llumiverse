@@ -1,3 +1,4 @@
+import { isModelFamilyVersionGTE } from '../options/version-parsing.js';
 import type { ModelCapabilities, ModelModalities } from '../types.js';
 
 // Global feature flags - temporarily disable tool support for non-OpenAI models
@@ -340,6 +341,11 @@ export function getModelCapabilitiesAzureFoundry(model: string): ModelCapabiliti
     const record = RECORD_MODEL_CAPABILITIES[normalized];
     if (record) {
         return applyGlobalToolSupportDisable(record, normalized);
+    }
+
+    if (isModelFamilyVersionGTE(normalized, 'llama-', 4, 0) || isModelFamilyVersionGTE(normalized, 'llama', 4, 0)) {
+        // Future Llama deployments inherit the latest known Foundry family behavior.
+        return applyGlobalToolSupportDisable(RECORD_FAMILY_CAPABILITIES['llama-4'], normalized);
     }
 
     // 2. Fallback: find the longest matching family prefix in RECORD_FAMILY_CAPABILITIES

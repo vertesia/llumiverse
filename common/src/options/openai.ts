@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import { type ModelProfile, resolveModelProfile } from '../model-directory.js';
 import type {
     OpenAiDalleOptionsSchema,
     OpenAiGptImageOptionsSchema,
@@ -10,6 +11,7 @@ import {
     type ModelOptions,
     type ModelOptionsInfo,
     OptionType,
+    Providers,
     SharedOptions,
 } from '../types.js';
 import { getMaxOutputTokens } from './context-windows.js';
@@ -34,18 +36,26 @@ export type OpenAiGptImageOptions = z.infer<typeof OpenAiGptImageOptionsSchema>;
  */
 export type OpenAiOptions = OpenAiThinkingOptions | OpenAiTextOptions | OpenAiDalleOptions | OpenAiGptImageOptions;
 
-export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOptionsInfo {
-    const visionOptions: ModelOptionInfoItem[] = isVisionModel(model)
-        ? [
-              {
-                  name: 'image_detail',
-                  type: OptionType.enum,
-                  enum: { Low: 'low', High: 'high', Auto: 'auto' },
-                  default: 'auto',
-                  description: 'Controls how the model processes an input image.',
-              },
-          ]
-        : [];
+export function getOpenAiOptions(
+    model: string,
+    _option?: ModelOptions,
+    profile: ModelProfile = resolveModelProfile(model, Providers.openai),
+): ModelOptionsInfo {
+    // Option matching follows the resolved source ID so provider/path-qualified and uppercase IDs expose the same
+    // controls as their canonical model.
+    model = profile.canonical_id;
+    const visionOptions: ModelOptionInfoItem[] =
+        profile.capabilities.input.image === true
+            ? [
+                  {
+                      name: 'image_detail',
+                      type: OptionType.enum,
+                      enum: { Low: 'low', High: 'high', Auto: 'auto' },
+                      default: 'auto',
+                      description: 'Controls how the model processes an input image.',
+                  },
+              ]
+            : [];
 
     // Image generation models
     if (isImageModel(model)) {
@@ -163,12 +173,10 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
             } else {
                 max_tokens_limit = 100000;
             }
-        } else if (model.includes('o3')) {
-            max_tokens_limit = 100000;
-        } else if (model.includes('o4')) {
+        } else if (isOSeriesModel(model)) {
             max_tokens_limit = 100000;
         } else if (isOpenAIGptVersionGTE(model, 5, 0)) {
-            max_tokens_limit = getMaxOutputTokens(model);
+            max_tokens_limit = profile.max_output_tokens ?? getMaxOutputTokens(model);
         }
 
         const commonOptions: ModelOptionInfoItem[] = [
@@ -190,7 +198,7 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
 
         const gptEffortLevels = getOpenAIReasoningEffortLevels(model);
         const reasoningOptions: ModelOptionInfoItem[] =
-            gptEffortLevels || model.includes('o3') || model.includes('o4') || isO1Full(model)
+            gptEffortLevels || isOSeriesModel(model)
                 ? [
                       {
                           name: SharedOptions.effort,
@@ -221,7 +229,7 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
             }
         } else if (model.includes('gpt-3-5')) {
             max_tokens_limit = 4096;
-        } else if (model.includes('gpt-5')) {
+        } else if (isOpenAIGptVersionGTE(model, 5, 0)) {
             max_tokens_limit = 128000;
         }
 
@@ -288,56 +296,59 @@ export function getOpenAiOptions(model: string, _option?: ModelOptions): ModelOp
     }
 }
 
-/** OpenAI-compatible endpoints own model capability detection, so expose effort for any text model. */
-export function getOpenAiCompatibleOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
-    const options = getOpenAiOptions(model, option);
-    if (options.options.some((item) => item.name === SharedOptions.effort) || options._option_id !== 'openai-text') {
-        return options;
+/** Expose only effort values verified for the source model and this transport. */
+export function getOpenAiCompatibleOptions(
+    model: string,
+    option?: ModelOptions,
+    profile: ModelProfile = resolveModelProfile(model, Providers.openai_compatible),
+): ModelOptionsInfo {
+    const options = getOpenAiOptions(model, option, profile);
+    const maxOutputTokens = profile.max_output_tokens;
+    const profileEffortLevels = profile.reasoning_effort_levels?.length
+        ? new Set(profile.reasoning_effort_levels)
+        : undefined;
+    const profileOptions: ModelOptionInfoItem[] = options.options
+        .map((item): ModelOptionInfoItem | null => {
+            if (item.name === SharedOptions.max_tokens && maxOutputTokens !== undefined) {
+                return { ...item, max: maxOutputTokens } as ModelOptionInfoItem;
+            }
+            if (item.name === SharedOptions.effort && item.type === OptionType.enum) {
+                if (!profileEffortLevels) return null;
+                const enumValues = item.enum as Record<string, string>;
+                return {
+                    ...item,
+                    enum: Object.fromEntries(
+                        Object.entries(enumValues).filter(([, value]) => profileEffortLevels.has(value)),
+                    ) as Record<string, string>,
+                } as ModelOptionInfoItem;
+            }
+            return item;
+        })
+        .filter((item): item is ModelOptionInfoItem => item !== null);
+    if (profileOptions.some((item) => item.name === SharedOptions.effort) || options._option_id !== 'openai-text') {
+        return { ...options, options: profileOptions };
     }
+    if (!profileEffortLevels) return { ...options, options: profileOptions };
     return {
         ...options,
         options: [
-            ...options.options,
+            ...profileOptions,
             {
                 name: SharedOptions.effort,
                 type: OptionType.enum,
-                enum: {
-                    None: 'none',
-                    Minimal: 'minimal',
-                    Low: 'low',
-                    Medium: 'medium',
-                    High: 'high',
-                    XHigh: 'xhigh',
-                    Max: 'max',
-                },
+                enum: Object.fromEntries([...profileEffortLevels].map((value) => [value, value])),
                 description: 'How much effort the model should put into reasoning, when supported by the endpoint.',
             },
         ],
     };
 }
 
-function isO1Full(model: string): boolean {
-    if (model.includes('o1')) {
-        if (model.includes('mini') || model.includes('preview')) {
-            return false;
-        }
-        return true;
-    }
-    return false;
-}
-
 function isReasoningModel(model: string): boolean {
-    const normalized = model.toLowerCase();
-    return (
-        normalized.includes('o1') ||
-        normalized.includes('o3') ||
-        normalized.includes('o4') ||
-        isOpenAIGptVersionGTE(model, 5, 0)
-    );
+    return isOSeriesModel(model) || isOpenAIGptVersionGTE(model, 5, 0);
 }
 
-function isVisionModel(model: string): boolean {
-    return model.includes('gpt-4o') || isO1Full(model) || model.includes('gpt-4-turbo');
+function isOSeriesModel(model: string): boolean {
+    return /(?:^|[~/.])o\d+(?:[-_.]|$)/.test(model.toLowerCase());
 }
 
 function isImageModel(model: string): boolean {

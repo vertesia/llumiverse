@@ -8,7 +8,7 @@ type Equals<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B 
 function assertType<T extends true>(_ok: T): void {}
 
 /**
- * `ModelOptions` is published by Vertesia as a discriminated-union component with twenty-three
+ * `ModelOptions` is published by Vertesia as a discriminated-union component with twenty-four
  * members, each its own component. These pin the properties that a consumer of the published document
  * depends on and that a careless edit here would break silently — the union is large enough that a
  * dropped member reads as a normal diff.
@@ -39,6 +39,7 @@ describe('ModelOptionsSchema', () => {
         // order a generated Java or Go client tries.
         expect(MEMBERS).toEqual([
             'TextFallbackOptions',
+            'AzureFoundryChatOptions',
             'ImagenOptions',
             'VertexAIClaudeOptions',
             'VertexAIGeminiOptions',
@@ -61,6 +62,7 @@ describe('ModelOptionsSchema', () => {
             'OpenAiDalleOptions',
             'OpenAiGptImageOptions',
             'GroqOptions',
+            'MistralTextOptions',
         ]);
     });
 

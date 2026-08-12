@@ -8,10 +8,12 @@ import {
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
+    getModelCapabilities,
     LlumiverseError,
     type LlumiverseErrorContext,
     type ModelSearchPayload,
     ModelType,
+    modelModalitiesToArray,
     type PromptSegment,
     Providers,
 } from '@llumiverse/core';
@@ -76,16 +78,20 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
 
     async listModels(_params?: ModelSearchPayload): Promise<AIModel[]> {
         const page = await this.client.models.list({ limit: 1000 });
-        return page.data.map(
-            (m) =>
-                ({
-                    id: m.id,
-                    name: m.display_name ?? m.id,
-                    provider: Providers.anthropic,
-                    type: ModelType.Text,
-                    can_stream: true,
-                }) satisfies AIModel,
-        );
+        return page.data.map((m) => {
+            const capabilities = getModelCapabilities(m.id, this.provider);
+            return {
+                id: m.id,
+                name: m.display_name ?? m.id,
+                provider: Providers.anthropic,
+                type: ModelType.Text,
+                can_stream: true,
+                is_multimodal: capabilities.input.image === true,
+                input_modalities: modelModalitiesToArray(capabilities.input),
+                output_modalities: modelModalitiesToArray(capabilities.output),
+                tool_support: capabilities.tool_support,
+            } satisfies AIModel;
+        });
     }
 
     async validateConnection(): Promise<boolean> {
