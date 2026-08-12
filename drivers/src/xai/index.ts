@@ -1,4 +1,13 @@
-import { type AIModel, type DriverOptions, type PromptOptions, type PromptSegment, Providers } from '@llumiverse/core';
+import {
+    type AIModel,
+    type DriverOptions,
+    getModelCapabilities,
+    isEmbeddingModel,
+    modelModalitiesToArray,
+    type PromptOptions,
+    type PromptSegment,
+    Providers,
+} from '@llumiverse/core';
 import { FetchClient } from '@vertesia/api-fetch-client';
 import OpenAI from 'openai';
 import { OpenAIResponsesDriverBase } from '../openai/index.js';
@@ -59,27 +68,31 @@ export class xAIDriver extends OpenAIResponsesDriverBase {
     // xAI's API is OpenAI-compatible and returns tool_calls in the same format.
 
     async listModels(): Promise<AIModel[]> {
-        const [lm, em] = (await Promise.all([
-            this.xai_service.get('/language-models'),
-            this.xai_service.get('/embedding-models'),
-        ])) as [xAIModelResponse, xAIModelResponse];
+        const lm = (await this.xai_service.get('/language-models')) as xAIModelResponse;
 
-        em.models.forEach((m) => {
-            m.output_modalities.push('vectors');
-        });
-
-        const models = [...lm.models, ...em.models].map((model) => {
-            return {
-                id: model.id,
-                provider: this.provider,
-                name: model.id,
-                description: `${model.id} by ${model.owned_by}`,
-                is_multimodal: model.input_modalities.length > 1,
-                input_modalities: model.input_modalities,
-                output_modalities: model.output_modalities,
-                tags: [...model.input_modalities.map((m) => `i:${m}`), ...model.output_modalities.map((m) => `o:${m}`)],
-            } satisfies AIModel;
-        });
+        // xAI listing modalities have been incomplete and occasionally describe endpoint artifacts rather than the
+        // language-model execution path. Prefer the curated family directory and use runtime data for availability.
+        const models = lm.models
+            .filter((model) => !isEmbeddingModel(model, this.provider))
+            .map((model) => {
+                const capabilities = getModelCapabilities(model.id, this.provider);
+                const inputModalities = modelModalitiesToArray(capabilities.input);
+                const outputModalities = modelModalitiesToArray(capabilities.output);
+                return {
+                    id: model.id,
+                    provider: this.provider,
+                    name: model.id,
+                    description: `${model.id} by ${model.owned_by}`,
+                    is_multimodal: capabilities.input.image === true,
+                    input_modalities: inputModalities,
+                    output_modalities: outputModalities,
+                    tool_support: capabilities.tool_support,
+                    tags: [
+                        ...inputModalities.map((modality) => `i:${modality}`),
+                        ...outputModalities.map((modality) => `o:${modality}`),
+                    ],
+                } satisfies AIModel;
+            });
 
         return models;
     }

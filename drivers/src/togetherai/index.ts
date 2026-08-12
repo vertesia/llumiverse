@@ -177,10 +177,17 @@ function toTogetherRequest(
         stop: Array.isArray(payload.stop) ? payload.stop : payload.stop ? [payload.stop] : undefined,
         n: payload.n ?? undefined,
         tools: payload.tools?.flatMap(toTogetherTool),
+        reasoning_effort:
+            payload.reasoning_effort === 'low' ||
+            payload.reasoning_effort === 'medium' ||
+            payload.reasoning_effort === 'high'
+                ? payload.reasoning_effort
+                : undefined,
         extra_body: payload.extra_body,
         stream,
     } satisfies (CompletionCreateParamsNonStreaming | CompletionCreateParamsStreaming) & {
         extra_body?: Record<string, unknown>;
+        reasoning_effort?: 'low' | 'medium' | 'high';
     };
     return request;
 }

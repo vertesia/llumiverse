@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { ImagenMaskMode, ImagenTaskType, ThinkingLevel } from '../options/vertexai.js';
 
 // Runtime schemas for `ModelOptions` — the union of every driver's per-model options — and its
-// twenty-seven members.
+// twenty-five members.
 //
 // These are the SINGLE definition of each option set. The OpenAPI document publishes them, AJV
 // enforces them, and the public TypeScript types in `../options/*` are `z.infer` of them, so there
@@ -50,6 +50,23 @@ export const TextFallbackOptionsSchema = z
     })
     .meta({ id: 'TextFallbackOptions' });
 
+// ===== azure_foundry =====
+
+export const AzureFoundryChatOptionsSchema = z
+    .strictObject({
+        _option_id: z.literal('azure-foundry-chat'),
+        max_tokens: z.number().optional(),
+        temperature: z.number().optional(),
+        top_p: z.number().optional(),
+        presence_penalty: z.number().optional(),
+        frequency_penalty: z.number().optional(),
+        stop_sequence: z.array(z.string()).optional(),
+        seed: z.number().optional(),
+        image_detail: z.enum(['low', 'high', 'auto']).optional(),
+        include_thoughts: z.boolean().optional(),
+    })
+    .meta({ id: 'AzureFoundryChatOptions' });
+
 // ===== groq =====
 
 export const GroqOptionsSchema = z
@@ -64,6 +81,27 @@ export const GroqOptionsSchema = z
         reasoning_format: z.enum(['parsed', 'raw', 'hidden']),
     })
     .meta({ id: 'GroqOptions' });
+
+// ===== mistral =====
+
+export const MistralTextOptionsSchema = z
+    .strictObject({
+        _option_id: z.literal('mistral-text'),
+        max_tokens: z.number().optional(),
+        temperature: z.number().optional(),
+        top_p: z.number().optional(),
+        presence_penalty: z.number().optional(),
+        frequency_penalty: z.number().optional(),
+        stop_sequence: z.array(z.string()).optional(),
+        effort: z.enum(['none', 'high']).optional(),
+        random_seed: z.number().int().optional(),
+        safe_prompt: z.boolean().optional(),
+        parallel_tool_calls: z.boolean().optional(),
+        tool_choice: z.enum(['auto', 'none', 'any', 'required']).optional(),
+        prompt_mode: z.literal('reasoning').optional(),
+        include_thoughts: z.boolean().optional(),
+    })
+    .meta({ id: 'MistralTextOptions' });
 
 // ===== bedrock =====
 
@@ -231,6 +269,8 @@ export const BedrockMantleChatCompletionsOptionsSchema = z
         temperature: z.number().optional(),
         top_p: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
+        effort: z.enum(['low', 'medium', 'high']).optional(),
+        reasoning_effort: z.enum(['low', 'medium', 'high']).optional(),
         include_thoughts: z.boolean().optional(),
     })
     .meta({ id: 'BedrockMantleChatCompletionsOptions' });
@@ -402,6 +442,7 @@ export const VertexAIGrokOptionsSchema = z
 export const ModelOptionsSchema = z
     .discriminatedUnion('_option_id', [
         TextFallbackOptionsSchema,
+        AzureFoundryChatOptionsSchema,
         ImagenOptionsSchema,
         VertexAIClaudeOptionsSchema,
         VertexAIGeminiOptionsSchema,
@@ -424,5 +465,6 @@ export const ModelOptionsSchema = z
         OpenAiDalleOptionsSchema,
         OpenAiGptImageOptionsSchema,
         GroqOptionsSchema,
+        MistralTextOptionsSchema,
     ])
     .meta({ id: 'ModelOptions' });

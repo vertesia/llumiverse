@@ -11,14 +11,13 @@ import {
     type EmbeddingsResult,
     type ExecutionOptions,
     getConversationMeta,
-    getModelCapabilities,
     type HttpTimeoutOptions,
     incrementConversationTurn,
     type LlumiverseError,
     type LlumiverseErrorContext,
     type ModelSearchPayload,
-    modelModalitiesToArray,
     type PromptSegment,
+    Providers,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
     type ToolUse,
@@ -33,6 +32,7 @@ import {
     type OpenAIChatCompletionsPrompt,
 } from '../openai/openai_chat_completions.js';
 import { type ClaudePrompt, formatClaudeDebugPrompt } from '../shared/claude-messages.js';
+import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { generateVertexAiEmbeddings } from './embeddings/embed.js';
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
 import { formatGeminiDebugPrompt } from './models/gemini.js';
@@ -77,7 +77,7 @@ export type VertexAIPrompt = ImagenPrompt | GenerateContentPrompt | ClaudePrompt
 export { trimModelName };
 
 export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, VertexAIPrompt> {
-    static PROVIDER = 'vertexai';
+    static readonly PROVIDER = Providers.vertexai;
     provider = VertexAIDriver.PROVIDER;
 
     aiplatform: v1beta1.ModelServiceClient | undefined;
@@ -620,6 +620,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         // Model Garden publisher listings for families that are reliably returned by the API.
         // Open MaaS-only families are appended from VERTEX_OPEN_MAAS_MODELS below to avoid
         // extra listPublisherModels calls for publishers whose MaaS models do not appear there.
+        // Intentional allow-list: Vertex Model Garden spans endpoint contracts this driver does not implement. Future
+        // versions within these known executable families flow through automatically, but do not broaden this to every
+        // publisher merely because it appears in listing metadata; add a publisher only with a compatible request path.
         const publisherConfig = {
             google: {
                 families: ['gemini', 'imagen'],
@@ -629,7 +632,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                     'imagen-product-recontext-preview',
                     'embedding',
                     'embed',
-                    'gemini-live-2.5-flash-preview-native-audio',
+                    'gemini-live',
+                    'native-audio',
+                    '-tts',
                     'computer-use-preview',
                 ],
                 /** Additional models not in the listings, but we want to include.
@@ -677,11 +682,15 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         // Process aiplatform models, project specific models
         const [response] = aiplatformResult;
         models = models.concat(
-            response.map((model) => ({
-                id: model.name?.split('/').pop() ?? '',
-                name: model.displayName ?? '',
-                provider: 'vertexai',
-            })),
+            response.map((model) => {
+                const id = model.name?.split('/').pop() ?? '';
+                return {
+                    id,
+                    name: model.displayName ?? '',
+                    provider: 'vertexai',
+                    ...resolveModelListingMetadata(id, Providers.vertexai),
+                };
+            }),
         );
 
         // Process global google models from GenAI
@@ -689,17 +698,19 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         const excludedModels = publisherConfig.google.excluded;
         models = models.concat(
             globalGoogleResult
-                .filter((model) => !excludedModels.some((excludedModel) => (model.name ?? '').includes(excludedModel)))
+                .filter(
+                    (model) =>
+                        !excludedModels.some((excludedModel) => (model.name ?? '').includes(excludedModel)) &&
+                        isExecutableGoogleModel(model),
+                )
                 .map((model) => {
-                    const modelCapability = getModelCapabilities(model.name ?? '', 'vertexai');
+                    const modelMetadata = resolveModelListingMetadata(model.name ?? '', Providers.vertexai);
                     return {
                         id: `locations/global/${model.name}`,
                         name: `Global ${model.name?.split('/').pop()}`,
                         provider: 'vertexai',
                         owner: 'google',
-                        input_modalities: modelModalitiesToArray(modelCapability.input),
-                        output_modalities: modelModalitiesToArray(modelCapability.output),
-                        tool_support: modelCapability.tool_support,
+                        ...modelMetadata,
                     };
                 }),
         );
@@ -729,7 +740,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                         const rawModelId = model.name ?? '';
                         const isGlobalOnlyPublisher = publisher === 'xai';
                         const listedModelId = isGlobalOnlyPublisher ? `locations/global/${rawModelId}` : rawModelId;
-                        const modelCapability = getModelCapabilities(listedModelId, 'vertexai');
+                        const modelMetadata = resolveModelListingMetadata(listedModelId, Providers.vertexai);
                         return {
                             id: listedModelId,
                             name: isGlobalOnlyPublisher
@@ -737,9 +748,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                                 : (rawModelId.split('/').pop() ?? ''),
                             provider: 'vertexai',
                             owner: publisher,
-                            input_modalities: modelModalitiesToArray(modelCapability.input),
-                            output_modalities: modelModalitiesToArray(modelCapability.output),
-                            tool_support: modelCapability.tool_support,
+                            ...modelMetadata,
                         } satisfies AIModel;
                     }),
             );
@@ -771,15 +780,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                         return false;
                     })
                     .map((model) => {
-                        const modelCapability = getModelCapabilities(model.name ?? '', 'vertexai');
+                        const modelMetadata = resolveModelListingMetadata(model.name ?? '', Providers.vertexai);
                         return {
                             id: `locations/global/${model.name}`,
                             name: `Global ${model.name?.split('/').pop()}`,
                             provider: 'vertexai',
                             owner: publisher,
-                            input_modalities: modelModalitiesToArray(modelCapability.input),
-                            output_modalities: modelModalitiesToArray(modelCapability.output),
-                            tool_support: modelCapability.tool_support,
+                            ...modelMetadata,
                         } satisfies AIModel;
                     });
 
@@ -805,15 +812,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                         return false;
                     })
                     .map((model) => {
-                        const modelCapability = getModelCapabilities(model.name ?? '', 'vertexai');
+                        const modelMetadata = resolveModelListingMetadata(model.name ?? '', Providers.vertexai);
                         return {
                             id: `locations/global/${model.name}`,
                             name: `Global ${model.name?.split('/').pop()}`,
                             provider: 'vertexai',
                             owner: publisher,
-                            input_modalities: modelModalitiesToArray(modelCapability.input),
-                            output_modalities: modelModalitiesToArray(modelCapability.output),
-                            tool_support: modelCapability.tool_support,
+                            ...modelMetadata,
                         } satisfies AIModel;
                     });
 
@@ -823,15 +828,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             // Add additional models that are not in the listing
             for (const additionalModel of publisherConfig[publisher as Publisher].additional) {
                 const publisherModelName = `publishers/${publisher}/models/${additionalModel}`;
-                const modelCapability = getModelCapabilities(additionalModel, 'vertexai');
+                const modelMetadata = resolveModelListingMetadata(additionalModel, Providers.vertexai);
                 models.push({
                     id: publisherModelName,
                     name: additionalModel,
                     provider: 'vertexai',
                     owner: publisher,
-                    input_modalities: modelModalitiesToArray(modelCapability.input),
-                    output_modalities: modelModalitiesToArray(modelCapability.output),
-                    tool_support: modelCapability.tool_support,
+                    ...modelMetadata,
                 } satisfies AIModel);
             }
         }
@@ -880,6 +883,21 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         // Fall back to default AbstractDriver error handling
         return super.formatLlumiverseError(error, context);
     }
+}
+
+function isExecutableGoogleModel(model: Model): boolean {
+    const modelName = (model.name ?? '').toLowerCase();
+    // Intentional execution-path allow-list: Vertex uses separate methods for embeddings, Live/TTS, music and video.
+    // This driver currently implements generateContent and generateImages. Unknown actions are excluded only when
+    // Google supplies them; absent action metadata falls back to the known-family/name policy above.
+    if (!modelName.includes('gemini') && !modelName.includes('imagen')) return false;
+
+    if (model.supportedActions?.length) {
+        const actions = model.supportedActions.map((action) => action.toLowerCase().replace(/[^a-z]/g, ''));
+        return actions.some((action) => action === 'generatecontent' || action === 'generateimages');
+    }
+
+    return !/(?:embedding|embed|tts|live|native-audio|veo|lyria)/.test(modelName);
 }
 
 //'us-central1-aiplatform.googleapis.com',

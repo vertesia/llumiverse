@@ -5,7 +5,6 @@ import {
     GetModelCustomizationJobCommand,
     type GetModelCustomizationJobCommandOutput,
     ModelCustomizationJobStatus,
-    ModelModality,
     StopModelCustomizationJobCommand,
 } from '@aws-sdk/client-bedrock';
 import {
@@ -41,16 +40,16 @@ import {
     type ExecutionTokenUsage,
     getConversationMeta,
     getMaxTokensLimitBedrock,
-    getModelCapabilities,
     type HttpTimeoutOptions,
     incrementConversationTurn,
+    isEmbeddingModel,
     type JSONObject,
     LlumiverseError,
     type LlumiverseErrorContext,
     type ModelOptions,
-    modelModalitiesToArray,
     type NovaCanvasOptions,
     type PromptSegment,
+    Providers,
     type StatelessExecutionOptions,
     stripBinaryFromConversation,
     stripHeartbeatsFromConversation,
@@ -70,6 +69,7 @@ import { LRUCache } from 'mnemonist';
 import { logClaudeTruncation } from '../shared/claude-stop-reason.js';
 import { resolveClaudeThinking } from '../shared/claude-thinking.js';
 import { truncateBinaryForDebug, uint8ArrayToBase64ForDebug } from '../shared/debug-prompt.js';
+import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import {
     converseConcatMessages,
     converseJSONprefill,
@@ -515,7 +515,7 @@ function formatTwelvelabsPromptForDebug(prompt: TwelvelabsPegasusRequest): Twelv
 }
 
 export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockPrompt> {
-    static PROVIDER = 'bedrock';
+    static readonly PROVIDER = Providers.bedrock;
 
     provider = BedrockDriver.PROVIDER;
 
@@ -1634,7 +1634,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     protected isImageModel(model: string): boolean {
-        return model.includes('titan-image') || model.includes('stable-diffusion') || model.includes('nova-canvas');
+        // This execution path serializes the Nova Canvas wire schema. Other image families need their own request path.
+        return model.includes('nova-canvas');
     }
 
     async requestImageGeneration(prompt: NovaMessagesPrompt, options: ExecutionOptions): Promise<Completion> {
@@ -1819,6 +1820,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             foundationModels = foundationModels.filter(foundationFilter);
         }
 
+        // Intentional allow-list: Bedrock spans several incompatible invocation schemas. Future versions from these
+        // known Converse-compatible publishers remain visible, but do not add a new publisher until its request path
+        // is verified. Per-model exclusions below are deterministic endpoint/schema incompatibilities, not guesses.
         const supportedPublishers = [
             'amazon',
             'anthropic',
@@ -1839,7 +1843,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             'zai',
         ];
         const unsupportedModelsByPublisher = {
-            amazon: ['titan-image-generator', 'nova-reel', 'nova-sonic', 'rerank'],
+            amazon: ['nova-reel', 'nova-sonic', 'titan-image-generator', 'rerank'],
             anthropic: [],
             cohere: ['rerank', 'embed'],
             ai21: [],
@@ -1889,7 +1893,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 throw new Error('modelId not found');
             }
 
-            const modelCapability = getModelCapabilities(m.modelArn ?? m.modelId, this.provider);
+            const modelMetadata = resolveModelListingMetadata(m.modelArn ?? m.modelId, this.provider, {
+                input_modalities: m.inputModalities,
+                output_modalities: m.outputModalities,
+            });
 
             const model: AIModel = {
                 id: m.modelArn ?? m.modelId,
@@ -1897,13 +1904,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 provider: this.provider,
                 owner: m.providerName,
                 can_stream: m.responseStreamingSupported ?? false,
-                input_modalities: m.inputModalities
-                    ? formatAmazonModalities(m.inputModalities)
-                    : modelModalitiesToArray(modelCapability.input),
-                output_modalities: m.outputModalities
-                    ? formatAmazonModalities(m.outputModalities)
-                    : modelModalitiesToArray(modelCapability.output),
-                tool_support: modelCapability.tool_support,
+                ...modelMetadata,
             };
 
             return model;
@@ -1916,7 +1917,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     throw new Error('Model ID not found');
                 }
 
-                const modelCapability = getModelCapabilities(m.modelArn, this.provider);
+                const capabilityModelId = m.baseModelName ?? m.modelArn;
+                if (isEmbeddingModel({ id: capabilityModelId }, this.provider)) return;
+                const modelMetadata = resolveModelListingMetadata(capabilityModelId, this.provider);
 
                 const model: AIModel = {
                     id: m.modelArn,
@@ -1925,9 +1928,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     owner: 'custom',
                     description: `Custom model from ${m.baseModelName}`,
                     is_custom: true,
-                    input_modalities: modelModalitiesToArray(modelCapability.input),
-                    output_modalities: modelModalitiesToArray(modelCapability.output),
-                    tool_support: modelCapability.tool_support,
+                    ...modelMetadata,
                 };
 
                 aiModels.push(model);
@@ -1954,20 +1955,29 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     }
                 }
 
-                const modelCapability = getModelCapabilities(
+                const modelMetadata = resolveModelListingMetadata(
                     p.inferenceProfileArn ?? p.inferenceProfileId,
                     this.provider,
                 );
 
-                if (providerName && shouldIncludeModel(profileId, providerName)) {
+                if (
+                    providerName &&
+                    shouldIncludeModel(profileId, providerName) &&
+                    !isEmbeddingModel(
+                        {
+                            id: p.inferenceProfileArn ?? p.inferenceProfileId,
+                            input_modalities: modelMetadata.input_modalities,
+                            output_modalities: modelMetadata.output_modalities,
+                        },
+                        this.provider,
+                    )
+                ) {
                     const model: AIModel = {
                         id: p.inferenceProfileArn ?? p.inferenceProfileId,
                         name: p.inferenceProfileName ?? p.inferenceProfileArn,
                         provider: this.provider,
                         owner: providerName,
-                        input_modalities: modelModalitiesToArray(modelCapability.input),
-                        output_modalities: modelModalitiesToArray(modelCapability.output),
-                        tool_support: modelCapability.tool_support,
+                        ...modelMetadata,
                     };
 
                     aiModels.push(model);
@@ -2313,25 +2323,4 @@ export function fixOrphanedToolResults(messages: Message[]): Message[] {
         result.push(filtered.length === message.content.length ? message : { ...message, content: filtered });
     }
     return result;
-}
-
-function formatAmazonModalities(modalities: ModelModality[]): string[] {
-    const standardizedModalities: string[] = [];
-    for (const modality of modalities) {
-        if (modality === ModelModality.TEXT) {
-            standardizedModalities.push('text');
-        } else if (modality === ModelModality.IMAGE) {
-            standardizedModalities.push('image');
-        } else if (modality === ModelModality.EMBEDDING) {
-            standardizedModalities.push('embedding');
-        } else if (modality === 'SPEECH') {
-            standardizedModalities.push('audio');
-        } else if (modality === 'VIDEO') {
-            standardizedModalities.push('video');
-        } else {
-            // Handle other modalities as needed
-            standardizedModalities.push((modality as string).toString().toLowerCase());
-        }
-    }
-    return standardizedModalities;
 }

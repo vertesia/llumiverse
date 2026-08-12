@@ -126,6 +126,39 @@ function mimeToVideoType(mime: string): BedrockVideoFormat {
     return 'mp4';
 }
 
+type BedrockAudioFormat =
+    | 'aac'
+    | 'flac'
+    | 'm4a'
+    | 'mka'
+    | 'mkv'
+    | 'mp3'
+    | 'mp4'
+    | 'mpeg'
+    | 'mpga'
+    | 'ogg'
+    | 'opus'
+    | 'pcm'
+    | 'wav'
+    | 'webm'
+    | 'x-aac';
+const mimeToAudioMap: Record<string, BedrockAudioFormat> = {
+    'audio/aac': 'aac',
+    'audio/flac': 'flac',
+    'audio/mp4': 'mp4',
+    'audio/mpeg': 'mp3',
+    'audio/ogg': 'ogg',
+    'audio/opus': 'opus',
+    'audio/wav': 'wav',
+    'audio/webm': 'webm',
+    'audio/x-aac': 'x-aac',
+    'audio/x-m4a': 'm4a',
+    'audio/x-matroska': 'mka',
+};
+function mimeToAudioType(mime: string): BedrockAudioFormat {
+    return mimeToAudioMap[mime] ?? 'mp3';
+}
+
 /**
  * Cleans a filename to conform to Bedrock's restrictions:
  * - Alphanumeric characters, whitespace, hyphens, parentheses, square brackets.
@@ -238,6 +271,35 @@ async function processFile<T extends FileProcessingMode>(
         return mode === 'content'
             ? (videoBlock satisfies ContentBlock.VideoMember)
             : (videoBlock satisfies ToolResultContentBlock.VideoMember);
+    }
+    // Audio is a first-class Converse content block. Treating it as UTF-8 corrupts binary speech inputs.
+    else if (f.mime_type?.startsWith('audio')) {
+        if (mode === 'tool') {
+            throw new Error('Bedrock Converse does not support audio blocks in tool results');
+        }
+        let urlString = await f.getURL();
+        let url = new URL(urlString);
+        if (isAmazonS3Hostname(url.hostname)) {
+            urlString = parseS3UrlToUri(url);
+            url = new URL(urlString);
+        }
+        const audioBlock =
+            url.protocol === 's3:'
+                ? {
+                      audio: {
+                          format: mimeToAudioType(f.mime_type),
+                          source: { s3Location: { uri: urlString } },
+                      },
+                  }
+                : {
+                      audio: {
+                          format: mimeToAudioType(f.mime_type),
+                          source: { bytes: await readStreamAsUint8Array(source) },
+                      },
+                  };
+        return audioBlock satisfies ContentBlock.AudioMember as T extends 'content'
+            ? ContentBlock
+            : ToolResultContentBlock;
     }
     //Fallback, send as text
     else {

@@ -4,6 +4,28 @@ import { describe, expect, it, vi } from 'vitest';
 import { TogetherAIDriver } from './index.js';
 
 describe('TogetherAIDriver', () => {
+    it('serializes verified GPT-OSS reasoning effort through the Together transport', async () => {
+        const driver = new TogetherAIDriver({ apiKey: 'test-key' });
+        const create = vi.fn(async () => ({
+            id: 'reasoning-1',
+            object: 'chat.completion',
+            created: 1,
+            model: 'openai/gpt-oss-120b',
+            choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } }],
+        }));
+        driver.service = { chat: { completions: { create } } } as unknown as TogetherAIDriver['service'];
+
+        await driver.requestTextCompletion(
+            { _is_openai_chat_completions: true, messages: [{ role: 'user', content: 'Think' }] },
+            {
+                model: 'openai/gpt-oss-120b',
+                model_options: { _option_id: 'openai-text', effort: 'high' },
+            },
+        );
+
+        expect(create).toHaveBeenCalledWith(expect.objectContaining({ reasoning_effort: 'high' }));
+    });
+
     it('maps Together array-shaped model catalog responses', async () => {
         const driver = new TogetherAIDriver({ apiKey: 'test-key' });
         const list = vi.fn(async () => [

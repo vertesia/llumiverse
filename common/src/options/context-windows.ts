@@ -1,3 +1,4 @@
+import { getMistralModelKnowledge } from '../capability/mistral.js';
 import {
     isClaudeVersionGTE,
     isModelFamilyVersionGTE,
@@ -16,6 +17,7 @@ function isDeepSeekV32OrLater(model: string): boolean {
  * that works across all providers.
  */
 export function getMaxOutputTokens(model: string): number {
+    model = model.toLowerCase();
     // Claude models
     if (model.includes('claude')) {
         if (isClaudeVersionGTE(model, 4, 7)) return 128_000;
@@ -36,9 +38,10 @@ export function getMaxOutputTokens(model: string): number {
     // OpenAI o-series
     if (model.includes('o1-mini')) return 65_536;
     if (model.includes('o1')) return 100_000;
-    if (model.includes('o3') || model.includes('o4')) return 100_000;
+    if (/(?:^|[~/.])o\d+(?:[-_.]|$)/.test(model.toLowerCase())) return 100_000;
     // GPT models
     const gptVersion = parseOpenAIGptVersion(model);
+    if (model.includes('gpt-5-chat-latest')) return 16_384;
     if (isOpenAIGptProModel(model) && gptVersion?.major === 5 && gptVersion.minor === 0) return 272_000;
     if (isOpenAIGptVersionGTE(model, 5, 0)) return 128_000;
     if (model.includes('gpt-oss')) return 16_384;
@@ -77,16 +80,19 @@ export function getMaxOutputTokens(model: string): number {
 }
 
 /**
- * Returns the max input tokens for a given model (context window minus max output).
+ * Returns the max input tokens for a known model (context window minus max output), or undefined when the context
+ * window is not known.
  */
-export function getMaxInputTokens(model: string): number {
-    return getContextWindowSize(model) - getMaxOutputTokens(model);
+export function getMaxInputTokens(model: string): number | undefined {
+    const contextWindow = getContextWindowSize(model);
+    return contextWindow === undefined ? undefined : contextWindow - getMaxOutputTokens(model);
 }
 
 /**
- * Returns the context window size (input + output) for a given model.
+ * Returns the known context window size (input + output), or undefined rather than guessing for an unknown model.
  */
-export function getContextWindowSize(model: string): number {
+export function getContextWindowSize(model: string): number | undefined {
+    model = model.toLowerCase();
     // Claude models
     if (model.includes('claude')) {
         if (isClaudeVersionGTE(model, 4, 7)) return 1_000_000;
@@ -98,10 +104,10 @@ export function getContextWindowSize(model: string): number {
         return 1_000_000; // Gemini 1.5, 2.0, 2.5, 3 all support 1M
     }
     // OpenAI o-series (check before gpt-4 to avoid false matches)
-    if (model.includes('o1') || model.includes('o3') || model.includes('o4')) return 200_000;
-    // GPT models — check specific variants before generic gpt-4
-    // Bedrock Mantle exposes its GPT models with an openai.gpt-* identifier and a smaller context window.
-    if (isModelFamilyVersionGTE(model, 'openai.gpt-', 5, 4)) return 272_000;
+    if (/(?:^|[~/.])o\d+(?:[-_.]|$)/.test(model.toLowerCase())) return 200_000;
+    // GPT models — provider-specific limits are applied by the provider overlay.
+    if (model.includes('gpt-5-chat-latest')) return 128_000;
+    if (model.includes('gpt-5.4-mini') || model.includes('gpt-5.4-nano')) return 400_000;
     if (isOpenAIGptVersionGTE(model, 5, 4)) return 1_050_000;
     if (isOpenAIGptVersionGTE(model, 5, 0)) return 400_000;
     if (model.includes('gpt-oss')) return 131_072;
@@ -116,8 +122,9 @@ export function getContextWindowSize(model: string): number {
     // Amazon Nova
     if (model.includes('nova')) return 300_000;
     // Mistral
-    if (model.includes('mistral-large')) return 128_000;
-    if (model.includes('mistral')) return 32_000;
+    if (/(?:mistral|mixtral|ministral|magistral|voxtral|codestral|devstral|leanstral|mathstral|pixtral)/.test(model)) {
+        return getMistralModelKnowledge(model).context_window;
+    }
     // DeepSeek
     if (isDeepSeekV32OrLater(model)) return 163_840;
     if (model.includes('deepseek-r1-0528')) return 163_840;
@@ -135,12 +142,14 @@ export function getContextWindowSize(model: string): number {
     // Gemma
     if (model.includes('gemma-4')) return 256_000;
     // Llama
-    if (model.includes('llama-4') || model.includes('llama4')) return 1_000_000;
+    if (isModelFamilyVersionGTE(model, 'llama-', 4, 0) || isModelFamilyVersionGTE(model, 'llama', 4, 0)) {
+        return model.includes('scout') ? 10_000_000 : 1_000_000;
+    }
     if (model.includes('llama-3.1') || model.includes('llama-3.2') || model.includes('llama-3.3')) return 128_000;
     if (model.includes('llama')) return 8_000;
     // Cohere
     if (model.includes('command-a')) return 256_000;
     if (model.includes('command')) return 128_000;
 
-    return 128_000; // conservative default
+    return undefined;
 }

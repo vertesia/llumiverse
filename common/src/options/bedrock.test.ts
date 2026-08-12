@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { getBedrockModelKnowledge } from '../capability/bedrock-models.js';
 import { getModelCapabilities } from '../capability.js';
+import { resolveModelProfile } from '../model-directory.js';
 import { getOptions } from '../options.js';
 import { OptionType, Providers } from '../types.js';
 import { getBedrockOptions, getMaxTokensLimitBedrock } from './bedrock.js';
@@ -135,6 +136,31 @@ describe('Bedrock Mantle metadata', () => {
         });
     });
 
+    it.each(['openai.gpt-5.6-sol', 'openai.gpt-5.6-terra', 'openai.gpt-5.6-luna'])(
+        'advertises current GPT-5.6 Bedrock output limits for %s',
+        (model) => {
+            const maxTokens = getOptions(model, Providers.bedrock_mantle).options.find(
+                (option) => option.name === 'max_tokens',
+            );
+            expect(maxTokens).toMatchObject({ max: 128_000 });
+        },
+    );
+
+    it('carries GPT-5.6 reasoning options forward to future GPT releases', () => {
+        const options = getOptions('openai.gpt-6.1', Providers.bedrock_mantle);
+        expect(options.options.find((option) => option.name === 'effort')).toMatchObject({
+            enum: { none: 'none', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
+        });
+        expect(options.options.find((option) => option.name === 'max_tokens')).toMatchObject({ max: 128_000 });
+    });
+
+    it('carries modern Claude limits forward to newer Claude families', () => {
+        expect(getBedrockModelKnowledge('anthropic.claude-opus-5')).toMatchObject({
+            context_window: 1_000_000,
+            max_output_tokens: 127_999,
+        });
+    });
+
     it('sets GPT-5.5 Bedrock Mantle capabilities and context window', () => {
         const capabilities = getModelCapabilities('openai.gpt-5.5', Providers.bedrock_mantle);
 
@@ -143,8 +169,9 @@ describe('Bedrock Mantle metadata', () => {
         expect(capabilities.output.text).toBe(true);
         expect(capabilities.tool_support).toBe(true);
         expect(capabilities.tool_support_streaming).toBe(true);
-        expect(getContextWindowSize('openai.gpt-5.5')).toBe(272_000);
-        expect(getContextWindowSize('openai.gpt-6.1')).toBe(272_000);
+        expect(resolveModelProfile('openai.gpt-5.5', Providers.bedrock_mantle).context_window).toBe(272_000);
+        expect(resolveModelProfile('openai.gpt-6.1', Providers.bedrock_mantle).context_window).toBe(272_000);
+        expect(getContextWindowSize('openai.gpt-5.5')).toBe(1_050_000);
     });
 
     it('uses Responses options for Grok 4.3 under the Bedrock Mantle provider', () => {
@@ -190,13 +217,13 @@ describe('Bedrock Mantle metadata', () => {
         });
     });
 
-    it('does not expose Mantle options or capabilities from the Bedrock provider', () => {
+    it('keeps Bedrock Runtime capabilities separate from Mantle options', () => {
         const options = getBedrockOptions('openai.gpt-5.5');
         const capabilities = getModelCapabilities('openai.gpt-5.5', Providers.bedrock);
 
         expect(options._option_id).toBe('bedrock-converse');
-        expect(capabilities.input.image).not.toBe(true);
-        expect(capabilities.tool_support).not.toBe(true);
+        expect(capabilities.input.image).toBe(true);
+        expect(capabilities.tool_support).toBe(true);
     });
 
     it('inherits Bedrock Runtime capabilities across newly discovered model families', () => {
@@ -205,6 +232,10 @@ describe('Bedrock Mantle metadata', () => {
         expect(getModelCapabilities('moonshotai.kimi-k3', Providers.bedrock).input.image).toBe(true);
         expect(getModelCapabilities('nvidia.nemotron-nano-12b-v3', Providers.bedrock).input.image).toBe(true);
         expect(getModelCapabilities('nvidia.nemotron-super-4-180b', Providers.bedrock).input.image).toBe(false);
+        expect(getModelCapabilities('nvidia.nemotron-nano-9b-v2', Providers.bedrock_mantle)).toMatchObject({
+            tool_support: true,
+            tool_support_streaming: true,
+        });
         expect(getModelCapabilities('zai.glm-6', Providers.bedrock).output.text).toBe(true);
     });
 
@@ -227,13 +258,15 @@ describe('Bedrock Mantle metadata', () => {
         ['ai21.jamba-1-5-mini-v1:0', true],
         ['amazon.nova-premier-v1:0', true],
         ['amazon.nova-pro-v1:0', true],
-        ['deepseek.v3-v1:0', false],
-        ['deepseek.v3.2', false],
+        ['deepseek.r1-v1:0', false],
+        ['deepseek.v3-v1:0', true],
+        ['deepseek.v3.2', true],
         ['meta.llama3-2-90b-instruct-v1:0', true],
-        ['meta.llama4-scout-17b-instruct-v1:0', false],
+        ['meta.llama4-scout-17b-instruct-v1:0', true],
         ['mistral.mistral-large-3-675b-instruct', true],
-        ['qwen.qwen3-235b-a22b-2507-v1:0', false],
-        ['qwen.qwen3-32b-v1:0', false],
+        ['openai.gpt-oss-120b-1:0', true],
+        ['qwen.qwen3-235b-a22b-2507-v1:0', true],
+        ['qwen.qwen3-32b-v1:0', true],
         ['writer.palmyra-vision-7b', true],
     ] as const)('uses the Runtime execution tool capability for %s', (model, expected) => {
         expect(getModelCapabilities(model, Providers.bedrock).tool_support).toBe(expected);
@@ -247,11 +280,19 @@ describe('Bedrock Mantle metadata', () => {
         expect(nova).toMatchObject({ tool_support: true, tool_support_streaming: true });
     });
 
+    it('does not assume tool support for an unknown Bedrock Runtime model', () => {
+        const capabilities = getModelCapabilities('future-provider.unknown-chat-v1', Providers.bedrock);
+        expect(capabilities.tool_support).toBeUndefined();
+        expect(capabilities.tool_support_streaming).toBeUndefined();
+    });
+
     it.each([
         ['amazon.nova-2-lite-v1:0', 1_000_000, 65_536],
         ['anthropic.claude-haiku-4-5-20251001-v1:0', 200_000, 63_999],
         ['google.gemma-3-12b-it', 128_000, 8_192],
         ['meta.llama4-scout-17b-instruct-v1:0', 10_000_000, 8_192],
+        ['meta.llama5-scout-17b-instruct-v1:0', 10_000_000, 8_192],
+        ['meta.llama5-maverick-17b-instruct-v1:0', 1_000_000, 8_192],
         ['minimax.minimax-m2.5', 196_000, 8_192],
         ['mistral.magistral-small-2509', 128_000, 40_960],
         ['moonshotai.kimi-k2.5', 256_000, 16_384],

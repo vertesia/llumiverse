@@ -12,8 +12,11 @@ import {
     type ExecutionTokenUsage,
     getConversationMeta,
     incrementConversationTurn,
+    isDedicatedInferenceModel,
+    isEmbeddingModel,
     type JSONObject,
     type JSONSchema,
+    ModelType,
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
     type PromptOptions,
@@ -30,6 +33,7 @@ import {
 } from '@llumiverse/core';
 import { transformSSEStream } from '@llumiverse/core/async';
 import OpenAI from 'openai';
+import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAISchema, limitedSchemaFormat } from './schema.js';
 
@@ -1143,7 +1147,12 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         options: ExecutionOptions,
         stream: boolean,
     ): OpenAIChatCompletionsPayload {
-        const modelOptions = options.model_options as TextFallbackOptions & { service_tier?: string };
+        const modelOptions = options.model_options as TextFallbackOptions & {
+            effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+            reasoning_effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+            seed?: number;
+            service_tier?: string;
+        };
         const payload: OpenAIChatCompletionsPayload = {
             model: this.getModelName(options),
             messages: convertToOpenAIChatCompletionsMessages(conversation.messages),
@@ -1156,6 +1165,8 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             frequency_penalty: modelOptions?.frequency_penalty,
             n: 1,
             stop: modelOptions?.stop_sequence,
+            seed: modelOptions?.seed,
+            reasoning_effort: modelOptions?.effort ?? modelOptions?.reasoning_effort,
             service_tier: asOpenAIChatServiceTier(modelOptions?.service_tier),
             stream,
         };
@@ -1434,12 +1445,23 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
     }
 
     async listModels(): Promise<AIModel[]> {
-        return (await this.service.models.list()).data.map((model) => ({
-            id: model.id,
-            name: model.id,
-            owner: model.owned_by,
-            provider: this.provider,
-        }));
+        return (await this.service.models.list()).data
+            .filter(
+                (model) =>
+                    !isEmbeddingModel({ id: model.id }, this.provider) &&
+                    !isDedicatedInferenceModel(model.id, this.provider),
+            )
+            .map((model) => {
+                const modelMetadata = resolveModelListingMetadata(model.id, this.provider);
+                return {
+                    id: model.id,
+                    name: model.id,
+                    owner: model.owned_by,
+                    provider: this.provider,
+                    type: ModelType.Text,
+                    ...modelMetadata,
+                } satisfies AIModel;
+            });
     }
 
     async validateConnection(): Promise<boolean> {
