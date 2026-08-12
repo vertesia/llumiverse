@@ -16,6 +16,8 @@ import { AbstractDriver } from './Driver.js';
 class LifecycleTestDriver extends AbstractDriver<DriverOptions, string> {
     provider = 'lifecycle-test';
     completion = Promise.resolve<Completion>({ result: [{ type: 'text', value: 'done' }] });
+    imageCompletion = Promise.resolve<Completion>({ result: [{ type: 'image', value: 'image-data' }] });
+    imageModel = false;
     completionStream: DriverCompletionStream = (async function* () {
         yield { result: [{ type: 'text', value: 'first' }] } satisfies CompletionChunkObject;
     })();
@@ -32,6 +34,10 @@ class LifecycleTestDriver extends AbstractDriver<DriverOptions, string> {
         return this.completionStream;
     }
 
+    async requestImageGeneration(_prompt: string, _options: ExecutionOptions): Promise<Completion> {
+        return this.imageCompletion;
+    }
+
     async listModels(_params?: ModelSearchPayload): Promise<AIModel[]> {
         return [];
     }
@@ -46,6 +52,10 @@ class LifecycleTestDriver extends AbstractDriver<DriverOptions, string> {
 
     protected override destroyProviderResources(): void {
         this.cleanup();
+    }
+
+    protected override isImageModel(_model: string): boolean {
+        return this.imageModel;
     }
 }
 
@@ -66,6 +76,24 @@ describe('AbstractDriver lifecycle', () => {
 
         expect(cleanup).not.toHaveBeenCalled();
         resolveCompletion({ result: [{ type: 'text', value: 'done' }] });
+        await execution;
+        expect(cleanup).toHaveBeenCalledOnce();
+    });
+
+    it('defers destruction until an in-flight image generation finishes', async () => {
+        let resolveImage!: (completion: Completion) => void;
+        const cleanup = vi.fn();
+        const driver = new LifecycleTestDriver(cleanup);
+        driver.imageModel = true;
+        driver.imageCompletion = new Promise((resolve) => {
+            resolveImage = resolve;
+        });
+
+        const execution = driver.execute(segments, options);
+        driver.destroy();
+
+        expect(cleanup).not.toHaveBeenCalled();
+        resolveImage({ result: [{ type: 'image', value: 'image-data' }] });
         await execution;
         expect(cleanup).toHaveBeenCalledOnce();
     });
