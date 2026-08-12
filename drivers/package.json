@@ -135,13 +135,13 @@
         "@llumiverse/core": "workspace:*",
         "@mistralai/mistralai": "^2.5.0",
         "@vertesia/api-fetch-client": "^1.4.1",
-        "eventsource": "^4.1.0",
+        "eventsource": "^4.1.1",
         "google-auth-library": "catalog:",
         "groq-sdk": "^1.4.1",
         "mnemonist": "^0.40.4",
         "node-web-stream-adapters": "^0.2.1",
         "openai": "^6.49.0",
         "replicate": "^1.4.0",
-        "together-ai": "^0.44.0"
+        "together-ai": "^0.46.0"
     }
 }
