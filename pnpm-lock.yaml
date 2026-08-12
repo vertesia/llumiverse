@@ -27,7 +27,7 @@ importers:
         specifier: 2.5.6
         version: 2.5.6
       turbo:
-        specifier: ^2.10.7
+        specifier: ^2.10.8
         version: 2.10.8
       typescript:
         specifier: 'catalog:'
@@ -161,8 +161,8 @@ importers:
         specifier: ^1.4.1
         version: 1.4.1
       eventsource:
-        specifier: ^4.1.0
-        version: 4.1.0
+        specifier: ^4.1.1
+        version: 4.1.1
       google-auth-library:
         specifier: ^10.9.1
         version: 10.9.1
@@ -182,8 +182,8 @@ importers:
         specifier: ^1.4.0
         version: 1.4.0
       together-ai:
-        specifier: ^0.44.0
-        version: 0.44.1
+        specifier: ^0.46.0
+        version: 0.46.0
     devDependencies:
       dotenv:
         specifier: ^17.4.2
@@ -1261,8 +1261,8 @@ packages:
     resolution: {integrity: sha512-kJezFj9YFAMLeORyi7aCLxLbD5/qWMQnoMVlVPyHIll7lgRJCc3JVln9Vgl9nwQi0YkMnhdGTMNn7CkRRAptMg==}
     engines: {node: '>=18.0.0'}
 
-  eventsource@4.1.0:
-    resolution: {integrity: sha512-2GuF51iuHX6A9xdTccMTsNb7VO0lHZihApxhvQzJB5A03DvHDd2FQepodbMaztPBmBcE/ox7o2gqaxGhYB9LhQ==}
+  eventsource@4.1.1:
+    resolution: {integrity: sha512-D6bTRWh6KahHTK/m4WnjPQyEinNPf9eFLEZSEoj7d6fTibspnAVYfzHvirL7u/aoX5d9YYfIkBVAhmigUELk9w==}
     engines: {node: '>=20.0.0'}
 
   expect-type@1.3.0:
@@ -1740,8 +1740,8 @@ packages:
     resolution: {integrity: sha512-Bf+ILmBgretUrdJxzXM0SgXLZ3XfiaUuOj/IKQHuTXip+05Xn+uyEYdVg0kYDipTBcLrCVyUzAPz7QmArb0mmw==}
     engines: {node: '>=14.0.0'}
 
-  together-ai@0.44.1:
-    resolution: {integrity: sha512-VlSM4bZ7ldHn04mFS1hXp+HnIPpv6GseK/S0hHtUSz/+z5sZXGejYV71ExQPLplPEGRQRviatZGvCyxZMaBd/Q==}
+  together-ai@0.46.0:
+    resolution: {integrity: sha512-Svw3xkWWQvj0T0oY/1ROKYnfWMCaUZBFURkBGSTg/3g0b3AuSpn5VhnaCYdqgGe175GczznIaSZDrwDl1UfN/g==}
     hasBin: true
 
   ts-algebra@2.0.0:
@@ -3177,7 +3177,7 @@ snapshots:
 
   eventsource-parser@3.1.0: {}
 
-  eventsource@4.1.0:
+  eventsource@4.1.1:
     dependencies:
       eventsource-parser: 3.1.0
 
@@ -3662,7 +3662,7 @@ snapshots:
 
   tinyrainbow@3.1.0: {}
 
-  together-ai@0.44.1: {}
+  together-ai@0.46.0: {}
 
   ts-algebra@2.0.0: {}
 
