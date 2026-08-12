@@ -1976,14 +1976,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     /**
-     * Cleanup AWS SDK clients when the driver is evicted from the cache.
+     * Cleanup AWS SDK clients after the evicted driver has no active executions.
      */
-    destroy(): void {
+    protected override destroyProviderResources(): void {
         this._executor?.destroy();
         this._service?.destroy();
         this._executor = undefined;
         this._service = undefined;
-        super.destroy();
     }
 }
 

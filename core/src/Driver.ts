@@ -108,6 +108,9 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     private _httpAgent?: Agent;
     private _driverFetch?: typeof fetch;
+    private _activeOperations = 0;
+    private _destroyRequested = false;
+    private _resourcesDestroyed = false;
 
     constructor(opts: OptionsT) {
         this.options = opts;
@@ -192,18 +195,23 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     }
 
     async execute(segments: PromptSegment[], options: ExecutionOptions): Promise<ExecutionResponse<PromptT>> {
-        const prompt = await this.createPrompt(segments, options);
-        return this._execute(prompt, options).catch((error: unknown) => {
-            // Don't wrap if already a LlumiverseError
-            if (LlumiverseError.isLlumiverseError(error)) {
-                throw error;
-            }
-            throw this.formatLlumiverseError(error, {
-                provider: this.provider,
-                model: options.model,
-                operation: 'execute',
+        const release = this.acquireOperation();
+        try {
+            const prompt = await this.createPrompt(segments, options);
+            return await this._execute(prompt, options).catch((error: unknown) => {
+                // Don't wrap if already a LlumiverseError
+                if (LlumiverseError.isLlumiverseError(error)) {
+                    throw error;
+                }
+                throw this.formatLlumiverseError(error, {
+                    provider: this.provider,
+                    model: options.model,
+                    operation: 'execute',
+                });
             });
-        });
+        } finally {
+            release();
+        }
     }
 
     async _execute(prompt: PromptT, options: ExecutionOptions): Promise<ExecutionResponse<PromptT>> {
@@ -260,18 +268,20 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     // by default no stream is supported. we block and we return all at once
     async stream(segments: PromptSegment[], options: ExecutionOptions): Promise<CompletionStream<PromptT>> {
-        this.logger.debug(
-            options,
-            `Executing prompt with provider ${this.provider} with options: ${JSON.stringify(options)}`,
-        );
-        const prompt = await this.createPrompt(segments, options);
-        const canStream = await this.canStream(options);
-        if (canStream) {
-            return new DefaultCompletionStream(this, prompt, options);
-        } else if (this.isImageModel(options.model)) {
+        const release = this.acquireOperation();
+        try {
+            this.logger.debug(
+                options,
+                `Executing prompt with provider ${this.provider} with options: ${JSON.stringify(options)}`,
+            );
+            const prompt = await this.createPrompt(segments, options);
+            const canStream = await this.canStream(options);
+            if (canStream) {
+                return new DefaultCompletionStream(this, prompt, options);
+            }
             return new FallbackCompletionStream(this, prompt, options);
-        } else {
-            return new FallbackCompletionStream(this, prompt, options);
+        } finally {
+            release();
         }
     }
 
@@ -443,17 +453,45 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     //generate embeddings for a given text
     abstract generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult>;
 
+    public acquireOperation(): () => void {
+        if (this._resourcesDestroyed) {
+            throw new Error(`Cannot use destroyed ${this.provider} driver`);
+        }
+
+        this._activeOperations++;
+        let released = false;
+        return () => {
+            if (released) return;
+            released = true;
+            this._activeOperations--;
+            this.destroyWhenIdle();
+        };
+    }
+
+    /** Provider-specific resource cleanup, called once after active operations finish. */
+    protected destroyProviderResources(): void {}
+
     /**
-     * Cleanup method called when the driver is evicted from the cache.
-     * Releases the lazily-created HTTP agent socket pool. Override this
-     * in driver implementations that need to release additional resources
-     * — MUST call `super.destroy()` to avoid leaking sockets.
+     * Request cleanup when the driver is evicted from a cache. Active executions
+     * and streams keep their resources until they complete, fail, or are cancelled.
      */
     destroy(): void {
-        this._httpAgent?.close().catch(() => {
-            /* shutdown best-effort */
-        });
-        this._httpAgent = undefined;
-        this._driverFetch = undefined;
+        this._destroyRequested = true;
+        this.destroyWhenIdle();
+    }
+
+    private destroyWhenIdle(): void {
+        if (!this._destroyRequested || this._resourcesDestroyed || this._activeOperations > 0) return;
+
+        this._resourcesDestroyed = true;
+        try {
+            this.destroyProviderResources();
+        } finally {
+            this._httpAgent?.close().catch(() => {
+                /* shutdown best-effort */
+            });
+            this._httpAgent = undefined;
+            this._driverFetch = undefined;
+        }
     }
 }

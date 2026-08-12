@@ -113,15 +113,17 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
     /**
      * Cleanup Google Cloud clients when the driver is evicted from the cache.
-     * `super.destroy()` releases the HTTP agent socket pool created by
-     * {@link AbstractDriver.getHttpAgent} / {@link AbstractDriver.getDriverFetch}.
+     * AbstractDriver invokes this hook only after active executions finish.
      */
-    destroy(): void {
+    protected override destroyProviderResources(): void {
         this.aiplatform?.close();
         this.modelGarden?.close();
         this.imagenClient?.close();
         this.predictionClient?.close();
-        super.destroy();
+        this.aiplatform = undefined;
+        this.modelGarden = undefined;
+        this.imagenClient = undefined;
+        this.predictionClient = undefined;
     }
 
     private async getAuthClient(): Promise<AuthClient> {

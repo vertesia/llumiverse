@@ -92,6 +92,15 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
     }
 
     async *[Symbol.asyncIterator]() {
+        const release = this.driver.acquireOperation();
+        try {
+            yield* this.iterate();
+        } finally {
+            release();
+        }
+    }
+
+    private async *iterate() {
         // reset state
         this.completion = undefined;
         this.chunks = 0;
@@ -361,6 +370,15 @@ export class FallbackCompletionStream<PromptT = unknown> implements CompletionSt
     ) {}
 
     async *[Symbol.asyncIterator]() {
+        const release = this.driver.acquireOperation();
+        try {
+            yield* this.iterate();
+        } finally {
+            release();
+        }
+    }
+
+    private async *iterate() {
         // reset state
         this.completion = undefined;
         this.driver.logger.debug(
