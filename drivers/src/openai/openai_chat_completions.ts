@@ -1224,16 +1224,31 @@ export interface OpenAISDKChatCompletionsDriver {
 export function openAIChatCompletionsStreamToSSE(
     stream: AsyncIterable<OpenAIChatCompletionsStreamResponse>,
 ): ReadableStream {
+    const iterator = stream[Symbol.asyncIterator]();
+    let cancelled = false;
+
     return new ReadableStream({
         async start(controller) {
             try {
-                for await (const chunk of stream) {
+                while (!cancelled) {
+                    const { done, value: chunk } = await iterator.next();
+                    if (done || cancelled) {
+                        break;
+                    }
                     controller.enqueue({ type: 'event', data: JSON.stringify(chunk) });
                 }
-                controller.close();
+                if (!cancelled) {
+                    controller.close();
+                }
             } catch (error) {
-                controller.error(error);
+                if (!cancelled) {
+                    controller.error(error);
+                }
             }
+        },
+        async cancel() {
+            cancelled = true;
+            await iterator.return?.();
         },
     });
 }
