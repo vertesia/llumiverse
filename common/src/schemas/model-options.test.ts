@@ -103,6 +103,7 @@ describe('ModelOptionsSchema', () => {
         expect(
             ModelOptionsSchema.safeParse({ _option_id: 'vertexai-gemini', service_tier: 'future-tier' }).success,
         ).toBe(true);
+        expect(ModelOptionsSchema.safeParse({ _option_id: 'vertexai-gemini', flex: true }).success).toBe(true);
         expect(
             ModelOptionsSchema.safeParse({ _option_id: 'bedrock-claude', service_tier: 'future-tier' }).success,
         ).toBe(true);

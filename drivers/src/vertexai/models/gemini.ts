@@ -56,6 +56,10 @@ function supportsStructuredOutput(options: PromptOptions): boolean {
     return !!options.result_schema && !options.model.includes('ultra');
 }
 
+export function resolveVertexAIServiceTier(modelOptions?: VertexAIGeminiOptions): string | undefined {
+    return modelOptions?.service_tier ?? (modelOptions?.flex ? 'flex' : undefined);
+}
+
 const geminiSafetySettings: SafetySetting[] = [
     {
         category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
@@ -681,7 +685,11 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         const model_options = options.model_options as VertexAIGeminiOptions | undefined;
         const includeThoughts = model_options?.include_thoughts !== false;
-        const client = driver.getGoogleGenAIClient(region, model_options?.service_tier, options.httpTimeout);
+        const client = driver.getGoogleGenAIClient(
+            region,
+            resolveVertexAIServiceTier(model_options),
+            options.httpTimeout,
+        );
 
         const payload = getGeminiPayload(options, prompt);
         const response = await client.models.generateContent(payload);
@@ -787,7 +795,11 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         const model_options = options.model_options as VertexAIGeminiOptions | undefined;
         const includeThoughts = model_options?.include_thoughts !== false;
-        const client = driver.getGoogleGenAIClient(region, model_options?.service_tier, options.httpTimeout);
+        const client = driver.getGoogleGenAIClient(
+            region,
+            resolveVertexAIServiceTier(model_options),
+            options.httpTimeout,
+        );
 
         const payload = getGeminiPayload(options, prompt);
         const response = await client.models.generateContentStream(payload);

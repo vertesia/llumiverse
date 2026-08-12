@@ -366,6 +366,15 @@ export const VertexAIGeminiOptionsSchema = z
         thinking_budget_tokens: z.number().optional(),
         thinking_level: ThinkingLevelSchema.optional(),
         service_tier: ServiceTierSchema.optional(),
+        // TODO: Remove this deprecated alias after main's OpenAPI compatibility baseline advances past release/1.4.
+        flex: z
+            .boolean()
+            .meta({
+                description: 'Deprecated: Use service_tier="flex" instead.',
+                deprecated: true,
+                'x-deprecated-message': 'Use service_tier="flex" instead.',
+            })
+            .optional(),
         image_aspect_ratio: z.enum(['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9', '21:9']).optional(),
         image_size: z.enum(['1K', '2K', '4K']).optional(),
         person_generation: z.enum(['ALLOW_ALL', 'ALLOW_ADULT', 'ALLOW_NONE']).optional(),
