@@ -224,6 +224,15 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         return resolveDriverRequestTimeoutMs(this.options.httpTimeout, httpTimeout);
     }
 
+    protected getDriverRequestOptions(
+        options: Pick<ExecutionOptions, 'httpTimeout'>,
+        signal?: AbortSignal,
+    ): { signal?: AbortSignal; timeout?: number } | undefined {
+        const timeout = options.httpTimeout ? this.getDriverRequestTimeoutMs(options.httpTimeout) : undefined;
+        if (!signal && timeout === undefined) return undefined;
+        return { signal, timeout };
+    }
+
     public createExecutionHttpAgentScope(
         options: Pick<ExecutionOptions, 'httpTimeout'>,
         force = false,

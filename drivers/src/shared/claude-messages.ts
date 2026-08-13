@@ -148,6 +148,7 @@ export interface ClaudeBaseOptions {
 interface RequestOptions {
     headers?: Record<string, string>;
     signal?: AbortSignal;
+    timeout?: number;
 }
 
 type ClaudeTool = NonNullable<MessageCreateParamsBase['tools']>[number];
@@ -959,7 +960,7 @@ export async function executeClaudeCompletion(
     options: ExecutionOptions,
     logger?: Logger,
     provider = 'anthropic',
-    signal?: AbortSignal,
+    transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
 ): Promise<Completion> {
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
 
@@ -970,7 +971,7 @@ export async function executeClaudeCompletion(
     const responseStream = await streamClaudeMessages(
         client,
         payload as MessageStreamParams,
-        signal ? { ...requestOptions, signal } : requestOptions,
+        transportOptions ? { ...requestOptions, ...transportOptions } : requestOptions,
     );
     const result = await responseStream.finalMessage();
     logClaudeTruncation(logger, result.stop_reason, { provider, model: options.model });
@@ -1000,7 +1001,7 @@ export async function streamClaudeCompletion(
     options: ExecutionOptions,
     logger?: Logger,
     provider = 'anthropic',
-    signal?: AbortSignal,
+    transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
 ): Promise<DriverCompletionStream> {
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
     const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
@@ -1008,7 +1009,11 @@ export async function streamClaudeCompletion(
     const { payload, requestOptions } = getClaudePayload(options, conversation);
     const streamingPayload: MessageStreamParams = { ...payload, stream: true };
 
-    const response_stream = await streamClaudeMessages(client, streamingPayload, { ...requestOptions, signal });
+    const response_stream = await streamClaudeMessages(
+        client,
+        streamingPayload,
+        transportOptions ? { ...requestOptions, ...transportOptions } : requestOptions,
+    );
 
     let currentToolUse: { id: string; name: string; inputJson: string } | null = null;
     let pendingSpacing = false;

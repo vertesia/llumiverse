@@ -35,6 +35,10 @@ class TestDriver extends AbstractDriver<DriverOptions, string> {
         return this.getDriverFetch();
     }
 
+    getRequestOptions(options: Pick<ExecutionOptions, 'httpTimeout'>, signal?: AbortSignal) {
+        return this.getDriverRequestOptions(options, signal);
+    }
+
     async requestTextCompletion(prompt: string, _options: ExecutionOptions): Promise<Completion> {
         const response = await this.getDriverFetch()(prompt);
         return {
@@ -93,6 +97,12 @@ describe('driver HTTP agent helpers', () => {
 
     it('fills missing timeout options from defaults', () => {
         expect(DEFAULT_DRIVER_REQUEST_TIMEOUT_MS).toBe(900_000);
+        expect(DEFAULT_DRIVER_HTTP_TIMEOUTS).toEqual({
+            headersTimeout: 900_000,
+            bodyTimeout: 900_000,
+            connectTimeout: 60_000,
+            keepAliveTimeout: 300_000,
+        });
         expect(resolveDriverHttpTimeouts()).toEqual(DEFAULT_DRIVER_HTTP_TIMEOUTS);
         expect(
             resolveDriverHttpTimeouts({
@@ -112,6 +122,22 @@ describe('driver HTTP agent helpers', () => {
         expect(
             resolveDriverRequestTimeoutMs({ headersTimeout: 120_000, bodyTimeout: 180_000 }, { bodyTimeout: 600_000 }),
         ).toBe(600_000);
+    });
+
+    it('builds SDK request options only when an execution override or cancellation signal exists', () => {
+        const driver = new TestDriver({});
+        const controller = new AbortController();
+
+        expect(driver.getRequestOptions({})).toBeUndefined();
+        expect(driver.getRequestOptions({}, controller.signal)).toEqual({
+            signal: controller.signal,
+            timeout: undefined,
+        });
+        expect(
+            driver.getRequestOptions({ httpTimeout: { headersTimeout: 1_200_000, bodyTimeout: 1_800_000 } }),
+        ).toEqual({ signal: undefined, timeout: 1_800_000 });
+
+        driver.destroy();
     });
 
     it('merges per-call timeout overrides without replacing defined defaults with undefined', () => {

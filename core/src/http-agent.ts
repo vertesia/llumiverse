@@ -7,16 +7,17 @@ import { Agent } from 'undici';
  * caller does not override them. Provider response waits deliberately sit
  * beyond the hosting request boundary: application-level cancellation should
  * end user work first, while these limits remain a bounded-resource safety net.
- * Connect and keep-alive limits govern socket health rather than request work,
- * so they remain short.
+ * Connect and keep-alive limits govern socket establishment and idle reuse,
+ * not provider execution. They remain below the response safety horizon but
+ * allow for transient network pressure and useful connection reuse.
  */
 export const DEFAULT_DRIVER_REQUEST_TIMEOUT_MS = 15 * 60_000;
 
 export const DEFAULT_DRIVER_HTTP_TIMEOUTS: Required<HttpTimeoutOptions> = {
     headersTimeout: DEFAULT_DRIVER_REQUEST_TIMEOUT_MS,
     bodyTimeout: DEFAULT_DRIVER_REQUEST_TIMEOUT_MS,
-    connectTimeout: 10_000,
-    keepAliveTimeout: 30_000,
+    connectTimeout: 60_000,
+    keepAliveTimeout: 5 * 60_000,
 };
 
 export function resolveDriverRequestTimeoutMs(defaults?: HttpTimeoutOptions, override?: HttpTimeoutOptions): number {

@@ -15,9 +15,8 @@ import { z } from 'zod';
 // `strictObject` for the reason `model-options.ts` gives: the derived component has always said
 // `additionalProperties: false`, and plain `z.object` would have PARSED an unknown key by dropping it.
 //
-// The `description` reproduces what the scanner already derived from the interface's TSDoc, including
-// the run of spaces where it collapsed the defaults list onto one line. Reproducing the contract, not
-// renegotiating it — the published document has to stay byte-identical through this conversion.
+// The description publishes the runtime defaults because they materially affect long-running requests.
+// Regenerate the OpenAPI artifacts whenever these values change.
 export const HttpTimeoutOptionsSchema = z
     .strictObject({
         headersTimeout: z
@@ -37,7 +36,7 @@ export const HttpTimeoutOptionsSchema = z
             "HTTP timeouts applied to a driver's upstream LLM-provider calls.\n\nAll values are in " +
             'milliseconds. Drivers should map these onto whatever HTTP client their SDK uses; the defaults ' +
             'applied in `@llumiverse/core/createDriverHttpAgent` are:   - headersTimeout:   900_000   - ' +
-            'bodyTimeout:      900_000   - connectTimeout:   10_000   - keepAliveTimeout: 30_000\n\nThe ' +
+            'bodyTimeout:      900_000   - connectTimeout:   60_000   - keepAliveTimeout: 300_000\n\nThe ' +
             'response defaults are deliberately longer than the hosting request boundary. Application-level ' +
             'cancellation should end user work first; driver timeouts are bounded-resource safety nets.',
     });

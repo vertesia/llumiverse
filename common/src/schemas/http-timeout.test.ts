@@ -59,7 +59,7 @@ describe('HttpTimeoutOptionsSchema', () => {
         );
         expect(description).toContain(
             'the defaults applied in `@llumiverse/core/createDriverHttpAgent` are:   - headersTimeout:   900_000   ' +
-                '- bodyTimeout:      900_000   - connectTimeout:   10_000   - keepAliveTimeout: 30_000',
+                '- bodyTimeout:      900_000   - connectTimeout:   60_000   - keepAliveTimeout: 300_000',
         );
         expect(description.endsWith('driver timeouts are bounded-resource safety nets.')).toBe(true);
     });

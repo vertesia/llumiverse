@@ -85,8 +85,9 @@ export class GroqDriver extends OpenAIChatCompletionsDriverBase<GroqDriverOption
         signal?: AbortSignal,
     ): Promise<OpenAIChatCompletionsResponse> {
         const request = toGroqRequest(payload, options, false);
-        const response = signal
-            ? await this.client.chat.completions.create(request, { signal })
+        const requestOptions = this.getDriverRequestOptions(options, signal);
+        const response = requestOptions
+            ? await this.client.chat.completions.create(request, requestOptions)
             : await this.client.chat.completions.create(request);
         return preserveOpenAIChatCompletionsOriginalResponse(normalizeGroqResponse(response), response);
     }
@@ -97,8 +98,9 @@ export class GroqDriver extends OpenAIChatCompletionsDriverBase<GroqDriverOption
         signal?: AbortSignal,
     ): Promise<ReadableStream> {
         const request = toGroqRequest(payload, options, true);
-        const stream = signal
-            ? await this.client.chat.completions.create(request, { signal })
+        const requestOptions = this.getDriverRequestOptions(options, signal);
+        const stream = requestOptions
+            ? await this.client.chat.completions.create(request, requestOptions)
             : await this.client.chat.completions.create(request);
         return openAIChatCompletionsStreamToSSE(normalizeGroqStream(stream), () => stream.controller.abort());
     }

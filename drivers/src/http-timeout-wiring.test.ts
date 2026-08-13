@@ -127,7 +127,7 @@ describe('driver HTTP timeout wiring', () => {
         expect(internals.getBedrockRequestHandlerConfig()).toEqual({
             requestTimeout: 900_000,
             throwOnRequestTimeout: true,
-            connectionTimeout: 10_000,
+            connectionTimeout: 60_000,
             socketTimeout: 900_000,
         });
 

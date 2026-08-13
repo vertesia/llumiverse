@@ -4,6 +4,25 @@ import { describe, expect, it, vi } from 'vitest';
 import { MistralAIDriver } from './index.js';
 
 describe('MistralAIDriver official SDK transport', () => {
+    it('forwards a longer per-execution timeout to the SDK request', async () => {
+        const driver = new MistralAIDriver({ apiKey: 'test-key' });
+        const complete = vi.fn(async (_request: unknown, _options?: unknown) => ({
+            choices: [{ index: 0, finishReason: 'stop', message: { role: 'assistant', content: 'done' } }],
+            usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+        }));
+        Object.defineProperty(driver.client.chat, 'complete', { value: complete });
+
+        await driver.requestTextCompletion(
+            { messages: [{ role: 'user', content: 'hello' }] },
+            {
+                model: 'mistral-small-latest',
+                httpTimeout: { headersTimeout: 1_200_000, bodyTimeout: 1_800_000 },
+            },
+        );
+
+        expect(complete.mock.calls[0][1]).toEqual({ signal: undefined, timeoutMs: 1_800_000 });
+    });
+
     it('enriches standard inference listings through the shared model directory', async () => {
         const driver = new MistralAIDriver({ apiKey: 'test-key' });
         Object.defineProperty(driver.client.models, 'list', {

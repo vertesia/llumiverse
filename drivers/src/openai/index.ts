@@ -192,6 +192,13 @@ export interface OpenAIResponsesDriverBaseOptions extends DriverOptions {}
 
 /** Reusable Responses text protocol shared by OpenAI-compatible transports. */
 export class OpenAIResponsesProtocol {
+    constructor(
+        private readonly resolveRequestOptions: (
+            options: Pick<ExecutionOptions, 'httpTimeout'>,
+            signal?: AbortSignal,
+        ) => { signal?: AbortSignal; timeout?: number } | undefined,
+    ) {}
+
     async requestTextCompletionStream(
         driver: OpenAIResponsesDriverBase,
         prompt: ResponseInputItem[],
@@ -275,8 +282,9 @@ export class OpenAIResponsesProtocol {
                 options.prompt_cache_schema_suffix === true && !!options.result_schema,
             ),
         };
-        const stream = signal
-            ? await driver.service.responses.create(request, { signal })
+        const requestOptions = this.resolveRequestOptions(options, signal);
+        const stream = requestOptions
+            ? await driver.service.responses.create(request, requestOptions)
             : await driver.service.responses.create(request);
 
         return mapResponseStream(stream, includeThoughts, (response) =>
@@ -365,8 +373,9 @@ export class OpenAIResponsesProtocol {
                 options.prompt_cache_schema_suffix === true && !!options.result_schema,
             ),
         } as OpenAI.Responses.ResponseCreateParamsNonStreaming;
-        const res = signal
-            ? await driver.service.responses.create(request, { signal })
+        const requestOptions = this.resolveRequestOptions(options, signal);
+        const res = requestOptions
+            ? await driver.service.responses.create(request, requestOptions)
             : await driver.service.responses.create(request);
 
         const completion = driver.extractDataFromResponse(options, res);
@@ -399,7 +408,9 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 
     constructor(opts: OpenAIResponsesDriverBaseOptions) {
         super(opts);
-        this.responsesProtocol = new OpenAIResponsesProtocol();
+        this.responsesProtocol = new OpenAIResponsesProtocol((options, signal) =>
+            this.getDriverRequestOptions(options, signal),
+        );
     }
 
     protected async formatPrompt(segments: PromptSegment[], options: PromptOptions): Promise<ResponseInputItem[]> {

@@ -169,6 +169,11 @@ export interface OpenAIChatCompletionsProtocolOptions {
      * JSON Schema payload for tools while preserving the shared Chat Completions path.
      */
     toolSchemaMode?: 'openai_strict' | 'compatible';
+    /** Resolve SDK options from the same driver/per-execution policy as the HTTP transport. */
+    resolveRequestOptions?: (
+        options: Pick<ExecutionOptions, 'httpTimeout'>,
+        signal?: AbortSignal,
+    ) => { signal?: AbortSignal; timeout?: number } | undefined;
 }
 
 const originalResponseSymbol = Symbol('openai-compatible-original-response');
@@ -1362,8 +1367,13 @@ export class OpenAISDKChatCompletionsProtocol extends OpenAIChatCompletionsProto
     protected async postChatCompletion(
         driver: OpenAISDKChatCompletionsDriver,
         payload: OpenAIChatCompletionsPayload,
+        options: ExecutionOptions,
     ): Promise<OpenAIChatCompletionsResponse> {
-        const response = await driver.service.chat.completions.create(toOpenAINonStreamingPayload(payload));
+        const request = toOpenAINonStreamingPayload(payload);
+        const requestOptions = this.options.resolveRequestOptions?.(options);
+        const response = requestOptions
+            ? await driver.service.chat.completions.create(request, requestOptions)
+            : await driver.service.chat.completions.create(request);
         return preserveOpenAIChatCompletionsOriginalResponse(
             normalizeOpenAIChatCompletionsResponse(response),
             response,
@@ -1373,12 +1383,15 @@ export class OpenAISDKChatCompletionsProtocol extends OpenAIChatCompletionsProto
     protected async postChatCompletionStream(
         driver: OpenAISDKChatCompletionsDriver,
         payload: OpenAIChatCompletionsPayload,
-        _options: ExecutionOptions,
+        options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<ReadableStream> {
-        const stream = await driver.service.chat.completions.create(toOpenAIStreamingPayload(payload), {
-            signal,
-        });
+        const request = toOpenAIStreamingPayload(payload);
+        const requestOptions =
+            this.options.resolveRequestOptions?.(options, signal) ?? (signal ? { signal } : undefined);
+        const stream = requestOptions
+            ? await driver.service.chat.completions.create(request, requestOptions)
+            : await driver.service.chat.completions.create(request);
         return openAIChatCompletionsStreamToSSE(normalizeOpenAIChatCompletionsStream(stream), () =>
             stream.controller.abort(),
         );
@@ -1470,12 +1483,13 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
 
     async _postChatCompletion(
         payload: OpenAIChatCompletionsPayload,
-        _options: ExecutionOptions,
+        options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<OpenAIChatCompletionsResponse> {
         const request = toOpenAINonStreamingPayload(payload);
-        const response = signal
-            ? await this.service.chat.completions.create(request, { signal })
+        const requestOptions = this.getDriverRequestOptions(options, signal);
+        const response = requestOptions
+            ? await this.service.chat.completions.create(request, requestOptions)
             : await this.service.chat.completions.create(request);
         return preserveOpenAIChatCompletionsOriginalResponse(
             normalizeOpenAIChatCompletionsResponse(response),
@@ -1485,12 +1499,14 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
 
     async _postChatCompletionStream(
         payload: OpenAIChatCompletionsPayload,
-        _options: ExecutionOptions,
+        options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<ReadableStream> {
-        const stream = await this.service.chat.completions.create(toOpenAIStreamingPayload(payload), {
-            signal,
-        });
+        const request = toOpenAIStreamingPayload(payload);
+        const requestOptions = this.getDriverRequestOptions(options, signal);
+        const stream = requestOptions
+            ? await this.service.chat.completions.create(request, requestOptions)
+            : await this.service.chat.completions.create(request);
         return openAIChatCompletionsStreamToSSE(normalizeOpenAIChatCompletionsStream(stream), () =>
             stream.controller.abort(),
         );

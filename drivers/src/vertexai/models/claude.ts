@@ -84,7 +84,14 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         ) {
             driver.logger.debug({ options: resolvedOptions.model_options }, 'Unexpected option id');
         }
-        return executeClaudeCompletion(client, prompt, resolvedOptions, driver.logger, driver.provider, signal);
+        return executeClaudeCompletion(
+            client,
+            prompt,
+            resolvedOptions,
+            driver.logger,
+            driver.provider,
+            signal ? { signal } : undefined,
+        );
     }
 
     async requestTextCompletionStream(
@@ -103,7 +110,14 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         ) {
             driver.logger.debug({ options: resolvedOptions.model_options }, 'Unexpected option id');
         }
-        return streamClaudeCompletion(client, prompt, resolvedOptions, driver.logger, driver.provider, signal);
+        return streamClaudeCompletion(
+            client,
+            prompt,
+            resolvedOptions,
+            driver.logger,
+            driver.provider,
+            signal ? { signal } : undefined,
+        );
     }
 
     isClaudeErrorRetryable(

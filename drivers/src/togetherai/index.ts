@@ -60,24 +60,26 @@ export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAI
 
     async _postChatCompletion(
         payload: OpenAIChatCompletionsPayload,
-        _options: ExecutionOptions,
+        options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<OpenAIChatCompletionsResponse> {
         const request = toTogetherRequest(payload, false);
-        const response = signal
-            ? await this.service.chat.completions.create(request, { signal })
+        const requestOptions = this.getDriverRequestOptions(options, signal);
+        const response = requestOptions
+            ? await this.service.chat.completions.create(request, requestOptions)
             : await this.service.chat.completions.create(request);
         return preserveOpenAIChatCompletionsOriginalResponse(normalizeTogetherResponse(response), response);
     }
 
     async _postChatCompletionStream(
         payload: OpenAIChatCompletionsPayload,
-        _options: ExecutionOptions,
+        options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<ReadableStream> {
         const request = toTogetherRequest(payload, true);
-        const stream = signal
-            ? await this.service.chat.completions.create(request, { signal })
+        const requestOptions = this.getDriverRequestOptions(options, signal);
+        const stream = requestOptions
+            ? await this.service.chat.completions.create(request, requestOptions)
             : await this.service.chat.completions.create(request);
         return openAIChatCompletionsStreamToSSE(normalizeTogetherStream(stream), () => stream.controller.abort());
     }

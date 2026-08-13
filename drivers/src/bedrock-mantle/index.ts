@@ -135,11 +135,13 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
         this.chatCompletionsProtocol = new OpenAISDKChatCompletionsProtocol({
             resultSchemaMode: 'response_format',
             toolSchemaMode: 'compatible',
+            resolveRequestOptions: (options, signal) => this.getDriverRequestOptions(options, signal),
         });
         this.alignedChatCompletionsProtocol = new OpenAISDKChatCompletionsProtocol({
             resultSchemaMode: 'response_format',
             includeResultSchemaInPrompt: true,
             toolSchemaMode: 'compatible',
+            resolveRequestOptions: (options, signal) => this.getDriverRequestOptions(options, signal),
         });
 
         const credentials = opts.credentials;
@@ -208,7 +210,7 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
                     options,
                     undefined,
                     'anthropic',
-                    signal,
+                    this.getDriverRequestOptions(options, signal),
                 );
             default:
                 throw new Error(`Unsupported Bedrock Mantle model: ${options.model}`);
@@ -241,7 +243,7 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
                     options,
                     undefined,
                     'bedrock-mantle',
-                    signal,
+                    this.getDriverRequestOptions(options, signal),
                 );
             default:
                 throw new Error(`Unsupported Bedrock Mantle model: ${options.model}`);

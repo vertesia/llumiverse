@@ -93,8 +93,12 @@ export class MistralAIDriver extends OpenAICompatibleDriverBase<MistralAIDriverO
     ): Promise<Completion> {
         const conversation = prepareMistralConversation(options.conversation, prompt);
         const request = buildMistralRequest(conversation, options, false, this.options.defaultMaxTokens);
-        const response = signal
-            ? await this.client.chat.complete(request, { signal })
+        const driverRequestOptions = this.getDriverRequestOptions(options, signal);
+        const requestOptions = driverRequestOptions
+            ? { signal: driverRequestOptions.signal, timeoutMs: driverRequestOptions.timeout }
+            : undefined;
+        const response = requestOptions
+            ? await this.client.chat.complete(request, requestOptions)
             : await this.client.chat.complete(request);
         const choice = response.choices[0];
         const message = choice?.message;
@@ -122,10 +126,13 @@ export class MistralAIDriver extends OpenAICompatibleDriverBase<MistralAIDriverO
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
         const conversation = prepareMistralConversation(options.conversation, prompt);
-        const response = await this.client.chat.stream(
-            buildMistralRequest(conversation, options, true, this.options.defaultMaxTokens),
-            { signal },
-        );
+        const request = buildMistralRequest(conversation, options, true, this.options.defaultMaxTokens);
+        const driverRequestOptions = this.getDriverRequestOptions(options, signal);
+        const requestOptions =
+            driverRequestOptions?.timeout !== undefined
+                ? { signal: driverRequestOptions.signal, timeoutMs: driverRequestOptions.timeout }
+                : { signal };
+        const response = await this.client.chat.stream(request, requestOptions);
         const includeThoughts =
             (options.model_options as TextFallbackOptions | MistralTextOptions | undefined)?.include_thoughts !== false;
         const nativeContent: ContentChunk[] = [];

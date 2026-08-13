@@ -55,6 +55,18 @@ function response() {
 }
 
 describe('OpenAI Responses reasoning', () => {
+    it('forwards a longer per-execution timeout to the SDK request', async () => {
+        const create = vi.fn(async (_request: unknown, _options?: unknown) => response());
+        const driver = new TestResponsesDriver(create);
+
+        await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
+            model: 'gpt-5',
+            httpTimeout: { headersTimeout: 1_200_000, bodyTimeout: 1_800_000 },
+        });
+
+        expect(create.mock.calls[0][1]).toEqual({ signal: undefined, timeout: 1_800_000 });
+    });
+
     it.each([
         ['effort', { effort: 'high' as const }],
         ['reasoning_effort', { reasoning_effort: 'high' as const }],
