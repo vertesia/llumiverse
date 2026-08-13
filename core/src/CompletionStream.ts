@@ -132,7 +132,6 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
     private readonly abortController = new AbortController();
     private activeIterator?: AsyncGenerator<string, void, unknown>;
     private readonly lease: CompletionStreamLease;
-    private sourceStream?: DriverCompletionStream;
 
     constructor(
         public driver: AbstractDriver<DriverOptions, PromptT>,
@@ -171,9 +170,7 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
     async cancel(): Promise<void> {
         if (this.lease.cancelPending()) return;
         this.abortController.abort();
-        const cancellation = this.sourceStream?.cancel();
-        const iteration = this.activeIterator?.return?.();
-        await Promise.allSettled([cancellation, iteration].filter((value) => value !== undefined));
+        await this.activeIterator?.return?.();
     }
 
     private async *iterateWithLease() {
@@ -211,9 +208,7 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
             stream = await httpScope.run(() =>
                 this.driver.requestTextCompletionStream(this.prompt, this.options, this.abortController.signal),
             );
-            this.sourceStream = stream;
             if (this.abortController.signal.aborted) {
-                await stream.cancel();
                 return;
             }
             const iterator = stream[Symbol.asyncIterator]();
@@ -365,7 +360,6 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
                 }
             }
             await httpScope.close();
-            this.sourceStream = undefined;
         }
 
         // Return undefined only if we never received any token data from the provider.

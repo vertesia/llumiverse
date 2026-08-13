@@ -20,8 +20,8 @@ class LifecycleTestDriver extends AbstractDriver<DriverOptions, string> {
     models = Promise.resolve<AIModel[]>([]);
     embeddings = Promise.resolve<EmbeddingsResult>({ results: [], model: 'test-model' });
     imageModel = false;
+    completionStreamSignal?: AbortSignal;
     completionStream: DriverCompletionStream = {
-        cancel: () => {},
         async *[Symbol.asyncIterator]() {
             yield { result: [{ type: 'text', value: 'first' }] } satisfies CompletionChunkObject;
         },
@@ -38,7 +38,12 @@ class LifecycleTestDriver extends AbstractDriver<DriverOptions, string> {
         return this.completion;
     }
 
-    async requestTextCompletionStream(_prompt: string, _options: ExecutionOptions): Promise<DriverCompletionStream> {
+    async requestTextCompletionStream(
+        _prompt: string,
+        _options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<DriverCompletionStream> {
+        this.completionStreamSignal = signal;
         return this.completionStream;
     }
 
@@ -110,7 +115,6 @@ describe('AbstractDriver lifecycle', () => {
         const cleanup = vi.fn();
         const driver = new LifecycleTestDriver(cleanup);
         driver.completionStream = {
-            cancel: () => {},
             async *[Symbol.asyncIterator]() {
                 yield { result: [{ type: 'text', value: 'first' }] } satisfies CompletionChunkObject;
                 yield { result: [{ type: 'text', value: 'second' }] } satisfies CompletionChunkObject;
@@ -178,21 +182,14 @@ describe('AbstractDriver lifecycle', () => {
 
     it('cancels the provider while a public iterator next call is pending', async () => {
         const cleanup = vi.fn();
-        const cancelProvider = vi.fn();
-        let finishRead!: () => void;
-        const pendingRead = new Promise<void>((resolve) => {
-            finishRead = resolve;
-        });
         const driver = new LifecycleTestDriver(cleanup);
         driver.completionStream = {
-            cancel: () => {
-                cancelProvider();
-                finishRead();
-            },
             [Symbol.asyncIterator]() {
                 return {
                     next: async () => {
-                        await pendingRead;
+                        await new Promise<void>((resolve) => {
+                            driver.completionStreamSignal?.addEventListener('abort', () => resolve(), { once: true });
+                        });
                         return { done: true, value: undefined };
                     },
                 };
@@ -204,7 +201,7 @@ describe('AbstractDriver lifecycle', () => {
         const read = iterator.next();
         await stream.cancel();
 
-        expect(cancelProvider).toHaveBeenCalledOnce();
+        expect(driver.completionStreamSignal?.aborted).toBe(true);
         await expect(read).resolves.toEqual({ done: true, value: undefined });
     });
 

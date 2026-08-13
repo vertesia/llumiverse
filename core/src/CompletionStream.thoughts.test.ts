@@ -27,7 +27,6 @@ class ThoughtsStreamDriver extends AbstractDriver<DriverOptions, string> {
     async requestTextCompletionStream(prompt: string): Promise<DriverCompletionStream> {
         const nativeAssistant = { role: 'assistant', id: prompt };
         return {
-            cancel: () => {},
             async *[Symbol.asyncIterator]() {
                 yield { result: [{ type: 'thoughts', value: 'reason-' }] };
                 yield { result: [{ type: 'thoughts', value: prompt }] };

@@ -103,6 +103,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
             },
             version: model.version,
             stream: true, //streaming described here https://replicate.com/blog/streaming
+            signal,
         };
 
         const prediction = await this.service.predictions.create(predictionData);
@@ -111,7 +112,12 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
 
         // biome-ignore lint/style/noNonNullAssertion: urls.stream is populated by Replicate because the prediction was created with stream:true; SDK types it optional
         const source = new EventSource(prediction.urls.stream!);
-        signal?.addEventListener('abort', () => source.close(), { once: true });
+        const abort = () => {
+            source.close();
+            stream.close('');
+        };
+        if (signal?.aborted) abort();
+        else signal?.addEventListener('abort', abort, { once: true });
         source.addEventListener('output', (e: ReplicateEvent) => {
             stream.push({ result: [{ type: 'text', value: e.data }] });
         });
@@ -131,7 +137,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
                 source.close();
             }
         });
-        return Object.assign(stream, { cancel: () => source.close() });
+        return stream;
     }
 
     async requestTextCompletion(prompt: string, options: ExecutionOptions) {

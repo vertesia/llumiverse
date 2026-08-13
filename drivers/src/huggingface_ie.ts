@@ -9,7 +9,7 @@ import {
     type ExecutionOptions,
     type TextFallbackOptions,
 } from '@llumiverse/core';
-import { createLinkedAbortController, transformAsyncIterator } from '@llumiverse/core/async';
+import { transformAsyncIterator } from '@llumiverse/core/async';
 import { AbstractDriver } from '@llumiverse/core/driver';
 import { FetchClient } from '@vertesia/api-fetch-client';
 
@@ -65,7 +65,6 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
         options.model_options = options.model_options as TextFallbackOptions;
 
         const executor = await this.getExecutor(options.model);
-        const controller = createLinkedAbortController(signal);
         const req = executor.textGenerationStream(
             {
                 inputs: prompt,
@@ -74,27 +73,24 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
                     max_new_tokens: options.model_options?.max_tokens,
                 },
             },
-            { signal: controller.signal },
+            { signal },
         );
 
-        return Object.assign(
-            transformAsyncIterator(req, (val: TextGenerationStreamOutput): CompletionChunkObject => {
-                //special like <s> are not part of the result
-                if (val.token.special) return { result: [] };
-                let finish_reason = val.details?.finish_reason as string;
-                if (finish_reason === 'eos_token') {
-                    finish_reason = 'stop';
-                }
-                return {
-                    result: val.token.text ? [{ type: 'text' as const, value: val.token.text }] : [],
-                    finish_reason: finish_reason,
-                    token_usage: {
-                        result: val.details?.generated_tokens ?? 0,
-                    },
-                };
-            }),
-            { cancel: () => controller.abort() },
-        );
+        return transformAsyncIterator(req, (val: TextGenerationStreamOutput): CompletionChunkObject => {
+            //special like <s> are not part of the result
+            if (val.token.special) return { result: [] };
+            let finish_reason = val.details?.finish_reason as string;
+            if (finish_reason === 'eos_token') {
+                finish_reason = 'stop';
+            }
+            return {
+                result: val.token.text ? [{ type: 'text' as const, value: val.token.text }] : [],
+                finish_reason: finish_reason,
+                token_usage: {
+                    result: val.details?.generated_tokens ?? 0,
+                },
+            };
+        });
     }
 
     async requestTextCompletion(prompt: string, options: ExecutionOptions) {

@@ -413,7 +413,6 @@ export interface CompletionChunkObject {
  * replay requires information that cannot be reconstructed from generic results.
  */
 export interface DriverCompletionStream extends AsyncIterable<CompletionChunkObject> {
-    cancel(): void | Promise<void>;
     finalizeConversation?: () => unknown | Promise<unknown>;
 }
 

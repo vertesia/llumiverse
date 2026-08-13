@@ -44,7 +44,7 @@ import {
     unwrapConversationArray,
     type VertexAIGeminiOptions,
 } from '@llumiverse/core';
-import { asyncMap, createLinkedAbortController } from '@llumiverse/core/async';
+import { asyncMap } from '@llumiverse/core/async';
 import { truncateBinaryForDebug } from '../../shared/debug-prompt.js';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
 import type { ModelDefinition } from '../models.js';
@@ -802,9 +802,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             options.httpTimeout,
         );
 
-        const controller = createLinkedAbortController(signal);
         const payload = getGeminiPayload(options, prompt);
-        payload.config = { ...payload.config, abortSignal: controller.signal };
+        payload.config = { ...payload.config, abortSignal: signal };
         const response = await client.models.generateContentStream(payload);
 
         const nativeParts: Part[] = [];
@@ -875,7 +874,6 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         });
 
         return Object.assign(stream, {
-            cancel: () => controller.abort(),
             finalizeConversation: () =>
                 finalizeGeminiConversation(
                     conversation,

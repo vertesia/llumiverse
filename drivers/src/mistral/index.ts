@@ -129,7 +129,6 @@ export class MistralAIDriver extends OpenAICompatibleDriverBase<MistralAIDriverO
         const nativeToolCalls = new Map<number, ToolCall>();
 
         const stream: DriverCompletionStream = {
-            cancel: () => response.cancel(),
             async *[Symbol.asyncIterator]() {
                 for await (const event of response) {
                     const chunk = event.data;

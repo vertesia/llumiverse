@@ -913,7 +913,6 @@ export function mapResponseStream(
     let finalResponse: OpenAI.Responses.Response | undefined;
 
     return {
-        cancel: () => (stream as { controller?: AbortController }).controller?.abort(),
         async *[Symbol.asyncIterator]() {
             let hasTextDeltas = false;
             let refusalText = '';

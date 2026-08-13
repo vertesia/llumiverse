@@ -1123,7 +1123,6 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         });
 
         return Object.assign(stream, {
-            cancel: () => responseStream.cancel(),
             finalizeConversation: () => {
                 const assistantMessage: OpenAIChatCompletionsMessage = {
                     role: 'assistant',

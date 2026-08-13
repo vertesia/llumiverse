@@ -11,7 +11,7 @@ import {
     type TextFallbackOptions,
     WATSONX_DEFAULT_EMBEDDING_MODEL,
 } from '@llumiverse/core';
-import { createLinkedAbortController, transformSSEStream } from '@llumiverse/core/async';
+import { transformSSEStream } from '@llumiverse/core/async';
 import { AbstractDriver } from '@llumiverse/core/driver';
 import { FetchClient, type ServerSentEvent } from '@vertesia/api-fetch-client';
 import type {
@@ -111,30 +111,26 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
             project_id: this.projectId,
         };
 
-        const controller = createLinkedAbortController(signal);
         const stream = (await this.fetchClient.post(`/ml/v1/text/generation_stream?version=${API_VERSION}`, {
             payload: payload,
             reader: 'sse',
-            signal: controller.signal,
+            signal,
         })) as ReadableStream<ServerSentEvent>;
 
-        return Object.assign(
-            transformSSEStream(stream, (data: string) => {
-                const json = JSON.parse(data) as WatsonxTextGenerationResponse;
-                return {
-                    result: json.results[0]?.generated_text
-                        ? [{ type: 'text', value: json.results[0].generated_text }]
-                        : [],
-                    finish_reason: watsonFinishReason(json.results[0]?.stop_reason),
-                    token_usage: {
-                        prompt: json.results[0].input_token_count,
-                        result: json.results[0].generated_token_count,
-                        total: json.results[0].input_token_count + json.results[0].generated_token_count,
-                    },
-                };
-            }),
-            { cancel: () => controller.abort() },
-        );
+        return transformSSEStream(stream, (data: string) => {
+            const json = JSON.parse(data) as WatsonxTextGenerationResponse;
+            return {
+                result: json.results[0]?.generated_text
+                    ? [{ type: 'text', value: json.results[0].generated_text }]
+                    : [],
+                finish_reason: watsonFinishReason(json.results[0]?.stop_reason),
+                token_usage: {
+                    prompt: json.results[0].input_token_count,
+                    result: json.results[0].generated_token_count,
+                    total: json.results[0].input_token_count + json.results[0].generated_token_count,
+                },
+            };
+        });
     }
 
     async listModels(): Promise<AIModel[]> {

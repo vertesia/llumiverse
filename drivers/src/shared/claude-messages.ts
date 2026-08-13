@@ -1091,7 +1091,6 @@ export async function streamClaudeCompletion(
     });
 
     return {
-        cancel: () => response_stream.abort(),
         [Symbol.asyncIterator]: () => stream[Symbol.asyncIterator](),
         finalizeConversation: async () => {
             const finalMessage = await response_stream.finalMessage();

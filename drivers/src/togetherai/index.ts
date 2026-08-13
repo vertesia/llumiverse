@@ -3,6 +3,7 @@ import {
     type EmbeddingResultItem,
     type EmbeddingsOptions,
     type EmbeddingsResult,
+    type ExecutionOptions,
     getModelCapabilities,
     ModelType,
     modelModalitiesToArray,
@@ -62,8 +63,12 @@ export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAI
         return preserveOpenAIChatCompletionsOriginalResponse(normalizeTogetherResponse(response), response);
     }
 
-    async _postChatCompletionStream(payload: OpenAIChatCompletionsPayload): Promise<ReadableStream> {
-        const stream = await this.service.chat.completions.create(toTogetherRequest(payload, true));
+    async _postChatCompletionStream(
+        payload: OpenAIChatCompletionsPayload,
+        _options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<ReadableStream> {
+        const stream = await this.service.chat.completions.create(toTogetherRequest(payload, true), { signal });
         return openAIChatCompletionsStreamToSSE(normalizeTogetherStream(stream), () => stream.controller.abort());
     }
 

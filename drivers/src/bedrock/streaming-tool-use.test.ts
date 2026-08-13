@@ -139,7 +139,6 @@ class FakeDriver extends AbstractDriver<DriverOptions, string> {
     async requestTextCompletionStream(_prompt: string, _options: ExecutionOptions): Promise<DriverCompletionStream> {
         const chunks = this.chunks;
         return {
-            cancel: () => {},
             async *[Symbol.asyncIterator]() {
                 for (const c of chunks) yield c;
             },
