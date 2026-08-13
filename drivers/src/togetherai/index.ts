@@ -68,7 +68,10 @@ export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAI
         _options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<ReadableStream> {
-        const stream = await this.service.chat.completions.create(toTogetherRequest(payload, true), { signal });
+        const request = toTogetherRequest(payload, true);
+        const stream = signal
+            ? await this.service.chat.completions.create(request, { signal })
+            : await this.service.chat.completions.create(request);
         return openAIChatCompletionsStreamToSSE(normalizeTogetherStream(stream), () => stream.controller.abort());
     }
 
