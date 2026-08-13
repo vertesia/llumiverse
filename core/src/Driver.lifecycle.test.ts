@@ -20,6 +20,9 @@ class LifecycleTestDriver extends AbstractDriver<DriverOptions, string> {
     models = Promise.resolve<AIModel[]>([]);
     embeddings = Promise.resolve<EmbeddingsResult>({ results: [], model: 'test-model' });
     imageModel = false;
+    streaming = true;
+    completionSignal?: AbortSignal;
+    waitForCompletionAbort = false;
     completionStreamSignal?: AbortSignal;
     completionStream: DriverCompletionStream = {
         async *[Symbol.asyncIterator]() {
@@ -34,7 +37,19 @@ class LifecycleTestDriver extends AbstractDriver<DriverOptions, string> {
         super(options);
     }
 
-    async requestTextCompletion(_prompt: string, _options: ExecutionOptions): Promise<Completion> {
+    async requestTextCompletion(
+        _prompt: string,
+        _options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion> {
+        this.completionSignal = signal;
+        if (this.waitForCompletionAbort) {
+            return new Promise((_resolve, reject) => {
+                signal?.addEventListener('abort', () => reject(signal.reason), {
+                    once: true,
+                });
+            });
+        }
         return this.completion;
     }
 
@@ -69,6 +84,10 @@ class LifecycleTestDriver extends AbstractDriver<DriverOptions, string> {
 
     protected override isImageModel(_model: string): boolean {
         return this.imageModel;
+    }
+
+    protected override canStream(): Promise<boolean> {
+        return Promise.resolve(this.streaming);
     }
 }
 
@@ -205,6 +224,19 @@ describe('AbstractDriver lifecycle', () => {
         await expect(read).resolves.toEqual({ done: true, value: undefined });
     });
 
+    it('cancels a pending fallback provider request', async () => {
+        const driver = new LifecycleTestDriver(vi.fn());
+        driver.streaming = false;
+        driver.waitForCompletionAbort = true;
+
+        const stream = await driver.stream(segments, options);
+        const read = stream[Symbol.asyncIterator]().next();
+        await stream.cancel();
+
+        expect(driver.completionSignal?.aborted).toBe(true);
+        await expect(read).resolves.toEqual({ done: true, value: undefined });
+    });
+
     it('rejects invalid stream start timeouts', () => {
         expect(() => new LifecycleTestDriver(vi.fn(), { streamStartTimeoutMs: 0 })).toThrow(
             'streamStartTimeoutMs must be a positive integer no greater than 2147483647',
@@ -227,24 +259,6 @@ describe('AbstractDriver lifecycle', () => {
         expect(cleanup).not.toHaveBeenCalled();
         resolveModels([]);
         await listing;
-        expect(cleanup).toHaveBeenCalledOnce();
-    });
-
-    it('holds destruction across work before an operation starts', async () => {
-        const cleanup = vi.fn();
-        const driver = new LifecycleTestDriver(cleanup);
-        let continueBorrow!: () => void;
-        const gate = new Promise<void>((resolve) => {
-            continueBorrow = resolve;
-        });
-        const borrowed = driver.withLease(async () => {
-            await gate;
-        });
-
-        driver.destroy();
-        expect(cleanup).not.toHaveBeenCalled();
-        continueBorrow();
-        await borrowed;
         expect(cleanup).toHaveBeenCalledOnce();
     });
 

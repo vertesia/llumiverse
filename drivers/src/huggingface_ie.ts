@@ -93,20 +93,23 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
         });
     }
 
-    async requestTextCompletion(prompt: string, options: ExecutionOptions) {
+    async requestTextCompletion(prompt: string, options: ExecutionOptions, signal?: AbortSignal) {
         if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== 'text-fallback') {
             this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
         options.model_options = options.model_options as TextFallbackOptions;
 
         const executor = await this.getExecutor(options.model);
-        const res = await executor.textGeneration({
+        const request = {
             inputs: prompt,
             parameters: {
                 temperature: options.model_options?.temperature,
                 max_new_tokens: options.model_options?.max_tokens,
             },
-        });
+        };
+        const res = signal
+            ? await executor.textGeneration(request, { signal })
+            : await executor.textGeneration(request);
 
         let finish_reason = res.details?.finish_reason as string;
         if (finish_reason === 'eos_token') {

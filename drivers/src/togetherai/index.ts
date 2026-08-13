@@ -57,9 +57,15 @@ export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAI
         });
     }
 
-    async _postChatCompletion(payload: OpenAIChatCompletionsPayload): Promise<OpenAIChatCompletionsResponse> {
+    async _postChatCompletion(
+        payload: OpenAIChatCompletionsPayload,
+        _options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<OpenAIChatCompletionsResponse> {
         const request = toTogetherRequest(payload, false);
-        const response = await this.service.chat.completions.create(request);
+        const response = signal
+            ? await this.service.chat.completions.create(request, { signal })
+            : await this.service.chat.completions.create(request);
         return preserveOpenAIChatCompletionsOriginalResponse(normalizeTogetherResponse(response), response);
     }
 

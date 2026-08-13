@@ -34,9 +34,6 @@ class CompletionStreamLease {
     }
 
     start(): void {
-        if (this.started) {
-            throw new Error('Completion stream can only be consumed once');
-        }
         this.started = true;
         clearTimeout(this.timer);
         if (this.cancelled) {
@@ -58,6 +55,64 @@ class CompletionStreamLease {
         clearTimeout(this.timer);
         this.releaseOperation();
         return true;
+    }
+}
+
+abstract class ManagedCompletionStream<PromptT> implements CompletionStream<PromptT> {
+    completion: ExecutionResponse<PromptT> | undefined;
+    protected readonly abortSignal: AbortSignal;
+    private readonly abortController = new AbortController();
+    private activeIterator?: AsyncGenerator<string, void, unknown>;
+    private iteratorCreated = false;
+    private readonly lease: CompletionStreamLease;
+
+    protected constructor(releaseOperation: () => void, streamStartTimeoutMs: number) {
+        this.abortSignal = this.abortController.signal;
+        this.lease = new CompletionStreamLease(releaseOperation, streamStartTimeoutMs);
+    }
+
+    [Symbol.asyncIterator](): AsyncIterator<string> {
+        if (this.iteratorCreated) {
+            throw new Error('Completion stream can only be consumed once');
+        }
+        this.iteratorCreated = true;
+        const iterator = this.iterateWithLease();
+        this.activeIterator = iterator;
+        let started = false;
+        return {
+            next: async () => {
+                if (!started) {
+                    this.lease.start();
+                    started = true;
+                }
+                return iterator.next();
+            },
+            return: async () => {
+                await this.cancel();
+                return { done: true, value: undefined };
+            },
+            throw: async (error?: unknown) => {
+                await this.cancel();
+                throw error;
+            },
+        };
+    }
+
+    async cancel(): Promise<void> {
+        if (this.lease.cancelPending()) return;
+        this.abortController.abort();
+        await this.activeIterator?.return?.();
+    }
+
+    protected abstract iterate(): AsyncGenerator<string, void, unknown>;
+
+    private async *iterateWithLease(): AsyncGenerator<string, void, unknown> {
+        try {
+            yield* this.iterate();
+        } finally {
+            this.activeIterator = undefined;
+            this.lease.release();
+        }
     }
 }
 
@@ -126,63 +181,21 @@ export function accumulateToolUseChunk(
     }
 }
 
-export class DefaultCompletionStream<PromptT = unknown> implements CompletionStream<PromptT> {
+export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletionStream<PromptT> {
     chunks: number; // Counter for number of chunks instead of storing strings
-    completion: ExecutionResponse<PromptT> | undefined;
-    private readonly abortController = new AbortController();
-    private activeIterator?: AsyncGenerator<string, void, unknown>;
-    private readonly lease: CompletionStreamLease;
 
     constructor(
-        public driver: AbstractDriver<DriverOptions, PromptT>,
-        public prompt: PromptT,
-        public options: ExecutionOptions,
+        protected readonly driver: AbstractDriver<DriverOptions, PromptT>,
+        protected readonly prompt: PromptT,
+        protected readonly options: ExecutionOptions,
         releaseOperation: () => void = () => {},
         streamStartTimeoutMs = DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS,
     ) {
+        super(releaseOperation, streamStartTimeoutMs);
         this.chunks = 0;
-        this.lease = new CompletionStreamLease(releaseOperation, streamStartTimeoutMs);
     }
 
-    [Symbol.asyncIterator](): AsyncIterator<string> {
-        const iterator = this.iterateWithLease();
-        this.activeIterator = iterator;
-        let started = false;
-        return {
-            next: async () => {
-                if (!started) {
-                    this.lease.start();
-                    started = true;
-                }
-                return iterator.next();
-            },
-            return: async () => {
-                await this.cancel();
-                return { done: true, value: undefined };
-            },
-            throw: async (error?: unknown) => {
-                await this.cancel();
-                throw error;
-            },
-        };
-    }
-
-    async cancel(): Promise<void> {
-        if (this.lease.cancelPending()) return;
-        this.abortController.abort();
-        await this.activeIterator?.return?.();
-    }
-
-    private async *iterateWithLease() {
-        try {
-            yield* this.iterate();
-        } finally {
-            this.activeIterator = undefined;
-            this.lease.release();
-        }
-    }
-
-    private async *iterate() {
+    protected async *iterate() {
         // reset state
         this.completion = undefined;
         this.chunks = 0;
@@ -206,9 +219,9 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
 
         try {
             stream = await httpScope.run(() =>
-                this.driver.requestTextCompletionStream(this.prompt, this.options, this.abortController.signal),
+                this.driver.requestTextCompletionStream(this.prompt, this.options, this.abortSignal),
             );
-            if (this.abortController.signal.aborted) {
+            if (this.abortSignal.aborted) {
                 return;
             }
             const iterator = stream[Symbol.asyncIterator]();
@@ -341,6 +354,7 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
                 }
             }
         } catch (error: unknown) {
+            if (this.abortSignal.aborted) return;
             // Don't wrap if already a LlumiverseError
             if (LlumiverseError.isLlumiverseError(error)) {
                 throw error;
@@ -447,43 +461,25 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
     }
 }
 
-export class FallbackCompletionStream<PromptT = unknown> implements CompletionStream<PromptT> {
-    completion: ExecutionResponse<PromptT> | undefined;
-    private readonly lease: CompletionStreamLease;
-
+export class FallbackCompletionStream<PromptT = unknown> extends ManagedCompletionStream<PromptT> {
     constructor(
-        public driver: AbstractDriver<DriverOptions, PromptT>,
-        public prompt: PromptT,
-        public options: ExecutionOptions,
+        protected readonly driver: AbstractDriver<DriverOptions, PromptT>,
+        protected readonly prompt: PromptT,
+        protected readonly options: ExecutionOptions,
         releaseOperation: () => void = () => {},
         streamStartTimeoutMs = DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS,
     ) {
-        this.lease = new CompletionStreamLease(releaseOperation, streamStartTimeoutMs);
+        super(releaseOperation, streamStartTimeoutMs);
     }
 
-    async *[Symbol.asyncIterator]() {
-        this.lease.start();
-        try {
-            yield* this.iterate();
-        } finally {
-            this.lease.release();
-        }
-    }
-
-    async cancel(): Promise<void> {
-        if (!this.lease.cancelPending()) {
-            throw new Error('An active completion stream must be cancelled through its iterator');
-        }
-    }
-
-    private async *iterate() {
+    protected async *iterate() {
         // reset state
         this.completion = undefined;
         this.driver.logger.debug(
             `[${this.driver.provider}] Streaming is not supported, falling back to blocking execution`,
         );
         try {
-            const completion = await this.driver._execute(this.prompt, this.options);
+            const completion = await this.driver._execute(this.prompt, this.options, this.abortSignal);
             // For fallback streaming, yield the text content but keep the original completion
             let previousResultType: CompletionResult['type'] | undefined;
             const content = completion.result
@@ -512,6 +508,7 @@ export class FallbackCompletionStream<PromptT = unknown> implements CompletionSt
             yield content;
             this.completion = completion; // Return the original completion with untouched CompletionResult[]
         } catch (error: unknown) {
+            if (this.abortSignal.aborted) return;
             // Don't wrap if already a LlumiverseError
             if (LlumiverseError.isLlumiverseError(error)) {
                 throw error;

@@ -81,9 +81,12 @@ export class GroqDriver extends OpenAIChatCompletionsDriverBase<GroqDriverOption
     async _postChatCompletion(
         payload: OpenAIChatCompletionsPayload,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<OpenAIChatCompletionsResponse> {
         const request = toGroqRequest(payload, options, false);
-        const response = await this.client.chat.completions.create(request);
+        const response = signal
+            ? await this.client.chat.completions.create(request, { signal })
+            : await this.client.chat.completions.create(request);
         return preserveOpenAIChatCompletionsOriginalResponse(normalizeGroqResponse(response), response);
     }
 

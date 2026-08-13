@@ -380,6 +380,7 @@ export class ImagenModelDefinition {
         driver: VertexAIDriver,
         prompt: ImagenPrompt,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<Completion> {
         if (
             options.model_options?._option_id !== undefined &&
@@ -429,7 +430,18 @@ export class ImagenModelDefinition {
         const client = await driver.getImagenClient();
 
         // Predict request
-        const [response] = await client.predict(request, { timeout: 120000 * numberOfImages }); //Extended timeout for image generation
+        const prediction = client.predict(request, { timeout: 120000 * numberOfImages }) as Promise<
+            [protos.google.cloud.aiplatform.v1.IPredictResponse, unknown, unknown]
+        > & { cancel(): void };
+        const cancel = () => prediction.cancel();
+        if (signal?.aborted) cancel();
+        else signal?.addEventListener('abort', cancel, { once: true });
+        let response: protos.google.cloud.aiplatform.v1.IPredictResponse;
+        try {
+            [response] = await prediction;
+        } finally {
+            signal?.removeEventListener('abort', cancel);
+        }
         const predictions = response.predictions;
 
         if (!predictions) {

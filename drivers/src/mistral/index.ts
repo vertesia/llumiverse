@@ -88,11 +88,13 @@ export class MistralAIDriver extends OpenAICompatibleDriverBase<MistralAIDriverO
     async requestTextCompletion(
         prompt: MistralPrompt | OpenAIChatCompletionsPrompt,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<Completion> {
         const conversation = prepareMistralConversation(options.conversation, prompt);
-        const response = await this.client.chat.complete(
-            buildMistralRequest(conversation, options, false, this.options.defaultMaxTokens),
-        );
+        const request = buildMistralRequest(conversation, options, false, this.options.defaultMaxTokens);
+        const response = signal
+            ? await this.client.chat.complete(request, { signal })
+            : await this.client.chat.complete(request);
         const choice = response.choices[0];
         const message = choice?.message;
         if (!message) throw new Error('Mistral response is not valid: no assistant message');

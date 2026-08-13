@@ -1135,10 +1135,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return processedConversation as ConverseRequest;
     }
 
-    async requestTextCompletion(prompt: BedrockPrompt, options: ExecutionOptions): Promise<Completion> {
+    async requestTextCompletion(
+        prompt: BedrockPrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion> {
         // Handle Twelvelabs Pegasus models
         if (options.model.includes('twelvelabs.pegasus')) {
-            return this.requestTwelvelabsPegasusCompletion(prompt as TwelvelabsPegasusRequest, options);
+            return this.requestTwelvelabsPegasusCompletion(prompt as TwelvelabsPegasusRequest, options, signal);
         }
 
         // Handle other Bedrock models that use Converse API
@@ -1153,9 +1157,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         let res: ConverseResponse;
         try {
-            res = await executorScope.executor.converse({
-                ...payload,
-            });
+            res = signal
+                ? await executorScope.executor.converse({ ...payload }, { abortSignal: signal })
+                : await executorScope.executor.converse({ ...payload });
         } finally {
             executorScope.close();
         }
@@ -1193,18 +1197,22 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     private async requestTwelvelabsPegasusCompletion(
         prompt: TwelvelabsPegasusRequest,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<Completion> {
         const executorScope = this.getScopedNonStreamingExecutor(options);
 
         let res: InvokeModelCommandOutput;
         try {
-            res = await executorScope.executor.invokeModel({
+            const request = {
                 modelId: options.model,
                 contentType: 'application/json',
                 accept: 'application/json',
                 body: JSON.stringify(prompt),
                 serviceTier: getBedrockServiceTier(options.model_options),
-            });
+            };
+            res = signal
+                ? await executorScope.executor.invokeModel(request, { abortSignal: signal })
+                : await executorScope.executor.invokeModel(request);
         } finally {
             executorScope.close();
         }

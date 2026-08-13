@@ -57,12 +57,16 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
         return formatClaudeDebugPrompt(prompt);
     }
 
-    async requestTextCompletion(prompt: ClaudePrompt, options: ExecutionOptions): Promise<Completion> {
+    async requestTextCompletion(
+        prompt: ClaudePrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion> {
         const model_options = options.model_options as AnthropicClaudeOptions | undefined;
         if (model_options?._option_id !== undefined && model_options?._option_id !== 'anthropic-claude') {
             this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
-        return executeClaudeCompletion(this.client, prompt, options, this.logger, this.provider);
+        return executeClaudeCompletion(this.client, prompt, options, this.logger, this.provider, signal);
     }
 
     async requestTextCompletionStream(

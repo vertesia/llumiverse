@@ -288,6 +288,7 @@ export class OpenAIResponsesProtocol {
         driver: OpenAIResponsesDriverBase,
         prompt: ResponseInputItem[],
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<Completion> {
         if (
             options.model_options?._option_id !== undefined &&
@@ -343,7 +344,7 @@ export class OpenAIResponsesProtocol {
             driver.getResponsesRequestModel(options.model),
             promptCacheKey,
         );
-        const res = await driver.service.responses.create({
+        const request = {
             stream: false,
             model: driver.getResponsesRequestModel(options.model),
             prompt_cache_key: promptCacheKey,
@@ -354,7 +355,7 @@ export class OpenAIResponsesProtocol {
             include: reasoning ? ['reasoning.encrypted_content'] : undefined,
             temperature: isReasoningModel ? undefined : model_options?.temperature,
             top_p: isReasoningModel ? undefined : model_options?.top_p,
-            max_output_tokens: model_options?.max_tokens, //TODO: use max_tokens for older models, currently relying on OpenAI to handle it
+            max_output_tokens: model_options?.max_tokens,
             service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
             tools: useTools ? toolDefs : undefined,
             text: buildResponseTextConfig(
@@ -363,7 +364,10 @@ export class OpenAIResponsesProtocol {
                 model_options?.verbosity,
                 options.prompt_cache_schema_suffix === true && !!options.result_schema,
             ),
-        });
+        } as OpenAI.Responses.ResponseCreateParamsNonStreaming;
+        const res = signal
+            ? await driver.service.responses.create(request, { signal })
+            : await driver.service.responses.create(request);
 
         const completion = driver.extractDataFromResponse(options, res);
         if (options.include_original_response) {
@@ -444,8 +448,12 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         return this.responsesProtocol.requestTextCompletionStream(this, prompt, options, signal);
     }
 
-    requestTextCompletion(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<Completion> {
-        return this.responsesProtocol.requestTextCompletion(this, prompt, options);
+    requestTextCompletion(
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion> {
+        return this.responsesProtocol.requestTextCompletion(this, prompt, options, signal);
     }
 
     protected canStream(_options: ExecutionOptions): Promise<boolean> {
@@ -685,7 +693,11 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
      * Request image generation from standalone Images API
      * Supports: DALL-E 2, DALL-E 3, GPT-image models (for edit/variation)
      */
-    async requestImageGeneration(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<Completion> {
+    async requestImageGeneration(
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion> {
         this.logger.debug(`[${this.provider}] Generating image with model ${options.model}`);
 
         const model_options = options.model_options as OpenAiDalleOptions | OpenAiGptImageOptions | undefined;
@@ -730,7 +742,9 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
                 generateParams.n = 1;
             }
 
-            const response = await this.service.images.generate(generateParams);
+            const response = signal
+                ? await this.service.images.generate(generateParams, { signal })
+                : await this.service.images.generate(generateParams);
 
             // Convert response to CompletionResults
             const results: CompletionResult[] = [];

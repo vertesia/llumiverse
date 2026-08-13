@@ -90,25 +90,33 @@ export function createAgentBackedFetch(agent: Agent): typeof fetch {
 
 export interface DriverHttpAgentScope {
     run<T>(callback: () => T): T;
+    abort(): Promise<void>;
     close(): Promise<void>;
 }
 
 const NOOP_HTTP_AGENT_SCOPE: DriverHttpAgentScope = {
     run: <T>(callback: () => T): T => callback(),
+    abort: () => Promise.resolve(),
     close: () => Promise.resolve(),
 };
 
 export function createDriverHttpAgentScope(
     defaults?: HttpTimeoutOptions,
     override?: HttpTimeoutOptions,
+    force = false,
 ): DriverHttpAgentScope {
-    if (!override) {
+    if (!override && !force) {
         return NOOP_HTTP_AGENT_SCOPE;
     }
 
     const agent = createDriverHttpAgent(mergeDriverHttpTimeoutOptions(defaults, override));
     return {
         run: <T>(callback: () => T): T => scopedHttpAgent.run(agent, callback),
+        abort: async () => {
+            await agent.destroy().catch(() => {
+                /* cancellation best-effort */
+            });
+        },
         close: async () => {
             await agent.close().catch(() => {
                 /* shutdown best-effort */

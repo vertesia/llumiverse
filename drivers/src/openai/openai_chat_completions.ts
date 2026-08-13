@@ -981,6 +981,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         driver: DriverT,
         prompt: OpenAIChatCompletionsPrompt,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<Completion> {
         let conversation = updateOpenAIChatCompletionsConversation(
             options.conversation as OpenAIChatCompletionsPrompt,
@@ -990,7 +991,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         const includeThoughts =
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
         const payload = this.buildPayload(conversation, options, false);
-        const result = await this.postChatCompletion(driver, payload, options);
+        const result = await this.postChatCompletion(driver, payload, options, signal);
 
         const choice = result?.choices?.[0];
         const message = choice?.message;
@@ -1200,6 +1201,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         driver: DriverT,
         payload: OpenAIChatCompletionsPayload,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<OpenAIChatCompletionsResponse>;
 
     protected abstract postChatCompletionStream(
@@ -1221,6 +1223,7 @@ interface OpenAIChatCompletionsTransportDriver {
     _postChatCompletion(
         payload: OpenAIChatCompletionsPayload,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<OpenAIChatCompletionsResponse>;
     _postChatCompletionStream(
         payload: OpenAIChatCompletionsPayload,
@@ -1272,8 +1275,9 @@ class DriverChatCompletionsProtocol extends OpenAIChatCompletionsProtocol<OpenAI
         driver: OpenAIChatCompletionsTransportDriver,
         payload: OpenAIChatCompletionsPayload,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<OpenAIChatCompletionsResponse> {
-        return driver._postChatCompletion(payload, options);
+        return driver._postChatCompletion(payload, options, signal);
     }
 
     protected async postChatCompletionStream(
@@ -1415,8 +1419,12 @@ export abstract class OpenAIChatCompletionsDriverBase<
         return this.chatCompletionsProtocol.createPrompt(this, segments, options);
     }
 
-    requestTextCompletion(prompt: OpenAIChatCompletionsPrompt, options: ExecutionOptions): Promise<Completion> {
-        return this.chatCompletionsProtocol.requestTextCompletion(this, prompt, options);
+    requestTextCompletion(
+        prompt: OpenAIChatCompletionsPrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion> {
+        return this.chatCompletionsProtocol.requestTextCompletion(this, prompt, options, signal);
     }
 
     requestTextCompletionStream(
@@ -1459,8 +1467,15 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
         });
     }
 
-    async _postChatCompletion(payload: OpenAIChatCompletionsPayload): Promise<OpenAIChatCompletionsResponse> {
-        const response = await this.service.chat.completions.create(toOpenAINonStreamingPayload(payload));
+    async _postChatCompletion(
+        payload: OpenAIChatCompletionsPayload,
+        _options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<OpenAIChatCompletionsResponse> {
+        const request = toOpenAINonStreamingPayload(payload);
+        const response = signal
+            ? await this.service.chat.completions.create(request, { signal })
+            : await this.service.chat.completions.create(request);
         return preserveOpenAIChatCompletionsOriginalResponse(
             normalizeOpenAIChatCompletionsResponse(response),
             response,

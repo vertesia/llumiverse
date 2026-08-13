@@ -92,9 +92,14 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
         this.service = service;
     }
 
-    async _postChatCompletion(payload: OpenAIChatCompletionsPayload): Promise<OpenAIChatCompletionsResponse> {
+    async _postChatCompletion(
+        payload: OpenAIChatCompletionsPayload,
+        _options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<OpenAIChatCompletionsResponse> {
         const response = await this.service.path('/chat/completions').post({
             body: toAzureInferenceRequest(payload, false),
+            ...(signal ? { abortSignal: signal } : {}),
         });
         if (response.status !== '200') {
             throw new AzureFoundryHTTPError(
@@ -239,18 +244,23 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         return formatOpenAIDebugPrompt(prompt);
     }
 
-    async requestTextCompletion(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<Completion> {
+    async requestTextCompletion(
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion> {
         const { deploymentName } = parseAzureFoundryModelId(options.model);
         const isOpenAI = await this.isOpenAIDeployment(options.model);
 
         if (isOpenAI) {
             this.openAIProtocolDriver ??= new AzureFoundryOpenAIProtocolDriver(this.service.getOpenAIClient());
-            return this.openAIProtocolDriver.requestTextCompletion(prompt, options);
+            return this.openAIProtocolDriver.requestTextCompletion(prompt, options, signal);
         }
         const chatPrompt = toAzureFoundryChatPrompt(prompt);
         return this.inferenceProtocolDriver.requestTextCompletion(
             chatPrompt,
             toAzureFoundryChatOptions(options, deploymentName),
+            signal,
         );
     }
 

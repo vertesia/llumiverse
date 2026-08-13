@@ -72,6 +72,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         driver: VertexAIDriver,
         prompt: ClaudePrompt,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<Completion> {
         const { region, options: resolvedOptions } = resolveVertexAIModelPath(options);
         const client = await driver.getAnthropicClient(region, resolvedOptions.httpTimeout);
@@ -83,7 +84,7 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         ) {
             driver.logger.debug({ options: resolvedOptions.model_options }, 'Unexpected option id');
         }
-        return executeClaudeCompletion(client, prompt, resolvedOptions, driver.logger, driver.provider);
+        return executeClaudeCompletion(client, prompt, resolvedOptions, driver.logger, driver.provider, signal);
     }
 
     async requestTextCompletionStream(

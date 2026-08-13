@@ -362,8 +362,12 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return formatImagenDebugPrompt(prompt);
     }
 
-    async requestTextCompletion(prompt: VertexAIPrompt, options: ExecutionOptions): Promise<Completion> {
-        return getModelDefinition(options.model).requestTextCompletion(this, prompt, options);
+    async requestTextCompletion(
+        prompt: VertexAIPrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion> {
+        return getModelDefinition(options.model).requestTextCompletion(this, prompt, options, signal);
     }
     async requestTextCompletionStream(
         prompt: VertexAIPrompt,
@@ -597,10 +601,14 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return processedConversation;
     }
 
-    async requestImageGeneration(_prompt: ImagenPrompt, _options: ExecutionOptions): Promise<Completion> {
+    async requestImageGeneration(
+        _prompt: ImagenPrompt,
+        _options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion> {
         const splits = _options.model.split('/');
         const modelName = trimModelName(splits[splits.length - 1]);
-        return new ImagenModelDefinition(modelName).requestImageGeneration(this, _prompt, _options);
+        return new ImagenModelDefinition(modelName).requestImageGeneration(this, _prompt, _options, signal);
     }
 
     async getGenAIModelsArray(client: GoogleGenAI): Promise<Model[]> {

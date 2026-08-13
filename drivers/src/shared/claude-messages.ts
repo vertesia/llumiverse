@@ -959,6 +959,7 @@ export async function executeClaudeCompletion(
     options: ExecutionOptions,
     logger?: Logger,
     provider = 'anthropic',
+    signal?: AbortSignal,
 ): Promise<Completion> {
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
 
@@ -966,7 +967,11 @@ export async function executeClaudeCompletion(
 
     const { payload, requestOptions } = getClaudePayload(options, conversation);
 
-    const responseStream = await streamClaudeMessages(client, payload as MessageStreamParams, requestOptions);
+    const responseStream = await streamClaudeMessages(
+        client,
+        payload as MessageStreamParams,
+        signal ? { ...requestOptions, signal } : requestOptions,
+    );
     const result = await responseStream.finalMessage();
     logClaudeTruncation(logger, result.stop_reason, { provider, model: options.model });
 

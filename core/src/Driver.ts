@@ -65,7 +65,11 @@ export interface Driver<PromptT = unknown> {
 
     createPrompt(segments: PromptSegment[], opts: ExecutionOptions): Promise<PromptT>;
 
-    execute(segments: PromptSegment[], options: ExecutionOptions): Promise<ExecutionResponse<PromptT>>;
+    execute(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<ExecutionResponse<PromptT>>;
 
     // by default no stream is supported. we block and we return all at once
     //stream(segments: PromptSegment[], options: ExecutionOptions): Promise<StreamingExecutionResponse<PromptT>>;
@@ -95,9 +99,6 @@ export interface Driver<PromptT = unknown> {
      */
     generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult>;
 
-    /** Hold this driver across application work that precedes a provider operation. */
-    withLease<T>(callback: (driver: this) => T | Promise<T>): Promise<T>;
-
     /** Request cleanup after all active operations and borrowed scopes finish. */
     destroy(): void;
 }
@@ -106,8 +107,7 @@ type AsyncDriverOperationName = {
     [Name in keyof Driver]-?: Driver[Name] extends (...args: never[]) => Promise<unknown> ? Name : never;
 }[keyof Driver];
 
-type LifecycleNeutralOperationName = 'createPrompt' | 'createTrainingPrompt' | 'withLease';
-type LifecycleGuardedOperationName = Exclude<AsyncDriverOperationName, LifecycleNeutralOperationName>;
+type LifecycleGuardedOperationName = AsyncDriverOperationName;
 
 const lifecycleGuardedOperationNames = [
     'execute',
@@ -119,6 +119,8 @@ const lifecycleGuardedOperationNames = [
     'listTrainableModels',
     'validateConnection',
     'generateEmbeddings',
+    'createPrompt',
+    'createTrainingPrompt',
 ] as const satisfies readonly LifecycleGuardedOperationName[];
 
 type MissingLifecycleGuard = Exclude<LifecycleGuardedOperationName, (typeof lifecycleGuardedOperationNames)[number]>;
@@ -182,10 +184,6 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         }
     }
 
-    async withLease<T>(callback: (driver: this) => T | Promise<T>): Promise<T> {
-        return this.runOperation(() => Promise.resolve(callback(this)));
-    }
-
     /**
      * Lazily-created undici `Agent` driven by `options.httpTimeout`.
      * Pools sockets for the lifetime of the driver. Subclasses can
@@ -216,8 +214,11 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         return this._driverFetch;
     }
 
-    public createExecutionHttpAgentScope(options: Pick<ExecutionOptions, 'httpTimeout'>): DriverHttpAgentScope {
-        return createDriverHttpAgentScope(this.options.httpTimeout, options.httpTimeout);
+    public createExecutionHttpAgentScope(
+        options: Pick<ExecutionOptions, 'httpTimeout'>,
+        force = false,
+    ): DriverHttpAgentScope {
+        return createDriverHttpAgentScope(this.options.httpTimeout, options.httpTimeout, force);
     }
 
     async createTrainingPrompt(options: TrainingPromptOptions): Promise<string> {
@@ -263,11 +264,15 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         }
     }
 
-    async execute(segments: PromptSegment[], options: ExecutionOptions): Promise<ExecutionResponse<PromptT>> {
+    async execute(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<ExecutionResponse<PromptT>> {
         const release = this.acquireOperation();
         try {
             const prompt = await this.createPrompt(segments, options);
-            return await this._execute(prompt, options).catch((error: unknown) => {
+            return await this._execute(prompt, options, signal).catch((error: unknown) => {
                 // Don't wrap if already a LlumiverseError
                 if (LlumiverseError.isLlumiverseError(error)) {
                     throw error;
@@ -283,8 +288,15 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         }
     }
 
-    async _execute(prompt: PromptT, options: ExecutionOptions): Promise<ExecutionResponse<PromptT>> {
-        const httpScope = this.createExecutionHttpAgentScope(options);
+    async _execute(
+        prompt: PromptT,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<ExecutionResponse<PromptT>> {
+        const httpScope = this.createExecutionHttpAgentScope(options, signal !== undefined);
+        const abort = () => void httpScope.abort();
+        if (signal?.aborted) abort();
+        else signal?.addEventListener('abort', abort, { once: true });
         try {
             return await httpScope.run(async () => {
                 try {
@@ -293,10 +305,10 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
                     if (this.isImageModel(options.model)) {
                         this.logger.debug(`[${this.provider}] Executing prompt on ${options.model}, image pathway.`);
-                        result = await this.requestImageGeneration(prompt, options);
+                        result = await this.requestImageGeneration(prompt, options, signal);
                     } else {
                         this.logger.debug(`[${this.provider}] Executing prompt on ${options.model}, text pathway.`);
-                        result = await this.requestTextCompletion(prompt, options);
+                        result = await this.requestTextCompletion(prompt, options, signal);
                         this.validateResult(result, options);
                     }
 
@@ -323,6 +335,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
                 }
             });
         } finally {
+            signal?.removeEventListener('abort', abort);
             await httpScope.close();
         }
     }
@@ -507,7 +520,11 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         return undefined;
     }
 
-    abstract requestTextCompletion(prompt: PromptT, options: ExecutionOptions): Promise<Completion>;
+    abstract requestTextCompletion(
+        prompt: PromptT,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion>;
 
     abstract requestTextCompletionStream(
         prompt: PromptT,
@@ -515,7 +532,11 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream>;
 
-    async requestImageGeneration(_prompt: PromptT, _options: ExecutionOptions): Promise<Completion> {
+    async requestImageGeneration(
+        _prompt: PromptT,
+        _options: ExecutionOptions,
+        _signal?: AbortSignal,
+    ): Promise<Completion> {
         throw new Error('Image generation not implemented.');
         //Cannot be made abstract, as abstract methods are required in the derived class
     }
