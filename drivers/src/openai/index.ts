@@ -254,30 +254,30 @@ export class OpenAIResponsesProtocol {
             driver.getResponsesRequestModel(options.model),
             promptCacheKey,
         );
-        const stream = await driver.service.responses.create(
-            {
-                stream: true,
-                model: driver.getResponsesRequestModel(options.model),
-                prompt_cache_key: promptCacheKey,
-                prompt_cache_retention: promptCacheRetention,
-                prompt_cache_options: promptCache.options,
-                input: promptCache.input,
-                reasoning,
-                include: reasoning ? ['reasoning.encrypted_content'] : undefined,
-                temperature: isReasoningModel ? undefined : model_options?.temperature,
-                top_p: isReasoningModel ? undefined : model_options?.top_p,
-                max_output_tokens: model_options?.max_tokens,
-                service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
-                tools: useTools ? toolDefs : undefined,
-                text: buildResponseTextConfig(
-                    parsedSchema,
-                    strictMode,
-                    model_options?.verbosity,
-                    options.prompt_cache_schema_suffix === true && !!options.result_schema,
-                ),
-            },
-            { signal },
-        );
+        const request: OpenAI.Responses.ResponseCreateParamsStreaming = {
+            stream: true,
+            model: driver.getResponsesRequestModel(options.model),
+            prompt_cache_key: promptCacheKey,
+            prompt_cache_retention: promptCacheRetention,
+            prompt_cache_options: promptCache.options,
+            input: promptCache.input,
+            reasoning,
+            include: reasoning ? ['reasoning.encrypted_content'] : undefined,
+            temperature: isReasoningModel ? undefined : model_options?.temperature,
+            top_p: isReasoningModel ? undefined : model_options?.top_p,
+            max_output_tokens: model_options?.max_tokens,
+            service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
+            tools: useTools ? toolDefs : undefined,
+            text: buildResponseTextConfig(
+                parsedSchema,
+                strictMode,
+                model_options?.verbosity,
+                options.prompt_cache_schema_suffix === true && !!options.result_schema,
+            ),
+        };
+        const stream = signal
+            ? await driver.service.responses.create(request, { signal })
+            : await driver.service.responses.create(request);
 
         return mapResponseStream(stream, includeThoughts, (response) =>
             finalizeOpenAIResponsesConversation(conversation, response.output, options),

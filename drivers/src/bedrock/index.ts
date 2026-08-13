@@ -1247,16 +1247,18 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const controller = createLinkedAbortController(signal);
 
         try {
-            const res = await executorScope.executor.invokeModelWithResponseStream(
-                {
-                    modelId: options.model,
-                    contentType: 'application/json',
-                    accept: 'application/json',
-                    body: JSON.stringify(prompt),
-                    serviceTier: getBedrockServiceTier(options.model_options),
-                },
-                { abortSignal: controller.signal },
-            );
+            const request = {
+                modelId: options.model,
+                contentType: 'application/json',
+                accept: 'application/json',
+                body: JSON.stringify(prompt),
+                serviceTier: getBedrockServiceTier(options.model_options),
+            };
+            const res = signal
+                ? await executorScope.executor.invokeModelWithResponseStream(request, {
+                      abortSignal: controller.signal,
+                  })
+                : await executorScope.executor.invokeModelWithResponseStream(request);
 
             if (!res.body) {
                 throw new Error('[Bedrock] Stream not found in response');
@@ -1332,8 +1334,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const payload = this.preparePayload(conversation, options);
         const executorScope = this.getScopedExecutor(options);
         const controller = createLinkedAbortController(signal);
-        return executorScope.executor
-            .converseStream({ ...payload }, { abortSignal: controller.signal })
+        const response = signal
+            ? executorScope.executor.converseStream({ ...payload }, { abortSignal: controller.signal })
+            : executorScope.executor.converseStream({ ...payload });
+        return response
             .then((res) => {
                 const stream = res.stream;
 
