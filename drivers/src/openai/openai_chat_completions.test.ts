@@ -53,19 +53,22 @@ describe('openAIChatCompletionsStreamToSSE', () => {
         await expect(reader.read()).rejects.toBe(providerError);
     });
 
-    it('returns the provider iterator when the consumer cancels after partial output', async () => {
-        let resolvePendingRead!: (result: IteratorResult<typeof streamChunk>) => void;
-        const iterator = {
-            next: vi
-                .fn()
-                .mockResolvedValueOnce({ done: false, value: streamChunk })
-                .mockReturnValueOnce(new Promise((resolve) => (resolvePendingRead = resolve))),
-            return: vi.fn().mockResolvedValue({ done: true, value: undefined }),
-        };
+    it('aborts a pending provider read when the consumer cancels', async () => {
+        const abortController = new AbortController();
         const providerStream = {
-            [Symbol.asyncIterator]: () => iterator,
+            async *[Symbol.asyncIterator]() {
+                yield streamChunk;
+                await new Promise<never>((_resolve, reject) => {
+                    abortController.signal.addEventListener(
+                        'abort',
+                        () => reject(new DOMException('provider request aborted', 'AbortError')),
+                        { once: true },
+                    );
+                });
+            },
         };
-        const reader = openAIChatCompletionsStreamToSSE(providerStream).getReader();
+        const normalized = normalizeOpenAIChatCompletionsStream(providerStream);
+        const reader = openAIChatCompletionsStreamToSSE(normalized, () => abortController.abort()).getReader();
 
         await expect(reader.read()).resolves.toEqual({
             done: false,
@@ -73,10 +76,7 @@ describe('openAIChatCompletionsStreamToSSE', () => {
         });
         await reader.cancel('consumer stopped');
 
-        expect(iterator.return).toHaveBeenCalledOnce();
-        resolvePendingRead({ done: false, value: streamChunk });
-        await Promise.resolve();
-        expect(iterator.next).toHaveBeenCalledTimes(2);
+        expect(abortController.signal.aborted).toBe(true);
     });
 });
 

@@ -87,16 +87,16 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
         public driver: AbstractDriver<DriverOptions, PromptT>,
         public prompt: PromptT,
         public options: ExecutionOptions,
+        private readonly releaseOperation: () => void = () => {},
     ) {
         this.chunks = 0;
     }
 
     async *[Symbol.asyncIterator]() {
-        const release = this.driver.acquireOperation();
         try {
             yield* this.iterate();
         } finally {
-            release();
+            this.releaseOperation();
         }
     }
 
@@ -367,14 +367,14 @@ export class FallbackCompletionStream<PromptT = unknown> implements CompletionSt
         public driver: AbstractDriver<DriverOptions, PromptT>,
         public prompt: PromptT,
         public options: ExecutionOptions,
+        private readonly releaseOperation: () => void = () => {},
     ) {}
 
     async *[Symbol.asyncIterator]() {
-        const release = this.driver.acquireOperation();
         try {
             yield* this.iterate();
         } finally {
-            release();
+            this.releaseOperation();
         }
     }
 

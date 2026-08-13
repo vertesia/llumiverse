@@ -17,6 +17,8 @@ class LifecycleTestDriver extends AbstractDriver<DriverOptions, string> {
     provider = 'lifecycle-test';
     completion = Promise.resolve<Completion>({ result: [{ type: 'text', value: 'done' }] });
     imageCompletion = Promise.resolve<Completion>({ result: [{ type: 'image', value: 'image-data' }] });
+    models = Promise.resolve<AIModel[]>([]);
+    embeddings = Promise.resolve<EmbeddingsResult>({ results: [], model: 'test-model' });
     imageModel = false;
     completionStream: DriverCompletionStream = (async function* () {
         yield { result: [{ type: 'text', value: 'first' }] } satisfies CompletionChunkObject;
@@ -39,7 +41,7 @@ class LifecycleTestDriver extends AbstractDriver<DriverOptions, string> {
     }
 
     async listModels(_params?: ModelSearchPayload): Promise<AIModel[]> {
-        return [];
+        return this.models;
     }
 
     async validateConnection(): Promise<boolean> {
@@ -47,7 +49,7 @@ class LifecycleTestDriver extends AbstractDriver<DriverOptions, string> {
     }
 
     async generateEmbeddings(_options: EmbeddingsOptions): Promise<EmbeddingsResult> {
-        throw new Error('Not implemented');
+        return this.embeddings;
     }
 
     protected override destroyProviderResources(): void {
@@ -116,7 +118,57 @@ describe('AbstractDriver lifecycle', () => {
         expect(cleanup).toHaveBeenCalledOnce();
     });
 
-    it('destroys immediately when idle and only once', () => {
+    it('holds the stream lease between creation and delayed consumption', async () => {
+        const cleanup = vi.fn();
+        const driver = new LifecycleTestDriver(cleanup);
+
+        const stream = await driver.stream(segments, options);
+        driver.destroy();
+
+        expect(cleanup).not.toHaveBeenCalled();
+        const chunks: string[] = [];
+        for await (const chunk of stream) {
+            chunks.push(chunk);
+        }
+        expect(chunks).toEqual(['first']);
+        expect(cleanup).toHaveBeenCalledOnce();
+    });
+
+    it('defers destruction until model listing finishes', async () => {
+        let resolveModels!: (models: AIModel[]) => void;
+        const cleanup = vi.fn();
+        const driver = new LifecycleTestDriver(cleanup);
+        driver.models = new Promise((resolve) => {
+            resolveModels = resolve;
+        });
+
+        const listing = driver.listModels();
+        driver.destroy();
+
+        expect(cleanup).not.toHaveBeenCalled();
+        resolveModels([]);
+        await listing;
+        expect(cleanup).toHaveBeenCalledOnce();
+    });
+
+    it('defers destruction until embedding generation finishes', async () => {
+        let resolveEmbeddings!: (result: EmbeddingsResult) => void;
+        const cleanup = vi.fn();
+        const driver = new LifecycleTestDriver(cleanup);
+        driver.embeddings = new Promise((resolve) => {
+            resolveEmbeddings = resolve;
+        });
+
+        const generation = driver.generateEmbeddings({ inputs: [{ type: 'text', text: 'hello' }] });
+        driver.destroy();
+
+        expect(cleanup).not.toHaveBeenCalled();
+        resolveEmbeddings({ results: [], model: 'test-model' });
+        await generation;
+        expect(cleanup).toHaveBeenCalledOnce();
+    });
+
+    it('destroys immediately when idle and only once', async () => {
         const cleanup = vi.fn();
         const driver = new LifecycleTestDriver(cleanup);
 
@@ -125,5 +177,9 @@ describe('AbstractDriver lifecycle', () => {
 
         expect(cleanup).toHaveBeenCalledOnce();
         expect(() => driver.acquireOperation()).toThrow('Cannot use destroyed lifecycle-test driver');
+        await expect(driver.listModels()).rejects.toThrow('Cannot use destroyed lifecycle-test driver');
+        await expect(driver.generateEmbeddings({ inputs: [{ type: 'text', text: 'hello' }] })).rejects.toThrow(
+            'Cannot use destroyed lifecycle-test driver',
+        );
     });
 });

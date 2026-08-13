@@ -1232,6 +1232,7 @@ export interface OpenAISDKChatCompletionsDriver {
 
 export function openAIChatCompletionsStreamToSSE(
     stream: AsyncIterable<OpenAIChatCompletionsStreamResponse>,
+    abortSource?: () => void,
 ): ReadableStream {
     const iterator = stream[Symbol.asyncIterator]();
     let cancelled = false;
@@ -1257,6 +1258,7 @@ export function openAIChatCompletionsStreamToSSE(
         },
         async cancel() {
             cancelled = true;
+            abortSource?.();
             await iterator.return?.();
         },
     });
@@ -1364,8 +1366,13 @@ export class OpenAISDKChatCompletionsProtocol extends OpenAIChatCompletionsProto
         driver: OpenAISDKChatCompletionsDriver,
         payload: OpenAIChatCompletionsPayload,
     ): Promise<ReadableStream> {
-        const stream = await driver.service.chat.completions.create(toOpenAIStreamingPayload(payload));
-        return openAIChatCompletionsStreamToSSE(normalizeOpenAIChatCompletionsStream(stream));
+        const abortController = new AbortController();
+        const stream = await driver.service.chat.completions.create(toOpenAIStreamingPayload(payload), {
+            signal: abortController.signal,
+        });
+        return openAIChatCompletionsStreamToSSE(normalizeOpenAIChatCompletionsStream(stream), () =>
+            abortController.abort(),
+        );
     }
 }
 
@@ -1455,8 +1462,13 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
     }
 
     async _postChatCompletionStream(payload: OpenAIChatCompletionsPayload): Promise<ReadableStream> {
-        const stream = await this.service.chat.completions.create(toOpenAIStreamingPayload(payload));
-        return openAIChatCompletionsStreamToSSE(normalizeOpenAIChatCompletionsStream(stream));
+        const abortController = new AbortController();
+        const stream = await this.service.chat.completions.create(toOpenAIStreamingPayload(payload), {
+            signal: abortController.signal,
+        });
+        return openAIChatCompletionsStreamToSSE(normalizeOpenAIChatCompletionsStream(stream), () =>
+            abortController.abort(),
+        );
     }
 
     async listModels(): Promise<AIModel[]> {

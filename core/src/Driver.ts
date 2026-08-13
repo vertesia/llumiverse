@@ -115,6 +115,42 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     constructor(opts: OptionsT) {
         this.options = opts;
         this.logger = createLogger(opts.logger);
+        this.installOperationGuards();
+    }
+
+    /**
+     * Guard provider operations implemented by subclasses without changing the public
+     * driver API. Capturing the prototype methods here keeps lifecycle accounting in
+     * one place, so new cache users cannot accidentally call an unleased network path.
+     */
+    private installOperationGuards(): void {
+        const operationNames = [
+            'startTraining',
+            'cancelTraining',
+            'getTrainingJob',
+            'listModels',
+            'listTrainableModels',
+            'validateConnection',
+            'generateEmbeddings',
+        ] as const;
+
+        for (const name of operationNames) {
+            const operation = this[name] as (...args: unknown[]) => Promise<unknown>;
+            Object.defineProperty(this, name, {
+                configurable: true,
+                value: (...args: unknown[]) => this.runOperation(() => operation.apply(this, args)),
+                writable: true,
+            });
+        }
+    }
+
+    private async runOperation<T>(operation: () => Promise<T>): Promise<T> {
+        const release = this.acquireOperation();
+        try {
+            return await operation();
+        } finally {
+            release();
+        }
     }
 
     /**
@@ -277,11 +313,12 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
             const prompt = await this.createPrompt(segments, options);
             const canStream = await this.canStream(options);
             if (canStream) {
-                return new DefaultCompletionStream(this, prompt, options);
+                return new DefaultCompletionStream(this, prompt, options, release);
             }
-            return new FallbackCompletionStream(this, prompt, options);
-        } finally {
+            return new FallbackCompletionStream(this, prompt, options, release);
+        } catch (error: unknown) {
             release();
+            throw error;
         }
     }
 
@@ -454,7 +491,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     abstract generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult>;
 
     public acquireOperation(): () => void {
-        if (this._resourcesDestroyed) {
+        if (this._destroyRequested || this._resourcesDestroyed) {
             throw new Error(`Cannot use destroyed ${this.provider} driver`);
         }
 
