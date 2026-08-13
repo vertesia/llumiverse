@@ -16,6 +16,7 @@ import {
     type InferenceConfiguration,
     type InvokeModelCommandOutput,
     type Message,
+    type ServiceTierType,
     type Tool,
     type ToolResultContentBlock,
 } from '@aws-sdk/client-bedrock-runtime';
@@ -102,6 +103,15 @@ type BedrockRuntimeExecutorScope = {
     executor: BedrockRuntime;
     close(): void;
 };
+
+type BedrockServiceTierOptions = {
+    service_tier?: string;
+};
+
+function getBedrockServiceTier(modelOptions?: ModelOptions): ServiceTierType | undefined {
+    // The public option deliberately accepts future provider values that may predate the installed SDK union.
+    return (modelOptions as BedrockServiceTierOptions | undefined)?.service_tier as ServiceTierType | undefined;
+}
 
 const BEDROCK_NON_STREAMING_HTTP_TIMEOUT: HttpTimeoutOptions = {
     headersTimeout: 900_000,
@@ -1193,6 +1203,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 contentType: 'application/json',
                 accept: 'application/json',
                 body: JSON.stringify(prompt),
+                serviceTier: getBedrockServiceTier(options.model_options),
             });
         } finally {
             executorScope.close();
@@ -1234,6 +1245,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 contentType: 'application/json',
                 accept: 'application/json',
                 body: JSON.stringify(prompt),
+                serviceTier: getBedrockServiceTier(options.model_options),
             });
 
             if (!res.body) {
@@ -1519,6 +1531,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const request: ConverseRequest = {
             modelId: options.model,
         };
+
+        const serviceTier = getBedrockServiceTier(options.model_options);
+        if (serviceTier) {
+            request.serviceTier = { type: serviceTier };
+        }
 
         if (prompt.messages) {
             request.messages = prompt.messages;

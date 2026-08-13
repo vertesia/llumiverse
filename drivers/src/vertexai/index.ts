@@ -86,7 +86,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     private regionOverrideClients: Map<string, FetchClient> = new Map();
     googleGenAI: GoogleGenAI | undefined;
     googleGenAIRegion: string | undefined;
-    googleGenAIFlex: boolean | undefined;
+    googleGenAIServiceTier: string | undefined;
     modelGarden: v1beta1.ModelGardenServiceClient | undefined;
     imagenClient: PredictionServiceClient | undefined;
     predictionClient: PredictionServiceClient | undefined;
@@ -102,7 +102,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         this.fetchClient = undefined;
         this.googleGenAI = undefined;
         this.googleGenAIRegion = undefined;
-        this.googleGenAIFlex = undefined;
+        this.googleGenAIServiceTier = undefined;
         this.modelGarden = undefined;
         this.imagenClient = undefined;
         this.predictionClient = undefined;
@@ -140,17 +140,17 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return Math.max(timeouts.headersTimeout, timeouts.bodyTimeout);
     }
 
-    private getGoogleGenAIHttpOptions(flex: boolean, httpTimeout?: HttpTimeoutOptions) {
+    private getGoogleGenAIHttpOptions(serviceTier?: string, httpTimeout?: HttpTimeoutOptions) {
         const configuredTimeout = mergeDriverHttpTimeoutOptions(this.options.httpTimeout, httpTimeout);
         const hasRequestTimeout =
             configuredTimeout?.headersTimeout !== undefined || configuredTimeout?.bodyTimeout !== undefined;
         return {
             timeout: hasRequestTimeout ? this.getSdkRequestTimeoutMs(httpTimeout) : DEFAULT_GEMINI_REQUEST_TIMEOUT_MS,
-            ...(flex
+            ...(serviceTier && serviceTier !== 'default'
                 ? {
                       headers: {
                           'X-Vertex-AI-LLM-Request-Type': 'shared',
-                          'X-Vertex-AI-LLM-Shared-Request-Type': 'flex',
+                          'X-Vertex-AI-LLM-Shared-Request-Type': serviceTier,
                       },
                   }
                 : {}),
@@ -169,23 +169,27 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
     public getGoogleGenAIClient(
         region: string = this.options.region,
-        flex: boolean = false,
+        serviceTier?: string,
         httpTimeout?: HttpTimeoutOptions,
     ): GoogleGenAI {
         if (httpTimeout) {
-            return this.buildGoogleGenAIClient(region, flex, httpTimeout);
+            return this.buildGoogleGenAIClient(region, serviceTier, httpTimeout);
         }
-        if (this.googleGenAI && this.googleGenAIRegion === region && this.googleGenAIFlex === flex) {
-            // Return existing client if region and flex settings match
+        if (this.googleGenAI && this.googleGenAIRegion === region && this.googleGenAIServiceTier === serviceTier) {
+            // Return existing client if region and service tier settings match
             return this.googleGenAI;
         }
-        this.googleGenAI = this.buildGoogleGenAIClient(region, flex);
+        this.googleGenAI = this.buildGoogleGenAIClient(region, serviceTier);
         this.googleGenAIRegion = region;
-        this.googleGenAIFlex = flex;
+        this.googleGenAIServiceTier = serviceTier;
         return this.googleGenAI;
     }
 
-    private buildGoogleGenAIClient(region: string, flex: boolean, httpTimeout?: HttpTimeoutOptions): GoogleGenAI {
+    private buildGoogleGenAIClient(
+        region: string,
+        serviceTier?: string,
+        httpTimeout?: HttpTimeoutOptions,
+    ): GoogleGenAI {
         return new GoogleGenAI({
             project: this.options.project,
             location: region,
@@ -193,7 +197,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             googleAuthOptions: this.options.googleAuthOptions || {
                 scopes: ['https://www.googleapis.com/auth/cloud-platform'],
             },
-            httpOptions: this.getGoogleGenAIHttpOptions(flex, httpTimeout),
+            httpOptions: this.getGoogleGenAIHttpOptions(serviceTier, httpTimeout),
         });
     }
 

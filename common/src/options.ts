@@ -6,7 +6,7 @@ import { getBedrockMantleOptions } from './options/bedrock_mantle.js';
 import { textOptionsFallback } from './options/fallback.js';
 import { getGroqOptions } from './options/groq.js';
 import { getMistralOptions } from './options/mistral.js';
-import { getOpenAiCompatibleOptions, getOpenAiOptions } from './options/openai.js';
+import { getAzureOpenAiOptions, getOpenAiCompatibleOptions, getOpenAiOptions } from './options/openai.js';
 import { getVertexAiOptions } from './options/vertexai.js';
 import { type ModelOptions, type ModelOptionsInfo, Providers } from './types.js';
 
@@ -27,7 +27,7 @@ export function getOptions(model: string, provider?: Providers, options?: ModelO
         case Providers.openai:
             return getOpenAiOptions(model, options, resolveModelProfile(model, provider));
         case Providers.azure_openai:
-            return getOpenAiOptions(model, options, resolveModelProfile(model, provider));
+            return getAzureOpenAiOptions(model, options, resolveModelProfile(model, provider));
         case Providers.openai_compatible:
             return getOpenAiCompatibleOptions(model, options, resolveModelProfile(model, provider));
         case Providers.groq:

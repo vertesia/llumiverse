@@ -231,6 +231,31 @@ describe('OpenAIChatCompletionsProtocol', () => {
         );
     });
 
+    it('forwards the Flex service tier to the transport', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol({
+            id: 'chatcmpl-flex',
+            object: 'chat.completion',
+            created: 1,
+            model: 'gpt-5.6-sol',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: 'ok' },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+        });
+
+        await model.requestTextCompletion(undefined, prompt, {
+            ...options,
+            model: 'gpt-5.6-sol',
+            model_options: { _option_id: 'openai-thinking', service_tier: 'flex' },
+        });
+
+        expect(model.payloads[0].service_tier).toBe('flex');
+    });
+
     it('ignores SDK custom tool calls that are not function tools', () => {
         const customToolCall = {
             id: 'custom-1',
