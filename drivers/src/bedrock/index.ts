@@ -61,7 +61,7 @@ import {
     type TrainingOptions,
     truncateLargeTextInConversation,
 } from '@llumiverse/core';
-import { transformAsyncIterator } from '@llumiverse/core/async';
+import { createLinkedAbortController, transformAsyncIterator } from '@llumiverse/core/async';
 import { AbstractDriver } from '@llumiverse/core/driver';
 import { formatNovaPrompt, type NovaMessagesPrompt } from '@llumiverse/core/formatters';
 import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
@@ -286,8 +286,13 @@ function finalizeBedrockNativeBlocks(blocks: Map<number, ContentBlock>): Content
         });
 }
 
-function withBedrockRuntimeScope<T>(iterable: AsyncIterable<T>, scope: BedrockRuntimeExecutorScope): AsyncIterable<T> {
+function withBedrockRuntimeScope<T>(
+    iterable: AsyncIterable<T>,
+    scope: BedrockRuntimeExecutorScope,
+    cancel: () => void,
+): AsyncIterable<T> & { cancel(): void } {
     return {
+        cancel,
         async *[Symbol.asyncIterator]() {
             try {
                 yield* iterable;
@@ -1236,17 +1241,22 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     private async requestTwelvelabsPegasusCompletionStream(
         prompt: TwelvelabsPegasusRequest,
         options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>> {
+        signal?: AbortSignal,
+    ): Promise<DriverCompletionStream> {
         const executorScope = this.getScopedExecutor(options);
+        const controller = createLinkedAbortController(signal);
 
         try {
-            const res = await executorScope.executor.invokeModelWithResponseStream({
-                modelId: options.model,
-                contentType: 'application/json',
-                accept: 'application/json',
-                body: JSON.stringify(prompt),
-                serviceTier: getBedrockServiceTier(options.model_options),
-            });
+            const res = await executorScope.executor.invokeModelWithResponseStream(
+                {
+                    modelId: options.model,
+                    contentType: 'application/json',
+                    accept: 'application/json',
+                    body: JSON.stringify(prompt),
+                    serviceTier: getBedrockServiceTier(options.model_options),
+                },
+                { abortSignal: controller.signal },
+            );
 
             if (!res.body) {
                 throw new Error('[Bedrock] Stream not found in response');
@@ -1294,7 +1304,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     result: [],
                 } satisfies CompletionChunkObject;
             });
-            return withBedrockRuntimeScope(stream, executorScope);
+            return withBedrockRuntimeScope(stream, executorScope, () => controller.abort());
         } catch (err) {
             executorScope.close();
             throw err;
@@ -1304,10 +1314,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     async requestTextCompletionStream(
         prompt: BedrockPrompt,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
         // Handle Twelvelabs Pegasus models
         if (options.model.includes('twelvelabs.pegasus')) {
-            return this.requestTwelvelabsPegasusCompletionStream(prompt as TwelvelabsPegasusRequest, options);
+            return this.requestTwelvelabsPegasusCompletionStream(prompt as TwelvelabsPegasusRequest, options, signal);
         }
 
         // Handle other Bedrock models that use Converse API
@@ -1320,10 +1331,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         const payload = this.preparePayload(conversation, options);
         const executorScope = this.getScopedExecutor(options);
+        const controller = createLinkedAbortController(signal);
         return executorScope.executor
-            .converseStream({
-                ...payload,
-            })
+            .converseStream({ ...payload }, { abortSignal: controller.signal })
             .then((res) => {
                 const stream = res.stream;
 
@@ -1337,7 +1347,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     collectBedrockNativeStreamBlock(nativeBlocks, streamSegment);
                     return this.getExtractedStream(streamSegment, conversePrompt, options, streamingToolBlocks);
                 });
-                const scoped = withBedrockRuntimeScope(transformedStream, executorScope);
+                const scoped = withBedrockRuntimeScope(transformedStream, executorScope, () => controller.abort());
                 return Object.assign(scoped, {
                     finalizeConversation: () =>
                         finalizeBedrockConversation(

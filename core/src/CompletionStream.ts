@@ -129,7 +129,10 @@ export function accumulateToolUseChunk(
 export class DefaultCompletionStream<PromptT = unknown> implements CompletionStream<PromptT> {
     chunks: number; // Counter for number of chunks instead of storing strings
     completion: ExecutionResponse<PromptT> | undefined;
+    private readonly abortController = new AbortController();
+    private activeIterator?: AsyncGenerator<string, void, unknown>;
     private readonly lease: CompletionStreamLease;
+    private sourceStream?: DriverCompletionStream;
 
     constructor(
         public driver: AbstractDriver<DriverOptions, PromptT>,
@@ -142,18 +145,43 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
         this.lease = new CompletionStreamLease(releaseOperation, streamStartTimeoutMs);
     }
 
-    async *[Symbol.asyncIterator]() {
-        this.lease.start();
-        try {
-            yield* this.iterate();
-        } finally {
-            this.lease.release();
-        }
+    [Symbol.asyncIterator](): AsyncIterator<string> {
+        const iterator = this.iterateWithLease();
+        this.activeIterator = iterator;
+        let started = false;
+        return {
+            next: async () => {
+                if (!started) {
+                    this.lease.start();
+                    started = true;
+                }
+                return iterator.next();
+            },
+            return: async () => {
+                await this.cancel();
+                return { done: true, value: undefined };
+            },
+            throw: async (error?: unknown) => {
+                await this.cancel();
+                throw error;
+            },
+        };
     }
 
     async cancel(): Promise<void> {
-        if (!this.lease.cancelPending()) {
-            throw new Error('An active completion stream must be cancelled through its iterator');
+        if (this.lease.cancelPending()) return;
+        this.abortController.abort();
+        const cancellation = this.sourceStream?.cancel();
+        const iteration = this.activeIterator?.return?.();
+        await Promise.allSettled([cancellation, iteration].filter((value) => value !== undefined));
+    }
+
+    private async *iterateWithLease() {
+        try {
+            yield* this.iterate();
+        } finally {
+            this.activeIterator = undefined;
+            this.lease.release();
         }
     }
 
@@ -180,7 +208,14 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
         let previousStreamedResultType: CompletionResult['type'] | undefined;
 
         try {
-            stream = await httpScope.run(() => this.driver.requestTextCompletionStream(this.prompt, this.options));
+            stream = await httpScope.run(() =>
+                this.driver.requestTextCompletionStream(this.prompt, this.options, this.abortController.signal),
+            );
+            this.sourceStream = stream;
+            if (this.abortController.signal.aborted) {
+                await stream.cancel();
+                return;
+            }
             const iterator = stream[Symbol.asyncIterator]();
             sourceIterator = iterator;
             while (true) {
@@ -330,6 +365,7 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
                 }
             }
             await httpScope.close();
+            this.sourceStream = undefined;
         }
 
         // Return undefined only if we never received any token data from the provider.

@@ -20,9 +20,12 @@ class LifecycleTestDriver extends AbstractDriver<DriverOptions, string> {
     models = Promise.resolve<AIModel[]>([]);
     embeddings = Promise.resolve<EmbeddingsResult>({ results: [], model: 'test-model' });
     imageModel = false;
-    completionStream: DriverCompletionStream = (async function* () {
-        yield { result: [{ type: 'text', value: 'first' }] } satisfies CompletionChunkObject;
-    })();
+    completionStream: DriverCompletionStream = {
+        cancel: () => {},
+        async *[Symbol.asyncIterator]() {
+            yield { result: [{ type: 'text', value: 'first' }] } satisfies CompletionChunkObject;
+        },
+    };
 
     constructor(
         private readonly cleanup: () => void,
@@ -106,10 +109,13 @@ describe('AbstractDriver lifecycle', () => {
     it('defers destruction until a stream is cancelled', async () => {
         const cleanup = vi.fn();
         const driver = new LifecycleTestDriver(cleanup);
-        driver.completionStream = (async function* () {
-            yield { result: [{ type: 'text', value: 'first' }] } satisfies CompletionChunkObject;
-            yield { result: [{ type: 'text', value: 'second' }] } satisfies CompletionChunkObject;
-        })();
+        driver.completionStream = {
+            cancel: () => {},
+            async *[Symbol.asyncIterator]() {
+                yield { result: [{ type: 'text', value: 'first' }] } satisfies CompletionChunkObject;
+                yield { result: [{ type: 'text', value: 'second' }] } satisfies CompletionChunkObject;
+            },
+        };
         const stream = await driver.stream(segments, options);
         const iterator = stream[Symbol.asyncIterator]();
 
@@ -170,10 +176,44 @@ describe('AbstractDriver lifecycle', () => {
         await expect(iterator.next()).rejects.toThrow('Completion stream was cancelled before consumption');
     });
 
+    it('cancels the provider while a public iterator next call is pending', async () => {
+        const cleanup = vi.fn();
+        const cancelProvider = vi.fn();
+        let finishRead!: () => void;
+        const pendingRead = new Promise<void>((resolve) => {
+            finishRead = resolve;
+        });
+        const driver = new LifecycleTestDriver(cleanup);
+        driver.completionStream = {
+            cancel: () => {
+                cancelProvider();
+                finishRead();
+            },
+            [Symbol.asyncIterator]() {
+                return {
+                    next: async () => {
+                        await pendingRead;
+                        return { done: true, value: undefined };
+                    },
+                };
+            },
+        };
+
+        const stream = await driver.stream(segments, options);
+        const iterator = stream[Symbol.asyncIterator]();
+        const read = iterator.next();
+        await stream.cancel();
+
+        expect(cancelProvider).toHaveBeenCalledOnce();
+        await expect(read).resolves.toEqual({ done: true, value: undefined });
+    });
+
     it('rejects invalid stream start timeouts', () => {
         expect(() => new LifecycleTestDriver(vi.fn(), { streamStartTimeoutMs: 0 })).toThrow(
-            'streamStartTimeoutMs must be a positive finite number',
+            'streamStartTimeoutMs must be a positive integer no greater than 2147483647',
         );
+        expect(() => new LifecycleTestDriver(vi.fn(), { streamStartTimeoutMs: 1.5 })).toThrow(RangeError);
+        expect(() => new LifecycleTestDriver(vi.fn(), { streamStartTimeoutMs: 2_147_483_648 })).toThrow(RangeError);
     });
 
     it('defers destruction until model listing finishes', async () => {
@@ -190,6 +230,24 @@ describe('AbstractDriver lifecycle', () => {
         expect(cleanup).not.toHaveBeenCalled();
         resolveModels([]);
         await listing;
+        expect(cleanup).toHaveBeenCalledOnce();
+    });
+
+    it('holds destruction across work before an operation starts', async () => {
+        const cleanup = vi.fn();
+        const driver = new LifecycleTestDriver(cleanup);
+        let continueBorrow!: () => void;
+        const gate = new Promise<void>((resolve) => {
+            continueBorrow = resolve;
+        });
+        const borrowed = driver.withLease(async () => {
+            await gate;
+        });
+
+        driver.destroy();
+        expect(cleanup).not.toHaveBeenCalled();
+        continueBorrow();
+        await borrowed;
         expect(cleanup).toHaveBeenCalledOnce();
     });
 

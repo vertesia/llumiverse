@@ -1,7 +1,7 @@
 import {
     type AIModel,
     type Completion,
-    type CompletionChunkObject,
+    type DriverCompletionStream,
     type DriverOptions,
     type EmbeddingsOptions,
     type EmbeddingsResult,
@@ -11,7 +11,7 @@ import {
     type TextFallbackOptions,
     WATSONX_DEFAULT_EMBEDDING_MODEL,
 } from '@llumiverse/core';
-import { transformSSEStream } from '@llumiverse/core/async';
+import { createLinkedAbortController, transformSSEStream } from '@llumiverse/core/async';
 import { AbstractDriver } from '@llumiverse/core/driver';
 import { FetchClient, type ServerSentEvent } from '@vertesia/api-fetch-client';
 import type {
@@ -92,7 +92,8 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
     async requestTextCompletionStream(
         prompt: string,
         options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>> {
+        signal?: AbortSignal,
+    ): Promise<DriverCompletionStream> {
         if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== 'text-fallback') {
             this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
@@ -110,25 +111,30 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
             project_id: this.projectId,
         };
 
+        const controller = createLinkedAbortController(signal);
         const stream = (await this.fetchClient.post(`/ml/v1/text/generation_stream?version=${API_VERSION}`, {
             payload: payload,
             reader: 'sse',
+            signal: controller.signal,
         })) as ReadableStream<ServerSentEvent>;
 
-        return transformSSEStream(stream, (data: string) => {
-            const json = JSON.parse(data) as WatsonxTextGenerationResponse;
-            return {
-                result: json.results[0]?.generated_text
-                    ? [{ type: 'text', value: json.results[0].generated_text }]
-                    : [],
-                finish_reason: watsonFinishReason(json.results[0]?.stop_reason),
-                token_usage: {
-                    prompt: json.results[0].input_token_count,
-                    result: json.results[0].generated_token_count,
-                    total: json.results[0].input_token_count + json.results[0].generated_token_count,
-                },
-            };
-        });
+        return Object.assign(
+            transformSSEStream(stream, (data: string) => {
+                const json = JSON.parse(data) as WatsonxTextGenerationResponse;
+                return {
+                    result: json.results[0]?.generated_text
+                        ? [{ type: 'text', value: json.results[0].generated_text }]
+                        : [],
+                    finish_reason: watsonFinishReason(json.results[0]?.stop_reason),
+                    token_usage: {
+                        prompt: json.results[0].input_token_count,
+                        result: json.results[0].generated_token_count,
+                        total: json.results[0].input_token_count + json.results[0].generated_token_count,
+                    },
+                };
+            }),
+            { cancel: () => controller.abort() },
+        );
     }
 
     async listModels(): Promise<AIModel[]> {

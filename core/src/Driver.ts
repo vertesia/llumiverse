@@ -51,7 +51,10 @@ function getObjectProperty(value: unknown, key: string): unknown {
     return undefined;
 }
 
+const driverLifecycleBrand: unique symbol = Symbol('driverLifecycle');
+
 export interface Driver<PromptT = unknown> {
+    readonly [driverLifecycleBrand]: true;
     /**
      *
      * @param segments
@@ -92,25 +95,23 @@ export interface Driver<PromptT = unknown> {
      */
     generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult>;
 
-    /**
-     * Optional cleanup method called when the driver is evicted from the cache.
-     * Override this in driver implementations that need to release resources.
-     */
-    destroy?(): void;
+    /** Hold this driver across application work that precedes a provider operation. */
+    withLease<T>(callback: (driver: this) => T | Promise<T>): Promise<T>;
+
+    /** Request cleanup after all active operations and borrowed scopes finish. */
+    destroy(): void;
 }
 
 type AsyncDriverOperationName = {
     [Name in keyof Driver]-?: Driver[Name] extends (...args: never[]) => Promise<unknown> ? Name : never;
 }[keyof Driver];
 
-type ExplicitlyScopedOperationName = 'execute' | 'stream';
-type LifecycleNeutralOperationName = 'createPrompt' | 'createTrainingPrompt';
-type LifecycleGuardedOperationName = Exclude<
-    AsyncDriverOperationName,
-    ExplicitlyScopedOperationName | LifecycleNeutralOperationName
->;
+type LifecycleNeutralOperationName = 'createPrompt' | 'createTrainingPrompt' | 'withLease';
+type LifecycleGuardedOperationName = Exclude<AsyncDriverOperationName, LifecycleNeutralOperationName>;
 
 const lifecycleGuardedOperationNames = [
+    'execute',
+    'stream',
     'startTraining',
     'cancelTraining',
     'getTrainingJob',
@@ -129,6 +130,7 @@ const lifecycleGuardsAreExhaustive: MissingLifecycleGuard extends never ? true :
 export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOptions, PromptT = unknown>
     implements Driver<PromptT>
 {
+    readonly [driverLifecycleBrand] = true;
     options: OptionsT;
     logger: Logger;
 
@@ -143,9 +145,11 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     constructor(opts: OptionsT) {
         if (
             opts.streamStartTimeoutMs !== undefined &&
-            (!Number.isFinite(opts.streamStartTimeoutMs) || opts.streamStartTimeoutMs <= 0)
+            (!Number.isSafeInteger(opts.streamStartTimeoutMs) ||
+                opts.streamStartTimeoutMs <= 0 ||
+                opts.streamStartTimeoutMs > 2_147_483_647)
         ) {
-            throw new RangeError('streamStartTimeoutMs must be a positive finite number');
+            throw new RangeError('streamStartTimeoutMs must be a positive integer no greater than 2147483647');
         }
         this.options = opts;
         this.logger = createLogger(opts.logger);
@@ -176,6 +180,10 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         } finally {
             release();
         }
+    }
+
+    async withLease<T>(callback: (driver: this) => T | Promise<T>): Promise<T> {
+        return this.runOperation(() => Promise.resolve(callback(this)));
     }
 
     /**
@@ -501,7 +509,11 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     abstract requestTextCompletion(prompt: PromptT, options: ExecutionOptions): Promise<Completion>;
 
-    abstract requestTextCompletionStream(prompt: PromptT, options: ExecutionOptions): Promise<DriverCompletionStream>;
+    abstract requestTextCompletionStream(
+        prompt: PromptT,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<DriverCompletionStream>;
 
     async requestImageGeneration(_prompt: PromptT, _options: ExecutionOptions): Promise<Completion> {
         throw new Error('Image generation not implemented.');

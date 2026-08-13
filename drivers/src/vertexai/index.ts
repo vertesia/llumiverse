@@ -368,8 +368,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     async requestTextCompletionStream(
         prompt: VertexAIPrompt,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
-        return getModelDefinition(options.model).requestTextCompletionStream(this, prompt, options);
+        return getModelDefinition(options.model).requestTextCompletionStream(this, prompt, options, signal);
     }
 
     /**

@@ -3,6 +3,7 @@ import { createValidationErrorCompletion, sleep } from './utils.js';
 
 export class TestValidationErrorCompletionStream implements CompletionStream<PromptSegment[]> {
     completion: ExecutionResponse<PromptSegment[]> | undefined;
+    async cancel(): Promise<void> {}
 
     constructor(
         public segments: PromptSegment[],

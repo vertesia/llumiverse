@@ -1,6 +1,16 @@
 import type { CompletionChunkObject } from '@llumiverse/common';
 import type { ServerSentEvent } from '@vertesia/api-fetch-client';
 
+export function createLinkedAbortController(signal?: AbortSignal): AbortController {
+    const controller = new AbortController();
+    if (signal?.aborted) {
+        controller.abort(signal.reason);
+    } else {
+        signal?.addEventListener('abort', () => controller.abort(signal.reason), { once: true });
+    }
+    return controller;
+}
+
 export async function* asyncMap<T, R>(asyncIterable: AsyncIterable<T>, callback: (value: T, index: number) => R) {
     let i = 0;
     for await (const val of asyncIterable) yield callback(val, i++);

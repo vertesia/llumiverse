@@ -116,10 +116,12 @@ export class MistralAIDriver extends OpenAICompatibleDriverBase<MistralAIDriverO
     async requestTextCompletionStream(
         prompt: MistralPrompt | OpenAIChatCompletionsPrompt,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
         const conversation = prepareMistralConversation(options.conversation, prompt);
         const response = await this.client.chat.stream(
             buildMistralRequest(conversation, options, true, this.options.defaultMaxTokens),
+            { signal },
         );
         const includeThoughts =
             (options.model_options as TextFallbackOptions | MistralTextOptions | undefined)?.include_thoughts !== false;
@@ -127,6 +129,7 @@ export class MistralAIDriver extends OpenAICompatibleDriverBase<MistralAIDriverO
         const nativeToolCalls = new Map<number, ToolCall>();
 
         const stream: DriverCompletionStream = {
+            cancel: () => response.cancel(),
             async *[Symbol.asyncIterator]() {
                 for await (const event of response) {
                     const chunk = event.data;

@@ -27,6 +27,7 @@ export interface ModelDefinition<PromptT = VertexAIPrompt> {
         driver: VertexAIDriver,
         prompt: PromptT,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<DriverCompletionStream>;
     preValidationProcessing?(
         result: Completion,

@@ -3,6 +3,7 @@ import {
     type Completion,
     type CompletionChunkObject,
     type DataSource,
+    type DriverCompletionStream,
     type DriverOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
@@ -86,7 +87,8 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
     async requestTextCompletionStream(
         prompt: string,
         options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>> {
+        signal?: AbortSignal,
+    ): Promise<DriverCompletionStream> {
         if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== 'text-fallback') {
             this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
@@ -109,6 +111,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
 
         // biome-ignore lint/style/noNonNullAssertion: urls.stream is populated by Replicate because the prediction was created with stream:true; SDK types it optional
         const source = new EventSource(prediction.urls.stream!);
+        signal?.addEventListener('abort', () => source.close(), { once: true });
         source.addEventListener('output', (e: ReplicateEvent) => {
             stream.push({ result: [{ type: 'text', value: e.data }] });
         });
@@ -128,7 +131,7 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
                 source.close();
             }
         });
-        return stream;
+        return Object.assign(stream, { cancel: () => source.close() });
     }
 
     async requestTextCompletion(prompt: string, options: ExecutionOptions) {

@@ -196,6 +196,7 @@ export class OpenAIResponsesProtocol {
         driver: OpenAIResponsesDriverBase,
         prompt: ResponseInputItem[],
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
         if (
             options.model_options?._option_id !== undefined &&
@@ -253,27 +254,30 @@ export class OpenAIResponsesProtocol {
             driver.getResponsesRequestModel(options.model),
             promptCacheKey,
         );
-        const stream = await driver.service.responses.create({
-            stream: true,
-            model: driver.getResponsesRequestModel(options.model),
-            prompt_cache_key: promptCacheKey,
-            prompt_cache_retention: promptCacheRetention,
-            prompt_cache_options: promptCache.options,
-            input: promptCache.input,
-            reasoning,
-            include: reasoning ? ['reasoning.encrypted_content'] : undefined,
-            temperature: isReasoningModel ? undefined : model_options?.temperature,
-            top_p: isReasoningModel ? undefined : model_options?.top_p,
-            max_output_tokens: model_options?.max_tokens,
-            service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
-            tools: useTools ? toolDefs : undefined,
-            text: buildResponseTextConfig(
-                parsedSchema,
-                strictMode,
-                model_options?.verbosity,
-                options.prompt_cache_schema_suffix === true && !!options.result_schema,
-            ),
-        });
+        const stream = await driver.service.responses.create(
+            {
+                stream: true,
+                model: driver.getResponsesRequestModel(options.model),
+                prompt_cache_key: promptCacheKey,
+                prompt_cache_retention: promptCacheRetention,
+                prompt_cache_options: promptCache.options,
+                input: promptCache.input,
+                reasoning,
+                include: reasoning ? ['reasoning.encrypted_content'] : undefined,
+                temperature: isReasoningModel ? undefined : model_options?.temperature,
+                top_p: isReasoningModel ? undefined : model_options?.top_p,
+                max_output_tokens: model_options?.max_tokens,
+                service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
+                tools: useTools ? toolDefs : undefined,
+                text: buildResponseTextConfig(
+                    parsedSchema,
+                    strictMode,
+                    model_options?.verbosity,
+                    options.prompt_cache_schema_suffix === true && !!options.result_schema,
+                ),
+            },
+            { signal },
+        );
 
         return mapResponseStream(stream, includeThoughts, (response) =>
             finalizeOpenAIResponsesConversation(conversation, response.output, options),
@@ -435,8 +439,9 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
     requestTextCompletionStream(
         prompt: ResponseInputItem[],
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
-        return this.responsesProtocol.requestTextCompletionStream(this, prompt, options);
+        return this.responsesProtocol.requestTextCompletionStream(this, prompt, options, signal);
     }
 
     requestTextCompletion(prompt: ResponseInputItem[], options: ExecutionOptions): Promise<Completion> {
@@ -908,6 +913,7 @@ export function mapResponseStream(
     let finalResponse: OpenAI.Responses.Response | undefined;
 
     return {
+        cancel: () => (stream as { controller?: AbortController }).controller?.abort(),
         async *[Symbol.asyncIterator]() {
             let hasTextDeltas = false;
             let refusalText = '';

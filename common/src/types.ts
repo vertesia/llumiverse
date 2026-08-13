@@ -413,6 +413,7 @@ export interface CompletionChunkObject {
  * replay requires information that cannot be reconstructed from generic results.
  */
 export interface DriverCompletionStream extends AsyncIterable<CompletionChunkObject> {
+    cancel(): void | Promise<void>;
     finalizeConversation?: () => unknown | Promise<unknown>;
 }
 
@@ -492,8 +493,8 @@ export interface ExecutionResponse<PromptT = unknown> extends Completion {
 
 export interface CompletionStream<PromptT = unknown> extends AsyncIterable<string> {
     completion: ExecutionResponse<PromptT> | undefined;
-    /** Release an unstarted stream and its driver lease without consuming output. */
-    cancel?(): Promise<void>;
+    /** Cancel provider work and release the driver lease. */
+    cancel(): Promise<void>;
 }
 
 /**

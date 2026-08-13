@@ -14,7 +14,7 @@ import ModelClient, { isUnexpected } from '@azure-rest/ai-inference';
 import {
     type AIModel,
     type Completion,
-    type CompletionChunkObject,
+    type DriverCompletionStream,
     type DriverOptions,
     dataSourceToBase64,
     type EmbeddingResultItem,
@@ -107,10 +107,14 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
         return preserveOpenAIChatCompletionsOriginalResponse(normalizeAzureInferenceResponse(original), original);
     }
 
-    async _postChatCompletionStream(payload: OpenAIChatCompletionsPayload): Promise<ReadableStream> {
+    async _postChatCompletionStream(
+        payload: OpenAIChatCompletionsPayload,
+        _options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<ReadableStream> {
         const response = await this.service
             .path('/chat/completions')
-            .post({ body: toAzureInferenceRequest(payload, true) })
+            .post({ body: toAzureInferenceRequest(payload, true), abortSignal: signal })
             .asNodeStream();
         const stream = response.body as NodeJSReadableStream;
         if (!stream) {
@@ -253,18 +257,20 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     async requestTextCompletionStream(
         prompt: ResponseInputItem[],
         options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>> {
+        signal?: AbortSignal,
+    ): Promise<DriverCompletionStream> {
         const { deploymentName } = parseAzureFoundryModelId(options.model);
         const isOpenAI = await this.isOpenAIDeployment(options.model);
 
         if (isOpenAI) {
             this.openAIProtocolDriver ??= new AzureFoundryOpenAIProtocolDriver(this.service.getOpenAIClient());
-            return this.openAIProtocolDriver.requestTextCompletionStream(prompt, options);
+            return this.openAIProtocolDriver.requestTextCompletionStream(prompt, options, signal);
         }
         const chatPrompt = toAzureFoundryChatPrompt(prompt);
         return this.inferenceProtocolDriver.requestTextCompletionStream(
             chatPrompt,
             toAzureFoundryChatOptions(options, deploymentName),
+            signal,
         );
     }
 

@@ -1038,6 +1038,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         driver: DriverT,
         prompt: OpenAIChatCompletionsPrompt,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
         let conversation = updateOpenAIChatCompletionsConversation(
             options.conversation as OpenAIChatCompletionsPrompt,
@@ -1047,7 +1048,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         const includeThoughts =
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
         const payload = this.buildPayload(conversation, options, true);
-        const responseStream = await this.postChatCompletionStream(driver, payload, options);
+        const responseStream = await this.postChatCompletionStream(driver, payload, options, signal);
 
         const projector = new OpenAIThinkStreamProjector();
         let nativeContent = '';
@@ -1122,6 +1123,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         });
 
         return Object.assign(stream, {
+            cancel: () => responseStream.cancel(),
             finalizeConversation: () => {
                 const assistantMessage: OpenAIChatCompletionsMessage = {
                     role: 'assistant',
@@ -1205,6 +1207,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         driver: DriverT,
         payload: OpenAIChatCompletionsPayload,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<ReadableStream>;
 }
 
@@ -1223,6 +1226,7 @@ interface OpenAIChatCompletionsTransportDriver {
     _postChatCompletionStream(
         payload: OpenAIChatCompletionsPayload,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<ReadableStream>;
 }
 
@@ -1277,8 +1281,9 @@ class DriverChatCompletionsProtocol extends OpenAIChatCompletionsProtocol<OpenAI
         driver: OpenAIChatCompletionsTransportDriver,
         payload: OpenAIChatCompletionsPayload,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<ReadableStream> {
-        return driver._postChatCompletionStream(payload, options);
+        return driver._postChatCompletionStream(payload, options, signal);
     }
 }
 
@@ -1365,13 +1370,14 @@ export class OpenAISDKChatCompletionsProtocol extends OpenAIChatCompletionsProto
     protected async postChatCompletionStream(
         driver: OpenAISDKChatCompletionsDriver,
         payload: OpenAIChatCompletionsPayload,
+        _options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<ReadableStream> {
-        const abortController = new AbortController();
         const stream = await driver.service.chat.completions.create(toOpenAIStreamingPayload(payload), {
-            signal: abortController.signal,
+            signal,
         });
         return openAIChatCompletionsStreamToSSE(normalizeOpenAIChatCompletionsStream(stream), () =>
-            abortController.abort(),
+            stream.controller.abort(),
         );
     }
 }
@@ -1417,8 +1423,9 @@ export abstract class OpenAIChatCompletionsDriverBase<
     requestTextCompletionStream(
         prompt: OpenAIChatCompletionsPrompt,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
-        return this.chatCompletionsProtocol.requestTextCompletionStream(this, prompt, options);
+        return this.chatCompletionsProtocol.requestTextCompletionStream(this, prompt, options, signal);
     }
 
     buildStreamingConversation(
@@ -1461,13 +1468,16 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
         );
     }
 
-    async _postChatCompletionStream(payload: OpenAIChatCompletionsPayload): Promise<ReadableStream> {
-        const abortController = new AbortController();
+    async _postChatCompletionStream(
+        payload: OpenAIChatCompletionsPayload,
+        _options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<ReadableStream> {
         const stream = await this.service.chat.completions.create(toOpenAIStreamingPayload(payload), {
-            signal: abortController.signal,
+            signal,
         });
         return openAIChatCompletionsStreamToSSE(normalizeOpenAIChatCompletionsStream(stream), () =>
-            abortController.abort(),
+            stream.controller.abort(),
         );
     }
 

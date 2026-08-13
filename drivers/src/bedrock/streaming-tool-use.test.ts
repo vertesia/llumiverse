@@ -2,6 +2,7 @@ import {
     type AIModel,
     type Completion,
     type CompletionChunkObject,
+    type DriverCompletionStream,
     type DriverOptions,
     type EmbeddingsOptions,
     type EmbeddingsResult,
@@ -135,14 +136,14 @@ class FakeDriver extends AbstractDriver<DriverOptions, string> {
         throw new Error('not implemented');
     }
 
-    async requestTextCompletionStream(
-        _prompt: string,
-        _options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>> {
+    async requestTextCompletionStream(_prompt: string, _options: ExecutionOptions): Promise<DriverCompletionStream> {
         const chunks = this.chunks;
-        return (async function* () {
-            for (const c of chunks) yield c;
-        })();
+        return {
+            cancel: () => {},
+            async *[Symbol.asyncIterator]() {
+                for (const c of chunks) yield c;
+            },
+        };
     }
 
     async listModels(_params?: ModelSearchPayload): Promise<AIModel[]> {

@@ -202,18 +202,31 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
     requestTextCompletionStream(
         prompt: BedrockMantlePrompt,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
         switch (getBedrockMantleProtocol(options.model)) {
             case 'responses':
-                return this.responsesDelegate.requestTextCompletionStream(requireResponsesPrompt(prompt), options);
+                return this.responsesDelegate.requestTextCompletionStream(
+                    requireResponsesPrompt(prompt),
+                    options,
+                    signal,
+                );
             case 'chat_completions':
                 return this.getChatCompletionsProtocol(options.model).requestTextCompletionStream(
                     this,
                     requireChatCompletionsPrompt(prompt),
                     options,
+                    signal,
                 );
             case 'messages':
-                return streamClaudeCompletion(this.anthropicService, requireClaudePrompt(prompt), options);
+                return streamClaudeCompletion(
+                    this.anthropicService,
+                    requireClaudePrompt(prompt),
+                    options,
+                    undefined,
+                    'bedrock-mantle',
+                    signal,
+                );
             default:
                 throw new Error(`Unsupported Bedrock Mantle model: ${options.model}`);
         }

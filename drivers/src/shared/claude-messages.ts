@@ -147,10 +147,12 @@ export interface ClaudeBaseOptions {
 
 interface RequestOptions {
     headers?: Record<string, string>;
+    signal?: AbortSignal;
 }
 
 type ClaudeTool = NonNullable<MessageCreateParamsBase['tools']>[number];
 type ClaudeMessageStream = AsyncIterable<RawMessageStreamEvent> & {
+    abort(): void;
     finalMessage(): Promise<Message>;
 };
 type ClaudeMessagesStreamClient = {
@@ -993,6 +995,7 @@ export async function streamClaudeCompletion(
     options: ExecutionOptions,
     logger?: Logger,
     provider = 'anthropic',
+    signal?: AbortSignal,
 ): Promise<DriverCompletionStream> {
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
     const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
@@ -1000,7 +1003,7 @@ export async function streamClaudeCompletion(
     const { payload, requestOptions } = getClaudePayload(options, conversation);
     const streamingPayload: MessageStreamParams = { ...payload, stream: true };
 
-    const response_stream = await streamClaudeMessages(client, streamingPayload, requestOptions);
+    const response_stream = await streamClaudeMessages(client, streamingPayload, { ...requestOptions, signal });
 
     let currentToolUse: { id: string; name: string; inputJson: string } | null = null;
     let pendingSpacing = false;
@@ -1088,6 +1091,7 @@ export async function streamClaudeCompletion(
     });
 
     return {
+        cancel: () => response_stream.abort(),
         [Symbol.asyncIterator]: () => stream[Symbol.asyncIterator](),
         finalizeConversation: async () => {
             const finalMessage = await response_stream.finalMessage();
