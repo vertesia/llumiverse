@@ -24,7 +24,6 @@ import {
     truncateLargeTextInConversation,
 } from '@llumiverse/core';
 import { AbstractDriver } from '@llumiverse/core/driver';
-import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
 import { type FETCH_FN, FetchClient } from '@vertesia/api-fetch-client';
 import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from 'google-auth-library';
 import {
@@ -39,8 +38,6 @@ import { formatGeminiDebugPrompt } from './models/gemini.js';
 import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
 import { getModelDefinition, trimModelName } from './models.js';
 import { getListedVertexOpenMaaSModels } from './open-maas-models.js';
-
-const DEFAULT_GEMINI_REQUEST_TIMEOUT_MS = 10 * 60_000;
 
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
@@ -133,19 +130,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return this.authClientPromise;
     }
 
-    private getSdkRequestTimeoutMs(httpTimeout?: HttpTimeoutOptions): number {
-        const timeouts = resolveDriverHttpTimeouts(
-            mergeDriverHttpTimeoutOptions(this.options.httpTimeout, httpTimeout),
-        );
-        return Math.max(timeouts.headersTimeout, timeouts.bodyTimeout);
-    }
-
     private getGoogleGenAIHttpOptions(serviceTier?: string, httpTimeout?: HttpTimeoutOptions) {
-        const configuredTimeout = mergeDriverHttpTimeoutOptions(this.options.httpTimeout, httpTimeout);
-        const hasRequestTimeout =
-            configuredTimeout?.headersTimeout !== undefined || configuredTimeout?.bodyTimeout !== undefined;
         return {
-            timeout: hasRequestTimeout ? this.getSdkRequestTimeoutMs(httpTimeout) : DEFAULT_GEMINI_REQUEST_TIMEOUT_MS,
+            timeout: this.getDriverRequestTimeoutMs(httpTimeout),
             ...(serviceTier && serviceTier !== 'default'
                 ? {
                       headers: {
@@ -159,7 +146,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
     private getAnthropicVertexClientOptions(region: string, authClient: AuthClient, httpTimeout?: HttpTimeoutOptions) {
         return {
-            timeout: this.getSdkRequestTimeoutMs(httpTimeout),
+            timeout: this.getDriverRequestTimeoutMs(httpTimeout),
             region,
             projectId: this.options.project,
             authClient: authClient,

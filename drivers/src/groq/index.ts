@@ -53,6 +53,7 @@ export class GroqDriver extends OpenAIChatCompletionsDriverBase<GroqDriverOption
             apiKey: options.apiKey,
             baseURL: options.endpoint_url,
             fetch: this.getDriverFetch(),
+            timeout: this.getDriverRequestTimeoutMs(),
         });
     }
 

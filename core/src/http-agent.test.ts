@@ -18,8 +18,10 @@ import {
     createAgentBackedFetch,
     createDriverHttpAgent,
     DEFAULT_DRIVER_HTTP_TIMEOUTS,
+    DEFAULT_DRIVER_REQUEST_TIMEOUT_MS,
     mergeDriverHttpTimeoutOptions,
     resolveDriverHttpTimeouts,
+    resolveDriverRequestTimeoutMs,
 } from './http-agent.js';
 
 class TestDriver extends AbstractDriver<DriverOptions, string> {
@@ -90,6 +92,7 @@ describe('driver HTTP agent helpers', () => {
     });
 
     it('fills missing timeout options from defaults', () => {
+        expect(DEFAULT_DRIVER_REQUEST_TIMEOUT_MS).toBe(900_000);
         expect(resolveDriverHttpTimeouts()).toEqual(DEFAULT_DRIVER_HTTP_TIMEOUTS);
         expect(
             resolveDriverHttpTimeouts({
@@ -102,6 +105,13 @@ describe('driver HTTP agent helpers', () => {
             connectTimeout: DEFAULT_DRIVER_HTTP_TIMEOUTS.connectTimeout,
             keepAliveTimeout: 456,
         });
+    });
+
+    it('maps split HTTP timeout settings to a single SDK request deadline', () => {
+        expect(resolveDriverRequestTimeoutMs()).toBe(DEFAULT_DRIVER_REQUEST_TIMEOUT_MS);
+        expect(
+            resolveDriverRequestTimeoutMs({ headersTimeout: 120_000, bodyTimeout: 180_000 }, { bodyTimeout: 600_000 }),
+        ).toBe(600_000);
     });
 
     it('merges per-call timeout overrides without replacing defined defaults with undefined', () => {

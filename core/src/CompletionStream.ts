@@ -11,10 +11,11 @@ import {
     type ToolUse,
 } from '@llumiverse/common';
 import type { AbstractDriver } from './Driver.js';
+import { DEFAULT_DRIVER_REQUEST_TIMEOUT_MS } from './http-agent.js';
 
 type StreamingToolUse = ToolUse<unknown> & { _actual_id?: string };
 
-export const DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS = 60_000;
+export const DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS = DEFAULT_DRIVER_REQUEST_TIMEOUT_MS;
 
 class CompletionStreamLease {
     private cancelled = false;

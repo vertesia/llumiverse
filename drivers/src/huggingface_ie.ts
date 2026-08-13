@@ -49,7 +49,9 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
                 throw new Error(`Endpoint ${model} is not running - current status: ${endpoint.status}`);
 
             // Use the new InferenceClient and bind it to the endpoint URL
-            this._executor = new InferenceClient(this.options.apiKey).endpoint(endpoint.url);
+            this._executor = new InferenceClient(this.options.apiKey, { fetch: this.getDriverFetch() }).endpoint(
+                endpoint.url,
+            );
         }
         return this._executor;
     }

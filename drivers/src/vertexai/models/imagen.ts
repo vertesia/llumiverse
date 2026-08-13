@@ -10,6 +10,7 @@ import {
     type PromptSegment,
     readStreamAsBase64,
 } from '@llumiverse/core';
+import { resolveDriverRequestTimeoutMs } from '@llumiverse/core/http-agent';
 import { truncateBinaryForDebug } from '../../shared/debug-prompt.js';
 import type { VertexAIDriver } from '../index.js';
 
@@ -412,8 +413,6 @@ export class ImagenModelDefinition {
         ) as ReturnType<typeof getImagenParameters> & { negativePrompt?: string };
         parameter.negativePrompt = prompt.negativePrompt ?? undefined;
 
-        const numberOfImages = options.model_options?.number_of_images ?? 1;
-
         // Remove all undefined values
         parameter = Object.fromEntries(
             Object.entries(parameter).filter(([_, v]) => v !== undefined),
@@ -430,7 +429,8 @@ export class ImagenModelDefinition {
         const client = await driver.getImagenClient();
 
         // Predict request
-        const prediction = client.predict(request, { timeout: 120000 * numberOfImages }) as Promise<
+        const timeout = resolveDriverRequestTimeoutMs(driver.options.httpTimeout, options.httpTimeout);
+        const prediction = client.predict(request, { timeout }) as Promise<
             [protos.google.cloud.aiplatform.v1.IPredictResponse, unknown, unknown]
         > & { cancel(): void };
         const cancel = () => prediction.cancel();

@@ -528,7 +528,8 @@ export interface DriverOptions {
     httpTimeout?: HttpTimeoutOptions;
     /**
      * Maximum time a returned completion stream may remain unconsumed before
-     * its driver lease is released. Defaults to 60 seconds.
+     * its driver lease is released. Defaults to 15 minutes. This is a bounded
+     * ownership safety net, not the normal request timeout.
      */
     streamStartTimeoutMs?: number;
 }

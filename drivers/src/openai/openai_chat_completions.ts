@@ -1464,6 +1464,7 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
             defaultHeaders: options.default_headers,
             fetch: this.getDriverFetch(),
             maxRetries: 0,
+            timeout: this.getDriverRequestTimeoutMs(),
         });
     }
 

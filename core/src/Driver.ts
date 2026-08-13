@@ -15,6 +15,7 @@ import {
     type EmbeddingsResult,
     type ExecutionOptions,
     type ExecutionResponse,
+    type HttpTimeoutOptions,
     LlumiverseError,
     type LlumiverseErrorContext,
     type Logger,
@@ -38,6 +39,7 @@ import {
     createDriverHttpAgent,
     createDriverHttpAgentScope,
     type DriverHttpAgentScope,
+    resolveDriverRequestTimeoutMs,
 } from './http-agent.js';
 import { createLogger } from './logger.js';
 import { validateResult } from './validation.js';
@@ -212,6 +214,14 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
             this._driverFetch = createAgentBackedFetch(this.getHttpAgent());
         }
         return this._driverFetch;
+    }
+
+    /**
+     * Resolve the single request deadline expected by SDKs that do not expose
+     * separate response-header and streaming-body inactivity timeouts.
+     */
+    protected getDriverRequestTimeoutMs(httpTimeout?: HttpTimeoutOptions): number {
+        return resolveDriverRequestTimeoutMs(this.options.httpTimeout, httpTimeout);
     }
 
     public createExecutionHttpAgentScope(

@@ -78,6 +78,7 @@ export class MistralAIDriver extends OpenAICompatibleDriverBase<MistralAIDriverO
             apiKey: options.apiKey,
             serverURL: options.endpoint_url ?? ENDPOINT,
             httpClient: new HTTPClient({ fetcher: this.getDriverFetch() }),
+            timeoutMs: this.getDriverRequestTimeoutMs(),
         });
     }
 

@@ -39,13 +39,11 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
 
     constructor(opts: AnthropicDriverOptions) {
         super(opts);
-        // Route requests through the driver's HTTP agent (configured by
-        // opts.httpTimeout) so a hung upstream surfaces in seconds rather
-        // than blocking on Node's 5-minute undici default.
         this.client = new Anthropic({
             apiKey: opts.apiKey,
             ...(opts.baseURL ? { baseURL: opts.baseURL } : {}),
             fetch: this.getDriverFetch(),
+            timeout: this.getDriverRequestTimeoutMs(),
         });
     }
 

@@ -36,9 +36,8 @@ export const HttpTimeoutOptionsSchema = z
         description:
             "HTTP timeouts applied to a driver's upstream LLM-provider calls.\n\nAll values are in " +
             'milliseconds. Drivers should map these onto whatever HTTP client their SDK uses; the defaults ' +
-            'applied in `@llumiverse/core/createDriverHttpAgent` are:   - headersTimeout:   60_000   - ' +
-            'bodyTimeout:      60_000   - connectTimeout:   10_000   - keepAliveTimeout: 30_000\n\nThe ' +
-            "defaults are deliberately tighter than Node's undici default (5 minutes for headers/body) so a " +
-            'hung upstream surfaces quickly. Bump `bodyTimeout` for streaming flows that have legitimate ' +
-            'silent gaps (e.g. tool-using agents).',
+            'applied in `@llumiverse/core/createDriverHttpAgent` are:   - headersTimeout:   900_000   - ' +
+            'bodyTimeout:      900_000   - connectTimeout:   10_000   - keepAliveTimeout: 30_000\n\nThe ' +
+            'response defaults are deliberately longer than the hosting request boundary. Application-level ' +
+            'cancellation should end user work first; driver timeouts are bounded-resource safety nets.',
     });

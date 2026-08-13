@@ -11,6 +11,7 @@ import {
     PromptRole,
 } from '@llumiverse/common';
 import { describe, expect, it, vi } from 'vitest';
+import { DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS } from './CompletionStream.js';
 import { AbstractDriver } from './Driver.js';
 
 class LifecycleTestDriver extends AbstractDriver<DriverOptions, string> {
@@ -181,6 +182,27 @@ describe('AbstractDriver lifecycle', () => {
             expect(cleanup).toHaveBeenCalledOnce();
             const iterator = stream[Symbol.asyncIterator]();
             await expect(iterator.next()).rejects.toThrow('Completion stream was not consumed within 100ms');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('keeps the default abandoned-stream lease beyond the request boundary', async () => {
+        expect(DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS).toBe(900_000);
+
+        vi.useFakeTimers();
+        try {
+            const cleanup = vi.fn();
+            const driver = new LifecycleTestDriver(cleanup);
+
+            await driver.stream(segments, options);
+            driver.destroy();
+
+            await vi.advanceTimersByTimeAsync(5 * 60_000);
+            expect(cleanup).not.toHaveBeenCalled();
+
+            await vi.advanceTimersByTimeAsync(10 * 60_000);
+            expect(cleanup).toHaveBeenCalledOnce();
         } finally {
             vi.useRealTimers();
         }

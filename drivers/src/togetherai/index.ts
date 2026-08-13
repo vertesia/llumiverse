@@ -54,6 +54,7 @@ export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAI
             apiKey: opts.apiKey,
             baseURL: opts.endpoint ?? 'https://api.together.ai/v1',
             fetch: this.getDriverFetch(),
+            timeout: this.getDriverRequestTimeoutMs(),
         });
     }
 

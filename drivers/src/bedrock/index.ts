@@ -113,11 +113,6 @@ function getBedrockServiceTier(modelOptions?: ModelOptions): ServiceTierType | u
     return (modelOptions as BedrockServiceTierOptions | undefined)?.service_tier as ServiceTierType | undefined;
 }
 
-const BEDROCK_NON_STREAMING_HTTP_TIMEOUT: HttpTimeoutOptions = {
-    headersTimeout: 900_000,
-    bodyTimeout: 900_000,
-};
-
 enum BedrockModelType {
     FoundationModel = 'foundation-model',
     InferenceProfile = 'inference-profile',
@@ -531,8 +526,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
     /**
      * Build a Smithy `requestHandler` config from the driver's
-     * `httpTimeout` so AWS SDK calls fail fast on hung upstream Bedrock
-     * endpoints instead of using the AWS default (no request timeout).
+     * `httpTimeout` so AWS SDK calls have a bounded safety timeout instead of
+     * using the AWS default (no request timeout).
      * Returns a partial config the SDK merges into its default handler.
      */
     private getBedrockRequestHandlerConfig(httpTimeout?: HttpTimeoutOptions) {
@@ -545,13 +540,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             connectionTimeout: timeouts.connectTimeout,
             socketTimeout: timeouts.bodyTimeout,
         };
-    }
-
-    private getBedrockNonStreamingHttpTimeout(httpTimeout?: HttpTimeoutOptions): HttpTimeoutOptions {
-        return mergeDriverHttpTimeoutOptions(
-            BEDROCK_NON_STREAMING_HTTP_TIMEOUT,
-            mergeDriverHttpTimeoutOptions(this.options.httpTimeout, httpTimeout),
-        ) as HttpTimeoutOptions;
     }
 
     private createExecutor(httpTimeout?: HttpTimeoutOptions) {
@@ -581,14 +569,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
 
         const executor = this.getExecutor(options.httpTimeout);
-        return {
-            executor,
-            close: () => executor.destroy(),
-        };
-    }
-
-    private getScopedNonStreamingExecutor(options: Pick<ExecutionOptions, 'httpTimeout'>): BedrockRuntimeExecutorScope {
-        const executor = this.getExecutor(this.getBedrockNonStreamingHttpTimeout(options.httpTimeout));
         return {
             executor,
             close: () => executor.destroy(),
@@ -1153,7 +1133,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const conversation = updateConversation(incomingConversation, conversePrompt);
 
         const payload = this.preparePayload(conversation, options);
-        const executorScope = this.getScopedNonStreamingExecutor(options);
+        const executorScope = this.getScopedExecutor(options);
 
         let res: ConverseResponse;
         try {
@@ -1199,7 +1179,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
-        const executorScope = this.getScopedNonStreamingExecutor(options);
+        const executorScope = this.getScopedExecutor(options);
 
         let res: InvokeModelCommandOutput;
         try {
@@ -1674,11 +1654,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         let res: InvokeModelCommandOutput;
         try {
-            const requestTimeout = options.httpTimeout
-                ? resolveDriverHttpTimeouts(
-                      mergeDriverHttpTimeoutOptions(this.options.httpTimeout, options.httpTimeout),
-                  ).headersTimeout
-                : (this.options.httpTimeout?.headersTimeout ?? 60_000 * 5);
+            const requestTimeout = this.getDriverRequestTimeoutMs(options.httpTimeout);
             res = await executorScope.executor.invokeModel(
                 {
                     modelId: options.model,

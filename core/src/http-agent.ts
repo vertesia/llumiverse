@@ -4,21 +4,25 @@ import { Agent } from 'undici';
 
 /**
  * Default HTTP timeouts used by {@link createDriverHttpAgent} when the
- * caller does not override them. These are deliberately tighter than
- * Node's undici default (5 minutes for headers and body) so a hung
- * upstream LLM-provider call surfaces in seconds rather than blocking
- * the whole request budget.
- *
- * Drivers with workloads that have legitimate long pauses (image
- * generation, tool-using agent streams) should pass higher overrides
- * via {@link HttpTimeoutOptions} rather than relying on the defaults.
+ * caller does not override them. Provider response waits deliberately sit
+ * beyond the hosting request boundary: application-level cancellation should
+ * end user work first, while these limits remain a bounded-resource safety net.
+ * Connect and keep-alive limits govern socket health rather than request work,
+ * so they remain short.
  */
+export const DEFAULT_DRIVER_REQUEST_TIMEOUT_MS = 15 * 60_000;
+
 export const DEFAULT_DRIVER_HTTP_TIMEOUTS: Required<HttpTimeoutOptions> = {
-    headersTimeout: 60_000,
-    bodyTimeout: 60_000,
+    headersTimeout: DEFAULT_DRIVER_REQUEST_TIMEOUT_MS,
+    bodyTimeout: DEFAULT_DRIVER_REQUEST_TIMEOUT_MS,
     connectTimeout: 10_000,
     keepAliveTimeout: 30_000,
 };
+
+export function resolveDriverRequestTimeoutMs(defaults?: HttpTimeoutOptions, override?: HttpTimeoutOptions): number {
+    const timeouts = resolveDriverHttpTimeouts(mergeDriverHttpTimeoutOptions(defaults, override));
+    return Math.max(timeouts.headersTimeout, timeouts.bodyTimeout);
+}
 
 const scopedHttpAgent = new AsyncLocalStorage<Agent>();
 

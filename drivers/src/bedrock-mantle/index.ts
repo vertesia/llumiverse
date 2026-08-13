@@ -114,6 +114,7 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
             ? getTokenProvider({ region: opts.region, credentials: opts.credentials })
             : getTokenProvider({ region: opts.region });
         const driverFetch = this.getDriverFetch();
+        const timeout = this.getDriverRequestTimeoutMs();
         const v1BaseURL = `https://bedrock-mantle.${opts.region}.api.aws/v1`;
 
         this.service = new BedrockOpenAI({
@@ -121,12 +122,14 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
             awsRegion: opts.region,
             bedrockTokenProvider,
             fetch: driverFetch,
+            timeout,
         });
         const responsesService = new BedrockOpenAI({
             baseURL: `https://bedrock-mantle.${opts.region}.api.aws/openai/v1`,
             awsRegion: opts.region,
             bedrockTokenProvider,
             fetch: driverFetch,
+            timeout,
         });
         this.responsesDelegate = new BedrockMantleResponsesDelegate(opts, responsesService);
         this.chatCompletionsProtocol = new OpenAISDKChatCompletionsProtocol({
@@ -153,6 +156,7 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
         this.anthropicService = new AnthropicBedrockMantle({
             awsRegion: opts.region,
             fetch: driverFetch,
+            timeout,
             ...credentialOptions,
         });
     }
