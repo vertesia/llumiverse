@@ -131,11 +131,10 @@ describe('driver HTTP agent helpers', () => {
         expect(driver.getRequestOptions({})).toBeUndefined();
         expect(driver.getRequestOptions({}, controller.signal)).toEqual({
             signal: controller.signal,
-            timeout: undefined,
         });
         expect(
             driver.getRequestOptions({ httpTimeout: { headersTimeout: 1_200_000, bodyTimeout: 1_800_000 } }),
-        ).toEqual({ signal: undefined, timeout: 1_800_000 });
+        ).toEqual({ timeout: 1_800_000 });
 
         driver.destroy();
     });

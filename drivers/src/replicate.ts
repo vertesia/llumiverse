@@ -47,6 +47,21 @@ const supportFineTunning = new Set([
     'mistralai/mistral-7b-v0.1',
 ]);
 
+function waitForPollingInterval(signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    return new Promise((resolve, reject) => {
+        const abort = () => {
+            clearTimeout(timeout);
+            reject(signal?.reason);
+        };
+        const timeout = setTimeout(() => {
+            signal?.removeEventListener('abort', abort);
+            resolve();
+        }, 500);
+        signal?.addEventListener('abort', abort, { once: true });
+    });
+}
+
 export interface ReplicateDriverOptions extends DriverOptions {
     apiKey: string;
 }
@@ -75,6 +90,15 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
             auth: options.apiKey,
             fetch: this.getDriverFetch(),
         });
+    }
+
+    private async cancelPrediction(prediction: Prediction): Promise<void> {
+        if (!prediction.id) return;
+        try {
+            await this.service.predictions.cancel(prediction.id);
+        } catch (error: unknown) {
+            this.logger.warn({ error, predictionId: prediction.id }, 'Failed to cancel Replicate prediction');
+        }
     }
 
     extractDataFromResponse(response: Prediction): Completion {
@@ -111,10 +135,16 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
         const stream = new EventStream<CompletionChunkObject>();
 
         // biome-ignore lint/style/noNonNullAssertion: urls.stream is populated by Replicate because the prediction was created with stream:true; SDK types it optional
-        const source = new EventSource(prediction.urls.stream!);
-        const abort = () => {
+        const source = new EventSource(prediction.urls.stream!, { fetch: this.getDriverFetch() });
+        const closeSource = () => {
+            signal?.removeEventListener('abort', abort);
             source.close();
+        };
+        let abortCleanup: Promise<void> | undefined;
+        const abort = () => {
+            closeSource();
             stream.close('');
+            abortCleanup ??= this.cancelPrediction(prediction);
         };
         if (signal?.aborted) abort();
         else signal?.addEventListener('abort', abort, { once: true });
@@ -126,21 +156,46 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
             try {
                 error = JSON.parse(e.data);
             } catch {
-                error = JSON.stringify(e);
+                error = e.data || 'Replicate SSE connection failed';
             }
             this.logger.error({ e, error }, 'Error in SSE stream');
+            closeSource();
+            abortCleanup ??= this.cancelPrediction(prediction);
+            stream.fail(error instanceof Error ? error : new Error(String(error)));
         });
         source.addEventListener('done', () => {
             try {
                 stream.close(''); // not using e.data which is {}
             } finally {
-                source.close();
+                closeSource();
             }
         });
-        return stream;
+        if (signal?.aborted) await Promise.resolve(abortCleanup);
+        return {
+            [Symbol.asyncIterator]() {
+                const iterator = stream[Symbol.asyncIterator]();
+                return {
+                    next: async () => {
+                        try {
+                            const result = await iterator.next();
+                            if (result.done) await Promise.resolve(abortCleanup);
+                            return result;
+                        } catch (error: unknown) {
+                            await Promise.resolve(abortCleanup);
+                            throw error;
+                        }
+                    },
+                    return: async () => {
+                        abort();
+                        await Promise.resolve(abortCleanup);
+                        return iterator.return?.() ?? { done: true, value: undefined };
+                    },
+                };
+            },
+        };
     }
 
-    async requestTextCompletion(prompt: string, options: ExecutionOptions) {
+    async requestTextCompletion(prompt: string, options: ExecutionOptions, signal?: AbortSignal) {
         if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== 'text-fallback') {
             this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
@@ -157,14 +212,40 @@ export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {
             //stream: stream,     //streaming described here https://replicate.com/blog/streaming
         };
 
-        const prediction = await this.service.predictions.create(predictionData);
+        const prediction = await this.service.predictions.create({
+            ...predictionData,
+            ...(signal ? { signal } : {}),
+        });
 
         //TODO stream
         //if we're streaming, return right away for the stream handler to handle
         //        if (stream) return prediction;
 
         //not streaming, wait for the result
-        const res = await this.service.wait(prediction, {});
+        let cancellation: Promise<void> | undefined;
+        const cancelPrediction = () => {
+            cancellation ??= this.cancelPrediction(prediction);
+        };
+        signal?.addEventListener('abort', cancelPrediction, { once: true });
+        let res = prediction;
+        try {
+            while (res.status !== 'succeeded' && res.status !== 'failed' && res.status !== 'canceled') {
+                signal?.throwIfAborted();
+                res = await this.service.predictions.get(prediction.id, { signal });
+                if (res.status !== 'succeeded' && res.status !== 'failed' && res.status !== 'canceled') {
+                    await waitForPollingInterval(signal);
+                }
+            }
+        } finally {
+            signal?.removeEventListener('abort', cancelPrediction);
+            await Promise.resolve(cancellation);
+        }
+        if (res.status === 'failed') {
+            throw new Error(`Prediction failed: ${res.error}`);
+        }
+        if (res.status === 'canceled') {
+            throw new Error('Prediction was canceled');
+        }
 
         const text: string = res.output.join('');
         return {

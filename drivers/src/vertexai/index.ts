@@ -112,15 +112,19 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
      * Cleanup Google Cloud clients when the driver is evicted from the cache.
      * AbstractDriver invokes this hook only after active executions finish.
      */
-    protected override destroyProviderResources(): void {
-        this.aiplatform?.close();
-        this.modelGarden?.close();
-        this.imagenClient?.close();
-        this.predictionClient?.close();
+    protected override destroyProviderResources(): Promise<void> {
+        const clients = [this.aiplatform, this.modelGarden, this.imagenClient, this.predictionClient];
         this.aiplatform = undefined;
         this.modelGarden = undefined;
         this.imagenClient = undefined;
         this.predictionClient = undefined;
+        return Promise.allSettled(clients.map((client) => client?.close())).then((results) => {
+            for (const result of results) {
+                if (result.status === 'rejected') {
+                    this.logger.warn({ error: result.reason }, 'Failed to close Vertex AI client');
+                }
+            }
+        });
     }
 
     private async getAuthClient(): Promise<AuthClient> {

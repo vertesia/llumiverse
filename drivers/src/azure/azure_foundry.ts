@@ -69,8 +69,8 @@ class AzureFoundryOpenAIProtocolDriver extends OpenAIResponsesDriverBase {
     service: OpenAI;
     readonly provider = Providers.azure_foundry;
 
-    constructor(service: OpenAI) {
-        super({});
+    constructor(service: OpenAI, options: DriverOptions) {
+        super(options);
         this.service = service;
     }
 
@@ -99,6 +99,7 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
     ): Promise<OpenAIChatCompletionsResponse> {
         const response = await this.service.path('/chat/completions').post({
             body: toAzureInferenceRequest(payload, false),
+            timeout: this.getDriverRequestTimeoutMs(_options.httpTimeout),
             ...(signal ? { abortSignal: signal } : {}),
         });
         if (response.status !== '200') {
@@ -119,7 +120,11 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
     ): Promise<ReadableStream> {
         const response = await this.service
             .path('/chat/completions')
-            .post({ body: toAzureInferenceRequest(payload, true), abortSignal: signal })
+            .post({
+                body: toAzureInferenceRequest(payload, true),
+                timeout: this.getDriverRequestTimeoutMs(_options.httpTimeout),
+                ...(signal ? { abortSignal: signal } : {}),
+            })
             .asNodeStream();
         const stream = response.body as NodeJSReadableStream;
         if (!stream) {
@@ -223,13 +228,20 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         return azureADTokenProvider;
     }
 
-    async isOpenAIDeployment(model: string): Promise<boolean> {
+    async isOpenAIDeployment(
+        model: string,
+        signal?: AbortSignal,
+        httpTimeout?: ExecutionOptions['httpTimeout'],
+    ): Promise<boolean> {
         const { deploymentName } = parseAzureFoundryModelId(model);
         const cached = this.deploymentProtocols.get(deploymentName);
         if (cached) {
             return cached === 'responses';
         }
-        const deployment = (await this.service.deployments.get(deploymentName)) as ModelDeployment;
+        const deployment = (await this.service.deployments.get(deploymentName, {
+            ...(signal ? { abortSignal: signal } : {}),
+            requestOptions: { timeout: this.getDriverRequestTimeoutMs(httpTimeout) },
+        })) as ModelDeployment;
         const protocol = deployment.modelPublisher.toLowerCase() === 'openai' ? 'responses' : 'chat_completions';
         this.deploymentProtocols.set(deploymentName, protocol);
         this.logger.debug(`[Azure Foundry] Deployment ${deploymentName} uses ${protocol}`);
@@ -238,6 +250,17 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
     protected canStream(_options: ExecutionOptions): Promise<boolean> {
         return Promise.resolve(true);
+    }
+
+    private getOpenAIProtocolDriver(): AzureFoundryOpenAIProtocolDriver {
+        this.openAIProtocolDriver ??= new AzureFoundryOpenAIProtocolDriver(
+            this.service.getOpenAIClient({
+                fetch: this.getDriverFetch(),
+                timeout: this.getDriverRequestTimeoutMs(),
+            }),
+            this.options,
+        );
+        return this.openAIProtocolDriver;
     }
 
     public formatDebugPrompt(prompt: ResponseInputItem[]): ResponseInputItem[] {
@@ -250,11 +273,10 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         signal?: AbortSignal,
     ): Promise<Completion> {
         const { deploymentName } = parseAzureFoundryModelId(options.model);
-        const isOpenAI = await this.isOpenAIDeployment(options.model);
+        const isOpenAI = await this.isOpenAIDeployment(options.model, signal, options.httpTimeout);
 
         if (isOpenAI) {
-            this.openAIProtocolDriver ??= new AzureFoundryOpenAIProtocolDriver(this.service.getOpenAIClient());
-            return this.openAIProtocolDriver.requestTextCompletion(prompt, options, signal);
+            return this.getOpenAIProtocolDriver().requestTextCompletion(prompt, options, signal);
         }
         const chatPrompt = toAzureFoundryChatPrompt(prompt);
         return this.inferenceProtocolDriver.requestTextCompletion(
@@ -270,11 +292,10 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
         const { deploymentName } = parseAzureFoundryModelId(options.model);
-        const isOpenAI = await this.isOpenAIDeployment(options.model);
+        const isOpenAI = await this.isOpenAIDeployment(options.model, signal, options.httpTimeout);
 
         if (isOpenAI) {
-            this.openAIProtocolDriver ??= new AzureFoundryOpenAIProtocolDriver(this.service.getOpenAIClient());
-            return this.openAIProtocolDriver.requestTextCompletionStream(prompt, options, signal);
+            return this.getOpenAIProtocolDriver().requestTextCompletionStream(prompt, options, signal);
         }
         const chatPrompt = toAzureFoundryChatPrompt(prompt);
         return this.inferenceProtocolDriver.requestTextCompletionStream(
@@ -335,7 +356,9 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     async validateConnection(): Promise<boolean> {
         try {
             // Test the AI Projects client by listing deployments
-            const deploymentsIterable = this.service.deployments.list();
+            const deploymentsIterable = this.service.deployments.list({
+                requestOptions: { timeout: this.getDriverRequestTimeoutMs() },
+            });
             let hasDeployments = false;
 
             for await (const deployment of deploymentsIterable) {
@@ -401,7 +424,10 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         const { deploymentName } = parseAzureFoundryModelId(model);
         try {
             const embeddingsClient = this.inferenceClient.path('/embeddings');
-            const response = await embeddingsClient.post({ body: { input, model: deploymentName } });
+            const response = await embeddingsClient.post({
+                body: { input, model: deploymentName },
+                timeout: this.getDriverRequestTimeoutMs(),
+            });
             if (isUnexpected(response)) {
                 throw new AzureFoundryHTTPError(
                     `${kind} embeddings request failed: ${response.status} ${response.body?.error?.message || 'Unknown error'}`,
@@ -443,7 +469,9 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         let deploymentsIterable: ReturnType<typeof this.service.deployments.list>;
         try {
             // List all deployments in the Azure AI Foundry project
-            deploymentsIterable = this.service.deployments.list();
+            deploymentsIterable = this.service.deployments.list({
+                requestOptions: { timeout: this.getDriverRequestTimeoutMs() },
+            });
         } catch (error) {
             this.logger.error({ error }, 'Failed to list deployments:');
             throw new Error('Failed to list deployments in Azure AI Foundry project');

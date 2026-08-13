@@ -952,43 +952,55 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return defaultRegion;
     }
 
-    private async getCanStream(model: string, type: BedrockModelType): Promise<boolean> {
+    private async getCanStream(model: string, type: BedrockModelType, signal?: AbortSignal): Promise<boolean> {
         let canStream: boolean = false;
         let error: unknown = null;
         const region = this.extractRegion(model, this.options.region);
+        const requestOptions = signal ? { abortSignal: signal } : undefined;
         if (type === BedrockModelType.FoundationModel || type === BedrockModelType.Unknown) {
             try {
-                const response = await this.getService(region).getFoundationModel({
-                    modelIdentifier: model,
-                });
+                const response = await this.getService(region).getFoundationModel(
+                    { modelIdentifier: model },
+                    requestOptions,
+                );
                 canStream = response.modelDetails?.responseStreamingSupported ?? false;
                 return canStream;
             } catch (e) {
+                signal?.throwIfAborted();
                 error = e;
             }
         }
         if (type === BedrockModelType.InferenceProfile || type === BedrockModelType.Unknown) {
             try {
-                const response = await this.getService(region).getInferenceProfile({
-                    inferenceProfileIdentifier: model,
-                });
+                const response = await this.getService(region).getInferenceProfile(
+                    { inferenceProfileIdentifier: model },
+                    requestOptions,
+                );
                 canStream = await this.getCanStream(
                     response.models?.[0].modelArn ?? '',
                     BedrockModelType.FoundationModel,
+                    signal,
                 );
                 return canStream;
             } catch (e) {
+                signal?.throwIfAborted();
                 error = e;
             }
         }
         if (type === BedrockModelType.CustomModel || type === BedrockModelType.Unknown) {
             try {
-                const response = await this.getService(region).getCustomModel({
-                    modelIdentifier: model,
-                });
-                canStream = await this.getCanStream(response.baseModelArn ?? '', BedrockModelType.FoundationModel);
+                const response = await this.getService(region).getCustomModel(
+                    { modelIdentifier: model },
+                    requestOptions,
+                );
+                canStream = await this.getCanStream(
+                    response.baseModelArn ?? '',
+                    BedrockModelType.FoundationModel,
+                    signal,
+                );
                 return canStream;
             } catch (e) {
+                signal?.throwIfAborted();
                 error = e;
             }
         }
@@ -998,7 +1010,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return canStream;
     }
 
-    protected async canStream(options: ExecutionOptions): Promise<boolean> {
+    protected async canStream(options: ExecutionOptions, signal?: AbortSignal): Promise<boolean> {
         // // TwelveLabs Pegasus supports streaming according to the documentation
         // if (options.model.includes("twelvelabs.pegasus")) {
         //     return true;
@@ -1014,7 +1026,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             } else if (options.model.includes('custom-model')) {
                 type = BedrockModelType.CustomModel;
             }
-            canStream = await this.getCanStream(options.model, type);
+            canStream = await this.getCanStream(options.model, type, signal);
+            signal?.throwIfAborted();
             supportStreamingCache.set(options.model, canStream);
         }
         return canStream;
@@ -1632,7 +1645,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return model.includes('nova-canvas');
     }
 
-    async requestImageGeneration(prompt: NovaMessagesPrompt, options: ExecutionOptions): Promise<Completion> {
+    async requestImageGeneration(
+        prompt: NovaMessagesPrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion> {
         if (
             options.model_options?._option_id !== undefined &&
             options.model_options?._option_id !== 'bedrock-nova-canvas'
@@ -1663,6 +1680,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     body: JSON.stringify(payload),
                 },
                 {
+                    abortSignal: signal,
                     requestTimeout,
                 },
             );

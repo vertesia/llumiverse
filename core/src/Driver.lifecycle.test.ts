@@ -2,6 +2,7 @@ import {
     type AIModel,
     type Completion,
     type CompletionChunkObject,
+    type CompletionStream,
     type DriverCompletionStream,
     type DriverOptions,
     type EmbeddingsOptions,
@@ -9,6 +10,7 @@ import {
     type ExecutionOptions,
     type ModelSearchPayload,
     PromptRole,
+    type PromptSegment,
 } from '@llumiverse/common';
 import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS } from './CompletionStream.js';
@@ -87,8 +89,44 @@ class LifecycleTestDriver extends AbstractDriver<DriverOptions, string> {
         return this.imageModel;
     }
 
-    protected override canStream(): Promise<boolean> {
+    protected override canStream(_options?: ExecutionOptions, _signal?: AbortSignal): Promise<boolean> {
         return Promise.resolve(this.streaming);
+    }
+}
+
+class OverriddenStreamDriver extends LifecycleTestDriver {
+    readonly cancelStream = vi.fn().mockResolvedValue(undefined);
+
+    override async stream(_segments: PromptSegment[], _options: ExecutionOptions): Promise<CompletionStream<string>> {
+        return {
+            completion: undefined,
+            cancel: this.cancelStream,
+            async *[Symbol.asyncIterator]() {
+                yield 'custom';
+            },
+        };
+    }
+}
+
+class PendingStreamCreationDriver extends LifecycleTestDriver {
+    protected override canStream(_options?: ExecutionOptions, signal?: AbortSignal): Promise<boolean> {
+        return new Promise((_resolve, reject) => {
+            signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+        });
+    }
+}
+
+class ThrowingIteratorDriver extends LifecycleTestDriver {
+    readonly cancelStream = vi.fn().mockResolvedValue(undefined);
+
+    override async stream(_segments: PromptSegment[], _options: ExecutionOptions): Promise<CompletionStream<string>> {
+        return {
+            completion: undefined,
+            cancel: this.cancelStream,
+            [Symbol.asyncIterator]() {
+                throw new Error('iterator creation failed');
+            },
+        };
     }
 }
 
@@ -167,6 +205,30 @@ describe('AbstractDriver lifecycle', () => {
         expect(cleanup).toHaveBeenCalledOnce();
     });
 
+    it('transfers lifecycle ownership for overridden stream implementations', async () => {
+        const cleanup = vi.fn();
+        const driver = new OverriddenStreamDriver(cleanup);
+
+        const stream = await driver.stream(segments, options);
+        driver.destroy();
+
+        expect(cleanup).not.toHaveBeenCalled();
+        await stream.cancel();
+        expect(cleanup).toHaveBeenCalledOnce();
+    });
+
+    it('releases lifecycle ownership when an overridden stream iterator throws during creation', async () => {
+        const cleanup = vi.fn();
+        const driver = new ThrowingIteratorDriver(cleanup);
+        const stream = await driver.stream(segments, options);
+
+        expect(() => stream[Symbol.asyncIterator]()).toThrow('iterator creation failed');
+        driver.destroy();
+
+        await vi.waitFor(() => expect(driver.cancelStream).toHaveBeenCalledOnce());
+        expect(cleanup).toHaveBeenCalledOnce();
+    });
+
     it('releases an abandoned stream lease after its start timeout', async () => {
         vi.useFakeTimers();
         try {
@@ -182,6 +244,20 @@ describe('AbstractDriver lifecycle', () => {
             expect(cleanup).toHaveBeenCalledOnce();
             const iterator = stream[Symbol.asyncIterator]();
             await expect(iterator.next()).rejects.toThrow('Completion stream was not consumed within 100ms');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('cancels an overridden stream when its start lease expires', async () => {
+        vi.useFakeTimers();
+        try {
+            const driver = new OverriddenStreamDriver(vi.fn(), { streamStartTimeoutMs: 100 });
+            await driver.stream(segments, options);
+
+            await vi.advanceTimersByTimeAsync(101);
+
+            expect(driver.cancelStream).toHaveBeenCalledOnce();
         } finally {
             vi.useRealTimers();
         }
@@ -257,6 +333,31 @@ describe('AbstractDriver lifecycle', () => {
 
         expect(driver.completionSignal?.aborted).toBe(true);
         await expect(read).resolves.toEqual({ done: true, value: undefined });
+    });
+
+    it('cancels stream creation before a provider stream exists', async () => {
+        const cleanup = vi.fn();
+        const driver = new PendingStreamCreationDriver(cleanup);
+        const controller = new AbortController();
+
+        const stream = driver.stream(segments, options, controller.signal);
+        controller.abort();
+
+        await expect(stream).rejects.toBe(controller.signal.reason);
+        driver.destroy();
+        expect(cleanup).toHaveBeenCalledOnce();
+    });
+
+    it('keeps the stream signal active after creation', async () => {
+        const driver = new LifecycleTestDriver(vi.fn());
+        const controller = new AbortController();
+        const stream = await driver.stream(segments, options, controller.signal);
+        const read = stream[Symbol.asyncIterator]().next();
+
+        controller.abort();
+
+        await expect(read).resolves.toEqual({ done: true, value: undefined });
+        expect(driver.completionStreamSignal?.aborted).toBe(true);
     });
 
     it('rejects invalid stream start timeouts', () => {

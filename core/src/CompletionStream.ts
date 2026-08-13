@@ -26,10 +26,11 @@ class CompletionStreamLease {
     constructor(
         private readonly releaseOperation: () => void,
         private readonly startTimeoutMs: number,
+        expire: () => Promise<void>,
     ) {
         this.timer = setTimeout(() => {
             this.expired = true;
-            this.releaseOperation();
+            void expire().finally(this.releaseOperation);
         }, startTimeoutMs);
         this.timer.unref?.();
     }
@@ -54,7 +55,6 @@ class CompletionStreamLease {
         if (this.started) return false;
         this.cancelled = true;
         clearTimeout(this.timer);
-        this.releaseOperation();
         return true;
     }
 }
@@ -65,11 +65,8 @@ abstract class ManagedCompletionStream<PromptT> implements CompletionStream<Prom
     private readonly abortController = new AbortController();
     private activeIterator?: AsyncGenerator<string, void, unknown>;
     private iteratorCreated = false;
-    private readonly lease: CompletionStreamLease;
-
-    protected constructor(releaseOperation: () => void, streamStartTimeoutMs: number) {
+    protected constructor() {
         this.abortSignal = this.abortController.signal;
-        this.lease = new CompletionStreamLease(releaseOperation, streamStartTimeoutMs);
     }
 
     [Symbol.asyncIterator](): AsyncIterator<string> {
@@ -77,7 +74,89 @@ abstract class ManagedCompletionStream<PromptT> implements CompletionStream<Prom
             throw new Error('Completion stream can only be consumed once');
         }
         this.iteratorCreated = true;
-        const iterator = this.iterateWithLease();
+        const iterator = this.iterateWithCleanup();
+        this.activeIterator = iterator;
+        return {
+            next: () => iterator.next(),
+            return: async () => {
+                await this.cancel();
+                return { done: true, value: undefined };
+            },
+            throw: async (error?: unknown) => {
+                await this.cancel();
+                throw error;
+            },
+        };
+    }
+
+    async cancel(): Promise<void> {
+        this.abortController.abort();
+        await this.activeIterator?.return?.();
+    }
+
+    protected abstract iterate(): AsyncGenerator<string, void, unknown>;
+
+    private async *iterateWithCleanup(): AsyncGenerator<string, void, unknown> {
+        try {
+            yield* this.iterate();
+        } finally {
+            this.activeIterator = undefined;
+        }
+    }
+}
+
+class LeasedCompletionStream<PromptT> implements CompletionStream<PromptT> {
+    private activeIterator?: AsyncIterator<string>;
+    private iteratorCreated = false;
+    private readonly lease: CompletionStreamLease;
+    private abort?: () => void;
+
+    constructor(
+        private readonly stream: CompletionStream<PromptT>,
+        releaseOperation: () => void,
+        streamStartTimeoutMs: number,
+        private readonly signal?: AbortSignal,
+    ) {
+        this.lease = new CompletionStreamLease(releaseOperation, streamStartTimeoutMs, async () => {
+            this.removeAbortListener();
+            try {
+                await this.stream.cancel();
+            } catch {
+                /* stream cleanup best-effort */
+            }
+        });
+        if (this.signal) {
+            this.abort = () => {
+                void this.cancel().catch(() => {
+                    /* signal-driven cleanup best-effort */
+                });
+            };
+            if (this.signal.aborted) this.abort();
+            else this.signal.addEventListener('abort', this.abort, { once: true });
+        }
+    }
+
+    get completion(): ExecutionResponse<PromptT> | undefined {
+        return this.stream.completion;
+    }
+
+    [Symbol.asyncIterator](): AsyncIterator<string> {
+        if (this.iteratorCreated) {
+            throw new Error('Completion stream can only be consumed once');
+        }
+        this.iteratorCreated = true;
+        let iterator: AsyncIterator<string>;
+        try {
+            iterator = this.stream[Symbol.asyncIterator]();
+        } catch (error: unknown) {
+            this.removeAbortListener();
+            try {
+                void this.stream.cancel().finally(() => this.lease.release());
+            } catch {
+                this.lease.release();
+            }
+            throw error;
+        }
         this.activeIterator = iterator;
         let started = false;
         return {
@@ -86,7 +165,14 @@ abstract class ManagedCompletionStream<PromptT> implements CompletionStream<Prom
                     this.lease.start();
                     started = true;
                 }
-                return iterator.next();
+                try {
+                    const result = await iterator.next();
+                    if (result.done) this.releaseLease();
+                    return result;
+                } catch (error: unknown) {
+                    this.releaseLease();
+                    throw error;
+                }
             },
             return: async () => {
                 await this.cancel();
@@ -100,21 +186,34 @@ abstract class ManagedCompletionStream<PromptT> implements CompletionStream<Prom
     }
 
     async cancel(): Promise<void> {
-        if (this.lease.cancelPending()) return;
-        this.abortController.abort();
-        await this.activeIterator?.return?.();
-    }
-
-    protected abstract iterate(): AsyncGenerator<string, void, unknown>;
-
-    private async *iterateWithLease(): AsyncGenerator<string, void, unknown> {
+        const pending = this.lease.cancelPending();
         try {
-            yield* this.iterate();
+            await this.stream.cancel();
+            if (!pending) await this.activeIterator?.return?.();
         } finally {
             this.activeIterator = undefined;
-            this.lease.release();
+            this.releaseLease();
         }
     }
+
+    private releaseLease(): void {
+        this.removeAbortListener();
+        this.lease.release();
+    }
+
+    private removeAbortListener(): void {
+        if (this.abort) this.signal?.removeEventListener('abort', this.abort);
+        this.abort = undefined;
+    }
+}
+
+export function leaseCompletionStream<PromptT>(
+    stream: CompletionStream<PromptT>,
+    releaseOperation: () => void,
+    streamStartTimeoutMs = DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS,
+    signal?: AbortSignal,
+): CompletionStream<PromptT> {
+    return new LeasedCompletionStream(stream, releaseOperation, streamStartTimeoutMs, signal);
 }
 
 /**
@@ -189,10 +288,8 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
         protected readonly driver: AbstractDriver<DriverOptions, PromptT>,
         protected readonly prompt: PromptT,
         protected readonly options: ExecutionOptions,
-        releaseOperation: () => void = () => {},
-        streamStartTimeoutMs = DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS,
     ) {
-        super(releaseOperation, streamStartTimeoutMs);
+        super();
         this.chunks = 0;
     }
 
@@ -467,10 +564,8 @@ export class FallbackCompletionStream<PromptT = unknown> extends ManagedCompleti
         protected readonly driver: AbstractDriver<DriverOptions, PromptT>,
         protected readonly prompt: PromptT,
         protected readonly options: ExecutionOptions,
-        releaseOperation: () => void = () => {},
-        streamStartTimeoutMs = DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS,
     ) {
-        super(releaseOperation, streamStartTimeoutMs);
+        super();
     }
 
     protected async *iterate() {

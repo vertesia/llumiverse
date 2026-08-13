@@ -114,6 +114,7 @@ describe('AzureFoundryDriver protocol composition', () => {
 
         expect(path).toHaveBeenCalledWith('/chat/completions');
         expect(post).toHaveBeenCalledWith({
+            timeout: 900_000,
             body: expect.objectContaining({
                 model: 'llama-deployment',
                 stream: false,
@@ -206,6 +207,10 @@ describe('AzureFoundryDriver protocol composition', () => {
         );
         expect(deploymentGet).toHaveBeenCalledOnce();
         expect(getOpenAIClient).toHaveBeenCalledOnce();
+        expect(getOpenAIClient).toHaveBeenCalledWith({
+            fetch: expect.any(Function),
+            timeout: 900_000,
+        });
         expect(create).toHaveBeenCalledWith(
             expect.objectContaining({
                 model: 'gpt-deployment',

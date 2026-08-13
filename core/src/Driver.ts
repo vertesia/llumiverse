@@ -32,6 +32,7 @@ import {
     DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS,
     DefaultCompletionStream,
     FallbackCompletionStream,
+    leaseCompletionStream,
 } from './CompletionStream.js';
 import { formatTextPrompt } from './formatters/index.js';
 import {
@@ -75,7 +76,11 @@ export interface Driver<PromptT = unknown> {
 
     // by default no stream is supported. we block and we return all at once
     //stream(segments: PromptSegment[], options: ExecutionOptions): Promise<StreamingExecutionResponse<PromptT>>;
-    stream(segments: PromptSegment[], options: ExecutionOptions): Promise<CompletionStream<PromptT>>;
+    stream(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CompletionStream<PromptT>>;
 
     startTraining(dataset: DataSource, options: TrainingOptions): Promise<TrainingJob>;
 
@@ -100,6 +105,9 @@ export interface Driver<PromptT = unknown> {
      * segmented video/audio or joint-multimodal models).
      */
     generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult>;
+
+    /** Borrow this driver across cache checkout until the caller invokes an operation. */
+    acquireOperation(): () => void;
 
     /** Request cleanup after all active operations and borrowed scopes finish. */
     destroy(): void;
@@ -171,7 +179,14 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
             const operation = this[name] as (...args: unknown[]) => Promise<unknown>;
             Object.defineProperty(this, name, {
                 configurable: false,
-                value: (...args: unknown[]) => this.runOperation(() => operation.apply(this, args)),
+                value:
+                    name === 'stream'
+                        ? (...args: unknown[]) =>
+                              this.runStreamOperation(
+                                  () => operation.apply(this, args) as Promise<CompletionStream<PromptT>>,
+                                  args[2] as AbortSignal | undefined,
+                              )
+                        : (...args: unknown[]) => this.runOperation(() => operation.apply(this, args)),
                 writable: false,
             });
         }
@@ -183,6 +198,22 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
             return await operation();
         } finally {
             release();
+        }
+    }
+
+    private async runStreamOperation(operation: () => Promise<CompletionStream<PromptT>>, signal?: AbortSignal) {
+        const release = this.acquireOperation();
+        try {
+            const stream = await operation();
+            return leaseCompletionStream(
+                stream,
+                release,
+                this.options.streamStartTimeoutMs ?? DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS,
+                signal,
+            );
+        } catch (error: unknown) {
+            release();
+            throw error;
         }
     }
 
@@ -229,8 +260,10 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         signal?: AbortSignal,
     ): { signal?: AbortSignal; timeout?: number } | undefined {
         const timeout = options.httpTimeout ? this.getDriverRequestTimeoutMs(options.httpTimeout) : undefined;
-        if (!signal && timeout === undefined) return undefined;
-        return { signal, timeout };
+        if (signal && timeout !== undefined) return { signal, timeout };
+        if (signal) return { signal };
+        if (timeout !== undefined) return { timeout };
+        return undefined;
     }
 
     public createExecutionHttpAgentScope(
@@ -288,23 +321,18 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<ExecutionResponse<PromptT>> {
-        const release = this.acquireOperation();
-        try {
-            const prompt = await this.createPrompt(segments, options);
-            return await this._execute(prompt, options, signal).catch((error: unknown) => {
-                // Don't wrap if already a LlumiverseError
-                if (LlumiverseError.isLlumiverseError(error)) {
-                    throw error;
-                }
-                throw this.formatLlumiverseError(error, {
-                    provider: this.provider,
-                    model: options.model,
-                    operation: 'execute',
-                });
+        const prompt = await this.createPrompt(segments, options);
+        return await this._execute(prompt, options, signal).catch((error: unknown) => {
+            // Don't wrap if already a LlumiverseError
+            if (LlumiverseError.isLlumiverseError(error)) {
+                throw error;
+            }
+            throw this.formatLlumiverseError(error, {
+                provider: this.provider,
+                model: options.model,
+                operation: 'execute',
             });
-        } finally {
-            release();
-        }
+        });
     }
 
     async _execute(
@@ -368,25 +396,24 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     }
 
     // by default no stream is supported. we block and we return all at once
-    async stream(segments: PromptSegment[], options: ExecutionOptions): Promise<CompletionStream<PromptT>> {
-        const release = this.acquireOperation();
-        try {
-            this.logger.debug(
-                options,
-                `Executing prompt with provider ${this.provider} with options: ${JSON.stringify(options)}`,
-            );
-            const prompt = await this.createPrompt(segments, options);
-            const canStream = await this.canStream(options);
-            const streamStartTimeoutMs =
-                this.options.streamStartTimeoutMs ?? DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS;
-            if (canStream) {
-                return new DefaultCompletionStream(this, prompt, options, release, streamStartTimeoutMs);
-            }
-            return new FallbackCompletionStream(this, prompt, options, release, streamStartTimeoutMs);
-        } catch (error: unknown) {
-            release();
-            throw error;
+    async stream(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CompletionStream<PromptT>> {
+        signal?.throwIfAborted();
+        this.logger.debug(
+            options,
+            `Executing prompt with provider ${this.provider} with options: ${JSON.stringify(options)}`,
+        );
+        const prompt = await this.createPrompt(segments, options);
+        signal?.throwIfAborted();
+        if (await this.canStream(options, signal)) {
+            signal?.throwIfAborted();
+            return new DefaultCompletionStream(this, prompt, options);
         }
+        signal?.throwIfAborted();
+        return new FallbackCompletionStream(this, prompt, options);
     }
 
     /**
@@ -414,7 +441,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
      * @param options the execution options containing the target model name.
      * @returns true if the execution can be streamed false otherwise.
      */
-    protected canStream(_options: ExecutionOptions) {
+    protected canStream(_options: ExecutionOptions, _signal?: AbortSignal) {
         return Promise.resolve(true);
     }
 
@@ -585,7 +612,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     }
 
     /** Provider-specific resource cleanup, called once after active operations finish. */
-    protected destroyProviderResources(): void {}
+    protected destroyProviderResources(): void | Promise<void> {}
 
     /**
      * Request cleanup when the driver is evicted from a cache. Active executions
@@ -601,11 +628,19 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
         this._resourcesDestroyed = true;
         try {
-            this.destroyProviderResources();
-        } finally {
-            this._httpAgent?.close().catch(() => {
-                /* shutdown best-effort */
+            void Promise.resolve(this.destroyProviderResources()).catch((error: unknown) => {
+                this.logger.warn({ error }, `Failed to destroy provider resources for ${this.provider}`);
             });
+        } catch (error: unknown) {
+            this.logger.warn({ error }, `Failed to destroy provider resources for ${this.provider}`);
+        } finally {
+            try {
+                this._httpAgent?.close().catch((error: unknown) => {
+                    this.logger.warn({ error }, `Failed to close HTTP resources for ${this.provider}`);
+                });
+            } catch (error: unknown) {
+                this.logger.warn({ error }, `Failed to close HTTP resources for ${this.provider}`);
+            }
             this._httpAgent = undefined;
             this._driverFetch = undefined;
         }
