@@ -1,8 +1,7 @@
 import { z } from 'zod';
 import { ImagenMaskMode, ImagenTaskType, ThinkingLevel } from '../options/vertexai.js';
 
-// Runtime schemas for `ModelOptions` — the union of every driver's per-model options — and its
-// twenty-five members.
+// Runtime schemas for `ModelOptions` — the union of every driver's per-model options.
 //
 // These are the SINGLE definition of each option set. The OpenAPI document publishes them, AJV
 // enforces them, and the public TypeScript types in `../options/*` are `z.infer` of them, so there
