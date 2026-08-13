@@ -24,8 +24,11 @@ class LifecycleTestDriver extends AbstractDriver<DriverOptions, string> {
         yield { result: [{ type: 'text', value: 'first' }] } satisfies CompletionChunkObject;
     })();
 
-    constructor(private readonly cleanup: () => void) {
-        super({});
+    constructor(
+        private readonly cleanup: () => void,
+        options: DriverOptions = {},
+    ) {
+        super(options);
     }
 
     async requestTextCompletion(_prompt: string, _options: ExecutionOptions): Promise<Completion> {
@@ -132,6 +135,45 @@ describe('AbstractDriver lifecycle', () => {
         }
         expect(chunks).toEqual(['first']);
         expect(cleanup).toHaveBeenCalledOnce();
+    });
+
+    it('releases an abandoned stream lease after its start timeout', async () => {
+        vi.useFakeTimers();
+        try {
+            const cleanup = vi.fn();
+            const driver = new LifecycleTestDriver(cleanup, { streamStartTimeoutMs: 100 });
+
+            const stream = await driver.stream(segments, options);
+            driver.destroy();
+            expect(cleanup).not.toHaveBeenCalled();
+
+            await vi.advanceTimersByTimeAsync(101);
+
+            expect(cleanup).toHaveBeenCalledOnce();
+            const iterator = stream[Symbol.asyncIterator]();
+            await expect(iterator.next()).rejects.toThrow('Completion stream was not consumed within 100ms');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('allows an unconsumed stream to be cancelled explicitly', async () => {
+        const cleanup = vi.fn();
+        const driver = new LifecycleTestDriver(cleanup);
+
+        const stream = await driver.stream(segments, options);
+        await stream.cancel?.();
+        driver.destroy();
+
+        expect(cleanup).toHaveBeenCalledOnce();
+        const iterator = stream[Symbol.asyncIterator]();
+        await expect(iterator.next()).rejects.toThrow('Completion stream was cancelled before consumption');
+    });
+
+    it('rejects invalid stream start timeouts', () => {
+        expect(() => new LifecycleTestDriver(vi.fn(), { streamStartTimeoutMs: 0 })).toThrow(
+            'streamStartTimeoutMs must be a positive finite number',
+        );
     });
 
     it('defers destruction until model listing finishes', async () => {

@@ -492,6 +492,8 @@ export interface ExecutionResponse<PromptT = unknown> extends Completion {
 
 export interface CompletionStream<PromptT = unknown> extends AsyncIterable<string> {
     completion: ExecutionResponse<PromptT> | undefined;
+    /** Release an unstarted stream and its driver lease without consuming output. */
+    cancel?(): Promise<void>;
 }
 
 /**
@@ -524,6 +526,11 @@ export interface DriverOptions {
      * driver) ignore this. See {@link HttpTimeoutOptions} for defaults.
      */
     httpTimeout?: HttpTimeoutOptions;
+    /**
+     * Maximum time a returned completion stream may remain unconsumed before
+     * its driver lease is released. Defaults to 60 seconds.
+     */
+    streamStartTimeoutMs?: number;
 }
 
 export type JSONSchemaType =

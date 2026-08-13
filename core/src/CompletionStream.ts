@@ -14,6 +14,53 @@ import type { AbstractDriver } from './Driver.js';
 
 type StreamingToolUse = ToolUse<unknown> & { _actual_id?: string };
 
+export const DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS = 60_000;
+
+class CompletionStreamLease {
+    private cancelled = false;
+    private expired = false;
+    private started = false;
+    private readonly timer: ReturnType<typeof setTimeout>;
+
+    constructor(
+        private readonly releaseOperation: () => void,
+        private readonly startTimeoutMs: number,
+    ) {
+        this.timer = setTimeout(() => {
+            this.expired = true;
+            this.releaseOperation();
+        }, startTimeoutMs);
+        this.timer.unref?.();
+    }
+
+    start(): void {
+        if (this.started) {
+            throw new Error('Completion stream can only be consumed once');
+        }
+        this.started = true;
+        clearTimeout(this.timer);
+        if (this.cancelled) {
+            throw new Error('Completion stream was cancelled before consumption');
+        }
+        if (this.expired) {
+            throw new Error(`Completion stream was not consumed within ${this.startTimeoutMs}ms`);
+        }
+    }
+
+    release(): void {
+        clearTimeout(this.timer);
+        this.releaseOperation();
+    }
+
+    cancelPending(): boolean {
+        if (this.started) return false;
+        this.cancelled = true;
+        clearTimeout(this.timer);
+        this.releaseOperation();
+        return true;
+    }
+}
+
 /**
  * Merge a single streamed `tool_use` fragment into the accumulator map keyed by tool id.
  *
@@ -82,21 +129,31 @@ export function accumulateToolUseChunk(
 export class DefaultCompletionStream<PromptT = unknown> implements CompletionStream<PromptT> {
     chunks: number; // Counter for number of chunks instead of storing strings
     completion: ExecutionResponse<PromptT> | undefined;
+    private readonly lease: CompletionStreamLease;
 
     constructor(
         public driver: AbstractDriver<DriverOptions, PromptT>,
         public prompt: PromptT,
         public options: ExecutionOptions,
-        private readonly releaseOperation: () => void = () => {},
+        releaseOperation: () => void = () => {},
+        streamStartTimeoutMs = DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS,
     ) {
         this.chunks = 0;
+        this.lease = new CompletionStreamLease(releaseOperation, streamStartTimeoutMs);
     }
 
     async *[Symbol.asyncIterator]() {
+        this.lease.start();
         try {
             yield* this.iterate();
         } finally {
-            this.releaseOperation();
+            this.lease.release();
+        }
+    }
+
+    async cancel(): Promise<void> {
+        if (!this.lease.cancelPending()) {
+            throw new Error('An active completion stream must be cancelled through its iterator');
         }
     }
 
@@ -362,19 +419,30 @@ export class DefaultCompletionStream<PromptT = unknown> implements CompletionStr
 
 export class FallbackCompletionStream<PromptT = unknown> implements CompletionStream<PromptT> {
     completion: ExecutionResponse<PromptT> | undefined;
+    private readonly lease: CompletionStreamLease;
 
     constructor(
         public driver: AbstractDriver<DriverOptions, PromptT>,
         public prompt: PromptT,
         public options: ExecutionOptions,
-        private readonly releaseOperation: () => void = () => {},
-    ) {}
+        releaseOperation: () => void = () => {},
+        streamStartTimeoutMs = DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS,
+    ) {
+        this.lease = new CompletionStreamLease(releaseOperation, streamStartTimeoutMs);
+    }
 
     async *[Symbol.asyncIterator]() {
+        this.lease.start();
         try {
             yield* this.iterate();
         } finally {
-            this.releaseOperation();
+            this.lease.release();
+        }
+    }
+
+    async cancel(): Promise<void> {
+        if (!this.lease.cancelPending()) {
+            throw new Error('An active completion stream must be cancelled through its iterator');
         }
     }
 

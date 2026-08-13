@@ -123,7 +123,9 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
                 response.status,
             );
         }
-        return openAIChatCompletionsStreamToSSE(normalizeAzureInferenceStream(createSseStream(stream)));
+        return openAIChatCompletionsStreamToSSE(normalizeAzureInferenceStream(createSseStream(stream)), () =>
+            stream.destroy(),
+        );
     }
 
     async listModels(): Promise<AIModel[]> {

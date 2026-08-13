@@ -27,7 +27,11 @@ import {
     type TrainingPromptOptions,
 } from '@llumiverse/common';
 import type { Agent } from 'undici';
-import { DefaultCompletionStream, FallbackCompletionStream } from './CompletionStream.js';
+import {
+    DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS,
+    DefaultCompletionStream,
+    FallbackCompletionStream,
+} from './CompletionStream.js';
 import { formatTextPrompt } from './formatters/index.js';
 import {
     createAgentBackedFetch,
@@ -95,6 +99,30 @@ export interface Driver<PromptT = unknown> {
     destroy?(): void;
 }
 
+type AsyncDriverOperationName = {
+    [Name in keyof Driver]-?: Driver[Name] extends (...args: never[]) => Promise<unknown> ? Name : never;
+}[keyof Driver];
+
+type ExplicitlyScopedOperationName = 'execute' | 'stream';
+type LifecycleNeutralOperationName = 'createPrompt' | 'createTrainingPrompt';
+type LifecycleGuardedOperationName = Exclude<
+    AsyncDriverOperationName,
+    ExplicitlyScopedOperationName | LifecycleNeutralOperationName
+>;
+
+const lifecycleGuardedOperationNames = [
+    'startTraining',
+    'cancelTraining',
+    'getTrainingJob',
+    'listModels',
+    'listTrainableModels',
+    'validateConnection',
+    'generateEmbeddings',
+] as const satisfies readonly LifecycleGuardedOperationName[];
+
+type MissingLifecycleGuard = Exclude<LifecycleGuardedOperationName, (typeof lifecycleGuardedOperationNames)[number]>;
+const lifecycleGuardsAreExhaustive: MissingLifecycleGuard extends never ? true : never = true;
+
 /**
  * To be implemented by each driver
  */
@@ -113,6 +141,12 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     private _resourcesDestroyed = false;
 
     constructor(opts: OptionsT) {
+        if (
+            opts.streamStartTimeoutMs !== undefined &&
+            (!Number.isFinite(opts.streamStartTimeoutMs) || opts.streamStartTimeoutMs <= 0)
+        ) {
+            throw new RangeError('streamStartTimeoutMs must be a positive finite number');
+        }
         this.options = opts;
         this.logger = createLogger(opts.logger);
         this.installOperationGuards();
@@ -124,22 +158,13 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
      * one place, so new cache users cannot accidentally call an unleased network path.
      */
     private installOperationGuards(): void {
-        const operationNames = [
-            'startTraining',
-            'cancelTraining',
-            'getTrainingJob',
-            'listModels',
-            'listTrainableModels',
-            'validateConnection',
-            'generateEmbeddings',
-        ] as const;
-
-        for (const name of operationNames) {
+        void lifecycleGuardsAreExhaustive;
+        for (const name of lifecycleGuardedOperationNames) {
             const operation = this[name] as (...args: unknown[]) => Promise<unknown>;
             Object.defineProperty(this, name, {
-                configurable: true,
+                configurable: false,
                 value: (...args: unknown[]) => this.runOperation(() => operation.apply(this, args)),
-                writable: true,
+                writable: false,
             });
         }
     }
@@ -312,10 +337,12 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
             );
             const prompt = await this.createPrompt(segments, options);
             const canStream = await this.canStream(options);
+            const streamStartTimeoutMs =
+                this.options.streamStartTimeoutMs ?? DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS;
             if (canStream) {
-                return new DefaultCompletionStream(this, prompt, options, release);
+                return new DefaultCompletionStream(this, prompt, options, release, streamStartTimeoutMs);
             }
-            return new FallbackCompletionStream(this, prompt, options, release);
+            return new FallbackCompletionStream(this, prompt, options, release, streamStartTimeoutMs);
         } catch (error: unknown) {
             release();
             throw error;

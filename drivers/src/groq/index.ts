@@ -92,7 +92,7 @@ export class GroqDriver extends OpenAIChatCompletionsDriverBase<GroqDriverOption
         options: ExecutionOptions,
     ): Promise<ReadableStream> {
         const stream = await this.client.chat.completions.create(toGroqRequest(payload, options, true));
-        return openAIChatCompletionsStreamToSSE(normalizeGroqStream(stream));
+        return openAIChatCompletionsStreamToSSE(normalizeGroqStream(stream), () => stream.controller.abort());
     }
 
     async listModels(): Promise<AIModel[]> {
