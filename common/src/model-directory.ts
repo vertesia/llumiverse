@@ -93,6 +93,9 @@ function inferFamily(model: string): { family: string; source_provider?: string 
         return { family: 'embedding' };
     }
     if (/(?:prompt-guard|moderation|safeguard)/.test(normalized)) return { family: 'moderation' };
+    if (normalized.includes('grok') && normalized.includes('image')) {
+        return { family: 'image', source_provider: 'xai' };
+    }
     if (normalized.includes('gpt-image') || normalized.includes('dall-e') || normalized.includes('imagen-')) {
         return { family: 'image', source_provider: normalized.includes('imagen') ? 'google' : 'openai' };
     }

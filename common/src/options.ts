@@ -8,6 +8,7 @@ import { getGroqOptions } from './options/groq.js';
 import { getMistralOptions } from './options/mistral.js';
 import { getAzureOpenAiOptions, getOpenAiCompatibleOptions, getOpenAiOptions } from './options/openai.js';
 import { getVertexAiOptions } from './options/vertexai.js';
+import { getXAIOptions } from './options/xai.js';
 import { type ModelOptions, type ModelOptionsInfo, Providers } from './types.js';
 
 export function getOptions(model: string, provider?: Providers, options?: ModelOptions): ModelOptionsInfo {
@@ -35,10 +36,11 @@ export function getOptions(model: string, provider?: Providers, options?: ModelO
         case Providers.mistralai:
             return getMistralOptions(model, options, resolveModelProfile(model, provider));
         case Providers.togetherai:
-        case Providers.xai:
             // These transports intentionally use the OpenAI-compatible option IDs because their request builders
             // implement that wire surface; the resolved profile removes provider/model-specific unsupported effort.
             return getOpenAiCompatibleOptions(model, options, resolveModelProfile(model, provider));
+        case Providers.xai:
+            return getXAIOptions(model, options, resolveModelProfile(model, provider));
         case Providers.azure_foundry:
             return getAzureFoundryOptions(model, options);
         default:

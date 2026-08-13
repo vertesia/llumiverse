@@ -13,5 +13,6 @@ export * from './options/openai.js';
 export * from './options/shared-parsing.js';
 export * from './options/version-parsing.js';
 export * from './options/vertexai.js';
+export * from './options/xai.js';
 export * from './options.js';
 export * from './types.js';
