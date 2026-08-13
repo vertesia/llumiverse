@@ -130,6 +130,41 @@ describe('xAI image generation', () => {
         });
     });
 
+    it('falls back from streaming to the image generation endpoint for Image 2.0', async () => {
+        const driver = new xAIDriver({ apiKey: 'test-key' });
+        const post = vi.fn(async () => ({ data: [{ url: 'https://example.com/image.jpeg' }] }));
+        driver.xai_service = { post } as unknown as FetchClient;
+        const options: ExecutionOptions = {
+            model: 'grok-imagine-image-2.0',
+            model_options: {
+                _option_id: 'xai-grok-image',
+                aspect_ratio: '1:1',
+                resolution: '2k',
+                quality: 'medium',
+                response_format: 'url',
+                n: 1,
+            },
+        };
+
+        const stream = await driver.stream([{ role: PromptRole.user, content: 'A lighthouse in a storm' }], options);
+        const chunks: string[] = [];
+        for await (const chunk of stream) chunks.push(chunk);
+
+        expect(chunks).toEqual(['[Image: https://ex...]']);
+        expect(stream.completion?.result).toEqual([{ type: 'image', value: 'https://example.com/image.jpeg' }]);
+        expect(post).toHaveBeenCalledWith('/images/generations', {
+            payload: {
+                model: 'grok-imagine-image-2.0',
+                prompt: 'A lighthouse in a storm',
+                aspect_ratio: '1:1',
+                resolution: '2k',
+                quality: 'medium',
+                response_format: 'url',
+                n: 1,
+            },
+        });
+    });
+
     it('uses the edits endpoint when the prompt contains reference images', async () => {
         const driver = new xAIDriver({ apiKey: 'test-key' });
         const post = vi.fn(async () => ({ data: [{ url: 'https://example.com/edit.jpeg' }] }));
