@@ -8,6 +8,28 @@ function setGroqCreate(driver: GroqDriver, create: ReturnType<typeof vi.fn>): vo
 }
 
 describe('GroqDriver shared Chat Completions transport', () => {
+    it('forwards a longer per-execution timeout to the SDK request', async () => {
+        const driver = new GroqDriver({ apiKey: 'test-key' });
+        const create = vi.fn(async (_request: unknown, _options?: unknown) => ({
+            id: 'groq-timeout',
+            object: 'chat.completion',
+            created: 1,
+            model: 'llama',
+            choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'done' } }],
+        }));
+        setGroqCreate(driver, create);
+
+        await driver.requestTextCompletion(
+            { _is_openai_chat_completions: true, messages: [{ role: 'user', content: 'hello' }] },
+            {
+                model: 'llama',
+                httpTimeout: { headersTimeout: 1_200_000, bodyTimeout: 1_800_000 },
+            },
+        );
+
+        expect(create.mock.calls[0][1]).toEqual({ signal: undefined, timeout: 1_800_000 });
+    });
+
     it('uses central capabilities when listing provider models', async () => {
         const driver = new GroqDriver({ apiKey: 'test-key' });
         const list = vi.fn(async () => ({

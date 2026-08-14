@@ -1,7 +1,7 @@
 import type {
     AIModel,
     Completion,
-    CompletionChunkObject,
+    DriverCompletionStream,
     DriverOptions,
     EmbeddingsOptions,
     EmbeddingsResult,
@@ -97,10 +97,7 @@ export class FireflyDriver extends AbstractDriver<FireflyDriverOptions> {
         throw new Error('Text completion not supported by Firefly');
     }
 
-    async requestTextCompletionStream(
-        _prompt: string,
-        _options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>> {
+    async requestTextCompletionStream(_prompt: string, _options: ExecutionOptions): Promise<DriverCompletionStream> {
         throw new Error('Text completion streaming not supported by Firefly');
     }
 

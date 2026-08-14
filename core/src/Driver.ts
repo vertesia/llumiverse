@@ -15,6 +15,7 @@ import {
     type EmbeddingsResult,
     type ExecutionOptions,
     type ExecutionResponse,
+    type HttpTimeoutOptions,
     LlumiverseError,
     type LlumiverseErrorContext,
     type Logger,
@@ -27,13 +28,19 @@ import {
     type TrainingPromptOptions,
 } from '@llumiverse/common';
 import type { Agent } from 'undici';
-import { DefaultCompletionStream, FallbackCompletionStream } from './CompletionStream.js';
+import {
+    DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS,
+    DefaultCompletionStream,
+    FallbackCompletionStream,
+    leaseCompletionStream,
+} from './CompletionStream.js';
 import { formatTextPrompt } from './formatters/index.js';
 import {
     createAgentBackedFetch,
     createDriverHttpAgent,
     createDriverHttpAgentScope,
     type DriverHttpAgentScope,
+    resolveDriverRequestTimeoutMs,
 } from './http-agent.js';
 import { createLogger } from './logger.js';
 import { validateResult } from './validation.js';
@@ -47,7 +54,12 @@ function getObjectProperty(value: unknown, key: string): unknown {
     return undefined;
 }
 
+// Nominal lifecycle contract: subclasses inherit this through AbstractDriver, while unrelated
+// structural implementations are excluded so resource-owning drivers cannot bypass its guards.
+const driverLifecycleBrand: unique symbol = Symbol('driverLifecycle');
+
 export interface Driver<PromptT = unknown> {
+    readonly [driverLifecycleBrand]: true;
     /**
      *
      * @param segments
@@ -58,11 +70,19 @@ export interface Driver<PromptT = unknown> {
 
     createPrompt(segments: PromptSegment[], opts: ExecutionOptions): Promise<PromptT>;
 
-    execute(segments: PromptSegment[], options: ExecutionOptions): Promise<ExecutionResponse<PromptT>>;
+    execute(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<ExecutionResponse<PromptT>>;
 
     // by default no stream is supported. we block and we return all at once
     //stream(segments: PromptSegment[], options: ExecutionOptions): Promise<StreamingExecutionResponse<PromptT>>;
-    stream(segments: PromptSegment[], options: ExecutionOptions): Promise<CompletionStream<PromptT>>;
+    stream(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CompletionStream<PromptT>>;
 
     startTraining(dataset: DataSource, options: TrainingOptions): Promise<TrainingJob>;
 
@@ -88,12 +108,32 @@ export interface Driver<PromptT = unknown> {
      */
     generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult>;
 
-    /**
-     * Optional cleanup method called when the driver is evicted from the cache.
-     * Override this in driver implementations that need to release resources.
-     */
-    destroy?(): void;
+    /** Request cleanup after all active operations and owned streams finish. */
+    destroy(): void;
 }
+
+type AsyncDriverOperationName = {
+    [Name in keyof Driver]-?: Driver[Name] extends (...args: never[]) => Promise<unknown> ? Name : never;
+}[keyof Driver];
+
+type LifecycleGuardedOperationName = AsyncDriverOperationName;
+
+const lifecycleGuardedOperationNames = [
+    'execute',
+    'stream',
+    'startTraining',
+    'cancelTraining',
+    'getTrainingJob',
+    'listModels',
+    'listTrainableModels',
+    'validateConnection',
+    'generateEmbeddings',
+    'createPrompt',
+    'createTrainingPrompt',
+] as const satisfies readonly LifecycleGuardedOperationName[];
+
+type MissingLifecycleGuard = Exclude<LifecycleGuardedOperationName, (typeof lifecycleGuardedOperationNames)[number]>;
+const lifecycleGuardsAreExhaustive: MissingLifecycleGuard extends never ? true : never = true;
 
 /**
  * To be implemented by each driver
@@ -101,6 +141,7 @@ export interface Driver<PromptT = unknown> {
 export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOptions, PromptT = unknown>
     implements Driver<PromptT>
 {
+    readonly [driverLifecycleBrand] = true;
     options: OptionsT;
     logger: Logger;
 
@@ -108,10 +149,71 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     private _httpAgent?: Agent;
     private _driverFetch?: typeof fetch;
+    private _activeOperations = 0;
+    private _destroyRequested = false;
+    private _resourcesDestroyed = false;
 
     constructor(opts: OptionsT) {
+        if (
+            opts.streamStartTimeoutMs !== undefined &&
+            (!Number.isSafeInteger(opts.streamStartTimeoutMs) ||
+                opts.streamStartTimeoutMs <= 0 ||
+                opts.streamStartTimeoutMs > 2_147_483_647)
+        ) {
+            throw new RangeError('streamStartTimeoutMs must be a positive integer no greater than 2147483647');
+        }
         this.options = opts;
         this.logger = createLogger(opts.logger);
+        this.installOperationGuards();
+    }
+
+    /**
+     * Guard provider operations implemented by subclasses without changing the public
+     * driver API. Capturing the prototype methods here keeps lifecycle accounting in
+     * one place, so new cache users cannot accidentally call an unleased network path.
+     */
+    private installOperationGuards(): void {
+        void lifecycleGuardsAreExhaustive;
+        for (const name of lifecycleGuardedOperationNames) {
+            const operation = this[name] as (...args: unknown[]) => Promise<unknown>;
+            Object.defineProperty(this, name, {
+                configurable: false,
+                value:
+                    name === 'stream'
+                        ? (...args: unknown[]) =>
+                              this.runStreamOperation(
+                                  () => operation.apply(this, args) as Promise<CompletionStream<PromptT>>,
+                                  args[2] as AbortSignal | undefined,
+                              )
+                        : (...args: unknown[]) => this.runOperation(() => operation.apply(this, args)),
+                writable: false,
+            });
+        }
+    }
+
+    private async runOperation<T>(operation: () => Promise<T>): Promise<T> {
+        const release = this.acquireOperationLease();
+        try {
+            return await operation();
+        } finally {
+            release();
+        }
+    }
+
+    private async runStreamOperation(operation: () => Promise<CompletionStream<PromptT>>, signal?: AbortSignal) {
+        const release = this.acquireOperationLease();
+        try {
+            const stream = await operation();
+            return leaseCompletionStream(
+                stream,
+                release,
+                this.options.streamStartTimeoutMs ?? DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS,
+                signal,
+            );
+        } catch (error: unknown) {
+            release();
+            throw error;
+        }
     }
 
     /**
@@ -144,8 +246,30 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         return this._driverFetch;
     }
 
-    public createExecutionHttpAgentScope(options: Pick<ExecutionOptions, 'httpTimeout'>): DriverHttpAgentScope {
-        return createDriverHttpAgentScope(this.options.httpTimeout, options.httpTimeout);
+    /**
+     * Resolve the single request deadline expected by SDKs that do not expose
+     * separate response-header and streaming-body inactivity timeouts.
+     */
+    protected getDriverRequestTimeoutMs(httpTimeout?: HttpTimeoutOptions): number {
+        return resolveDriverRequestTimeoutMs(this.options.httpTimeout, httpTimeout);
+    }
+
+    protected getDriverRequestOptions(
+        options: Pick<ExecutionOptions, 'httpTimeout'>,
+        signal?: AbortSignal,
+    ): { signal?: AbortSignal; timeout?: number } | undefined {
+        const timeout = options.httpTimeout ? this.getDriverRequestTimeoutMs(options.httpTimeout) : undefined;
+        if (signal && timeout !== undefined) return { signal, timeout };
+        if (signal) return { signal };
+        if (timeout !== undefined) return { timeout };
+        return undefined;
+    }
+
+    public createExecutionHttpAgentScope(
+        options: Pick<ExecutionOptions, 'httpTimeout'>,
+        force = false,
+    ): DriverHttpAgentScope {
+        return createDriverHttpAgentScope(this.options.httpTimeout, options.httpTimeout, force);
     }
 
     async createTrainingPrompt(options: TrainingPromptOptions): Promise<string> {
@@ -191,9 +315,13 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         }
     }
 
-    async execute(segments: PromptSegment[], options: ExecutionOptions): Promise<ExecutionResponse<PromptT>> {
+    async execute(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<ExecutionResponse<PromptT>> {
         const prompt = await this.createPrompt(segments, options);
-        return this._execute(prompt, options).catch((error: unknown) => {
+        return await this._execute(prompt, options, signal).catch((error: unknown) => {
             // Don't wrap if already a LlumiverseError
             if (LlumiverseError.isLlumiverseError(error)) {
                 throw error;
@@ -206,8 +334,15 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         });
     }
 
-    async _execute(prompt: PromptT, options: ExecutionOptions): Promise<ExecutionResponse<PromptT>> {
-        const httpScope = this.createExecutionHttpAgentScope(options);
+    async _execute(
+        prompt: PromptT,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<ExecutionResponse<PromptT>> {
+        const httpScope = this.createExecutionHttpAgentScope(options, signal !== undefined);
+        const abort = () => void httpScope.abort();
+        if (signal?.aborted) abort();
+        else signal?.addEventListener('abort', abort, { once: true });
         try {
             return await httpScope.run(async () => {
                 try {
@@ -216,10 +351,10 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
                     if (this.isImageModel(options.model)) {
                         this.logger.debug(`[${this.provider}] Executing prompt on ${options.model}, image pathway.`);
-                        result = await this.requestImageGeneration(prompt, options);
+                        result = await this.requestImageGeneration(prompt, options, signal);
                     } else {
                         this.logger.debug(`[${this.provider}] Executing prompt on ${options.model}, text pathway.`);
-                        result = await this.requestTextCompletion(prompt, options);
+                        result = await this.requestTextCompletion(prompt, options, signal);
                         this.validateResult(result, options);
                     }
 
@@ -246,6 +381,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
                 }
             });
         } finally {
+            signal?.removeEventListener('abort', abort);
             await httpScope.close();
         }
     }
@@ -259,20 +395,24 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     }
 
     // by default no stream is supported. we block and we return all at once
-    async stream(segments: PromptSegment[], options: ExecutionOptions): Promise<CompletionStream<PromptT>> {
+    async stream(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CompletionStream<PromptT>> {
+        signal?.throwIfAborted();
         this.logger.debug(
             options,
             `Executing prompt with provider ${this.provider} with options: ${JSON.stringify(options)}`,
         );
         const prompt = await this.createPrompt(segments, options);
-        const canStream = await this.canStream(options);
-        if (canStream) {
+        signal?.throwIfAborted();
+        if (await this.canStream(options, signal)) {
+            signal?.throwIfAborted();
             return new DefaultCompletionStream(this, prompt, options);
-        } else if (this.isImageModel(options.model)) {
-            return new FallbackCompletionStream(this, prompt, options);
-        } else {
-            return new FallbackCompletionStream(this, prompt, options);
         }
+        signal?.throwIfAborted();
+        return new FallbackCompletionStream(this, prompt, options);
     }
 
     /**
@@ -300,7 +440,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
      * @param options the execution options containing the target model name.
      * @returns true if the execution can be streamed false otherwise.
      */
-    protected canStream(_options: ExecutionOptions) {
+    protected canStream(_options: ExecutionOptions, _signal?: AbortSignal) {
         return Promise.resolve(true);
     }
 
@@ -425,11 +565,23 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         return undefined;
     }
 
-    abstract requestTextCompletion(prompt: PromptT, options: ExecutionOptions): Promise<Completion>;
+    abstract requestTextCompletion(
+        prompt: PromptT,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion>;
 
-    abstract requestTextCompletionStream(prompt: PromptT, options: ExecutionOptions): Promise<DriverCompletionStream>;
+    abstract requestTextCompletionStream(
+        prompt: PromptT,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<DriverCompletionStream>;
 
-    async requestImageGeneration(_prompt: PromptT, _options: ExecutionOptions): Promise<Completion> {
+    async requestImageGeneration(
+        _prompt: PromptT,
+        _options: ExecutionOptions,
+        _signal?: AbortSignal,
+    ): Promise<Completion> {
         throw new Error('Image generation not implemented.');
         //Cannot be made abstract, as abstract methods are required in the derived class
     }
@@ -443,17 +595,53 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     //generate embeddings for a given text
     abstract generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult>;
 
+    private acquireOperationLease(): () => void {
+        if (this._destroyRequested || this._resourcesDestroyed) {
+            throw new Error(`Cannot use destroyed ${this.provider} driver`);
+        }
+
+        this._activeOperations++;
+        let released = false;
+        return () => {
+            if (released) return;
+            released = true;
+            this._activeOperations--;
+            this.destroyWhenIdle();
+        };
+    }
+
+    /** Provider-specific resource cleanup, called once after active operations finish. */
+    protected destroyProviderResources(): void | Promise<void> {}
+
     /**
-     * Cleanup method called when the driver is evicted from the cache.
-     * Releases the lazily-created HTTP agent socket pool. Override this
-     * in driver implementations that need to release additional resources
-     * — MUST call `super.destroy()` to avoid leaking sockets.
+     * Request cleanup when the driver is evicted from a cache. Active executions
+     * and streams keep their resources until they complete, fail, or are cancelled.
      */
     destroy(): void {
-        this._httpAgent?.close().catch(() => {
-            /* shutdown best-effort */
-        });
-        this._httpAgent = undefined;
-        this._driverFetch = undefined;
+        this._destroyRequested = true;
+        this.destroyWhenIdle();
+    }
+
+    private destroyWhenIdle(): void {
+        if (!this._destroyRequested || this._resourcesDestroyed || this._activeOperations > 0) return;
+
+        this._resourcesDestroyed = true;
+        try {
+            void Promise.resolve(this.destroyProviderResources()).catch((error: unknown) => {
+                this.logger.warn({ error }, `Failed to destroy provider resources for ${this.provider}`);
+            });
+        } catch (error: unknown) {
+            this.logger.warn({ error }, `Failed to destroy provider resources for ${this.provider}`);
+        } finally {
+            try {
+                this._httpAgent?.close().catch((error: unknown) => {
+                    this.logger.warn({ error }, `Failed to close HTTP resources for ${this.provider}`);
+                });
+            } catch (error: unknown) {
+                this.logger.warn({ error }, `Failed to close HTTP resources for ${this.provider}`);
+            }
+            this._httpAgent = undefined;
+            this._driverFetch = undefined;
+        }
     }
 }

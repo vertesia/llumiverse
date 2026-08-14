@@ -3,6 +3,7 @@ import {
     type EmbeddingResultItem,
     type EmbeddingsOptions,
     type EmbeddingsResult,
+    type ExecutionOptions,
     getModelCapabilities,
     ModelType,
     modelModalitiesToArray,
@@ -53,18 +54,34 @@ export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAI
             apiKey: opts.apiKey,
             baseURL: opts.endpoint ?? 'https://api.together.ai/v1',
             fetch: this.getDriverFetch(),
+            timeout: this.getDriverRequestTimeoutMs(),
         });
     }
 
-    async _postChatCompletion(payload: OpenAIChatCompletionsPayload): Promise<OpenAIChatCompletionsResponse> {
+    async _postChatCompletion(
+        payload: OpenAIChatCompletionsPayload,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<OpenAIChatCompletionsResponse> {
         const request = toTogetherRequest(payload, false);
-        const response = await this.service.chat.completions.create(request);
+        const requestOptions = this.getDriverRequestOptions(options, signal);
+        const response = requestOptions
+            ? await this.service.chat.completions.create(request, requestOptions)
+            : await this.service.chat.completions.create(request);
         return preserveOpenAIChatCompletionsOriginalResponse(normalizeTogetherResponse(response), response);
     }
 
-    async _postChatCompletionStream(payload: OpenAIChatCompletionsPayload): Promise<ReadableStream> {
-        const stream = await this.service.chat.completions.create(toTogetherRequest(payload, true));
-        return openAIChatCompletionsStreamToSSE(normalizeTogetherStream(stream));
+    async _postChatCompletionStream(
+        payload: OpenAIChatCompletionsPayload,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<ReadableStream> {
+        const request = toTogetherRequest(payload, true);
+        const requestOptions = this.getDriverRequestOptions(options, signal);
+        const stream = requestOptions
+            ? await this.service.chat.completions.create(request, requestOptions)
+            : await this.service.chat.completions.create(request);
+        return openAIChatCompletionsStreamToSSE(normalizeTogetherStream(stream), () => stream.controller.abort());
     }
 
     /**

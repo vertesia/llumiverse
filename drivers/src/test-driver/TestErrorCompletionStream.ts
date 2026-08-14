@@ -3,6 +3,7 @@ import { sleep, throwError } from './utils.js';
 
 export class TestErrorCompletionStream implements CompletionStream<PromptSegment[]> {
     completion: ExecutionResponse<PromptSegment[]> | undefined;
+    async cancel(): Promise<void> {}
 
     constructor(
         public segments: PromptSegment[],

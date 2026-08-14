@@ -19,6 +19,7 @@ export class OpenAIDriver extends OpenAIResponsesDriverBase {
             apiKey: opts.apiKey,
             fetch: this.getDriverFetch(),
             maxRetries: 0,
+            timeout: this.getDriverRequestTimeoutMs(),
         });
     }
 }

@@ -1,7 +1,7 @@
 import { type CompletionChunkObject, type ExecutionOptions, getConversationMeta } from '@llumiverse/core';
 import type { ServerSentEvent } from '@vertesia/api-fetch-client';
 import type OpenAI from 'openai';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
     normalizeOpenAIChatCompletionsResponse,
     normalizeOpenAIChatCompletionsStream,
@@ -10,9 +10,75 @@ import {
     OpenAIChatCompletionsProtocol,
     type OpenAIChatCompletionsProtocolOptions,
     type OpenAIChatCompletionsResponse,
+    openAIChatCompletionsStreamToSSE,
     parseOpenAIChatCompletionsToolCalls,
     prepareOpenAIChatCompletionsConversation,
 } from './openai_chat_completions.js';
+
+const streamChunk = {
+    id: 'chatcmpl-stream',
+    object: 'chat.completion.chunk' as const,
+    created: 1,
+    model: 'test/model',
+    choices: [],
+};
+
+describe('openAIChatCompletionsStreamToSSE', () => {
+    it('closes after forwarding a normally completed provider stream', async () => {
+        async function* providerStream() {
+            yield streamChunk;
+        }
+
+        const reader = openAIChatCompletionsStreamToSSE(providerStream()).getReader();
+
+        await expect(reader.read()).resolves.toEqual({
+            done: false,
+            value: { type: 'event', data: JSON.stringify(streamChunk) },
+        });
+        await expect(reader.read()).resolves.toEqual({ done: true, value: undefined });
+    });
+
+    it('propagates provider errors to the consumer', async () => {
+        const providerError = new Error('provider stream failed');
+        const providerStream = {
+            [Symbol.asyncIterator]() {
+                return {
+                    next: vi.fn().mockRejectedValue(providerError),
+                };
+            },
+        };
+
+        const reader = openAIChatCompletionsStreamToSSE(providerStream).getReader();
+
+        await expect(reader.read()).rejects.toBe(providerError);
+    });
+
+    it('aborts a pending provider read when the consumer cancels', async () => {
+        const abortController = new AbortController();
+        const providerStream = {
+            async *[Symbol.asyncIterator]() {
+                yield streamChunk;
+                await new Promise<never>((_resolve, reject) => {
+                    abortController.signal.addEventListener(
+                        'abort',
+                        () => reject(new DOMException('provider request aborted', 'AbortError')),
+                        { once: true },
+                    );
+                });
+            },
+        };
+        const normalized = normalizeOpenAIChatCompletionsStream(providerStream);
+        const reader = openAIChatCompletionsStreamToSSE(normalized, () => abortController.abort()).getReader();
+
+        await expect(reader.read()).resolves.toEqual({
+            done: false,
+            value: { type: 'event', data: JSON.stringify(streamChunk) },
+        });
+        await reader.cancel('consumer stopped');
+
+        expect(abortController.signal.aborted).toBe(true);
+    });
+});
 
 function createSSEStream(events: ServerSentEvent[]): ReadableStream<ServerSentEvent> {
     return new ReadableStream<ServerSentEvent>({

@@ -1,7 +1,7 @@
 import {
     type AIModel,
     type Completion,
-    type CompletionChunkObject,
+    type DriverCompletionStream,
     type DriverOptions,
     type EmbeddingsOptions,
     type EmbeddingsResult,
@@ -92,7 +92,8 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
     async requestTextCompletionStream(
         prompt: string,
         options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>> {
+        signal?: AbortSignal,
+    ): Promise<DriverCompletionStream> {
         if (options.model_options?._option_id !== undefined && options.model_options?._option_id !== 'text-fallback') {
             this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
@@ -113,6 +114,7 @@ export class WatsonxDriver extends AbstractDriver<WatsonxDriverOptions, string> 
         const stream = (await this.fetchClient.post(`/ml/v1/text/generation_stream?version=${API_VERSION}`, {
             payload: payload,
             reader: 'sse',
+            signal,
         })) as ReadableStream<ServerSentEvent>;
 
         return transformSSEStream(stream, (data: string) => {

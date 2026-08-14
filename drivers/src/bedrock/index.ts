@@ -113,11 +113,6 @@ function getBedrockServiceTier(modelOptions?: ModelOptions): ServiceTierType | u
     return (modelOptions as BedrockServiceTierOptions | undefined)?.service_tier as ServiceTierType | undefined;
 }
 
-const BEDROCK_NON_STREAMING_HTTP_TIMEOUT: HttpTimeoutOptions = {
-    headersTimeout: 900_000,
-    bodyTimeout: 900_000,
-};
-
 enum BedrockModelType {
     FoundationModel = 'foundation-model',
     InferenceProfile = 'inference-profile',
@@ -531,8 +526,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
     /**
      * Build a Smithy `requestHandler` config from the driver's
-     * `httpTimeout` so AWS SDK calls fail fast on hung upstream Bedrock
-     * endpoints instead of using the AWS default (no request timeout).
+     * `httpTimeout` so AWS SDK calls have a bounded safety timeout instead of
+     * using the AWS default (no request timeout).
      * Returns a partial config the SDK merges into its default handler.
      */
     private getBedrockRequestHandlerConfig(httpTimeout?: HttpTimeoutOptions) {
@@ -545,13 +540,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             connectionTimeout: timeouts.connectTimeout,
             socketTimeout: timeouts.bodyTimeout,
         };
-    }
-
-    private getBedrockNonStreamingHttpTimeout(httpTimeout?: HttpTimeoutOptions): HttpTimeoutOptions {
-        return mergeDriverHttpTimeoutOptions(
-            BEDROCK_NON_STREAMING_HTTP_TIMEOUT,
-            mergeDriverHttpTimeoutOptions(this.options.httpTimeout, httpTimeout),
-        ) as HttpTimeoutOptions;
     }
 
     private createExecutor(httpTimeout?: HttpTimeoutOptions) {
@@ -581,14 +569,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
 
         const executor = this.getExecutor(options.httpTimeout);
-        return {
-            executor,
-            close: () => executor.destroy(),
-        };
-    }
-
-    private getScopedNonStreamingExecutor(options: Pick<ExecutionOptions, 'httpTimeout'>): BedrockRuntimeExecutorScope {
-        const executor = this.getExecutor(this.getBedrockNonStreamingHttpTimeout(options.httpTimeout));
         return {
             executor,
             close: () => executor.destroy(),
@@ -972,43 +952,55 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return defaultRegion;
     }
 
-    private async getCanStream(model: string, type: BedrockModelType): Promise<boolean> {
+    private async getCanStream(model: string, type: BedrockModelType, signal?: AbortSignal): Promise<boolean> {
         let canStream: boolean = false;
         let error: unknown = null;
         const region = this.extractRegion(model, this.options.region);
+        const requestOptions = signal ? { abortSignal: signal } : undefined;
         if (type === BedrockModelType.FoundationModel || type === BedrockModelType.Unknown) {
             try {
-                const response = await this.getService(region).getFoundationModel({
-                    modelIdentifier: model,
-                });
+                const response = await this.getService(region).getFoundationModel(
+                    { modelIdentifier: model },
+                    requestOptions,
+                );
                 canStream = response.modelDetails?.responseStreamingSupported ?? false;
                 return canStream;
             } catch (e) {
+                signal?.throwIfAborted();
                 error = e;
             }
         }
         if (type === BedrockModelType.InferenceProfile || type === BedrockModelType.Unknown) {
             try {
-                const response = await this.getService(region).getInferenceProfile({
-                    inferenceProfileIdentifier: model,
-                });
+                const response = await this.getService(region).getInferenceProfile(
+                    { inferenceProfileIdentifier: model },
+                    requestOptions,
+                );
                 canStream = await this.getCanStream(
                     response.models?.[0].modelArn ?? '',
                     BedrockModelType.FoundationModel,
+                    signal,
                 );
                 return canStream;
             } catch (e) {
+                signal?.throwIfAborted();
                 error = e;
             }
         }
         if (type === BedrockModelType.CustomModel || type === BedrockModelType.Unknown) {
             try {
-                const response = await this.getService(region).getCustomModel({
-                    modelIdentifier: model,
-                });
-                canStream = await this.getCanStream(response.baseModelArn ?? '', BedrockModelType.FoundationModel);
+                const response = await this.getService(region).getCustomModel(
+                    { modelIdentifier: model },
+                    requestOptions,
+                );
+                canStream = await this.getCanStream(
+                    response.baseModelArn ?? '',
+                    BedrockModelType.FoundationModel,
+                    signal,
+                );
                 return canStream;
             } catch (e) {
+                signal?.throwIfAborted();
                 error = e;
             }
         }
@@ -1018,7 +1010,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return canStream;
     }
 
-    protected async canStream(options: ExecutionOptions): Promise<boolean> {
+    protected async canStream(options: ExecutionOptions, signal?: AbortSignal): Promise<boolean> {
         // // TwelveLabs Pegasus supports streaming according to the documentation
         // if (options.model.includes("twelvelabs.pegasus")) {
         //     return true;
@@ -1034,7 +1026,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             } else if (options.model.includes('custom-model')) {
                 type = BedrockModelType.CustomModel;
             }
-            canStream = await this.getCanStream(options.model, type);
+            canStream = await this.getCanStream(options.model, type, signal);
+            signal?.throwIfAborted();
             supportStreamingCache.set(options.model, canStream);
         }
         return canStream;
@@ -1135,10 +1128,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return processedConversation as ConverseRequest;
     }
 
-    async requestTextCompletion(prompt: BedrockPrompt, options: ExecutionOptions): Promise<Completion> {
+    async requestTextCompletion(
+        prompt: BedrockPrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion> {
         // Handle Twelvelabs Pegasus models
         if (options.model.includes('twelvelabs.pegasus')) {
-            return this.requestTwelvelabsPegasusCompletion(prompt as TwelvelabsPegasusRequest, options);
+            return this.requestTwelvelabsPegasusCompletion(prompt as TwelvelabsPegasusRequest, options, signal);
         }
 
         // Handle other Bedrock models that use Converse API
@@ -1149,13 +1146,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const conversation = updateConversation(incomingConversation, conversePrompt);
 
         const payload = this.preparePayload(conversation, options);
-        const executorScope = this.getScopedNonStreamingExecutor(options);
+        const executorScope = this.getScopedExecutor(options);
 
         let res: ConverseResponse;
         try {
-            res = await executorScope.executor.converse({
-                ...payload,
-            });
+            res = signal
+                ? await executorScope.executor.converse({ ...payload }, { abortSignal: signal })
+                : await executorScope.executor.converse({ ...payload });
         } finally {
             executorScope.close();
         }
@@ -1193,18 +1190,22 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     private async requestTwelvelabsPegasusCompletion(
         prompt: TwelvelabsPegasusRequest,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<Completion> {
-        const executorScope = this.getScopedNonStreamingExecutor(options);
+        const executorScope = this.getScopedExecutor(options);
 
         let res: InvokeModelCommandOutput;
         try {
-            res = await executorScope.executor.invokeModel({
+            const request = {
                 modelId: options.model,
                 contentType: 'application/json',
                 accept: 'application/json',
                 body: JSON.stringify(prompt),
                 serviceTier: getBedrockServiceTier(options.model_options),
-            });
+            };
+            res = signal
+                ? await executorScope.executor.invokeModel(request, { abortSignal: signal })
+                : await executorScope.executor.invokeModel(request);
         } finally {
             executorScope.close();
         }
@@ -1236,17 +1237,22 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     private async requestTwelvelabsPegasusCompletionStream(
         prompt: TwelvelabsPegasusRequest,
         options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>> {
+        signal?: AbortSignal,
+    ): Promise<DriverCompletionStream> {
         const executorScope = this.getScopedExecutor(options);
-
         try {
-            const res = await executorScope.executor.invokeModelWithResponseStream({
+            const request = {
                 modelId: options.model,
                 contentType: 'application/json',
                 accept: 'application/json',
                 body: JSON.stringify(prompt),
                 serviceTier: getBedrockServiceTier(options.model_options),
-            });
+            };
+            const res = signal
+                ? await executorScope.executor.invokeModelWithResponseStream(request, {
+                      abortSignal: signal,
+                  })
+                : await executorScope.executor.invokeModelWithResponseStream(request);
 
             if (!res.body) {
                 throw new Error('[Bedrock] Stream not found in response');
@@ -1304,10 +1310,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     async requestTextCompletionStream(
         prompt: BedrockPrompt,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
         // Handle Twelvelabs Pegasus models
         if (options.model.includes('twelvelabs.pegasus')) {
-            return this.requestTwelvelabsPegasusCompletionStream(prompt as TwelvelabsPegasusRequest, options);
+            return this.requestTwelvelabsPegasusCompletionStream(prompt as TwelvelabsPegasusRequest, options, signal);
         }
 
         // Handle other Bedrock models that use Converse API
@@ -1320,10 +1327,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         const payload = this.preparePayload(conversation, options);
         const executorScope = this.getScopedExecutor(options);
-        return executorScope.executor
-            .converseStream({
-                ...payload,
-            })
+        const response = signal
+            ? executorScope.executor.converseStream({ ...payload }, { abortSignal: signal })
+            : executorScope.executor.converseStream({ ...payload });
+        return response
             .then((res) => {
                 const stream = res.stream;
 
@@ -1638,7 +1645,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         return model.includes('nova-canvas');
     }
 
-    async requestImageGeneration(prompt: NovaMessagesPrompt, options: ExecutionOptions): Promise<Completion> {
+    async requestImageGeneration(
+        prompt: NovaMessagesPrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion> {
         if (
             options.model_options?._option_id !== undefined &&
             options.model_options?._option_id !== 'bedrock-nova-canvas'
@@ -1660,11 +1671,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         let res: InvokeModelCommandOutput;
         try {
-            const requestTimeout = options.httpTimeout
-                ? resolveDriverHttpTimeouts(
-                      mergeDriverHttpTimeoutOptions(this.options.httpTimeout, options.httpTimeout),
-                  ).headersTimeout
-                : (this.options.httpTimeout?.headersTimeout ?? 60_000 * 5);
+            const requestTimeout = this.getDriverRequestTimeoutMs(options.httpTimeout);
             res = await executorScope.executor.invokeModel(
                 {
                     modelId: options.model,
@@ -1673,6 +1680,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     body: JSON.stringify(payload),
                 },
                 {
+                    abortSignal: signal,
                     requestTimeout,
                 },
             );
@@ -1993,14 +2001,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     /**
-     * Cleanup AWS SDK clients when the driver is evicted from the cache.
+     * Cleanup AWS SDK clients after the evicted driver has no active executions.
      */
-    destroy(): void {
+    protected override destroyProviderResources(): void {
         this._executor?.destroy();
         this._service?.destroy();
         this._executor = undefined;
         this._service = undefined;
-        super.destroy();
     }
 }
 

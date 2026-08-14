@@ -10,6 +10,7 @@ import {
     type PromptSegment,
     readStreamAsBase64,
 } from '@llumiverse/core';
+import { resolveDriverRequestTimeoutMs } from '@llumiverse/core/http-agent';
 import { truncateBinaryForDebug } from '../../shared/debug-prompt.js';
 import type { VertexAIDriver } from '../index.js';
 
@@ -380,6 +381,7 @@ export class ImagenModelDefinition {
         driver: VertexAIDriver,
         prompt: ImagenPrompt,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<Completion> {
         if (
             options.model_options?._option_id !== undefined &&
@@ -411,8 +413,6 @@ export class ImagenModelDefinition {
         ) as ReturnType<typeof getImagenParameters> & { negativePrompt?: string };
         parameter.negativePrompt = prompt.negativePrompt ?? undefined;
 
-        const numberOfImages = options.model_options?.number_of_images ?? 1;
-
         // Remove all undefined values
         parameter = Object.fromEntries(
             Object.entries(parameter).filter(([_, v]) => v !== undefined),
@@ -429,7 +429,19 @@ export class ImagenModelDefinition {
         const client = await driver.getImagenClient();
 
         // Predict request
-        const [response] = await client.predict(request, { timeout: 120000 * numberOfImages }); //Extended timeout for image generation
+        const timeout = resolveDriverRequestTimeoutMs(driver.options.httpTimeout, options.httpTimeout);
+        const prediction = client.predict(request, { timeout }) as Promise<
+            [protos.google.cloud.aiplatform.v1.IPredictResponse, unknown, unknown]
+        > & { cancel(): void };
+        const cancel = () => prediction.cancel();
+        if (signal?.aborted) cancel();
+        else signal?.addEventListener('abort', cancel, { once: true });
+        let response: protos.google.cloud.aiplatform.v1.IPredictResponse;
+        try {
+            [response] = await prediction;
+        } finally {
+            signal?.removeEventListener('abort', cancel);
+        }
         const predictions = response.predictions;
 
         if (!predictions) {

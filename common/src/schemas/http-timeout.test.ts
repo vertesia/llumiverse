@@ -52,18 +52,15 @@ describe('HttpTimeoutOptionsSchema', () => {
         expect(HttpTimeoutOptionsSchema.safeParse({ socketTimeout: 90_000 }).success).toBe(false);
     });
 
-    it('reproduces the description the scanner derived from the TSDoc', () => {
-        // Byte-for-byte, because the OpenAPI document has to stay unchanged through the conversion —
-        // this component is `$ref`d from a slot that has not converted, so a canonical/derived
-        // disagreement here fails generation rather than merely reading differently.
+    it('documents the runtime timeout defaults', () => {
         const description = emitted.description as string;
         expect(description.startsWith("HTTP timeouts applied to a driver's upstream LLM-provider calls.\n\n")).toBe(
             true,
         );
         expect(description).toContain(
-            'the defaults applied in `@llumiverse/core/createDriverHttpAgent` are:   - headersTimeout:   60_000   ' +
-                '- bodyTimeout:      60_000   - connectTimeout:   10_000   - keepAliveTimeout: 30_000',
+            'the defaults applied in `@llumiverse/core/createDriverHttpAgent` are:   - headersTimeout:   900_000   ' +
+                '- bodyTimeout:      900_000   - connectTimeout:   60_000   - keepAliveTimeout: 300_000',
         );
-        expect(description.endsWith('(e.g. tool-using agents).')).toBe(true);
+        expect(description.endsWith('driver timeouts are bounded-resource safety nets.')).toBe(true);
     });
 });
