@@ -54,6 +54,8 @@ function getObjectProperty(value: unknown, key: string): unknown {
     return undefined;
 }
 
+// Nominal lifecycle contract: subclasses inherit this through AbstractDriver, while unrelated
+// structural implementations are excluded so resource-owning drivers cannot bypass its guards.
 const driverLifecycleBrand: unique symbol = Symbol('driverLifecycle');
 
 export interface Driver<PromptT = unknown> {
