@@ -15,7 +15,15 @@ import { AbstractDriver } from './Driver.js';
 class ThoughtsStreamDriver extends AbstractDriver<DriverOptions, string> {
     provider = 'test';
 
-    async requestTextCompletion(): Promise<Completion> {
+    async requestTextCompletion(prompt: string): Promise<Completion> {
+        if (prompt === 'video') {
+            return {
+                result: [
+                    { type: 'video', value: 'gs://bucket/one.mp4' },
+                    { type: 'video', value: 'gs://bucket/two.mp4' },
+                ],
+            };
+        }
         return {
             result: [
                 { type: 'thoughts', value: 'reason-fallback' },
@@ -26,6 +34,15 @@ class ThoughtsStreamDriver extends AbstractDriver<DriverOptions, string> {
 
     async requestTextCompletionStream(prompt: string): Promise<DriverCompletionStream> {
         const nativeAssistant = { role: 'assistant', id: prompt };
+        if (prompt === 'video') {
+            return {
+                async *[Symbol.asyncIterator]() {
+                    yield { result: [{ type: 'video', value: 'gs://bucket/one.mp4' }] };
+                    yield { result: [{ type: 'video', value: 'gs://bucket/two.mp4' }], finish_reason: 'stop' };
+                },
+                finalizeConversation: () => nativeAssistant,
+            };
+        }
         return {
             async *[Symbol.asyncIterator]() {
                 yield { result: [{ type: 'thoughts', value: 'reason-' }] };
@@ -96,5 +113,30 @@ describe('DefaultCompletionStream thoughts', () => {
 
         expect(streams[0].completion?.conversation).toEqual({ role: 'assistant', id: 'left' });
         expect(streams[1].completion?.conversation).toEqual({ role: 'assistant', id: 'right' });
+    });
+
+    it('keeps streamed video results discrete', async () => {
+        const driver = new ThoughtsStreamDriver({});
+        const stream = new DefaultCompletionStream(driver, 'video', { model: 'test' });
+
+        const visible: string[] = [];
+        for await (const chunk of stream) visible.push(chunk);
+
+        expect(visible).toEqual(['\n[Video: gs://bucket/one.mp4]\n', '\n[Video: gs://bucket/two.mp4]\n']);
+        expect(stream.completion?.result).toEqual([
+            { type: 'video', value: 'gs://bucket/one.mp4' },
+            { type: 'video', value: 'gs://bucket/two.mp4' },
+        ]);
+    });
+
+    it('preserves video results through fallback streaming', async () => {
+        const driver = new ThoughtsStreamDriver({});
+        const stream = new FallbackCompletionStream(driver, 'video', { model: 'test' });
+
+        const visible: string[] = [];
+        for await (const chunk of stream) visible.push(chunk);
+
+        expect(visible).toEqual(['[Video: gs://bucket/one.mp4][Video: gs://bucket/two.mp4]']);
+        expect(stream.completion?.result).toHaveLength(2);
     });
 });

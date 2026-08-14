@@ -406,7 +406,8 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
                                             }
                                             break;
                                         case 'image':
-                                            // Images are discrete results and must retain their original boundaries.
+                                        case 'video':
+                                            // Media outputs are discrete results and must retain their original boundaries.
                                             accumulatedResults.push(result);
                                             break;
                                     }
@@ -439,6 +440,8 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
                                                     : String(r.value).slice(0, 10);
                                             return `\n[Image: ${truncatedValue}...]\n`;
                                         }
+                                        case 'video':
+                                            return `\n[Video: ${r.value}]\n`;
                                         default: {
                                             const _exhaustive: never = r;
                                             return String(_exhaustive);
@@ -598,6 +601,8 @@ export class FallbackCompletionStream<PromptT = unknown> extends ManagedCompleti
                                 typeof r.value === 'string' ? r.value.slice(0, 10) : String(r.value).slice(0, 10);
                             return `[Image: ${truncatedValue}...]`;
                         }
+                        case 'video':
+                            return `[Video: ${r.value}]`;
                         default: {
                             const _exhaustive: never = r;
                             return String(_exhaustive);

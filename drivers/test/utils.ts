@@ -23,6 +23,8 @@ export function completionResultToString(result: CompletionResult): string {
             return JSON.stringify(result.value, null, 2);
         case 'image':
             return result.value;
+        case 'video':
+            return result.value;
     }
 }
 
