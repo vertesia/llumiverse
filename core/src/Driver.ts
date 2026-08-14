@@ -106,10 +106,7 @@ export interface Driver<PromptT = unknown> {
      */
     generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult>;
 
-    /** Borrow this driver across cache checkout until the caller invokes an operation. */
-    acquireOperation(): () => void;
-
-    /** Request cleanup after all active operations and borrowed scopes finish. */
+    /** Request cleanup after all active operations and owned streams finish. */
     destroy(): void;
 }
 
@@ -193,7 +190,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     }
 
     private async runOperation<T>(operation: () => Promise<T>): Promise<T> {
-        const release = this.acquireOperation();
+        const release = this.acquireOperationLease();
         try {
             return await operation();
         } finally {
@@ -202,7 +199,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     }
 
     private async runStreamOperation(operation: () => Promise<CompletionStream<PromptT>>, signal?: AbortSignal) {
-        const release = this.acquireOperation();
+        const release = this.acquireOperationLease();
         try {
             const stream = await operation();
             return leaseCompletionStream(
@@ -596,7 +593,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     //generate embeddings for a given text
     abstract generateEmbeddings(options: EmbeddingsOptions): Promise<EmbeddingsResult>;
 
-    public acquireOperation(): () => void {
+    private acquireOperationLease(): () => void {
         if (this._destroyRequested || this._resourcesDestroyed) {
             throw new Error(`Cannot use destroyed ${this.provider} driver`);
         }

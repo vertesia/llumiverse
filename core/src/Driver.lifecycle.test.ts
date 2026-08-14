@@ -410,7 +410,6 @@ describe('AbstractDriver lifecycle', () => {
         driver.destroy();
 
         expect(cleanup).toHaveBeenCalledOnce();
-        expect(() => driver.acquireOperation()).toThrow('Cannot use destroyed lifecycle-test driver');
         await expect(driver.listModels()).rejects.toThrow('Cannot use destroyed lifecycle-test driver');
         await expect(driver.generateEmbeddings({ inputs: [{ type: 'text', text: 'hello' }] })).rejects.toThrow(
             'Cannot use destroyed lifecycle-test driver',
