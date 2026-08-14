@@ -362,7 +362,7 @@ export class LlumiverseError extends Error {
 // ============== Result Types ===============
 
 export interface BaseResult {
-    type: 'text' | 'thoughts' | 'json' | 'image';
+    type: 'text' | 'thoughts' | 'json' | 'image' | 'video';
     value: unknown;
 }
 
@@ -387,10 +387,15 @@ export interface ImageResult extends BaseResult {
     value: string; // base64 data url or real url
 }
 
+export interface VideoResult extends BaseResult {
+    type: 'video';
+    value: string;
+}
+
 /**
  * @discriminator type
  */
-export type CompletionResult = TextResult | ThoughtsResult | JsonResult | ImageResult;
+export type CompletionResult = TextResult | ThoughtsResult | JsonResult | ImageResult | VideoResult;
 
 //Internal structure used in driver implementation.
 export interface CompletionChunkObject {
@@ -612,6 +617,11 @@ export interface ExecutionOptionsBase extends PromptOptions {
 }
 
 export interface ExecutionOptions extends ExecutionOptionsBase {
+    /**
+     * Provider output prefix for generated media. This is prepared internally and is intentionally
+     * absent from StatelessExecutionOptions so API callers cannot select an arbitrary bucket.
+     */
+    output_storage_uri?: string;
     /**
      * Available tools for the request
      */

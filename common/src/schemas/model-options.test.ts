@@ -22,6 +22,28 @@ const emitted = z.toJSONSchema(ModelOptionsSchema, { target: 'draft-2020-12', io
 const MEMBERS = (emitted.oneOf ?? emitted.anyOf ?? []).map((member) => member.$ref.replace('#/$defs/', ''));
 
 describe('ModelOptionsSchema', () => {
+    it('validates strict Gemini Omni video option boundaries', () => {
+        expect(
+            ModelOptionsSchema.safeParse({
+                _option_id: 'vertexai-gemini-omni-video',
+                task: 'reference_to_video',
+                aspect_ratio: '16:9',
+                duration_seconds: 3,
+            }).success,
+        ).toBe(true);
+        expect(
+            ModelOptionsSchema.safeParse({ _option_id: 'vertexai-gemini-omni-video', duration_seconds: 10 }).success,
+        ).toBe(true);
+        expect(
+            ModelOptionsSchema.safeParse({ _option_id: 'vertexai-gemini-omni-video', duration_seconds: 2 }).success,
+        ).toBe(false);
+        expect(
+            ModelOptionsSchema.safeParse({ _option_id: 'vertexai-gemini-omni-video', duration_seconds: 5.5 }).success,
+        ).toBe(false);
+        expect(ModelOptionsSchema.safeParse({ _option_id: 'vertexai-gemini-omni-video', unknown: true }).success).toBe(
+            false,
+        );
+    });
     it('is the only definition of the union — the public type is inferred from it', () => {
         // Vacuous as an equality, and that is the point: `ModelOptions` in `../types.js` IS
         // `z.infer` of this schema, so there is no second declaration for it to disagree with. The
@@ -43,6 +65,7 @@ describe('ModelOptionsSchema', () => {
             'ImagenOptions',
             'VertexAIClaudeOptions',
             'VertexAIGeminiOptions',
+            'VertexAIGeminiOmniVideoOptions',
             'VertexAIGrokOptions',
             'NovaCanvasOptions',
             'BedrockConverseOptions',

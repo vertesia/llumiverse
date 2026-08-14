@@ -426,6 +426,15 @@ export const VertexAIGeminiOptionsSchema = z
     })
     .meta({ id: 'VertexAIGeminiOptions' });
 
+export const VertexAIGeminiOmniVideoOptionsSchema = z
+    .strictObject({
+        _option_id: z.literal('vertexai-gemini-omni-video'),
+        task: z.enum(['text_to_video', 'image_to_video', 'reference_to_video']).optional(),
+        aspect_ratio: z.enum(['16:9', '9:16']).optional(),
+        duration_seconds: z.number().int().min(3).max(10).optional(),
+    })
+    .meta({ id: 'VertexAIGeminiOmniVideoOptions' });
+
 export const VertexAIGrokOptionsSchema = z
     .strictObject({
         _option_id: z.literal('vertexai-grok'),
@@ -446,6 +455,7 @@ export const ModelOptionsSchema = z
         ImagenOptionsSchema,
         VertexAIClaudeOptionsSchema,
         VertexAIGeminiOptionsSchema,
+        VertexAIGeminiOmniVideoOptionsSchema,
         VertexAIGrokOptionsSchema,
         NovaCanvasOptionsSchema,
         BedrockConverseOptionsSchema,

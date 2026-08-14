@@ -116,8 +116,18 @@ export const ImageResultSchema = z
     .strictObject({ type: z.literal('image'), value: z.string() })
     .meta({ id: 'ImageResult' });
 
+export const VideoResultSchema = z
+    .strictObject({ type: z.literal('video'), value: z.string() })
+    .meta({ id: 'VideoResult' });
+
 export const CompletionResultSchema = z
-    .discriminatedUnion('type', [TextResultSchema, ThoughtsResultSchema, JsonResultSchema, ImageResultSchema])
+    .discriminatedUnion('type', [
+        TextResultSchema,
+        ThoughtsResultSchema,
+        JsonResultSchema,
+        ImageResultSchema,
+        VideoResultSchema,
+    ])
     .meta({ id: 'CompletionResult' });
 
 export const ExecutionTokenUsageSchema = z
