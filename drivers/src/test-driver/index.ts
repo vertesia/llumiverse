@@ -2,7 +2,7 @@ import {
     type AIModel,
     AIModelStatus,
     type CompletionStream,
-    type Driver,
+    type DriverOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
     type ExecutionResponse,
@@ -10,6 +10,7 @@ import {
     type PromptSegment,
     type TrainingJob,
 } from '@llumiverse/core';
+import { AbstractDriver } from '@llumiverse/core/driver';
 import { TestErrorCompletionStream } from './TestErrorCompletionStream.js';
 import { TestValidationErrorCompletionStream } from './TestValidationErrorCompletionStream.js';
 import { createValidationErrorCompletion, sleep, throwError } from './utils.js';
@@ -22,8 +23,20 @@ export enum TestDriverModels {
     validationError = 'validation-error',
 }
 
-export class TestDriver implements Driver<PromptSegment[]> {
+export class TestDriver extends AbstractDriver<DriverOptions, PromptSegment[]> {
     provider = 'test';
+
+    constructor() {
+        super({});
+    }
+
+    requestTextCompletion(): Promise<never> {
+        throw new Error('Method not implemented.');
+    }
+
+    requestTextCompletionStream(): Promise<never> {
+        throw new Error('Method not implemented.');
+    }
 
     createTrainingPrompt(): Promise<string> {
         throw new Error('Method not implemented.');

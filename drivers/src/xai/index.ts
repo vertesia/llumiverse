@@ -45,6 +45,7 @@ export class xAIDriver extends OpenAIResponsesDriverBase {
             baseURL: opts.endpoint ?? this.DEFAULT_ENDPOINT,
             fetch: this.getDriverFetch(),
             maxRetries: 0,
+            timeout: this.getDriverRequestTimeoutMs(),
         });
         this.xai_service = new FetchClient(
             opts.endpoint ?? this.DEFAULT_ENDPOINT,

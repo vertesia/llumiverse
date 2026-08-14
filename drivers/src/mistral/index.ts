@@ -78,6 +78,7 @@ export class MistralAIDriver extends OpenAICompatibleDriverBase<MistralAIDriverO
             apiKey: options.apiKey,
             serverURL: options.endpoint_url ?? ENDPOINT,
             httpClient: new HTTPClient({ fetcher: this.getDriverFetch() }),
+            timeoutMs: this.getDriverRequestTimeoutMs(),
         });
     }
 
@@ -88,11 +89,17 @@ export class MistralAIDriver extends OpenAICompatibleDriverBase<MistralAIDriverO
     async requestTextCompletion(
         prompt: MistralPrompt | OpenAIChatCompletionsPrompt,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<Completion> {
         const conversation = prepareMistralConversation(options.conversation, prompt);
-        const response = await this.client.chat.complete(
-            buildMistralRequest(conversation, options, false, this.options.defaultMaxTokens),
-        );
+        const request = buildMistralRequest(conversation, options, false, this.options.defaultMaxTokens);
+        const driverRequestOptions = this.getDriverRequestOptions(options, signal);
+        const requestOptions = driverRequestOptions
+            ? { signal: driverRequestOptions.signal, timeoutMs: driverRequestOptions.timeout }
+            : undefined;
+        const response = requestOptions
+            ? await this.client.chat.complete(request, requestOptions)
+            : await this.client.chat.complete(request);
         const choice = response.choices[0];
         const message = choice?.message;
         if (!message) throw new Error('Mistral response is not valid: no assistant message');
@@ -116,11 +123,16 @@ export class MistralAIDriver extends OpenAICompatibleDriverBase<MistralAIDriverO
     async requestTextCompletionStream(
         prompt: MistralPrompt | OpenAIChatCompletionsPrompt,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
         const conversation = prepareMistralConversation(options.conversation, prompt);
-        const response = await this.client.chat.stream(
-            buildMistralRequest(conversation, options, true, this.options.defaultMaxTokens),
-        );
+        const request = buildMistralRequest(conversation, options, true, this.options.defaultMaxTokens);
+        const driverRequestOptions = this.getDriverRequestOptions(options, signal);
+        const requestOptions =
+            driverRequestOptions?.timeout !== undefined
+                ? { signal: driverRequestOptions.signal, timeoutMs: driverRequestOptions.timeout }
+                : { signal };
+        const response = await this.client.chat.stream(request, requestOptions);
         const includeThoughts =
             (options.model_options as TextFallbackOptions | MistralTextOptions | undefined)?.include_thoughts !== false;
         const nativeContent: ContentChunk[] = [];

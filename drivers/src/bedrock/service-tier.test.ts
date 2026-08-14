@@ -1,4 +1,5 @@
 import type { ConverseRequest } from '@aws-sdk/client-bedrock-runtime';
+import type { NovaMessagesPrompt } from '@llumiverse/core/formatters';
 import { describe, expect, it, vi } from 'vitest';
 import { BedrockDriver } from './index.js';
 import type { TwelvelabsPegasusRequest } from './twelvelabs.js';
@@ -68,5 +69,35 @@ describe('Bedrock service tiers', () => {
         expect(invokeModelWithResponseStream).toHaveBeenCalledWith(
             expect.objectContaining({ serviceTier: 'reserved' }),
         );
+    });
+
+    it('passes cancellation to Nova Canvas image generation', async () => {
+        const invokeModel = vi.fn(async () => ({
+            body: new TextEncoder().encode(JSON.stringify({ images: ['image'] })),
+        }));
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        Object.defineProperty(driver, 'getExecutor', {
+            value: () => ({ invokeModel, destroy: vi.fn() }),
+        });
+        const options = {
+            model: 'amazon.nova-canvas-v1:0',
+            model_options: {
+                _option_id: 'bedrock-nova-canvas' as const,
+                taskType: 'TEXT_IMAGE' as const,
+                width: 512,
+                height: 512,
+            },
+        };
+        const prompt: NovaMessagesPrompt = {
+            messages: [{ role: 'user', content: [{ text: 'Draw a tree' }] }],
+        };
+        const controller = new AbortController();
+
+        await driver.requestImageGeneration(prompt, options, controller.signal);
+
+        expect(invokeModel).toHaveBeenCalledWith(expect.any(Object), {
+            abortSignal: controller.signal,
+            requestTimeout: 900_000,
+        });
     });
 });

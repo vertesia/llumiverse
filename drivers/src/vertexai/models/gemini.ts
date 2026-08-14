@@ -657,6 +657,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         driver: VertexAIDriver,
         prompt: GenerateContentPrompt,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<Completion> {
         const splits = options.model.split('/');
         let region: string | undefined;
@@ -692,6 +693,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         );
 
         const payload = getGeminiPayload(options, prompt);
+        if (signal) payload.config = { ...payload.config, abortSignal: signal };
         const response = await client.models.generateContent(payload);
 
         const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(driver, response.usageMetadata);
@@ -767,6 +769,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         driver: VertexAIDriver,
         prompt: GenerateContentPrompt,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
         const splits = options.model.split('/');
         let region: string | undefined;
@@ -802,6 +805,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         );
 
         const payload = getGeminiPayload(options, prompt);
+        payload.config = { ...payload.config, abortSignal: signal };
         const response = await client.models.generateContentStream(payload);
 
         const nativeParts: Part[] = [];

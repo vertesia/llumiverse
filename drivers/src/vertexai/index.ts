@@ -24,7 +24,6 @@ import {
     truncateLargeTextInConversation,
 } from '@llumiverse/core';
 import { AbstractDriver } from '@llumiverse/core/driver';
-import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
 import { type FETCH_FN, FetchClient } from '@vertesia/api-fetch-client';
 import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from 'google-auth-library';
 import {
@@ -39,8 +38,6 @@ import { formatGeminiDebugPrompt } from './models/gemini.js';
 import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
 import { getModelDefinition, trimModelName } from './models.js';
 import { getListedVertexOpenMaaSModels } from './open-maas-models.js';
-
-const DEFAULT_GEMINI_REQUEST_TIMEOUT_MS = 10 * 60_000;
 
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
@@ -113,15 +110,21 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
     /**
      * Cleanup Google Cloud clients when the driver is evicted from the cache.
-     * `super.destroy()` releases the HTTP agent socket pool created by
-     * {@link AbstractDriver.getHttpAgent} / {@link AbstractDriver.getDriverFetch}.
+     * AbstractDriver invokes this hook only after active executions finish.
      */
-    destroy(): void {
-        this.aiplatform?.close();
-        this.modelGarden?.close();
-        this.imagenClient?.close();
-        this.predictionClient?.close();
-        super.destroy();
+    protected override destroyProviderResources(): Promise<void> {
+        const clients = [this.aiplatform, this.modelGarden, this.imagenClient, this.predictionClient];
+        this.aiplatform = undefined;
+        this.modelGarden = undefined;
+        this.imagenClient = undefined;
+        this.predictionClient = undefined;
+        return Promise.allSettled(clients.map((client) => client?.close())).then((results) => {
+            for (const result of results) {
+                if (result.status === 'rejected') {
+                    this.logger.warn({ error: result.reason }, 'Failed to close Vertex AI client');
+                }
+            }
+        });
     }
 
     private async getAuthClient(): Promise<AuthClient> {
@@ -131,19 +134,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return this.authClientPromise;
     }
 
-    private getSdkRequestTimeoutMs(httpTimeout?: HttpTimeoutOptions): number {
-        const timeouts = resolveDriverHttpTimeouts(
-            mergeDriverHttpTimeoutOptions(this.options.httpTimeout, httpTimeout),
-        );
-        return Math.max(timeouts.headersTimeout, timeouts.bodyTimeout);
-    }
-
     private getGoogleGenAIHttpOptions(serviceTier?: string, httpTimeout?: HttpTimeoutOptions) {
-        const configuredTimeout = mergeDriverHttpTimeoutOptions(this.options.httpTimeout, httpTimeout);
-        const hasRequestTimeout =
-            configuredTimeout?.headersTimeout !== undefined || configuredTimeout?.bodyTimeout !== undefined;
         return {
-            timeout: hasRequestTimeout ? this.getSdkRequestTimeoutMs(httpTimeout) : DEFAULT_GEMINI_REQUEST_TIMEOUT_MS,
+            timeout: this.getDriverRequestTimeoutMs(httpTimeout),
             ...(serviceTier && serviceTier !== 'default'
                 ? {
                       headers: {
@@ -157,7 +150,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
     private getAnthropicVertexClientOptions(region: string, authClient: AuthClient, httpTimeout?: HttpTimeoutOptions) {
         return {
-            timeout: this.getSdkRequestTimeoutMs(httpTimeout),
+            timeout: this.getDriverRequestTimeoutMs(httpTimeout),
             region,
             projectId: this.options.project,
             authClient: authClient,
@@ -360,14 +353,19 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return formatImagenDebugPrompt(prompt);
     }
 
-    async requestTextCompletion(prompt: VertexAIPrompt, options: ExecutionOptions): Promise<Completion> {
-        return getModelDefinition(options.model).requestTextCompletion(this, prompt, options);
+    async requestTextCompletion(
+        prompt: VertexAIPrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion> {
+        return getModelDefinition(options.model).requestTextCompletion(this, prompt, options, signal);
     }
     async requestTextCompletionStream(
         prompt: VertexAIPrompt,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
-        return getModelDefinition(options.model).requestTextCompletionStream(this, prompt, options);
+        return getModelDefinition(options.model).requestTextCompletionStream(this, prompt, options, signal);
     }
 
     /**
@@ -594,10 +592,14 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return processedConversation;
     }
 
-    async requestImageGeneration(_prompt: ImagenPrompt, _options: ExecutionOptions): Promise<Completion> {
+    async requestImageGeneration(
+        _prompt: ImagenPrompt,
+        _options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion> {
         const splits = _options.model.split('/');
         const modelName = trimModelName(splits[splits.length - 1]);
-        return new ImagenModelDefinition(modelName).requestImageGeneration(this, _prompt, _options);
+        return new ImagenModelDefinition(modelName).requestImageGeneration(this, _prompt, _options, signal);
     }
 
     async getGenAIModelsArray(client: GoogleGenAI): Promise<Model[]> {

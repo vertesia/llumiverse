@@ -114,6 +114,7 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
             ? getTokenProvider({ region: opts.region, credentials: opts.credentials })
             : getTokenProvider({ region: opts.region });
         const driverFetch = this.getDriverFetch();
+        const timeout = this.getDriverRequestTimeoutMs();
         const v1BaseURL = `https://bedrock-mantle.${opts.region}.api.aws/v1`;
 
         this.service = new BedrockOpenAI({
@@ -121,22 +122,26 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
             awsRegion: opts.region,
             bedrockTokenProvider,
             fetch: driverFetch,
+            timeout,
         });
         const responsesService = new BedrockOpenAI({
             baseURL: `https://bedrock-mantle.${opts.region}.api.aws/openai/v1`,
             awsRegion: opts.region,
             bedrockTokenProvider,
             fetch: driverFetch,
+            timeout,
         });
         this.responsesDelegate = new BedrockMantleResponsesDelegate(opts, responsesService);
         this.chatCompletionsProtocol = new OpenAISDKChatCompletionsProtocol({
             resultSchemaMode: 'response_format',
             toolSchemaMode: 'compatible',
+            resolveRequestOptions: (options, signal) => this.getDriverRequestOptions(options, signal),
         });
         this.alignedChatCompletionsProtocol = new OpenAISDKChatCompletionsProtocol({
             resultSchemaMode: 'response_format',
             includeResultSchemaInPrompt: true,
             toolSchemaMode: 'compatible',
+            resolveRequestOptions: (options, signal) => this.getDriverRequestOptions(options, signal),
         });
 
         const credentials = opts.credentials;
@@ -153,6 +158,7 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
         this.anthropicService = new AnthropicBedrockMantle({
             awsRegion: opts.region,
             fetch: driverFetch,
+            timeout,
             ...credentialOptions,
         });
     }
@@ -182,18 +188,30 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
         return formatClaudeDebugPrompt(prompt);
     }
 
-    requestTextCompletion(prompt: BedrockMantlePrompt, options: ExecutionOptions): Promise<Completion> {
+    requestTextCompletion(
+        prompt: BedrockMantlePrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion> {
         switch (getBedrockMantleProtocol(options.model)) {
             case 'responses':
-                return this.responsesDelegate.requestTextCompletion(requireResponsesPrompt(prompt), options);
+                return this.responsesDelegate.requestTextCompletion(requireResponsesPrompt(prompt), options, signal);
             case 'chat_completions':
                 return this.getChatCompletionsProtocol(options.model).requestTextCompletion(
                     this,
                     requireChatCompletionsPrompt(prompt),
                     options,
+                    signal,
                 );
             case 'messages':
-                return executeClaudeCompletion(this.anthropicService, requireClaudePrompt(prompt), options);
+                return executeClaudeCompletion(
+                    this.anthropicService,
+                    requireClaudePrompt(prompt),
+                    options,
+                    undefined,
+                    'anthropic',
+                    this.getDriverRequestOptions(options, signal),
+                );
             default:
                 throw new Error(`Unsupported Bedrock Mantle model: ${options.model}`);
         }
@@ -202,18 +220,31 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
     requestTextCompletionStream(
         prompt: BedrockMantlePrompt,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
         switch (getBedrockMantleProtocol(options.model)) {
             case 'responses':
-                return this.responsesDelegate.requestTextCompletionStream(requireResponsesPrompt(prompt), options);
+                return this.responsesDelegate.requestTextCompletionStream(
+                    requireResponsesPrompt(prompt),
+                    options,
+                    signal,
+                );
             case 'chat_completions':
                 return this.getChatCompletionsProtocol(options.model).requestTextCompletionStream(
                     this,
                     requireChatCompletionsPrompt(prompt),
                     options,
+                    signal,
                 );
             case 'messages':
-                return streamClaudeCompletion(this.anthropicService, requireClaudePrompt(prompt), options);
+                return streamClaudeCompletion(
+                    this.anthropicService,
+                    requireClaudePrompt(prompt),
+                    options,
+                    undefined,
+                    'bedrock-mantle',
+                    this.getDriverRequestOptions(options, signal),
+                );
             default:
                 throw new Error(`Unsupported Bedrock Mantle model: ${options.model}`);
         }

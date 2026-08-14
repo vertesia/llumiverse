@@ -45,6 +45,7 @@ export class AzureOpenAIDriver extends OpenAIResponsesDriverBase {
             deployment: opts.deployment,
             fetch: this.getDriverFetch(),
             maxRetries: 0,
+            timeout: this.getDriverRequestTimeoutMs(),
         });
     }
 

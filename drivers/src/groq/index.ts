@@ -53,6 +53,7 @@ export class GroqDriver extends OpenAIChatCompletionsDriverBase<GroqDriverOption
             apiKey: options.apiKey,
             baseURL: options.endpoint_url,
             fetch: this.getDriverFetch(),
+            timeout: this.getDriverRequestTimeoutMs(),
         });
     }
 
@@ -81,18 +82,27 @@ export class GroqDriver extends OpenAIChatCompletionsDriverBase<GroqDriverOption
     async _postChatCompletion(
         payload: OpenAIChatCompletionsPayload,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<OpenAIChatCompletionsResponse> {
         const request = toGroqRequest(payload, options, false);
-        const response = await this.client.chat.completions.create(request);
+        const requestOptions = this.getDriverRequestOptions(options, signal);
+        const response = requestOptions
+            ? await this.client.chat.completions.create(request, requestOptions)
+            : await this.client.chat.completions.create(request);
         return preserveOpenAIChatCompletionsOriginalResponse(normalizeGroqResponse(response), response);
     }
 
     async _postChatCompletionStream(
         payload: OpenAIChatCompletionsPayload,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<ReadableStream> {
-        const stream = await this.client.chat.completions.create(toGroqRequest(payload, options, true));
-        return openAIChatCompletionsStreamToSSE(normalizeGroqStream(stream));
+        const request = toGroqRequest(payload, options, true);
+        const requestOptions = this.getDriverRequestOptions(options, signal);
+        const stream = requestOptions
+            ? await this.client.chat.completions.create(request, requestOptions)
+            : await this.client.chat.completions.create(request);
+        return openAIChatCompletionsStreamToSSE(normalizeGroqStream(stream), () => stream.controller.abort());
     }
 
     async listModels(): Promise<AIModel[]> {

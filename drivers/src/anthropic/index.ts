@@ -39,13 +39,11 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
 
     constructor(opts: AnthropicDriverOptions) {
         super(opts);
-        // Route requests through the driver's HTTP agent (configured by
-        // opts.httpTimeout) so a hung upstream surfaces in seconds rather
-        // than blocking on Node's 5-minute undici default.
         this.client = new Anthropic({
             apiKey: opts.apiKey,
             ...(opts.baseURL ? { baseURL: opts.baseURL } : {}),
             fetch: this.getDriverFetch(),
+            timeout: this.getDriverRequestTimeoutMs(),
         });
     }
 
@@ -57,23 +55,42 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
         return formatClaudeDebugPrompt(prompt);
     }
 
-    async requestTextCompletion(prompt: ClaudePrompt, options: ExecutionOptions): Promise<Completion> {
+    async requestTextCompletion(
+        prompt: ClaudePrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion> {
         const model_options = options.model_options as AnthropicClaudeOptions | undefined;
         if (model_options?._option_id !== undefined && model_options?._option_id !== 'anthropic-claude') {
             this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
-        return executeClaudeCompletion(this.client, prompt, options, this.logger, this.provider);
+        return executeClaudeCompletion(
+            this.client,
+            prompt,
+            options,
+            this.logger,
+            this.provider,
+            this.getDriverRequestOptions(options, signal),
+        );
     }
 
     async requestTextCompletionStream(
         prompt: ClaudePrompt,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
         const model_options = options.model_options as AnthropicClaudeOptions | undefined;
         if (model_options?._option_id !== undefined && model_options?._option_id !== 'anthropic-claude') {
             this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
-        return streamClaudeCompletion(this.client, prompt, options, this.logger, this.provider);
+        return streamClaudeCompletion(
+            this.client,
+            prompt,
+            options,
+            this.logger,
+            this.provider,
+            this.getDriverRequestOptions(options, signal),
+        );
     }
 
     async listModels(_params?: ModelSearchPayload): Promise<AIModel[]> {

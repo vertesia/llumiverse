@@ -1,7 +1,7 @@
 import {
     type AIModel,
     type Completion,
-    type CompletionChunkObject,
+    type DriverCompletionStream,
     type DriverOptions,
     type EmbeddingsOptions,
     type EmbeddingsResult,
@@ -22,10 +22,7 @@ class TestDriver extends AbstractDriver<DriverOptions, string> {
         throw new Error('Not implemented');
     }
 
-    async requestTextCompletionStream(
-        _prompt: string,
-        _options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>> {
+    async requestTextCompletionStream(_prompt: string, _options: ExecutionOptions): Promise<DriverCompletionStream> {
         throw new Error('Not implemented');
     }
 

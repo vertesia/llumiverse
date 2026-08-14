@@ -410,6 +410,7 @@ describe('BedrockMantleDriver protocol execution', () => {
         const completion = await driver.requestTextCompletion(prompt, {
             model: 'anthropic.claude-haiku-4-5',
             model_options: { _option_id: 'bedrock-mantle-claude', max_tokens: 100 },
+            httpTimeout: { headersTimeout: 1_200_000, bodyTimeout: 1_800_000 },
         });
 
         expect(stream).toHaveBeenCalledWith(
@@ -419,7 +420,7 @@ describe('BedrockMantleDriver protocol execution', () => {
                 max_tokens: 100,
                 stream: true,
             }),
-            undefined,
+            { signal: undefined, timeout: 1_800_000 },
         );
         expect(completion.result).toEqual([{ type: 'text', value: 'ok' }]);
     });

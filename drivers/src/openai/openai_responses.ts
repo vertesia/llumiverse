@@ -55,6 +55,7 @@ export class OpenAIResponsesDriver extends OpenAIResponsesDriverBase {
             defaultHeaders: opts.default_headers,
             fetch: this.getDriverFetch(),
             maxRetries: 0,
+            timeout: this.getDriverRequestTimeoutMs(),
         });
     }
 
