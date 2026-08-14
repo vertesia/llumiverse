@@ -97,7 +97,11 @@ class LifecycleTestDriver extends AbstractDriver<DriverOptions, string> {
 class OverriddenStreamDriver extends LifecycleTestDriver {
     readonly cancelStream = vi.fn().mockResolvedValue(undefined);
 
-    override async stream(_segments: PromptSegment[], _options: ExecutionOptions): Promise<CompletionStream<string>> {
+    override async stream(
+        _segments: PromptSegment[],
+        _options: ExecutionOptions,
+        _signal?: AbortSignal,
+    ): Promise<CompletionStream<string>> {
         return {
             completion: undefined,
             cancel: this.cancelStream,
@@ -132,6 +136,17 @@ class ThrowingIteratorDriver extends LifecycleTestDriver {
 
 const segments = [{ role: PromptRole.user, content: 'hello' }];
 const options = { model: 'test-model' };
+
+function holdStreamCancellation(driver: OverriddenStreamDriver): () => void {
+    let release!: () => void;
+    driver.cancelStream.mockImplementationOnce(
+        () =>
+            new Promise<void>((resolve) => {
+                release = resolve;
+            }),
+    );
+    return () => release();
+}
 
 describe('AbstractDriver lifecycle', () => {
     it('defers destruction until an in-flight execution finishes', async () => {
@@ -215,6 +230,54 @@ describe('AbstractDriver lifecycle', () => {
         expect(cleanup).not.toHaveBeenCalled();
         await stream.cancel();
         expect(cleanup).toHaveBeenCalledOnce();
+    });
+
+    it('coalesces concurrent cancellation of a leased stream', async () => {
+        const driver = new OverriddenStreamDriver(vi.fn());
+        const releaseCancellation = holdStreamCancellation(driver);
+        const stream = await driver.stream(segments, options);
+
+        const first = stream.cancel();
+        const second = stream.cancel();
+
+        expect(second).toBe(first);
+        expect(driver.cancelStream).toHaveBeenCalledOnce();
+        releaseCancellation();
+        await Promise.all([first, second]);
+    });
+
+    it('coalesces abort-signal and explicit cancellation', async () => {
+        const driver = new OverriddenStreamDriver(vi.fn());
+        const releaseCancellation = holdStreamCancellation(driver);
+        const controller = new AbortController();
+        const stream = await driver.stream(segments, options, controller.signal);
+
+        controller.abort();
+        const explicitCancellation = stream.cancel();
+
+        expect(driver.cancelStream).toHaveBeenCalledOnce();
+        releaseCancellation();
+        await explicitCancellation;
+    });
+
+    it('coalesces stream-start timeout and explicit cancellation', async () => {
+        vi.useFakeTimers();
+        try {
+            const driver = new OverriddenStreamDriver(vi.fn(), { streamStartTimeoutMs: 100 });
+            const releaseCancellation = holdStreamCancellation(driver);
+            const stream = await driver.stream(segments, options);
+
+            await vi.advanceTimersByTimeAsync(101);
+            const explicitCancellation = stream.cancel();
+
+            expect(driver.cancelStream).toHaveBeenCalledOnce();
+            releaseCancellation();
+            await explicitCancellation;
+            const iterator = stream[Symbol.asyncIterator]();
+            await expect(iterator.next()).rejects.toThrow('Completion stream was not consumed within 100ms');
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('releases lifecycle ownership when an overridden stream iterator throws during creation', async () => {

@@ -38,11 +38,11 @@ class CompletionStreamLease {
     start(): void {
         this.started = true;
         clearTimeout(this.timer);
-        if (this.cancelled) {
-            throw new Error('Completion stream was cancelled before consumption');
-        }
         if (this.expired) {
             throw new Error(`Completion stream was not consumed within ${this.startTimeoutMs}ms`);
+        }
+        if (this.cancelled) {
+            throw new Error('Completion stream was cancelled before consumption');
         }
     }
 
@@ -110,6 +110,7 @@ class LeasedCompletionStream<PromptT> implements CompletionStream<PromptT> {
     private iteratorCreated = false;
     private readonly lease: CompletionStreamLease;
     private abort?: () => void;
+    private cancellation?: Promise<void>;
 
     constructor(
         private readonly stream: CompletionStream<PromptT>,
@@ -118,9 +119,8 @@ class LeasedCompletionStream<PromptT> implements CompletionStream<PromptT> {
         private readonly signal?: AbortSignal,
     ) {
         this.lease = new CompletionStreamLease(releaseOperation, streamStartTimeoutMs, async () => {
-            this.removeAbortListener();
             try {
-                await this.stream.cancel();
+                await this.cancel();
             } catch {
                 /* stream cleanup best-effort */
             }
@@ -149,12 +149,9 @@ class LeasedCompletionStream<PromptT> implements CompletionStream<PromptT> {
         try {
             iterator = this.stream[Symbol.asyncIterator]();
         } catch (error: unknown) {
-            this.removeAbortListener();
-            try {
-                void this.stream.cancel().finally(() => this.lease.release());
-            } catch {
-                this.lease.release();
-            }
+            void this.cancel().catch(() => {
+                /* iterator-creation cleanup best-effort */
+            });
             throw error;
         }
         this.activeIterator = iterator;
@@ -185,7 +182,14 @@ class LeasedCompletionStream<PromptT> implements CompletionStream<PromptT> {
         };
     }
 
-    async cancel(): Promise<void> {
+    cancel(): Promise<void> {
+        if (!this.cancellation) {
+            this.cancellation = this.cancelInternal();
+        }
+        return this.cancellation;
+    }
+
+    private async cancelInternal(): Promise<void> {
         const pending = this.lease.cancelPending();
         try {
             await this.stream.cancel();
