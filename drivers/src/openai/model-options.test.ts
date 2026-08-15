@@ -13,7 +13,11 @@ describe('OpenAI reasoning effort', () => {
         expect(openAIReasoningEffort('gpt-4o', 'medium')).toBeUndefined();
     });
 
-    it('preserves effort for Bedrock Mantle Grok reasoning models', () => {
+    it('preserves effort for namespaced Bedrock Mantle Grok reasoning models', () => {
         expect(openAIReasoningEffort('xai.grok-4.3', 'none')).toBe('none');
+    });
+
+    it.each(['grok-4.5', 'grok-5-fast'])('preserves effort for direct xAI model id %s', (model) => {
+        expect(openAIReasoningEffort(model, 'high')).toBe('high');
     });
 });

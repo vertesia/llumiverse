@@ -96,9 +96,9 @@ function isOpenAIReasoningModel(model: string): boolean {
 }
 
 export function openAIReasoningEffort(model: string, effort: string | undefined): string | undefined {
-    return effort && (isOpenAIReasoningModel(model) || model.toLowerCase().startsWith('xai.grok-'))
-        ? effort
-        : undefined;
+    const normalized = model.toLowerCase();
+    const isGrokReasoningModel = normalized.startsWith('grok-') || normalized.startsWith('xai.grok-');
+    return effort && (isOpenAIReasoningModel(model) || isGrokReasoningModel) ? effort : undefined;
 }
 
 function hasExplicitPromptCacheBreakpoint(item: ResponseInputItem): boolean {
