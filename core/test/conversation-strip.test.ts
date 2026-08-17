@@ -286,6 +286,73 @@ describe('stripBase64ImagesFromConversation', () => {
         expect(result.messages[0].content[0].image_url.url).toBe('https://example.com/image.jpg');
     });
 
+    test('should replace an OpenAI Responses input_image block with a text block', () => {
+        // The Responses API keeps the data URL in a plain string field. Blanking that string in
+        // place would leave an `input_image` block carrying a non-URL, which the API rejects.
+        const input = {
+            input: [
+                {
+                    type: 'message',
+                    content: [{ type: 'input_image', image_url: 'data:image/png;base64,abc123', detail: 'auto' }],
+                },
+            ],
+        };
+
+        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as Tree;
+        expect(result.input[0].content[0]).toEqual({ type: 'input_text', text: IMAGE_PLACEHOLDER });
+    });
+
+    test('should replace an input_image carried by a tool result output', () => {
+        const input = {
+            input: [
+                {
+                    type: 'function_call_output',
+                    call_id: 'call_1',
+                    output: [
+                        { type: 'input_text', text: '{"artifact_path":"out/plot.png"}' },
+                        { type: 'input_image', image_url: 'data:image/png;base64,abc123', detail: 'auto' },
+                    ],
+                },
+            ],
+        };
+
+        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as Tree;
+        expect(result.input[0].output).toEqual([
+            { type: 'input_text', text: '{"artifact_path":"out/plot.png"}' },
+            { type: 'input_text', text: IMAGE_PLACEHOLDER },
+        ]);
+    });
+
+    test('should replace an OpenAI Responses input_file block with a document placeholder', () => {
+        const input = {
+            input: [
+                {
+                    type: 'message',
+                    content: [
+                        { type: 'input_file', filename: 'report.pdf', file_data: 'data:application/pdf;base64,abc123' },
+                    ],
+                },
+            ],
+        };
+
+        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as Tree;
+        expect(result.input[0].content[0]).toEqual({ type: 'input_text', text: DOCUMENT_PLACEHOLDER });
+    });
+
+    test('should leave an input_image referencing a remote URL alone', () => {
+        const input = {
+            input: [
+                {
+                    type: 'message',
+                    content: [{ type: 'input_image', image_url: 'https://example.com/image.jpg', detail: 'auto' }],
+                },
+            ],
+        };
+
+        const result = stripBase64ImagesFromConversation(input, FORCE_STRIP) as Tree;
+        expect(result.input[0].content[0].image_url).toBe('https://example.com/image.jpg');
+    });
+
     test('should handle null and undefined', () => {
         expect(stripBase64ImagesFromConversation(null)).toBeNull();
         expect(stripBase64ImagesFromConversation(undefined)).toBeUndefined();
@@ -741,6 +808,27 @@ describe('truncateLargeTextInConversation', () => {
 
         expect(result.messages[0].content.length).toBeLessThan(50000);
         expect(result.messages[0].content).toContain(TEXT_TRUNCATED_MARKER);
+    });
+
+    test('should leave OpenAI Responses media blocks intact', () => {
+        // A truncated base64 payload is a corrupt one - these blocks have to survive whole.
+        const imageBlock = {
+            type: 'input_image',
+            image_url: `data:image/png;base64,${'a'.repeat(50000)}`,
+            detail: 'auto',
+        };
+        const fileBlock = {
+            type: 'input_file',
+            filename: 'report.pdf',
+            file_data: `data:application/pdf;base64,${'b'.repeat(50000)}`,
+        };
+        const input = {
+            input: [{ type: 'function_call_output', call_id: 'call_1', output: [imageBlock, fileBlock] }],
+        };
+
+        const result = truncateLargeTextInConversation(input, { textMaxTokens: 10000 }) as Tree;
+
+        expect(result.input[0].output).toEqual([imageBlock, fileBlock]);
     });
 
     test('should preserve conversation metadata during truncation', () => {
