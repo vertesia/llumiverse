@@ -194,8 +194,8 @@ jobs:
       - push
     if: ${{ always() && needs.sync.outputs.is_merged == 'true' && needs.push.result == 'failure' }}
     runs-on: ubuntu-latest
-    # Scopes the cross-repo dispatch token to a dedicated environment.
-    environment: build
+    # Scopes the submodule-sync App key to a dedicated environment.
+    environment: submodule-sync
     permissions:
       contents: read # required for checking out the repository
       pull-requests: write # required for opening the fast-forward-failure PR
@@ -260,23 +260,31 @@ jobs:
             gh pr edit "${STEPS_CREATE_PR_OUTPUTS_PR_NUMBER}" --add-assignee "${GITHUB_ACTOR}"
           fi
 
+      - name: Generate Studio dispatch token
+        id: studio-dispatch-token
+        if: ${{ github.actor != 'github-actions[bot]' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.APP_VERTESIA_SUBMODULE_SYNC_CLIENT_ID }}
+          private-key: ${{ secrets.APP_VERTESIA_SUBMODULE_SYNC_PEM }}
+          owner: ${{ github.repository_owner }}
+          repositories: studio
+          permission-contents: write
+
       - name: Notify studio for Slack notification
         if: ${{ github.actor != 'github-actions[bot]' }}
         env:
-          STUDIO_DISPATCH_TOKEN: ${{ secrets.STUDIO_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ steps.studio-dispatch-token.outputs.token }}
           STEPS_CREATE_PR_OUTPUTS_PR_URL: ${{ steps.create_pr.outputs.PR_URL }}
         run: |
-          curl -L \
-            -X POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${STUDIO_DISPATCH_TOKEN}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            --fail-with-body \
-            https://api.github.com/repos/vertesia/studio/dispatches \
-            -d "$(jq -nc \
+          gh api repos/vertesia/studio/dispatches \
+            --method POST \
+            --input - <<EOF
+          $(jq -nc \
               --arg actor "${GITHUB_ACTOR}" \
               --arg url "${STEPS_CREATE_PR_OUTPUTS_PR_URL}" \
-              '{event_type: "developer-notification", client_payload: {github_login: $actor, message: ("Your changes from `preview` synced cleanly in vertesia/llumiverse, but `main` could not be fast-forwarded. Please review this PR: " + $url)}}')"
+              '{event_type: "developer-notification", client_payload: {github_login: $actor, message: ("Your changes from `preview` synced cleanly in vertesia/llumiverse, but `main` could not be fast-forwarded. Please review this PR: " + $url)}}')
+          EOF
 
   notify:
     name: Notify developer of successful sync
@@ -284,50 +292,64 @@ jobs:
     needs:
       - push
     if: ${{ needs.push.result == 'success' && github.actor != 'github-actions[bot]' }}
-    # Scopes the cross-repo dispatch token to a dedicated environment.
-    environment: build
+    # Scopes the submodule-sync App key to a dedicated environment.
+    environment: submodule-sync
     steps:
+      - name: Generate Studio dispatch token
+        id: studio-dispatch-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.APP_VERTESIA_SUBMODULE_SYNC_CLIENT_ID }}
+          private-key: ${{ secrets.APP_VERTESIA_SUBMODULE_SYNC_PEM }}
+          owner: ${{ github.repository_owner }}
+          repositories: studio
+          permission-contents: write
+
       - name: Notify studio
         env:
-          STUDIO_DISPATCH_TOKEN: ${{ secrets.STUDIO_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ steps.studio-dispatch-token.outputs.token }}
           ACTION_RUN_URL: https://github.com/vertesia/llumiverse/actions/runs/${{ github.run_id }}
         run: |
-          curl -L \
-            -X POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${STUDIO_DISPATCH_TOKEN}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            --fail-with-body \
-            https://api.github.com/repos/vertesia/studio/dispatches \
-            -d "$(jq -nc \
+          gh api repos/vertesia/studio/dispatches \
+            --method POST \
+            --input - <<EOF
+          $(jq -nc \
               --arg actor "${GITHUB_ACTOR}" \
               --arg url "${ACTION_RUN_URL}" \
-              '{event_type: "developer-notification", client_payload: {github_login: $actor, message: ("Your changes from `preview` have been synced to `main` in vertesia/llumiverse. See the <" + $url + "|Action run>.")}}')"
+              '{event_type: "developer-notification", client_payload: {github_login: $actor, message: ("Your changes from `preview` have been synced to `main` in vertesia/llumiverse. See the <" + $url + "|Action run>.")}}')
+          EOF
 
   notify_conflict:
     name: Notify developer of conflict PR
     needs: sync
     if: ${{ needs.sync.outputs.pr_number != '0' }}
     runs-on: ubuntu-latest
-    # Scopes the cross-repo dispatch token to a dedicated environment.
-    environment: build
+    # Scopes the submodule-sync App key to a dedicated environment.
+    environment: submodule-sync
     steps:
+      - name: Generate Studio dispatch token
+        id: studio-dispatch-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.APP_VERTESIA_SUBMODULE_SYNC_CLIENT_ID }}
+          private-key: ${{ secrets.APP_VERTESIA_SUBMODULE_SYNC_PEM }}
+          owner: ${{ github.repository_owner }}
+          repositories: studio
+          permission-contents: write
+
       - name: Notify studio for Slack notification
         env:
-          STUDIO_DISPATCH_TOKEN: ${{ secrets.STUDIO_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ steps.studio-dispatch-token.outputs.token }}
           NEEDS_SYNC_OUTPUTS_PR_URL: ${{ needs.sync.outputs.pr_url }}
         run: |
-          curl -L \
-            -X POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${STUDIO_DISPATCH_TOKEN}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            --fail-with-body \
-            https://api.github.com/repos/vertesia/studio/dispatches \
-            -d "$(jq -nc \
+          gh api repos/vertesia/studio/dispatches \
+            --method POST \
+            --input - <<EOF
+          $(jq -nc \
               --arg actor "${GITHUB_ACTOR}" \
               --arg url "${NEEDS_SYNC_OUTPUTS_PR_URL}" \
-              '{event_type: "developer-notification", client_payload: {github_login: $actor, message: ("Your changes from `preview` failed to sync to `main` in vertesia/llumiverse due to merge conflicts. Please resolve this PR: " + $url)}}')"
+              '{event_type: "developer-notification", client_payload: {github_login: $actor, message: ("Your changes from `preview` failed to sync to `main` in vertesia/llumiverse due to merge conflicts. Please resolve this PR: " + $url)}}')
+          EOF
 
   cleanup:
     name: Cleanup temporary sync branch
