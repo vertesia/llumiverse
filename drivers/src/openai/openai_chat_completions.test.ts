@@ -1076,6 +1076,8 @@ describe('OpenAIChatCompletionsProtocol', () => {
             result_schema: {
                 type: 'object',
                 properties: { answer: { type: 'string' } },
+                required: ['answer'],
+                additionalProperties: false,
             },
             tools: [
                 {
@@ -1084,6 +1086,8 @@ describe('OpenAIChatCompletionsProtocol', () => {
                     input_schema: {
                         type: 'object',
                         properties: { location: { type: 'string' } },
+                        required: ['location'],
+                        additionalProperties: false,
                     },
                 },
             ],
