@@ -1,8 +1,12 @@
-import type { JSONSchema } from '@llumiverse/core';
+import type { JSONSchema, JSONSchemaTypeName } from '@llumiverse/core';
 
 export interface OpenAISchemaFormatResult {
     schema: JSONSchema;
     strict: boolean;
+}
+
+function hasSchemaType(schema: JSONSchema, type: JSONSchemaTypeName): boolean {
+    return Array.isArray(schema.type) ? schema.type.includes(type) : schema.type === type;
 }
 
 export function formatOpenAISchema(schema: JSONSchema): OpenAISchemaFormatResult {
@@ -39,7 +43,7 @@ export function limitedSchemaFormat(schema: JSONSchema): JSONSchema {
 
             formattedSchema.properties[propName] = limitedSchemaFormat(property);
 
-            if (property?.type === 'array' && property.items && property.items?.type === 'object') {
+            if (hasSchemaType(property, 'array') && property.items && hasSchemaType(property.items, 'object')) {
                 formattedSchema.properties[propName] = {
                     ...property,
                     items: limitedSchemaFormat(property.items),
@@ -63,7 +67,7 @@ export function openAISchemaFormat(schema: JSONSchema, nesting: number = 0): JSO
     delete formattedSchema.default;
 
     // Additional properties not supported, required to be set.
-    if (formattedSchema?.type === 'object') {
+    if (hasSchemaType(formattedSchema, 'object')) {
         formattedSchema.additionalProperties = false;
     }
 
@@ -81,7 +85,7 @@ export function openAISchemaFormat(schema: JSONSchema, nesting: number = 0): JSO
 
             formattedSchema.properties[propName] = openAISchemaFormat(property, nesting + 1);
 
-            if (property?.type === 'array' && property.items && property.items?.type === 'object') {
+            if (hasSchemaType(property, 'array') && property.items && hasSchemaType(property.items, 'object')) {
                 formattedSchema.properties[propName] = {
                     ...property,
                     items: openAISchemaFormat(property.items, nesting + 1),
@@ -90,7 +94,7 @@ export function openAISchemaFormat(schema: JSONSchema, nesting: number = 0): JSO
         }
     }
     if (
-        formattedSchema?.type === 'object' &&
+        hasSchemaType(formattedSchema, 'object') &&
         (!formattedSchema?.properties || Object.keys(formattedSchema?.properties ?? {}).length === 0)
     ) {
         // If no properties are defined, then additionalProperties: true was set or the object would be empty.
