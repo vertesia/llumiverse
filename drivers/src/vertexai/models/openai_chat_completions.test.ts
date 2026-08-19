@@ -326,6 +326,8 @@ describe('OpenAIChatCompletionsModelDefinition', () => {
             result_schema: {
                 type: 'object',
                 properties: { answer: { type: 'string' } },
+                required: ['answer'],
+                additionalProperties: false,
             },
         };
 
