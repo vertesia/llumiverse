@@ -2,6 +2,18 @@ import type { JSONSchema, JSONSchemaTypeName } from '@llumiverse/core';
 import type { JSONSchema as OpenAIJSONSchema } from 'openai/lib/jsonschema.js';
 import { forEachJSONSchemaChild, toStrictJsonSchema } from 'openai/lib/transform.js';
 
+const OPENAI_STRICT_STRING_FORMATS = new Set([
+    'date-time',
+    'time',
+    'date',
+    'duration',
+    'email',
+    'hostname',
+    'ipv4',
+    'ipv6',
+    'uuid',
+]);
+
 export interface OpenAISchemaFormatResult {
     schema: JSONSchema;
     strict: boolean;
@@ -71,6 +83,12 @@ function assertOpenAIStrictSchemaContract(schema: JSONSchema): void {
         visited.add(candidate);
 
         const candidateSchema = candidate as JSONSchema;
+        if (candidateSchema.format !== undefined && !OPENAI_STRICT_STRING_FORMATS.has(candidateSchema.format)) {
+            throw new Error(`Unsupported OpenAI strict schema format: ${candidateSchema.format}`);
+        }
+        if (candidateSchema.oneOf !== undefined) {
+            throw new Error('OpenAI strict schemas do not support oneOf');
+        }
         if (hasSchemaType(candidateSchema, 'object') || candidateSchema.properties) {
             const properties = candidateSchema.properties ?? {};
             const propertyNames = Object.keys(properties);

@@ -72,11 +72,18 @@ describe('formatOpenAISchema', () => {
         ['unsupported string format', { type: 'string', format: 'uri' }],
         ['unsupported array keyword', { type: 'array', items: { type: 'string' }, uniqueItems: true }],
         ['unsupported composition keyword', { type: 'object', allOf: [{ type: 'object' }] }],
+        ['unsupported union keyword', { oneOf: [{ type: 'string' }, { type: 'number' }] }],
     ])('uses non-strict mode for %s', (_name, schema) => {
-        const result = formatOpenAISchema(schema);
+        const rootSchema = {
+            type: 'object',
+            properties: { value: schema },
+            required: ['value'],
+            additionalProperties: false,
+        } satisfies JSONSchema;
+        const result = formatOpenAISchema(rootSchema);
 
         expect(result.strict).toBe(false);
-        expect(result.schema).toEqual(schema);
+        expect(result.schema).toEqual(rootSchema);
     });
 
     it('keeps supported constraints in strict mode', () => {
