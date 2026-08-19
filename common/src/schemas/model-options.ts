@@ -1,8 +1,7 @@
 import { z } from 'zod';
 import { ImagenMaskMode, ImagenTaskType, ThinkingLevel } from '../options/vertexai.js';
 
-// Runtime schemas for `ModelOptions` — the union of every driver's per-model options — and its
-// twenty-five members.
+// Runtime schemas for `ModelOptions` — the union of every driver's per-model options.
 //
 // These are the SINGLE definition of each option set. The OpenAPI document publishes them, AJV
 // enforces them, and the public TypeScript types in `../options/*` are `z.infer` of them, so there
@@ -344,6 +343,36 @@ export const OpenAiGptImageOptionsSchema = z
     })
     .meta({ id: 'OpenAiGptImageOptions' });
 
+// ===== xai =====
+
+export const XAIGrokImageOptionsSchema = z
+    .strictObject({
+        _option_id: z.literal('xai-grok-image'),
+        aspect_ratio: z
+            .enum([
+                '1:1',
+                '16:9',
+                '9:16',
+                '4:3',
+                '3:4',
+                '3:2',
+                '2:3',
+                '2:1',
+                '1:2',
+                '19.5:9',
+                '9:19.5',
+                '20:9',
+                '9:20',
+                'auto',
+            ])
+            .optional(),
+        resolution: z.enum(['1k', '2k']).optional(),
+        quality: z.enum(['low', 'medium']).optional(),
+        response_format: z.enum(['url', 'b64_json']).optional(),
+        n: z.number().int().min(1).max(10).optional(),
+    })
+    .meta({ id: 'XAIGrokImageOptions' });
+
 // ===== vertexai =====
 
 export const ImagenOptionsSchema = z
@@ -474,6 +503,7 @@ export const ModelOptionsSchema = z
         OpenAiTextOptionsSchema,
         OpenAiDalleOptionsSchema,
         OpenAiGptImageOptionsSchema,
+        XAIGrokImageOptionsSchema,
         GroqOptionsSchema,
         MistralTextOptionsSchema,
     ])

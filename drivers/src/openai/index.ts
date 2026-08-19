@@ -469,11 +469,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 
     protected canStream(_options: ExecutionOptions): Promise<boolean> {
         // Image generation models don't support streaming
-        if (
-            _options.model.includes('dall-e') ||
-            _options.model.includes('gpt-image') ||
-            _options.model.includes('chatgpt-image')
-        ) {
+        if (this.isImageModel(_options.model)) {
             return Promise.resolve(false);
         }
 

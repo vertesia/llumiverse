@@ -84,6 +84,7 @@ describe('ModelOptionsSchema', () => {
             'OpenAiTextOptions',
             'OpenAiDalleOptions',
             'OpenAiGptImageOptions',
+            'XAIGrokImageOptions',
             'GroqOptions',
             'MistralTextOptions',
         ]);

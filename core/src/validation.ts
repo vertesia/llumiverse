@@ -1,5 +1,5 @@
 import type { CompletionResult, JSONValue, ResultValidationError } from '@llumiverse/common';
-import { Ajv } from 'ajv';
+import { Ajv, type ValidateFunction } from 'ajv';
 import addFormats from 'ajv-formats';
 import { extractAndParseJSON } from './json.js';
 import { resolveField } from './resolver.js';
@@ -18,6 +18,28 @@ addFormats(ajv);
 
 function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Compile `schema` against the shared Ajv instance without tripping over its `$id` registry.
+ *
+ * `ajv.compile()` registers a schema under its `$id` and caches compiled validators by object
+ * identity. A stored result schema is deserialized into a *fresh* object on every execution, so the
+ * second execution of any interaction whose schema declares an `$id` reached Ajv as an unknown
+ * object claiming an already-taken id and threw `schema with key or id "..." already exists`. That
+ * turned every such run into a `validation_error` on output the model had produced correctly.
+ *
+ * Dropping the previous registration first — rather than reusing the cached validator — keeps the
+ * newest definition authoritative, because a schema can be edited between executions while keeping
+ * its `$id`. `removeSchema` is a no-op when nothing is registered, and it also bounds the registry
+ * at one entry per id instead of leaking one per execution.
+ */
+function compileSchema(schema: object): ValidateFunction {
+    const id = (schema as { $id?: unknown }).$id;
+    if (typeof id === 'string' && id) {
+        ajv.removeSchema(id);
+    }
+    return ajv.compile(schema);
 }
 
 function getRequiredFields(schemaField: unknown): string[] {
@@ -73,7 +95,7 @@ export function validateResult(data: CompletionResult[], schema: object): Comple
         throw new Error('Data to validate must be an array');
     }
 
-    const validate = ajv.compile(schema);
+    const validate = compileSchema(schema);
     const valid = validate(json);
 
     if (!valid && validate.errors) {

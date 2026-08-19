@@ -1,8 +1,8 @@
 // This file is used by multiple drivers
 // to format prompts in a way that is compatible with OpenAI's API.
 
-import { type PromptOptions, PromptRole, type PromptSegment } from '@llumiverse/common';
-import { readStreamAsBase64 } from '@llumiverse/core';
+import { type DataSource, type PromptOptions, PromptRole, type PromptSegment } from '@llumiverse/common';
+import { readStreamAsBase64, readStreamAsString } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import { truncateDataUrlForDebug } from '../shared/debug-prompt.js';
 
@@ -18,6 +18,37 @@ function isResponseInputContent(value: unknown): value is ResponseInputContent {
         'type' in value &&
         (value.type === 'input_text' || value.type === 'input_image' || value.type === 'input_file')
     );
+}
+
+/**
+ * Map an attachment to the Responses content part that carries it. Types the API has no
+ * representation for (audio, video) are skipped rather than mislabelled as an image, which
+ * the API rejects outright. A missing mime type keeps the historical image assumption.
+ */
+async function fileToInputContent(file: DataSource): Promise<ResponseInputContent | undefined> {
+    const mimeType = file.mime_type;
+    if (!mimeType || mimeType.startsWith('image/')) {
+        return {
+            type: 'input_image',
+            image_url: `data:${mimeType || 'image/jpeg'};base64,${await readStreamAsBase64(await file.getStream())}`,
+            detail: 'auto',
+        };
+    }
+    if (mimeType === 'application/pdf') {
+        return {
+            type: 'input_file',
+            filename: file.name,
+            file_data: `data:${mimeType};base64,${await readStreamAsBase64(await file.getStream())}`,
+        };
+    }
+    if (mimeType.startsWith('text/')) {
+        return { type: 'input_text', text: await readStreamAsString(await file.getStream()) };
+    }
+    return undefined;
+}
+
+function inputTextParts(parts: ResponseInputContent[]): OpenAI.Responses.ResponseInputText[] {
+    return parts.filter((part): part is OpenAI.Responses.ResponseInputText => part.type === 'input_text');
 }
 
 function isEasyInputMessageWithInputContent(
@@ -94,20 +125,17 @@ export async function formatOpenAILikeMultimodalPrompt(
     const others: ResponseInputItem[] = [];
 
     for (const msg of segments) {
-        const parts: ResponseInputContent[] = [];
+        const fileParts: ResponseInputContent[] = [];
 
         //generate the parts based on PromptSegment
         if (msg.files) {
             for (const file of msg.files) {
-                const stream = await file.getStream();
-                const data = await readStreamAsBase64(stream);
-                parts.push({
-                    type: 'input_image',
-                    image_url: `data:${file.mime_type || 'image/jpeg'};base64,${data}`,
-                    detail: 'auto',
-                });
+                const part = await fileToInputContent(file);
+                if (part) fileParts.push(part);
             }
         }
+
+        const parts: ResponseInputContent[] = [...fileParts];
 
         if (msg.content) {
             parts.push({
@@ -118,9 +146,7 @@ export async function formatOpenAILikeMultimodalPrompt(
 
         if (msg.role === PromptRole.system) {
             // For system messages, filter to only text parts
-            const textParts = parts.filter(
-                (part): part is OpenAI.Responses.ResponseInputText => part.type === 'input_text',
-            );
+            const textParts = inputTextParts(parts);
             const textContent = textParts.length === 1 && !msg.files ? textParts[0].text : textParts;
             const systemMsg: EasyInputMessage = {
                 type: 'message',
@@ -144,13 +170,10 @@ export async function formatOpenAILikeMultimodalPrompt(
                 });
             }
         } else if (msg.role === PromptRole.safety) {
-            const textParts = parts.filter(
-                (part): part is OpenAI.Responses.ResponseInputText => part.type === 'input_text',
-            );
             const safetyMsg: EasyInputMessage = {
                 type: 'message',
                 role: 'system',
-                content: textParts,
+                content: inputTextParts(parts),
             };
 
             if (Array.isArray(safetyMsg.content)) {
@@ -164,10 +187,19 @@ export async function formatOpenAILikeMultimodalPrompt(
             if (!msg.tool_use_id) {
                 throw new Error('Tool use id is required for tool messages');
             }
+            // A tool result can carry attachments - an image a tool rendered or promoted into the
+            // conversation, a document it fetched. The Responses API accepts those as a content
+            // list on `function_call_output`; emitting only the text would silently drop them and
+            // leave the model insisting it cannot see the image it just asked for.
             const toolOutputMsg: OpenAI.Responses.ResponseInputItem.FunctionCallOutput = {
                 type: 'function_call_output',
                 call_id: msg.tool_use_id,
-                output: msg.content || '',
+                // The tool's own output reads first, then its attachments. With no attachments,
+                // keep the plain-string form the API has always accepted.
+                output:
+                    fileParts.length > 0
+                        ? [...(msg.content ? [{ type: 'input_text' as const, text: msg.content }] : []), ...fileParts]
+                        : msg.content || '',
             };
             others.push(toolOutputMsg);
         } else if (msg.role !== PromptRole.negative && msg.role !== PromptRole.mask) {

@@ -338,7 +338,14 @@ describe('BedrockMantleDriver protocol execution', () => {
                 expect.objectContaining({
                     model,
                     messages: [{ role: 'user', content: 'hello' }],
-                    response_format: expect.objectContaining({ type: 'json_schema' }),
+                    response_format: {
+                        type: 'json_schema',
+                        json_schema: {
+                            name: 'output',
+                            strict: false,
+                            schema: result_schema,
+                        },
+                    },
                 }),
             );
         }
@@ -443,6 +450,11 @@ describe('Bedrock Mantle Responses options', () => {
         const prompt = [
             { type: 'message', role: 'user', content: 'hello' },
         ] satisfies OpenAI.Responses.ResponseInputItem[];
+        const result_schema = {
+            type: 'object' as const,
+            properties: { answer: { type: 'string' as const } },
+            required: ['answer'],
+        };
 
         await driver.requestTextCompletion(prompt, {
             model: 'openai.gpt-5.5',
@@ -452,11 +464,7 @@ describe('Bedrock Mantle Responses options', () => {
                 effort: 'low',
                 verbosity: 'low',
             },
-            result_schema: {
-                type: 'object',
-                properties: { answer: { type: 'string' } },
-                required: ['answer'],
-            },
+            result_schema,
         });
 
         expect(create).toHaveBeenCalledWith(
@@ -467,7 +475,12 @@ describe('Bedrock Mantle Responses options', () => {
                 include: ['reasoning.encrypted_content'],
                 text: expect.objectContaining({
                     verbosity: 'low',
-                    format: expect.objectContaining({ type: 'json_schema', name: 'format_output' }),
+                    format: {
+                        type: 'json_schema',
+                        name: 'format_output',
+                        strict: false,
+                        schema: result_schema,
+                    },
                 }),
             }),
         );

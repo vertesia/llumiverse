@@ -22,9 +22,9 @@
     },
     "devDependencies": {
         "@biomejs/biome": "2.5.6",
-        "turbo": "^2.10.8",
+        "turbo": "^2.10.9",
         "typescript": "catalog:",
         "vitest": "^4.1.10"
     },
-    "packageManager": "pnpm@11.15.1"
+    "packageManager": "pnpm@11.20.0"
 }
