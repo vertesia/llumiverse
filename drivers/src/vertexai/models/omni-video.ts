@@ -77,6 +77,34 @@ function resolveTask(options: VertexAIGeminiOmniVideoOptions | undefined, imageC
     return task;
 }
 
+function interactionFailureRetryable(errors: Interactions.Error[] | undefined): boolean | undefined {
+    const details = JSON.stringify(errors ?? []).toLowerCase();
+    if (
+        details.includes('invalid_argument') ||
+        details.includes('unauthenticated') ||
+        details.includes('permission_denied') ||
+        details.includes('not_found') ||
+        details.includes('failed_precondition') ||
+        details.includes('out_of_range') ||
+        details.includes('unimplemented')
+    ) {
+        return false;
+    }
+    if (
+        details.includes('resource_exhausted') ||
+        details.includes('rate_limit') ||
+        details.includes('throttl') ||
+        details.includes('aborted') ||
+        details.includes('internal') ||
+        details.includes('unavailable') ||
+        details.includes('deadline_exceeded') ||
+        details.includes('timeout')
+    ) {
+        return true;
+    }
+    return undefined;
+}
+
 function parseVideoResults(response: Interactions.Interaction, outputPrefix: string) {
     if (response.status !== 'completed') {
         const details = response.errors?.length ? `: ${JSON.stringify(response.errors)}` : '';
@@ -84,7 +112,11 @@ function parseVideoResults(response: Interactions.Interaction, outputPrefix: str
         const transient = new Set(['queued', 'in_progress', 'incomplete']);
         throw new OmniVideoInteractionError(
             `Gemini Omni video interaction did not complete (status: ${response.status})${details}`,
-            permanent.has(response.status) ? false : transient.has(response.status) ? true : undefined,
+            permanent.has(response.status)
+                ? false
+                : transient.has(response.status)
+                  ? true
+                  : interactionFailureRetryable(response.errors),
         );
     }
 

@@ -210,13 +210,15 @@ describe('GeminiOmniVideoModelDefinition', () => {
     });
 
     it.each([
-        ['in_progress', true],
-        ['incomplete', true],
-        ['requires_action', false],
-        ['cancelled', false],
-        ['budget_exceeded', false],
-        ['failed', undefined],
-    ] as const)('classifies interaction status %s with retryable=%s', async (status, retryable) => {
+        ['in_progress', undefined, true],
+        ['incomplete', undefined, true],
+        ['requires_action', undefined, false],
+        ['cancelled', undefined, false],
+        ['budget_exceeded', undefined, false],
+        ['failed', [{ code: 'RESOURCE_EXHAUSTED', message: 'Try later' }], true],
+        ['failed', [{ code: 'PERMISSION_DENIED', message: 'Forbidden' }], false],
+        ['failed', [{ code: 'UNKNOWN', message: 'Unknown failure' }], undefined],
+    ] as const)('classifies interaction status %s errors %j with retryable=%s', async (status, errors, retryable) => {
         const definition = new GeminiOmniVideoModelDefinition();
         const prompt = await definition.createPrompt(
             {} as VertexAIDriver,
@@ -226,7 +228,7 @@ describe('GeminiOmniVideoModelDefinition', () => {
         let thrown: unknown;
         try {
             await definition.requestTextCompletion(
-                driverWithResponse({ id: 'interaction-1', status }).driver,
+                driverWithResponse({ id: 'interaction-1', status, errors }).driver,
                 prompt,
                 options(),
             );
