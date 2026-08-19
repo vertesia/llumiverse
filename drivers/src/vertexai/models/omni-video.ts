@@ -1,3 +1,4 @@
+import type { Interactions } from '@google/genai';
 import {
     type AIModel,
     type Completion,
@@ -28,29 +29,20 @@ export interface OmniVideoPrompt {
     images: OmniVideoImageInput[];
 }
 
-interface OmniInteractionResponse {
-    status?: string;
-    error?: unknown;
-    usage?: {
-        total_tokens?: number;
-        total_input_tokens?: number;
-        total_output_tokens?: number;
-    };
-    steps?: Array<{
-        type?: string;
-        content?: Array<{
-            type?: string;
-            uri?: string;
-            mime_type?: string;
-            data?: unknown;
-        }>;
-    }>;
-}
-
 class OmniVideoTerminalError extends Error {
     constructor(message: string) {
         super(message);
         this.name = 'OmniVideoTerminalError';
+    }
+}
+
+class OmniVideoInteractionError extends Error {
+    constructor(
+        message: string,
+        readonly retryable: boolean | undefined,
+    ) {
+        super(message);
+        this.name = 'OmniVideoInteractionError';
     }
 }
 
@@ -85,11 +77,14 @@ function resolveTask(options: VertexAIGeminiOmniVideoOptions | undefined, imageC
     return task;
 }
 
-function parseVideoResults(response: OmniInteractionResponse, outputPrefix: string) {
+function parseVideoResults(response: Interactions.Interaction, outputPrefix: string) {
     if (response.status !== 'completed') {
-        const details = response.error ? `: ${JSON.stringify(response.error)}` : '';
-        throw new OmniVideoTerminalError(
-            `Gemini Omni video interaction did not complete (status: ${response.status ?? 'missing'})${details}`,
+        const details = response.errors?.length ? `: ${JSON.stringify(response.errors)}` : '';
+        const permanent = new Set(['requires_action', 'cancelled', 'budget_exceeded']);
+        const transient = new Set(['queued', 'in_progress', 'incomplete']);
+        throw new OmniVideoInteractionError(
+            `Gemini Omni video interaction did not complete (status: ${response.status})${details}`,
+            permanent.has(response.status) ? false : transient.has(response.status) ? true : undefined,
         );
     }
 
@@ -116,15 +111,6 @@ function parseVideoResults(response: OmniInteractionResponse, outputPrefix: stri
         }
         return { type: 'video' as const, value: part.uri };
     });
-}
-
-function statusCode(error: unknown): number | undefined {
-    if (!error || typeof error !== 'object') return undefined;
-    const candidate = error as { code?: unknown; status?: unknown; statusCode?: unknown };
-    for (const value of [candidate.code, candidate.status, candidate.statusCode]) {
-        if (typeof value === 'number') return value;
-    }
-    return undefined;
 }
 
 export class GeminiOmniVideoModelDefinition implements ModelDefinition<OmniVideoPrompt> {
@@ -193,15 +179,16 @@ export class GeminiOmniVideoModelDefinition implements ModelDefinition<OmniVideo
             duration: `${modelOptions?.duration_seconds ?? 5}s`,
             ...(modelOptions?.aspect_ratio ? { aspect_ratio: modelOptions.aspect_ratio } : {}),
         };
+        const payload = {
+            model: GEMINI_OMNI_VIDEO_MODEL,
+            input: [{ type: 'text' as const, text: prompt.text }, ...prompt.images],
+            response_format: [responseFormat],
+            generation_config: { video_config: { task } },
+        } satisfies Interactions.CreateModelInteractionParamsNonStreaming;
         const response = await driver
             .getFetchClientForRegion('global', 'v1beta1')
-            .post<OmniInteractionResponse>('interactions', {
-                payload: {
-                    model: GEMINI_OMNI_VIDEO_MODEL,
-                    input: [{ type: 'text', text: prompt.text }, ...prompt.images],
-                    response_format: [responseFormat],
-                    generation_config: { video_config: { task } },
-                },
+            .post<Interactions.Interaction>('interactions', {
+                payload,
                 signal,
                 timeoutMs: driver.getRequestTimeoutMs(options.httpTimeout),
             });
@@ -224,17 +211,21 @@ export class GeminiOmniVideoModelDefinition implements ModelDefinition<OmniVideo
     }
 
     formatLlumiverseError(_driver: VertexAIDriver, error: unknown, context: LlumiverseErrorContext): LlumiverseError {
-        const code = statusCode(error);
+        if (!(error instanceof OmniVideoTerminalError) && !(error instanceof OmniVideoInteractionError)) {
+            if (!(error instanceof Error) || error.name !== 'AbortError') {
+                // Let VertexAIDriver fall back to the shared HTTP/network classifier. In particular,
+                // timeouts and all 5xx responses are retryable while ordinary 4xx responses are not.
+                throw error;
+            }
+        }
+        const retryable = error instanceof OmniVideoInteractionError ? error.retryable : false;
         const name = error instanceof Error ? error.name : 'GeminiOmniVideoError';
-        const terminal =
-            error instanceof OmniVideoTerminalError || name === 'AbortError' || name === 'TimeoutError' || code === 504;
-        const retryable = terminal ? false : code === 429 || code === 500 || code === 503 ? true : undefined;
         return new LlumiverseError(
             error instanceof Error ? error.message : String(error),
             retryable,
             context,
             error,
-            code,
+            undefined,
             name,
         );
     }

@@ -27,6 +27,7 @@ function options(overrides: Partial<ExecutionOptions> = {}): ExecutionOptions {
 
 function completedResponse(...uris: string[]) {
     return {
+        id: 'interaction-1',
         status: 'completed',
         usage: { total_tokens: 9, total_input_tokens: 3, total_output_tokens: 6 },
         steps: [
@@ -187,20 +188,57 @@ describe('GeminiOmniVideoModelDefinition', () => {
         ).rejects.toThrow(message);
     });
 
-    it('classifies cancellation, timeout and gateway timeout as terminal', () => {
+    it('keeps deliberate cancellation terminal and delegates transport failures to shared retry handling', () => {
         const definition = new GeminiOmniVideoModelDefinition();
+        const context = {
+            provider: 'vertexai',
+            model: GEMINI_OMNI_VIDEO_MODEL,
+            operation: 'execute' as const,
+        };
+        const cancellation = Object.assign(new Error('cancelled'), { name: 'AbortError' });
+        const formatted = definition.formatLlumiverseError({} as VertexAIDriver, cancellation, context);
+
+        expect(formatted).toBeInstanceOf(LlumiverseError);
+        expect(formatted.retryable).toBe(false);
+
         for (const error of [
-            Object.assign(new Error('cancelled'), { name: 'AbortError' }),
             Object.assign(new Error('timed out'), { name: 'TimeoutError' }),
             Object.assign(new Error('gateway timeout'), { status: 504 }),
         ]) {
-            const formatted = definition.formatLlumiverseError({} as VertexAIDriver, error, {
-                provider: 'vertexai',
-                model: GEMINI_OMNI_VIDEO_MODEL,
-                operation: 'execute',
-            });
-            expect(formatted).toBeInstanceOf(LlumiverseError);
-            expect(formatted.retryable).toBe(false);
+            expect(() => definition.formatLlumiverseError({} as VertexAIDriver, error, context)).toThrow(error);
         }
+    });
+
+    it.each([
+        ['in_progress', true],
+        ['incomplete', true],
+        ['requires_action', false],
+        ['cancelled', false],
+        ['budget_exceeded', false],
+        ['failed', undefined],
+    ] as const)('classifies interaction status %s with retryable=%s', async (status, retryable) => {
+        const definition = new GeminiOmniVideoModelDefinition();
+        const prompt = await definition.createPrompt(
+            {} as VertexAIDriver,
+            [{ role: PromptRole.user, content: 'prompt' }],
+            options(),
+        );
+        let thrown: unknown;
+        try {
+            await definition.requestTextCompletion(
+                driverWithResponse({ id: 'interaction-1', status }).driver,
+                prompt,
+                options(),
+            );
+        } catch (error) {
+            thrown = error;
+        }
+
+        const formatted = definition.formatLlumiverseError({} as VertexAIDriver, thrown, {
+            provider: 'vertexai',
+            model: GEMINI_OMNI_VIDEO_MODEL,
+            operation: 'execute',
+        });
+        expect(formatted.retryable).toBe(retryable);
     });
 });
