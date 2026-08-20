@@ -14,6 +14,9 @@ describe('Gemini implicit prompt caching', () => {
     };
     const options: ExecutionOptions = { model: 'gemini-2.5-flash' };
 
+    // `getGeminiPayload` is pure and stays that way: explicit context caching needs the driver's
+    // client, so it rewrites the payload in the execution path instead. See
+    // gemini-context-cache.test.ts for the payload a cached execution actually sends.
     it('keeps the provider payload identical when a routing identity is supplied', () => {
         const baseline = getGeminiPayload(options, prompt);
         const routed = getGeminiPayload({ ...options, prompt_cache_key: 'document-prefix' }, prompt);
