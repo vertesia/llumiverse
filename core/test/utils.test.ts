@@ -36,14 +36,14 @@ describe('Core Utilities', () => {
         const schema = parseJSON(readDataFile('ciia-schema.json')) as object;
         const content: JsonResult[] = [{ type: 'json', value: parseJSON(readDataFile('ciia-data.json')) }];
         const res = validateResult(content, schema);
-        console.debug(res);
+        expect(res).toBeDefined();
     });
 
     test('Validate JSON against complex schema', () => {
         const schema = parseJSON(readDataFile('complex-schema.json')) as object;
         const content: JsonResult[] = [{ type: 'json', value: parseJSON(readDataFile('complex-document.json')) }];
         const res = validateResult(content, schema);
-        console.debug(res);
+        expect(res).toBeDefined();
     });
 
     test('Fail at validating JSON against schema', () => {
@@ -56,35 +56,33 @@ describe('Core Utilities', () => {
         const schema = parseJSON(readDataFile('ciia-schema.json')) as object;
         const content: JsonResult[] = [{ type: 'json', value: parseJSON(readDataFile('ciia-data-wrong-types.json')) }];
         const res = validateResult(content, schema);
-        console.debug(res);
+        expect(res).toBeDefined();
     });
 
     test('JSON parser should validate if date is empty string', () => {
         const schema = parseJSON(readDataFile('ciia-schema.json')) as object;
         const content: JsonResult[] = [{ type: 'json', value: parseJSON(readDataFile('ciia-data-date-empty.json')) }];
         const res = validateResult(content, schema);
-        console.debug(res);
+        expect(res).toBeDefined();
     });
 
     test('JSON parser should validate if date is null', () => {
         const schema = parseJSON(readDataFile('ciia-schema.json')) as object;
         const content: JsonResult[] = [{ type: 'json', value: parseJSON(readDataFile('ciia-data-date-null.json')) }];
         const res = validateResult(content, schema);
-        console.debug(res);
+        expect(res).toBeDefined();
     });
 
     test('JSON parser should not validate if date is wrong', () => {
         const schema = parseJSON(readDataFile('ciia-schema.json')) as object;
         const content: JsonResult[] = [{ type: 'json', value: parseJSON(readDataFile('ciia-data-date-wrong.json')) }];
         expect(() => validateResult(content, schema)).toThrowError(ValidationError);
-        console.debug(content, schema);
     });
 
     test('JSON parser should not validate if date is required but null', () => {
         const schema = parseJSON(readDataFile('ciia-schema-date-required.json')) as object;
         const content: JsonResult[] = [{ type: 'json', value: parseJSON(readDataFile('ciia-data-date-empty.json')) }];
         expect(() => validateResult(content, schema)).toThrowError(ValidationError);
-        console.debug(content, schema);
     });
 
     const dataFiles = fs.readdirSync(new URL('./data', import.meta.url)).filter((f) => f.endsWith('.data.json'));
@@ -94,6 +92,6 @@ describe('Core Utilities', () => {
         const schema = parseJSON(readDataFile(`${base}.schema.json`)) as object;
         const content: JsonResult[] = [{ type: 'json', value: parseJSON(readDataFile(dataFile)) }];
         const res = validateResult(content, schema);
-        console.debug(res);
+        expect(res).toBeDefined();
     });
 });
