@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import {
     type AIModel,
     type Completion,
-    type CompletionChunkObject,
+    type DriverCompletionStream,
     type DriverOptions,
     type EmbeddingsOptions,
     type EmbeddingsResult,
@@ -18,8 +18,10 @@ import {
     createAgentBackedFetch,
     createDriverHttpAgent,
     DEFAULT_DRIVER_HTTP_TIMEOUTS,
+    DEFAULT_DRIVER_REQUEST_TIMEOUT_MS,
     mergeDriverHttpTimeoutOptions,
     resolveDriverHttpTimeouts,
+    resolveDriverRequestTimeoutMs,
 } from './http-agent.js';
 
 class TestDriver extends AbstractDriver<DriverOptions, string> {
@@ -33,6 +35,10 @@ class TestDriver extends AbstractDriver<DriverOptions, string> {
         return this.getDriverFetch();
     }
 
+    getRequestOptions(options: Pick<ExecutionOptions, 'httpTimeout'>, signal?: AbortSignal) {
+        return this.getDriverRequestOptions(options, signal);
+    }
+
     async requestTextCompletion(prompt: string, _options: ExecutionOptions): Promise<Completion> {
         const response = await this.getDriverFetch()(prompt);
         return {
@@ -40,10 +46,7 @@ class TestDriver extends AbstractDriver<DriverOptions, string> {
         };
     }
 
-    async requestTextCompletionStream(
-        _prompt: string,
-        _options: ExecutionOptions,
-    ): Promise<AsyncIterable<CompletionChunkObject>> {
+    async requestTextCompletionStream(_prompt: string, _options: ExecutionOptions): Promise<DriverCompletionStream> {
         throw new Error('Not implemented');
     }
 
@@ -93,6 +96,13 @@ describe('driver HTTP agent helpers', () => {
     });
 
     it('fills missing timeout options from defaults', () => {
+        expect(DEFAULT_DRIVER_REQUEST_TIMEOUT_MS).toBe(900_000);
+        expect(DEFAULT_DRIVER_HTTP_TIMEOUTS).toEqual({
+            headersTimeout: 900_000,
+            bodyTimeout: 900_000,
+            connectTimeout: 60_000,
+            keepAliveTimeout: 300_000,
+        });
         expect(resolveDriverHttpTimeouts()).toEqual(DEFAULT_DRIVER_HTTP_TIMEOUTS);
         expect(
             resolveDriverHttpTimeouts({
@@ -105,6 +115,28 @@ describe('driver HTTP agent helpers', () => {
             connectTimeout: DEFAULT_DRIVER_HTTP_TIMEOUTS.connectTimeout,
             keepAliveTimeout: 456,
         });
+    });
+
+    it('maps split HTTP timeout settings to a single SDK request deadline', () => {
+        expect(resolveDriverRequestTimeoutMs()).toBe(DEFAULT_DRIVER_REQUEST_TIMEOUT_MS);
+        expect(
+            resolveDriverRequestTimeoutMs({ headersTimeout: 120_000, bodyTimeout: 180_000 }, { bodyTimeout: 600_000 }),
+        ).toBe(600_000);
+    });
+
+    it('builds SDK request options only when an execution override or cancellation signal exists', () => {
+        const driver = new TestDriver({});
+        const controller = new AbortController();
+
+        expect(driver.getRequestOptions({})).toBeUndefined();
+        expect(driver.getRequestOptions({}, controller.signal)).toEqual({
+            signal: controller.signal,
+        });
+        expect(
+            driver.getRequestOptions({ httpTimeout: { headersTimeout: 1_200_000, bodyTimeout: 1_800_000 } }),
+        ).toEqual({ timeout: 1_800_000 });
+
+        driver.destroy();
     });
 
     it('merges per-call timeout overrides without replacing defined defaults with undefined', () => {

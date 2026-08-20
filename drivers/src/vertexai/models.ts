@@ -22,11 +22,17 @@ export interface ModelDefinition<PromptT = VertexAIPrompt> {
     model: AIModel;
     versions?: string[]; // the versions of the model that are available. ex: ['001', '002']
     createPrompt(driver: VertexAIDriver, segments: PromptSegment[], options: ExecutionOptions): Promise<PromptT>;
-    requestTextCompletion(driver: VertexAIDriver, prompt: PromptT, options: ExecutionOptions): Promise<Completion>;
+    requestTextCompletion(
+        driver: VertexAIDriver,
+        prompt: PromptT,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion>;
     requestTextCompletionStream(
         driver: VertexAIDriver,
         prompt: PromptT,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<DriverCompletionStream>;
     preValidationProcessing?(
         result: Completion,

@@ -1,5 +1,5 @@
 import type { HttpTimeoutOptions } from '@llumiverse/core';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { exposePrivate } from '../test/__helpers__/test-utils.js';
 import { AnthropicDriver } from './anthropic/index.js';
 import { BedrockDriver } from './bedrock/index.js';
@@ -21,8 +21,11 @@ type DriverFetchInternals = {
 
 type SdkFetchHolder = {
     fetch?: typeof fetch;
+    timeout?: number;
     _options?: {
         fetch?: typeof fetch;
+        timeout?: number;
+        timeoutMs?: number;
     };
 };
 
@@ -57,6 +60,11 @@ function expectSdkUsesDriverFetch(driver: object, client: object): void {
     const expectedFetch = driverFetch(driver);
     const sdkClient = exposePrivate<SdkFetchHolder>(client);
     expect(sdkClient.fetch ?? sdkClient._options?.fetch).toBe(expectedFetch);
+}
+
+function expectSdkUsesDriverRequestTimeout(client: object): void {
+    const sdkClient = exposePrivate<SdkFetchHolder>(client);
+    expect(sdkClient.timeout ?? sdkClient._options?.timeout ?? sdkClient._options?.timeoutMs).toBe(900_000);
 }
 
 async function expectFetchClientUsesDriverFetch(driver: object, client: object): Promise<void> {
@@ -107,33 +115,26 @@ describe('driver HTTP timeout wiring', () => {
         driver.destroy();
     });
 
-    it('uses a longer Bedrock timeout default for non-streaming text execution', () => {
+    it('uses the generous shared request timeout for Bedrock', () => {
         const driver = new BedrockDriver({
             region: 'us-east-1',
         });
 
         const internals = exposePrivate<{
             getBedrockRequestHandlerConfig: (httpTimeout?: HttpTimeoutOptions) => BedrockRequestHandlerConfig;
-            getBedrockNonStreamingHttpTimeout: (httpTimeout?: HttpTimeoutOptions) => HttpTimeoutOptions;
         }>(driver);
 
         expect(internals.getBedrockRequestHandlerConfig()).toEqual({
-            requestTimeout: 60_000,
-            throwOnRequestTimeout: true,
-            connectionTimeout: 10_000,
-            socketTimeout: 60_000,
-        });
-        expect(internals.getBedrockRequestHandlerConfig(internals.getBedrockNonStreamingHttpTimeout())).toEqual({
             requestTimeout: 900_000,
             throwOnRequestTimeout: true,
-            connectionTimeout: 10_000,
+            connectionTimeout: 60_000,
             socketTimeout: 900_000,
         });
 
         driver.destroy();
     });
 
-    it('keeps explicit Bedrock non-streaming timeout overrides field-by-field', () => {
+    it('keeps explicit Bedrock timeout overrides field-by-field', () => {
         const driver = new BedrockDriver({
             region: 'us-east-1',
             httpTimeout: {
@@ -144,16 +145,9 @@ describe('driver HTTP timeout wiring', () => {
 
         const internals = exposePrivate<{
             getBedrockRequestHandlerConfig: (httpTimeout?: HttpTimeoutOptions) => BedrockRequestHandlerConfig;
-            getBedrockNonStreamingHttpTimeout: (httpTimeout?: HttpTimeoutOptions) => HttpTimeoutOptions;
         }>(driver);
 
-        expect(
-            internals.getBedrockRequestHandlerConfig(
-                internals.getBedrockNonStreamingHttpTimeout({
-                    headersTimeout: 180_000,
-                }),
-            ),
-        ).toEqual({
+        expect(internals.getBedrockRequestHandlerConfig({ headersTimeout: 180_000 })).toEqual({
             requestTimeout: 180_000,
             throwOnRequestTimeout: true,
             connectionTimeout: 1_000,
@@ -166,6 +160,7 @@ describe('driver HTTP timeout wiring', () => {
     it('passes the driver fetch to SDK clients that accept a custom fetch implementation', () => {
         const openai = new OpenAIDriver({ apiKey: 'test-key' });
         expectSdkUsesDriverFetch(openai, openai.service);
+        expectSdkUsesDriverRequestTimeout(openai.service);
         openai.destroy();
 
         const azure = new AzureOpenAIDriver({
@@ -174,6 +169,7 @@ describe('driver HTTP timeout wiring', () => {
             deployment: 'deployment',
         });
         expectSdkUsesDriverFetch(azure, azure.service);
+        expectSdkUsesDriverRequestTimeout(azure.service);
         azure.destroy();
 
         const compatible = new OpenAIResponsesDriver({
@@ -181,18 +177,22 @@ describe('driver HTTP timeout wiring', () => {
             endpoint: 'https://example.test/v1',
         });
         expectSdkUsesDriverFetch(compatible, compatible.service);
+        expectSdkUsesDriverRequestTimeout(compatible.service);
         compatible.destroy();
 
         const together = new TogetherAIDriver({ apiKey: 'test-key' });
         expectSdkUsesDriverFetch(together, together.service);
+        expectSdkUsesDriverRequestTimeout(together.service);
         together.destroy();
 
         const anthropic = new AnthropicDriver({ apiKey: 'test-key' });
         expectSdkUsesDriverFetch(anthropic, anthropic.client);
+        expectSdkUsesDriverRequestTimeout(anthropic.client);
         anthropic.destroy();
 
         const groq = new GroqDriver({ apiKey: 'test-key' });
         expectSdkUsesDriverFetch(groq, groq.client);
+        expectSdkUsesDriverRequestTimeout(groq.client);
         groq.destroy();
 
         const replicate = new ReplicateDriver({ apiKey: 'test-key' });
@@ -201,6 +201,7 @@ describe('driver HTTP timeout wiring', () => {
 
         const xai = new xAIDriver({ apiKey: 'test-key' });
         expectSdkUsesDriverFetch(xai, xai.service);
+        expectSdkUsesDriverRequestTimeout(xai.service);
         xai.destroy();
     });
 
@@ -209,6 +210,7 @@ describe('driver HTTP timeout wiring', () => {
         expect(exposePrivate<MistralClientInternals>(mistral.client)._options.httpClient.fetcher).toBe(
             driverFetch(mistral),
         );
+        expectSdkUsesDriverRequestTimeout(mistral.client);
         mistral.destroy();
 
         const watsonx = new WatsonxDriver({
@@ -224,6 +226,14 @@ describe('driver HTTP timeout wiring', () => {
             endpoint_url: 'https://example.test',
         });
         await expectFetchClientUsesDriverFetch(huggingFace, huggingFace.service);
+        vi.spyOn(huggingFace, 'getModelURLEndpoint').mockResolvedValue({
+            url: 'https://inference.example.test',
+            status: 'available',
+        });
+        const huggingFaceExecutor = await huggingFace.getExecutor('model');
+        expect(
+            exposePrivate<{ defaultOptions: { fetch?: typeof fetch } }>(huggingFaceExecutor).defaultOptions.fetch,
+        ).toBe(driverFetch(huggingFace));
         huggingFace.destroy();
 
         const xai = new xAIDriver({ apiKey: 'test-key' });
@@ -255,7 +265,7 @@ describe('driver HTTP timeout wiring', () => {
 
         const internals = exposePrivate<{
             getGoogleGenAIHttpOptions: (
-                flex: boolean,
+                serviceTier?: string,
                 httpTimeout?: HttpTimeoutOptions,
             ) => {
                 timeout: number;
@@ -273,18 +283,28 @@ describe('driver HTTP timeout wiring', () => {
             };
         }>(driver);
 
-        expect(internals.getGoogleGenAIHttpOptions(false)).toEqual({
+        expect(internals.getGoogleGenAIHttpOptions()).toEqual({
             timeout: 3_000,
         });
-        expect(internals.getGoogleGenAIHttpOptions(true)).toEqual({
+        expect(internals.getGoogleGenAIHttpOptions('flex')).toEqual({
             timeout: 3_000,
             headers: {
                 'X-Vertex-AI-LLM-Request-Type': 'shared',
                 'X-Vertex-AI-LLM-Shared-Request-Type': 'flex',
             },
         });
+        expect(internals.getGoogleGenAIHttpOptions('future-tier')).toEqual({
+            timeout: 3_000,
+            headers: {
+                'X-Vertex-AI-LLM-Request-Type': 'shared',
+                'X-Vertex-AI-LLM-Shared-Request-Type': 'future-tier',
+            },
+        });
+        expect(internals.getGoogleGenAIHttpOptions('default')).toEqual({
+            timeout: 3_000,
+        });
         expect(
-            internals.getGoogleGenAIHttpOptions(false, {
+            internals.getGoogleGenAIHttpOptions(undefined, {
                 headersTimeout: 10_000,
                 bodyTimeout: 20_000,
             }),
@@ -318,7 +338,7 @@ describe('driver HTTP timeout wiring', () => {
         });
 
         const defaultGoogleClient = driver.getGoogleGenAIClient();
-        const overrideGoogleClient = driver.getGoogleGenAIClient('us-central1', false, {
+        const overrideGoogleClient = driver.getGoogleGenAIClient('us-central1', undefined, {
             headersTimeout: 10_000,
         });
         expect(overrideGoogleClient).not.toBe(defaultGoogleClient);
@@ -327,13 +347,13 @@ describe('driver HTTP timeout wiring', () => {
         driver.destroy();
     });
 
-    it('allows ten minutes for Gemini requests by default', () => {
+    it('uses the shared fifteen-minute timeout for single-timeout SDK clients', () => {
         const driver = new VertexAIDriver({
             project: 'project',
             region: 'us-central1',
         });
         const internals = exposePrivate<{
-            getGoogleGenAIHttpOptions: (flex: boolean) => { timeout: number };
+            getGoogleGenAIHttpOptions: (serviceTier?: string) => { timeout: number };
             getAnthropicVertexClientOptions: (region: string, authClient: unknown) => { timeout: number };
         }>(driver);
         const connectOnlyDriver = new VertexAIDriver({
@@ -342,12 +362,12 @@ describe('driver HTTP timeout wiring', () => {
             httpTimeout: { connectTimeout: 1_000 },
         });
         const connectOnlyInternals = exposePrivate<{
-            getGoogleGenAIHttpOptions: (flex: boolean) => { timeout: number };
+            getGoogleGenAIHttpOptions: (serviceTier?: string) => { timeout: number };
         }>(connectOnlyDriver);
 
-        expect(internals.getGoogleGenAIHttpOptions(false).timeout).toBe(600_000);
-        expect(connectOnlyInternals.getGoogleGenAIHttpOptions(false).timeout).toBe(600_000);
-        expect(internals.getAnthropicVertexClientOptions('global', {}).timeout).toBe(60_000);
+        expect(internals.getGoogleGenAIHttpOptions().timeout).toBe(900_000);
+        expect(connectOnlyInternals.getGoogleGenAIHttpOptions().timeout).toBe(900_000);
+        expect(internals.getAnthropicVertexClientOptions('global', {}).timeout).toBe(900_000);
 
         connectOnlyDriver.destroy();
         driver.destroy();

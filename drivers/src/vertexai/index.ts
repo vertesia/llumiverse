@@ -11,21 +11,19 @@ import {
     type EmbeddingsResult,
     type ExecutionOptions,
     getConversationMeta,
-    getModelCapabilities,
     type HttpTimeoutOptions,
     incrementConversationTurn,
     type LlumiverseError,
     type LlumiverseErrorContext,
     type ModelSearchPayload,
-    modelModalitiesToArray,
     type PromptSegment,
+    Providers,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
     type ToolUse,
     truncateLargeTextInConversation,
 } from '@llumiverse/core';
 import { AbstractDriver } from '@llumiverse/core/driver';
-import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
 import { type FETCH_FN, FetchClient } from '@vertesia/api-fetch-client';
 import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from 'google-auth-library';
 import {
@@ -33,14 +31,13 @@ import {
     type OpenAIChatCompletionsPrompt,
 } from '../openai/openai_chat_completions.js';
 import { type ClaudePrompt, formatClaudeDebugPrompt } from '../shared/claude-messages.js';
+import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { generateVertexAiEmbeddings } from './embeddings/embed.js';
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
 import { formatGeminiDebugPrompt } from './models/gemini.js';
 import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
 import { getModelDefinition, trimModelName } from './models.js';
 import { getListedVertexOpenMaaSModels } from './open-maas-models.js';
-
-const DEFAULT_GEMINI_REQUEST_TIMEOUT_MS = 10 * 60_000;
 
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
@@ -77,7 +74,7 @@ export type VertexAIPrompt = ImagenPrompt | GenerateContentPrompt | ClaudePrompt
 export { trimModelName };
 
 export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, VertexAIPrompt> {
-    static PROVIDER = 'vertexai';
+    static readonly PROVIDER = Providers.vertexai;
     provider = VertexAIDriver.PROVIDER;
 
     aiplatform: v1beta1.ModelServiceClient | undefined;
@@ -86,7 +83,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     private regionOverrideClients: Map<string, FetchClient> = new Map();
     googleGenAI: GoogleGenAI | undefined;
     googleGenAIRegion: string | undefined;
-    googleGenAIFlex: boolean | undefined;
+    googleGenAIServiceTier: string | undefined;
     modelGarden: v1beta1.ModelGardenServiceClient | undefined;
     imagenClient: PredictionServiceClient | undefined;
     predictionClient: PredictionServiceClient | undefined;
@@ -102,7 +99,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         this.fetchClient = undefined;
         this.googleGenAI = undefined;
         this.googleGenAIRegion = undefined;
-        this.googleGenAIFlex = undefined;
+        this.googleGenAIServiceTier = undefined;
         this.modelGarden = undefined;
         this.imagenClient = undefined;
         this.predictionClient = undefined;
@@ -113,15 +110,21 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
     /**
      * Cleanup Google Cloud clients when the driver is evicted from the cache.
-     * `super.destroy()` releases the HTTP agent socket pool created by
-     * {@link AbstractDriver.getHttpAgent} / {@link AbstractDriver.getDriverFetch}.
+     * AbstractDriver invokes this hook only after active executions finish.
      */
-    destroy(): void {
-        this.aiplatform?.close();
-        this.modelGarden?.close();
-        this.imagenClient?.close();
-        this.predictionClient?.close();
-        super.destroy();
+    protected override destroyProviderResources(): Promise<void> {
+        const clients = [this.aiplatform, this.modelGarden, this.imagenClient, this.predictionClient];
+        this.aiplatform = undefined;
+        this.modelGarden = undefined;
+        this.imagenClient = undefined;
+        this.predictionClient = undefined;
+        return Promise.allSettled(clients.map((client) => client?.close())).then((results) => {
+            for (const result of results) {
+                if (result.status === 'rejected') {
+                    this.logger.warn({ error: result.reason }, 'Failed to close Vertex AI client');
+                }
+            }
+        });
     }
 
     private async getAuthClient(): Promise<AuthClient> {
@@ -131,24 +134,14 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return this.authClientPromise;
     }
 
-    private getSdkRequestTimeoutMs(httpTimeout?: HttpTimeoutOptions): number {
-        const timeouts = resolveDriverHttpTimeouts(
-            mergeDriverHttpTimeoutOptions(this.options.httpTimeout, httpTimeout),
-        );
-        return Math.max(timeouts.headersTimeout, timeouts.bodyTimeout);
-    }
-
-    private getGoogleGenAIHttpOptions(flex: boolean, httpTimeout?: HttpTimeoutOptions) {
-        const configuredTimeout = mergeDriverHttpTimeoutOptions(this.options.httpTimeout, httpTimeout);
-        const hasRequestTimeout =
-            configuredTimeout?.headersTimeout !== undefined || configuredTimeout?.bodyTimeout !== undefined;
+    private getGoogleGenAIHttpOptions(serviceTier?: string, httpTimeout?: HttpTimeoutOptions) {
         return {
-            timeout: hasRequestTimeout ? this.getSdkRequestTimeoutMs(httpTimeout) : DEFAULT_GEMINI_REQUEST_TIMEOUT_MS,
-            ...(flex
+            timeout: this.getDriverRequestTimeoutMs(httpTimeout),
+            ...(serviceTier && serviceTier !== 'default'
                 ? {
                       headers: {
                           'X-Vertex-AI-LLM-Request-Type': 'shared',
-                          'X-Vertex-AI-LLM-Shared-Request-Type': 'flex',
+                          'X-Vertex-AI-LLM-Shared-Request-Type': serviceTier,
                       },
                   }
                 : {}),
@@ -157,7 +150,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
     private getAnthropicVertexClientOptions(region: string, authClient: AuthClient, httpTimeout?: HttpTimeoutOptions) {
         return {
-            timeout: this.getSdkRequestTimeoutMs(httpTimeout),
+            timeout: this.getDriverRequestTimeoutMs(httpTimeout),
             region,
             projectId: this.options.project,
             authClient: authClient,
@@ -167,23 +160,27 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
     public getGoogleGenAIClient(
         region: string = this.options.region,
-        flex: boolean = false,
+        serviceTier?: string,
         httpTimeout?: HttpTimeoutOptions,
     ): GoogleGenAI {
         if (httpTimeout) {
-            return this.buildGoogleGenAIClient(region, flex, httpTimeout);
+            return this.buildGoogleGenAIClient(region, serviceTier, httpTimeout);
         }
-        if (this.googleGenAI && this.googleGenAIRegion === region && this.googleGenAIFlex === flex) {
-            // Return existing client if region and flex settings match
+        if (this.googleGenAI && this.googleGenAIRegion === region && this.googleGenAIServiceTier === serviceTier) {
+            // Return existing client if region and service tier settings match
             return this.googleGenAI;
         }
-        this.googleGenAI = this.buildGoogleGenAIClient(region, flex);
+        this.googleGenAI = this.buildGoogleGenAIClient(region, serviceTier);
         this.googleGenAIRegion = region;
-        this.googleGenAIFlex = flex;
+        this.googleGenAIServiceTier = serviceTier;
         return this.googleGenAI;
     }
 
-    private buildGoogleGenAIClient(region: string, flex: boolean, httpTimeout?: HttpTimeoutOptions): GoogleGenAI {
+    private buildGoogleGenAIClient(
+        region: string,
+        serviceTier?: string,
+        httpTimeout?: HttpTimeoutOptions,
+    ): GoogleGenAI {
         return new GoogleGenAI({
             project: this.options.project,
             location: region,
@@ -191,7 +188,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             googleAuthOptions: this.options.googleAuthOptions || {
                 scopes: ['https://www.googleapis.com/auth/cloud-platform'],
             },
-            httpOptions: this.getGoogleGenAIHttpOptions(flex, httpTimeout),
+            httpOptions: this.getGoogleGenAIHttpOptions(serviceTier, httpTimeout),
         });
     }
 
@@ -356,14 +353,19 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return formatImagenDebugPrompt(prompt);
     }
 
-    async requestTextCompletion(prompt: VertexAIPrompt, options: ExecutionOptions): Promise<Completion> {
-        return getModelDefinition(options.model).requestTextCompletion(this, prompt, options);
+    async requestTextCompletion(
+        prompt: VertexAIPrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion> {
+        return getModelDefinition(options.model).requestTextCompletion(this, prompt, options, signal);
     }
     async requestTextCompletionStream(
         prompt: VertexAIPrompt,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
-        return getModelDefinition(options.model).requestTextCompletionStream(this, prompt, options);
+        return getModelDefinition(options.model).requestTextCompletionStream(this, prompt, options, signal);
     }
 
     /**
@@ -590,10 +592,14 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return processedConversation;
     }
 
-    async requestImageGeneration(_prompt: ImagenPrompt, _options: ExecutionOptions): Promise<Completion> {
+    async requestImageGeneration(
+        _prompt: ImagenPrompt,
+        _options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<Completion> {
         const splits = _options.model.split('/');
         const modelName = trimModelName(splits[splits.length - 1]);
-        return new ImagenModelDefinition(modelName).requestImageGeneration(this, _prompt, _options);
+        return new ImagenModelDefinition(modelName).requestImageGeneration(this, _prompt, _options, signal);
     }
 
     async getGenAIModelsArray(client: GoogleGenAI): Promise<Model[]> {
@@ -616,6 +622,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         // Model Garden publisher listings for families that are reliably returned by the API.
         // Open MaaS-only families are appended from VERTEX_OPEN_MAAS_MODELS below to avoid
         // extra listPublisherModels calls for publishers whose MaaS models do not appear there.
+        // Intentional allow-list: Vertex Model Garden spans endpoint contracts this driver does not implement. Future
+        // versions within these known executable families flow through automatically, but do not broaden this to every
+        // publisher merely because it appears in listing metadata; add a publisher only with a compatible request path.
         const publisherConfig = {
             google: {
                 families: ['gemini', 'imagen'],
@@ -625,7 +634,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                     'imagen-product-recontext-preview',
                     'embedding',
                     'embed',
-                    'gemini-live-2.5-flash-preview-native-audio',
+                    'gemini-live',
+                    'native-audio',
+                    '-tts',
                     'computer-use-preview',
                 ],
                 /** Additional models not in the listings, but we want to include.
@@ -673,11 +684,15 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         // Process aiplatform models, project specific models
         const [response] = aiplatformResult;
         models = models.concat(
-            response.map((model) => ({
-                id: model.name?.split('/').pop() ?? '',
-                name: model.displayName ?? '',
-                provider: 'vertexai',
-            })),
+            response.map((model) => {
+                const id = model.name?.split('/').pop() ?? '';
+                return {
+                    id,
+                    name: model.displayName ?? '',
+                    provider: 'vertexai',
+                    ...resolveModelListingMetadata(id, Providers.vertexai),
+                };
+            }),
         );
 
         // Process global google models from GenAI
@@ -685,17 +700,19 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         const excludedModels = publisherConfig.google.excluded;
         models = models.concat(
             globalGoogleResult
-                .filter((model) => !excludedModels.some((excludedModel) => (model.name ?? '').includes(excludedModel)))
+                .filter(
+                    (model) =>
+                        !excludedModels.some((excludedModel) => (model.name ?? '').includes(excludedModel)) &&
+                        isExecutableGoogleModel(model),
+                )
                 .map((model) => {
-                    const modelCapability = getModelCapabilities(model.name ?? '', 'vertexai');
+                    const modelMetadata = resolveModelListingMetadata(model.name ?? '', Providers.vertexai);
                     return {
                         id: `locations/global/${model.name}`,
                         name: `Global ${model.name?.split('/').pop()}`,
                         provider: 'vertexai',
                         owner: 'google',
-                        input_modalities: modelModalitiesToArray(modelCapability.input),
-                        output_modalities: modelModalitiesToArray(modelCapability.output),
-                        tool_support: modelCapability.tool_support,
+                        ...modelMetadata,
                     };
                 }),
         );
@@ -725,7 +742,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                         const rawModelId = model.name ?? '';
                         const isGlobalOnlyPublisher = publisher === 'xai';
                         const listedModelId = isGlobalOnlyPublisher ? `locations/global/${rawModelId}` : rawModelId;
-                        const modelCapability = getModelCapabilities(listedModelId, 'vertexai');
+                        const modelMetadata = resolveModelListingMetadata(listedModelId, Providers.vertexai);
                         return {
                             id: listedModelId,
                             name: isGlobalOnlyPublisher
@@ -733,9 +750,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                                 : (rawModelId.split('/').pop() ?? ''),
                             provider: 'vertexai',
                             owner: publisher,
-                            input_modalities: modelModalitiesToArray(modelCapability.input),
-                            output_modalities: modelModalitiesToArray(modelCapability.output),
-                            tool_support: modelCapability.tool_support,
+                            ...modelMetadata,
                         } satisfies AIModel;
                     }),
             );
@@ -767,15 +782,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                         return false;
                     })
                     .map((model) => {
-                        const modelCapability = getModelCapabilities(model.name ?? '', 'vertexai');
+                        const modelMetadata = resolveModelListingMetadata(model.name ?? '', Providers.vertexai);
                         return {
                             id: `locations/global/${model.name}`,
                             name: `Global ${model.name?.split('/').pop()}`,
                             provider: 'vertexai',
                             owner: publisher,
-                            input_modalities: modelModalitiesToArray(modelCapability.input),
-                            output_modalities: modelModalitiesToArray(modelCapability.output),
-                            tool_support: modelCapability.tool_support,
+                            ...modelMetadata,
                         } satisfies AIModel;
                     });
 
@@ -801,15 +814,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                         return false;
                     })
                     .map((model) => {
-                        const modelCapability = getModelCapabilities(model.name ?? '', 'vertexai');
+                        const modelMetadata = resolveModelListingMetadata(model.name ?? '', Providers.vertexai);
                         return {
                             id: `locations/global/${model.name}`,
                             name: `Global ${model.name?.split('/').pop()}`,
                             provider: 'vertexai',
                             owner: publisher,
-                            input_modalities: modelModalitiesToArray(modelCapability.input),
-                            output_modalities: modelModalitiesToArray(modelCapability.output),
-                            tool_support: modelCapability.tool_support,
+                            ...modelMetadata,
                         } satisfies AIModel;
                     });
 
@@ -819,15 +830,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             // Add additional models that are not in the listing
             for (const additionalModel of publisherConfig[publisher as Publisher].additional) {
                 const publisherModelName = `publishers/${publisher}/models/${additionalModel}`;
-                const modelCapability = getModelCapabilities(additionalModel, 'vertexai');
+                const modelMetadata = resolveModelListingMetadata(additionalModel, Providers.vertexai);
                 models.push({
                     id: publisherModelName,
                     name: additionalModel,
                     provider: 'vertexai',
                     owner: publisher,
-                    input_modalities: modelModalitiesToArray(modelCapability.input),
-                    output_modalities: modelModalitiesToArray(modelCapability.output),
-                    tool_support: modelCapability.tool_support,
+                    ...modelMetadata,
                 } satisfies AIModel);
             }
         }
@@ -876,6 +885,21 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         // Fall back to default AbstractDriver error handling
         return super.formatLlumiverseError(error, context);
     }
+}
+
+function isExecutableGoogleModel(model: Model): boolean {
+    const modelName = (model.name ?? '').toLowerCase();
+    // Intentional execution-path allow-list: Vertex uses separate methods for embeddings, Live/TTS, music and video.
+    // This driver currently implements generateContent and generateImages. Unknown actions are excluded only when
+    // Google supplies them; absent action metadata falls back to the known-family/name policy above.
+    if (!modelName.includes('gemini') && !modelName.includes('imagen')) return false;
+
+    if (model.supportedActions?.length) {
+        const actions = model.supportedActions.map((action) => action.toLowerCase().replace(/[^a-z]/g, ''));
+        return actions.some((action) => action === 'generatecontent' || action === 'generateimages');
+    }
+
+    return !/(?:embedding|embed|tts|live|native-audio|veo|lyria)/.test(modelName);
 }
 
 //'us-central1-aiplatform.googleapis.com',

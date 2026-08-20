@@ -1,6 +1,15 @@
 import type { GroqDeepseekThinkingOptions } from '@llumiverse/common';
-import type { AIModel, EmbeddingsOptions, EmbeddingsResult, ExecutionOptions } from '@llumiverse/core';
-import { Providers } from '@llumiverse/core';
+import {
+    type AIModel,
+    type EmbeddingsOptions,
+    type EmbeddingsResult,
+    type ExecutionOptions,
+    getModelCapabilities,
+    isEmbeddingModel,
+    ModelType,
+    modelModalitiesToArray,
+    Providers,
+} from '@llumiverse/core';
 import Groq from 'groq-sdk';
 import { APIConnectionError, APIError, APIUserAbortError } from 'groq-sdk/error';
 import type {
@@ -44,6 +53,7 @@ export class GroqDriver extends OpenAIChatCompletionsDriverBase<GroqDriverOption
             apiKey: options.apiKey,
             baseURL: options.endpoint_url,
             fetch: this.getDriverFetch(),
+            timeout: this.getDriverRequestTimeoutMs(),
         });
     }
 
@@ -72,28 +82,55 @@ export class GroqDriver extends OpenAIChatCompletionsDriverBase<GroqDriverOption
     async _postChatCompletion(
         payload: OpenAIChatCompletionsPayload,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<OpenAIChatCompletionsResponse> {
         const request = toGroqRequest(payload, options, false);
-        const response = await this.client.chat.completions.create(request);
+        const requestOptions = this.getDriverRequestOptions(options, signal);
+        const response = requestOptions
+            ? await this.client.chat.completions.create(request, requestOptions)
+            : await this.client.chat.completions.create(request);
         return preserveOpenAIChatCompletionsOriginalResponse(normalizeGroqResponse(response), response);
     }
 
     async _postChatCompletionStream(
         payload: OpenAIChatCompletionsPayload,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<ReadableStream> {
-        const stream = await this.client.chat.completions.create(toGroqRequest(payload, options, true));
-        return openAIChatCompletionsStreamToSSE(normalizeGroqStream(stream));
+        const request = toGroqRequest(payload, options, true);
+        const requestOptions = this.getDriverRequestOptions(options, signal);
+        const stream = requestOptions
+            ? await this.client.chat.completions.create(request, requestOptions)
+            : await this.client.chat.completions.create(request);
+        return openAIChatCompletionsStreamToSSE(normalizeGroqStream(stream), () => stream.controller.abort());
     }
 
     async listModels(): Promise<AIModel[]> {
         const models = await this.client.models.list();
-        return models.data.map((model) => ({
-            id: model.id,
-            name: model.id,
-            provider: this.provider,
-            owner: model.owned_by || '',
-        }));
+        return models.data
+            .filter((model) => {
+                const id = model.id.toLowerCase();
+                return (
+                    !isEmbeddingModel({ id: model.id }, this.provider) &&
+                    !/(^|[-_.:/])whisper(?:[-_.:/]|$)/.test(id) &&
+                    !/^canopylabs\/orpheus(?:[-_.:/]|$)/.test(id)
+                );
+            })
+            .map((model) => {
+                const capabilities = getModelCapabilities(model.id, this.provider);
+                return {
+                    id: model.id,
+                    name: model.id,
+                    provider: this.provider,
+                    owner: model.owned_by || '',
+                    type: ModelType.Text,
+                    can_stream: true,
+                    is_multimodal: capabilities.input.image === true,
+                    input_modalities: modelModalitiesToArray(capabilities.input),
+                    output_modalities: modelModalitiesToArray(capabilities.output),
+                    tool_support: capabilities.tool_support,
+                } satisfies AIModel;
+            });
     }
 
     async validateConnection(): Promise<boolean> {

@@ -1,7 +1,7 @@
 import { type CompletionChunkObject, type ExecutionOptions, getConversationMeta } from '@llumiverse/core';
 import type { ServerSentEvent } from '@vertesia/api-fetch-client';
 import type OpenAI from 'openai';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
     normalizeOpenAIChatCompletionsResponse,
     normalizeOpenAIChatCompletionsStream,
@@ -10,9 +10,75 @@ import {
     OpenAIChatCompletionsProtocol,
     type OpenAIChatCompletionsProtocolOptions,
     type OpenAIChatCompletionsResponse,
+    openAIChatCompletionsStreamToSSE,
     parseOpenAIChatCompletionsToolCalls,
     prepareOpenAIChatCompletionsConversation,
 } from './openai_chat_completions.js';
+
+const streamChunk = {
+    id: 'chatcmpl-stream',
+    object: 'chat.completion.chunk' as const,
+    created: 1,
+    model: 'test/model',
+    choices: [],
+};
+
+describe('openAIChatCompletionsStreamToSSE', () => {
+    it('closes after forwarding a normally completed provider stream', async () => {
+        async function* providerStream() {
+            yield streamChunk;
+        }
+
+        const reader = openAIChatCompletionsStreamToSSE(providerStream()).getReader();
+
+        await expect(reader.read()).resolves.toEqual({
+            done: false,
+            value: { type: 'event', data: JSON.stringify(streamChunk) },
+        });
+        await expect(reader.read()).resolves.toEqual({ done: true, value: undefined });
+    });
+
+    it('propagates provider errors to the consumer', async () => {
+        const providerError = new Error('provider stream failed');
+        const providerStream = {
+            [Symbol.asyncIterator]() {
+                return {
+                    next: vi.fn().mockRejectedValue(providerError),
+                };
+            },
+        };
+
+        const reader = openAIChatCompletionsStreamToSSE(providerStream).getReader();
+
+        await expect(reader.read()).rejects.toBe(providerError);
+    });
+
+    it('aborts a pending provider read when the consumer cancels', async () => {
+        const abortController = new AbortController();
+        const providerStream = {
+            async *[Symbol.asyncIterator]() {
+                yield streamChunk;
+                await new Promise<never>((_resolve, reject) => {
+                    abortController.signal.addEventListener(
+                        'abort',
+                        () => reject(new DOMException('provider request aborted', 'AbortError')),
+                        { once: true },
+                    );
+                });
+            },
+        };
+        const normalized = normalizeOpenAIChatCompletionsStream(providerStream);
+        const reader = openAIChatCompletionsStreamToSSE(normalized, () => abortController.abort()).getReader();
+
+        await expect(reader.read()).resolves.toEqual({
+            done: false,
+            value: { type: 'event', data: JSON.stringify(streamChunk) },
+        });
+        await reader.cancel('consumer stopped');
+
+        expect(abortController.signal.aborted).toBe(true);
+    });
+});
 
 function createSSEStream(events: ServerSentEvent[]): ReadableStream<ServerSentEvent> {
     return new ReadableStream<ServerSentEvent>({
@@ -163,6 +229,31 @@ describe('OpenAIChatCompletionsProtocol', () => {
                 extra_body: { google: { model_safety_settings: { enabled: false } } },
             }),
         );
+    });
+
+    it('forwards the Flex service tier to the transport', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol({
+            id: 'chatcmpl-flex',
+            object: 'chat.completion',
+            created: 1,
+            model: 'gpt-5.6-sol',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: 'ok' },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+        });
+
+        await model.requestTextCompletion(undefined, prompt, {
+            ...options,
+            model: 'gpt-5.6-sol',
+            model_options: { _option_id: 'openai-thinking', service_tier: 'flex' },
+        });
+
+        expect(model.payloads[0].service_tier).toBe('flex');
     });
 
     it('ignores SDK custom tool calls that are not function tools', () => {
@@ -985,6 +1076,8 @@ describe('OpenAIChatCompletionsProtocol', () => {
             result_schema: {
                 type: 'object',
                 properties: { answer: { type: 'string' } },
+                required: ['answer'],
+                additionalProperties: false,
             },
             tools: [
                 {
@@ -993,6 +1086,8 @@ describe('OpenAIChatCompletionsProtocol', () => {
                     input_schema: {
                         type: 'object',
                         properties: { location: { type: 'string' } },
+                        required: ['location'],
+                        additionalProperties: false,
                     },
                 },
             ],

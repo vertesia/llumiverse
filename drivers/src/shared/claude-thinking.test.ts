@@ -1,4 +1,4 @@
-import { getOptions } from '@llumiverse/core';
+import { getOptions, Providers } from '@llumiverse/core';
 import { describe, expect, it } from 'vitest';
 import { resolveClaudeThinking } from './claude-thinking.js';
 
@@ -27,10 +27,10 @@ describe('resolveClaudeThinking', () => {
             thinking: { type: 'enabled', budget_tokens: 12_000 },
             outputConfig: undefined,
         });
-        expect(getOptions('claude-sonnet-4-6', 'anthropic').options.map((option) => option.name)).toContain(
+        expect(getOptions('claude-sonnet-4-6', Providers.anthropic).options.map((option) => option.name)).toContain(
             'thinking_budget_tokens',
         );
-        expect(getOptions('claude-sonnet-5', 'anthropic').options.map((option) => option.name)).not.toContain(
+        expect(getOptions('claude-sonnet-5', Providers.anthropic).options.map((option) => option.name)).not.toContain(
             'thinking_budget_tokens',
         );
     });

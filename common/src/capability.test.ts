@@ -1,6 +1,46 @@
 import { describe, expect, it } from 'vitest';
-import { getModelCapabilities, supportsToolUse } from './capability.js';
+import { getModelCapabilities, isDedicatedInferenceModel, isEmbeddingModel, supportsToolUse } from './capability.js';
 import { Providers } from './types.js';
+
+describe('dedicated inference model classification', () => {
+    it.each(['gpt-image-1', 'text-embedding-3-small', 'whisper-1', 'sora-2'])(
+        'recognizes %s as a dedicated endpoint model',
+        (model) => {
+            expect(isDedicatedInferenceModel(model, Providers.openai)).toBe(true);
+        },
+    );
+
+    it('keeps unknown future models in normal inference listings', () => {
+        expect(isDedicatedInferenceModel('future-inference-model-v1', Providers.openai)).toBe(false);
+    });
+});
+
+describe('embedding model classification', () => {
+    it.each([
+        [{ id: 'text-embedding-3-small' }, Providers.openai],
+        [{ id: 'text-embedding-ada-002' }, Providers.azure_openai],
+        [{ id: 'mistral-embed' }, Providers.mistralai],
+        [{ id: 'embedding-model', output_modalities: ['vectors'] }, Providers.xai],
+        [{ id: 'chat-model', type: 'embedding' }, Providers.togetherai],
+    ] as const)('recognizes an embedding listing: %s', (model, provider) => {
+        expect(isEmbeddingModel(model, provider)).toBe(true);
+    });
+
+    it('does not classify normal inference models as embeddings', () => {
+        expect(isEmbeddingModel({ id: 'gpt-5.6-sol' }, Providers.openai)).toBe(false);
+        expect(isEmbeddingModel({ id: 'grok-4.3', output_modalities: ['text'] }, Providers.xai)).toBe(false);
+    });
+
+    it('does not hide non-embedding models when capability metadata is incomplete', () => {
+        expect(isEmbeddingModel({ id: 'whisper-large-v3' }, Providers.groq)).toBe(false);
+        expect(isEmbeddingModel({ id: 'canopylabs/orpheus-v1-english' }, Providers.groq)).toBe(false);
+        expect(isEmbeddingModel({ id: 'meta-llama/llama-prompt-guard-2-86m' }, Providers.groq)).toBe(false);
+        expect(isEmbeddingModel({ id: 'llama-3.3-70b-versatile' }, Providers.groq)).toBe(false);
+        expect(isEmbeddingModel({ id: 'gpt-image-1' }, Providers.openai)).toBe(false);
+        expect(isEmbeddingModel({ id: 'amazon.titan-image-generator-v3' }, Providers.bedrock)).toBe(false);
+        expect(isEmbeddingModel({ id: 'amazon.nova-reel-v1' }, Providers.bedrock)).toBe(false);
+    });
+});
 
 describe('xAI Grok tool capabilities', () => {
     it.each(['grok-2', 'grok-3', 'grok-4', 'grok-4-fast-reasoning'])(
@@ -15,11 +55,17 @@ describe('xAI Grok tool capabilities', () => {
         },
     );
 
-    it('enables streaming tool use when provider is omitted for grok-* models', () => {
-        const caps = getModelCapabilities('grok-3');
-        expect(caps.tool_support).toBe(true);
-        expect(caps.tool_support_streaming).toBeUndefined();
-        expect(supportsToolUse('grok-3', undefined, true)).toBe(true);
+    it('carries verified image input support into current and future Grok 4 models', () => {
+        expect(getModelCapabilities('grok-4.20', Providers.xai).input.image).toBe(true);
+        expect(getModelCapabilities('grok-4.5', Providers.xai).input.image).toBe(true);
+    });
+
+    it('preserves supported audio and video inputs while masking unsupported outputs', () => {
+        const caps = getModelCapabilities('gemini-4.0-flash', Providers.vertexai);
+        expect(caps.input.audio).toBe(true);
+        expect(caps.input.video).toBe(true);
+        expect(caps.output.audio).toBe(false);
+        expect(caps.output.video).toBe(false);
     });
 });
 
@@ -38,5 +84,11 @@ describe('supportsToolUse streaming default', () => {
         expect(caps.tool_support_streaming).toBe(false);
         expect(supportsToolUse('meta.llama3-1-70b-instruct-v1:0', Providers.bedrock, true)).toBe(false);
         expect(supportsToolUse('meta.llama3-1-70b-instruct-v1:0', Providers.bedrock, false)).toBe(true);
+    });
+
+    it('leaves genuinely unknown Bedrock tool support unset', () => {
+        const caps = getModelCapabilities('future-provider.unknown-chat-v1', Providers.bedrock);
+        expect(caps.tool_support).toBeUndefined();
+        expect(caps.tool_support_streaming).toBeUndefined();
     });
 });

@@ -6,7 +6,7 @@ type AIPlatformClient = Awaited<ReturnType<VertexAIDriver['getAIPlatformClient']
 type ModelGardenClient = Awaited<ReturnType<VertexAIDriver['getModelGardenClient']>>;
 
 class TestVertexAIDriver extends VertexAIDriver {
-    constructor() {
+    constructor(private readonly googleModels: Model[] = []) {
         super({ project: 'test-project', region: 'us-central1' });
     }
 
@@ -22,6 +22,15 @@ class TestVertexAIDriver extends VertexAIDriver {
                 if (parent === 'publishers/xai') {
                     return [[{ name: 'publishers/xai/models/grok-4.1' }]];
                 }
+                if (parent === 'publishers/google') {
+                    return [
+                        [
+                            { name: 'publishers/google/models/gemini-4-future' },
+                            { name: 'publishers/google/models/gemini-live-future' },
+                            { name: 'publishers/google/models/gemini-4-tts' },
+                        ],
+                    ];
+                }
                 return [[]];
             },
         } as unknown as ModelGardenClient;
@@ -32,7 +41,7 @@ class TestVertexAIDriver extends VertexAIDriver {
     }
 
     override async getGenAIModelsArray(_client: GoogleGenAI): Promise<Model[]> {
-        return [];
+        return this.googleModels;
     }
 }
 
@@ -43,5 +52,29 @@ describe('VertexAIDriver listModels', () => {
 
         expect(modelIds).toContain('locations/global/publishers/xai/models/grok-4.1');
         expect(modelIds).not.toContain('publishers/xai/models/grok-4.1');
+    });
+
+    it('uses supported actions to keep only models executable by the implemented Google paths', async () => {
+        const driver = new TestVertexAIDriver([
+            { name: 'models/gemini-4-future', supportedActions: ['generateContent'] },
+            { name: 'models/gemini-4-unannounced' },
+            { name: 'models/gemini-live-preview', supportedActions: ['bidiGenerateContent'] },
+            { name: 'models/gemini-tts-preview', supportedActions: ['predict'] },
+            { name: 'models/text-embedding-future', supportedActions: ['embedContent'] },
+            { name: 'models/imagen-5', supportedActions: ['generateImages'] },
+            { name: 'models/veo-4', supportedActions: ['generateVideos'] },
+        ]);
+
+        const modelIds = (await driver.listModels()).map((model) => model.id);
+
+        expect(modelIds).toContain('locations/global/models/gemini-4-future');
+        expect(modelIds).toContain('locations/global/models/gemini-4-unannounced');
+        expect(modelIds).toContain('locations/global/models/imagen-5');
+        expect(modelIds).not.toContain('locations/global/models/gemini-live-preview');
+        expect(modelIds).not.toContain('locations/global/models/gemini-tts-preview');
+        expect(modelIds).not.toContain('locations/global/models/text-embedding-future');
+        expect(modelIds).not.toContain('locations/global/models/veo-4');
+        expect(modelIds).not.toContain('publishers/google/models/gemini-live-future');
+        expect(modelIds).not.toContain('publishers/google/models/gemini-4-tts');
     });
 });

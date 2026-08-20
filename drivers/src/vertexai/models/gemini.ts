@@ -4,6 +4,7 @@ import {
     FinishReason,
     FunctionCallingConfigMode,
     type FunctionDeclaration,
+    type FunctionResponsePart,
     type GenerateContentConfig,
     type GenerateContentParameters,
     type GenerateContentResponseUsageMetadata,
@@ -21,6 +22,7 @@ import {
     type AIModel,
     type Completion,
     type CompletionResult,
+    type DataSource,
     type DriverCompletionStream,
     type ExecutionOptions,
     type ExecutionTokenUsage,
@@ -54,6 +56,10 @@ type GoogleApiErrorLike = Pick<ApiError, 'status' | 'message'>;
 function supportsStructuredOutput(options: PromptOptions): boolean {
     // Gemini 1.0 Ultra does not support JSON output, 1.0 Pro does.
     return !!options.result_schema && !options.model.includes('ultra');
+}
+
+export function resolveVertexAIServiceTier(modelOptions?: VertexAIGeminiOptions): string | undefined {
+    return modelOptions?.service_tier ?? (modelOptions?.flex ? 'flex' : undefined);
 }
 
 const geminiSafetySettings: SafetySetting[] = [
@@ -508,11 +514,20 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 if (!msg.tool_use_id) {
                     throw new Error('Tool response missing tool_use_id');
                 }
+                // A tool result can carry attachments - typically an image the tool rendered or
+                // promoted into the conversation. Gemini takes those as `FunctionResponse.parts`;
+                // sending the JSON response alone drops them and leaves the model unable to see
+                // what it just asked for.
+                const responseParts: FunctionResponsePart[] = [];
+                for (const f of msg.files ?? []) {
+                    responseParts.push(await fileToMediaPart(f));
+                }
                 // Build functionResponse part with optional thought_signature for Gemini thinking models
                 const functionResponsePart: Part = {
                     functionResponse: {
                         name: msg.tool_use_id,
                         response: formatFunctionResponse(msg.content || ''),
+                        ...(responseParts.length > 0 && { parts: responseParts }),
                     },
                     // Include thought_signature if provided (required for Gemini 2.5+/3.0+ thinking models)
                     thoughtSignature: msg.thought_signature,
@@ -534,28 +549,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 // File content handling
                 if (msg.files) {
                     for (const f of msg.files) {
-                        const fileUri = await f.getURI();
-                        const isGsUri =
-                            fileUri.startsWith('gs://') || fileUri.startsWith('https://storage.googleapis.com/');
-
-                        if (isGsUri) {
-                            parts.push({
-                                fileData: {
-                                    fileUri,
-                                    mimeType: f.mime_type,
-                                },
-                            });
-                        } else {
-                            // Inline data handling
-                            const stream = await f.getStream();
-                            const data = await readStreamAsBase64(stream);
-                            parts.push({
-                                inlineData: {
-                                    data,
-                                    mimeType: f.mime_type,
-                                },
-                            });
-                        }
+                        parts.push(await fileToMediaPart(f));
                     }
                 }
 
@@ -653,6 +647,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         driver: VertexAIDriver,
         prompt: GenerateContentPrompt,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<Completion> {
         const splits = options.model.split('/');
         let region: string | undefined;
@@ -681,9 +676,14 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         const model_options = options.model_options as VertexAIGeminiOptions | undefined;
         const includeThoughts = model_options?.include_thoughts !== false;
-        const client = driver.getGoogleGenAIClient(region, model_options?.flex ?? false, options.httpTimeout);
+        const client = driver.getGoogleGenAIClient(
+            region,
+            resolveVertexAIServiceTier(model_options),
+            options.httpTimeout,
+        );
 
         const payload = getGeminiPayload(options, prompt);
+        if (signal) payload.config = { ...payload.config, abortSignal: signal };
         const response = await client.models.generateContent(payload);
 
         const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(driver, response.usageMetadata);
@@ -759,6 +759,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         driver: VertexAIDriver,
         prompt: GenerateContentPrompt,
         options: ExecutionOptions,
+        signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
         const splits = options.model.split('/');
         let region: string | undefined;
@@ -787,9 +788,14 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         const model_options = options.model_options as VertexAIGeminiOptions | undefined;
         const includeThoughts = model_options?.include_thoughts !== false;
-        const client = driver.getGoogleGenAIClient(region, model_options?.flex ?? false, options.httpTimeout);
+        const client = driver.getGoogleGenAIClient(
+            region,
+            resolveVertexAIServiceTier(model_options),
+            options.httpTimeout,
+        );
 
         const payload = getGeminiPayload(options, prompt);
+        payload.config = { ...payload.config, abortSignal: signal };
         const response = await client.models.generateContentStream(payload);
 
         const nativeParts: Part[] = [];
@@ -1145,6 +1151,24 @@ function storeSystemInConversation(conversation: unknown, system: Content | unde
         return { ...(conversation as object), [SYSTEM_KEY]: system };
     }
     return conversation;
+}
+
+/**
+ * Media reference shape shared by `Part` and `FunctionResponsePart`, so the same attachment
+ * mapping serves both a user turn and a tool result. Files already in Google Cloud Storage are
+ * passed by URI; anything else is inlined as base64.
+ */
+type GeminiMediaPart =
+    | { fileData: { fileUri: string; mimeType?: string } }
+    | { inlineData: { data: string; mimeType?: string } };
+
+async function fileToMediaPart(file: DataSource): Promise<GeminiMediaPart> {
+    const fileUri = await file.getURI();
+    if (fileUri.startsWith('gs://') || fileUri.startsWith('https://storage.googleapis.com/')) {
+        return { fileData: { fileUri, mimeType: file.mime_type } };
+    }
+    const data = await readStreamAsBase64(await file.getStream());
+    return { inlineData: { data, mimeType: file.mime_type } };
 }
 
 /**

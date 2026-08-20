@@ -1,12 +1,13 @@
 import {
     type AIModel,
     type DriverOptions,
-    getModelCapabilities,
+    isDedicatedInferenceModel,
+    isEmbeddingModel,
     ModelType,
-    modelModalitiesToArray,
     Providers,
 } from '@llumiverse/core';
 import OpenAI from 'openai';
+import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { OpenAIResponsesDriverBase } from './index.js';
 
 export interface OpenAIResponsesDriverOptions extends DriverOptions {
@@ -54,6 +55,7 @@ export class OpenAIResponsesDriver extends OpenAIResponsesDriverBase {
             defaultHeaders: opts.default_headers,
             fetch: this.getDriverFetch(),
             maxRetries: 0,
+            timeout: this.getDriverRequestTimeoutMs(),
         });
     }
 
@@ -62,8 +64,13 @@ export class OpenAIResponsesDriver extends OpenAIResponsesDriverBase {
             const result = (await this.service.models.list()).data;
 
             const models = result
+                .filter(
+                    (m) =>
+                        !isEmbeddingModel({ id: m.id }, this.provider) &&
+                        !isDedicatedInferenceModel(m.id, this.provider),
+                )
                 .map((m) => {
-                    const modelCapability = getModelCapabilities(m.id, 'openai');
+                    const modelMetadata = resolveModelListingMetadata(m.id, this.provider);
                     let owner = m.owned_by;
                     if (owner === 'system') {
                         owner = 'unknown';
@@ -75,10 +82,8 @@ export class OpenAIResponsesDriver extends OpenAIResponsesDriverBase {
                         owner: owner,
                         type: ModelType.Text,
                         can_stream: true,
-                        is_multimodal: false,
-                        input_modalities: modelModalitiesToArray(modelCapability.input),
-                        output_modalities: modelModalitiesToArray(modelCapability.output),
-                        tool_support: modelCapability.tool_support,
+                        is_multimodal: modelMetadata.input_modalities.includes('image'),
+                        ...modelMetadata,
                     } satisfies AIModel;
                 })
                 .sort((a, b) => a.id.localeCompare(b.id));

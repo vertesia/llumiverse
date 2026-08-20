@@ -4,12 +4,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { OpenAIResponsesDriverBase } from './index.js';
 
 class TestResponsesDriver extends OpenAIResponsesDriverBase {
-    provider: Providers.openai | Providers.openai_compatible;
+    provider: Providers.openai | Providers.azure_openai | Providers.openai_compatible;
     service: OpenAI;
 
     constructor(
         create: (request: unknown) => Promise<unknown>,
-        provider: Providers.openai | Providers.openai_compatible = Providers.openai,
+        provider: Providers.openai | Providers.azure_openai | Providers.openai_compatible = Providers.openai,
     ) {
         super({});
         this.provider = provider;
@@ -55,6 +55,18 @@ function response() {
 }
 
 describe('OpenAI Responses reasoning', () => {
+    it('forwards a longer per-execution timeout to the SDK request', async () => {
+        const create = vi.fn(async (_request: unknown, _options?: unknown) => response());
+        const driver = new TestResponsesDriver(create);
+
+        await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
+            model: 'gpt-5',
+            httpTimeout: { headersTimeout: 1_200_000, bodyTimeout: 1_800_000 },
+        });
+
+        expect(create.mock.calls[0][1]).toEqual({ signal: undefined, timeout: 1_800_000 });
+    });
+
     it.each([
         ['effort', { effort: 'high' as const }],
         ['reasoning_effort', { reasoning_effort: 'high' as const }],
@@ -72,7 +84,7 @@ describe('OpenAI Responses reasoning', () => {
         );
     });
 
-    it.each(['gpt-5.4', 'gpt-5.5', 'gpt-5.6', 'gpt-5.6-sol'])(
+    it.each(['gpt-5.4', 'gpt-5.5', 'gpt-5.6', 'gpt-5.6-sol', 'gpt-5.7'])(
         'uses current-turn reasoning context for %s',
         async (model) => {
             const create = vi.fn(async (_request: unknown) => response());
@@ -261,4 +273,48 @@ describe('OpenAI Responses reasoning', () => {
             }),
         );
     });
+
+    it.each([false, true])('forwards the Flex service tier when stream=%s', async (streaming) => {
+        const create = vi.fn(async (request: unknown) =>
+            (request as { stream?: boolean }).stream
+                ? (async function* () {
+                      yield { type: 'response.completed', sequence_number: 1, response: response() };
+                  })()
+                : response(),
+        );
+        const driver = new TestResponsesDriver(create);
+        const options = {
+            model: 'gpt-5.6-sol',
+            model_options: { _option_id: 'openai-thinking' as const, service_tier: 'flex' },
+        };
+
+        if (streaming) {
+            const stream = await driver.requestTextCompletionStream(
+                [{ type: 'message', role: 'user', content: 'question' }],
+                options,
+            );
+            for await (const _chunk of stream) {
+                // Consume the provider stream.
+            }
+        } else {
+            await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], options);
+        }
+
+        expect(create).toHaveBeenCalledWith(expect.objectContaining({ service_tier: 'flex' }));
+    });
+
+    it.each([Providers.openai, Providers.azure_openai] as const)(
+        'forwards service tier names without a driver allowlist for %s',
+        async (provider) => {
+            const create = vi.fn(async (_request: unknown) => response());
+            const driver = new TestResponsesDriver(create, provider);
+
+            await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
+                model: 'gpt-5.6-sol',
+                model_options: { _option_id: 'openai-thinking', service_tier: 'future-tier' },
+            });
+
+            expect(create).toHaveBeenCalledWith(expect.objectContaining({ service_tier: 'future-tier' }));
+        },
+    );
 });

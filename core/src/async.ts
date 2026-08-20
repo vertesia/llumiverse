@@ -46,6 +46,8 @@ export class EventStream<T, ReturnT = unknown> implements AsyncIterable<T> {
         reject: (err: unknown) => void;
     };
     private done = false;
+    private failed = false;
+    private failure: unknown;
 
     push(event: T) {
         if (this.done) {
@@ -71,10 +73,22 @@ export class EventStream<T, ReturnT = unknown> implements AsyncIterable<T> {
         }
     }
 
+    fail(error: unknown) {
+        this.done = true;
+        this.failed = true;
+        this.failure = error;
+        this.queue = [];
+        if (this.pending) {
+            this.pending.reject(error);
+            this.pending = undefined;
+        }
+    }
+
     [Symbol.asyncIterator](): AsyncIterator<T, ReturnT | undefined> {
         const self = this;
         return {
             next(): Promise<IteratorResult<T, ReturnT | undefined>> {
+                if (self.failed) return Promise.reject(self.failure);
                 const next = self.queue.shift();
                 if (next !== undefined) {
                     return Promise.resolve({ value: next });

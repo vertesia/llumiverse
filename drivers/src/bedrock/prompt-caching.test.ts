@@ -1,5 +1,5 @@
 import { type ConverseResponse, StopReason } from '@aws-sdk/client-bedrock-runtime';
-import { type DataSource, type ExecutionOptions, PromptRole } from '@llumiverse/core';
+import { Base64DataSource, type DataSource, type ExecutionOptions, PromptRole } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import { formatConversePrompt } from './converse.js';
 import { BedrockDriver } from './index.js';
@@ -18,6 +18,29 @@ describe('Bedrock prompt caching', () => {
         ),
         getURL: vi.fn(),
         getURI: vi.fn(),
+    });
+
+    it('serializes speech input as a Converse audio block', async () => {
+        const prompt = await formatConversePrompt(
+            [
+                {
+                    role: PromptRole.user,
+                    content: 'Transcribe this',
+                    files: [new Base64DataSource('speech.mp3', 'audio/mpeg', 'AQID')],
+                },
+            ],
+            { model: 'mistral.voxtral-small-24b-2507' },
+        );
+
+        expect(prompt.messages).toEqual([
+            {
+                role: 'user',
+                content: [
+                    { text: 'Transcribe this' },
+                    { audio: { format: 'mp3', source: { bytes: new Uint8Array([1, 2, 3]) } } },
+                ],
+            },
+        ]);
     });
 
     it('places a cache point after stable source attachments and before the final task', async () => {

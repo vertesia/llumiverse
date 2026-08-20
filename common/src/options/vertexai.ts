@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import { resolveModelProfile } from '../model-directory.js';
 import type {
     ImagenOptionsSchema,
     VertexAIClaudeOptionsSchema,
@@ -10,10 +11,12 @@ import {
     type ModelOptions,
     type ModelOptionsInfo,
     OptionType,
+    Providers,
     SharedOptions,
 } from '../types.js';
 import { getMaxOutputTokens } from './context-windows.js';
 import { textOptionsFallback } from './fallback.js';
+import { getOpenAiCompatibleOptions } from './openai.js';
 import {
     buildClaudeCacheOptions,
     buildClaudeCacheTtlOptions,
@@ -77,11 +80,17 @@ const FLEX_SUPPORTED_GEMINI_MODELS = [
     'gemini-3.1-pro-preview',
     'gemini-3-flash-preview',
     'gemini-3-pro-image-preview',
+    'gemini-3.5-flash',
+    'gemini-3.5-flash-lite',
+    'gemini-3.6-flash',
 ] as const;
 
 export function isFlexSupportedGeminiModel(model: string): boolean {
     const modelName = model.split('/').pop() ?? model;
-    return FLEX_SUPPORTED_GEMINI_MODELS.some((m) => modelName.includes(m));
+    return (
+        FLEX_SUPPORTED_GEMINI_MODELS.some((m) => modelName.includes(m)) ||
+        (modelName.includes('flash') && !modelName.includes('image') && isGeminiModelVersionGte(modelName, '3.5'))
+    );
 }
 
 export function getVertexAiOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
@@ -337,7 +346,7 @@ function getGeminiEffortOptions(model: string): Record<string, string> {
     if (model.includes('gemini-3.1-flash-image')) {
         return { Minimal: 'minimal', High: 'high' };
     }
-    if (model.includes('gemini-3.1-pro')) {
+    if (model.includes('pro') && isGeminiModelVersionGte(model, '3.1')) {
         return { Low: 'low', Medium: 'medium', High: 'high' };
     }
     return { Minimal: 'minimal', Low: 'low', Medium: 'medium', High: 'high' };
@@ -516,14 +525,14 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
     };
 
     if (isGeminiModelVersionGte(model, '3.0')) {
-        const flexOptions: ModelOptionInfoItem[] = isFlexSupportedGeminiModel(model)
+        const serviceTierOptions: ModelOptionInfoItem[] = isFlexSupportedGeminiModel(model)
             ? [
                   {
-                      name: 'flex',
-                      type: OptionType.boolean,
-                      default: false,
-                      description:
-                          'Use Flex processing tier for cost-efficient, batch-style execution with relaxed latency.',
+                      name: 'service_tier',
+                      type: OptionType.enum,
+                      enum: { Default: 'default', Flex: 'flex' },
+                      default: 'default',
+                      description: 'Select the Vertex AI processing tier for this request.',
                   },
               ]
             : [];
@@ -534,7 +543,7 @@ function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInf
                 ...commonOptions,
                 seedOption,
                 ...getGeminiThinkingOptionItems(model),
-                ...flexOptions,
+                ...serviceTierOptions,
             ],
         };
     }
@@ -656,38 +665,30 @@ function isOpenMaaSChatModel(model: string): boolean {
 }
 
 function getOpenMaaSChatOptions(model: string): ModelOptionsInfo {
-    const max_tokens_limit = getMaxOutputTokens(model);
-    const excludeOptions = ['max_tokens', 'top_k', 'presence_penalty', 'frequency_penalty'];
-    let commonOptions = textOptionsFallback.options.filter((option) => !excludeOptions.includes(option.name));
-    const max_tokens: ModelOptionInfoItem[] = [
-        {
-            name: SharedOptions.max_tokens,
-            type: OptionType.numeric,
-            min: 1,
-            max: max_tokens_limit,
-            integer: true,
-            step: 200,
-            description: 'The maximum number of tokens to generate',
-        },
-    ];
-
-    commonOptions = commonOptions.map((commonOption) => {
-        if (
-            model.includes('llama') &&
-            commonOption.name === SharedOptions.temperature &&
-            commonOption.type === OptionType.numeric
-        ) {
-            return {
-                ...commonOption,
-                max: 1.0,
-            };
-        }
-        return commonOption;
-    });
+    const compatible = getOpenAiCompatibleOptions(model, undefined, resolveModelProfile(model, Providers.vertexai));
+    const commonOptions = compatible.options
+        // Vertex Open MaaS does not offer these OpenAI-native penalty fields consistently across source families.
+        .filter(
+            (option) =>
+                option.name !== SharedOptions.presence_penalty && option.name !== SharedOptions.frequency_penalty,
+        )
+        .map((commonOption) => {
+            if (
+                model.includes('llama') &&
+                commonOption.name === SharedOptions.temperature &&
+                commonOption.type === OptionType.numeric
+            ) {
+                return {
+                    ...commonOption,
+                    max: 1.0,
+                };
+            }
+            return commonOption;
+        });
 
     return {
-        _option_id: 'text-fallback',
-        options: [...max_tokens, ...commonOptions],
+        ...compatible,
+        options: commonOptions,
     };
 }
 

@@ -177,6 +177,32 @@ function isOpenAIBase64ImageBlock(obj: unknown): boolean {
     return typeof imgUrl.url === 'string' && imgUrl.url.startsWith('data:image/') && imgUrl.url.includes(';base64,');
 }
 
+function isBase64DataUrl(value: unknown, prefix = 'data:'): boolean {
+    return typeof value === 'string' && value.startsWith(prefix) && value.includes(';base64,');
+}
+
+/**
+ * Check if an object is an OpenAI Responses image block: { type: "input_image", image_url: "data:image/...;base64,..." }.
+ *
+ * Distinct from the Chat Completions `image_url` block above - the Responses API keeps the data
+ * URL in a plain string field. Without this, the generic string walker would blank the URL in
+ * place and leave behind an `input_image` block the API rejects.
+ */
+function isOpenAIResponsesBase64ImageBlock(obj: unknown): boolean {
+    if (typeof obj !== 'object' || obj === null) return false;
+    const o = obj as Record<string, unknown>;
+    return o.type === 'input_image' && isBase64DataUrl(o.image_url, 'data:image/');
+}
+
+/**
+ * Check if an object is an OpenAI Responses file block: { type: "input_file", file_data: "data:...;base64,..." }
+ */
+function isOpenAIResponsesBase64FileBlock(obj: unknown): boolean {
+    if (typeof obj !== 'object' || obj === null) return false;
+    const o = obj as Record<string, unknown>;
+    return o.type === 'input_file' && isBase64DataUrl(o.file_data);
+}
+
 /**
  * Check if an object is an Anthropic base64 image block: { type: "image", source: { type: "base64", data: "...", media_type: "..." } }
  */
@@ -470,6 +496,13 @@ function stripBase64ImagesFromConversationInternal(
             if (isOpenAIBase64ImageBlock(item)) {
                 return { type: 'text', text: IMAGE_PLACEHOLDER };
             }
+            // Same for the OpenAI Responses shapes, in a message's content or a tool result's output
+            if (isOpenAIResponsesBase64ImageBlock(item)) {
+                return { type: 'input_text', text: IMAGE_PLACEHOLDER };
+            }
+            if (isOpenAIResponsesBase64FileBlock(item)) {
+                return { type: 'input_text', text: DOCUMENT_PLACEHOLDER };
+            }
             // Replace entire Gemini inlineData blocks with text blocks
             if (isGeminiInlineDataBlock(item)) {
                 return { text: IMAGE_PLACEHOLDER };
@@ -607,6 +640,8 @@ function shouldPreserveMediaPayload(obj: unknown): boolean {
     // Preserved base64 media payloads for OpenAI, Gemini, and Anthropic/Claude.
     if (
         isOpenAIBase64ImageBlock(obj) ||
+        isOpenAIResponsesBase64ImageBlock(obj) ||
+        isOpenAIResponsesBase64FileBlock(obj) ||
         isGeminiInlineDataBlock(obj) ||
         isAnthropicBase64ImageBlock(obj) ||
         isAnthropicBase64DocumentBlock(obj)

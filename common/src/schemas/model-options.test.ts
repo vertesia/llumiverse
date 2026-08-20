@@ -8,7 +8,7 @@ type Equals<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B 
 function assertType<T extends true>(_ok: T): void {}
 
 /**
- * `ModelOptions` is published by Vertesia as a discriminated-union component with twenty-three
+ * `ModelOptions` is published by Vertesia as a discriminated-union component with twenty-four
  * members, each its own component. These pin the properties that a consumer of the published document
  * depends on and that a careless edit here would break silently — the union is large enough that a
  * dropped member reads as a normal diff.
@@ -39,6 +39,7 @@ describe('ModelOptionsSchema', () => {
         // order a generated Java or Go client tries.
         expect(MEMBERS).toEqual([
             'TextFallbackOptions',
+            'AzureFoundryChatOptions',
             'ImagenOptions',
             'VertexAIClaudeOptions',
             'VertexAIGeminiOptions',
@@ -60,7 +61,9 @@ describe('ModelOptionsSchema', () => {
             'OpenAiTextOptions',
             'OpenAiDalleOptions',
             'OpenAiGptImageOptions',
+            'XAIGrokImageOptions',
             'GroqOptions',
+            'MistralTextOptions',
         ]);
     });
 
@@ -93,5 +96,22 @@ describe('ModelOptionsSchema', () => {
         expect(ModelOptionsSchema.parse(options)).toEqual(options);
         expect(ModelOptionsSchema.safeParse({ _option_id: 'text-fallback', nope: 1 }).success).toBe(false);
         expect(ModelOptionsSchema.safeParse({ _option_id: 'not-a-driver' }).success).toBe(false);
+    });
+
+    it('accepts current and future service tiers for provider option schemas', () => {
+        expect(ModelOptionsSchema.safeParse({ _option_id: 'openai-text', service_tier: 'flex' }).success).toBe(true);
+        expect(ModelOptionsSchema.safeParse({ _option_id: 'openai-thinking', service_tier: 'priority' }).success).toBe(
+            true,
+        );
+        expect(
+            ModelOptionsSchema.safeParse({ _option_id: 'vertexai-gemini', service_tier: 'future-tier' }).success,
+        ).toBe(true);
+        expect(ModelOptionsSchema.safeParse({ _option_id: 'vertexai-gemini', flex: true }).success).toBe(true);
+        expect(
+            ModelOptionsSchema.safeParse({ _option_id: 'bedrock-claude', service_tier: 'future-tier' }).success,
+        ).toBe(true);
+        expect(
+            ModelOptionsSchema.safeParse({ _option_id: 'bedrock-twelvelabs-pegasus', service_tier: 'flex' }).success,
+        ).toBe(true);
     });
 });

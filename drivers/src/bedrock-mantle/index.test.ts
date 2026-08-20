@@ -216,6 +216,7 @@ describe('BedrockMantleDriver model listing', () => {
             { id: 'google.gemma-4-31b', object: 'model', created: 1783669008, owned_by: 'system' },
             { id: 'google.gemma-5-70b', object: 'model', created: 1783669008, owned_by: 'system' },
             { id: 'zai.glm-5', object: 'model', created: 1783669008, owned_by: 'system' },
+            { id: 'amazon.titan-embed-text-v2:0', object: 'model', created: 1783669008, owned_by: 'system' },
         ] satisfies OpenAI.Models.Model[];
         const list = vi.fn<ModelsList>(async () => ({ data: modelFixtures }));
         Reflect.set(driver, 'service', { models: { list } });
@@ -237,6 +238,7 @@ describe('BedrockMantleDriver model listing', () => {
             expect(modelIds).toContain(expectedModel);
         }
         expect(modelIds).not.toContain('unverified.model-1');
+        expect(modelIds).not.toContain('amazon.titan-embed-text-v2:0');
         expect(models).toEqual(
             expect.arrayContaining([
                 expect.objectContaining({
@@ -267,7 +269,7 @@ describe('BedrockMantleDriver model listing', () => {
                     provider: Providers.bedrock_mantle,
                     can_stream: true,
                     output_modalities: ['text'],
-                    tool_support: true,
+                    tool_support: undefined,
                 }),
             ]),
         );
@@ -336,7 +338,14 @@ describe('BedrockMantleDriver protocol execution', () => {
                 expect.objectContaining({
                     model,
                     messages: [{ role: 'user', content: 'hello' }],
-                    response_format: expect.objectContaining({ type: 'json_schema' }),
+                    response_format: {
+                        type: 'json_schema',
+                        json_schema: {
+                            name: 'output',
+                            strict: false,
+                            schema: result_schema,
+                        },
+                    },
                 }),
             );
         }
@@ -408,6 +417,7 @@ describe('BedrockMantleDriver protocol execution', () => {
         const completion = await driver.requestTextCompletion(prompt, {
             model: 'anthropic.claude-haiku-4-5',
             model_options: { _option_id: 'bedrock-mantle-claude', max_tokens: 100 },
+            httpTimeout: { headersTimeout: 1_200_000, bodyTimeout: 1_800_000 },
         });
 
         expect(stream).toHaveBeenCalledWith(
@@ -417,7 +427,7 @@ describe('BedrockMantleDriver protocol execution', () => {
                 max_tokens: 100,
                 stream: true,
             }),
-            undefined,
+            { signal: undefined, timeout: 1_800_000 },
         );
         expect(completion.result).toEqual([{ type: 'text', value: 'ok' }]);
     });
@@ -440,6 +450,11 @@ describe('Bedrock Mantle Responses options', () => {
         const prompt = [
             { type: 'message', role: 'user', content: 'hello' },
         ] satisfies OpenAI.Responses.ResponseInputItem[];
+        const result_schema = {
+            type: 'object' as const,
+            properties: { answer: { type: 'string' as const } },
+            required: ['answer'],
+        };
 
         await driver.requestTextCompletion(prompt, {
             model: 'openai.gpt-5.5',
@@ -449,11 +464,7 @@ describe('Bedrock Mantle Responses options', () => {
                 effort: 'low',
                 verbosity: 'low',
             },
-            result_schema: {
-                type: 'object',
-                properties: { answer: { type: 'string' } },
-                required: ['answer'],
-            },
+            result_schema,
         });
 
         expect(create).toHaveBeenCalledWith(
@@ -464,7 +475,12 @@ describe('Bedrock Mantle Responses options', () => {
                 include: ['reasoning.encrypted_content'],
                 text: expect.objectContaining({
                     verbosity: 'low',
-                    format: expect.objectContaining({ type: 'json_schema', name: 'format_output' }),
+                    format: {
+                        type: 'json_schema',
+                        name: 'format_output',
+                        strict: false,
+                        schema: result_schema,
+                    },
                 }),
             }),
         );
