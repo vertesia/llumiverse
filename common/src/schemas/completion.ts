@@ -34,6 +34,10 @@ export const PromptRoleSchema = z.enum(PromptRole).meta({ id: 'PromptRole' });
 
 export const ModalitiesSchema = z.enum(Modalities).meta({ id: 'Modalities' });
 
+// A literal union rather than a TS enum: this one is only ever written as a plain string in an
+// interaction's execution options, so there is no enum value for callers to import.
+export const PromptCacheModeSchema = z.enum(['auto', 'off']).meta({ id: 'PromptCacheMode' });
+
 // The wire form of a data source: what it is called and what it contains. The BYTES are not here —
 // a `DataSource` in memory can hand back a stream, and the published component has only ever
 // described these two fields.
@@ -182,6 +186,23 @@ export const StatelessExecutionOptionsSchema = z
                     'directly; providers with cache breakpoints use its presence to cache the stable prefix before ' +
                     'the final dynamic block. Providers with fully implicit caching still require an identical ' +
                     'prompt prefix.',
+            })
+            .optional(),
+        prompt_cache_mode: PromptCacheModeSchema.meta({
+            description:
+                'Controls provider-side explicit caches — cache resources the driver creates and reuses (e.g. ' +
+                'Vertex cachedContents). "auto" (default) caches the static prefix whenever prompt_cache_key is ' +
+                'set; "off" never creates or uses a cache resource and leaves the provider payload unchanged. ' +
+                'Implicit caching and cache breakpoints are unaffected.',
+        }).optional(),
+        prompt_cache_ttl_seconds: z
+            .number()
+            .int()
+            .positive()
+            .meta({
+                description:
+                    'Lifetime, in seconds, of a provider-side cache resource created for this execution. Defaults ' +
+                    'to 1800 (30 minutes). Ignored by providers without an explicit cache API.',
             })
             .optional(),
         httpTimeout: HttpTimeoutOptionsSchema.meta({

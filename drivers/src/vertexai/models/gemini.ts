@@ -50,6 +50,7 @@ import { asyncMap } from '@llumiverse/core/async';
 import { truncateBinaryForDebug } from '../../shared/debug-prompt.js';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
 import type { ModelDefinition } from '../models.js';
+import { generateWithGeminiContextCache } from './gemini-context-cache.js';
 
 type GoogleApiErrorLike = Pick<ApiError, 'status' | 'message'>;
 
@@ -684,7 +685,11 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         const payload = getGeminiPayload(options, prompt);
         if (signal) payload.config = { ...payload.config, abortSignal: signal };
-        const response = await client.models.generateContent(payload);
+        // Routes through an explicit Vertex context cache when this execution carries a
+        // prompt_cache_key; sends `payload` untouched otherwise, and on any cache failure.
+        const response = await generateWithGeminiContextCache(driver, client, options, prompt, payload, (request) =>
+            client.models.generateContent(request),
+        );
 
         const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(driver, response.usageMetadata);
 
@@ -796,7 +801,9 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         const payload = getGeminiPayload(options, prompt);
         payload.config = { ...payload.config, abortSignal: signal };
-        const response = await client.models.generateContentStream(payload);
+        const response = await generateWithGeminiContextCache(driver, client, options, prompt, payload, (request) =>
+            client.models.generateContentStream(request),
+        );
 
         const nativeParts: Part[] = [];
         const stream = asyncMap(response, async (item) => {
