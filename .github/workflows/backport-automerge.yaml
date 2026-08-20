@@ -46,9 +46,9 @@ jobs:
     if: |
       github.event.workflow_run.event == 'pull_request' &&
       startsWith(github.event.workflow_run.head_branch, 'backport-')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     environment: renovate-automerge
-    timeout-minutes: 5
+    timeout-minutes: 10
     concurrency:
       group: backport-automerge-${{ github.event.workflow_run.head_branch }}
       cancel-in-progress: false
@@ -228,6 +228,61 @@ jobs:
           gh pr review "$PR_URL" \
             --approve \
             --body "Auto-approved clean backport after build/test and lint passed for ${HEAD_SHA}."
+
+          # The eligibility gate above only waits for the build/test and lint workflows.
+          # The base branch rulesets also enforce gates that complete independently of
+          # them: CodeQL code scanning (GitHub's default setup, so there is no workflow
+          # file we could gate on) and, on some branches, Copilot code review. Merging
+          # immediately races those and fails with "the base branch policy prohibits the
+          # merge", which strands the PR approved but unmerged for good, because nothing
+          # re-triggers this workflow once the workflows it does gate on have completed.
+          # Let GitHub settle the merge state first, then merge the exact head SHA below.
+          merge_state_timeout=180
+          merge_state_poll=10
+
+          deadline=$(( SECONDS + merge_state_timeout ))
+          while :; do
+            pr_state="$(gh pr view "$PR_URL" --repo "$REPO" --json headRefOid,mergeStateStatus)"
+            settled_head_sha="$(jq -r '.headRefOid' <<< "$pr_state")"
+            settled_state="$(jq -r '.mergeStateStatus // ""' <<< "$pr_state")"
+
+            if [[ "$settled_head_sha" != "$HEAD_SHA" ]]; then
+              echo "Not merging $PR_URL: head moved from $HEAD_SHA to $settled_head_sha." >&2
+              echo "The run triggered by the new head is responsible for merging it." >&2
+              exit 1
+            fi
+
+            # CLEAN and HAS_HOOKS are mergeable. UNSTABLE means only non-required checks
+            # are failing, which the merge below accepted before this wait existed.
+            if [[ "$settled_state" == "CLEAN" || "$settled_state" == "HAS_HOOKS" || "$settled_state" == "UNSTABLE" ]]; then
+              echo "Merge state is '$settled_state'; proceeding to merge $HEAD_SHA."
+              break
+            fi
+
+            if [[ "$settled_state" == "DIRTY" ]]; then
+              echo "Not merging $PR_URL: the PR has merge conflicts." >&2
+              exit 1
+            fi
+
+            if [[ "$settled_state" == "BEHIND" ]]; then
+              echo "Not merging $PR_URL: the base branch advanced; update or rebase the PR first." >&2
+              exit 1
+            fi
+
+            if [[ "$settled_state" == "DRAFT" ]]; then
+              echo "Not merging $PR_URL: the PR became a draft." >&2
+              exit 1
+            fi
+
+            if (( SECONDS >= deadline )); then
+              echo "Not merging $PR_URL: merge state still '$settled_state' after ${merge_state_timeout}s." >&2
+              exit 1
+            fi
+
+            echo "Merge state is '$settled_state'; waiting for branch protection to settle."
+            sleep "$merge_state_poll"
+          done
+
           gh pr merge "$PR_URL" \
             --repo "$REPO" \
             --squash \
