@@ -5,16 +5,25 @@ import {
     type GenerateContentParameters,
     type GenerateContentResponse,
     type GoogleGenAI,
+    type ListCachedContentsParameters,
+    type Pager,
     type UpdateCachedContentParameters,
 } from '@google/genai';
 import type { ExecutionOptions, Logger } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import { type GenerateContentPrompt, VertexAIDriver, type VertexAIDriverOptions } from '../index.js';
 import { GeminiModelDefinition, getGeminiPayload } from './gemini.js';
-import { deriveGeminiCachePrefix, stripLeadingParts } from './gemini-context-cache.js';
+import {
+    deriveGeminiCachePrefix,
+    GEMINI_CACHE_DISPLAY_NAME_PREFIX,
+    geminiCacheContentHash,
+    geminiCacheDisplayName,
+    stripLeadingParts,
+} from './gemini-context-cache.js';
 
 const MODEL = 'gemini-3.7-flash';
 const CACHE_NAME = 'projects/test-project/locations/us-central1/cachedContents/1';
+const PEER_CACHE_NAME = 'projects/test-project/locations/us-central1/cachedContents/peer';
 const CATALOG_TEXT = 'catalog entry. '.repeat(1200);
 
 /**
@@ -57,6 +66,13 @@ function apiError(status: number, message: string): Error {
     return Object.assign(new Error(message), { status });
 }
 
+/** The display name the driver must give — and look for — for the Balise route prefix. */
+function routePrefixDisplayName(model = MODEL): string {
+    const prefix = deriveGeminiCachePrefix(baliseRoutePrompt());
+    if (!prefix) throw new Error('the route prompt must have a cacheable prefix');
+    return geminiCacheDisplayName(model, geminiCacheContentHash(model, prefix, undefined, undefined));
+}
+
 function makeDriver(options: Partial<VertexAIDriverOptions> = {}) {
     const warn = vi.fn();
     const logger = { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() } as unknown as Logger;
@@ -73,12 +89,22 @@ function makeDriver(options: Partial<VertexAIDriverOptions> = {}) {
     });
     const create = vi.fn(async (_params: CreateCachedContentParameters) => cachedContent());
     const update = vi.fn(async (_params: UpdateCachedContentParameters) => cachedContent());
+    // What `caches.list` reports — i.e. what caches other instances of the fleet have already built.
+    const listed: CachedContent[] = [];
+    const list = vi.fn(async (_params?: ListCachedContentsParameters) => {
+        const page = [...listed];
+        return {
+            async *[Symbol.asyncIterator]() {
+                yield* page;
+            },
+        } as unknown as Pager<CachedContent>;
+    });
 
     class TestVertexAIDriver extends VertexAIDriver {
         override getGoogleGenAIClient(): GoogleGenAI {
             return {
                 models: { generateContent, generateContentStream },
-                caches: { create, update },
+                caches: { create, update, list },
             } as unknown as GoogleGenAI;
         }
     }
@@ -89,7 +115,7 @@ function makeDriver(options: Partial<VertexAIDriverOptions> = {}) {
         logger,
         ...options,
     });
-    return { driver, warn, requests, generateContent, generateContentStream, create, update };
+    return { driver, warn, requests, generateContent, generateContentStream, create, update, list, listed };
 }
 
 function cachedOptions(overrides: Partial<ExecutionOptions> = {}): ExecutionOptions {
@@ -134,6 +160,50 @@ describe('deriveGeminiCachePrefix', () => {
     });
 });
 
+describe('cache identity', () => {
+    const prefix = { contents: [{ role: 'user', parts: [{ text: CATALOG_TEXT }] }], partCount: 1 };
+    const otherPrefix = { contents: [{ role: 'user', parts: [{ text: 'other catalog' }] }], partCount: 1 };
+
+    it('names a cache deterministically from its content', () => {
+        const first = geminiCacheDisplayName(MODEL, geminiCacheContentHash(MODEL, prefix, undefined, undefined));
+        const second = geminiCacheDisplayName(MODEL, geminiCacheContentHash(MODEL, prefix, undefined, undefined));
+
+        expect(first).toBe(second);
+        expect(first).toMatch(new RegExp(`^${GEMINI_CACHE_DISPLAY_NAME_PREFIX}:gemini-3\\.7-flash:[0-9a-f]{16}$`));
+    });
+
+    it('gives different content different names', () => {
+        expect(geminiCacheContentHash(MODEL, prefix, undefined, undefined)).not.toBe(
+            geminiCacheContentHash(MODEL, otherPrefix, undefined, undefined),
+        );
+        expect(geminiCacheContentHash(MODEL, prefix, undefined, undefined)).not.toBe(
+            geminiCacheContentHash('gemini-3.7-pro', prefix, undefined, undefined),
+        );
+        expect(geminiCacheContentHash(MODEL, prefix, undefined, undefined)).not.toBe(
+            geminiCacheContentHash(MODEL, prefix, [{ functionDeclarations: [{ name: 'lookup' }] }], undefined),
+        );
+        expect(geminiCacheContentHash(MODEL, prefix, undefined, undefined)).not.toBe(
+            geminiCacheContentHash(
+                MODEL,
+                { ...prefix, system: { role: 'user', parts: [{ text: 's' }] } },
+                undefined,
+                undefined,
+            ),
+        );
+    });
+
+    it('stays inside the Vertex display-name budget for a long model id', () => {
+        const longModel = 'publishers/google/models/gemini-9.9-flash-lite-preview-experimental-09-2031';
+        const name = geminiCacheDisplayName(longModel, 'a'.repeat(64));
+
+        expect(name.length).toBeLessThanOrEqual(128);
+        // The publisher path is not part of the identity — only the model id the request carries.
+        expect(name).toBe(
+            `${GEMINI_CACHE_DISPLAY_NAME_PREFIX}:gemini-9.9-flash-lite-preview-experimental-09-2031:${'a'.repeat(16)}`,
+        );
+    });
+});
+
 describe('stripLeadingParts', () => {
     it('removes the prefix parts and drops the blocks that empty out', () => {
         const contents = [{ role: 'user', parts: [{ text: 'a' }, { text: 'b' }, { text: 'c' }] }];
@@ -159,6 +229,8 @@ describe('Gemini explicit context caching', () => {
                 systemInstruction: { role: 'user', parts: [{ text: 'Route each photo to a domain.' }] },
                 contents: [{ role: 'user', parts: [{ text: CATALOG_TEXT }] }],
                 ttl: '1800s',
+                // Deterministic in the content, so a peer instance can find this resource by listing.
+                displayName: routePrefixDisplayName(),
             },
         });
         expect(requests[0].contents).toEqual([
@@ -173,16 +245,82 @@ describe('Gemini explicit context caching', () => {
         expect(warn).not.toHaveBeenCalled();
     });
 
-    it('reuses the registered cache instead of creating a second one', async () => {
-        const { driver, create, requests } = makeDriver();
+    it('reuses the memoized cache without listing or creating again', async () => {
+        const { driver, create, list, requests } = makeDriver();
         const model = new GeminiModelDefinition(MODEL);
 
         await model.requestTextCompletion(driver, baliseRoutePrompt(), cachedOptions());
         await model.requestTextCompletion(driver, baliseRoutePrompt(), cachedOptions());
 
         expect(create).toHaveBeenCalledTimes(1);
+        // Discovery is a cold-start cost, not a per-call one.
+        expect(list).toHaveBeenCalledTimes(1);
         expect(requests).toHaveLength(2);
         expect(requests[1].config?.cachedContent).toBe(CACHE_NAME);
+    });
+
+    it('collapses sharded cache keys onto one cache', async () => {
+        const { driver, create, requests } = makeDriver();
+        const model = new GeminiModelDefinition(MODEL);
+
+        // Callers shard prompt_cache_key to spread load. The prefix is byte-identical, so the
+        // shards must share one resource rather than mint one each.
+        await model.requestTextCompletion(driver, baliseRoutePrompt(), cachedOptions({ prompt_cache_key: 'route:0' }));
+        await model.requestTextCompletion(driver, baliseRoutePrompt(), cachedOptions({ prompt_cache_key: 'route:3' }));
+
+        expect(create).toHaveBeenCalledTimes(1);
+        expect(requests[0].config?.cachedContent).toBe(CACHE_NAME);
+        expect(requests[1].config?.cachedContent).toBe(CACHE_NAME);
+    });
+
+    it('adopts a live cache a peer instance already created', async () => {
+        const { driver, create, list, listed, requests, warn } = makeDriver();
+        listed.push({
+            name: PEER_CACHE_NAME,
+            displayName: routePrefixDisplayName(),
+            expireTime: new Date(Date.now() + 20 * 60 * 1000).toISOString(),
+        });
+
+        await new GeminiModelDefinition(MODEL).requestTextCompletion(driver, baliseRoutePrompt(), cachedOptions());
+
+        expect(list).toHaveBeenCalledTimes(1);
+        expect(create).not.toHaveBeenCalled();
+        expect(requests[0].config?.cachedContent).toBe(PEER_CACHE_NAME);
+        expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('ignores listed caches that are expired, undated, or hold other content', async () => {
+        const { driver, create, listed, requests } = makeDriver();
+        const displayName = routePrefixDisplayName();
+        listed.push(
+            // Right content, already dead: adopting it would only buy a 404.
+            {
+                name: `${PEER_CACHE_NAME}-expired`,
+                displayName,
+                expireTime: new Date(Date.now() - 60_000).toISOString(),
+            },
+            // Right content, no expiry reported: its lifetime is unknowable, so it is not adopted.
+            { name: `${PEER_CACHE_NAME}-undated`, displayName },
+            // Live, but it caches a different prefix.
+            {
+                name: `${PEER_CACHE_NAME}-other`,
+                displayName: geminiCacheDisplayName(
+                    MODEL,
+                    geminiCacheContentHash(
+                        MODEL,
+                        { contents: [{ role: 'user', parts: [{ text: 'another catalog' }] }], partCount: 1 },
+                        undefined,
+                        undefined,
+                    ),
+                ),
+                expireTime: new Date(Date.now() + 20 * 60 * 1000).toISOString(),
+            },
+        );
+
+        await new GeminiModelDefinition(MODEL).requestTextCompletion(driver, baliseRoutePrompt(), cachedOptions());
+
+        expect(create).toHaveBeenCalledTimes(1);
+        expect(requests[0].config?.cachedContent).toBe(CACHE_NAME);
     });
 
     it('moves declared tools into the cache and out of the request', async () => {
@@ -259,9 +397,18 @@ describe('Gemini explicit context caching', () => {
         expect(warn).toHaveBeenCalledTimes(1);
     });
 
-    it('recreates the cache once when the resource has expired', async () => {
-        const { driver, create, generateContent, warn } = makeDriver();
-        create.mockResolvedValueOnce(cachedContent(`${CACHE_NAME}-stale`)).mockResolvedValueOnce(cachedContent());
+    it('rediscovers, then recreates once, when the resource has gone', async () => {
+        const { driver, create, list, listed, generateContent, warn } = makeDriver();
+        const staleName = `${CACHE_NAME}-stale`;
+        create
+            .mockImplementationOnce(async () => {
+                const entry = cachedContent(staleName);
+                // Vertex keeps advertising a resource after it stops being usable, so the listing
+                // must not hand it back to the very call that just proved it dead.
+                listed.push({ ...entry, displayName: routePrefixDisplayName() });
+                return entry;
+            })
+            .mockImplementationOnce(async () => cachedContent());
         generateContent.mockRejectedValueOnce(apiError(404, 'CachedContent not found.'));
 
         const completion = await new GeminiModelDefinition(MODEL).requestTextCompletion(
@@ -270,9 +417,11 @@ describe('Gemini explicit context caching', () => {
             cachedOptions(),
         );
 
+        // Listed twice: the cold-start sweep, then the sweep that precedes the recreate.
+        expect(list).toHaveBeenCalledTimes(2);
         expect(create).toHaveBeenCalledTimes(2);
         expect(generateContent).toHaveBeenCalledTimes(2);
-        expect(generateContent.mock.calls[0][0].config?.cachedContent).toBe(`${CACHE_NAME}-stale`);
+        expect(generateContent.mock.calls[0][0].config?.cachedContent).toBe(staleName);
         expect(generateContent.mock.calls[1][0].config?.cachedContent).toBe(CACHE_NAME);
         expect(warn).toHaveBeenCalledTimes(1);
         expect(completion.result).toEqual([{ type: 'text', value: 'places' }]);

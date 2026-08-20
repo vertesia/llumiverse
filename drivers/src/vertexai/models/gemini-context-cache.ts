@@ -42,19 +42,39 @@ import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
  * `[system, user: catalog text, user: task text + image]` therefore caches `system + catalog` and
  * sends `task + image` — which is the shape that matters, since the task text names the photo.
  *
- * ## Registry
+ * ## Identity: the content, not the caller's key
  *
- * The find-or-create registry is in memory on the driver instance, keyed by model + cache key +
- * a hash of the prefix (and of the tools, which Vertex requires to live in the cache rather than the
- * request). Two driver instances — two processes, or a driver cache eviction — will each create
- * their own `cachedContents` resource for the same prefix. That is harmless: the duplicate expires
- * on its own TTL and costs storage rent for that window, not a re-billed prefix.
+ * A cache is identified by a hash of exactly what goes *into* the resource — model, system
+ * instruction, prefix contents, tools, tool config — and by nothing else. In particular
+ * `prompt_cache_key` is not part of it: the key is the on/off trigger, not the identity. Callers
+ * shard that key (`route:0` … `route:3`) to spread load, and hashing it would mint four resources
+ * for four byte-identical prefixes. Content addressing collapses the shards onto one cache for free.
+ *
+ * ## Registry: Vertex itself, with a local memo in front
+ *
+ * A registry that lives only in a process costs hit rate linearly in fleet size — every instance
+ * pays its own cold create, multiplied by every shard. So the shared registry *is* Vertex: each
+ * cache is created with a deterministic `displayName` built from the content hash, and a cold
+ * instance lists `cachedContents` and adopts a live match instead of creating its own.
+ *
+ * The in-memory map on the driver instance is a memo in front of that, not the registry itself:
+ * listing happens on a cold key, on expiry, and after a 404 — never per call.
+ *
+ * Two instances that go cold at the same moment can still both create. That is left alone
+ * deliberately: the duplicate expires on its own TTL, costs storage rent for that window rather than
+ * a re-billed prefix, and both instances converge on one resource at the next list. Locking would
+ * cost more than the duplication does.
+ *
+ * `ListCachedContents` carries no filter field, so the match is client-side: one control-plane read
+ * per cold key, paged at 100 (the API coerces anything above 1000), stopping at the first hit and
+ * bounded at 1000 entries so a project full of unrelated caches cannot stall a completion. Neither
+ * the API surface nor the SDK documents a rate limit on the call; the bound here is our own.
  *
  * ## Fallback
  *
  * Every failure on the cache path is non-fatal. A create error, a min-token rejection, an expired
  * resource, a permission error: one warning through the driver logger, then the full un-cached
- * request exactly as before. A min-token rejection additionally marks the key uncacheable so the
+ * request exactly as before. A min-token rejection additionally marks the prefix uncacheable so the
  * next thousand calls do not each pay for a doomed create.
  */
 
@@ -66,6 +86,26 @@ const CACHE_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
 /** Registry bound. Entries are small; the cap only keeps a pathological key space from growing. */
 const REGISTRY_MAX_ENTRIES = 512;
+
+/**
+ * Marks a `cachedContents` resource as one of ours and makes it discoverable by content.
+ * Short on purpose: it is repeated on every listed resource.
+ */
+export const GEMINI_CACHE_DISPLAY_NAME_PREFIX = 'llmv-cache';
+
+/**
+ * Vertex documents no explicit limit on `CachedContent.display_name`, but every other Vertex
+ * resource caps its display name at 128 characters, so the format is built to stay well inside that.
+ */
+const DISPLAY_NAME_MAX_LENGTH = 128;
+const DISPLAY_NAME_MODEL_SEGMENT_MAX_LENGTH = 64;
+/** 64 bits of the content hash: ~3e-12 collision probability across 10k distinct prefixes. */
+const DISPLAY_NAME_HASH_LENGTH = 16;
+
+/** `ListCachedContentsRequest` has no filter field, so matching is client-side over pages. */
+const LIST_PAGE_SIZE = 100;
+/** Bound on a single discovery sweep, so a project full of unrelated caches cannot stall a call. */
+const LIST_MAX_SCANNED = 1000;
 
 export interface GeminiContextCacheEntry {
     /** Server-generated resource name, e.g. `projects/p/locations/l/cachedContents/123`. */
@@ -79,11 +119,14 @@ export interface GeminiContextCacheManagerOptions {
 }
 
 /**
- * Per-driver registry of Vertex `cachedContents` resources.
+ * Per-driver memo of Vertex `cachedContents` resources, keyed by content hash.
  *
- * Deliberately dumb: a bounded map of live entries, a set of keys Vertex has refused to cache, and
- * de-duplication of concurrent creates for the same key. It holds no client and makes no calls; the
- * caller supplies the factory so the whole find-or-create path stays testable without GCP.
+ * Deliberately dumb: a bounded map of live entries, a set of prefixes Vertex has refused to cache,
+ * and de-duplication of concurrent lookups for the same content. It holds no client and makes no
+ * calls; the caller supplies the loader, so discovery and creation stay testable without GCP.
+ *
+ * This is a memo, not the registry — the registry is Vertex, reached by listing. Its only job is to
+ * keep that listing off the per-call path.
  */
 export class GeminiContextCacheManager {
     private readonly entries = new Map<string, GeminiContextCacheEntry>();
@@ -108,7 +151,7 @@ export class GeminiContextCacheManager {
         }
     }
 
-    /** Forget a resource that is gone or unusable. The next execution creates a new one. */
+    /** Forget a resource that is gone or unusable. The next execution rediscovers or recreates it. */
     invalidate(key: string): void {
         this.entries.delete(key);
     }
@@ -128,12 +171,12 @@ export class GeminiContextCacheManager {
     }
 
     /**
-     * Return the live entry for `key`, creating one through `create` on a miss. Concurrent callers
-     * for the same key share a single create.
+     * Return the memoized entry for `key`, or run `load` — discovery then creation — on a miss or
+     * near expiry. Concurrent callers for the same content share one lookup.
      */
     async resolve(
         key: string,
-        create: () => Promise<GeminiContextCacheEntry | undefined>,
+        load: () => Promise<GeminiContextCacheEntry | undefined>,
     ): Promise<GeminiContextCacheEntry | undefined> {
         const existing = this.entries.get(key);
         if (existing && existing.expiresAtMs - Date.now() > CACHE_REFRESH_MARGIN_MS) {
@@ -142,7 +185,7 @@ export class GeminiContextCacheManager {
         const inflight = this.pending.get(key);
         if (inflight) return inflight;
 
-        const started = create().finally(() => this.pending.delete(key));
+        const started = load().finally(() => this.pending.delete(key));
         this.pending.set(key, started);
         return started;
     }
@@ -268,13 +311,17 @@ export function isCacheUnusableError(error: unknown): boolean {
 
 interface GeminiContextCachePlan {
     payload: GenerateContentParameters;
-    cacheKey: string;
+    contentHash: string;
+    cacheName: string;
     manager: GeminiContextCacheManager;
 }
 
-function cacheKeyFor(
+/**
+ * Identity of a cache: a hash of everything that goes into the resource, and nothing else.
+ * `prompt_cache_key` is deliberately absent — see the module comment.
+ */
+export function geminiCacheContentHash(
     model: string,
-    promptCacheKey: string,
     prefix: GeminiCachePrefix,
     tools: Tool[] | undefined,
     toolConfig: ToolConfig | undefined,
@@ -283,7 +330,6 @@ function cacheKeyFor(
         .update(
             JSON.stringify({
                 model,
-                promptCacheKey,
                 system: prefix.system ?? null,
                 contents: prefix.contents,
                 tools: tools ?? null,
@@ -291,6 +337,16 @@ function cacheKeyFor(
             }),
         )
         .digest('hex');
+}
+
+/**
+ * The name a cache for this content is *always* given, so any instance can find it by listing.
+ * Deterministic in the content hash, which is what makes Vertex usable as the shared registry.
+ */
+export function geminiCacheDisplayName(model: string, contentHash: string): string {
+    const shortModel = (model.split('/').pop() ?? model).slice(0, DISPLAY_NAME_MODEL_SEGMENT_MAX_LENGTH);
+    const displayName = `${GEMINI_CACHE_DISPLAY_NAME_PREFIX}:${shortModel}:${contentHash.slice(0, DISPLAY_NAME_HASH_LENGTH)}`;
+    return displayName.slice(0, DISPLAY_NAME_MAX_LENGTH);
 }
 
 function toCacheEntry(cached: CachedContent, ttlSeconds: number): GeminiContextCacheEntry | undefined {
@@ -320,6 +376,8 @@ async function planGeminiContextCache(
     options: ExecutionOptions,
     prompt: GenerateContentPrompt,
     payload: GenerateContentParameters,
+    /** Resource names already proven unusable on this call, so discovery does not re-adopt them. */
+    excludeCacheNames?: ReadonlySet<string>,
 ): Promise<GeminiContextCachePlan | undefined> {
     // Order matters: without a cache key nothing below runs, so a driver that never opted in — or a
     // test double that does not implement the registry — sees exactly today's payload.
@@ -338,8 +396,8 @@ async function planGeminiContextCache(
     // alongside cachedContent — those belong to the cache. So they are part of its identity.
     const tools = payload.config?.tools as Tool[] | undefined;
     const toolConfig = payload.config?.toolConfig;
-    const cacheKey = cacheKeyFor(payload.model, options.prompt_cache_key, prefix, tools, toolConfig);
-    if (manager.isUncacheable(cacheKey)) return undefined;
+    const contentHash = geminiCacheContentHash(payload.model, prefix, tools, toolConfig);
+    if (manager.isUncacheable(contentHash)) return undefined;
 
     const requestContents = stripLeadingParts(payload.contents as Content[], prefix.partCount);
     if (!requestContents || requestContents.length === 0) {
@@ -350,23 +408,25 @@ async function planGeminiContextCache(
         return undefined;
     }
 
-    const entry = await manager.resolve(cacheKey, () =>
-        createOrRefreshCache({
+    const entry = await manager.resolve(contentHash, () =>
+        adoptOrCreateCache({
             driver,
             client,
             manager,
-            cacheKey,
+            contentHash,
             model: payload.model,
             prefix,
             tools,
             toolConfig,
             ttlSeconds: resolveTtlSeconds(options, manager),
+            excludeCacheNames,
         }),
     );
     if (!entry) return undefined;
 
     return {
-        cacheKey,
+        contentHash,
+        cacheName: entry.name,
         manager,
         payload: {
             ...payload,
@@ -382,50 +442,63 @@ async function planGeminiContextCache(
     };
 }
 
-interface CreateOrRefreshCacheParams {
+interface AdoptOrCreateCacheParams {
     driver: VertexAIDriver;
     client: GoogleGenAI;
     manager: GeminiContextCacheManager;
-    cacheKey: string;
+    contentHash: string;
     model: string;
     prefix: GeminiCachePrefix;
     tools: Tool[] | undefined;
     toolConfig: ToolConfig | undefined;
     ttlSeconds: number;
+    excludeCacheNames?: ReadonlySet<string>;
 }
 
-async function createOrRefreshCache({
+/**
+ * Find the `cachedContents` resource for this content, or make one.
+ *
+ * Three steps, cheapest first: extend a memoized resource that is nearing expiry, adopt a live one
+ * another instance already created (found by listing on the deterministic display name), and only
+ * then create. Never throws: the caller treats `undefined` as "send the request un-cached".
+ */
+async function adoptOrCreateCache({
     driver,
     client,
     manager,
-    cacheKey,
+    contentHash,
     model,
     prefix,
     tools,
     toolConfig,
     ttlSeconds,
-}: CreateOrRefreshCacheParams): Promise<GeminiContextCacheEntry | undefined> {
-    const ttl = `${ttlSeconds}s`;
-    const existing = manager.get(cacheKey);
-    if (existing) {
-        // Live but close to expiry: extend it rather than lose the prefix mid-flight.
-        try {
-            const updated = await client.caches.update({ name: existing.name, config: { ttl } });
-            const refreshed = toCacheEntry(updated, ttlSeconds) ?? {
-                name: existing.name,
-                expiresAtMs: Date.now() + ttlSeconds * 1000,
-            };
-            manager.set(cacheKey, refreshed);
+    excludeCacheNames,
+}: AdoptOrCreateCacheParams): Promise<GeminiContextCacheEntry | undefined> {
+    const displayName = geminiCacheDisplayName(model, contentHash);
+
+    // 1. Memoized and near expiry — extend rather than lose the prefix mid-flight.
+    const existing = manager.get(contentHash);
+    if (existing && !excludeCacheNames?.has(existing.name)) {
+        const refreshed = await extendCacheTtl(driver, client, existing, model, ttlSeconds);
+        if (refreshed) {
+            manager.set(contentHash, refreshed);
             return refreshed;
-        } catch (error) {
-            driver.logger.warn(
-                { error, model },
-                '[VertexAI] Gemini context cache: TTL refresh failed, creating a new cache',
-            );
-            manager.invalidate(cacheKey);
         }
+        manager.invalidate(contentHash);
     }
 
+    // 2. Vertex is the shared registry: adopt whatever a peer instance already built.
+    const adopted = await findCacheByDisplayName(driver, client, displayName, model, excludeCacheNames);
+    if (adopted) {
+        const entry =
+            adopted.expiresAtMs - Date.now() < CACHE_REFRESH_MARGIN_MS
+                ? ((await extendCacheTtl(driver, client, adopted, model, ttlSeconds)) ?? adopted)
+                : adopted;
+        manager.set(contentHash, entry);
+        return entry;
+    }
+
+    // 3. Nobody has one. Build it.
     try {
         const created = await client.caches.create({
             model,
@@ -434,8 +507,8 @@ async function createOrRefreshCache({
                 systemInstruction: prefix.system,
                 tools,
                 toolConfig,
-                ttl,
-                displayName: `llumiverse-${cacheKey.slice(0, 32)}`,
+                ttl: `${ttlSeconds}s`,
+                displayName,
             },
         });
         const entry = toCacheEntry(created, ttlSeconds);
@@ -443,22 +516,78 @@ async function createOrRefreshCache({
             driver.logger.warn({ model }, '[VertexAI] Gemini context cache: create returned no resource name');
             return undefined;
         }
-        manager.set(cacheKey, entry);
+        manager.set(contentHash, entry);
         return entry;
     } catch (error) {
         if (isMinimumTokenCountError(error)) {
             // Below the model's minimum cacheable size. This will never succeed for this prefix.
-            manager.markUncacheable(cacheKey);
+            manager.markUncacheable(contentHash);
             driver.logger.warn(
                 { error, model },
                 '[VertexAI] Gemini context cache: prefix below the model minimum token count, caching disabled ' +
-                    'for this key',
+                    'for this prefix',
             );
             return undefined;
         }
         driver.logger.warn({ error, model }, '[VertexAI] Gemini context cache: create failed, sending un-cached');
         return undefined;
     }
+}
+
+/** Push a resource's expiry out. Returns `undefined` when Vertex would not extend it. */
+async function extendCacheTtl(
+    driver: VertexAIDriver,
+    client: GoogleGenAI,
+    entry: GeminiContextCacheEntry,
+    model: string,
+    ttlSeconds: number,
+): Promise<GeminiContextCacheEntry | undefined> {
+    try {
+        const updated = await client.caches.update({ name: entry.name, config: { ttl: `${ttlSeconds}s` } });
+        return toCacheEntry(updated, ttlSeconds) ?? { name: entry.name, expiresAtMs: Date.now() + ttlSeconds * 1000 };
+    } catch (error) {
+        driver.logger.warn(
+            { error, model },
+            '[VertexAI] Gemini context cache: TTL refresh failed, looking for another cache',
+        );
+        return undefined;
+    }
+}
+
+/**
+ * Scan `cachedContents` for a live resource carrying `displayName`.
+ *
+ * `ListCachedContentsRequest` has no filter field, so the match is client-side; the sweep is bounded
+ * and stops at the first hit. Only entries with a parseable expiry still in the future are adopted —
+ * a resource that expires between the list and the request would only produce a 404, and the
+ * un-parseable case would mean inventing a lifetime we do not know.
+ */
+async function findCacheByDisplayName(
+    driver: VertexAIDriver,
+    client: GoogleGenAI,
+    displayName: string,
+    model: string,
+    excludeCacheNames?: ReadonlySet<string>,
+): Promise<GeminiContextCacheEntry | undefined> {
+    try {
+        const pager = await client.caches.list({ config: { pageSize: LIST_PAGE_SIZE } });
+        let scanned = 0;
+        for await (const cached of pager) {
+            if (++scanned > LIST_MAX_SCANNED) break;
+            if (cached.displayName !== displayName) continue;
+            if (!cached.name || excludeCacheNames?.has(cached.name)) continue;
+            const expiresAtMs = cached.expireTime ? Date.parse(cached.expireTime) : Number.NaN;
+            if (Number.isNaN(expiresAtMs) || expiresAtMs <= Date.now()) continue;
+            return { name: cached.name, expiresAtMs };
+        }
+    } catch (error) {
+        // Discovery is an optimisation; losing it costs a duplicate cache, not a request.
+        driver.logger.warn(
+            { error, model },
+            '[VertexAI] Gemini context cache: listing cached contents failed, creating a new cache',
+        );
+    }
+    return undefined;
 }
 
 /**
@@ -491,23 +620,27 @@ export async function generateWithGeminiContextCache<T>(
         return await send(plan.payload);
     } catch (error) {
         if (!isCacheUnusableError(error)) throw error;
-        // The resource is gone (expired, deleted, or created by a driver instance that no longer
-        // owns it). Forget it, build one replacement, and retry once.
-        plan.manager.invalidate(plan.cacheKey);
+        // The resource is gone (expired, deleted, or created by an instance that no longer owns it).
+        // Forget it, then re-plan: discovery may find a peer's live cache before falling through to
+        // a create. The dead name is excluded so a stale listing cannot hand it back.
+        plan.manager.invalidate(plan.contentHash);
         driver.logger.warn(
             { error, model: payload.model },
-            '[VertexAI] Gemini context cache: cached content unusable, recreating',
+            '[VertexAI] Gemini context cache: cached content unusable, rediscovering',
         );
-        const retry = await planGeminiContextCache(driver, client, options, prompt, payload).catch(() => undefined);
+        const exclude = new Set([plan.cacheName]);
+        const retry = await planGeminiContextCache(driver, client, options, prompt, payload, exclude).catch(
+            () => undefined,
+        );
         if (retry) {
             try {
                 return await send(retry.payload);
             } catch (retryError) {
                 if (!isCacheUnusableError(retryError)) throw retryError;
-                retry.manager.invalidate(retry.cacheKey);
+                retry.manager.invalidate(retry.contentHash);
                 driver.logger.warn(
                     { error: retryError, model: payload.model },
-                    '[VertexAI] Gemini context cache: recreated cache also unusable, sending un-cached',
+                    '[VertexAI] Gemini context cache: replacement cache also unusable, sending un-cached',
                 );
             }
         }
