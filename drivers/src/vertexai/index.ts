@@ -36,6 +36,7 @@ import { generateVertexAiEmbeddings } from './embeddings/embed.js';
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
 import { formatGeminiDebugPrompt } from './models/gemini.js';
 import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
+import { GEMINI_OMNI_VIDEO_MODEL, type OmniVideoPrompt } from './models/omni-video.js';
 import { getModelDefinition, trimModelName } from './models.js';
 import { getListedVertexOpenMaaSModels } from './open-maas-models.js';
 
@@ -69,7 +70,12 @@ function isClaudeStreamingPrompt(prompt: unknown): prompt is ClaudeStreamingProm
 }
 
 //General Prompt type for VertexAI
-export type VertexAIPrompt = ImagenPrompt | GenerateContentPrompt | ClaudePrompt | OpenAIChatCompletionsPrompt;
+export type VertexAIPrompt =
+    | ImagenPrompt
+    | OmniVideoPrompt
+    | GenerateContentPrompt
+    | ClaudePrompt
+    | OpenAIChatCompletionsPrompt;
 
 export { trimModelName };
 
@@ -230,6 +236,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         return client;
     }
 
+    public getRequestTimeoutMs(httpTimeout?: HttpTimeoutOptions): number {
+        return this.getDriverRequestTimeoutMs(httpTimeout);
+    }
+
     public async getAnthropicClient(
         region: string = this.options.region,
         httpTimeout?: HttpTimeoutOptions,
@@ -350,6 +360,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         if ('messages' in prompt) {
             return prompt;
         }
+        if ('text' in prompt && 'images' in prompt) {
+            return prompt;
+        }
         return formatImagenDebugPrompt(prompt);
     }
 
@@ -414,6 +427,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                         return typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
                     case 'image':
                         // Skip images in conversation - they're in the result
+                        return '';
+                    case 'video':
                         return '';
                     default: {
                         const _exhaustive: never = r;
@@ -516,6 +531,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                     case 'json':
                         return typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
                     case 'image':
+                        return '';
+                    case 'video':
                         return '';
                     default: {
                         const _exhaustive: never = r;
@@ -641,7 +658,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 ],
                 /** Additional models not in the listings, but we want to include.
                  * TODO: Remove once available in listing API. */
-                additional: ['imagen-3.0-fast-generate-001'],
+                additional: ['imagen-3.0-fast-generate-001', 'gemini-omni-flash-preview'],
             },
             anthropic: {
                 families: ['claude'],
@@ -740,7 +757,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                     })
                     .map((model) => {
                         const rawModelId = model.name ?? '';
-                        const isGlobalOnlyPublisher = publisher === 'xai';
+                        const isGlobalOnlyPublisher = isGlobalOnlyPublisherModel(publisher, rawModelId);
                         const listedModelId = isGlobalOnlyPublisher ? `locations/global/${rawModelId}` : rawModelId;
                         const modelMetadata = resolveModelListingMetadata(listedModelId, Providers.vertexai);
                         return {
@@ -829,11 +846,12 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
             // Add additional models that are not in the listing
             for (const additionalModel of publisherConfig[publisher as Publisher].additional) {
-                const publisherModelName = `publishers/${publisher}/models/${additionalModel}`;
+                const rawModelId = `publishers/${publisher}/models/${additionalModel}`;
+                const isGlobalOnlyPublisher = isGlobalOnlyPublisherModel(publisher, rawModelId);
                 const modelMetadata = resolveModelListingMetadata(additionalModel, Providers.vertexai);
                 models.push({
-                    id: publisherModelName,
-                    name: additionalModel,
+                    id: isGlobalOnlyPublisher ? `locations/global/${rawModelId}` : rawModelId,
+                    name: isGlobalOnlyPublisher ? `Global ${additionalModel}` : additionalModel,
                     provider: 'vertexai',
                     owner: publisher,
                     ...modelMetadata,
@@ -887,8 +905,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 }
 
+function isGlobalOnlyPublisherModel(publisher: string, modelId: string): boolean {
+    return publisher === 'xai' || (publisher === 'google' && modelId.endsWith(`/models/${GEMINI_OMNI_VIDEO_MODEL}`));
+}
+
 function isExecutableGoogleModel(model: Model): boolean {
     const modelName = (model.name ?? '').toLowerCase();
+    if (modelName.endsWith('/gemini-omni-flash-preview') || modelName === 'gemini-omni-flash-preview') return true;
     // Intentional execution-path allow-list: Vertex uses separate methods for embeddings, Live/TTS, music and video.
     // This driver currently implements generateContent and generateImages. Unknown actions are excluded only when
     // Google supplies them; absent action metadata falls back to the known-family/name policy above.

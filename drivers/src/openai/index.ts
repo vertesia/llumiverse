@@ -860,6 +860,8 @@ function completionResultsToText(completionResults: CompletionResult[] | undefin
                 case 'image':
                     // Skip images in conversation - they're in the result
                     return '';
+                case 'video':
+                    return '';
                 default: {
                     const _exhaustive: never = r;
                     return String(_exhaustive);

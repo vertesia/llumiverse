@@ -3,6 +3,7 @@ import { resolveModelProfile } from '../model-directory.js';
 import type {
     ImagenOptionsSchema,
     VertexAIClaudeOptionsSchema,
+    VertexAIGeminiOmniVideoOptionsSchema,
     VertexAIGeminiOptionsSchema,
     VertexAIGrokOptionsSchema,
 } from '../schemas/model-options.js';
@@ -38,13 +39,19 @@ import { hasSamplingParameterRestriction, isGeminiModelVersionGte } from './vers
 export type ImagenOptions = z.infer<typeof ImagenOptionsSchema>;
 export type VertexAIClaudeOptions = z.infer<typeof VertexAIClaudeOptionsSchema>;
 export type VertexAIGeminiOptions = z.infer<typeof VertexAIGeminiOptionsSchema>;
+export type VertexAIGeminiOmniVideoOptions = z.infer<typeof VertexAIGeminiOmniVideoOptionsSchema>;
 export type VertexAIGrokOptions = z.infer<typeof VertexAIGrokOptionsSchema>;
 
 // Union type of all VertexAI options
 /**
  * @discriminator _option_id
  */
-export type VertexAIOptions = ImagenOptions | VertexAIClaudeOptions | VertexAIGeminiOptions | VertexAIGrokOptions;
+export type VertexAIOptions =
+    | ImagenOptions
+    | VertexAIClaudeOptions
+    | VertexAIGeminiOptions
+    | VertexAIGeminiOmniVideoOptions
+    | VertexAIGrokOptions;
 
 export enum ImagenTaskType {
     TEXT_IMAGE = 'TEXT_IMAGE',
@@ -94,6 +101,38 @@ export function isFlexSupportedGeminiModel(model: string): boolean {
 }
 
 export function getVertexAiOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
+    if (model.split('/').pop() === 'gemini-omni-flash-preview') {
+        return {
+            _option_id: 'vertexai-gemini-omni-video',
+            options: [
+                {
+                    name: 'task',
+                    type: OptionType.enum,
+                    enum: {
+                        'Text to video': 'text_to_video',
+                        'Image to video': 'image_to_video',
+                        'Reference images to video': 'reference_to_video',
+                    },
+                    description: 'Video generation task. Image inputs require an explicit image task.',
+                },
+                {
+                    name: 'aspect_ratio',
+                    type: OptionType.enum,
+                    enum: { Landscape: '16:9', Portrait: '9:16' },
+                    description: 'Aspect ratio of the generated video.',
+                },
+                {
+                    name: 'duration_seconds',
+                    type: OptionType.numeric,
+                    min: 3,
+                    max: 10,
+                    default: 5,
+                    integer: true,
+                    description: 'Duration of the generated video in seconds.',
+                },
+            ],
+        };
+    }
     if (model.includes('imagen-')) {
         return getImagenOptions(model, option);
     } else if (model.includes('gemini')) {
