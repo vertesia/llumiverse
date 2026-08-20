@@ -266,6 +266,16 @@ jobs:
               exit 1
             fi
 
+            if [[ "$settled_state" == "BEHIND" ]]; then
+              echo "Not merging $PR_URL: the base branch advanced; update or rebase the PR first." >&2
+              exit 1
+            fi
+
+            if [[ "$settled_state" == "DRAFT" ]]; then
+              echo "Not merging $PR_URL: the PR became a draft." >&2
+              exit 1
+            fi
+
             if (( SECONDS >= deadline )); then
               echo "Not merging $PR_URL: merge state still '$settled_state' after ${merge_state_timeout}s." >&2
               exit 1
