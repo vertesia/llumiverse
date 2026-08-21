@@ -1,3 +1,4 @@
+import { FinishReason } from '@google/genai';
 import { LlumiverseError } from '@llumiverse/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { exposePrivate, getProp } from '../../../test/__helpers__/test-utils.js';
@@ -20,7 +21,94 @@ describe('GeminiModelDefinition Error Handling', () => {
         modelDef = new GeminiModelDefinition('gemini-2.0-flash');
     });
 
+    async function formatFinishReasonError(
+        finishReason: FinishReason,
+        safetyRatings?: unknown[],
+    ): Promise<LlumiverseError> {
+        const responseDriver = {
+            logger: { warn: () => {}, info: () => {}, error: () => {} },
+            getGoogleGenAIClient: () => ({
+                models: {
+                    generateContent: async () => ({
+                        candidates: [{ finishReason, content: { role: 'model' }, safetyRatings }],
+                    }),
+                },
+            }),
+        } as unknown as VertexAIDriver;
+
+        const originalError = await modelDef
+            .requestTextCompletion(
+                responseDriver,
+                { contents: [{ role: 'user', parts: [{ text: 'Describe this image' }] }] },
+                { model: 'publishers/google/models/gemini-2.0-flash' },
+            )
+            .then(
+                () => undefined,
+                (error: unknown) => error,
+            );
+        expect(originalError).toBeInstanceOf(Error);
+
+        return modelDef.formatLlumiverseError(driver, originalError, {
+            provider: 'vertexai',
+            model: 'gemini-2.0-flash',
+            operation: 'execute',
+        });
+    }
+
     describe('formatLlumiverseError', () => {
+        it('surfaces a SAFETY finish reason as a non-retryable error', async () => {
+            const safetyRatings = [
+                {
+                    category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
+                    probability: 'HIGH',
+                    blocked: true,
+                },
+            ];
+            const error = await formatFinishReasonError(FinishReason.SAFETY, safetyRatings);
+
+            expect(error).toBeInstanceOf(LlumiverseError);
+            expect(error.retryable).toBe(false);
+            expect(error.name).toBe('SAFETY');
+            expect(error.message).toContain('Gemini blocked the response because it may violate safety policies');
+            expect(error.message).toContain('Finish reason: SAFETY');
+            expect(error.message).toContain('HARM_CATEGORY_DANGEROUS_CONTENT');
+            expect(error.message).not.toContain('content:');
+        });
+
+        it.each([
+            FinishReason.SAFETY,
+            FinishReason.RECITATION,
+            FinishReason.LANGUAGE,
+            FinishReason.BLOCKLIST,
+            FinishReason.PROHIBITED_CONTENT,
+            FinishReason.SPII,
+            FinishReason.IMAGE_SAFETY,
+            FinishReason.IMAGE_PROHIBITED_CONTENT,
+            FinishReason.IMAGE_RECITATION,
+        ])('classifies policy finish reason %s as non-retryable', async (finishReason) => {
+            const error = await formatFinishReasonError(finishReason);
+            expect(error.retryable).toBe(false);
+            expect(error.name).toBe(finishReason);
+        });
+
+        it.each([
+            FinishReason.MALFORMED_FUNCTION_CALL,
+            FinishReason.NO_IMAGE,
+            FinishReason.IMAGE_OTHER,
+            FinishReason.OTHER,
+        ])('classifies generation finish reason %s as retryable', async (finishReason) => {
+            const error = await formatFinishReasonError(finishReason);
+            expect(error.retryable).toBe(true);
+            expect(error.name).toBe(finishReason);
+        });
+
+        it('keeps an unknown finish reason retryability unspecified', async () => {
+            const error = await formatFinishReasonError('FUTURE_FINISH_REASON' as FinishReason);
+            expect(error.retryable).toBeUndefined();
+            expect(error.message).toContain('unsupported finish reason');
+            expect(error.name).toBe('FUTURE_FINISH_REASON');
+        });
+
         it('should handle INVALID_ARGUMENT error (400)', () => {
             const googleError = {
                 status: 400,
