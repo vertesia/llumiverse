@@ -21,7 +21,7 @@
         "typecheck:test": "pnpm exec turbo run typecheck:test"
     },
     "devDependencies": {
-        "@biomejs/biome": "2.5.6",
+        "@biomejs/biome": "2.5.8",
         "turbo": "^2.10.9",
         "typescript": "catalog:",
         "vitest": "^4.1.10"
