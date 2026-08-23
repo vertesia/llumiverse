@@ -79,6 +79,10 @@ const OLD_MESSAGE_TEXT_MAX_TOKENS = 2000;
 const AGENT_PROMPT_CACHE_KEY_PREFIX = 'agent-';
 const AGENT_MESSAGE_CACHE_BLOCK_INTERVAL = 12;
 const MAX_CLAUDE_CACHE_BREAKPOINTS = 4;
+const RESULT_SCHEMA_INSTRUCTION_PREFIXES = [
+    'When not calling tools, the answer must be a JSON object using the following JSON Schema:',
+    'The answer must be a JSON object using the following JSON Schema:',
+] as const;
 
 export function isClaudePromptCacheEnabled(options: ExecutionOptions): boolean {
     const modelOptions = options.model_options as ClaudeBaseOptions | undefined;
@@ -87,6 +91,22 @@ export function isClaudePromptCacheEnabled(options: ExecutionOptions): boolean {
 
 function isAgentPromptCacheKey(promptCacheKey: string | undefined): boolean {
     return promptCacheKey?.startsWith(AGENT_PROMPT_CACHE_KEY_PREFIX) === true;
+}
+
+function isResultSchemaSystemBlock(block: TextBlockParam): boolean {
+    return block.type === 'text' && RESULT_SCHEMA_INSTRUCTION_PREFIXES.some((prefix) => block.text.startsWith(prefix));
+}
+
+function mergeClaudeSystemBlocks(base: TextBlockParam[], additions: TextBlockParam[]): TextBlockParam[] {
+    if (!additions.some(isResultSchemaSystemBlock)) return base.concat(additions);
+
+    // Agent tool continuations carry result_schema on every request. Replacing
+    // the prior generated schema block keeps the system prefix byte-stable and
+    // also repairs conversations persisted by older workers, which accumulated
+    // one identical ~3.5 KB schema block per tool iteration.
+    const combined = base.concat(additions);
+    const latestSchemaIndex = combined.findLastIndex(isResultSchemaSystemBlock);
+    return combined.filter((block, index) => !isResultSchemaSystemBlock(block) || index === latestSchemaIndex);
 }
 
 function addAgentMessageCacheBreakpoints(
@@ -406,14 +426,22 @@ export async function formatClaudePrompt(
     }
 
     if (schemaText && options.prompt_cache_key !== undefined) {
-        const taskMessage = messages[messages.length - 1];
-        const taskBlock = Array.isArray(taskMessage?.content)
-            ? taskMessage.content[taskMessage.content.length - 1]
-            : undefined;
-        if (taskBlock?.type === 'text') {
-            taskBlock.text = `${taskBlock.text}\n\n${schemaText}`;
-        } else {
+        if (isAgentPromptCacheKey(options.prompt_cache_key)) {
+            // Agent result schemas are stable for the whole tool loop. Keep one
+            // generated system block rather than appending the same schema to
+            // every persisted continuation prompt. Routed one-shot prompts keep
+            // the schema on their dynamic task block below.
             system.push({ text: schemaText, type: 'text' as const });
+        } else {
+            const taskMessage = messages[messages.length - 1];
+            const taskBlock = Array.isArray(taskMessage?.content)
+                ? taskMessage.content[taskMessage.content.length - 1]
+                : undefined;
+            if (taskBlock?.type === 'text') {
+                taskBlock.text = `${taskBlock.text}\n\n${schemaText}`;
+            } else {
+                system.push({ text: schemaText, type: 'text' as const });
+            }
         }
     }
 
@@ -591,7 +619,7 @@ export function updateClaudeConversation(
 ): ClaudePrompt {
     const baseSystemMessages = conversation?.system || [];
     const baseMessages = conversation?.messages || [];
-    const system = baseSystemMessages.concat(prompt.system || []);
+    const system = mergeClaudeSystemBlocks(baseSystemMessages, prompt.system || []);
     const combined = sanitizeMessages(baseMessages.concat(prompt.messages || []));
     const mergedMessages = mergeConsecutiveUserMessages(combined);
     return {

@@ -5,6 +5,7 @@ import {
     buildClaudeStreamingConversation,
     formatClaudePrompt,
     getClaudePayload,
+    updateClaudeConversation,
 } from './claude-messages.js';
 
 describe('formatClaudePrompt', () => {
@@ -161,6 +162,66 @@ describe('formatClaudePrompt', () => {
         expect(second.messages[0].content[0]).toMatchObject({
             cache_control: { type: 'ephemeral', ttl: '1h' },
         });
+    });
+
+    it('keeps one stable result-schema system block across agent tool continuations', async () => {
+        const options: ExecutionOptions = {
+            model: 'claude-sonnet-4-6',
+            prompt_cache_key: 'agent-stable-prefix',
+            result_schema: { type: 'object', properties: { value: { type: 'string' } } },
+        };
+        const initial = await formatClaudePrompt(
+            [
+                { role: PromptRole.system, content: 'agent instructions' },
+                { role: PromptRole.user, content: 'start work' },
+            ],
+            options,
+        );
+        const continuation = await formatClaudePrompt(
+            [{ role: PromptRole.tool, tool_use_id: 'tool-1', content: 'first result' }],
+            options,
+        );
+        const nextContinuation = await formatClaudePrompt(
+            [{ role: PromptRole.tool, tool_use_id: 'tool-2', content: 'second result' }],
+            options,
+        );
+
+        const firstConversation = updateClaudeConversation(initial, continuation);
+        const secondConversation = updateClaudeConversation(firstConversation, nextContinuation);
+        const schemaBlocks = secondConversation.system?.filter((block) => block.text.includes('JSON Schema'));
+
+        expect(initial.messages[0].content[0]).toEqual({ type: 'text', text: 'start work' });
+        expect(firstConversation.system).toEqual(secondConversation.system);
+        expect(schemaBlocks).toHaveLength(1);
+        expect(schemaBlocks?.[0].text).toContain('"value"');
+    });
+
+    it('collapses legacy duplicate agent result-schema system blocks on the next continuation', async () => {
+        const options: ExecutionOptions = {
+            model: 'claude-sonnet-4-6',
+            prompt_cache_key: 'agent-stable-prefix',
+            result_schema: { type: 'object', properties: { value: { type: 'string' } } },
+        };
+        const continuation = await formatClaudePrompt(
+            [{ role: PromptRole.tool, tool_use_id: 'tool-1', content: 'result' }],
+            options,
+        );
+        const schemaBlock = continuation.system?.find((block) => block.text.includes('JSON Schema'));
+        expect(schemaBlock).toBeDefined();
+        if (!schemaBlock) throw new Error('Expected generated result-schema system block');
+        const legacyConversation = {
+            messages: [{ role: 'user' as const, content: [{ type: 'text' as const, text: 'start work' }] }],
+            system: [
+                { type: 'text' as const, text: 'agent instructions' },
+                schemaBlock,
+                { ...schemaBlock },
+                { ...schemaBlock },
+            ],
+        };
+
+        const repaired = updateClaudeConversation(legacyConversation, continuation);
+
+        expect(repaired.system?.filter((block) => block.text.includes('JSON Schema'))).toHaveLength(1);
     });
 
     it('appends a user turn when the conversation ends with an assistant message on no-prefill models', () => {
