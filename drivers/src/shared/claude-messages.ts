@@ -76,10 +76,42 @@ import { truncateBinaryForDebug } from './debug-prompt.js';
 // below — so long agent conversations don't balloon context.
 const KEEP_RECENT_MESSAGES = 12;
 const OLD_MESSAGE_TEXT_MAX_TOKENS = 2000;
+const AGENT_PROMPT_CACHE_KEY_PREFIX = 'agent-';
+const AGENT_MESSAGE_CACHE_BLOCK_INTERVAL = 12;
+const MAX_CLAUDE_CACHE_BREAKPOINTS = 4;
 
 export function isClaudePromptCacheEnabled(options: ExecutionOptions): boolean {
     const modelOptions = options.model_options as ClaudeBaseOptions | undefined;
     return options.prompt_cache_key !== undefined || modelOptions?.cache_enabled === true;
+}
+
+function isAgentPromptCacheKey(promptCacheKey: string | undefined): boolean {
+    return promptCacheKey?.startsWith(AGENT_PROMPT_CACHE_KEY_PREFIX) === true;
+}
+
+function addAgentMessageCacheBreakpoints(
+    messages: MessageParam[],
+    cacheControl: { type: 'ephemeral'; ttl?: '5m' | '1h' },
+): boolean {
+    let cacheableBlockIndex = 0;
+    let breakpointCount = 0;
+
+    for (const message of messages) {
+        if (!Array.isArray(message.content)) continue;
+
+        for (const block of message.content) {
+            if (block.type === 'thinking' || block.type === 'redacted_thinking') continue;
+
+            if (cacheableBlockIndex === breakpointCount * AGENT_MESSAGE_CACHE_BLOCK_INTERVAL) {
+                block.cache_control = cacheControl;
+                breakpointCount++;
+                if (breakpointCount === MAX_CLAUDE_CACHE_BREAKPOINTS) return true;
+            }
+            cacheableBlockIndex++;
+        }
+    }
+
+    return breakpointCount > 0;
 }
 
 interface WarnLogger {
@@ -740,17 +772,27 @@ export function getClaudePayload(
         const cacheTtl = model_options?.cache_ttl as '5m' | '1h' | undefined;
         const cacheControl = { type: 'ephemeral' as const, ...(cacheTtl && { ttl: cacheTtl }) };
 
-        if (sanitizedSystem && sanitizedSystem.length > 0) {
+        // Vertex requires cache_control to remain on the same blocks across
+        // requests. Agent conversations therefore use fixed block ordinals:
+        // each newly reached breakpoint extends the cached prefix without
+        // relocating or deleting an earlier breakpoint. Four message markers
+        // also cache the preceding system and tool definitions, while covering
+        // the growing tool loop until the next semantic checkpoint.
+        const hasAgentMessageBreakpoints =
+            isAgentPromptCacheKey(options.prompt_cache_key) &&
+            addAgentMessageCacheBreakpoints(sanitizedMessages, cacheControl);
+
+        if (!hasAgentMessageBreakpoints && sanitizedSystem && sanitizedSystem.length > 0) {
             const lastBlock = sanitizedSystem[sanitizedSystem.length - 1] as TextBlockParam & {
                 cache_control?: unknown;
             };
             lastBlock.cache_control = cacheControl;
         }
-        if (sanitizedTools && sanitizedTools.length > 0) {
+        if (!hasAgentMessageBreakpoints && sanitizedTools && sanitizedTools.length > 0) {
             const lastTool = sanitizedTools[sanitizedTools.length - 1] as ClaudeTool & { cache_control?: unknown };
             lastTool.cache_control = cacheControl;
         }
-        if (options.prompt_cache_key !== undefined) {
+        if (!hasAgentMessageBreakpoints && options.prompt_cache_key !== undefined) {
             const lastMessage = sanitizedMessages[sanitizedMessages.length - 1];
             if (lastMessage && Array.isArray(lastMessage.content) && lastMessage.content.length >= 2) {
                 const stablePrefixBlock = lastMessage.content[lastMessage.content.length - 2];
@@ -764,7 +806,7 @@ export function getClaudePayload(
                     stablePrefixBlock.cache_control = cacheControl;
                 }
             }
-        } else if (sanitizedMessages.length >= 4) {
+        } else if (!hasAgentMessageBreakpoints && sanitizedMessages.length >= 4) {
             const pivotMsg = sanitizedMessages[sanitizedMessages.length - 2];
             if (Array.isArray(pivotMsg.content) && pivotMsg.content.length > 0) {
                 const lastBlock = pivotMsg.content[pivotMsg.content.length - 1];

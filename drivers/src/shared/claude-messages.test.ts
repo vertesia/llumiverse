@@ -127,6 +127,42 @@ describe('formatClaudePrompt', () => {
         });
     });
 
+    it('keeps agent cache breakpoints on fixed blocks as the conversation grows', () => {
+        const messages = Array.from({ length: 49 }, (_, index) => ({
+            role: (index % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
+            content: [{ type: 'text' as const, text: `block-${index}` }],
+        }));
+        const options: ExecutionOptions = {
+            model: 'claude-sonnet-4-6',
+            prompt_cache_key: 'agent-stable-prefix',
+            model_options: { cache_ttl: '1h' } as never,
+        };
+
+        const first = getClaudePayload(options, {
+            system: [{ type: 'text', text: 'system' }],
+            messages: messages.slice(0, 25),
+        }).payload;
+        const second = getClaudePayload(options, {
+            system: [{ type: 'text', text: 'system' }],
+            messages,
+        }).payload;
+
+        expect(second.messages.slice(0, first.messages.length)).toEqual(first.messages);
+        expect(second.system).toEqual([{ type: 'text', text: 'system' }]);
+        expect(
+            second.messages.flatMap((message, messageIndex) =>
+                Array.isArray(message.content)
+                    ? message.content
+                          .map((block) => ('cache_control' in block ? messageIndex : undefined))
+                          .filter((index): index is number => index !== undefined)
+                    : [],
+            ),
+        ).toEqual([0, 12, 24, 36]);
+        expect(second.messages[0].content[0]).toMatchObject({
+            cache_control: { type: 'ephemeral', ttl: '1h' },
+        });
+    });
+
     it('appends a user turn when the conversation ends with an assistant message on no-prefill models', () => {
         const options: ExecutionOptions = { model: 'claude-fable-5' };
         const prompt = {
