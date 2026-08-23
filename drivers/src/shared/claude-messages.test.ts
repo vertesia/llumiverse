@@ -1,6 +1,11 @@
 import { type DataSource, type ExecutionOptions, PromptRole, type PromptSegment } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
-import { anthropicUsageToTokenUsage, formatClaudePrompt, getClaudePayload } from './claude-messages.js';
+import {
+    anthropicUsageToTokenUsage,
+    buildClaudeStreamingConversation,
+    formatClaudePrompt,
+    getClaudePayload,
+} from './claude-messages.js';
 
 describe('formatClaudePrompt', () => {
     const imageSource = (): DataSource => ({
@@ -207,5 +212,87 @@ describe('formatClaudePrompt', () => {
             result: 10,
             total: 185,
         });
+    });
+
+    it('keeps the serialized cached conversation prefix immutable as tool turns are appended', () => {
+        const largeHistoricalResult = `SOURCE:${'x'.repeat(12_000)}`;
+        const historicalMessages = Array.from({ length: 14 }, (_, index) => ({
+            role: (index % 2 === 0 ? 'assistant' : 'user') as 'assistant' | 'user',
+            content: [
+                index === 1
+                    ? {
+                          type: 'tool_result' as const,
+                          tool_use_id: 'historical-read',
+                          content: largeHistoricalResult,
+                      }
+                    : { type: 'text' as const, text: `historical-${index}` },
+            ],
+        }));
+        const options: ExecutionOptions = {
+            model: 'claude-sonnet-4-6',
+            model_options: { cache_enabled: true } as never,
+            stripTextMaxTokens: 8_000,
+            conversation: { messages: historicalMessages },
+        };
+
+        const first = buildClaudeStreamingConversation(
+            {
+                messages: [
+                    {
+                        role: 'user',
+                        content: [{ type: 'text', text: 'first new tool result' }],
+                    },
+                ],
+            },
+            [],
+            [{ id: 'tool-1', tool_name: 'app_workspace_edit', tool_input: { path: 'src/App.tsx' } }],
+            options,
+        );
+        const second = buildClaudeStreamingConversation(
+            {
+                messages: [
+                    {
+                        role: 'user',
+                        content: [{ type: 'text', text: 'second new tool result' }],
+                    },
+                ],
+            },
+            [],
+            [{ id: 'tool-2', tool_name: 'app_workspace_typecheck', tool_input: {} }],
+            { ...options, conversation: first },
+        );
+
+        expect(JSON.stringify(first.messages)).toContain(largeHistoricalResult);
+        expect(second.messages.slice(0, first.messages.length)).toEqual(first.messages);
+        expect(JSON.stringify(second.messages.slice(0, first.messages.length))).toBe(JSON.stringify(first.messages));
+    });
+
+    it('retains sliding text truncation when prompt caching is disabled', () => {
+        const largeHistoricalResult = `SOURCE:${'x'.repeat(12_000)}`;
+        const conversation = buildClaudeStreamingConversation(
+            {
+                messages: Array.from({ length: 14 }, (_, index) => ({
+                    role: (index % 2 === 0 ? 'assistant' : 'user') as 'assistant' | 'user',
+                    content: [
+                        index === 1
+                            ? {
+                                  type: 'tool_result' as const,
+                                  tool_use_id: 'historical-read',
+                                  content: largeHistoricalResult,
+                              }
+                            : { type: 'text' as const, text: `historical-${index}` },
+                    ],
+                })),
+            },
+            [],
+            [{ id: 'tool-1', tool_name: 'app_workspace_edit', tool_input: { path: 'src/App.tsx' } }],
+            {
+                model: 'claude-sonnet-4-6',
+                stripTextMaxTokens: 8_000,
+            },
+        );
+
+        expect(JSON.stringify(conversation.messages)).not.toContain(largeHistoricalResult);
+        expect(JSON.stringify(conversation.messages)).toContain('[Content truncated');
     });
 });

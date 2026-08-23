@@ -77,6 +77,11 @@ import { truncateBinaryForDebug } from './debug-prompt.js';
 const KEEP_RECENT_MESSAGES = 12;
 const OLD_MESSAGE_TEXT_MAX_TOKENS = 2000;
 
+export function isClaudePromptCacheEnabled(options: ExecutionOptions): boolean {
+    const modelOptions = options.model_options as ClaudeBaseOptions | undefined;
+    return options.prompt_cache_key !== undefined || modelOptions?.cache_enabled === true;
+}
+
 interface WarnLogger {
     warn: (data: Record<string, unknown>, message: string) => void;
 }
@@ -730,7 +735,7 @@ export function getClaudePayload(
         ? stripClaudeCacheControlFromTools(options.tools as MessageCreateParamsBase['tools'])
         : undefined;
 
-    const cacheEnabled = options.prompt_cache_key !== undefined || model_options?.cache_enabled === true;
+    const cacheEnabled = isClaudePromptCacheEnabled(options);
     if (cacheEnabled) {
         const cacheTtl = model_options?.cache_ttl as '5m' | '1h' | undefined;
         const cacheControl = { type: 'ephemeral' as const, ...(cacheTtl && { ttl: cacheTtl }) };
@@ -846,11 +851,21 @@ export function buildClaudeStreamingConversation(
     // stale blocks; long agent conversations otherwise balloon context and
     // trigger frequent expensive checkpoints.
     const requestedTextMax = options.stripTextMaxTokens;
+    // Sliding-window truncation rewrites one previously sent message whenever it
+    // falls out of the recent-message window. That defeats Anthropic's exact
+    // prefix cache and turns the growing conversation into a cache write on every
+    // agent iteration. Cached Claude conversations are append-only between
+    // semantic checkpoints; their model-facing tool results are already bounded
+    // and artifact-backed at the Studio execution boundary.
+    const preserveCachedTextPrefix = isClaudePromptCacheEnabled(options);
     const stripOptions = {
         keepForTurns: options.stripImagesAfterTurns ?? Infinity,
         currentTurn,
-        textMaxTokens: requestedTextMax ? Math.min(requestedTextMax, OLD_MESSAGE_TEXT_MAX_TOKENS) : undefined,
-        keepRecentMessages: requestedTextMax ? KEEP_RECENT_MESSAGES : undefined,
+        textMaxTokens:
+            requestedTextMax && !preserveCachedTextPrefix
+                ? Math.min(requestedTextMax, OLD_MESSAGE_TEXT_MAX_TOKENS)
+                : undefined,
+        keepRecentMessages: requestedTextMax && !preserveCachedTextPrefix ? KEEP_RECENT_MESSAGES : undefined,
     };
     let processed = stripBase64ImagesFromConversation(conversation, stripOptions);
     processed = truncateLargeTextInConversation(processed, stripOptions);
@@ -883,7 +898,9 @@ function finalizeClaudeConversation(
     const stripOpts = {
         keepForTurns: options.stripImagesAfterTurns ?? Infinity,
         currentTurn,
-        textMaxTokens: options.stripTextMaxTokens,
+        // See buildClaudeStreamingConversation: cached histories must remain
+        // byte-stable between checkpoints, so do not age-rewrite text blocks.
+        textMaxTokens: isClaudePromptCacheEnabled(options) ? undefined : options.stripTextMaxTokens,
         preserveSubtree,
     };
     let processedConversation = stripBase64ImagesFromConversation(completedConversation, stripOpts);
