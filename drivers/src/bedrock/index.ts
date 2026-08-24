@@ -807,6 +807,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 prompt_cached: result.usage?.cacheReadInputTokens ?? undefined,
                 prompt_cache_write: result.usage?.cacheWriteInputTokens ?? undefined,
             },
+            service_tier: result.serviceTier?.type,
             finish_reason: converseFinishReason(result.stopReason),
         };
 
@@ -927,6 +928,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const completionResult: CompletionChunkObject = {
             result: reasoning + output ? [{ type: 'text', value: reasoning + output }] : [],
             token_usage: token_usage,
+            service_tier: result.metadata?.serviceTier?.type,
             finish_reason: converseFinishReason(stop_reason),
             tool_use,
         };
@@ -1231,6 +1233,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         return {
             result: result.message ? [{ type: 'text' as const, value: result.message }] : [],
+            service_tier: res.serviceTier,
             finish_reason: finishReason,
             original_response: options.include_original_response ? result : undefined,
         };
@@ -1289,17 +1292,20 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                                     ? [{ type: 'text' as const, value: result.delta || result.message || '' }]
                                     : [],
                             finish_reason: finishReason,
+                            service_tier: res.serviceTier,
                         } satisfies CompletionChunkObject;
                     } catch {
                         // If JSON parsing fails, return empty chunk
                         return {
                             result: [],
+                            service_tier: res.serviceTier,
                         } satisfies CompletionChunkObject;
                     }
                 }
 
                 return {
                     result: [],
+                    service_tier: res.serviceTier,
                 } satisfies CompletionChunkObject;
             });
             return withBedrockRuntimeScope(stream, executorScope);

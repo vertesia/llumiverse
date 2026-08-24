@@ -1032,6 +1032,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             result: completionResults,
             tool_use,
             token_usage: mapOpenAIChatCompletionsUsage(result.usage),
+            service_tier: result.service_tier ?? undefined,
             finish_reason: normalizeOpenAIChatCompletionsFinishReason(choice?.finish_reason, !!tool_use?.length),
             original_response: options.include_original_response
                 ? ((result as OpenAIChatCompletionsResponseWithOriginal)[originalResponseSymbol] ?? result)
@@ -1125,6 +1126,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                     !!toolUseChunks?.length,
                 ),
                 token_usage: mapOpenAIChatCompletionsUsage(json.usage),
+                service_tier: json.service_tier ?? undefined,
             } satisfies CompletionChunkObject;
         });
 

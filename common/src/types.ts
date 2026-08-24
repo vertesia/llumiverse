@@ -405,6 +405,8 @@ export type CompletionResult = TextResult | ThoughtsResult | JsonResult | ImageR
 export interface CompletionChunkObject {
     result: CompletionResult[];
     token_usage?: ExecutionTokenUsage;
+    /** The processing tier the provider actually used for this response. */
+    service_tier?: string;
     finish_reason?: 'stop' | 'length' | string;
     /**
      * Tool calls returned by the model during streaming.
@@ -461,6 +463,8 @@ export interface Completion {
     // the driver impl must return the result and optionally the token_usage. the execution time is computed by the extended abstract driver
     result: CompletionResult[];
     token_usage?: ExecutionTokenUsage;
+    /** The processing tier the provider actually used for this response. */
+    service_tier?: string;
     /**
      * Contains the tools from which the model awaits information.
      */
