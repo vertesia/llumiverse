@@ -13,6 +13,7 @@ import {
     Modality,
     type Part,
     ProminentPeople,
+    type SafetyRating,
     type SafetySetting,
     type ThinkingConfig,
     ThinkingLevel,
@@ -53,6 +54,85 @@ import type { ModelDefinition } from '../models.js';
 import { generateWithGeminiContextCache } from './gemini-context-cache.js';
 
 type GoogleApiErrorLike = Pick<ApiError, 'status' | 'message'>;
+type GeminiFinishReasonHandling = { message: string; retryable: boolean };
+
+const geminiFinishReasonHandling: Partial<Record<FinishReason, GeminiFinishReasonHandling>> = {
+    [FinishReason.SAFETY]: {
+        message: 'Gemini blocked the response because it may violate safety policies.',
+        retryable: false,
+    },
+    [FinishReason.RECITATION]: {
+        message: 'Gemini blocked the response because it may reproduce protected source material.',
+        retryable: false,
+    },
+    [FinishReason.LANGUAGE]: {
+        message: 'Gemini stopped because the response used an unsupported language.',
+        retryable: false,
+    },
+    [FinishReason.BLOCKLIST]: {
+        message: 'Gemini blocked the response because it contains a forbidden term.',
+        retryable: false,
+    },
+    [FinishReason.PROHIBITED_CONTENT]: {
+        message: 'Gemini blocked the response because it may contain prohibited content.',
+        retryable: false,
+    },
+    [FinishReason.SPII]: {
+        message: 'Gemini blocked the response because it may contain sensitive personal information.',
+        retryable: false,
+    },
+    [FinishReason.IMAGE_SAFETY]: {
+        message: 'Gemini blocked the generated image because it may violate safety policies.',
+        retryable: false,
+    },
+    [FinishReason.IMAGE_PROHIBITED_CONTENT]: {
+        message: 'Gemini blocked the generated image because it may contain prohibited content.',
+        retryable: false,
+    },
+    [FinishReason.IMAGE_RECITATION]: {
+        message: 'Gemini blocked the generated image because it may reproduce protected source material.',
+        retryable: false,
+    },
+    [FinishReason.MALFORMED_FUNCTION_CALL]: {
+        message: 'Gemini generated an invalid function call.',
+        retryable: true,
+    },
+    [FinishReason.NO_IMAGE]: { message: 'Gemini did not generate the requested image.', retryable: true },
+    [FinishReason.IMAGE_OTHER]: {
+        message: 'Gemini stopped image generation for an unspecified reason.',
+        retryable: true,
+    },
+    [FinishReason.OTHER]: { message: 'Gemini stopped generation for an unspecified reason.', retryable: true },
+};
+
+class GeminiFinishReasonError extends Error {
+    readonly retryable: boolean | undefined;
+
+    constructor(
+        readonly finishReason: FinishReason,
+        readonly finishMessage?: string,
+        readonly safetyRatings?: SafetyRating[],
+    ) {
+        super(formatGeminiFinishReasonErrorMessage(finishReason, finishMessage, safetyRatings));
+        this.name = 'GeminiFinishReasonError';
+        this.retryable = geminiFinishReasonHandling[finishReason]?.retryable;
+    }
+}
+
+function formatGeminiFinishReasonErrorMessage(
+    finishReason: FinishReason,
+    finishMessage?: string,
+    safetyRatings?: SafetyRating[],
+): string {
+    const summary =
+        geminiFinishReasonHandling[finishReason]?.message ??
+        'Gemini stopped generation with an unsupported finish reason.';
+
+    const details = [`${summary} Finish reason: ${finishReason}.`];
+    if (finishMessage) details.push(`Finish message: ${finishMessage}.`);
+    if (safetyRatings?.length) details.push(`Safety ratings: ${JSON.stringify(safetyRatings)}.`);
+    return details.join(' ');
+}
 
 function supportsStructuredOutput(options: PromptOptions): boolean {
     // Gemini 1.0 Ultra does not support JSON output, 1.0 Pro does.
@@ -405,9 +485,23 @@ const supportedFinishReasons: FinishReason[] = [
 // Finish reasons that indicate tool call issues but should be recovered gracefully
 // instead of throwing an error. The tool_use is still extracted and returned
 // so the workflow can generate a proper toolError response.
-const recoverableToolCallReasons = [
-    'UNEXPECTED_TOOL_CALL', // Model called an undeclared tool
-];
+const recoverableToolCallReasons = [FinishReason.UNEXPECTED_TOOL_CALL];
+
+function isRecoverableGeminiFinishReason(finishReason: FinishReason | undefined): boolean {
+    return finishReason !== undefined && recoverableToolCallReasons.includes(finishReason);
+}
+
+function assertSupportedGeminiFinishReason(candidate: {
+    finishReason?: FinishReason;
+    finishMessage?: string;
+    safetyRatings?: SafetyRating[];
+}): boolean {
+    const isRecoverableToolCall = isRecoverableGeminiFinishReason(candidate.finishReason);
+    if (candidate.finishReason && !supportedFinishReasons.includes(candidate.finishReason) && !isRecoverableToolCall) {
+        throw new GeminiFinishReasonError(candidate.finishReason, candidate.finishMessage, candidate.safetyRatings);
+    }
+    return isRecoverableToolCall;
+}
 
 function geminiThinkingLevelForEffort(effort: VertexAIGeminiOptions['effort']): ThinkingLevel | undefined {
     switch (effort) {
@@ -725,19 +819,9 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             }
             const content = candidate.content;
 
-            // Check for unsupported finish reasons, but allow recoverable tool call issues
-            const isRecoverableToolCall = recoverableToolCallReasons.includes(candidate.finishReason as string);
-            if (
-                candidate.finishReason &&
-                !supportedFinishReasons.includes(candidate.finishReason) &&
-                !isRecoverableToolCall
-            ) {
-                throw new Error(
-                    `Unsupported finish reason: ${candidate.finishReason}, ` +
-                        `finish message: ${candidate.finishMessage}, ` +
-                        `content: ${JSON.stringify(content, null, 2)}, safety: ${JSON.stringify(candidate.safetyRatings, null, 2)}`,
-                );
-            }
+            // Provider finish reasons are terminal responses, not transport failures. Classify them
+            // explicitly while allowing recoverable tool-call issues to continue through the workflow.
+            const isRecoverableToolCall = assertSupportedGeminiFinishReason(candidate);
 
             if (content) {
                 tool_use = collectToolUseParts(content);
@@ -838,19 +922,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                         default:
                             finish_reason = candidate.finishReason;
                     }
-                    // Check for unsupported finish reasons, but allow recoverable tool call issues
-                    const isRecoverableToolCall = recoverableToolCallReasons.includes(candidate.finishReason as string);
-                    if (
-                        candidate.finishReason &&
-                        !supportedFinishReasons.includes(candidate.finishReason) &&
-                        !isRecoverableToolCall
-                    ) {
-                        throw new Error(
-                            `Unsupported finish reason: ${candidate.finishReason}, ` +
-                                `finish message: ${candidate.finishMessage}, ` +
-                                `content: ${JSON.stringify(candidate.content, null, 2)}, safety: ${JSON.stringify(candidate.safetyRatings, null, 2)}`,
-                        );
-                    }
+                    const isRecoverableToolCall = assertSupportedGeminiFinishReason(candidate);
                     if (candidate.content?.role === 'model') {
                         appendGeminiStreamParts(nativeParts, candidate.content.parts ?? []);
                         // Collect all parts in order (text and images)
@@ -922,6 +994,17 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
      * @see https://docs.cloud.google.com/vertex-ai/generative-ai/docs/model-reference/api-errors
      */
     formatLlumiverseError(_driver: VertexAIDriver, error: unknown, context: LlumiverseErrorContext): LlumiverseError {
+        if (error instanceof GeminiFinishReasonError) {
+            return new LlumiverseError(
+                `[${context.provider}] ${error.message}`,
+                error.retryable,
+                context,
+                error,
+                undefined,
+                error.finishReason,
+            );
+        }
+
         // Check if it's a Google API error with status code
         const isApiError = this.isGoogleApiError(error);
 
