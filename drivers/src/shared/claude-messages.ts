@@ -36,7 +36,12 @@ import type {
 import type { MessageStreamParams } from '@anthropic-ai/sdk/resources/index.mjs';
 import type { MessageCreateParamsBase, RawMessageStreamEvent } from '@anthropic-ai/sdk/resources/messages.js';
 import type AnthropicVertex from '@anthropic-ai/vertex-sdk';
-import { getClaudeMaxTokensLimit } from '@llumiverse/common';
+import {
+    AGENT_PROMPT_CACHE_KEY_PREFIX,
+    getClaudeMaxTokensLimit,
+    JSON_SCHEMA_INSTRUCTION_PREFIX,
+    TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX,
+} from '@llumiverse/common';
 import {
     type Completion,
     type CompletionChunkObject,
@@ -76,12 +81,11 @@ import { truncateBinaryForDebug } from './debug-prompt.js';
 // below — so long agent conversations don't balloon context.
 const KEEP_RECENT_MESSAGES = 12;
 const OLD_MESSAGE_TEXT_MAX_TOKENS = 2000;
-const AGENT_PROMPT_CACHE_KEY_PREFIX = 'agent-';
 const AGENT_MESSAGE_CACHE_BLOCK_INTERVAL = 12;
 const MAX_CLAUDE_CACHE_BREAKPOINTS = 4;
 const RESULT_SCHEMA_INSTRUCTION_PREFIXES = [
-    'When not calling tools, the answer must be a JSON object using the following JSON Schema:',
-    'The answer must be a JSON object using the following JSON Schema:',
+    TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX,
+    JSON_SCHEMA_INSTRUCTION_PREFIX,
 ] as const;
 
 export function isClaudePromptCacheEnabled(options: ExecutionOptions): boolean {
@@ -372,8 +376,8 @@ export async function formatClaudePrompt(
     if (options.result_schema) {
         schemaText =
             options.tools && options.tools.length > 0
-                ? `When not calling tools, the answer must be a JSON object using the following JSON Schema:\n${JSON.stringify(options.result_schema)}`
-                : `The answer must be a JSON object using the following JSON Schema:\n${JSON.stringify(options.result_schema)}`;
+                ? `${TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX}\n${JSON.stringify(options.result_schema)}`
+                : `${JSON_SCHEMA_INSTRUCTION_PREFIX}\n${JSON.stringify(options.result_schema)}`;
         if (options.prompt_cache_key === undefined) {
             system.push({ text: schemaText, type: 'text' as const });
         }
