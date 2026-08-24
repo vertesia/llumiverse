@@ -1,5 +1,4 @@
-// biome-ignore lint/suspicious/noDeprecatedImports: Modalities.image is the supported way to request image output; the deprecation note refers to reading the result modality via CompletionResult.type
-import { type AbstractDriver, type ExecutionOptions, Modalities } from '@llumiverse/core';
+import type { AbstractDriver, ExecutionOptions } from '@llumiverse/core';
 import 'dotenv/config';
 import fs from 'node:fs';
 import { describe, expect, test } from 'vitest';
@@ -14,6 +13,7 @@ interface TestDriver {
 }
 
 const drivers: TestDriver[] = [];
+const imageOutputModality = 'image' as NonNullable<ExecutionOptions['output_modality']>;
 
 if (process.env.BEDROCK_REGION) {
     drivers.push({
@@ -33,7 +33,7 @@ describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => 
     test('generate a prompt Nova canvas', async () => {
         const options: ExecutionOptions = {
             model: 'amazon.nova-canvas-v1:0',
-            output_modality: Modalities.image,
+            output_modality: imageOutputModality,
             model_options: {
                 _option_id: 'bedrock-nova-canvas',
                 taskType: 'TEXT_IMAGE',
@@ -55,7 +55,7 @@ describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => 
 
         const options: ExecutionOptions = {
             model: model,
-            output_modality: Modalities.image,
+            output_modality: imageOutputModality,
             model_options: {
                 _option_id: 'bedrock-nova-canvas',
                 taskType: 'TEXT_IMAGE',
@@ -77,7 +77,7 @@ describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => 
 
         const options: ExecutionOptions = {
             model: model,
-            output_modality: Modalities.image,
+            output_modality: imageOutputModality,
             model_options: {
                 _option_id: 'bedrock-nova-canvas',
                 taskType: 'TEXT_IMAGE',
@@ -97,7 +97,7 @@ describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => 
     test.each(models)(`${name}: text to image variation`, { timeout: 300 * 1000 }, async (model) => {
         const options: ExecutionOptions = {
             model: model,
-            output_modality: Modalities.image,
+            output_modality: imageOutputModality,
             model_options: {
                 _option_id: 'bedrock-nova-canvas',
                 taskType: 'IMAGE_VARIATION',
