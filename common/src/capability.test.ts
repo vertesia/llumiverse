@@ -69,6 +69,17 @@ describe('xAI Grok tool capabilities', () => {
     });
 });
 
+describe('Gemini Omni video capabilities', () => {
+    it('exposes only text/image input and video output', () => {
+        expect(getModelCapabilities('gemini-omni-flash-preview', Providers.vertexai)).toEqual({
+            input: { text: true, image: true, video: false, audio: false, embed: false },
+            output: { text: false, image: false, video: true, audio: false, embed: false },
+            tool_support: false,
+            tool_support_streaming: false,
+        });
+    });
+});
+
 describe('supportsToolUse streaming default', () => {
     it('falls back to tool_support when tool_support_streaming is unset', () => {
         // Vertex Grok records tool_support but not tool_support_streaming

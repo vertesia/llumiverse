@@ -8,4 +8,11 @@ describe('CompletionResultSchema', () => {
             value: 'Reasoning summary',
         });
     });
+
+    it('accepts a provider-neutral video result', () => {
+        expect(CompletionResultSchema.parse({ type: 'video', value: 'gs://bucket/video.mp4' })).toEqual({
+            type: 'video',
+            value: 'gs://bucket/video.mp4',
+        });
+    });
 });

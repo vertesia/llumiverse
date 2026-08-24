@@ -1,5 +1,9 @@
 import type { z } from 'zod';
-import type { ExecutionTokenUsageSchema, StatelessExecutionOptionsSchema } from './schemas/completion.js';
+import type {
+    ExecutionTokenUsageSchema,
+    PromptCacheModeSchema,
+    StatelessExecutionOptionsSchema,
+} from './schemas/completion.js';
 import type {
     EmbeddingOutputSchema,
     EmbeddingResultItemSchema,
@@ -362,7 +366,7 @@ export class LlumiverseError extends Error {
 // ============== Result Types ===============
 
 export interface BaseResult {
-    type: 'text' | 'thoughts' | 'json' | 'image';
+    type: 'text' | 'thoughts' | 'json' | 'image' | 'video';
     value: unknown;
 }
 
@@ -387,10 +391,15 @@ export interface ImageResult extends BaseResult {
     value: string; // base64 data url or real url
 }
 
+export interface VideoResult extends BaseResult {
+    type: 'video';
+    value: string;
+}
+
 /**
  * @discriminator type
  */
-export type CompletionResult = TextResult | ThoughtsResult | JsonResult | ImageResult;
+export type CompletionResult = TextResult | ThoughtsResult | JsonResult | ImageResult | VideoResult;
 
 //Internal structure used in driver implementation.
 export interface CompletionChunkObject {
@@ -583,6 +592,12 @@ export interface PromptOptions {
 // drivers are unaffected.
 export type StatelessExecutionOptions = z.infer<typeof StatelessExecutionOptionsSchema>;
 
+/**
+ * How a driver may use a provider-side *explicit* prompt cache for one execution.
+ * See {@link ExecutionOptionsBase.prompt_cache_mode}.
+ */
+export type PromptCacheMode = z.infer<typeof PromptCacheModeSchema>;
+
 export interface ExecutionOptionsBase extends PromptOptions {
     /**
      * If set to true the original response from the target LLM will be included in the response under the original_response field.
@@ -600,6 +615,23 @@ export interface ExecutionOptionsBase extends PromptOptions {
     prompt_cache_key?: string;
 
     /**
+     * Controls provider-side *explicit* caches — cache resources the driver creates and reuses
+     * (e.g. Vertex `cachedContents`), as opposed to breakpoints or implicit prefix matching.
+     *
+     * - `auto` (default): a provider that has an explicit cache API caches the static prefix
+     *   whenever `prompt_cache_key` is set. Without a key nothing is created.
+     * - `off`: never create or use a provider-side cache resource for this execution. Implicit
+     *   caching and cache breakpoints are unaffected, and the provider payload is unchanged.
+     */
+    prompt_cache_mode?: PromptCacheMode;
+
+    /**
+     * Lifetime, in seconds, of a provider-side cache resource created for this execution.
+     * Defaults to 1800 (30 minutes). Ignored by providers without an explicit cache API.
+     */
+    prompt_cache_ttl_seconds?: number;
+
+    /**
      * Per-call HTTP timeouts for upstream LLM-provider calls. These override
      * the driver's default `DriverOptions.httpTimeout` for this execution only.
      */
@@ -612,6 +644,11 @@ export interface ExecutionOptionsBase extends PromptOptions {
 }
 
 export interface ExecutionOptions extends ExecutionOptionsBase {
+    /**
+     * Provider output prefix for generated media. This is prepared internally and is intentionally
+     * absent from StatelessExecutionOptions so API callers cannot select an arbitrary bucket.
+     */
+    output_storage_uri?: string;
     /**
      * Available tools for the request
      */

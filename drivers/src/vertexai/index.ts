@@ -35,7 +35,9 @@ import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { generateVertexAiEmbeddings } from './embeddings/embed.js';
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
 import { formatGeminiDebugPrompt } from './models/gemini.js';
+import { GeminiContextCacheManager } from './models/gemini-context-cache.js';
 import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
+import { GEMINI_OMNI_VIDEO_MODEL, type OmniVideoPrompt } from './models/omni-video.js';
 import { getModelDefinition, trimModelName } from './models.js';
 import { getListedVertexOpenMaaSModels } from './open-maas-models.js';
 
@@ -43,6 +45,18 @@ export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
     region: string;
     googleAuthOptions?: GoogleAuthOptions;
+    /**
+     * Kill switch for explicit Gemini context caching (Vertex `cachedContents`). Caching is normally
+     * decided per execution — see `ExecutionOptions.prompt_cache_mode`, which defaults to caching the
+     * static prefix whenever `prompt_cache_key` is set. Setting this to `false` disables the whole
+     * path for every execution this driver runs, whatever the execution options say.
+     */
+    geminiContextCache?: boolean;
+    /**
+     * Default lifetime, in seconds, of the `cachedContents` resources this driver creates.
+     * Defaults to 1800 (30 minutes). `ExecutionOptions.prompt_cache_ttl_seconds` overrides it per call.
+     */
+    geminiContextCacheTtlSeconds?: number;
 }
 
 export interface GenerateContentPrompt {
@@ -69,7 +83,12 @@ function isClaudeStreamingPrompt(prompt: unknown): prompt is ClaudeStreamingProm
 }
 
 //General Prompt type for VertexAI
-export type VertexAIPrompt = ImagenPrompt | GenerateContentPrompt | ClaudePrompt | OpenAIChatCompletionsPrompt;
+export type VertexAIPrompt =
+    | ImagenPrompt
+    | OmniVideoPrompt
+    | GenerateContentPrompt
+    | ClaudePrompt
+    | OpenAIChatCompletionsPrompt;
 
 export { trimModelName };
 
@@ -90,6 +109,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
     googleAuth: GoogleAuth<AuthClient>;
     private authClientPromise: Promise<AuthClient> | undefined;
+    private geminiContextCacheManager: GeminiContextCacheManager | undefined;
 
     constructor(options: VertexAIDriverOptions) {
         super(options);
@@ -106,6 +126,27 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
         this.googleAuth = new GoogleAuth(options.googleAuthOptions);
         this.authClientPromise = undefined;
+        this.geminiContextCacheManager = undefined;
+    }
+
+    /**
+     * Registry of the Vertex `cachedContents` resources this driver instance has created, used by the
+     * Gemini execution path to find-or-create the cache for an execution's `prompt_cache_key`.
+     * Returns `undefined` when the driver-level kill switch is off, which keeps the Gemini payload
+     * exactly as it is built today.
+     *
+     * The registry is per instance on purpose. Two instances create two resources for the same
+     * prefix; the duplicate expires on its own TTL and costs only storage rent for that window,
+     * which is far cheaper than the coordination a shared registry would need.
+     */
+    public getGeminiContextCacheManager(): GeminiContextCacheManager | undefined {
+        if (this.options.geminiContextCache === false) return undefined;
+        if (!this.geminiContextCacheManager) {
+            this.geminiContextCacheManager = new GeminiContextCacheManager({
+                ttlSeconds: this.options.geminiContextCacheTtlSeconds,
+            });
+        }
+        return this.geminiContextCacheManager;
     }
 
     /**
@@ -114,6 +155,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
      */
     protected override destroyProviderResources(): Promise<void> {
         const clients = [this.aiplatform, this.modelGarden, this.imagenClient, this.predictionClient];
+        // Dropping the registry only forfeits reuse: the cachedContents resources it names live
+        // server-side and expire on their own TTL.
+        this.geminiContextCacheManager = undefined;
         this.aiplatform = undefined;
         this.modelGarden = undefined;
         this.imagenClient = undefined;
@@ -228,6 +272,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
             this.regionOverrideClients.set(cacheKey, client);
         }
         return client;
+    }
+
+    public getRequestTimeoutMs(httpTimeout?: HttpTimeoutOptions): number {
+        return this.getDriverRequestTimeoutMs(httpTimeout);
     }
 
     public async getAnthropicClient(
@@ -350,6 +398,9 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         if ('messages' in prompt) {
             return prompt;
         }
+        if ('text' in prompt && 'images' in prompt) {
+            return prompt;
+        }
         return formatImagenDebugPrompt(prompt);
     }
 
@@ -414,6 +465,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                         return typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
                     case 'image':
                         // Skip images in conversation - they're in the result
+                        return '';
+                    case 'video':
                         return '';
                     default: {
                         const _exhaustive: never = r;
@@ -516,6 +569,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                     case 'json':
                         return typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
                     case 'image':
+                        return '';
+                    case 'video':
                         return '';
                     default: {
                         const _exhaustive: never = r;
@@ -641,7 +696,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 ],
                 /** Additional models not in the listings, but we want to include.
                  * TODO: Remove once available in listing API. */
-                additional: ['imagen-3.0-fast-generate-001'],
+                additional: ['imagen-3.0-fast-generate-001', 'gemini-omni-flash-preview'],
             },
             anthropic: {
                 families: ['claude'],
@@ -740,7 +795,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                     })
                     .map((model) => {
                         const rawModelId = model.name ?? '';
-                        const isGlobalOnlyPublisher = publisher === 'xai';
+                        const isGlobalOnlyPublisher = isGlobalOnlyPublisherModel(publisher, rawModelId);
                         const listedModelId = isGlobalOnlyPublisher ? `locations/global/${rawModelId}` : rawModelId;
                         const modelMetadata = resolveModelListingMetadata(listedModelId, Providers.vertexai);
                         return {
@@ -829,11 +884,12 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 
             // Add additional models that are not in the listing
             for (const additionalModel of publisherConfig[publisher as Publisher].additional) {
-                const publisherModelName = `publishers/${publisher}/models/${additionalModel}`;
+                const rawModelId = `publishers/${publisher}/models/${additionalModel}`;
+                const isGlobalOnlyPublisher = isGlobalOnlyPublisherModel(publisher, rawModelId);
                 const modelMetadata = resolveModelListingMetadata(additionalModel, Providers.vertexai);
                 models.push({
-                    id: publisherModelName,
-                    name: additionalModel,
+                    id: isGlobalOnlyPublisher ? `locations/global/${rawModelId}` : rawModelId,
+                    name: isGlobalOnlyPublisher ? `Global ${additionalModel}` : additionalModel,
                     provider: 'vertexai',
                     owner: publisher,
                     ...modelMetadata,
@@ -887,8 +943,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 }
 
+function isGlobalOnlyPublisherModel(publisher: string, modelId: string): boolean {
+    return publisher === 'xai' || (publisher === 'google' && modelId.endsWith(`/models/${GEMINI_OMNI_VIDEO_MODEL}`));
+}
+
 function isExecutableGoogleModel(model: Model): boolean {
     const modelName = (model.name ?? '').toLowerCase();
+    if (modelName.endsWith('/gemini-omni-flash-preview') || modelName === 'gemini-omni-flash-preview') return true;
     // Intentional execution-path allow-list: Vertex uses separate methods for embeddings, Live/TTS, music and video.
     // This driver currently implements generateContent and generateImages. Unknown actions are excluded only when
     // Google supplies them; absent action metadata falls back to the known-family/name policy above.

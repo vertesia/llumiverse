@@ -9,6 +9,15 @@ export function getModelCapabilities(model: string, provider: Providers): ModelC
             model = parts.slice(2).join('/');
         }
     }
+    const modelName = model.split('/').pop()?.toLowerCase();
+    if (provider === 'vertexai' && modelName === 'gemini-omni-flash-preview') {
+        return {
+            input: { text: true, image: true, video: false, audio: false, embed: false },
+            output: { text: false, image: false, video: true, audio: false, embed: false },
+            tool_support: false,
+            tool_support_streaming: false,
+        };
+    }
     const capabilities = resolveModelProfile(model, provider).capabilities;
     // The platform accepts audio/video inputs but cannot return those modalities yet. Keep source output metadata in
     // the directory so enabling output support later only requires removing this execution-path mask.

@@ -292,16 +292,16 @@ describe('OpenAIChatCompletionsModelDefinition', () => {
         ]);
     });
 
-    it('uses response_format with normalized JSON schema for structured Vertex MaaS output', async () => {
+    it('uses strict response_format for structured Vertex GPT output', async () => {
         const modelDef = new OpenAIChatCompletionsModelDefinition({
-            modelName: 'zai-org/glm-5-maas',
+            modelName: 'openai/gpt-oss-120b-maas',
             region: 'global',
         });
         const post = vi.fn(async () => ({
             id: 'chatcmpl-1',
             object: 'chat.completion',
             created: 1,
-            model: 'zai-org/glm-5-maas',
+            model: 'openai/gpt-oss-120b-maas',
             choices: [
                 {
                     index: 0,
@@ -321,11 +321,13 @@ describe('OpenAIChatCompletionsModelDefinition', () => {
             messages: [{ role: 'user', content: 'Hello' }],
         };
         const options: ExecutionOptions = {
-            model: 'locations/global/publishers/zai-org/models/glm-5-maas',
+            model: 'locations/global/publishers/openai/models/gpt-oss-120b-maas',
             model_options: { _option_id: 'text-fallback' },
             result_schema: {
                 type: 'object',
                 properties: { answer: { type: 'string' } },
+                required: ['answer'],
+                additionalProperties: false,
             },
         };
 

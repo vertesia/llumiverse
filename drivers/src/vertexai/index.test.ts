@@ -26,6 +26,7 @@ class TestVertexAIDriver extends VertexAIDriver {
                     return [
                         [
                             { name: 'publishers/google/models/gemini-4-future' },
+                            { name: 'publishers/google/models/gemini-omni-flash-preview' },
                             { name: 'publishers/google/models/gemini-live-future' },
                             { name: 'publishers/google/models/gemini-4-tts' },
                         ],
@@ -52,6 +53,18 @@ describe('VertexAIDriver listModels', () => {
 
         expect(modelIds).toContain('locations/global/publishers/xai/models/grok-4.1');
         expect(modelIds).not.toContain('publishers/xai/models/grok-4.1');
+    });
+
+    it('lists Gemini Omni only with its global location id', async () => {
+        const models = await new TestVertexAIDriver().listModels();
+        const omniModels = models.filter((model) => model.id.includes('gemini-omni-flash-preview'));
+
+        expect(omniModels).toEqual([
+            expect.objectContaining({
+                id: 'locations/global/publishers/google/models/gemini-omni-flash-preview',
+                name: 'Global gemini-omni-flash-preview',
+            }),
+        ]);
     });
 
     it('uses supported actions to keep only models executable by the implemented Google paths', async () => {
