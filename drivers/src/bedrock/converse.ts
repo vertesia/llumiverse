@@ -6,6 +6,7 @@ import {
     type SystemContentBlock,
     type ToolResultContentBlock,
 } from '@aws-sdk/client-bedrock-runtime';
+import { JSON_SCHEMA_INSTRUCTION_PREFIX, TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX } from '@llumiverse/common';
 import {
     type DataSource,
     type ExecutionOptions,
@@ -468,9 +469,9 @@ export async function formatConversePrompt(
     if (options.result_schema && shouldIncludeSchemaInConversePrompt(options.model)) {
         let schemaText: string;
         if (options.tools && options.tools.length > 0) {
-            schemaText = `When not calling tools, the answer must be a JSON object using the following JSON Schema:\n${JSON.stringify(options.result_schema, undefined, 2)}`;
+            schemaText = `${TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX}\n${JSON.stringify(options.result_schema, undefined, 2)}`;
         } else {
-            schemaText = `The answer must be a JSON object using the following JSON Schema:\n${JSON.stringify(options.result_schema, undefined, 2)}`;
+            schemaText = `${JSON_SCHEMA_INSTRUCTION_PREFIX}\n${JSON.stringify(options.result_schema, undefined, 2)}`;
         }
         const schemaInstruction = `IMPORTANT: ${schemaText}`;
         const taskMessage = messages[messages.length - 1];

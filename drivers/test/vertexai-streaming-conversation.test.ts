@@ -77,4 +77,47 @@ describe('VertexAI streaming conversation rebuild', () => {
         expect(conversation.messages[1].content[0].text).toBe('continue');
         expect(conversation.messages[2].content[0].text).toBe('response');
     });
+
+    test('Claude streaming path keeps a cached prefix immutable across appended tool turns', () => {
+        const driver = new VertexAIDriver({ project: 'test', region: 'us-central1' });
+        const largeToolResult = `SOURCE:${'x'.repeat(12_000)}`;
+        const existing = {
+            messages: [
+                { role: 'assistant', content: [{ type: 'tool_use', id: 'read-1', name: 'read', input: {} }] },
+                { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'read-1', content: largeToolResult }] },
+            ],
+            system: [{ type: 'text', text: 'system' }],
+        };
+        const options = {
+            model: 'publishers/anthropic/models/claude-sonnet-4-6',
+            model_options: { cache_enabled: true },
+            stripTextMaxTokens: 2_000,
+            conversation: existing,
+        } as ExecutionOptions;
+
+        const first = driver.buildStreamingConversation(
+            {
+                messages: [{ role: 'assistant', content: [{ type: 'text', text: 'continue' }] }],
+            } as unknown as VertexAIPrompt,
+            [],
+            [{ id: 'tool-2', tool_name: 'app_workspace_edit', tool_input: { path: 'src/App.tsx' } }],
+            options,
+        ) as unknown as Tree;
+        const second = driver.buildStreamingConversation(
+            {
+                messages: [
+                    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tool-2', content: 'edited' }] },
+                ],
+            } as unknown as VertexAIPrompt,
+            [],
+            [{ id: 'tool-3', tool_name: 'app_workspace_typecheck', tool_input: {} }],
+            { ...options, conversation: first },
+        ) as unknown as Tree;
+
+        const firstMessages = first.messages as unknown as unknown[];
+        const secondMessages = second.messages as unknown as unknown[];
+        expect(JSON.stringify(firstMessages)).toContain(largeToolResult);
+        expect(secondMessages.slice(0, firstMessages.length)).toEqual(firstMessages);
+        expect(JSON.stringify(secondMessages.slice(0, firstMessages.length))).toBe(JSON.stringify(firstMessages));
+    });
 });
