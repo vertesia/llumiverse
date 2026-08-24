@@ -1,5 +1,9 @@
-// biome-ignore lint/suspicious/noDeprecatedImports: Modalities.image is the supported way to request image output; the deprecation note refers to reading the result modality via CompletionResult.type
-import { type AbstractDriver, type ExecutionOptions, Modalities } from '@llumiverse/core';
+import {
+    type AbstractDriver,
+    type ExecutionOptions,
+    // biome-ignore lint/suspicious/noDeprecatedImports: Modalities.image remains the supported image request option
+    Modalities,
+} from '@llumiverse/core';
 import 'dotenv/config';
 import fs from 'node:fs';
 import { describe, expect, test } from 'vitest';
