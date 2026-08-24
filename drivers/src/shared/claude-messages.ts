@@ -36,7 +36,12 @@ import type {
 import type { MessageStreamParams } from '@anthropic-ai/sdk/resources/index.mjs';
 import type { MessageCreateParamsBase, RawMessageStreamEvent } from '@anthropic-ai/sdk/resources/messages.js';
 import type AnthropicVertex from '@anthropic-ai/vertex-sdk';
-import { getClaudeMaxTokensLimit } from '@llumiverse/common';
+import {
+    AGENT_PROMPT_CACHE_KEY_PREFIX,
+    getClaudeMaxTokensLimit,
+    JSON_SCHEMA_INSTRUCTION_PREFIX,
+    TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX,
+} from '@llumiverse/common';
 import {
     type Completion,
     type CompletionChunkObject,
@@ -76,6 +81,62 @@ import { truncateBinaryForDebug } from './debug-prompt.js';
 // below — so long agent conversations don't balloon context.
 const KEEP_RECENT_MESSAGES = 12;
 const OLD_MESSAGE_TEXT_MAX_TOKENS = 2000;
+const AGENT_MESSAGE_CACHE_BLOCK_INTERVAL = 12;
+const MAX_CLAUDE_CACHE_BREAKPOINTS = 4;
+const RESULT_SCHEMA_INSTRUCTION_PREFIXES = [
+    TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX,
+    JSON_SCHEMA_INSTRUCTION_PREFIX,
+] as const;
+
+export function isClaudePromptCacheEnabled(options: ExecutionOptions): boolean {
+    const modelOptions = options.model_options as ClaudeBaseOptions | undefined;
+    return options.prompt_cache_key !== undefined || modelOptions?.cache_enabled === true;
+}
+
+function isAgentPromptCacheKey(promptCacheKey: string | undefined): boolean {
+    return promptCacheKey?.startsWith(AGENT_PROMPT_CACHE_KEY_PREFIX) === true;
+}
+
+function isResultSchemaSystemBlock(block: TextBlockParam): boolean {
+    return block.type === 'text' && RESULT_SCHEMA_INSTRUCTION_PREFIXES.some((prefix) => block.text.startsWith(prefix));
+}
+
+function mergeClaudeSystemBlocks(base: TextBlockParam[], additions: TextBlockParam[]): TextBlockParam[] {
+    if (!additions.some(isResultSchemaSystemBlock)) return base.concat(additions);
+
+    // Agent tool continuations carry result_schema on every request. Replacing
+    // the prior generated schema block keeps the system prefix byte-stable and
+    // also repairs conversations persisted by older workers, which accumulated
+    // one identical ~3.5 KB schema block per tool iteration.
+    const combined = base.concat(additions);
+    const latestSchemaIndex = combined.findLastIndex(isResultSchemaSystemBlock);
+    return combined.filter((block, index) => !isResultSchemaSystemBlock(block) || index === latestSchemaIndex);
+}
+
+function addAgentMessageCacheBreakpoints(
+    messages: MessageParam[],
+    cacheControl: { type: 'ephemeral'; ttl?: '5m' | '1h' },
+): boolean {
+    let cacheableBlockIndex = 0;
+    let breakpointCount = 0;
+
+    for (const message of messages) {
+        if (!Array.isArray(message.content)) continue;
+
+        for (const block of message.content) {
+            if (block.type === 'thinking' || block.type === 'redacted_thinking') continue;
+
+            if (cacheableBlockIndex === breakpointCount * AGENT_MESSAGE_CACHE_BLOCK_INTERVAL) {
+                block.cache_control = cacheControl;
+                breakpointCount++;
+                if (breakpointCount === MAX_CLAUDE_CACHE_BREAKPOINTS) return true;
+            }
+            cacheableBlockIndex++;
+        }
+    }
+
+    return breakpointCount > 0;
+}
 
 interface WarnLogger {
     warn: (data: Record<string, unknown>, message: string) => void;
@@ -315,8 +376,8 @@ export async function formatClaudePrompt(
     if (options.result_schema) {
         schemaText =
             options.tools && options.tools.length > 0
-                ? `When not calling tools, the answer must be a JSON object using the following JSON Schema:\n${JSON.stringify(options.result_schema)}`
-                : `The answer must be a JSON object using the following JSON Schema:\n${JSON.stringify(options.result_schema)}`;
+                ? `${TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX}\n${JSON.stringify(options.result_schema)}`
+                : `${JSON_SCHEMA_INSTRUCTION_PREFIX}\n${JSON.stringify(options.result_schema)}`;
         if (options.prompt_cache_key === undefined) {
             system.push({ text: schemaText, type: 'text' as const });
         }
@@ -369,14 +430,22 @@ export async function formatClaudePrompt(
     }
 
     if (schemaText && options.prompt_cache_key !== undefined) {
-        const taskMessage = messages[messages.length - 1];
-        const taskBlock = Array.isArray(taskMessage?.content)
-            ? taskMessage.content[taskMessage.content.length - 1]
-            : undefined;
-        if (taskBlock?.type === 'text') {
-            taskBlock.text = `${taskBlock.text}\n\n${schemaText}`;
-        } else {
+        if (isAgentPromptCacheKey(options.prompt_cache_key)) {
+            // Agent result schemas are stable for the whole tool loop. Keep one
+            // generated system block rather than appending the same schema to
+            // every persisted continuation prompt. Routed one-shot prompts keep
+            // the schema on their dynamic task block below.
             system.push({ text: schemaText, type: 'text' as const });
+        } else {
+            const taskMessage = messages[messages.length - 1];
+            const taskBlock = Array.isArray(taskMessage?.content)
+                ? taskMessage.content[taskMessage.content.length - 1]
+                : undefined;
+            if (taskBlock?.type === 'text') {
+                taskBlock.text = `${taskBlock.text}\n\n${schemaText}`;
+            } else {
+                system.push({ text: schemaText, type: 'text' as const });
+            }
         }
     }
 
@@ -554,7 +623,7 @@ export function updateClaudeConversation(
 ): ClaudePrompt {
     const baseSystemMessages = conversation?.system || [];
     const baseMessages = conversation?.messages || [];
-    const system = baseSystemMessages.concat(prompt.system || []);
+    const system = mergeClaudeSystemBlocks(baseSystemMessages, prompt.system || []);
     const combined = sanitizeMessages(baseMessages.concat(prompt.messages || []));
     const mergedMessages = mergeConsecutiveUserMessages(combined);
     return {
@@ -730,22 +799,32 @@ export function getClaudePayload(
         ? stripClaudeCacheControlFromTools(options.tools as MessageCreateParamsBase['tools'])
         : undefined;
 
-    const cacheEnabled = options.prompt_cache_key !== undefined || model_options?.cache_enabled === true;
+    const cacheEnabled = isClaudePromptCacheEnabled(options);
     if (cacheEnabled) {
         const cacheTtl = model_options?.cache_ttl as '5m' | '1h' | undefined;
         const cacheControl = { type: 'ephemeral' as const, ...(cacheTtl && { ttl: cacheTtl }) };
 
-        if (sanitizedSystem && sanitizedSystem.length > 0) {
+        // Vertex requires cache_control to remain on the same blocks across
+        // requests. Agent conversations therefore use fixed block ordinals:
+        // each newly reached breakpoint extends the cached prefix without
+        // relocating or deleting an earlier breakpoint. Four message markers
+        // also cache the preceding system and tool definitions, while covering
+        // the growing tool loop until the next semantic checkpoint.
+        const hasAgentMessageBreakpoints =
+            isAgentPromptCacheKey(options.prompt_cache_key) &&
+            addAgentMessageCacheBreakpoints(sanitizedMessages, cacheControl);
+
+        if (!hasAgentMessageBreakpoints && sanitizedSystem && sanitizedSystem.length > 0) {
             const lastBlock = sanitizedSystem[sanitizedSystem.length - 1] as TextBlockParam & {
                 cache_control?: unknown;
             };
             lastBlock.cache_control = cacheControl;
         }
-        if (sanitizedTools && sanitizedTools.length > 0) {
+        if (!hasAgentMessageBreakpoints && sanitizedTools && sanitizedTools.length > 0) {
             const lastTool = sanitizedTools[sanitizedTools.length - 1] as ClaudeTool & { cache_control?: unknown };
             lastTool.cache_control = cacheControl;
         }
-        if (options.prompt_cache_key !== undefined) {
+        if (!hasAgentMessageBreakpoints && options.prompt_cache_key !== undefined) {
             const lastMessage = sanitizedMessages[sanitizedMessages.length - 1];
             if (lastMessage && Array.isArray(lastMessage.content) && lastMessage.content.length >= 2) {
                 const stablePrefixBlock = lastMessage.content[lastMessage.content.length - 2];
@@ -759,7 +838,7 @@ export function getClaudePayload(
                     stablePrefixBlock.cache_control = cacheControl;
                 }
             }
-        } else if (sanitizedMessages.length >= 4) {
+        } else if (!hasAgentMessageBreakpoints && sanitizedMessages.length >= 4) {
             const pivotMsg = sanitizedMessages[sanitizedMessages.length - 2];
             if (Array.isArray(pivotMsg.content) && pivotMsg.content.length > 0) {
                 const lastBlock = pivotMsg.content[pivotMsg.content.length - 1];
@@ -846,11 +925,21 @@ export function buildClaudeStreamingConversation(
     // stale blocks; long agent conversations otherwise balloon context and
     // trigger frequent expensive checkpoints.
     const requestedTextMax = options.stripTextMaxTokens;
+    // Sliding-window truncation rewrites one previously sent message whenever it
+    // falls out of the recent-message window. That defeats Anthropic's exact
+    // prefix cache and turns the growing conversation into a cache write on every
+    // agent iteration. Cached Claude conversations are append-only between
+    // semantic checkpoints; their model-facing tool results are already bounded
+    // and artifact-backed at the Studio execution boundary.
+    const preserveCachedTextPrefix = isClaudePromptCacheEnabled(options);
     const stripOptions = {
         keepForTurns: options.stripImagesAfterTurns ?? Infinity,
         currentTurn,
-        textMaxTokens: requestedTextMax ? Math.min(requestedTextMax, OLD_MESSAGE_TEXT_MAX_TOKENS) : undefined,
-        keepRecentMessages: requestedTextMax ? KEEP_RECENT_MESSAGES : undefined,
+        textMaxTokens:
+            requestedTextMax && !preserveCachedTextPrefix
+                ? Math.min(requestedTextMax, OLD_MESSAGE_TEXT_MAX_TOKENS)
+                : undefined,
+        keepRecentMessages: requestedTextMax && !preserveCachedTextPrefix ? KEEP_RECENT_MESSAGES : undefined,
     };
     let processed = stripBase64ImagesFromConversation(conversation, stripOptions);
     processed = truncateLargeTextInConversation(processed, stripOptions);
@@ -883,7 +972,9 @@ function finalizeClaudeConversation(
     const stripOpts = {
         keepForTurns: options.stripImagesAfterTurns ?? Infinity,
         currentTurn,
-        textMaxTokens: options.stripTextMaxTokens,
+        // See buildClaudeStreamingConversation: cached histories must remain
+        // byte-stable between checkpoints, so do not age-rewrite text blocks.
+        textMaxTokens: isClaudePromptCacheEnabled(options) ? undefined : options.stripTextMaxTokens,
         preserveSubtree,
     };
     let processedConversation = stripBase64ImagesFromConversation(completedConversation, stripOpts);

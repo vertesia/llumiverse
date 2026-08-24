@@ -30,7 +30,7 @@ import {
     buildOpenAIChatCompletionsStreamingConversation,
     type OpenAIChatCompletionsPrompt,
 } from '../openai/openai_chat_completions.js';
-import { type ClaudePrompt, formatClaudeDebugPrompt } from '../shared/claude-messages.js';
+import { type ClaudePrompt, formatClaudeDebugPrompt, isClaudePromptCacheEnabled } from '../shared/claude-messages.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { generateVertexAiEmbeddings } from './embeddings/embed.js';
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
@@ -635,7 +635,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         const stripOptions = {
             keepForTurns: options.stripImagesAfterTurns ?? Infinity,
             currentTurn,
-            textMaxTokens: options.stripTextMaxTokens,
+            // Cached Claude histories must remain byte-stable between semantic
+            // checkpoints. Studio already bounds and artifact-backs model-facing
+            // tool results before they reach this driver.
+            textMaxTokens: isClaudePromptCacheEnabled(options) ? undefined : options.stripTextMaxTokens,
         };
         let processedConversation = stripBase64ImagesFromConversation(withTurn, stripOptions);
         processedConversation = truncateLargeTextInConversation(processedConversation, stripOptions);
