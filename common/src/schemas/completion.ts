@@ -36,7 +36,45 @@ export const ModalitiesSchema = z.enum(Modalities).meta({ id: 'Modalities' });
 
 // A literal union rather than a TS enum: this one is only ever written as a plain string in an
 // interaction's execution options, so there is no enum value for callers to import.
-export const PromptCacheModeSchema = z.enum(['auto', 'off']).meta({ id: 'PromptCacheMode' });
+export const PromptCacheModeSchema = z.enum(['auto', 'off', 'required']).meta({ id: 'PromptCacheMode' });
+
+export const PromptCachePathSchema = z
+    .enum([
+        'disabled',
+        'no_key',
+        'local_memo_hit',
+        'distributed_registry_hit',
+        'provider_list_recovery',
+        'created',
+        'waited_for_creator',
+        'refreshed',
+        'fallback_quota',
+        'fallback_provider_error',
+        'fallback_coordination_unavailable',
+        'fallback_wait_timeout',
+        'minimum_token_rejection',
+        'unusable_resource_recreated',
+    ])
+    .meta({ id: 'PromptCachePath' });
+
+export const PromptCacheDiagnosticSchema = z
+    .strictObject({
+        path: PromptCachePathSchema,
+        explicit_cache_used: z.boolean(),
+        content_hash_prefix: z.string().optional(),
+        model: z.string(),
+        scope: z.string().optional(),
+        cacheable_part_count: z.number().int().nonnegative().optional(),
+        preparation_latency_ms: z.number().nonnegative(),
+        wait_latency_ms: z.number().nonnegative().optional(),
+        provider_status: z.number().int().optional(),
+    })
+    .meta({
+        id: 'PromptCacheDiagnostic',
+        description:
+            'Safe diagnostic for one provider-side explicit prompt-cache attempt. It never contains prompt ' +
+            'contents, images, credentials, or full provider resource names.',
+    });
 
 // The wire form of a data source: what it is called and what it contains. The BYTES are not here —
 // a `DataSource` in memory can hand back a stream, and the published component has only ever
@@ -192,17 +230,19 @@ export const StatelessExecutionOptionsSchema = z
             description:
                 'Controls provider-side explicit caches — cache resources the driver creates and reuses (e.g. ' +
                 'Vertex cachedContents). "auto" (default) caches the static prefix whenever prompt_cache_key is ' +
-                'set; "off" never creates or uses a cache resource and leaves the provider payload unchanged. ' +
+                'set; "off" never creates or uses a cache resource and leaves the provider payload unchanged; ' +
+                '"required" behaves like auto but surfaces cache preparation failures instead of falling back. ' +
                 'Implicit caching and cache breakpoints are unaffected.',
         }).optional(),
         prompt_cache_ttl_seconds: z
             .number()
             .int()
-            .positive()
+            .min(60)
             .meta({
                 description:
                     'Lifetime, in seconds, of a provider-side cache resource created for this execution. Defaults ' +
-                    'to 1800 (30 minutes). Ignored by providers without an explicit cache API.',
+                    'to 1800 (30 minutes) and must be at least 60 seconds. Ignored by providers without an explicit ' +
+                    'cache API.',
             })
             .optional(),
         httpTimeout: HttpTimeoutOptionsSchema.meta({

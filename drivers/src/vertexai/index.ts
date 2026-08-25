@@ -35,11 +35,21 @@ import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { generateVertexAiEmbeddings } from './embeddings/embed.js';
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
 import { formatGeminiDebugPrompt } from './models/gemini.js';
-import { GeminiContextCacheManager } from './models/gemini-context-cache.js';
+import {
+    type GeminiContextCacheCoordinationKey,
+    type GeminiContextCacheCoordinator,
+    GeminiContextCacheManager,
+} from './models/gemini-context-cache.js';
 import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
 import { GEMINI_OMNI_VIDEO_MODEL, type OmniVideoPrompt } from './models/omni-video.js';
 import { getModelDefinition, trimModelName } from './models.js';
 import { getListedVertexOpenMaaSModels } from './open-maas-models.js';
+
+export type {
+    GeminiContextCacheCoordinationKey,
+    GeminiContextCacheCoordinator,
+    GeminiContextCacheEntry,
+} from './models/gemini-context-cache.js';
 
 export interface VertexAIDriverOptions extends DriverOptions {
     project: string;
@@ -57,6 +67,10 @@ export interface VertexAIDriverOptions extends DriverOptions {
      * Defaults to 1800 (30 minutes). `ExecutionOptions.prompt_cache_ttl_seconds` overrides it per call.
      */
     geminiContextCacheTtlSeconds?: number;
+    /** Host-supplied fleet coordinator. Llumiverse itself has no Redis dependency. */
+    geminiContextCacheCoordinator?: GeminiContextCacheCoordinator;
+    /** Host isolation scope, normally the Studio environment ID. */
+    geminiContextCacheScope?: string;
 }
 
 export interface GenerateContentPrompt {
@@ -130,23 +144,43 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     }
 
     /**
-     * Registry of the Vertex `cachedContents` resources this driver instance has created, used by the
-     * Gemini execution path to find-or-create the cache for an execution's `prompt_cache_key`.
+     * Local memo and optional host-supplied fleet coordinator for Vertex `cachedContents`, used by
+     * the Gemini execution path to find-or-create the cache for an execution's `prompt_cache_key`.
      * Returns `undefined` when the driver-level kill switch is off, which keeps the Gemini payload
      * exactly as it is built today.
      *
-     * The registry is per instance on purpose. Two instances create two resources for the same
-     * prefix; the duplicate expires on its own TTL and costs only storage rent for that window,
-     * which is far cheaper than the coordination a shared registry would need.
+     * Llumiverse does not depend on a coordination backend. Studio injects its Redis adapter through
+     * the driver options; standalone consumers retain process-local singleflight and Vertex-list
+     * recovery.
      */
     public getGeminiContextCacheManager(): GeminiContextCacheManager | undefined {
         if (this.options.geminiContextCache === false) return undefined;
         if (!this.geminiContextCacheManager) {
             this.geminiContextCacheManager = new GeminiContextCacheManager({
                 ttlSeconds: this.options.geminiContextCacheTtlSeconds,
+                coordinator: this.options.geminiContextCacheCoordinator,
+                coordinationScope: this.options.geminiContextCacheScope,
             });
         }
         return this.geminiContextCacheManager;
+    }
+
+    public getGeminiContextCacheCoordinationKey(
+        location: string,
+        model: string,
+        contentHash: string,
+    ): GeminiContextCacheCoordinationKey {
+        return {
+            scope: this.options.geminiContextCacheScope,
+            project: this.options.project,
+            location,
+            model,
+            contentHash,
+        };
+    }
+
+    public getVertexRegion(): string {
+        return this.options.region;
     }
 
     /**
