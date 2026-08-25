@@ -11,7 +11,7 @@ catalogs:
       version: 7.0.2
 
 overrides:
-  google-auth-library: ^11.0.0
+  google-auth-library: ^11.0.2
   '@types/node': ^24.13.3
   vite: ^8.0.16
   brace-expansion@>=3.0.0 <5.0.8: 5.0.9
@@ -141,7 +141,7 @@ importers:
         specifier: ^2.0.0
         version: 2.0.0
       '@google-cloud/aiplatform':
-        specifier: ^7.0.0
+        specifier: ^7.1.0
         version: 7.1.0
       '@google/genai':
         specifier: ^2.17.0
@@ -165,8 +165,8 @@ importers:
         specifier: ^4.1.1
         version: 4.1.1
       google-auth-library:
-        specifier: ^11.0.0
-        version: 11.0.0
+        specifier: ^11.0.2
+        version: 11.0.2
       groq-sdk:
         specifier: ^1.5.0
         version: 1.5.0
@@ -1309,9 +1309,9 @@ packages:
     resolution: {integrity: sha512-bTIgTsM2bWn3XklZISBTQX7ZSddGW+IO3bMdGaemHZ3tbqExMENHLx6kKZ/KlejgrMtj8q7wBItt51yegqalrA==}
     engines: {node: '>=18'}
 
-  gcp-metadata@8.1.2:
-    resolution: {integrity: sha512-zV/5HKTfCeKWnxG0Dmrw51hEWFGfcF2xiXqcA3+J90WDuP0SvoiSO5ORvcBsifmx/FoIjgQN3oNOGaQ5PhLFkg==}
-    engines: {node: '>=18'}
+  gcp-metadata@9.0.3:
+    resolution: {integrity: sha512-2YYnIlHaKBGT2IPg3G2M57hia9Galz15zsEOvw9T3oRf0lSn6KN6VcHQLqby7x8ksYKnjXvp3rp2KJyLCN6zfQ==}
+    engines: {node: '>=22'}
 
   get-caller-file@2.0.5:
     resolution: {integrity: sha512-DyFP3BM/3YHTQOCUL/w0OZHR0lpKeGrxotcHWcqNEdnltqFwXVfhEBQ94eIo34AfQpo0rGki4cyIiftY06h2Fg==}
@@ -1321,17 +1321,13 @@ packages:
     resolution: {integrity: sha512-Wjlyrolmm8uDpm/ogGyXZXb1Z+Ca2B8NbJwqBVg0axK9GbBeoS7yGV6vjXnYdGm6X53iehEuxxbyiKp8QmN4Vw==}
     engines: {node: 18 || 20 || >=22}
 
-  google-auth-library@11.0.0:
-    resolution: {integrity: sha512-WC5gkb2pElGhZKgGx9r799trH3ZUx90ecgIOIMmgiiHS/gzO3r4vvFoQWuKI0QmR2xU5uee2M4hDUxRZDh/x7w==}
+  google-auth-library@11.0.2:
+    resolution: {integrity: sha512-vzpgPutxrghPsnjrjpzLX2bdv8IOL719Rh0oEjGnQu8YCIbnbMuTTQ5zU9LcKvLdOPgCxBwppbvnhgW90Qna5Q==}
     engines: {node: '>=22'}
 
   google-gax@6.0.2:
     resolution: {integrity: sha512-9O+aJyiZrGcEggeG9FoA1R3HRQEUi32ydPSvE42lFbh+D8KwQS57CgMsZ0JPpGCM1LFwEWe+yr2h/53xmgHnQA==}
     engines: {node: '>=22'}
-
-  google-logging-utils@1.1.3:
-    resolution: {integrity: sha512-eAmLkjDjAFCVXg7A1unxHsLf961m6y17QFqXqAXGj/gVkKFrEICfStRfwUlGNfeCEjNRa32JEWOUTlYXPyyKvA==}
-    engines: {node: '>=14'}
 
   google-logging-utils@2.0.1:
     resolution: {integrity: sha512-HMhaQghlOTvbcb3c4T5jmmOMtG3JUF1iOQMezaJXL86CDS+Tm2vHd0IeLFRAx3+ewd+bo9E1HFHoy17X5aJa9A==}
@@ -1927,7 +1923,7 @@ snapshots:
   '@anthropic-ai/vertex-sdk@0.19.4(zod@4.4.3)':
     dependencies:
       '@anthropic-ai/sdk': 0.116.0(zod@4.4.3)
-      google-auth-library: 11.0.0
+      google-auth-library: 11.0.2
     transitivePeerDependencies:
       - supports-color
       - zod
@@ -2482,7 +2478,7 @@ snapshots:
 
   '@google/genai@2.17.1':
     dependencies:
-      google-auth-library: 11.0.0
+      google-auth-library: 11.0.2
       p-retry: 4.6.2
       protobufjs: 7.6.5
       ws: 8.21.0
@@ -3202,10 +3198,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  gcp-metadata@8.1.2:
+  gcp-metadata@9.0.3:
     dependencies:
       gaxios: 7.1.4
-      google-logging-utils: 1.1.3
+      google-logging-utils: 2.0.1
       json-bigint: 1.0.0
     transitivePeerDependencies:
       - supports-color
@@ -3218,13 +3214,13 @@ snapshots:
       minipass: 7.1.3
       path-scurry: 2.0.2
 
-  google-auth-library@11.0.0:
+  google-auth-library@11.0.2:
     dependencies:
       base64-js: 1.5.1
       ecdsa-sig-formatter: 1.0.11
       gaxios: 7.1.4
-      gcp-metadata: 8.1.2
-      google-logging-utils: 1.1.3
+      gcp-metadata: 9.0.3
+      google-logging-utils: 2.0.1
       jws: 4.0.1
     transitivePeerDependencies:
       - supports-color
@@ -3234,7 +3230,7 @@ snapshots:
       '@grpc/grpc-js': 1.14.4
       '@grpc/proto-loader': 0.8.0
       duplexify: 4.1.3
-      google-auth-library: 11.0.0
+      google-auth-library: 11.0.2
       google-logging-utils: 2.0.1
       node-fetch: 3.3.2
       object-hash: 3.0.0
@@ -3243,8 +3239,6 @@ snapshots:
       retry-request: 9.0.1
     transitivePeerDependencies:
       - supports-color
-
-  google-logging-utils@1.1.3: {}
 
   google-logging-utils@2.0.1: {}
 
