@@ -1,4 +1,4 @@
-import type { ConverseRequest } from '@aws-sdk/client-bedrock-runtime';
+import type { ConverseRequest, ConverseResponse } from '@aws-sdk/client-bedrock-runtime';
 import type { NovaMessagesPrompt } from '@llumiverse/core/formatters';
 import { describe, expect, it, vi } from 'vitest';
 import { BedrockDriver } from './index.js';
@@ -11,6 +11,19 @@ const PROMPT: TwelvelabsPegasusRequest = {
 };
 
 describe('Bedrock service tiers', () => {
+    it('returns the processing tier reported by Converse', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const completion = driver.getExtractedExecution({
+            output: { message: { role: 'assistant', content: [{ text: 'answer' }] } },
+            stopReason: 'end_turn',
+            usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+            metrics: { latencyMs: 1 },
+            serviceTier: { type: 'priority' },
+        } as unknown as ConverseResponse);
+
+        expect(completion.service_tier).toBe('priority');
+    });
+
     it('uses the Converse service tier object for text models', () => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
         const prompt: ConverseRequest = {

@@ -308,6 +308,7 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
 
         const start = Date.now();
         let finish_reason: string | undefined;
+        let serviceTier: string | undefined;
         let promptTokens: number = 0;
         let resultTokens: number | undefined;
         let promptCachedTokens: number | undefined;
@@ -343,6 +344,9 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
                         if (chunk.finish_reason) {
                             //Do not replace non-null values with null values
                             finish_reason = chunk.finish_reason; //Used to skip empty finish_reason chunks coming after "stop" or "length"
+                        }
+                        if (chunk.service_tier) {
+                            serviceTier = chunk.service_tier;
                         }
                         if (chunk.token_usage) {
                             //Tokens returned include prior parts of stream,
@@ -535,6 +539,7 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
             prompt: this.driver.formatDebugPrompt(this.prompt),
             execution_time: Date.now() - start,
             token_usage: tokens,
+            service_tier: serviceTier,
             finish_reason: finish_reason,
             chunks: this.chunks,
             tool_use: toolUseArray,

@@ -143,6 +143,21 @@ export function resolveVertexAIServiceTier(modelOptions?: VertexAIGeminiOptions)
     return modelOptions?.service_tier ?? (modelOptions?.flex ? 'flex' : undefined);
 }
 
+export function normalizeVertexAIResolvedServiceTier(trafficType?: string): string | undefined {
+    switch (trafficType) {
+        case 'ON_DEMAND':
+            return 'default';
+        case 'ON_DEMAND_PRIORITY':
+            return 'priority';
+        case 'ON_DEMAND_FLEX':
+            return 'flex';
+        case 'PROVISIONED_THROUGHPUT':
+            return 'provisioned';
+        default:
+            return undefined;
+    }
+}
+
 const geminiSafetySettings: SafetySetting[] = [
     {
         category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
@@ -837,6 +852,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         return {
             result: result && result.length > 0 ? result : [{ type: 'text' as const, value: '' }],
             token_usage: token_usage,
+            service_tier: normalizeVertexAIResolvedServiceTier(response.usageMetadata?.trafficType),
             finish_reason: finish_reason,
             original_response: options.include_original_response ? response : undefined,
             conversation: finalConversation,
@@ -928,6 +944,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                         return {
                             result: combinedResults.length > 0 ? combinedResults : [],
                             token_usage: token_usage,
+                            service_tier: normalizeVertexAIResolvedServiceTier(item.usageMetadata?.trafficType),
                             finish_reason: finish_reason,
                             tool_use,
                         };
@@ -941,6 +958,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                     : [],
                 finish_reason: item.promptFeedback?.blockReason ?? '',
                 token_usage: token_usage,
+                service_tier: normalizeVertexAIResolvedServiceTier(item.usageMetadata?.trafficType),
             };
         });
 

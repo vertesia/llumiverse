@@ -446,6 +446,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         return {
             result: allResults,
             token_usage: tokenInfo,
+            service_tier: result.service_tier ?? undefined,
             finish_reason: responseFinishReason(result, tools),
             tool_use: tools,
         };
@@ -1027,6 +1028,7 @@ export function mapResponseStream(
                         result: [],
                         finish_reason: responseFinishReason(event.response, finalTools),
                         token_usage: mapUsage(event.response.usage),
+                        service_tier: event.response.service_tier ?? undefined,
                     } satisfies CompletionChunkObject;
                 }
             }
