@@ -219,7 +219,7 @@ export function getGeminiPayload(options: ExecutionOptions, prompt: GenerateCont
     // When no tools are provided but conversation contains functionCall/functionResponse parts
     // (e.g. checkpoint summary calls), convert them to text to avoid API errors.
     // Use a local variable to avoid mutating the caller's conversation object.
-    let payloadContents = mergeConsecutiveRole(prompt.contents);
+    let payloadContents = prompt.contents ? [...prompt.contents] : [];
     if (!tools && payloadContents) {
         const hasToolParts = payloadContents.some((c) => c.parts?.some((p) => p.functionCall || p.functionResponse));
         if (hasToolParts) {
@@ -389,35 +389,6 @@ function collectToolUseParts(content: Content): ToolUse[] | undefined {
     return out.length > 0 ? out : undefined;
 }
 
-export function mergeConsecutiveRole(contents: Content[] | undefined): Content[] {
-    if (!contents || contents.length === 0) return [];
-
-    const needsMerging = contents.some(
-        (content, i) => i < contents.length - 1 && content.role === contents[i + 1].role,
-    );
-    // If no merging needed, return original array
-    if (!needsMerging) {
-        return contents;
-    }
-
-    const result: Content[] = [];
-    let currentContent = { ...contents[0], parts: [...(contents[0].parts || [])] };
-
-    for (let i = 1; i < contents.length; i++) {
-        if (currentContent.role === contents[i].role) {
-            // Same role - concatenate parts (without merging individual parts)
-            currentContent.parts = (currentContent.parts || []).concat(...(contents[i].parts || []));
-        } else {
-            // Different role - push current and start new
-            result.push(currentContent);
-            currentContent = { ...contents[i], parts: [...(contents[i].parts || [])] };
-        }
-    }
-
-    result.push(currentContent);
-    return result;
-}
-
 /**
  * Drop functionResponse parts whose name has no matching functionCall in the
  * immediately-preceding `model` content. Gemini pairs a functionResponse to its
@@ -426,30 +397,32 @@ export function mergeConsecutiveRole(contents: Content[] | undefined): Content[]
  * causes the API to reject the request. Mirrors the same guard added to the
  * Claude, Bedrock, and OpenAI drivers.
  *
- * Run after mergeConsecutiveRole so parallel responses that were split across
- * user contents are first recombined under the model turn that issued the calls,
- * and are therefore not mistaken for orphans.
+ * Consecutive user contents remain separate because they are also cache boundaries. The matching
+ * model call set therefore remains active across a run of user function-response contents, which
+ * preserves split parallel tool results without merging the caller's segments.
  */
 export function fixOrphanedToolResults(contents: Content[]): Content[] {
     if (contents.length === 0) return contents;
     const result: Content[] = [];
-    for (let i = 0; i < contents.length; i++) {
-        const content = contents[i];
+    let allowedNames = new Set<string>();
+    for (const content of contents) {
+        if (content.role === 'model') {
+            allowedNames = new Set(
+                (content.parts ?? []).flatMap((part) => (part.functionCall?.name ? [part.functionCall.name] : [])),
+            );
+            result.push(content);
+            continue;
+        }
         if (content.role !== 'user' || !content.parts) {
+            allowedNames = new Set();
             result.push(content);
             continue;
         }
         const hasFunctionResponse = content.parts.some((part) => part.functionResponse);
         if (!hasFunctionResponse) {
+            allowedNames = new Set();
             result.push(content);
             continue;
-        }
-        const prev = contents[i - 1];
-        const allowedNames = new Set<string>();
-        if (prev && prev.role === 'model' && prev.parts) {
-            for (const part of prev.parts) {
-                if (part.functionCall?.name) allowedNames.add(part.functionCall.name);
-            }
         }
         const filtered = content.parts.filter((part) =>
             part.functionResponse ? allowedNames.has(part.functionResponse.name ?? '') : true,
@@ -694,9 +667,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             contents = contents.concat(safety);
         }
 
-        // Merge consecutive messages with the same role. Note: this may not be necessary, works without it, keeping to match previous behavior.
-        contents = mergeConsecutiveRole(contents);
-
+        // Preserve PromptSegment boundaries through the provider request. Besides retaining the
+        // explicit-cache breakpoint, this avoids changing the caller's conversation turn shape.
         return { contents, system };
     }
 
@@ -781,9 +753,16 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         if (signal) payload.config = { ...payload.config, abortSignal: signal };
         // Routes through an explicit Vertex context cache when this execution carries a
         // prompt_cache_key; sends `payload` untouched otherwise, and on any cache failure.
-        const response = await generateWithGeminiContextCache(driver, client, options, prompt, payload, (request) =>
-            client.models.generateContent(request),
+        const cacheExecution = await generateWithGeminiContextCache(
+            driver,
+            client,
+            options,
+            prompt,
+            payload,
+            (request) => client.models.generateContent(request),
+            region ?? driver.getVertexRegion?.() ?? 'global',
         );
+        const response = cacheExecution.value;
 
         const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(driver, response.usageMetadata);
 
@@ -841,6 +820,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             original_response: options.include_original_response ? response : undefined,
             conversation: finalConversation,
             tool_use,
+            prompt_cache_diagnostic: cacheExecution.diagnostic,
         } satisfies Completion;
     }
 
@@ -885,9 +865,16 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         const payload = getGeminiPayload(options, prompt);
         payload.config = { ...payload.config, abortSignal: signal };
-        const response = await generateWithGeminiContextCache(driver, client, options, prompt, payload, (request) =>
-            client.models.generateContentStream(request),
+        const cacheExecution = await generateWithGeminiContextCache(
+            driver,
+            client,
+            options,
+            prompt,
+            payload,
+            (request) => client.models.generateContentStream(request),
+            region ?? driver.getVertexRegion?.() ?? 'global',
         );
+        const response = cacheExecution.value;
 
         const nativeParts: Part[] = [];
         const stream = asyncMap(response, async (item) => {
@@ -945,6 +932,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         });
 
         return Object.assign(stream, {
+            finalizePromptCacheDiagnostic: () => cacheExecution.diagnostic,
             finalizeConversation: () =>
                 finalizeGeminiConversation(
                     conversation,
