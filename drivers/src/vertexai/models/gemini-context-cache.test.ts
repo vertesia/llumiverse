@@ -9,15 +9,20 @@ import {
     type Pager,
     type UpdateCachedContentParameters,
 } from '@google/genai';
-import type { ExecutionOptions, Logger } from '@llumiverse/core';
+import { type DataSource, type ExecutionOptions, type Logger, PromptRole, type PromptSegment } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import { type GenerateContentPrompt, VertexAIDriver, type VertexAIDriverOptions } from '../index.js';
 import { GeminiModelDefinition, getGeminiPayload } from './gemini.js';
 import {
     deriveGeminiCachePrefix,
     GEMINI_CACHE_DISPLAY_NAME_PREFIX,
+    type GeminiContextCacheCoordinationKey,
+    type GeminiContextCacheCoordinator,
+    type GeminiContextCacheEntry,
+    GeminiContextCacheRequiredError,
     geminiCacheContentHash,
     geminiCacheDisplayName,
+    isMinimumTokenCountError,
     stripLeadingParts,
 } from './gemini-context-cache.js';
 
@@ -64,6 +69,110 @@ function cachedContent(name = CACHE_NAME, ttlSeconds = 1800): CachedContent {
 
 function apiError(status: number, message: string): Error {
     return Object.assign(new Error(message), { status });
+}
+
+class FakeDistributedCoordinator implements GeminiContextCacheCoordinator {
+    readonly entries = new Map<string, GeminiContextCacheEntry>();
+    readonly leases = new Map<string, string>();
+    readonly cooldowns = new Map<string, number>();
+    readonly permits = new Set<string>();
+    invalidations = 0;
+    unavailable = false;
+
+    private cacheKey(key: GeminiContextCacheCoordinationKey): string {
+        return JSON.stringify([key.scope, key.project, key.location, key.model, key.contentHash]);
+    }
+
+    private scopeKey(key: GeminiContextCacheCoordinationKey): string {
+        return JSON.stringify([key.scope, key.project, key.location]);
+    }
+
+    private assertAvailable(): void {
+        if (this.unavailable) throw new Error('fake Redis unavailable');
+    }
+
+    async getEntry(key: GeminiContextCacheCoordinationKey): Promise<GeminiContextCacheEntry | undefined> {
+        this.assertAvailable();
+        return this.entries.get(this.cacheKey(key));
+    }
+
+    async acquireLease(key: GeminiContextCacheCoordinationKey): Promise<string | undefined> {
+        this.assertAvailable();
+        const cacheKey = this.cacheKey(key);
+        if (this.leases.has(cacheKey)) return undefined;
+        const token = `lease-${this.leases.size}-${Math.random()}`;
+        this.leases.set(cacheKey, token);
+        return token;
+    }
+
+    async waitForEntry(
+        key: GeminiContextCacheCoordinationKey,
+        timeoutMs: number,
+    ): Promise<GeminiContextCacheEntry | undefined> {
+        this.assertAvailable();
+        const cacheKey = this.cacheKey(key);
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+            const entry = this.entries.get(cacheKey);
+            if (entry) return entry;
+            if (!this.leases.has(cacheKey) || this.cooldowns.has(this.scopeKey(key))) return undefined;
+            await new Promise((resolve) => setTimeout(resolve, 1));
+        }
+        return undefined;
+    }
+
+    async publishEntry(
+        key: GeminiContextCacheCoordinationKey,
+        leaseToken: string,
+        entry: GeminiContextCacheEntry,
+    ): Promise<boolean> {
+        this.assertAvailable();
+        const cacheKey = this.cacheKey(key);
+        if (this.leases.get(cacheKey) !== leaseToken) return false;
+        this.entries.set(cacheKey, entry);
+        return true;
+    }
+
+    async releaseLease(key: GeminiContextCacheCoordinationKey, leaseToken: string): Promise<void> {
+        this.assertAvailable();
+        const cacheKey = this.cacheKey(key);
+        if (this.leases.get(cacheKey) === leaseToken) this.leases.delete(cacheKey);
+    }
+
+    async invalidateEntry(key: GeminiContextCacheCoordinationKey, expectedName: string): Promise<void> {
+        this.assertAvailable();
+        const cacheKey = this.cacheKey(key);
+        if (this.entries.get(cacheKey)?.name === expectedName) {
+            this.entries.delete(cacheKey);
+            this.invalidations++;
+        }
+    }
+
+    async getCooldownUntil(key: GeminiContextCacheCoordinationKey): Promise<number | undefined> {
+        this.assertAvailable();
+        const until = this.cooldowns.get(this.scopeKey(key));
+        return until && until > Date.now() ? until : undefined;
+    }
+
+    async setCooldownUntil(key: GeminiContextCacheCoordinationKey, untilMs: number): Promise<void> {
+        this.assertAvailable();
+        const scopeKey = this.scopeKey(key);
+        this.cooldowns.set(scopeKey, Math.max(this.cooldowns.get(scopeKey) ?? 0, untilMs));
+    }
+
+    async acquireCreatePermit(key: GeminiContextCacheCoordinationKey, limit: number): Promise<string | undefined> {
+        this.assertAvailable();
+        const prefix = `${this.scopeKey(key)}:`;
+        if ([...this.permits].filter((permit) => permit.startsWith(prefix)).length >= limit) return undefined;
+        const token = `${prefix}${Math.random()}`;
+        this.permits.add(token);
+        return token;
+    }
+
+    async releaseCreatePermit(_key: GeminiContextCacheCoordinationKey, permitToken: string): Promise<void> {
+        this.assertAvailable();
+        this.permits.delete(permitToken);
+    }
 }
 
 /** The display name the driver must give — and look for — for the Balise route prefix. */
@@ -366,7 +475,7 @@ describe('Gemini explicit context caching', () => {
 
     it('sends the full un-cached request when cache creation fails', async () => {
         const { driver, create, requests, warn } = makeDriver();
-        create.mockRejectedValueOnce(apiError(503, 'UNAVAILABLE'));
+        create.mockRejectedValue(apiError(400, 'cache creation rejected'));
 
         const completion = await new GeminiModelDefinition(MODEL).requestTextCompletion(
             driver,
@@ -380,8 +489,7 @@ describe('Gemini explicit context caching', () => {
             role: 'user',
             parts: [{ text: 'Route each photo to a domain.' }],
         });
-        expect(requests[0].contents).toHaveLength(1);
-        expect((requests[0].contents as { parts: unknown[] }[])[0].parts).toHaveLength(3);
+        expect(requests[0].contents).toEqual(baliseRoutePrompt().contents);
         expect(completion.result).toEqual([{ type: 'text', value: 'places' }]);
     });
 
@@ -395,6 +503,10 @@ describe('Gemini explicit context caching', () => {
 
         expect(create).toHaveBeenCalledTimes(1);
         expect(warn).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not classify a minimum TTL error as a minimum token error', () => {
+        expect(isMinimumTokenCountError(apiError(400, 'TTL must be at least the minimum of 60 seconds.'))).toBe(false);
     });
 
     it('rediscovers, then recreates once, when the resource has gone', async () => {
@@ -479,6 +591,269 @@ describe('Gemini explicit context caching', () => {
             total: 4230,
         });
     });
+
+    it('deduplicates 20 concurrent creates inside one driver process', async () => {
+        const { driver, create } = makeDriver();
+        create.mockImplementation(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            return cachedContent();
+        });
+        const model = new GeminiModelDefinition(MODEL);
+
+        await Promise.all(
+            Array.from({ length: 20 }, () => model.requestTextCompletion(driver, baliseRoutePrompt(), cachedOptions())),
+        );
+
+        expect(create).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves transient create retry policy to the host workflow', async () => {
+        const { driver, create } = makeDriver();
+        create.mockRejectedValueOnce(apiError(503, 'UNAVAILABLE'));
+
+        const completion = await new GeminiModelDefinition(MODEL).requestTextCompletion(
+            driver,
+            baliseRoutePrompt(),
+            cachedOptions(),
+        );
+
+        expect(create).toHaveBeenCalledTimes(1);
+        expect(completion.prompt_cache_diagnostic).toMatchObject({
+            path: 'fallback_provider_error',
+            provider_status: 503,
+        });
+    });
+});
+
+describe('Gemini distributed context cache coordination', () => {
+    const coordinatedOptions = (coordinator: FakeDistributedCoordinator): Partial<VertexAIDriverOptions> => ({
+        geminiContextCacheCoordinator: coordinator,
+        geminiContextCacheScope: 'environment-1',
+    });
+
+    it('produces one create across 20 driver instances sharing a coordinator', async () => {
+        const coordinator = new FakeDistributedCoordinator();
+        const harnesses = Array.from({ length: 20 }, () => makeDriver(coordinatedOptions(coordinator)));
+
+        const completions = await Promise.all(
+            harnesses.map(({ driver }) =>
+                new GeminiModelDefinition(MODEL).requestTextCompletion(driver, baliseRoutePrompt(), cachedOptions()),
+            ),
+        );
+
+        expect(harnesses.reduce((sum, harness) => sum + harness.create.mock.calls.length, 0)).toBe(1);
+        expect(
+            completions.filter((completion) => completion.prompt_cache_diagnostic?.explicit_cache_used),
+        ).toHaveLength(20);
+    });
+
+    it('converges route and extraction calls with identical cached contents', async () => {
+        const coordinator = new FakeDistributedCoordinator();
+        const route = makeDriver(coordinatedOptions(coordinator));
+        const extraction = makeDriver(coordinatedOptions(coordinator));
+        const extractionPrompt = baliseRoutePrompt();
+        extractionPrompt.contents[1] = {
+            role: 'user',
+            parts: [
+                { text: 'Photo 99: extract fields.' },
+                { inlineData: { data: 'cGhvdG8=', mimeType: 'image/jpeg' } },
+            ],
+        };
+
+        await Promise.all([
+            new GeminiModelDefinition(MODEL).requestTextCompletion(route.driver, baliseRoutePrompt(), cachedOptions()),
+            new GeminiModelDefinition(MODEL).requestTextCompletion(
+                extraction.driver,
+                extractionPrompt,
+                cachedOptions(),
+            ),
+        ]);
+
+        expect(route.create.mock.calls.length + extraction.create.mock.calls.length).toBe(1);
+        expect(route.requests[0].config?.cachedContent).toBe(extraction.requests[0].config?.cachedContent);
+    });
+
+    it('never shares a resource for different cache contents even when keys match', async () => {
+        const coordinator = new FakeDistributedCoordinator();
+        const first = makeDriver(coordinatedOptions(coordinator));
+        const second = makeDriver(coordinatedOptions(coordinator));
+        const otherPrompt = baliseRoutePrompt();
+        otherPrompt.contents[0] = { role: 'user', parts: [{ text: `${CATALOG_TEXT}different` }] };
+
+        await Promise.all([
+            new GeminiModelDefinition(MODEL).requestTextCompletion(first.driver, baliseRoutePrompt(), cachedOptions()),
+            new GeminiModelDefinition(MODEL).requestTextCompletion(second.driver, otherPrompt, cachedOptions()),
+        ]);
+
+        expect(first.create.mock.calls.length + second.create.mock.calls.length).toBe(2);
+        expect(coordinator.entries.size).toBe(2);
+    });
+
+    it('shares a 429 cooldown and allows exactly one retry after it clears', async () => {
+        const coordinator = new FakeDistributedCoordinator();
+        const first = makeDriver(coordinatedOptions(coordinator));
+        const second = makeDriver(coordinatedOptions(coordinator));
+        first.create.mockRejectedValue(
+            Object.assign(apiError(429, 'RESOURCE_EXHAUSTED'), { headers: { 'retry-after': '2' } }),
+        );
+
+        const firstCompletion = await new GeminiModelDefinition(MODEL).requestTextCompletion(
+            first.driver,
+            baliseRoutePrompt(),
+            cachedOptions(),
+        );
+        const secondCompletion = await new GeminiModelDefinition(MODEL).requestTextCompletion(
+            second.driver,
+            baliseRoutePrompt(),
+            cachedOptions(),
+        );
+
+        expect(first.create).toHaveBeenCalledTimes(1);
+        expect(second.create).not.toHaveBeenCalled();
+        expect(firstCompletion.prompt_cache_diagnostic?.path).toBe('fallback_quota');
+        expect(secondCompletion.prompt_cache_diagnostic?.path).toBe('fallback_quota');
+        expect([...coordinator.cooldowns.values()][0] - Date.now()).toBeGreaterThan(1_500);
+
+        coordinator.cooldowns.clear();
+        const retries = [makeDriver(coordinatedOptions(coordinator)), makeDriver(coordinatedOptions(coordinator))];
+        await Promise.all(
+            retries.map(({ driver }) =>
+                new GeminiModelDefinition(MODEL).requestTextCompletion(driver, baliseRoutePrompt(), cachedOptions()),
+            ),
+        );
+        expect(retries.reduce((sum, harness) => sum + harness.create.mock.calls.length, 0)).toBe(1);
+    });
+
+    it('coordinates a near-expiry TTL refresh once', async () => {
+        const coordinator = new FakeDistributedCoordinator();
+        const seed = makeDriver(coordinatedOptions(coordinator));
+        const prefix = deriveGeminiCachePrefix(baliseRoutePrompt());
+        if (!prefix) throw new Error('expected cacheable prefix');
+        const contentHash = geminiCacheContentHash(MODEL, prefix, undefined, undefined);
+        const key = seed.driver.getGeminiContextCacheCoordinationKey('us-central1', MODEL, contentHash);
+        coordinator.entries.set(JSON.stringify([key.scope, key.project, key.location, key.model, key.contentHash]), {
+            name: CACHE_NAME,
+            expiresAtMs: Date.now() + 60_000,
+        });
+        const harnesses = Array.from({ length: 20 }, () => makeDriver(coordinatedOptions(coordinator)));
+
+        await Promise.all(
+            harnesses.map(({ driver }) =>
+                new GeminiModelDefinition(MODEL).requestTextCompletion(driver, baliseRoutePrompt(), cachedOptions()),
+            ),
+        );
+
+        expect(harnesses.reduce((sum, harness) => sum + harness.update.mock.calls.length, 0)).toBe(1);
+        expect(harnesses.reduce((sum, harness) => sum + harness.create.mock.calls.length, 0)).toBe(0);
+    });
+
+    it('invalidates a 404 by expected name and coordinates one recreation', async () => {
+        const coordinator = new FakeDistributedCoordinator();
+        const harness = makeDriver(coordinatedOptions(coordinator));
+        const prefix = deriveGeminiCachePrefix(baliseRoutePrompt());
+        if (!prefix) throw new Error('expected cacheable prefix');
+        const contentHash = geminiCacheContentHash(MODEL, prefix, undefined, undefined);
+        const key = harness.driver.getGeminiContextCacheCoordinationKey('us-central1', MODEL, contentHash);
+        coordinator.entries.set(JSON.stringify([key.scope, key.project, key.location, key.model, key.contentHash]), {
+            name: PEER_CACHE_NAME,
+            expiresAtMs: Date.now() + 20 * 60_000,
+        });
+        harness.generateContent.mockRejectedValueOnce(apiError(404, 'CachedContent not found.'));
+
+        const completion = await new GeminiModelDefinition(MODEL).requestTextCompletion(
+            harness.driver,
+            baliseRoutePrompt(),
+            cachedOptions(),
+        );
+
+        expect(coordinator.invalidations).toBe(1);
+        expect(harness.create).toHaveBeenCalledTimes(1);
+        expect(completion.prompt_cache_diagnostic?.path).toBe('unusable_resource_recreated');
+    });
+
+    it('preserves inference without any create when coordination is unavailable', async () => {
+        const coordinator = new FakeDistributedCoordinator();
+        coordinator.unavailable = true;
+        const harnesses = Array.from({ length: 20 }, () => makeDriver(coordinatedOptions(coordinator)));
+
+        const completions = await Promise.all(
+            harnesses.map(({ driver }) =>
+                new GeminiModelDefinition(MODEL).requestTextCompletion(driver, baliseRoutePrompt(), cachedOptions()),
+            ),
+        );
+
+        expect(harnesses.reduce((sum, harness) => sum + harness.create.mock.calls.length, 0)).toBe(0);
+        expect(completions.every((completion) => completion.result[0]?.value === 'places')).toBe(true);
+        expect(
+            completions.every(
+                (completion) => completion.prompt_cache_diagnostic?.path === 'fallback_coordination_unavailable',
+            ),
+        ).toBe(true);
+    });
+});
+
+describe('Gemini PromptSegment cache breakpoint', () => {
+    function image(): DataSource {
+        return {
+            name: 'photo.jpg',
+            mime_type: 'image/jpeg',
+            getURI: vi.fn().mockResolvedValue('gs://balise-dev/photo.jpg'),
+            getURL: vi.fn(),
+            getStream: vi.fn(),
+        } as unknown as DataSource;
+    }
+
+    const segments = (): PromptSegment[] => [
+        { role: PromptRole.system, content: 'Route each photo to a domain.' },
+        { role: PromptRole.user, content: CATALOG_TEXT },
+        { role: PromptRole.user, content: 'Route this photo.', files: [image()] },
+    ];
+
+    it('keeps stable user text in cachedContents and the image task in both provider paths', async () => {
+        const blocking = makeDriver();
+        const streaming = makeDriver();
+        const model = new GeminiModelDefinition(MODEL);
+        const blockingPrompt = await model.createPrompt(blocking.driver, segments(), cachedOptions());
+        const streamingPrompt = await model.createPrompt(streaming.driver, segments(), cachedOptions());
+
+        expect(blockingPrompt.contents).toHaveLength(2);
+        await model.requestTextCompletion(blocking.driver, blockingPrompt, cachedOptions());
+        const stream = await model.requestTextCompletionStream(streaming.driver, streamingPrompt, cachedOptions());
+        for await (const _chunk of stream) {
+            // Drain the native stream so its final diagnostic and conversation are available.
+        }
+
+        for (const harness of [blocking, streaming]) {
+            expect(harness.create.mock.calls[0][0].config?.contents).toEqual([
+                { role: 'user', parts: [{ text: CATALOG_TEXT }] },
+            ]);
+            expect(harness.requests[0].contents).toEqual([
+                {
+                    role: 'user',
+                    parts: [
+                        { text: 'Route this photo.' },
+                        { fileData: { fileUri: 'gs://balise-dev/photo.jpg', mimeType: 'image/jpeg' } },
+                    ],
+                },
+            ]);
+        }
+    });
+
+    it('keeps a trailing model segment out of cachedContents.create', async () => {
+        const harness = makeDriver();
+        const prompt = baliseRoutePrompt();
+        prompt.contents.splice(1, 0, { role: 'model', parts: [{ text: 'Ready to route a photo.' }] });
+
+        await new GeminiModelDefinition(MODEL).requestTextCompletion(harness.driver, prompt, cachedOptions());
+
+        expect(harness.create.mock.calls[0][0].config?.contents).toEqual([
+            { role: 'user', parts: [{ text: CATALOG_TEXT }] },
+        ]);
+        expect(harness.requests[0].contents).toEqual([
+            { role: 'model', parts: [{ text: 'Ready to route a photo.' }] },
+            prompt.contents[2],
+        ]);
+    });
 });
 
 describe('Gemini explicit context caching opt-out', () => {
@@ -513,6 +888,20 @@ describe('Gemini explicit context caching opt-out', () => {
 
         expect(request).toEqual(getGeminiPayload(options, baliseRoutePrompt()));
         expect(create).not.toHaveBeenCalled();
+    });
+
+    it('surfaces preparation failure when prompt_cache_mode is required', async () => {
+        const { driver, create, generateContent } = makeDriver();
+        create.mockRejectedValue(apiError(400, 'cache creation rejected'));
+
+        await expect(
+            new GeminiModelDefinition(MODEL).requestTextCompletion(
+                driver,
+                baliseRoutePrompt(),
+                cachedOptions({ prompt_cache_mode: 'required' }),
+            ),
+        ).rejects.toBeInstanceOf(GeminiContextCacheRequiredError);
+        expect(generateContent).not.toHaveBeenCalled();
     });
 
     it('exposes no registry when the driver kill switch is off', () => {

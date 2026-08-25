@@ -543,6 +543,7 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
             finish_reason: finish_reason,
             chunks: this.chunks,
             tool_use: toolUseArray,
+            prompt_cache_diagnostic: stream?.finalizePromptCacheDiagnostic?.(),
         };
 
         // Build conversation context for multi-turn support

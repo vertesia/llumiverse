@@ -101,7 +101,7 @@ describe('fixOrphanedToolResults - Gemini', () => {
 });
 
 describe('getGeminiPayload - orphaned tool results', () => {
-    test('retains split parallel functionResponses by merging consecutive user contents before cleanup', () => {
+    test('retains split parallel functionResponses without merging consecutive user contents', () => {
         const contents: Content[] = [
             {
                 role: 'model',
@@ -114,5 +114,6 @@ describe('getGeminiPayload - orphaned tool results', () => {
         const payload = getGeminiPayload(OPTIONS_WITH_TOOLS, { contents });
 
         expect(functionResponseNames(payload.contents as Content[])).toEqual(['a', 'b']);
+        expect(payload.contents).toHaveLength(3);
     });
 });

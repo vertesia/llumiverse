@@ -1,7 +1,9 @@
 import type { z } from 'zod';
 import type {
     ExecutionTokenUsageSchema,
+    PromptCacheDiagnosticSchema,
     PromptCacheModeSchema,
+    PromptCachePathSchema,
     StatelessExecutionOptionsSchema,
 } from './schemas/completion.js';
 import type {
@@ -425,6 +427,7 @@ export interface CompletionChunkObject {
  */
 export interface DriverCompletionStream extends AsyncIterable<CompletionChunkObject> {
     finalizeConversation?: () => unknown | Promise<unknown>;
+    finalizePromptCacheDiagnostic?: () => PromptCacheDiagnostic | undefined;
 }
 
 /**
@@ -465,6 +468,8 @@ export interface Completion {
     token_usage?: ExecutionTokenUsage;
     /** The processing tier the provider actually used for this response. */
     service_tier?: string;
+    /** Safe diagnostics for the provider-side explicit prompt-cache path used by this completion. */
+    prompt_cache_diagnostic?: PromptCacheDiagnostic;
     /**
      * Contains the tools from which the model awaits information.
      */
@@ -602,6 +607,10 @@ export type StatelessExecutionOptions = z.infer<typeof StatelessExecutionOptions
  */
 export type PromptCacheMode = z.infer<typeof PromptCacheModeSchema>;
 
+export type PromptCachePath = z.infer<typeof PromptCachePathSchema>;
+
+export type PromptCacheDiagnostic = z.infer<typeof PromptCacheDiagnosticSchema>;
+
 /** Namespace used by agent conversations that require stable Claude cache layout. */
 export const AGENT_PROMPT_CACHE_KEY_PREFIX = 'agent-';
 
@@ -634,6 +643,8 @@ export interface ExecutionOptionsBase extends PromptOptions {
      *   whenever `prompt_cache_key` is set. Without a key nothing is created.
      * - `off`: never create or use a provider-side cache resource for this execution. Implicit
      *   caching and cache breakpoints are unaffected, and the provider payload is unchanged.
+     * - `required`: use an explicit cache like `auto`, but surface preparation failures instead of
+     *   silently sending the request without it. Intended for diagnostics and validation.
      */
     prompt_cache_mode?: PromptCacheMode;
 

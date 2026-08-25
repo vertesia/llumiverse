@@ -8,7 +8,7 @@ import type {
     Tool,
     ToolConfig,
 } from '@google/genai';
-import type { ExecutionOptions } from '@llumiverse/core';
+import type { ExecutionOptions, PromptCacheDiagnostic, PromptCachePath } from '@llumiverse/core';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
 
 /**
@@ -36,9 +36,9 @@ import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
  *            stopping before the first block containing a non-text part (image, file, tool call,
  *            signed thought) or before the final block, whichever comes first.
  *
- * The final block is never cached: it is the turn that changes from call to call. Derivation runs on
- * the prompt's `Content` blocks *before* `mergeConsecutiveRole` collapses same-role neighbours, so
- * the boundary the caller expressed by sending separate segments survives. A prompt shaped
+ * The final block is never cached: it is the turn that changes from call to call. Prompt content
+ * blocks are never merged, so the boundary the caller expressed by sending separate segments
+ * survives. A prompt shaped
  * `[system, user: catalog text, user: task text + image]` therefore caches `system + catalog` and
  * sends `task + image` — which is the shape that matters, since the task text names the photo.
  *
@@ -50,20 +50,17 @@ import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
  * shard that key (`route:0` … `route:3`) to spread load, and hashing it would mint four resources
  * for four byte-identical prefixes. Content addressing collapses the shards onto one cache for free.
  *
- * ## Registry: Vertex itself, with a local memo in front
+ * ## Registry: host coordination, with a local memo and Vertex recovery
  *
  * A registry that lives only in a process costs hit rate linearly in fleet size — every instance
- * pays its own cold create, multiplied by every shard. So the shared registry *is* Vertex: each
- * cache is created with a deterministic `displayName` built from the content hash, and a cold
- * instance lists `cachedContents` and adopts a live match instead of creating its own.
+ * pays its own cold create, multiplied by every shard. Hosts can inject a distributed coordinator;
+ * Studio supplies Redis. The coordinator stores resource name/expiry, grants one bounded lease per
+ * content hash, shares create cooldowns, and limits concurrent creates per Vertex project/location.
  *
- * The in-memory map on the driver instance is a memo in front of that, not the registry itself:
- * listing happens on a cold key, on expiry, and after a 404 — never per call.
- *
- * Two instances that go cold at the same moment can still both create. That is left alone
- * deliberately: the duplicate expires on its own TTL, costs storage rent for that window rather than
- * a re-billed prefix, and both instances converge on one resource at the next list. Locking would
- * cost more than the duplication does.
+ * The in-memory map on the driver instance is a memo in front of that registry. Vertex listing by
+ * deterministic `displayName` remains recovery for a missing registry entry or a pre-existing
+ * resource; it is not the normal fleet lookup. If the injected coordinator is unavailable, a live
+ * local memo may still be used, but a cold instance sends uncached rather than creating in a storm.
  *
  * `ListCachedContents` carries no filter field, so the match is client-side: one control-plane read
  * per cold key, paged at 100 (the API coerces anything above 1000), stopping at the first hit and
@@ -72,10 +69,10 @@ import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
  *
  * ## Fallback
  *
- * Every failure on the cache path is non-fatal. A create error, a min-token rejection, an expired
- * resource, a permission error: one warning through the driver logger, then the full un-cached
- * request exactly as before. A min-token rejection additionally marks the prefix uncacheable so the
- * next thousand calls do not each pay for a doomed create.
+ * In `auto` mode every failure on the cache path is non-fatal. A create error, a min-token rejection,
+ * an expired resource, or a permission error produces a safe diagnostic and then the full uncached
+ * request. In `required` mode the same preparation failure is surfaced for validation. A min-token
+ * rejection additionally marks the prefix uncacheable so later calls do not repeat a doomed create.
  */
 
 /** Default lifetime of a created `cachedContents` resource. */
@@ -107,15 +104,73 @@ const LIST_PAGE_SIZE = 100;
 /** Bound on a single discovery sweep, so a project full of unrelated caches cannot stall a call. */
 const LIST_MAX_SCANNED = 1000;
 
+const CACHE_LEASE_MS = 60_000;
+const CACHE_WAIT_MS = 5_000;
+const CREATE_PERMIT_WAIT_MS = 1_500;
+const CREATE_PERMIT_LEASE_MS = 60_000;
+const MAX_CONCURRENT_CREATES_PER_LOCATION = 2;
+const DEFAULT_QUOTA_COOLDOWN_MS = 30_000;
+
 export interface GeminiContextCacheEntry {
     /** Server-generated resource name, e.g. `projects/p/locations/l/cachedContents/123`. */
     name: string;
     expiresAtMs: number;
 }
 
+export interface GeminiContextCacheCoordinationKey {
+    /** Studio environment ID or another caller-defined isolation scope. */
+    scope?: string;
+    project: string;
+    location: string;
+    model: string;
+    contentHash: string;
+}
+
+/**
+ * Optional fleet coordinator supplied by the host application.
+ *
+ * Llumiverse deliberately owns no Redis dependency. Studio injects these functions when it creates
+ * a Vertex driver; another host can implement the same semantics with its own coordination store.
+ * A rejected operation means coordination is unavailable and causes a safe uncached fallback.
+ */
+export interface GeminiContextCacheCoordinator {
+    getEntry(key: GeminiContextCacheCoordinationKey): Promise<GeminiContextCacheEntry | undefined>;
+    acquireLease(key: GeminiContextCacheCoordinationKey, leaseMs: number): Promise<string | undefined>;
+    waitForEntry(
+        key: GeminiContextCacheCoordinationKey,
+        timeoutMs: number,
+    ): Promise<GeminiContextCacheEntry | undefined>;
+    publishEntry(
+        key: GeminiContextCacheCoordinationKey,
+        leaseToken: string,
+        entry: GeminiContextCacheEntry,
+        ttlMs: number,
+    ): Promise<boolean>;
+    releaseLease(key: GeminiContextCacheCoordinationKey, leaseToken: string): Promise<void>;
+    invalidateEntry(key: GeminiContextCacheCoordinationKey, expectedName: string): Promise<void>;
+    getCooldownUntil(key: GeminiContextCacheCoordinationKey): Promise<number | undefined>;
+    setCooldownUntil(key: GeminiContextCacheCoordinationKey, untilMs: number): Promise<void>;
+    acquireCreatePermit(
+        key: GeminiContextCacheCoordinationKey,
+        limit: number,
+        leaseMs: number,
+        waitMs: number,
+    ): Promise<string | undefined>;
+    releaseCreatePermit(key: GeminiContextCacheCoordinationKey, permitToken: string): Promise<void>;
+}
+
 export interface GeminiContextCacheManagerOptions {
     /** TTL used when an execution does not carry `prompt_cache_ttl_seconds`. */
     ttlSeconds?: number;
+    coordinator?: GeminiContextCacheCoordinator;
+    coordinationScope?: string;
+}
+
+interface GeminiContextCacheResolution {
+    entry?: GeminiContextCacheEntry;
+    path: PromptCachePath;
+    waitLatencyMs?: number;
+    providerStatus?: number;
 }
 
 /**
@@ -125,17 +180,23 @@ export interface GeminiContextCacheManagerOptions {
  * and de-duplication of concurrent lookups for the same content. It holds no client and makes no
  * calls; the caller supplies the loader, so discovery and creation stay testable without GCP.
  *
- * This is a memo, not the registry — the registry is Vertex, reached by listing. Its only job is to
- * keep that listing off the per-call path.
+ * This is a memo, not the fleet registry. Its job is to keep distributed lookups off the hot path
+ * and collapse concurrent calls inside one driver process.
  */
 export class GeminiContextCacheManager {
     private readonly entries = new Map<string, GeminiContextCacheEntry>();
     private readonly uncacheable = new Set<string>();
-    private readonly pending = new Map<string, Promise<GeminiContextCacheEntry | undefined>>();
+    private readonly pending = new Map<string, Promise<GeminiContextCacheResolution>>();
+    private createCooldownUntilMs = 0;
+    private activeCreates = 0;
     readonly defaultTtlSeconds: number;
+    readonly coordinator: GeminiContextCacheCoordinator | undefined;
+    readonly coordinationScope: string | undefined;
 
     constructor(options: GeminiContextCacheManagerOptions = {}) {
         this.defaultTtlSeconds = options.ttlSeconds ?? DEFAULT_GEMINI_CONTEXT_CACHE_TTL_SECONDS;
+        this.coordinator = options.coordinator;
+        this.coordinationScope = options.coordinationScope;
     }
 
     get(key: string): GeminiContextCacheEntry | undefined {
@@ -170,20 +231,48 @@ export class GeminiContextCacheManager {
         }
     }
 
+    getLocalCooldownUntil(): number | undefined {
+        return this.createCooldownUntilMs > Date.now() ? this.createCooldownUntilMs : undefined;
+    }
+
+    setLocalCooldownUntil(untilMs: number): void {
+        this.createCooldownUntilMs = Math.max(this.createCooldownUntilMs, untilMs);
+    }
+
+    async acquireLocalCreatePermit(waitMs: number): Promise<boolean> {
+        const deadline = Date.now() + waitMs;
+        while (this.activeCreates >= MAX_CONCURRENT_CREATES_PER_LOCATION) {
+            if (Date.now() >= deadline) return false;
+            await delay(Math.min(25, Math.max(1, deadline - Date.now())));
+        }
+        this.activeCreates++;
+        return true;
+    }
+
+    releaseLocalCreatePermit(): void {
+        this.activeCreates = Math.max(0, this.activeCreates - 1);
+    }
+
     /**
      * Return the memoized entry for `key`, or run `load` — discovery then creation — on a miss or
      * near expiry. Concurrent callers for the same content share one lookup.
      */
     async resolve(
         key: string,
-        load: () => Promise<GeminiContextCacheEntry | undefined>,
-    ): Promise<GeminiContextCacheEntry | undefined> {
+        load: () => Promise<GeminiContextCacheResolution>,
+    ): Promise<GeminiContextCacheResolution> {
         const existing = this.entries.get(key);
         if (existing && existing.expiresAtMs - Date.now() > CACHE_REFRESH_MARGIN_MS) {
-            return existing;
+            return { entry: existing, path: 'local_memo_hit' };
         }
         const inflight = this.pending.get(key);
-        if (inflight) return inflight;
+        if (inflight) {
+            const startedAt = Date.now();
+            const resolution = await inflight;
+            return resolution.entry
+                ? { ...resolution, path: 'waited_for_creator', waitLatencyMs: Date.now() - startedAt }
+                : resolution;
+        }
 
         const started = load().finally(() => this.pending.delete(key));
         this.pending.set(key, started);
@@ -198,7 +287,7 @@ export class GeminiContextCacheManager {
 export interface GeminiCachePrefix {
     system?: Content;
     contents: Content[];
-    /** Number of leading `Part`s the prefix covers once same-role blocks are merged. */
+    /** Number of leading `Part`s lifted into the cache resource. */
     partCount: number;
 }
 
@@ -232,14 +321,19 @@ export function deriveGeminiCachePrefix(prompt: GenerateContentPrompt): GeminiCa
         prefix.push(contents[i]);
         partCount += parts.length;
     }
+    // Vertex rejects cachedContents.create when its request ends in a model turn. Keep any trailing
+    // model blocks in the uncached continuation; the resource must end on a user turn.
+    while (prefix.at(-1)?.role === 'model') {
+        partCount -= prefix.pop()?.parts?.length ?? 0;
+    }
     if (!prompt.system && prefix.length === 0) return undefined;
     return { system: prompt.system, contents: prefix, partCount };
 }
 
 /**
- * Drop the first `count` `Part`s from a merged `Content[]`, dropping blocks that empty out.
- * Returns `undefined` if the request holds fewer parts than the prefix claims — a mismatch means the
- * payload is not the merge of the prompt we derived from, and caching must not touch it.
+ * Drop the first `count` `Part`s from a `Content[]`, dropping blocks that empty out. Returns
+ * `undefined` if the request holds fewer parts than the prefix claims; caching must not touch a
+ * payload that no longer matches the prompt from which the prefix was derived.
  */
 export function stripLeadingParts(contents: Content[], count: number): Content[] | undefined {
     if (count <= 0) return contents;
@@ -289,7 +383,7 @@ function errorMessage(error: unknown): string {
 export function isMinimumTokenCountError(error: unknown): boolean {
     const status = errorStatus(error);
     if (status !== undefined && status !== 400) return false;
-    return /minimum|min_?total_?token|too small|too few tokens|at least \d+ tokens/i.test(errorMessage(error));
+    return /minimum token|min_?total_?token|too (?:small|few).*token|at least \d+ tokens/i.test(errorMessage(error));
 }
 
 /**
@@ -311,9 +405,28 @@ export function isCacheUnusableError(error: unknown): boolean {
 
 interface GeminiContextCachePlan {
     payload: GenerateContentParameters;
-    contentHash: string;
+    managerKey: string;
     cacheName: string;
     manager: GeminiContextCacheManager;
+    coordinationKey?: GeminiContextCacheCoordinationKey;
+    diagnostic: PromptCacheDiagnostic;
+}
+
+interface GeminiContextCachePlanResult {
+    plan?: GeminiContextCachePlan;
+    diagnostic: PromptCacheDiagnostic;
+}
+
+export interface GeminiContextCacheExecution<T> {
+    value: T;
+    diagnostic: PromptCacheDiagnostic;
+}
+
+export class GeminiContextCacheRequiredError extends Error {
+    constructor(readonly diagnostic: PromptCacheDiagnostic) {
+        super(`Gemini explicit context cache was required but unavailable (${diagnostic.path})`);
+        this.name = 'GeminiContextCacheRequiredError';
+    }
 }
 
 /**
@@ -376,28 +489,52 @@ async function planGeminiContextCache(
     options: ExecutionOptions,
     prompt: GenerateContentPrompt,
     payload: GenerateContentParameters,
+    location: string,
     /** Resource names already proven unusable on this call, so discovery does not re-adopt them. */
     excludeCacheNames?: ReadonlySet<string>,
-): Promise<GeminiContextCachePlan | undefined> {
+): Promise<GeminiContextCachePlanResult> {
+    const startedAt = Date.now();
+    const baseDiagnostic = (path: PromptCachePath): PromptCacheDiagnostic => ({
+        path,
+        explicit_cache_used: false,
+        model: payload.model,
+        preparation_latency_ms: Date.now() - startedAt,
+    });
     // Order matters: without a cache key nothing below runs, so a driver that never opted in — or a
     // test double that does not implement the registry — sees exactly today's payload.
-    if (!options.prompt_cache_key) return undefined;
-    if (options.prompt_cache_mode === 'off') return undefined;
+    if (options.prompt_cache_mode === 'off') return { diagnostic: baseDiagnostic('disabled') };
+    if (!options.prompt_cache_key) return { diagnostic: baseDiagnostic('no_key') };
     // Image generation carries its own config shape and no reusable prefix.
-    if (options.model.toLowerCase().includes('image')) return undefined;
+    if (options.model.toLowerCase().includes('image')) return { diagnostic: baseDiagnostic('disabled') };
     const manager = driver.getGeminiContextCacheManager?.();
-    if (!manager) return undefined;
-    if (!Array.isArray(payload.contents)) return undefined;
+    if (!manager) return { diagnostic: baseDiagnostic('disabled') };
+    if (!Array.isArray(payload.contents)) return { diagnostic: baseDiagnostic('fallback_provider_error') };
 
     const prefix = deriveGeminiCachePrefix(prompt);
-    if (!prefix) return undefined;
+    if (!prefix) return { diagnostic: baseDiagnostic('fallback_provider_error') };
 
     // Vertex rejects a generateContent request that sets systemInstruction, tools or toolConfig
     // alongside cachedContent — those belong to the cache. So they are part of its identity.
     const tools = payload.config?.tools as Tool[] | undefined;
     const toolConfig = payload.config?.toolConfig;
     const contentHash = geminiCacheContentHash(payload.model, prefix, tools, toolConfig);
-    if (manager.isUncacheable(contentHash)) return undefined;
+    const managerKey = `${location}:${contentHash}`;
+    const coordinationKey = driver.getGeminiContextCacheCoordinationKey?.(location, payload.model, contentHash);
+    const diagnostic = (path: PromptCachePath, extra: Partial<PromptCacheDiagnostic> = {}): PromptCacheDiagnostic => ({
+        path,
+        explicit_cache_used: false,
+        content_hash_prefix: contentHash.slice(0, 12),
+        model: payload.model,
+        scope: coordinationKey
+            ? [coordinationKey.scope, coordinationKey.project, coordinationKey.location].filter(Boolean).join(':')
+            : manager.coordinationScope,
+        cacheable_part_count: prefix.partCount,
+        preparation_latency_ms: Date.now() - startedAt,
+        ...extra,
+    });
+    if (manager.isUncacheable(managerKey)) {
+        return { diagnostic: diagnostic('minimum_token_rejection') };
+    }
 
     const requestContents = stripLeadingParts(payload.contents as Content[], prefix.partCount);
     if (!requestContents || requestContents.length === 0) {
@@ -405,38 +542,58 @@ async function planGeminiContextCache(
             { model: payload.model },
             '[VertexAI] Gemini context cache: request contents do not match the derived prefix, sending un-cached',
         );
-        return undefined;
+        return { diagnostic: diagnostic('fallback_provider_error') };
     }
 
-    const entry = await manager.resolve(contentHash, () =>
+    const resolution = await manager.resolve(managerKey, () =>
         adoptOrCreateCache({
             driver,
             client,
             manager,
             contentHash,
+            managerKey,
             model: payload.model,
             prefix,
             tools,
             toolConfig,
             ttlSeconds: resolveTtlSeconds(options, manager),
             excludeCacheNames,
+            coordinationKey,
         }),
     );
-    if (!entry) return undefined;
+    if (!resolution.entry) {
+        return {
+            diagnostic: diagnostic(resolution.path, {
+                wait_latency_ms: resolution.waitLatencyMs,
+                provider_status: resolution.providerStatus,
+            }),
+        };
+    }
+
+    const cacheDiagnostic = diagnostic(resolution.path, {
+        explicit_cache_used: true,
+        wait_latency_ms: resolution.waitLatencyMs,
+        provider_status: resolution.providerStatus,
+    });
 
     return {
-        contentHash,
-        cacheName: entry.name,
-        manager,
-        payload: {
-            ...payload,
-            contents: requestContents,
-            config: {
-                ...payload.config,
-                systemInstruction: undefined,
-                tools: undefined,
-                toolConfig: undefined,
-                cachedContent: entry.name,
+        diagnostic: cacheDiagnostic,
+        plan: {
+            managerKey,
+            cacheName: resolution.entry.name,
+            manager,
+            coordinationKey,
+            diagnostic: cacheDiagnostic,
+            payload: {
+                ...payload,
+                contents: requestContents,
+                config: {
+                    ...payload.config,
+                    systemInstruction: undefined,
+                    tools: undefined,
+                    toolConfig: undefined,
+                    cachedContent: resolution.entry.name,
+                },
             },
         },
     };
@@ -447,12 +604,14 @@ interface AdoptOrCreateCacheParams {
     client: GoogleGenAI;
     manager: GeminiContextCacheManager;
     contentHash: string;
+    managerKey: string;
     model: string;
     prefix: GeminiCachePrefix;
     tools: Tool[] | undefined;
     toolConfig: ToolConfig | undefined;
     ttlSeconds: number;
     excludeCacheNames?: ReadonlySet<string>;
+    coordinationKey?: GeminiContextCacheCoordinationKey;
 }
 
 /**
@@ -467,24 +626,44 @@ async function adoptOrCreateCache({
     client,
     manager,
     contentHash,
+    managerKey,
     model,
     prefix,
     tools,
     toolConfig,
     ttlSeconds,
     excludeCacheNames,
-}: AdoptOrCreateCacheParams): Promise<GeminiContextCacheEntry | undefined> {
+    coordinationKey,
+}: AdoptOrCreateCacheParams): Promise<GeminiContextCacheResolution> {
     const displayName = geminiCacheDisplayName(model, contentHash);
 
-    // 1. Memoized and near expiry — extend rather than lose the prefix mid-flight.
-    const existing = manager.get(contentHash);
-    if (existing && !excludeCacheNames?.has(existing.name)) {
+    if (manager.coordinator && coordinationKey) {
+        return coordinateAdoptOrCreateCache({
+            driver,
+            client,
+            manager,
+            managerKey,
+            model,
+            prefix,
+            tools,
+            toolConfig,
+            ttlSeconds,
+            excludeCacheNames,
+            coordinationKey,
+            displayName,
+        });
+    }
+
+    // Standalone provider-library path: local singleflight plus Vertex recovery. Studio always
+    // injects a coordinator, so this path never turns a Redis outage into a fleet-wide create storm.
+    const existing = manager.get(managerKey);
+    if (existing && existing.expiresAtMs > Date.now() && !excludeCacheNames?.has(existing.name)) {
         const refreshed = await extendCacheTtl(driver, client, existing, model, ttlSeconds);
         if (refreshed) {
-            manager.set(contentHash, refreshed);
-            return refreshed;
+            manager.set(managerKey, refreshed);
+            return { entry: refreshed, path: 'refreshed' };
         }
-        manager.invalidate(contentHash);
+        manager.invalidate(managerKey);
     }
 
     // 2. Vertex is the shared registry: adopt whatever a peer instance already built.
@@ -494,11 +673,195 @@ async function adoptOrCreateCache({
             adopted.expiresAtMs - Date.now() < CACHE_REFRESH_MARGIN_MS
                 ? ((await extendCacheTtl(driver, client, adopted, model, ttlSeconds)) ?? adopted)
                 : adopted;
-        manager.set(contentHash, entry);
-        return entry;
+        manager.set(managerKey, entry);
+        return { entry, path: 'provider_list_recovery' };
     }
 
-    // 3. Nobody has one. Build it.
+    const cooldownUntil = manager.getLocalCooldownUntil();
+    if (cooldownUntil) return { path: 'fallback_quota', waitLatencyMs: Math.max(0, cooldownUntil - Date.now()) };
+    if (!(await manager.acquireLocalCreatePermit(CREATE_PERMIT_WAIT_MS))) {
+        return { path: 'fallback_wait_timeout', waitLatencyMs: CREATE_PERMIT_WAIT_MS };
+    }
+    try {
+        return await createCache({
+            driver,
+            client,
+            manager,
+            managerKey,
+            model,
+            prefix,
+            tools,
+            toolConfig,
+            ttlSeconds,
+            displayName,
+        });
+    } finally {
+        manager.releaseLocalCreatePermit();
+    }
+}
+
+interface CoordinatedAdoptOrCreateCacheParams extends Omit<AdoptOrCreateCacheParams, 'contentHash'> {
+    coordinationKey: GeminiContextCacheCoordinationKey;
+    displayName: string;
+}
+
+async function coordinateAdoptOrCreateCache({
+    driver,
+    client,
+    manager,
+    managerKey,
+    model,
+    prefix,
+    tools,
+    toolConfig,
+    ttlSeconds,
+    excludeCacheNames,
+    coordinationKey,
+    displayName,
+}: CoordinatedAdoptOrCreateCacheParams): Promise<GeminiContextCacheResolution> {
+    const coordinator = manager.coordinator;
+    if (!coordinator) return { path: 'fallback_coordination_unavailable' };
+
+    const localEntry = manager.get(managerKey);
+    try {
+        const sharedEntry = await coordinator.getEntry(coordinationKey);
+        if (
+            sharedEntry &&
+            sharedEntry.expiresAtMs > Date.now() &&
+            !excludeCacheNames?.has(sharedEntry.name) &&
+            sharedEntry.expiresAtMs - Date.now() > CACHE_REFRESH_MARGIN_MS
+        ) {
+            manager.set(managerKey, sharedEntry);
+            return { entry: sharedEntry, path: 'distributed_registry_hit' };
+        }
+
+        const leaseToken = await coordinator.acquireLease(coordinationKey, CACHE_LEASE_MS);
+        if (!leaseToken) {
+            const waitStartedAt = Date.now();
+            const waitedEntry = await coordinator.waitForEntry(coordinationKey, CACHE_WAIT_MS);
+            const waitLatencyMs = Date.now() - waitStartedAt;
+            if (waitedEntry && waitedEntry.expiresAtMs > Date.now() && !excludeCacheNames?.has(waitedEntry.name)) {
+                manager.set(managerKey, waitedEntry);
+                return { entry: waitedEntry, path: 'waited_for_creator', waitLatencyMs };
+            }
+            const cooldownUntil = await coordinator.getCooldownUntil(coordinationKey);
+            return cooldownUntil && cooldownUntil > Date.now()
+                ? { path: 'fallback_quota', waitLatencyMs }
+                : { path: 'fallback_wait_timeout', waitLatencyMs };
+        }
+
+        try {
+            // Re-read after acquiring the lease: a previous leader may have published between our
+            // initial read and acquisition.
+            const current = await coordinator.getEntry(coordinationKey);
+            if (current && current.expiresAtMs > Date.now() && !excludeCacheNames?.has(current.name)) {
+                if (current.expiresAtMs - Date.now() > CACHE_REFRESH_MARGIN_MS) {
+                    manager.set(managerKey, current);
+                    return { entry: current, path: 'distributed_registry_hit' };
+                }
+                const refreshed = await extendCacheTtl(driver, client, current, model, ttlSeconds);
+                if (refreshed) {
+                    await coordinator.publishEntry(
+                        coordinationKey,
+                        leaseToken,
+                        refreshed,
+                        Math.max(1_000, refreshed.expiresAtMs - Date.now()),
+                    );
+                    manager.set(managerKey, refreshed);
+                    return { entry: refreshed, path: 'refreshed' };
+                }
+                await coordinator.invalidateEntry(coordinationKey, current.name);
+            }
+
+            const adopted = await findCacheByDisplayName(driver, client, displayName, model, excludeCacheNames);
+            if (adopted) {
+                const entry =
+                    adopted.expiresAtMs - Date.now() < CACHE_REFRESH_MARGIN_MS
+                        ? ((await extendCacheTtl(driver, client, adopted, model, ttlSeconds)) ?? adopted)
+                        : adopted;
+                await coordinator.publishEntry(
+                    coordinationKey,
+                    leaseToken,
+                    entry,
+                    Math.max(1_000, entry.expiresAtMs - Date.now()),
+                );
+                manager.set(managerKey, entry);
+                return { entry, path: 'provider_list_recovery' };
+            }
+
+            const cooldownUntil = await coordinator.getCooldownUntil(coordinationKey);
+            if (cooldownUntil && cooldownUntil > Date.now()) {
+                return { path: 'fallback_quota', waitLatencyMs: Math.max(0, cooldownUntil - Date.now()) };
+            }
+
+            const permitToken = await coordinator.acquireCreatePermit(
+                coordinationKey,
+                MAX_CONCURRENT_CREATES_PER_LOCATION,
+                CREATE_PERMIT_LEASE_MS,
+                CREATE_PERMIT_WAIT_MS,
+            );
+            if (!permitToken) return { path: 'fallback_wait_timeout', waitLatencyMs: CREATE_PERMIT_WAIT_MS };
+            try {
+                const resolution = await createCache({
+                    driver,
+                    client,
+                    manager,
+                    managerKey,
+                    model,
+                    prefix,
+                    tools,
+                    toolConfig,
+                    ttlSeconds,
+                    displayName,
+                    coordinator,
+                    coordinationKey,
+                });
+                if (resolution.entry) {
+                    await coordinator.publishEntry(
+                        coordinationKey,
+                        leaseToken,
+                        resolution.entry,
+                        Math.max(1_000, resolution.entry.expiresAtMs - Date.now()),
+                    );
+                }
+                return resolution;
+            } finally {
+                await coordinator.releaseCreatePermit(coordinationKey, permitToken);
+            }
+        } finally {
+            await coordinator.releaseLease(coordinationKey, leaseToken);
+        }
+    } catch {
+        // A still-live memo is safe to use while the registry is unavailable. On a cold instance we
+        // deliberately do not create: uncached inference is preferable to a fleet-wide create storm.
+        if (localEntry && localEntry.expiresAtMs > Date.now() && !excludeCacheNames?.has(localEntry.name)) {
+            return { entry: localEntry, path: 'local_memo_hit' };
+        }
+        return { path: 'fallback_coordination_unavailable' };
+    }
+}
+
+interface CreateCacheParams
+    extends Omit<AdoptOrCreateCacheParams, 'contentHash' | 'excludeCacheNames' | 'coordinationKey'> {
+    displayName: string;
+    coordinator?: GeminiContextCacheCoordinator;
+    coordinationKey?: GeminiContextCacheCoordinationKey;
+}
+
+async function createCache({
+    driver,
+    client,
+    manager,
+    managerKey,
+    model,
+    prefix,
+    tools,
+    toolConfig,
+    ttlSeconds,
+    displayName,
+    coordinator,
+    coordinationKey,
+}: CreateCacheParams): Promise<GeminiContextCacheResolution> {
     try {
         const created = await client.caches.create({
             model,
@@ -514,24 +877,59 @@ async function adoptOrCreateCache({
         const entry = toCacheEntry(created, ttlSeconds);
         if (!entry) {
             driver.logger.warn({ model }, '[VertexAI] Gemini context cache: create returned no resource name');
-            return undefined;
+            return { path: 'fallback_provider_error' };
         }
-        manager.set(contentHash, entry);
-        return entry;
+        manager.set(managerKey, entry);
+        return { entry, path: 'created' };
     } catch (error) {
+        const status = errorStatus(error);
         if (isMinimumTokenCountError(error)) {
-            // Below the model's minimum cacheable size. This will never succeed for this prefix.
-            manager.markUncacheable(contentHash);
-            driver.logger.warn(
-                { error, model },
-                '[VertexAI] Gemini context cache: prefix below the model minimum token count, caching disabled ' +
-                    'for this prefix',
-            );
-            return undefined;
+            manager.markUncacheable(managerKey);
+            return { path: 'minimum_token_rejection', providerStatus: status };
         }
-        driver.logger.warn({ error, model }, '[VertexAI] Gemini context cache: create failed, sending un-cached');
-        return undefined;
+
+        // This is not a provider retry loop. In auto mode the cache-create 429 is swallowed so the
+        // completion can proceed uncached and Temporal cannot observe it. Retain only Vertex's
+        // Retry-After as a shared create-suppression window for the remaining fleet traffic.
+        if (status === 429) {
+            const untilMs = Date.now() + (retryAfterMilliseconds(error) ?? DEFAULT_QUOTA_COOLDOWN_MS);
+            if (coordinator && coordinationKey) await coordinator.setCooldownUntil(coordinationKey, untilMs);
+            else manager.setLocalCooldownUntil(untilMs);
+            return { path: 'fallback_quota', providerStatus: status };
+        }
+
+        return { path: 'fallback_provider_error', providerStatus: status };
     }
+}
+
+function delay(milliseconds: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function retryAfterMilliseconds(error: unknown): number | undefined {
+    if (!error || typeof error !== 'object') return undefined;
+    const candidates = [
+        (error as { headers?: unknown }).headers,
+        (error as { response?: { headers?: unknown } }).response?.headers,
+    ];
+    for (const headers of candidates) {
+        let value: unknown;
+        if (headers && typeof headers === 'object' && 'get' in headers && typeof headers.get === 'function') {
+            value = headers.get('retry-after');
+        } else if (headers && typeof headers === 'object') {
+            value =
+                (headers as Record<string, unknown>)['retry-after'] ??
+                (headers as Record<string, unknown>)['Retry-After'];
+        }
+        if (typeof value !== 'string' && typeof value !== 'number') continue;
+        const seconds = Number(value);
+        if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
+        if (typeof value === 'string') {
+            const dateMs = Date.parse(value);
+            if (!Number.isNaN(dateMs)) return Math.max(0, dateMs - Date.now());
+        }
+    }
+    return undefined;
 }
 
 /** Push a resource's expiry out. Returns `undefined` when Vertex would not extend it. */
@@ -604,46 +1002,105 @@ export async function generateWithGeminiContextCache<T>(
     prompt: GenerateContentPrompt,
     payload: GenerateContentParameters,
     send: (payload: GenerateContentParameters) => Promise<T>,
-): Promise<T> {
+    location: string,
+): Promise<GeminiContextCacheExecution<T>> {
     // `planGeminiContextCache` already swallows provider failures, but nothing on this path is
     // allowed to cost the caller a completion — so an unexpected throw degrades too.
-    const plan = await planGeminiContextCache(driver, client, options, prompt, payload).catch((error: unknown) => {
+    const planned: GeminiContextCachePlanResult = await planGeminiContextCache(
+        driver,
+        client,
+        options,
+        prompt,
+        payload,
+        location,
+    ).catch((error: unknown): GeminiContextCachePlanResult => {
         driver.logger.warn(
             { error, model: payload.model },
             '[VertexAI] Gemini context cache: preparation failed, sending un-cached',
         );
-        return undefined;
+        return {
+            diagnostic: {
+                path: 'fallback_provider_error' as const,
+                explicit_cache_used: false,
+                model: payload.model,
+                preparation_latency_ms: 0,
+                provider_status: errorStatus(error),
+            },
+        };
     });
-    if (!plan) return send(payload);
+    logCacheDiagnostic(driver, planned.diagnostic);
+    const plan = planned.plan;
+    if (!plan) {
+        if (options.prompt_cache_mode === 'required') throw new GeminiContextCacheRequiredError(planned.diagnostic);
+        return { value: await send(payload), diagnostic: planned.diagnostic };
+    }
 
     try {
-        return await send(plan.payload);
+        return { value: await send(plan.payload), diagnostic: plan.diagnostic };
     } catch (error) {
         if (!isCacheUnusableError(error)) throw error;
         // The resource is gone (expired, deleted, or created by an instance that no longer owns it).
         // Forget it, then re-plan: discovery may find a peer's live cache before falling through to
         // a create. The dead name is excluded so a stale listing cannot hand it back.
-        plan.manager.invalidate(plan.contentHash);
+        plan.manager.invalidate(plan.managerKey);
+        if (plan.coordinationKey && plan.manager.coordinator) {
+            await plan.manager.coordinator.invalidateEntry(plan.coordinationKey, plan.cacheName).catch(() => undefined);
+        }
         driver.logger.warn(
             { error, model: payload.model },
             '[VertexAI] Gemini context cache: cached content unusable, rediscovering',
         );
         const exclude = new Set([plan.cacheName]);
-        const retry = await planGeminiContextCache(driver, client, options, prompt, payload, exclude).catch(
-            () => undefined,
-        );
+        const retryResult = await planGeminiContextCache(
+            driver,
+            client,
+            options,
+            prompt,
+            payload,
+            location,
+            exclude,
+        ).catch(() => undefined);
+        const retry = retryResult?.plan;
         if (retry) {
             try {
-                return await send(retry.payload);
+                const diagnostic = { ...retry.diagnostic, path: 'unusable_resource_recreated' as const };
+                logCacheDiagnostic(driver, diagnostic);
+                return { value: await send(retry.payload), diagnostic };
             } catch (retryError) {
                 if (!isCacheUnusableError(retryError)) throw retryError;
-                retry.manager.invalidate(retry.contentHash);
+                retry.manager.invalidate(retry.managerKey);
+                if (retry.coordinationKey && retry.manager.coordinator) {
+                    await retry.manager.coordinator
+                        .invalidateEntry(retry.coordinationKey, retry.cacheName)
+                        .catch(() => undefined);
+                }
                 driver.logger.warn(
                     { error: retryError, model: payload.model },
                     '[VertexAI] Gemini context cache: replacement cache also unusable, sending un-cached',
                 );
             }
         }
-        return send(payload);
+        const diagnostic: PromptCacheDiagnostic = {
+            ...(retryResult?.diagnostic ?? plan.diagnostic),
+            path: 'fallback_provider_error',
+            explicit_cache_used: false,
+            provider_status: errorStatus(error),
+        };
+        logCacheDiagnostic(driver, diagnostic);
+        if (options.prompt_cache_mode === 'required') throw new GeminiContextCacheRequiredError(diagnostic);
+        return { value: await send(payload), diagnostic };
+    }
+}
+
+function logCacheDiagnostic(driver: VertexAIDriver, diagnostic: PromptCacheDiagnostic): void {
+    const fields = { prompt_cache: diagnostic };
+    if (
+        diagnostic.provider_status !== undefined ||
+        diagnostic.path === 'fallback_coordination_unavailable' ||
+        diagnostic.path === 'fallback_wait_timeout'
+    ) {
+        driver.logger.warn(fields, '[VertexAI] Gemini explicit context cache degraded');
+    } else {
+        driver.logger.debug?.(fields, '[VertexAI] Gemini explicit context cache path');
     }
 }
