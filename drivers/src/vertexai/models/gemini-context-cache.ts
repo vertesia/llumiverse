@@ -8,7 +8,12 @@ import type {
     Tool,
     ToolConfig,
 } from '@google/genai';
-import type { ExecutionOptions, PromptCacheDiagnostic, PromptCachePath } from '@llumiverse/core';
+import type {
+    ExecutionOptions,
+    PromptCacheDiagnostic,
+    PromptCacheFailureReason,
+    PromptCachePath,
+} from '@llumiverse/core';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
 
 /**
@@ -32,9 +37,15 @@ import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
  * per-call fragment creates a brand-new cache resource on every call. So the policy here is
  * deliberately more conservative than Claude's `content[-2]` breakpoint:
  *
+ * Without an explicit segment marker, the conservative legacy policy remains:
+ *
  *   prefix = systemInstruction + the leading `Content` blocks that hold nothing but static text,
- *            stopping before the first block containing a non-text part (image, file, tool call,
- *            signed thought) or before the final block, whichever comes first.
+ *            stopping before the first block containing a non-text part or the final block.
+ *
+ * A caller can instead put `cache_control: {type: 'ephemeral'}` on a `PromptSegment`. The Gemini
+ * renderer preserves that boundary and permits text, `fileData`, and `inlineData` through it. Tool
+ * traffic, thoughts, and unknown future part kinds remain ineligible. This is what lets two calls
+ * share `[system, catalog, photo]` while keeping their route/extract instruction as a dynamic suffix.
  *
  * The final block is never cached: it is the turn that changes from call to call. Prompt content
  * blocks are never merged, so the boundary the caller expressed by sending separate segments
@@ -171,6 +182,8 @@ interface GeminiContextCacheResolution {
     path: PromptCachePath;
     waitLatencyMs?: number;
     providerStatus?: number;
+    providerCode?: string;
+    failureReason?: PromptCacheFailureReason;
 }
 
 /**
@@ -306,12 +319,45 @@ function isStaticTextPart(part: Part): boolean {
     return true;
 }
 
-/**
- * Derive the cacheable prefix of a Gemini prompt. See the module comment for the policy.
- * Returns `undefined` when there is nothing worth caching.
- */
-export function deriveGeminiCachePrefix(prompt: GenerateContentPrompt): GeminiCachePrefix | undefined {
+function isExplicitlyCacheablePart(part: Part): boolean {
+    if (isStaticTextPart(part)) return true;
+    let mediaKey: 'fileData' | 'inlineData';
+    if (part.fileData && typeof part.fileData.fileUri === 'string' && part.fileData.fileUri.length > 0) {
+        mediaKey = 'fileData';
+    } else if (part.inlineData && typeof part.inlineData.data === 'string' && part.inlineData.data.length > 0) {
+        mediaKey = 'inlineData';
+    } else return false;
+    for (const [key, value] of Object.entries(part)) {
+        if (key === mediaKey) continue;
+        if (value !== undefined && value !== null && value !== false) return false;
+    }
+    return true;
+}
+
+interface GeminiCachePrefixAnalysis {
+    prefix?: GeminiCachePrefix;
+    failureReason?: PromptCacheFailureReason;
+}
+
+function analyzeGeminiCachePrefix(prompt: GenerateContentPrompt): GeminiCachePrefixAnalysis {
     const contents = prompt.contents ?? [];
+    const boundary = prompt.cacheBoundaryContentCount;
+    if (boundary !== undefined) {
+        if (!Number.isInteger(boundary) || boundary <= 0 || boundary >= contents.length) {
+            return { failureReason: 'invalid_cache_boundary' };
+        }
+        const prefix = contents.slice(0, boundary);
+        if (prefix.at(-1)?.role === 'model') {
+            return { failureReason: 'cache_ends_with_model_turn' };
+        }
+        const parts = prefix.flatMap((content) => content.parts ?? []);
+        if (parts.length === 0) return { failureReason: 'no_cacheable_prefix' };
+        if (!parts.every(isExplicitlyCacheablePart)) {
+            return { failureReason: 'unsupported_cache_part' };
+        }
+        return { prefix: { system: prompt.system, contents: prefix, partCount: parts.length } };
+    }
+
     const prefix: Content[] = [];
     let partCount = 0;
     // `contents.length - 1`: the last block is this call's dynamic turn and is never cached.
@@ -326,8 +372,16 @@ export function deriveGeminiCachePrefix(prompt: GenerateContentPrompt): GeminiCa
     while (prefix.at(-1)?.role === 'model') {
         partCount -= prefix.pop()?.parts?.length ?? 0;
     }
-    if (!prompt.system && prefix.length === 0) return undefined;
-    return { system: prompt.system, contents: prefix, partCount };
+    if (partCount === 0) return { failureReason: 'no_cacheable_prefix' };
+    return { prefix: { system: prompt.system, contents: prefix, partCount } };
+}
+
+/**
+ * Derive the cacheable prefix of a Gemini prompt. See the module comment for the policy.
+ * Returns `undefined` when there is nothing worth caching.
+ */
+export function deriveGeminiCachePrefix(prompt: GenerateContentPrompt): GeminiCachePrefix | undefined {
+    return analyzeGeminiCachePrefix(prompt).prefix;
 }
 
 /**
@@ -373,6 +427,35 @@ function errorMessage(error: unknown): string {
         if (typeof message === 'string') return message;
     }
     return String(error);
+}
+
+function providerErrorCode(error: unknown): string | undefined {
+    const errorRecord = error && typeof error === 'object' ? (error as Record<string, unknown>) : undefined;
+    const nestedError =
+        errorRecord?.error && typeof errorRecord.error === 'object'
+            ? (errorRecord.error as Record<string, unknown>)
+            : undefined;
+    for (const value of [errorRecord?.code, errorRecord?.status, nestedError?.code, nestedError?.status]) {
+        if (typeof value === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(value)) return value;
+    }
+
+    const message = errorMessage(error);
+    if (/requests? ending with (?:a )?model turn (?:are|is) not supported/i.test(message)) {
+        return 'REQUEST_ENDS_WITH_MODEL_TURN';
+    }
+    for (const code of [
+        'INVALID_ARGUMENT',
+        'FAILED_PRECONDITION',
+        'RESOURCE_EXHAUSTED',
+        'PERMISSION_DENIED',
+        'UNAUTHENTICATED',
+        'DEADLINE_EXCEEDED',
+        'UNAVAILABLE',
+        'NOT_FOUND',
+    ]) {
+        if (message.includes(code)) return code;
+    }
+    return undefined;
 }
 
 /**
@@ -424,7 +507,10 @@ export interface GeminiContextCacheExecution<T> {
 
 export class GeminiContextCacheRequiredError extends Error {
     constructor(readonly diagnostic: PromptCacheDiagnostic) {
-        super(`Gemini explicit context cache was required but unavailable (${diagnostic.path})`);
+        const detail = diagnostic.provider_code ?? diagnostic.failure_reason;
+        super(
+            `Gemini explicit context cache was required but unavailable (${diagnostic.path}${detail ? `: ${detail}` : ''})`,
+        );
         this.name = 'GeminiContextCacheRequiredError';
     }
 }
@@ -510,8 +596,16 @@ async function planGeminiContextCache(
     if (!manager) return { diagnostic: baseDiagnostic('disabled') };
     if (!Array.isArray(payload.contents)) return { diagnostic: baseDiagnostic('fallback_provider_error') };
 
-    const prefix = deriveGeminiCachePrefix(prompt);
-    if (!prefix) return { diagnostic: baseDiagnostic('fallback_provider_error') };
+    const prefixAnalysis = analyzeGeminiCachePrefix(prompt);
+    const prefix = prefixAnalysis.prefix;
+    if (!prefix) {
+        return {
+            diagnostic: {
+                ...baseDiagnostic('fallback_provider_error'),
+                failure_reason: prefixAnalysis.failureReason ?? 'no_cacheable_prefix',
+            },
+        };
+    }
 
     // Vertex rejects a generateContent request that sets systemInstruction, tools or toolConfig
     // alongside cachedContent — those belong to the cache. So they are part of its identity.
@@ -542,7 +636,11 @@ async function planGeminiContextCache(
             { model: payload.model },
             '[VertexAI] Gemini context cache: request contents do not match the derived prefix, sending un-cached',
         );
-        return { diagnostic: diagnostic('fallback_provider_error') };
+        return {
+            diagnostic: diagnostic('fallback_provider_error', {
+                failure_reason: 'request_contents_mismatch',
+            }),
+        };
     }
 
     const resolution = await manager.resolve(managerKey, () =>
@@ -566,6 +664,8 @@ async function planGeminiContextCache(
             diagnostic: diagnostic(resolution.path, {
                 wait_latency_ms: resolution.waitLatencyMs,
                 provider_status: resolution.providerStatus,
+                provider_code: resolution.providerCode,
+                failure_reason: resolution.failureReason,
             }),
         };
     }
@@ -877,7 +977,7 @@ async function createCache({
         const entry = toCacheEntry(created, ttlSeconds);
         if (!entry) {
             driver.logger.warn({ model }, '[VertexAI] Gemini context cache: create returned no resource name');
-            return { path: 'fallback_provider_error' };
+            return { path: 'fallback_provider_error', failureReason: 'provider_missing_resource_name' };
         }
         manager.set(managerKey, entry);
         return { entry, path: 'created' };
@@ -885,7 +985,11 @@ async function createCache({
         const status = errorStatus(error);
         if (isMinimumTokenCountError(error)) {
             manager.markUncacheable(managerKey);
-            return { path: 'minimum_token_rejection', providerStatus: status };
+            return {
+                path: 'minimum_token_rejection',
+                providerStatus: status,
+                providerCode: providerErrorCode(error),
+            };
         }
 
         // This is not a provider retry loop. In auto mode the cache-create 429 is swallowed so the
@@ -895,10 +999,15 @@ async function createCache({
             const untilMs = Date.now() + (retryAfterMilliseconds(error) ?? DEFAULT_QUOTA_COOLDOWN_MS);
             if (coordinator && coordinationKey) await coordinator.setCooldownUntil(coordinationKey, untilMs);
             else manager.setLocalCooldownUntil(untilMs);
-            return { path: 'fallback_quota', providerStatus: status };
+            return { path: 'fallback_quota', providerStatus: status, providerCode: providerErrorCode(error) };
         }
 
-        return { path: 'fallback_provider_error', providerStatus: status };
+        return {
+            path: 'fallback_provider_error',
+            providerStatus: status,
+            providerCode: providerErrorCode(error),
+            failureReason: 'provider_rejected',
+        };
     }
 }
 
@@ -1025,6 +1134,8 @@ export async function generateWithGeminiContextCache<T>(
                 model: payload.model,
                 preparation_latency_ms: 0,
                 provider_status: errorStatus(error),
+                provider_code: providerErrorCode(error),
+                failure_reason: 'provider_rejected',
             },
         };
     });
@@ -1085,6 +1196,8 @@ export async function generateWithGeminiContextCache<T>(
             path: 'fallback_provider_error',
             explicit_cache_used: false,
             provider_status: errorStatus(error),
+            provider_code: providerErrorCode(error),
+            failure_reason: 'provider_rejected',
         };
         logCacheDiagnostic(driver, diagnostic);
         if (options.prompt_cache_mode === 'required') throw new GeminiContextCacheRequiredError(diagnostic);

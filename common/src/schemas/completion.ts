@@ -57,6 +57,18 @@ export const PromptCachePathSchema = z
     ])
     .meta({ id: 'PromptCachePath' });
 
+export const PromptCacheFailureReasonSchema = z
+    .enum([
+        'no_cacheable_prefix',
+        'invalid_cache_boundary',
+        'unsupported_cache_part',
+        'cache_ends_with_model_turn',
+        'request_contents_mismatch',
+        'provider_missing_resource_name',
+        'provider_rejected',
+    ])
+    .meta({ id: 'PromptCacheFailureReason' });
+
 export const PromptCacheDiagnosticSchema = z
     .strictObject({
         path: PromptCachePathSchema,
@@ -68,6 +80,11 @@ export const PromptCacheDiagnosticSchema = z
         preparation_latency_ms: z.number().nonnegative(),
         wait_latency_ms: z.number().nonnegative().optional(),
         provider_status: z.number().int().optional(),
+        provider_code: z
+            .string()
+            .regex(/^[A-Z][A-Z0-9_]{0,63}$/)
+            .optional(),
+        failure_reason: PromptCacheFailureReasonSchema.optional(),
     })
     .meta({
         id: 'PromptCacheDiagnostic',
@@ -100,6 +117,14 @@ export const PromptSegmentSchema = z
             })
             .optional(),
         files: z.array(DataSourceSchema).optional(),
+        cache_control: z
+            .strictObject({ type: z.literal('ephemeral') })
+            .meta({
+                description:
+                    'Marks the end of a reusable prompt prefix. Providers that support explicit cache boundaries ' +
+                    'may cache this segment and every preceding segment, including supported media.',
+            })
+            .optional(),
     })
     .meta({ id: 'PromptSegment' });
 
