@@ -162,8 +162,8 @@ importers:
         specifier: ^1.4.1
         version: 1.4.1
       eventsource:
-        specifier: ^4.1.1
-        version: 4.1.1
+        specifier: ^5.1.0
+        version: 5.1.1
       google-auth-library:
         specifier: ^11.0.2
         version: 11.0.2
@@ -1256,9 +1256,13 @@ packages:
     resolution: {integrity: sha512-kJezFj9YFAMLeORyi7aCLxLbD5/qWMQnoMVlVPyHIll7lgRJCc3JVln9Vgl9nwQi0YkMnhdGTMNn7CkRRAptMg==}
     engines: {node: '>=18.0.0'}
 
-  eventsource@4.1.1:
-    resolution: {integrity: sha512-D6bTRWh6KahHTK/m4WnjPQyEinNPf9eFLEZSEoj7d6fTibspnAVYfzHvirL7u/aoX5d9YYfIkBVAhmigUELk9w==}
-    engines: {node: '>=20.0.0'}
+  eventsource-parser@4.1.0:
+    resolution: {integrity: sha512-+DHvQ1wLO//MK+1OZgcuXCbZFKgu3YjKPJt7n98rxX8vezL0ni+7s3ZQiM8bJkUEOk7MsuCycrPLj0FzUNf7Og==}
+    engines: {node: '>=22.12'}
+
+  eventsource@5.1.1:
+    resolution: {integrity: sha512-onrlI7l612Ee3xnBqZNTq4djf6Fho/0yIpO/rYjRG/FzjMyPJquNx9SS3QyjglnVFxwxrube1XmX41zB+0Rdgw==}
+    engines: {node: '>=22.12.0'}
 
   expect-type@1.3.0:
     resolution: {integrity: sha512-knvyeauYhqjOYvQ66MznSMs83wmHrCycNEN6Ao+2AeYEfxUIkuiVxdEa1qlGEPK+We3n0THiDciYSsCcgW/DoA==}
@@ -3147,9 +3151,11 @@ snapshots:
 
   eventsource-parser@3.1.0: {}
 
-  eventsource@4.1.1:
+  eventsource-parser@4.1.0: {}
+
+  eventsource@5.1.1:
     dependencies:
-      eventsource-parser: 3.1.0
+      eventsource-parser: 4.1.0
 
   expect-type@1.3.0: {}
 
