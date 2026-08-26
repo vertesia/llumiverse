@@ -135,7 +135,7 @@
         "@llumiverse/core": "workspace:*",
         "@mistralai/mistralai": "^2.6.1",
         "@vertesia/api-fetch-client": "^1.4.1",
-        "eventsource": "^4.1.1",
+        "eventsource": "^5.1.0",
         "google-auth-library": "catalog:",
         "groq-sdk": "^1.5.0",
         "mnemonist": "^0.40.4",
