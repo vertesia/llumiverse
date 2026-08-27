@@ -378,10 +378,10 @@ export function getOpenAiCompatibleOptions(
         })
         .filter((item): item is ModelOptionInfoItem => item !== null);
     if (profileOptions.some((item) => item.name === SharedOptions.effort) || options._option_id !== 'openai-text') {
-        return { ...options, options: profileOptions };
+        return withCompatibleExtraBody({ ...options, options: profileOptions });
     }
-    if (!profileEffortLevels) return { ...options, options: profileOptions };
-    return {
+    if (!profileEffortLevels) return withCompatibleExtraBody({ ...options, options: profileOptions });
+    return withCompatibleExtraBody({
         ...options,
         options: [
             ...profileOptions,
@@ -390,6 +390,21 @@ export function getOpenAiCompatibleOptions(
                 type: OptionType.enum,
                 enum: Object.fromEntries([...profileEffortLevels].map((value) => [value, value])),
                 description: 'How much effort the model should put into reasoning, when supported by the endpoint.',
+            },
+        ],
+    });
+}
+
+function withCompatibleExtraBody(options: ModelOptionsInfo): ModelOptionsInfo {
+    return {
+        ...options,
+        options: [
+            ...options.options,
+            {
+                name: 'extra_body',
+                type: OptionType.json_object,
+                description:
+                    'Additional provider-specific fields merged into the request body. Standard model options take precedence.',
             },
         ],
     };

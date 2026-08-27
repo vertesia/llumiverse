@@ -190,7 +190,7 @@ describe('OpenAIChatCompletionsProtocol', () => {
         expect(chunks[0].choices[0].delta.reasoning).toBe('streaming reasoning');
     });
 
-    it('forwards token fields, penalties, stop sequences, and extra_body to the transport', async () => {
+    it('combines static and per-execution extra body fields for the transport', async () => {
         const model = new TestOpenAIChatCompletionsProtocol(
             {
                 id: 'chatcmpl-1',
@@ -213,10 +213,14 @@ describe('OpenAIChatCompletionsProtocol', () => {
         await model.requestTextCompletion(undefined, prompt, {
             ...options,
             model_options: {
-                _option_id: 'text-fallback',
+                _option_id: 'openai-text',
                 presence_penalty: 0.1,
                 frequency_penalty: 0.2,
                 stop_sequence: ['END'],
+                extra_body: {
+                    provider: { sort: 'latency' },
+                    baseten: { performance: 'max' },
+                },
             },
         });
 
@@ -226,7 +230,11 @@ describe('OpenAIChatCompletionsProtocol', () => {
                 presence_penalty: 0.1,
                 frequency_penalty: 0.2,
                 stop: ['END'],
-                extra_body: { google: { model_safety_settings: { enabled: false } } },
+                extra_body: {
+                    google: { model_safety_settings: { enabled: false } },
+                    provider: { sort: 'latency' },
+                    baseten: { performance: 'max' },
+                },
             }),
         );
     });

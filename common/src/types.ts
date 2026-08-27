@@ -734,6 +734,7 @@ export enum OptionType {
     enum = 'enum',
     boolean = 'boolean',
     string_list = 'string_list',
+    json_object = 'json_object',
 }
 
 // Derived from the schema, like the option types that use it. Restating the seven values here made
@@ -761,7 +762,12 @@ export interface ModelOptionsInfo {
     _option_id: string; //Should follow same ids as ModelOptions
 }
 
-export type ModelOptionInfoItem = NumericOptionInfo | EnumOptionInfo | BooleanOptionInfo | StringListOptionInfo;
+export type ModelOptionInfoItem =
+    | NumericOptionInfo
+    | EnumOptionInfo
+    | BooleanOptionInfo
+    | StringListOptionInfo
+    | JSONObjectOptionInfo;
 interface OptionInfoPrototype {
     type: OptionType;
     name: string;
@@ -799,6 +805,12 @@ export interface StringListOptionInfo extends OptionInfoPrototype {
     type: OptionType.string_list;
     value?: string[];
     default?: string[];
+}
+
+export interface JSONObjectOptionInfo extends OptionInfoPrototype {
+    type: OptionType.json_object;
+    value?: JSONObject;
+    default?: JSONObject;
 }
 
 // ============== Prompts ===============
