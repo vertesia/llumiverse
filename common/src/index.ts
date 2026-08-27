@@ -10,6 +10,7 @@ export * from './options/fallback.js';
 export * from './options/groq.js';
 export * from './options/mistral.js';
 export * from './options/openai.js';
+export * from './options/openrouter.js';
 export * from './options/shared-parsing.js';
 export * from './options/version-parsing.js';
 export * from './options/vertexai.js';

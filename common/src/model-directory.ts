@@ -338,7 +338,7 @@ function applyProviderOverlay(
 
     // OpenRouter and other OpenAI-compatible transports retain the source model's semantic
     // capabilities, but cannot expose provider-native fields such as Vertex Flex or thinking_level.
-    if (provider === Providers.openai_compatible) {
+    if (isOpenAICompatibleTransport(provider)) {
         return {
             capabilities: {
                 ...capabilities,
@@ -379,7 +379,7 @@ function getReasoningEffortLevels(model: string, family: string, provider: Provi
     if (family === 'gpt') {
         if (model.includes('gpt-oss')) {
             return provider === Providers.togetherai ||
-                provider === Providers.openai_compatible ||
+                isOpenAICompatibleTransport(provider) ||
                 provider === Providers.vertexai ||
                 provider === Providers.bedrock ||
                 provider === Providers.bedrock_mantle ||
@@ -390,7 +390,7 @@ function getReasoningEffortLevels(model: string, family: string, provider: Provi
         if (
             provider === Providers.openai ||
             provider === Providers.azure_openai ||
-            provider === Providers.openai_compatible ||
+            isOpenAICompatibleTransport(provider) ||
             provider === Providers.azure_foundry ||
             provider === Providers.bedrock_mantle
         ) {
@@ -399,7 +399,7 @@ function getReasoningEffortLevels(model: string, family: string, provider: Provi
         }
         return undefined;
     }
-    if (family === 'gemini' && provider === Providers.openai_compatible && isGeminiModelVersionGte(model, '3.5')) {
+    if (family === 'gemini' && isOpenAICompatibleTransport(provider) && isGeminiModelVersionGte(model, '3.5')) {
         return ['minimal', 'low', 'medium', 'high'];
     }
     if (provider === Providers.mistralai && family === 'mistral') {
@@ -414,6 +414,10 @@ function getReasoningEffortLevels(model: string, family: string, provider: Provi
         if (isSingleDigitGrokVersionGte(model, 4, 3)) return ['none', 'low', 'medium', 'high'];
     }
     return undefined;
+}
+
+function isOpenAICompatibleTransport(provider: Providers): boolean {
+    return provider === Providers.openai_compatible || provider === Providers.openrouter;
 }
 
 function isSingleDigitGrokVersionGte(model: string, targetMajor: number, targetMinor: number): boolean {
