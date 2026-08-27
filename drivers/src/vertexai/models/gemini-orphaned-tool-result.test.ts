@@ -11,7 +11,7 @@
 import type { Content } from '@google/genai';
 import type { ExecutionOptions } from '@llumiverse/core';
 import { describe, expect, test } from 'vitest';
-import { fixOrphanedToolResults, getGeminiPayload } from './gemini.js';
+import { fixOrphanedToolResults, getGeminiPayload, mergeFunctionResponseContents } from './gemini.js';
 
 const OPTIONS_WITH_TOOLS = {
     model: 'gemini-2.5-flash',
@@ -101,7 +101,10 @@ describe('fixOrphanedToolResults - Gemini', () => {
 });
 
 describe('getGeminiPayload - orphaned tool results', () => {
-    test('retains split parallel functionResponses without merging consecutive user contents', () => {
+    test('recombines split parallel functionResponses into one user turn matching the call turn', () => {
+        // Gemini rejects a function-call turn whose responses are split across consecutive user
+        // contents: "Please ensure that the number of function response parts is equal to the
+        // number of function call parts of the function call turn." (400 INVALID_ARGUMENT)
         const contents: Content[] = [
             {
                 role: 'model',
@@ -114,6 +117,77 @@ describe('getGeminiPayload - orphaned tool results', () => {
         const payload = getGeminiPayload(OPTIONS_WITH_TOOLS, { contents });
 
         expect(functionResponseNames(payload.contents as Content[])).toEqual(['a', 'b']);
-        expect(payload.contents).toHaveLength(3);
+        expect(payload.contents).toHaveLength(2);
+        expect((payload.contents as Content[])[1].parts).toHaveLength(2);
+    });
+});
+
+describe('mergeFunctionResponseContents', () => {
+    test('merges a run of function-response-only user contents into one turn', () => {
+        const contents: Content[] = [
+            { role: 'user', parts: [{ text: 'checkpoint summary' }] },
+            {
+                role: 'model',
+                parts: [
+                    { functionCall: { name: 'think', args: {} }, thoughtSignature: 'sig-1' },
+                    { functionCall: { name: 'wait_for', args: {} } },
+                ],
+            },
+            {
+                role: 'user',
+                parts: [{ functionResponse: { name: 'think', response: { ok: true } }, thoughtSignature: 'sig-1' }],
+            },
+            { role: 'user', parts: [{ functionResponse: { name: 'wait_for', response: { ok: true } } }] },
+        ];
+
+        const result = mergeFunctionResponseContents(contents);
+
+        expect(result).toHaveLength(3);
+        expect(result[2].role).toBe('user');
+        expect(result[2].parts).toHaveLength(2);
+        // Part-level metadata such as thoughtSignature survives the merge.
+        expect(result[2].parts?.[0].thoughtSignature).toBe('sig-1');
+        // The input contents are not mutated.
+        expect(contents).toHaveLength(4);
+        expect(contents[2].parts).toHaveLength(1);
+    });
+
+    test('leaves consecutive user text segments separate (cache breakpoints)', () => {
+        const contents: Content[] = [
+            { role: 'user', parts: [{ text: 'catalog' }] },
+            { role: 'user', parts: [{ text: 'task' }] },
+        ];
+        expect(mergeFunctionResponseContents(contents)).toEqual(contents);
+    });
+
+    test('does not merge a mixed text + functionResponse content into a response run', () => {
+        const contents: Content[] = [
+            { role: 'user', parts: [{ functionResponse: { name: 'a', response: {} } }] },
+            { role: 'user', parts: [{ functionResponse: { name: 'b', response: {} } }, { text: 'and also' }] },
+        ];
+        expect(mergeFunctionResponseContents(contents)).toEqual(contents);
+    });
+
+    test('merges independent response runs separately', () => {
+        const contents: Content[] = [
+            {
+                role: 'model',
+                parts: [{ functionCall: { name: 'a', args: {} } }, { functionCall: { name: 'b', args: {} } }],
+            },
+            { role: 'user', parts: [{ functionResponse: { name: 'a', response: {} } }] },
+            { role: 'user', parts: [{ functionResponse: { name: 'b', response: {} } }] },
+            {
+                role: 'model',
+                parts: [{ functionCall: { name: 'c', args: {} } }, { functionCall: { name: 'd', args: {} } }],
+            },
+            { role: 'user', parts: [{ functionResponse: { name: 'c', response: {} } }] },
+            { role: 'user', parts: [{ functionResponse: { name: 'd', response: {} } }] },
+        ];
+
+        const result = mergeFunctionResponseContents(contents);
+
+        expect(result).toHaveLength(4);
+        expect(result[1].parts).toHaveLength(2);
+        expect(result[3].parts).toHaveLength(2);
     });
 });
