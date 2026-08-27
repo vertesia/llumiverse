@@ -234,7 +234,7 @@ export function getGeminiPayload(options: ExecutionOptions, prompt: GenerateCont
     // When no tools are provided but conversation contains functionCall/functionResponse parts
     // (e.g. checkpoint summary calls), convert them to text to avoid API errors.
     // Use a local variable to avoid mutating the caller's conversation object.
-    let payloadContents = prompt.contents ? [...prompt.contents] : [];
+    let payloadContents = mergeFunctionResponseContents(prompt.contents ?? []);
     if (!tools && payloadContents) {
         const hasToolParts = payloadContents.some((c) => c.parts?.some((p) => p.functionCall || p.functionResponse));
         if (hasToolParts) {
@@ -404,6 +404,38 @@ function collectToolUseParts(content: Content): ToolUse[] | undefined {
     return out.length > 0 ? out : undefined;
 }
 
+/** True when `content` is a user turn holding nothing but functionResponse parts. */
+function isFunctionResponseOnlyContent(content: Content): boolean {
+    return content.role === 'user' && !!content.parts?.length && content.parts.every((part) => part.functionResponse);
+}
+
+/**
+ * Recombine runs of consecutive user contents that hold nothing but functionResponse parts into a
+ * single user turn. The prompt builder emits one content per tool-result segment, but Gemini
+ * requires every response to a model function-call turn to arrive in ONE user turn whose
+ * functionResponse count equals the call count — split parallel results are rejected with 400
+ * INVALID_ARGUMENT ("Please ensure that the number of function response parts is equal to the
+ * number of function call parts of the function call turn"). Only function-response contents are
+ * merged: text segments keep their boundaries, which are explicit-cache breakpoints
+ * (see gemini-context-cache.ts) — and a cached prefix only ever holds static text parts, so this
+ * merge can never move the prefix boundary.
+ */
+export function mergeFunctionResponseContents(contents: Content[]): Content[] {
+    const result: Content[] = [];
+    for (const content of contents) {
+        const previous = result.at(-1);
+        if (previous && isFunctionResponseOnlyContent(previous) && isFunctionResponseOnlyContent(content)) {
+            result[result.length - 1] = {
+                ...previous,
+                parts: [...(previous.parts ?? []), ...(content.parts ?? [])],
+            };
+        } else {
+            result.push(content);
+        }
+    }
+    return result;
+}
+
 /**
  * Drop functionResponse parts whose name has no matching functionCall in the
  * immediately-preceding `model` content. Gemini pairs a functionResponse to its
@@ -412,9 +444,9 @@ function collectToolUseParts(content: Content): ToolUse[] | undefined {
  * causes the API to reject the request. Mirrors the same guard added to the
  * Claude, Bedrock, and OpenAI drivers.
  *
- * Consecutive user contents remain separate because they are also cache boundaries. The matching
- * model call set therefore remains active across a run of user function-response contents, which
- * preserves split parallel tool results without merging the caller's segments.
+ * The matching model call set remains active across a run of user function-response contents, so
+ * split parallel tool results are not mistaken for orphans even when this runs on contents that
+ * have not been through mergeFunctionResponseContents.
  */
 export function fixOrphanedToolResults(contents: Content[]): Content[] {
     if (contents.length === 0) return contents;
