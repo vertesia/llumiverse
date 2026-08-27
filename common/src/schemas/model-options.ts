@@ -33,6 +33,10 @@ const ServiceTierSchema = z
     .min(1)
     .describe('Provider-defined processing tier. Unknown non-empty values are preserved for forward compatibility.');
 
+const ExtraBodySchema = z
+    .record(z.string(), z.unknown())
+    .describe('Additional provider-specific fields merged into the OpenAI-compatible request body.');
+
 // ===== fallback =====
 
 export const TextFallbackOptionsSchema = z
@@ -302,6 +306,7 @@ export const OpenAiThinkingOptionsSchema = z
         image_detail: z.enum(['low', 'high', 'auto']).optional(),
         include_thoughts: z.boolean().optional(),
         service_tier: ServiceTierSchema.optional(),
+        extra_body: ExtraBodySchema.optional(),
     })
     .meta({ id: 'OpenAiThinkingOptions' });
 
@@ -319,6 +324,7 @@ export const OpenAiTextOptionsSchema = z
         image_detail: z.enum(['low', 'high', 'auto']).optional(),
         include_thoughts: z.boolean().optional(),
         service_tier: ServiceTierSchema.optional(),
+        extra_body: ExtraBodySchema.optional(),
     })
     .meta({ id: 'OpenAiTextOptions' });
 

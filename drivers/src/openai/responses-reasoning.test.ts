@@ -84,6 +84,36 @@ describe('OpenAI Responses reasoning', () => {
         );
     });
 
+    it('merges provider-specific extra body fields without allowing core request overrides', async () => {
+        const create = vi.fn(async (_request: unknown) => response());
+        const driver = new TestResponsesDriver(create, Providers.openai_compatible);
+
+        await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
+            model: 'openrouter/model',
+            model_options: {
+                _option_id: 'openai-text',
+                max_tokens: 256,
+                extra_body: {
+                    provider: { sort: 'throughput', allow_fallbacks: false },
+                    baseten: { performance: 'max' },
+                    model: 'must-not-override',
+                    stream: true,
+                },
+            },
+        });
+
+        expect(create).toHaveBeenCalledWith(
+            expect.objectContaining({
+                model: 'openrouter/model',
+                stream: false,
+                max_output_tokens: 256,
+                provider: { sort: 'throughput', allow_fallbacks: false },
+                baseten: { performance: 'max' },
+            }),
+        );
+        expect(create.mock.calls[0][0]).not.toHaveProperty('extra_body');
+    });
+
     it.each(['gpt-5.4', 'gpt-5.5', 'gpt-5.6', 'gpt-5.6-sol', 'gpt-5.7'])(
         'uses current-turn reasoning context for %s',
         async (model) => {

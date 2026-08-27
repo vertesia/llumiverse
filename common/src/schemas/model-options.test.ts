@@ -137,4 +137,23 @@ describe('ModelOptionsSchema', () => {
             ModelOptionsSchema.safeParse({ _option_id: 'bedrock-twelvelabs-pegasus', service_tier: 'flex' }).success,
         ).toBe(true);
     });
+
+    it('accepts provider-specific objects for OpenAI-compatible option schemas', () => {
+        expect(
+            ModelOptionsSchema.safeParse({
+                _option_id: 'openai-text',
+                extra_body: {
+                    provider: { sort: 'throughput', allow_fallbacks: false },
+                    baseten: { performance: 'max' },
+                },
+            }).success,
+        ).toBe(true);
+        expect(
+            ModelOptionsSchema.safeParse({
+                _option_id: 'openai-thinking',
+                extra_body: { provider_extension: { enabled: true } },
+            }).success,
+        ).toBe(true);
+        expect(ModelOptionsSchema.safeParse({ _option_id: 'openai-text', extra_body: [] }).success).toBe(false);
+    });
 });
