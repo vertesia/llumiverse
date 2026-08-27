@@ -9,6 +9,7 @@ export * from './openai/azure_openai.js';
 export * from './openai/openai.js';
 export * from './openai/openai_chat_completions.js';
 export * from './openai/openai_responses.js';
+export * from './openrouter/index.js';
 export * from './replicate.js';
 export * from './test-driver/index.js';
 export * from './togetherai/index.js';

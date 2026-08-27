@@ -158,6 +158,9 @@ importers:
       '@mistralai/mistralai':
         specifier: ^2.6.3
         version: 2.6.3(@opentelemetry/api@1.9.1)
+      '@openrouter/sdk':
+        specifier: ^1.2.54
+        version: 1.2.59
       '@vertesia/api-fetch-client':
         specifier: ^1.4.1
         version: 1.4.1
@@ -679,6 +682,9 @@ packages:
 
   '@nodable/entities@2.1.0':
     resolution: {integrity: sha512-nyT7T3nbMyBI/lvr6L5TyWbFJAI9FTgVRakNoBqCD+PmID8DzFrrNdLLtHMwMszOtqZa8PAOV24ZqDnQrhQINA==}
+
+  '@openrouter/sdk@1.2.59':
+    resolution: {integrity: sha512-BpSFoIMbk32ZYcywa9GSUul9dCAy6uWLOSkBBnjF5waql1WRPMmtjEFhJifkL8mteFJfRjZyVMuZtxfDO/10bA==}
 
   '@opentelemetry/api@1.9.1':
     resolution: {integrity: sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q==}
@@ -2853,6 +2859,10 @@ snapshots:
     optional: true
 
   '@nodable/entities@2.1.0': {}
+
+  '@openrouter/sdk@1.2.59':
+    dependencies:
+      zod: 4.4.3
 
   '@opentelemetry/api@1.9.1': {}
 

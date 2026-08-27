@@ -5,6 +5,22 @@ import { getOptions } from './options.js';
 import { Providers } from './types.js';
 
 describe('central model directory', () => {
+    it('preserves source-model semantics through the native OpenRouter transport', () => {
+        const profile = resolveModelProfile('google/gemini-3.5-flash', Providers.openrouter);
+        const options = getOptions(profile.model_id, Providers.openrouter);
+
+        expect(profile).toMatchObject({
+            family: 'gemini',
+            source_provider: 'google',
+            reasoning_effort_levels: ['minimal', 'low', 'medium', 'high'],
+        });
+        expect(options._option_id).toBe('openrouter-text');
+        expect(options.options.map((option) => option.name)).toEqual(
+            expect.arrayContaining(['provider_sort', 'provider_order', 'provider_allow_fallbacks']),
+        );
+        expect(options.options.map((option) => option.name)).not.toContain('extra_body');
+    });
+
     it('resolves provider-qualified Gemini models through OpenAI-compatible transport', () => {
         const profile = resolveModelProfile('google/gemini-3.5-flash', Providers.openai_compatible);
         const capabilities = getModelCapabilities('google/gemini-3.5-flash', Providers.openai_compatible);
@@ -17,6 +33,9 @@ describe('central model directory', () => {
         expect(options._option_id).toBe('openai-text');
         expect(options.options.map((option) => option.name)).not.toContain('service_tier');
         expect(options.options.map((option) => option.name)).not.toContain('thinking_level');
+        expect(options.options.find((option) => option.name === 'extra_body')).toMatchObject({
+            type: 'json_object',
+        });
         expect(options.options.find((option) => option.name === 'max_tokens')).toMatchObject({ max: 65_535 });
         expect(options.options.find((option) => option.name === 'effort')).toMatchObject({
             enum: { minimal: 'minimal', low: 'low', medium: 'medium', high: 'high' },

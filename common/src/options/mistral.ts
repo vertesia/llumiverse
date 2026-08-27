@@ -21,7 +21,7 @@ export function getMistralOptions(
     const compatible = getOpenAiCompatibleOptions(model, options, profile);
     const supportsReasoning = profile.reasoning_effort_levels?.length;
     const compatibleOptions = compatible.options
-        .filter((item) => item.name !== 'image_detail')
+        .filter((item) => item.name !== 'image_detail' && item.name !== 'extra_body')
         .map((item): ModelOptionInfoItem => {
             if (item.name !== SharedOptions.max_tokens || profile.max_output_tokens !== undefined) return item;
             const { max: _unverifiedMax, ...withoutMax } = item as ModelOptionInfoItem & { max?: number };

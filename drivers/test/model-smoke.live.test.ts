@@ -18,7 +18,7 @@ import {
     GroqDriver,
     MistralAIDriver,
     OpenAIDriver,
-    OpenAIResponsesDriver,
+    OpenRouterDriver,
     TogetherAIDriver,
     VertexAIDriver,
     WatsonxDriver,
@@ -174,9 +174,8 @@ if (process.env.WATSONX_API_KEY) {
 if (process.env.OPENROUTER_API_KEY) {
     drivers.push({
         name: 'openrouter',
-        driver: new OpenAIResponsesDriver({
+        driver: new OpenRouterDriver({
             apiKey: process.env.OPENROUTER_API_KEY,
-            endpoint: 'https://openrouter.ai/api/v1',
         }),
         models: [
             'moonshotai/kimi-k2.5',

@@ -5,6 +5,7 @@ packages:
   - ./examples
 verifyDepsBeforeRun: false
 allowBuilds:
+  '@openrouter/sdk': false
   '@google/genai': true
   esbuild: true
   protobufjs: true

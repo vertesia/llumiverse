@@ -8,8 +8,8 @@ type Equals<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B 
 function assertType<T extends true>(_ok: T): void {}
 
 /**
- * `ModelOptions` is published by Vertesia as a discriminated-union component with twenty-four
- * members, each its own component. These pin the properties that a consumer of the published document
+ * `ModelOptions` is published by Vertesia as a discriminated union whose members are named components.
+ * These pin the properties that a consumer of the published document
  * depends on and that a careless edit here would break silently — the union is large enough that a
  * dropped member reads as a normal diff.
  */
@@ -82,6 +82,7 @@ describe('ModelOptionsSchema', () => {
             'BedrockMantleClaudeOptions',
             'OpenAiThinkingOptions',
             'OpenAiTextOptions',
+            'OpenRouterTextOptions',
             'OpenAiDalleOptions',
             'OpenAiGptImageOptions',
             'XAIGrokImageOptions',
@@ -136,5 +137,40 @@ describe('ModelOptionsSchema', () => {
         expect(
             ModelOptionsSchema.safeParse({ _option_id: 'bedrock-twelvelabs-pegasus', service_tier: 'flex' }).success,
         ).toBe(true);
+    });
+
+    it('validates OpenRouter provider routing options', () => {
+        expect(
+            ModelOptionsSchema.safeParse({
+                _option_id: 'openrouter-text',
+                provider_sort: 'throughput',
+                provider_order: ['google-vertex', 'amazon-bedrock'],
+                provider_allow_fallbacks: false,
+            }).success,
+        ).toBe(true);
+        expect(ModelOptionsSchema.safeParse({ _option_id: 'openrouter-text', provider_sort: 'random' }).success).toBe(
+            false,
+        );
+    });
+
+    it('accepts provider-specific extra body fields only as a JSON object', () => {
+        expect(
+            ModelOptionsSchema.safeParse({
+                _option_id: 'openai-text',
+                extra_body: {
+                    provider: { sort: 'throughput', allow_fallbacks: false },
+                    baseten: { performance: 'max' },
+                },
+            }).success,
+        ).toBe(true);
+        expect(
+            ModelOptionsSchema.safeParse({ _option_id: 'openai-thinking', extra_body: { custom_flag: true } }).success,
+        ).toBe(true);
+        expect(ModelOptionsSchema.safeParse({ _option_id: 'openai-text', extra_body: ['invalid'] }).success).toBe(
+            false,
+        );
+        expect(
+            ModelOptionsSchema.safeParse({ _option_id: 'openrouter-text', extra_body: { unsupported: true } }).success,
+        ).toBe(false);
     });
 });
