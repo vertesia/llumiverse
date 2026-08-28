@@ -442,6 +442,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
     }
 
     extractDataFromResponse(_options: ExecutionOptions, result: OpenAI.Responses.Response): Completion {
+        assertOpenAIResponseSucceeded(result);
         const tokenInfo = mapUsage(result.usage);
 
         const tools = collectTools(result.output);
@@ -1034,6 +1035,7 @@ export function mapResponseStream(
                     event.type === 'response.incomplete' ||
                     event.type === 'response.failed'
                 ) {
+                    assertOpenAIResponseSucceeded(event.response);
                     finalResponse = event.response;
                     const finalTools = collectTools(event.response.output);
                     yield {
@@ -1288,6 +1290,54 @@ function responseFinishReason(
         return response.status;
     }
     return 'stop';
+}
+
+type OpenAIResponseFailure = Error & {
+    code: string;
+    status: number;
+};
+
+function responseErrorStatus(code: string): number {
+    if (code === 'rate_limit_exceeded') return 429;
+    if (code === 'server_error') return 500;
+    if (code === 'vector_store_timeout') return 408;
+    if (code === 'image_file_not_found') return 404;
+    // Known policy, prompt, residency, and image-validation failures are request errors. Unknown
+    // proxy/provider codes are treated as server failures so the normal driver retry policy can
+    // recover from transient OpenAI-compatible backends.
+    if (
+        code === 'invalid_prompt' ||
+        code === 'data_residency_mismatch' ||
+        code === 'bio_policy' ||
+        code.startsWith('invalid_image') ||
+        code === 'image_too_large' ||
+        code === 'image_too_small' ||
+        code === 'image_parse_error' ||
+        code === 'image_content_policy_violation' ||
+        code === 'unsupported_image_media_type' ||
+        code === 'empty_image_file' ||
+        code === 'image_file_too_large'
+    ) {
+        return 400;
+    }
+    return 500;
+}
+
+function openAIResponseFailure(response: OpenAI.Responses.Response): OpenAIResponseFailure {
+    const code = response.error?.code ?? 'response_failed';
+    const detail = response.error?.message ?? 'The provider returned a failed response without error details.';
+    const responseId = response.id ? ` [response ${response.id}]` : '';
+    const error = new Error(`[OpenAI Responses API] ${detail} (${code})${responseId}`) as OpenAIResponseFailure;
+    error.name = 'OpenAIResponseError';
+    error.code = code;
+    error.status = responseErrorStatus(code);
+    return error;
+}
+
+function assertOpenAIResponseSucceeded(response: OpenAI.Responses.Response): void {
+    if (response.status === 'failed') {
+        throw openAIResponseFailure(response);
+    }
 }
 
 /**
