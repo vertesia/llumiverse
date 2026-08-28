@@ -18,6 +18,10 @@
             "types": "./lib/openai/drivers.d.ts",
             "default": "./lib/openai/drivers.js"
         },
+        "./openrouter": {
+            "types": "./lib/openrouter/index.d.ts",
+            "default": "./lib/openrouter/index.js"
+        },
         "./azure": {
             "types": "./lib/azure/azure_foundry.d.ts",
             "default": "./lib/azure/azure_foundry.js"
@@ -130,10 +134,11 @@
         "@azure/openai": "^2.0.0",
         "@google-cloud/aiplatform": "^7.1.0",
         "@google/genai": "^2.18.0",
-        "@huggingface/inference": "^4.13.27",
+        "@huggingface/inference": "^4.13.28",
         "@llumiverse/common": "workspace:*",
         "@llumiverse/core": "workspace:*",
         "@mistralai/mistralai": "^2.6.3",
+        "@openrouter/sdk": "^1.2.54",
         "@vertesia/api-fetch-client": "^1.4.1",
         "eventsource": "^5.1.0",
         "google-auth-library": "catalog:",

@@ -34,6 +34,7 @@ import {
 import { transformSSEStream } from '@llumiverse/core/async';
 import OpenAI from 'openai';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
+import { getOpenAIExtraBody, mergeOpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAISchema, limitedSchemaFormat } from './schema.js';
 
@@ -1181,8 +1182,9 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             stream,
         };
 
-        if (this.options.extraBody) {
-            payload.extra_body = this.options.extraBody;
+        const executionExtraBody = getOpenAIExtraBody(modelOptions);
+        if (this.options.extraBody || executionExtraBody) {
+            payload.extra_body = { ...this.options.extraBody, ...executionExtraBody };
         }
 
         const toolsPayload = convertToolsToOpenAIChatCompletionsFormat(options.tools, this.options.toolSchemaMode);
@@ -1341,29 +1343,31 @@ function toOpenAISDKMessage(message: OpenAIChatCompletionsRequestMessage): OpenA
 function toOpenAINonStreamingPayload(
     payload: OpenAIChatCompletionsPayload,
 ): OpenAI.Chat.ChatCompletionCreateParamsNonStreaming {
-    const { messages, stream: _stream, ...body } = payload;
-    const request = {
-        ...body,
-        messages: messages.map(toOpenAISDKMessage),
-        stream: false,
-    } satisfies OpenAI.Chat.ChatCompletionCreateParamsNonStreaming & {
-        extra_body?: Record<string, unknown>;
-    };
+    const { messages, stream: _stream, extra_body, ...body } = payload;
+    const request = mergeOpenAIExtraBody(
+        {
+            ...body,
+            messages: messages.map(toOpenAISDKMessage),
+            stream: false,
+        } satisfies OpenAI.Chat.ChatCompletionCreateParamsNonStreaming,
+        extra_body,
+    );
     return request;
 }
 
 function toOpenAIStreamingPayload(
     payload: OpenAIChatCompletionsPayload,
 ): OpenAI.Chat.ChatCompletionCreateParamsStreaming {
-    const { messages, stream: _stream, ...body } = payload;
-    const request = {
-        ...body,
-        messages: messages.map(toOpenAISDKMessage),
-        stream: true,
-        stream_options: { include_usage: true },
-    } satisfies OpenAI.Chat.ChatCompletionCreateParamsStreaming & {
-        extra_body?: Record<string, unknown>;
-    };
+    const { messages, stream: _stream, extra_body, ...body } = payload;
+    const request = mergeOpenAIExtraBody(
+        {
+            ...body,
+            messages: messages.map(toOpenAISDKMessage),
+            stream: true,
+            stream_options: { include_usage: true },
+        } satisfies OpenAI.Chat.ChatCompletionCreateParamsStreaming,
+        extra_body,
+    );
     return request;
 }
 

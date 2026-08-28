@@ -1,6 +1,6 @@
-import type { ToolUse } from '@llumiverse/common';
+import { LlumiverseError, type ToolUse } from '@llumiverse/common';
 import { describe, expect, test } from 'vitest';
-import { accumulateToolUseChunk } from '../src/CompletionStream.js';
+import { accumulateToolUseChunk, finalizeStreamingToolUse } from '../src/CompletionStream.js';
 
 type StreamingToolUse = ToolUse<unknown> & { _actual_id?: string };
 
@@ -84,5 +84,44 @@ describe('streaming tool_use thought_signature reassembly', () => {
 
         // A single-fragment signature must round-trip unchanged (not concatenated with itself).
         expect(result?.thought_signature).toBe(fullSignature);
+    });
+});
+
+describe('streaming tool_use argument finalization', () => {
+    const context = { provider: 'bedrock', model: 'anthropic.claude-sonnet-4-5' };
+
+    test('parses complete streamed JSON arguments', () => {
+        const tools: StreamingToolUse[] = [
+            { id: 'write', tool_name: 'write_artifact', tool_input: '{"name":"report","type":"text"}' },
+        ];
+
+        expect(finalizeStreamingToolUse(tools, 'tool_use', context)).toEqual([
+            {
+                id: 'write',
+                tool_name: 'write_artifact',
+                tool_input: { name: 'report', type: 'text' },
+            },
+        ]);
+    });
+
+    test('rejects malformed arguments as retryable when the stream has no finish reason', () => {
+        const tools: StreamingToolUse[] = [{ id: 'write', tool_name: 'write_artifact', tool_input: '' }];
+
+        try {
+            finalizeStreamingToolUse(tools, undefined, context);
+            throw new Error('Expected malformed tool input to be rejected');
+        } catch (error: unknown) {
+            expect(LlumiverseError.isLlumiverseError(error)).toBe(true);
+            if (LlumiverseError.isLlumiverseError(error)) {
+                expect(error.retryable).toBe(true);
+                expect(error.context).toEqual({ ...context, operation: 'stream' });
+            }
+        }
+    });
+
+    test('drops malformed arguments when the provider reports a length stop', () => {
+        const tools: StreamingToolUse[] = [{ id: 'write', tool_name: 'write_artifact', tool_input: '{"name":' }];
+
+        expect(finalizeStreamingToolUse(tools, 'length', context)).toBeUndefined();
     });
 });

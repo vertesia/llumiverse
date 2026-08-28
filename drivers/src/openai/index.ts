@@ -41,6 +41,7 @@ import {
 import type OpenAI from 'openai';
 import type { AzureOpenAI } from 'openai';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
+import { mergeOpenAIExtraBody, type OpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAILikeMultimodalPrompt } from './openai_format.js';
 import { formatOpenAISchema } from './schema.js';
@@ -57,6 +58,7 @@ type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
     prompt_cache_key?: string;
     prompt_cache_retention?: 'in_memory' | '24h';
     service_tier?: string;
+    extra_body?: OpenAIExtraBody;
 };
 
 function asOpenAIResponseServiceTier(serviceTier?: string): OpenAIResponseServiceTier {
@@ -262,28 +264,31 @@ export class OpenAIResponsesProtocol {
             promptCacheKey,
         );
         const toolChoice = model_options?.tool_choice === 'any' ? 'required' : model_options?.tool_choice;
-        const request: OpenAI.Responses.ResponseCreateParamsStreaming = {
-            stream: true,
-            model: driver.getResponsesRequestModel(options.model),
-            prompt_cache_key: promptCacheKey,
-            prompt_cache_retention: promptCacheRetention,
-            prompt_cache_options: promptCache.options,
-            input: promptCache.input,
-            reasoning,
-            include: reasoning ? ['reasoning.encrypted_content'] : undefined,
-            temperature: isReasoningModel ? undefined : model_options?.temperature,
-            top_p: isReasoningModel ? undefined : model_options?.top_p,
-            max_output_tokens: model_options?.max_tokens,
-            service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
-            tools: useTools ? toolDefs : undefined,
-            tool_choice: useTools ? toolChoice : undefined,
-            text: buildResponseTextConfig(
-                parsedSchema,
-                strictMode,
-                model_options?.verbosity,
-                options.prompt_cache_schema_suffix === true && !!options.result_schema,
-            ),
-        };
+        const request = mergeOpenAIExtraBody<OpenAI.Responses.ResponseCreateParamsStreaming>(
+            {
+                stream: true,
+                model: driver.getResponsesRequestModel(options.model),
+                prompt_cache_key: promptCacheKey,
+                prompt_cache_retention: promptCacheRetention,
+                prompt_cache_options: promptCache.options,
+                input: promptCache.input,
+                reasoning,
+                include: reasoning ? ['reasoning.encrypted_content'] : undefined,
+                temperature: isReasoningModel ? undefined : model_options?.temperature,
+                top_p: isReasoningModel ? undefined : model_options?.top_p,
+                max_output_tokens: model_options?.max_tokens,
+                service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
+                tools: useTools ? toolDefs : undefined,
+                tool_choice: useTools ? toolChoice : undefined,
+                text: buildResponseTextConfig(
+                    parsedSchema,
+                    strictMode,
+                    model_options?.verbosity,
+                    options.prompt_cache_schema_suffix === true && !!options.result_schema,
+                ),
+            },
+            model_options?.extra_body,
+        );
         const requestOptions = this.resolveRequestOptions(options, signal);
         const stream = requestOptions
             ? await driver.service.responses.create(request, requestOptions)
@@ -355,28 +360,31 @@ export class OpenAIResponsesProtocol {
             promptCacheKey,
         );
         const toolChoice = model_options?.tool_choice === 'any' ? 'required' : model_options?.tool_choice;
-        const request = {
-            stream: false,
-            model: driver.getResponsesRequestModel(options.model),
-            prompt_cache_key: promptCacheKey,
-            prompt_cache_retention: promptCacheRetention,
-            prompt_cache_options: promptCache.options,
-            input: promptCache.input,
-            reasoning,
-            include: reasoning ? ['reasoning.encrypted_content'] : undefined,
-            temperature: isReasoningModel ? undefined : model_options?.temperature,
-            top_p: isReasoningModel ? undefined : model_options?.top_p,
-            max_output_tokens: model_options?.max_tokens,
-            service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
-            tools: useTools ? toolDefs : undefined,
-            tool_choice: useTools ? toolChoice : undefined,
-            text: buildResponseTextConfig(
-                parsedSchema,
-                strictMode,
-                model_options?.verbosity,
-                options.prompt_cache_schema_suffix === true && !!options.result_schema,
-            ),
-        } as OpenAI.Responses.ResponseCreateParamsNonStreaming;
+        const request = mergeOpenAIExtraBody<OpenAI.Responses.ResponseCreateParamsNonStreaming>(
+            {
+                stream: false,
+                model: driver.getResponsesRequestModel(options.model),
+                prompt_cache_key: promptCacheKey,
+                prompt_cache_retention: promptCacheRetention,
+                prompt_cache_options: promptCache.options,
+                input: promptCache.input,
+                reasoning,
+                include: reasoning ? ['reasoning.encrypted_content'] : undefined,
+                temperature: isReasoningModel ? undefined : model_options?.temperature,
+                top_p: isReasoningModel ? undefined : model_options?.top_p,
+                max_output_tokens: model_options?.max_tokens,
+                service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
+                tools: useTools ? toolDefs : undefined,
+                tool_choice: useTools ? toolChoice : undefined,
+                text: buildResponseTextConfig(
+                    parsedSchema,
+                    strictMode,
+                    model_options?.verbosity,
+                    options.prompt_cache_schema_suffix === true && !!options.result_schema,
+                ),
+            },
+            model_options?.extra_body,
+        );
         const requestOptions = this.resolveRequestOptions(options, signal);
         const res = requestOptions
             ? await driver.service.responses.create(request, requestOptions)

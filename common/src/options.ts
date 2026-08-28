@@ -7,6 +7,7 @@ import { textOptionsFallback } from './options/fallback.js';
 import { getGroqOptions } from './options/groq.js';
 import { getMistralOptions } from './options/mistral.js';
 import { getAzureOpenAiOptions, getOpenAiCompatibleOptions, getOpenAiOptions } from './options/openai.js';
+import { getOpenRouterOptions } from './options/openrouter.js';
 import { getVertexAiOptions } from './options/vertexai.js';
 import { getXAIOptions } from './options/xai.js';
 import { type ModelOptions, type ModelOptionsInfo, Providers } from './types.js';
@@ -29,6 +30,8 @@ export function getOptions(model: string, provider?: Providers, options?: ModelO
             return getOpenAiOptions(model, options, resolveModelProfile(model, provider));
         case Providers.azure_openai:
             return getAzureOpenAiOptions(model, options, resolveModelProfile(model, provider));
+        case Providers.openrouter:
+            return getOpenRouterOptions(model, options, resolveModelProfile(model, provider));
         case Providers.openai_compatible:
             return getOpenAiCompatibleOptions(model, options, resolveModelProfile(model, provider));
         case Providers.groq:

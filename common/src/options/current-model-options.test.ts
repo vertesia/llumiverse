@@ -37,15 +37,18 @@ describe('current reasoning model options', () => {
     });
 
     it('does not advertise unverified effort for unknown OpenAI-compatible models', () => {
-        expect(
-            getOptions('custom-reasoning-model', Providers.openai_compatible).options.map((option) => option.name),
-        ).not.toContain(SharedOptions.effort);
+        const options = getOptions('custom-reasoning-model', Providers.openai_compatible).options;
+        expect(options.map((option) => option.name)).not.toContain(SharedOptions.effort);
+        expect(options.find((option) => option.name === 'extra_body')).toMatchObject({
+            type: OptionType.json_object,
+        });
     });
 
     it('advertises the native Mistral options that its transport serializes', () => {
         const options = getOptions('mistral-small-latest', Providers.mistralai);
+        const optionNames = options.options.map((option) => option.name);
         expect(options._option_id).toBe('mistral-text');
-        expect(options.options.map((option) => option.name)).toEqual(
+        expect(optionNames).toEqual(
             expect.arrayContaining([
                 'max_tokens',
                 'temperature',
@@ -62,7 +65,8 @@ describe('current reasoning model options', () => {
                 'include_thoughts',
             ]),
         );
-        expect(options.options.map((option) => option.name)).not.toContain('image_detail');
+        expect(optionNames).not.toContain('image_detail');
+        expect(optionNames).not.toContain('extra_body');
         expect(effortValues('mistral-small-latest', Providers.mistralai)).toEqual(['none', 'high']);
     });
 

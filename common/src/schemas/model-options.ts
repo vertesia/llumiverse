@@ -33,6 +33,10 @@ const ServiceTierSchema = z
     .min(1)
     .describe('Provider-defined processing tier. Unknown non-empty values are preserved for forward compatibility.');
 
+const ExtraBodySchema = z
+    .record(z.string(), z.unknown())
+    .describe('Additional provider-specific fields merged into the OpenAI-compatible request body.');
+
 // ===== fallback =====
 
 export const TextFallbackOptionsSchema = z
@@ -304,6 +308,7 @@ export const OpenAiThinkingOptionsSchema = z
         image_detail: z.enum(['low', 'high', 'auto']).optional(),
         include_thoughts: z.boolean().optional(),
         service_tier: ServiceTierSchema.optional(),
+        extra_body: ExtraBodySchema.optional(),
     })
     .meta({ id: 'OpenAiThinkingOptions' });
 
@@ -322,8 +327,41 @@ export const OpenAiTextOptionsSchema = z
         image_detail: z.enum(['low', 'high', 'auto']).optional(),
         include_thoughts: z.boolean().optional(),
         service_tier: ServiceTierSchema.optional(),
+        extra_body: ExtraBodySchema.optional(),
     })
     .meta({ id: 'OpenAiTextOptions' });
+
+export const OpenRouterTextOptionsSchema = OpenAiTextOptionsSchema.omit({ _option_id: true, extra_body: true })
+    .extend({
+        _option_id: z.literal('openrouter-text'),
+        provider_sort: z.enum(['price', 'throughput', 'latency', 'exacto']).optional(),
+        provider_order: z.array(z.string()).optional(),
+        provider_only: z.array(z.string()).optional(),
+        provider_ignore: z.array(z.string()).optional(),
+        provider_allow_fallbacks: z.boolean().optional(),
+        provider_require_parameters: z.boolean().optional(),
+        provider_data_collection: z.enum(['allow', 'deny']).optional(),
+        provider_zdr: z.boolean().optional(),
+        provider_quantizations: z
+            .array(
+                z.enum([
+                    'int4',
+                    'int8',
+                    'fp4',
+                    'mxfp4',
+                    'nvfp4',
+                    'fp6',
+                    'fp8',
+                    'mxfp8',
+                    'fp16',
+                    'bf16',
+                    'fp32',
+                    'unknown',
+                ]),
+            )
+            .optional(),
+    })
+    .meta({ id: 'OpenRouterTextOptions' });
 
 export const OpenAiDalleOptionsSchema = z
     .strictObject({
@@ -504,6 +542,7 @@ export const ModelOptionsSchema = z
         BedrockMantleClaudeOptionsSchema,
         OpenAiThinkingOptionsSchema,
         OpenAiTextOptionsSchema,
+        OpenRouterTextOptionsSchema,
         OpenAiDalleOptionsSchema,
         OpenAiGptImageOptionsSchema,
         XAIGrokImageOptionsSchema,
