@@ -220,6 +220,50 @@ export function leaseCompletionStream<PromptT>(
     return new LeasedCompletionStream(stream, releaseOperation, streamStartTimeoutMs, signal);
 }
 
+export function finalizeStreamingToolUse(
+    toolUseArray: StreamingToolUse[] | undefined,
+    finishReason: string | undefined,
+    context: { provider: string; model: string },
+): ToolUse<unknown>[] | undefined {
+    if (!toolUseArray) return undefined;
+
+    const malformedToolIds = new Set<string>();
+    let parseError: unknown;
+    for (const tool of toolUseArray) {
+        if (tool._actual_id) {
+            tool.id = tool._actual_id;
+            delete tool._actual_id;
+        }
+        if (typeof tool.tool_input === 'string') {
+            try {
+                tool.tool_input = JSON.parse(tool.tool_input);
+            } catch (error: unknown) {
+                malformedToolIds.add(tool.id);
+                parseError ??= error;
+            }
+        }
+    }
+
+    if (malformedToolIds.size === 0) return toolUseArray;
+
+    // A length stop means the model ran out of tokens mid-call. The partial call must not be
+    // returned, but other complete calls from the same response remain usable.
+    if (finishReason === 'length') {
+        const completeTools = toolUseArray.filter((tool) => !malformedToolIds.has(tool.id));
+        return completeTools.length > 0 ? completeTools : undefined;
+    }
+
+    // Without an explicit length stop, malformed arguments indicate an incomplete or corrupt
+    // provider stream. Never coerce them to {}, because that can execute a tool with invented
+    // arguments. Surface a retryable stream error instead.
+    throw new LlumiverseError(
+        `[${context.provider}] Received malformed JSON arguments for a streamed tool call`,
+        true,
+        { ...context, operation: 'stream' },
+        parseError,
+    );
+}
+
 /**
  * Merge a single streamed `tool_use` fragment into the accumulator map keyed by tool id.
  *
@@ -499,40 +543,11 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
                   }
                 : undefined;
 
-        // Convert accumulated tool_use Map to array
-        let toolUseArray = accumulatedToolUse.size > 0 ? Array.from(accumulatedToolUse.values()) : undefined;
-
-        // Finalize tool calls: restore actual IDs and parse JSON arguments
-        if (toolUseArray) {
-            const truncatedToolIds = new Set<string>();
-            for (const tool of toolUseArray) {
-                // Restore actual ID from OpenAI (was stored in _actual_id during streaming)
-                if (tool._actual_id) {
-                    tool.id = tool._actual_id;
-                    delete tool._actual_id;
-                }
-                // Parse tool_input strings as JSON if needed (streaming sends arguments as string chunks)
-                if (typeof tool.tool_input === 'string') {
-                    try {
-                        tool.tool_input = JSON.parse(tool.tool_input);
-                    } catch {
-                        // JSON parse failed — tool_input was likely truncated by max_tokens.
-                        // Set to empty object to prevent string tool_input from corrupting the conversation.
-                        tool.tool_input = {};
-                        truncatedToolIds.add(tool.id);
-                    }
-                }
-            }
-
-            // If finish_reason is "length" (max_tokens hit), drop truncated tool calls entirely —
-            // they were cut off mid-generation and would produce invalid results.
-            if (finish_reason === 'length' && truncatedToolIds.size > 0) {
-                toolUseArray = toolUseArray.filter((t) => !truncatedToolIds.has(t.id));
-                if (toolUseArray.length === 0) {
-                    toolUseArray = undefined;
-                }
-            }
-        }
+        const toolUseArray = finalizeStreamingToolUse(
+            accumulatedToolUse.size > 0 ? Array.from(accumulatedToolUse.values()) : undefined,
+            finish_reason,
+            { provider: this.driver.provider, model: this.options.model },
+        );
 
         this.completion = {
             result: accumulatedResults, // Return the accumulated CompletionResult[] instead of text
