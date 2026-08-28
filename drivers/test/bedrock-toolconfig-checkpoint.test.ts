@@ -130,6 +130,20 @@ describe('Bedrock - convertToolBlocksToText', () => {
         const result = convertToolBlocksToText(messages);
         expect(result).toEqual(messages);
     });
+
+    test('preparePayload tolerates an empty final message content array', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const prompt: ConverseRequest = {
+            modelId: 'anthropic.claude-sonnet-4-20250514',
+            messages: [{ role: 'assistant', content: [] }],
+        };
+
+        expect(() =>
+            driver.preparePayload(prompt, {
+                model: 'anthropic.claude-sonnet-4-20250514',
+            } as ExecutionOptions),
+        ).not.toThrow();
+    });
 });
 
 // ─── VertexAI Claude ──────────────────────────────────────────────────────────
