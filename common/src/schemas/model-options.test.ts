@@ -121,6 +121,16 @@ describe('ModelOptionsSchema', () => {
         expect(ModelOptionsSchema.safeParse({ _option_id: 'not-a-driver' }).success).toBe(false);
     });
 
+    it.each(['text-fallback', 'openai-thinking', 'openai-text'] as const)(
+        'accepts an explicit tool choice for %s',
+        (_option_id) => {
+            expect(ModelOptionsSchema.parse({ _option_id, tool_choice: 'required' })).toEqual({
+                _option_id,
+                tool_choice: 'required',
+            });
+        },
+    );
+
     it('accepts current and future service tiers for provider option schemas', () => {
         expect(ModelOptionsSchema.safeParse({ _option_id: 'openai-text', service_tier: 'flex' }).success).toBe(true);
         expect(ModelOptionsSchema.safeParse({ _option_id: 'openai-thinking', service_tier: 'priority' }).success).toBe(

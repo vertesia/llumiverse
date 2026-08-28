@@ -39,6 +39,7 @@ export const TextFallbackOptionsSchema = z
     .strictObject({
         _option_id: z.literal('text-fallback'),
         max_tokens: z.number().optional(),
+        tool_choice: z.enum(['auto', 'none', 'any', 'required']).optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
         top_k: z.number().optional(),
@@ -296,6 +297,7 @@ export const OpenAiThinkingOptionsSchema = z
     .strictObject({
         _option_id: z.literal('openai-thinking'),
         max_tokens: z.number().optional(),
+        tool_choice: z.enum(['auto', 'none', 'any', 'required']).optional(),
         stop_sequence: z.array(z.string()).optional(),
         effort: ReasoningEffortSchema.optional(),
         reasoning_effort: ReasoningEffortSchema.optional(),
@@ -309,6 +311,7 @@ export const OpenAiTextOptionsSchema = z
     .strictObject({
         _option_id: z.literal('openai-text'),
         max_tokens: z.number().optional(),
+        tool_choice: z.enum(['auto', 'none', 'any', 'required']).optional(),
         effort: ReasoningEffortSchema.optional(),
         reasoning_effort: ReasoningEffortSchema.optional(),
         temperature: z.number().optional(),

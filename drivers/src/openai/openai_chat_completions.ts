@@ -1161,6 +1161,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             reasoning_effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
             seed?: number;
             service_tier?: string;
+            tool_choice?: 'auto' | 'none' | 'any' | 'required';
         };
         const payload: OpenAIChatCompletionsPayload = {
             model: this.getModelName(options),
@@ -1187,6 +1188,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         const toolsPayload = convertToolsToOpenAIChatCompletionsFormat(options.tools, this.options.toolSchemaMode);
         if (toolsPayload && toolsPayload.length > 0) {
             payload.tools = toolsPayload;
+            payload.tool_choice = modelOptions?.tool_choice === 'any' ? 'required' : modelOptions?.tool_choice;
         }
 
         if (options.result_schema && this.options.resultSchemaMode !== 'prompt') {

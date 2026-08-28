@@ -56,6 +56,22 @@ function response() {
 }
 
 describe('OpenAI Responses reasoning', () => {
+    it.each([
+        ['required', 'required'],
+        ['any', 'required'],
+    ] as const)('forwards explicit %s tool choice as %s', async (configured, expected) => {
+        const create = vi.fn(async (_request: unknown) => response());
+        const driver = new TestResponsesDriver(create);
+
+        await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
+            model: 'gpt-5.6-sol',
+            model_options: { _option_id: 'openai-thinking', tool_choice: configured },
+            tools: [{ name: 'think', description: 'Think', input_schema: { type: 'object' } }],
+        });
+
+        expect(create).toHaveBeenCalledWith(expect.objectContaining({ tool_choice: expected }));
+    });
+
     it('returns the processing tier reported by OpenAI', async () => {
         const driver = new TestResponsesDriver(vi.fn(async () => response()));
 

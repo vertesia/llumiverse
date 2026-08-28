@@ -290,6 +290,34 @@ describe('OpenAIChatCompletionsProtocol', () => {
         expect(model.payloads[0].tool_choice).toBeUndefined();
     });
 
+    it.each([
+        ['required', 'required'],
+        ['any', 'required'],
+    ] as const)('forwards explicit %s tool choice as %s', async (configured, expected) => {
+        const model = new TestOpenAIChatCompletionsProtocol({
+            id: 'chatcmpl-1',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: 'ok' },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+        });
+
+        await model.requestTextCompletion(undefined, prompt, {
+            ...options,
+            model_options: { _option_id: 'text-fallback', tool_choice: configured },
+            tools: [{ name: 'think', description: 'Think', input_schema: { type: 'object' } }],
+        });
+
+        expect(model.payloads[0].tool_choice).toBe(expected);
+    });
+
     it('reads text from non-streaming content arrays', async () => {
         const model = new TestOpenAIChatCompletionsProtocol({
             id: 'chatcmpl-1',

@@ -261,6 +261,7 @@ export class OpenAIResponsesProtocol {
             driver.getResponsesRequestModel(options.model),
             promptCacheKey,
         );
+        const toolChoice = model_options?.tool_choice === 'any' ? 'required' : model_options?.tool_choice;
         const request: OpenAI.Responses.ResponseCreateParamsStreaming = {
             stream: true,
             model: driver.getResponsesRequestModel(options.model),
@@ -275,6 +276,7 @@ export class OpenAIResponsesProtocol {
             max_output_tokens: model_options?.max_tokens,
             service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
             tools: useTools ? toolDefs : undefined,
+            tool_choice: useTools ? toolChoice : undefined,
             text: buildResponseTextConfig(
                 parsedSchema,
                 strictMode,
@@ -352,6 +354,7 @@ export class OpenAIResponsesProtocol {
             driver.getResponsesRequestModel(options.model),
             promptCacheKey,
         );
+        const toolChoice = model_options?.tool_choice === 'any' ? 'required' : model_options?.tool_choice;
         const request = {
             stream: false,
             model: driver.getResponsesRequestModel(options.model),
@@ -366,6 +369,7 @@ export class OpenAIResponsesProtocol {
             max_output_tokens: model_options?.max_tokens,
             service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
             tools: useTools ? toolDefs : undefined,
+            tool_choice: useTools ? toolChoice : undefined,
             text: buildResponseTextConfig(
                 parsedSchema,
                 strictMode,
