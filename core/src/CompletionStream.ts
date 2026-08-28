@@ -15,7 +15,6 @@ import { DEFAULT_DRIVER_REQUEST_TIMEOUT_MS } from './http-agent.js';
 
 type StreamingToolUse = ToolUse<unknown> & { _actual_id?: string };
 
-<<<<<<< HEAD
 export const DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS = DEFAULT_DRIVER_REQUEST_TIMEOUT_MS;
 
 class CompletionStreamLease {
@@ -219,7 +218,8 @@ export function leaseCompletionStream<PromptT>(
     signal?: AbortSignal,
 ): CompletionStream<PromptT> {
     return new LeasedCompletionStream(stream, releaseOperation, streamStartTimeoutMs, signal);
-=======
+}
+
 export function finalizeStreamingToolUse(
     toolUseArray: StreamingToolUse[] | undefined,
     finishReason: string | undefined,
@@ -262,7 +262,6 @@ export function finalizeStreamingToolUse(
         { ...context, operation: 'stream' },
         parseError,
     );
->>>>>>> 77adc54 (fix: reject malformed streamed tool calls (#625))
 }
 
 /**
