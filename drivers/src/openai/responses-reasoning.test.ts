@@ -1,4 +1,4 @@
-import { Providers } from '@llumiverse/core';
+import { PromptRole, Providers } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import { OpenAIResponsesDriverBase } from './index.js';
@@ -56,6 +56,35 @@ function response() {
 }
 
 describe('OpenAI Responses reasoning', () => {
+    it('uses prompt-schema fallback for GLM 5.3 on OpenAI-compatible Responses', async () => {
+        const create = vi.fn(async () => ({
+            ...response(),
+            model: 'z-ai/glm-5.3',
+            output: [
+                {
+                    ...messageItem,
+                    content: [{ type: 'output_text', text: '{"value":"ok"}', annotations: [], logprobs: [] }],
+                },
+            ],
+        }));
+        const driver = new TestResponsesDriver(create, Providers.openai_compatible);
+        const options = {
+            model: 'z-ai/glm-5.3',
+            result_schema: {
+                type: 'object' as const,
+                properties: { value: { type: 'string' as const } },
+                required: ['value'],
+                additionalProperties: false,
+            },
+        };
+        const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Return the value.' }], options);
+
+        await driver.requestTextCompletion(prompt, options);
+
+        expect(JSON.stringify(prompt)).toContain('<response_schema>');
+        expect(create).toHaveBeenCalledWith(expect.not.objectContaining({ text: expect.anything() }));
+    });
+
     it.each([
         ['required', 'required'],
         ['any', 'required'],

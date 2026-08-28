@@ -1104,6 +1104,13 @@ function supportsSchema(model: string, provider: Providers): boolean {
     if (realtimeModel) {
         return false;
     }
+    // OpenRouter's OpenAI-compatible Responses surface advertises native structured output for
+    // GLM 5.3, but the model returns unconstrained prose and downstream validation fails. Keep
+    // this generation on the existing prompt-schema fallback; later GLM generations remain
+    // eligible for native support unless runtime evidence says otherwise.
+    if (provider === Providers.openai_compatible && /^z-ai\/glm-5\.3(?:$|[-/:])/.test(model)) {
+        return false;
+    }
     return supportsToolUse(model, provider);
 }
 
