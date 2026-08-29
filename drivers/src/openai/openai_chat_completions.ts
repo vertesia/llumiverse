@@ -1163,6 +1163,8 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             seed?: number;
             service_tier?: string;
             tool_choice?: 'auto' | 'none' | 'any' | 'required';
+            /** Internal execution hint supplied after public model-option validation. */
+            required_tool_name?: string;
         };
         const payload: OpenAIChatCompletionsPayload = {
             model: this.getModelName(options),
@@ -1190,7 +1192,11 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         const toolsPayload = convertToolsToOpenAIChatCompletionsFormat(options.tools, this.options.toolSchemaMode);
         if (toolsPayload && toolsPayload.length > 0) {
             payload.tools = toolsPayload;
-            payload.tool_choice = modelOptions?.tool_choice === 'any' ? 'required' : modelOptions?.tool_choice;
+            payload.tool_choice = modelOptions?.required_tool_name
+                ? { type: 'function', function: { name: modelOptions.required_tool_name } }
+                : modelOptions?.tool_choice === 'any'
+                  ? 'required'
+                  : modelOptions?.tool_choice;
         }
 
         if (options.result_schema && this.options.resultSchemaMode !== 'prompt') {

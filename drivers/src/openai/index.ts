@@ -59,7 +59,18 @@ type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
     prompt_cache_retention?: 'in_memory' | '24h';
     service_tier?: string;
     extra_body?: OpenAIExtraBody;
+    /** Internal execution hint supplied after public model-option validation. */
+    required_tool_name?: string;
 };
+
+function getOpenAIResponseToolChoice(
+    modelOptions: OpenAIRequestOptions | undefined,
+): OpenAI.Responses.ResponseCreateParams['tool_choice'] {
+    if (modelOptions?.required_tool_name) {
+        return { type: 'function', name: modelOptions.required_tool_name };
+    }
+    return modelOptions?.tool_choice === 'any' ? 'required' : modelOptions?.tool_choice;
+}
 
 function asOpenAIResponseServiceTier(serviceTier?: string): OpenAIResponseServiceTier {
     // The public option deliberately accepts future provider values that may predate the installed SDK union.
@@ -263,7 +274,7 @@ export class OpenAIResponsesProtocol {
             driver.getResponsesRequestModel(options.model),
             promptCacheKey,
         );
-        const toolChoice = model_options?.tool_choice === 'any' ? 'required' : model_options?.tool_choice;
+        const toolChoice = getOpenAIResponseToolChoice(model_options);
         const request = mergeOpenAIExtraBody<OpenAI.Responses.ResponseCreateParamsStreaming>(
             {
                 stream: true,
@@ -359,7 +370,7 @@ export class OpenAIResponsesProtocol {
             driver.getResponsesRequestModel(options.model),
             promptCacheKey,
         );
-        const toolChoice = model_options?.tool_choice === 'any' ? 'required' : model_options?.tool_choice;
+        const toolChoice = getOpenAIResponseToolChoice(model_options);
         const request = mergeOpenAIExtraBody<OpenAI.Responses.ResponseCreateParamsNonStreaming>(
             {
                 stream: false,

@@ -101,6 +101,36 @@ describe('OpenAI Responses reasoning', () => {
         expect(create).toHaveBeenCalledWith(expect.objectContaining({ tool_choice: expected }));
     });
 
+    it('forces one named tool without changing the visible tool definitions', async () => {
+        const create = vi.fn(async (_request: unknown) => response());
+        const driver = new TestResponsesDriver(create);
+
+        await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
+            model: 'gpt-5.6-sol',
+            model_options: {
+                _option_id: 'openai-thinking',
+                tool_choice: 'required',
+                required_tool_name: 'write_artifact',
+            } as Parameters<typeof driver.requestTextCompletion>[1]['model_options'] & {
+                required_tool_name: string;
+            },
+            tools: [
+                { name: 'read_artifact', description: 'Read', input_schema: { type: 'object' } },
+                { name: 'write_artifact', description: 'Write', input_schema: { type: 'object' } },
+            ],
+        });
+
+        expect(create).toHaveBeenCalledWith(
+            expect.objectContaining({
+                tools: expect.arrayContaining([
+                    expect.objectContaining({ name: 'read_artifact' }),
+                    expect.objectContaining({ name: 'write_artifact' }),
+                ]),
+                tool_choice: { type: 'function', name: 'write_artifact' },
+            }),
+        );
+    });
+
     it('returns the processing tier reported by OpenAI', async () => {
         const driver = new TestResponsesDriver(vi.fn(async () => response()));
 

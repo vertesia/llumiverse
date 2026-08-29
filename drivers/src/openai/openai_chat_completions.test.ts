@@ -326,6 +326,35 @@ describe('OpenAIChatCompletionsProtocol', () => {
         expect(model.payloads[0].tool_choice).toBe(expected);
     });
 
+    it('forces one named tool without changing the visible tool definitions', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol({
+            id: 'chatcmpl-1',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+        });
+
+        await model.requestTextCompletion(undefined, prompt, {
+            ...options,
+            model_options: {
+                _option_id: 'text-fallback',
+                tool_choice: 'required',
+                required_tool_name: 'write_artifact',
+            } as ExecutionOptions['model_options'] & { required_tool_name: string },
+            tools: [
+                { name: 'read_artifact', description: 'Read', input_schema: { type: 'object' } },
+                { name: 'write_artifact', description: 'Write', input_schema: { type: 'object' } },
+            ],
+        });
+
+        expect(model.payloads[0].tools).toHaveLength(2);
+        expect(model.payloads[0].tool_choice).toEqual({
+            type: 'function',
+            function: { name: 'write_artifact' },
+        });
+    });
+
     it('reads text from non-streaming content arrays', async () => {
         const model = new TestOpenAIChatCompletionsProtocol({
             id: 'chatcmpl-1',
