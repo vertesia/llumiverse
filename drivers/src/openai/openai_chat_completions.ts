@@ -1239,6 +1239,7 @@ export interface OpenAIChatCompletionsDriverOptions extends DriverOptions {
     defaultMaxTokens?: number;
     extraBody?: Record<string, unknown>;
     resultSchemaMode?: OpenAIChatCompletionsProtocolOptions['resultSchemaMode'];
+    includeResultSchemaInPrompt?: OpenAIChatCompletionsProtocolOptions['includeResultSchemaInPrompt'];
     toolSchemaMode?: OpenAIChatCompletionsProtocolOptions['toolSchemaMode'];
 }
 
@@ -1429,6 +1430,7 @@ export abstract class OpenAIChatCompletionsDriverBase<
             defaultMaxTokens: options.defaultMaxTokens,
             extraBody: options.extraBody,
             resultSchemaMode: options.resultSchemaMode,
+            includeResultSchemaInPrompt: options.includeResultSchemaInPrompt,
             toolSchemaMode: options.toolSchemaMode,
         });
     }

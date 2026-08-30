@@ -185,8 +185,13 @@ describe('OpenRouterDriver native SDK transport', () => {
         const send = vi.fn(async (_request: unknown, _options?: unknown) => nativeStream);
         setService(driver, { chat: { send } });
 
-        const options = {
+        const options: ExecutionOptions = {
             model: 'openai/gpt-5.6-sol',
+            result_schema: {
+                type: 'object',
+                properties: { answer: { type: 'string' } },
+                required: ['answer'],
+            },
             tools: [{ name: 'lookup', input_schema: { type: 'object' } }],
         };
         const stream = await driver.stream([{ role: PromptRole.user, content: 'Weather?' }], options);
@@ -194,11 +199,22 @@ describe('OpenRouterDriver native SDK transport', () => {
             // Consume all native chunks so the final completion and conversation are assembled.
         }
 
-        expect(send.mock.calls[0][0]).toEqual({
-            chatRequest: expect.objectContaining({
+        expect(send.mock.calls[0][0]).toMatchObject({
+            chatRequest: {
                 stream: true,
                 streamOptions: { includeUsage: true },
-            }),
+                messages: [
+                    {
+                        role: 'system',
+                        content: expect.stringMatching(/only answer using JSON[\s\S]*<response_schema>[\s\S]*"answer"/),
+                    },
+                    { role: 'user', content: 'Weather?' },
+                ],
+                responseFormat: {
+                    type: 'json_schema',
+                    jsonSchema: expect.objectContaining({ name: 'output' }),
+                },
+            },
         });
         expect(stream.completion?.result).toContainEqual({ type: 'thoughts', value: 'thinking' });
         expect(stream.completion?.token_usage).toEqual({ prompt: 2, prompt_new: 2, result: 1, total: 3 });
