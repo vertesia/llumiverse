@@ -1,3 +1,4 @@
+import type { ConverseRequest } from '@aws-sdk/client-bedrock-runtime';
 import {
     type AIModel,
     type Completion,
@@ -121,6 +122,40 @@ describe('BedrockDriver getExtractedStream — tool use', () => {
         );
 
         expect(chunk.finish_reason).toBe('tool_use');
+    });
+});
+
+describe('BedrockDriver private tool-choice mapping', () => {
+    const prompt = {
+        modelId: 'anthropic.claude-sonnet-4-6',
+        messages: [{ role: 'user', content: [{ text: 'Act now.' }] }],
+    } satisfies ConverseRequest;
+    const tools = [{ name: 'write_artifact', description: '', input_schema: { type: 'object', properties: {} } }];
+
+    it('requires a named Converse tool when the private hint names one', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const payload = driver.preparePayload(prompt, {
+            model: 'anthropic.claude-sonnet-4-6',
+            tools,
+            model_options: {
+                _option_id: 'bedrock-claude',
+                tool_choice: 'required',
+                required_tool_name: 'write_artifact',
+            },
+        } as unknown as ExecutionOptions);
+
+        expect(payload.toolConfig?.toolChoice).toEqual({ tool: { name: 'write_artifact' } });
+    });
+
+    it('omits Converse tools for a private no-tool completion turn', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const payload = driver.preparePayload(prompt, {
+            model: 'anthropic.claude-sonnet-4-6',
+            tools,
+            model_options: { _option_id: 'bedrock-claude', tool_choice: 'none' },
+        } as unknown as ExecutionOptions);
+
+        expect(payload.toolConfig).toBeUndefined();
     });
 });
 

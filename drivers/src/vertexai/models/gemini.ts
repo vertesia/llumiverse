@@ -228,7 +228,12 @@ function getProminentPeopleOption(
 }
 
 export function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentPrompt): GenerateContentParameters {
-    const model_options = options.model_options as VertexAIGeminiOptions | undefined;
+    const model_options = options.model_options as
+        | (VertexAIGeminiOptions & {
+              tool_choice?: 'auto' | 'none' | 'any' | 'required';
+              required_tool_name?: string;
+          })
+        | undefined;
     const tools = getToolDefinitions(options.tools);
 
     // When no tools are provided but conversation contains functionCall/functionResponse parts
@@ -278,7 +283,15 @@ export function getGeminiPayload(options: ExecutionOptions, prompt: GenerateCont
         toolConfig: tools
             ? {
                   functionCallingConfig: {
-                      mode: FunctionCallingConfigMode.AUTO,
+                      mode:
+                          model_options?.tool_choice === 'none'
+                              ? FunctionCallingConfigMode.NONE
+                              : model_options?.tool_choice === 'required' || model_options?.tool_choice === 'any'
+                                ? FunctionCallingConfigMode.ANY
+                                : FunctionCallingConfigMode.AUTO,
+                      ...(model_options?.required_tool_name
+                          ? { allowedFunctionNames: [model_options.required_tool_name] }
+                          : {}),
                   },
               }
             : undefined,

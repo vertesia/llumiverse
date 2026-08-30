@@ -1583,9 +1583,18 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             };
         }
 
-        if (tool_defs?.length) {
+        const privateToolOptions = model_options as typeof model_options & {
+            tool_choice?: 'auto' | 'none' | 'any' | 'required';
+            required_tool_name?: string;
+        };
+        if (tool_defs?.length && privateToolOptions.tool_choice !== 'none') {
             request.toolConfig = {
                 tools: tool_defs,
+                ...(privateToolOptions.required_tool_name
+                    ? { toolChoice: { tool: { name: privateToolOptions.required_tool_name } } }
+                    : privateToolOptions.tool_choice === 'required' || privateToolOptions.tool_choice === 'any'
+                      ? { toolChoice: { any: {} } }
+                      : {}),
             };
         } else if (request.messages && messagesContainToolBlocks(request.messages)) {
             // Bedrock requires toolConfig when conversation contains toolUse/toolResult blocks.
