@@ -1,4 +1,4 @@
-import { Base64DataSource, ModelType, PromptRole, Providers } from '@llumiverse/core';
+import { Base64DataSource, type ExecutionOptions, ModelType, PromptRole, Providers } from '@llumiverse/core';
 import { RequestTimeoutError } from '@openrouter/sdk/models/errors';
 import { describe, expect, it, vi } from 'vitest';
 import { OpenRouterDriver } from './index.js';
@@ -70,6 +70,12 @@ describe('OpenRouterDriver native SDK transport', () => {
                     provider_sort: 'throughput',
                     provider_order: ['google-vertex', 'amazon-bedrock'],
                     provider_allow_fallbacks: false,
+                    tool_choice: 'required',
+                    required_tool_name: 'lookup',
+                    parallel_tool_calls: false,
+                } as ExecutionOptions['model_options'] & {
+                    required_tool_name: string;
+                    parallel_tool_calls: false;
                 },
                 result_schema: {
                     type: 'object',
@@ -112,6 +118,8 @@ describe('OpenRouterDriver native SDK transport', () => {
                         function: expect.objectContaining({ name: 'lookup' }),
                     },
                 ],
+                toolChoice: { type: 'function', function: { name: 'lookup' } },
+                parallelToolCalls: false,
             },
         });
         expect(requestOptions).toEqual({ timeoutMs: 1_800_000 });

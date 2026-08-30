@@ -61,6 +61,8 @@ type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
     extra_body?: OpenAIExtraBody;
     /** Internal execution hint supplied after public model-option validation. */
     required_tool_name?: string;
+    /** Internal execution hint used with a required named tool. */
+    parallel_tool_calls?: boolean;
 };
 
 function getOpenAIResponseToolChoice(
@@ -291,6 +293,7 @@ export class OpenAIResponsesProtocol {
                 service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
                 tools: useTools ? toolDefs : undefined,
                 tool_choice: useTools ? toolChoice : undefined,
+                parallel_tool_calls: useTools ? model_options?.parallel_tool_calls : undefined,
                 text: buildResponseTextConfig(
                     parsedSchema,
                     strictMode,
@@ -387,6 +390,7 @@ export class OpenAIResponsesProtocol {
                 service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
                 tools: useTools ? toolDefs : undefined,
                 tool_choice: useTools ? toolChoice : undefined,
+                parallel_tool_calls: useTools ? model_options?.parallel_tool_calls : undefined,
                 text: buildResponseTextConfig(
                     parsedSchema,
                     strictMode,

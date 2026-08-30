@@ -111,8 +111,10 @@ describe('OpenAI Responses reasoning', () => {
                 _option_id: 'openai-thinking',
                 tool_choice: 'required',
                 required_tool_name: 'write_artifact',
+                parallel_tool_calls: false,
             } as Parameters<typeof driver.requestTextCompletion>[1]['model_options'] & {
                 required_tool_name: string;
+                parallel_tool_calls: false;
             },
             tools: [
                 { name: 'read_artifact', description: 'Read', input_schema: { type: 'object' } },
@@ -127,6 +129,7 @@ describe('OpenAI Responses reasoning', () => {
                     expect.objectContaining({ name: 'write_artifact' }),
                 ]),
                 tool_choice: { type: 'function', name: 'write_artifact' },
+                parallel_tool_calls: false,
             }),
         );
     });

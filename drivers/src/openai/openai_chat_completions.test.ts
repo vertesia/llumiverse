@@ -341,7 +341,8 @@ describe('OpenAIChatCompletionsProtocol', () => {
                 _option_id: 'text-fallback',
                 tool_choice: 'required',
                 required_tool_name: 'write_artifact',
-            } as ExecutionOptions['model_options'] & { required_tool_name: string },
+                parallel_tool_calls: false,
+            } as ExecutionOptions['model_options'] & { required_tool_name: string; parallel_tool_calls: false },
             tools: [
                 { name: 'read_artifact', description: 'Read', input_schema: { type: 'object' } },
                 { name: 'write_artifact', description: 'Write', input_schema: { type: 'object' } },
@@ -353,6 +354,7 @@ describe('OpenAIChatCompletionsProtocol', () => {
             type: 'function',
             function: { name: 'write_artifact' },
         });
+        expect(model.payloads[0].parallel_tool_calls).toBe(false);
     });
 
     it('reads text from non-streaming content arrays', async () => {

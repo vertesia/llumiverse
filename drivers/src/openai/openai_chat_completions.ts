@@ -1165,6 +1165,8 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             tool_choice?: 'auto' | 'none' | 'any' | 'required';
             /** Internal execution hint supplied after public model-option validation. */
             required_tool_name?: string;
+            /** Internal execution hint used with a required named tool. */
+            parallel_tool_calls?: boolean;
         };
         const payload: OpenAIChatCompletionsPayload = {
             model: this.getModelName(options),
@@ -1197,6 +1199,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                 : modelOptions?.tool_choice === 'any'
                   ? 'required'
                   : modelOptions?.tool_choice;
+            payload.parallel_tool_calls = modelOptions?.parallel_tool_calls;
         }
 
         if (options.result_schema && this.options.resultSchemaMode !== 'prompt') {
