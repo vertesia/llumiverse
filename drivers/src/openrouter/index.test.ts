@@ -201,7 +201,7 @@ describe('OpenRouterDriver native SDK transport', () => {
             }),
         });
         expect(stream.completion?.result).toContainEqual({ type: 'thoughts', value: 'thinking' });
-        expect(stream.completion?.token_usage).toEqual({ prompt: 2, result: 1, total: 3 });
+        expect(stream.completion?.token_usage).toEqual({ prompt: 2, prompt_new: 2, result: 1, total: 3 });
         expect(stream.completion?.tool_use).toEqual([
             { id: 'call_actual', tool_name: 'lookup', tool_input: { city: 'Paris' } },
         ]);

@@ -144,6 +144,45 @@ const options: ExecutionOptions = {
 };
 
 describe('OpenAIChatCompletionsProtocol', () => {
+    it('preserves compatible-provider prompt cache usage', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol({
+            id: 'chatcmpl-cache',
+            object: 'chat.completion',
+            created: 1,
+            model: 'compatible-model',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: 'ok' },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+            usage: {
+                prompt_tokens: 1_000,
+                completion_tokens: 20,
+                total_tokens: 1_020,
+                prompt_tokens_details: { cached_tokens: 800, audio_tokens: 0 },
+                completion_tokens_details: {
+                    accepted_prediction_tokens: 0,
+                    audio_tokens: 0,
+                    reasoning_tokens: 0,
+                    rejected_prediction_tokens: 0,
+                },
+            },
+        });
+
+        const completion = await model.requestTextCompletion(undefined, prompt, options);
+
+        expect(completion.token_usage).toMatchObject({
+            prompt: 1_000,
+            prompt_cached: 800,
+            prompt_new: 200,
+            result: 20,
+            total: 1_020,
+        });
+    });
+
     it('preserves compatible reasoning fields at the OpenAI SDK transport boundary', async () => {
         const response = {
             id: 'chatcmpl-1',

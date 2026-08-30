@@ -367,10 +367,13 @@ function mapOpenAIChatCompletionsUsage(usage?: OpenAIChatCompletionsUsage | null
     if (!usage) {
         return undefined;
     }
+    const cachedTokens = usage.prompt_tokens_details?.cached_tokens;
     return {
         prompt: usage.prompt_tokens,
         result: usage.completion_tokens,
         total: usage.total_tokens,
+        prompt_cached: cachedTokens ?? undefined,
+        prompt_new: Math.max(0, usage.prompt_tokens - (cachedTokens ?? 0)),
     };
 }
 

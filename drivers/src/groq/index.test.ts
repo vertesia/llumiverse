@@ -189,7 +189,7 @@ describe('GroqDriver shared Chat Completions transport', () => {
         expect(emitted[0].tool_use?.[0]).toEqual(
             expect.objectContaining({ id: 'tool_0', _actual_id: 'call_actual', tool_name: 'lookup' }),
         );
-        expect(emitted.at(-1)?.token_usage).toEqual({ prompt: 2, result: 1, total: 3 });
+        expect(emitted.at(-1)?.token_usage).toEqual({ prompt: 2, prompt_new: 2, result: 1, total: 3 });
     });
 
     it('validates with model listing and reports the missing embedding transport', async () => {
