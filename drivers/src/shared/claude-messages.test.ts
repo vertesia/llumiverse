@@ -363,7 +363,7 @@ describe('formatClaudePrompt', () => {
         expect(payload.top_k).toBeUndefined();
     });
 
-    it('rejects forced tool choice for Claude Mythos adaptive-only turns', () => {
+    it('rejects forced tool choice for Claude Mythos preview turns', () => {
         expect(() =>
             getClaudePayload(
                 {
@@ -383,9 +383,29 @@ describe('formatClaudePrompt', () => {
                 name: 'ToolChoiceConfigurationError',
                 retryable: false,
                 code: 400,
-                message: expect.stringContaining('required adaptive thinking'),
+                message: expect.stringContaining('does not support forced tool choice'),
             }),
         );
+    });
+
+    it('preserves adaptive thinking and forced tool choice for released Claude Mythos turns', () => {
+        const { payload } = getClaudePayload(
+            {
+                model: 'claude-mythos-5',
+                tools: [{ name: 'write_artifact', input_schema: { type: 'object', properties: {} } }],
+                model_options: {
+                    _option_id: 'anthropic-claude',
+                    effort: 'medium',
+                    tool_choice: 'required',
+                    required_tool_name: 'write_artifact',
+                } as never,
+            },
+            { messages: [{ role: 'user', content: [{ type: 'text', text: 'Act now.' }] }] },
+        );
+
+        expect(payload.tool_choice).toMatchObject({ type: 'tool', name: 'write_artifact' });
+        expect(payload.thinking).toEqual({ type: 'adaptive', display: 'omitted' });
+        expect(payload.output_config).toEqual({ effort: 'medium' });
     });
 
     it('rejects a forced Claude tool turn when no tools are available', () => {

@@ -58,7 +58,6 @@ import {
     type Logger,
     PromptRole,
     type PromptSegment,
-    parseClaudeVersion,
     readStreamAsBase64,
     readStreamAsString,
     type StatelessExecutionOptions,
@@ -880,9 +879,9 @@ export function getClaudePayload(
             operation,
         });
     }
-    if (forcedToolChoice && parseClaudeVersion(modelName)?.variant === 'mythos') {
+    if (forcedToolChoice && modelName.toLowerCase().includes('claude-mythos-preview')) {
         throw createToolChoiceConfigurationError(
-            `Claude model ${modelName} cannot combine required adaptive thinking with forced tool choice.`,
+            `Claude preview model ${modelName} does not support forced tool choice.`,
             { provider, model: modelName, operation },
         );
     }

@@ -194,27 +194,25 @@ describe('BedrockDriver private tool-choice mapping', () => {
         expect(payload.additionalModelRequestFields).toEqual({ reasoning_config: { type: 'disabled' } });
     });
 
-    it('rejects forced tool choice for adaptive-only Claude families on Bedrock', () => {
+    it('degrades forced tool choice to auto for adaptive-only Claude families on Bedrock', () => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
-        expect(() =>
-            driver.preparePayload(prompt, {
-                model: 'anthropic.claude-fable-5',
-                tools,
-                model_options: {
-                    _option_id: 'bedrock-claude',
-                    effort: 'medium',
-                    tool_choice: 'required',
-                    required_tool_name: 'write_artifact',
-                },
-            } as unknown as ExecutionOptions),
-        ).toThrowError(
-            expect.objectContaining({
-                name: 'ToolChoiceConfigurationError',
-                retryable: false,
-                code: 400,
-                message: expect.stringContaining('required adaptive thinking'),
-            }),
-        );
+        const payload = driver.preparePayload(prompt, {
+            model: 'anthropic.claude-fable-5',
+            tools,
+            model_options: {
+                _option_id: 'bedrock-claude',
+                effort: 'medium',
+                tool_choice: 'required',
+                required_tool_name: 'write_artifact',
+            },
+        } as unknown as ExecutionOptions);
+
+        expect(payload.toolConfig?.tools).toHaveLength(1);
+        expect(payload.toolConfig?.toolChoice).toBeUndefined();
+        expect(payload.additionalModelRequestFields).toEqual({
+            reasoning_config: { type: 'adaptive', display: 'omitted' },
+            output_config: { effort: 'medium' },
+        });
     });
 
     it('rejects a forced Converse tool turn when no tools are available', () => {

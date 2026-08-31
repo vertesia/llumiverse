@@ -1401,17 +1401,18 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         );
         const claudeVersion = parseClaudeVersion(options.model);
         const onlySupportsAdaptiveThinking = claudeVersion?.variant === 'fable' || claudeVersion?.variant === 'mythos';
-        if (options.model.includes('claude') && forcedToolRequested && onlySupportsAdaptiveThinking) {
-            throw createToolChoiceConfigurationError(
-                `Bedrock model ${options.model} cannot combine its required adaptive thinking with forced tool choice.`,
-                { provider: this.provider, model: options.model, operation: 'stream' },
-            );
-        }
+        const useAutomaticToolChoiceForAdaptiveClaude =
+            options.model.includes('claude') && forcedToolRequested && onlySupportsAdaptiveThinking;
         // Bedrock only permits auto/none tool choice while thinking is active. Disable thinking
         // for the constrained turn on models that support the disabled form. Adaptive-only
-        // families are rejected above because neither legal payload can satisfy both contracts.
+        // families keep thinking and use automatic tool choice; the caller's required-tool
+        // validator remains authoritative and triggers the bounded recovery path if the model
+        // does not call the requested tool.
         const disableClaudeThinkingForForcedTool =
-            options.model.includes('claude') && forcedToolRequested && claudeThinking.supportsThinking;
+            options.model.includes('claude') &&
+            forcedToolRequested &&
+            claudeThinking.supportsThinking &&
+            !useAutomaticToolChoiceForAdaptiveClaude;
         const hasSamplingRestriction = claudeThinking.hasSamplingRestriction;
 
         if (options.model.includes('amazon')) {
@@ -1624,9 +1625,12 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if (tool_defs?.length) {
             request.toolConfig = {
                 tools: tool_defs,
-                ...(supportsForcedToolChoice && privateToolOptions.required_tool_name
+                ...(supportsForcedToolChoice &&
+                !useAutomaticToolChoiceForAdaptiveClaude &&
+                privateToolOptions.required_tool_name
                     ? { toolChoice: { tool: { name: privateToolOptions.required_tool_name } } }
                     : supportsForcedToolChoice &&
+                        !useAutomaticToolChoiceForAdaptiveClaude &&
                         (privateToolOptions.tool_choice === 'required' || privateToolOptions.tool_choice === 'any')
                       ? { toolChoice: { any: {} } }
                       : {}),
