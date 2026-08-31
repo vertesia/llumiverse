@@ -144,7 +144,12 @@ describe('OpenAI Responses reasoning', () => {
                 model_options: { _option_id: 'openai-thinking', tool_choice: 'required' },
                 tools: [],
             }),
-        ).rejects.toThrow('required tool choice was requested, but no tools are available');
+        ).rejects.toMatchObject({
+            name: 'ToolChoiceConfigurationError',
+            retryable: false,
+            code: 400,
+            message: expect.stringContaining('required tool choice was requested, but no tools are available'),
+        });
         expect(create).not.toHaveBeenCalled();
     });
 

@@ -50,6 +50,7 @@ import {
     type NovaCanvasOptions,
     type PromptSegment,
     Providers,
+    parseClaudeVersion,
     type StatelessExecutionOptions,
     stripBinaryFromConversation,
     stripHeartbeatsFromConversation,
@@ -70,6 +71,7 @@ import { logClaudeTruncation } from '../shared/claude-stop-reason.js';
 import { resolveClaudeThinking } from '../shared/claude-thinking.js';
 import { truncateBinaryForDebug, uint8ArrayToBase64ForDebug } from '../shared/debug-prompt.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
+import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
 import {
     converseConcatMessages,
     converseJSONprefill,
@@ -1381,6 +1383,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             privateToolOptions.required_tool_name !== undefined ||
             privateToolOptions.tool_choice === 'required' ||
             privateToolOptions.tool_choice === 'any';
+        const tool_defs = getToolDefinitions(options.tools);
+        if (forcedToolRequested && !tool_defs?.length) {
+            throw createToolChoiceConfigurationError(
+                'A forced Bedrock tool turn requires at least one tool definition.',
+                { provider: this.provider, model: options.model, operation: 'stream' },
+            );
+        }
 
         let additionalField: Record<string, unknown> = {};
         let supportsJSONPrefill = false;
@@ -1390,7 +1399,19 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             options.model,
             options.model_options as BedrockClaudeOptions | undefined,
         );
-        const disableClaudeThinkingForForcedTool = options.model.includes('claude') && forcedToolRequested;
+        const claudeVersion = parseClaudeVersion(options.model);
+        const onlySupportsAdaptiveThinking = claudeVersion?.variant === 'fable' || claudeVersion?.variant === 'mythos';
+        if (options.model.includes('claude') && forcedToolRequested && onlySupportsAdaptiveThinking) {
+            throw createToolChoiceConfigurationError(
+                `Bedrock model ${options.model} cannot combine its required adaptive thinking with forced tool choice.`,
+                { provider: this.provider, model: options.model, operation: 'stream' },
+            );
+        }
+        // Bedrock only permits auto/none tool choice while thinking is active. Disable thinking
+        // for the constrained turn on models that support the disabled form. Adaptive-only
+        // families are rejected above because neither legal payload can satisfy both contracts.
+        const disableClaudeThinkingForForcedTool =
+            options.model.includes('claude') && forcedToolRequested && claudeThinking.supportsThinking;
         const hasSamplingRestriction = claudeThinking.hasSamplingRestriction;
 
         if (options.model.includes('amazon')) {
@@ -1526,11 +1547,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
         }
 
-        const tool_defs = getToolDefinitions(options.tools);
-        if (forcedToolRequested && !tool_defs?.length) {
-            throw new Error('A forced Bedrock tool turn requires at least one tool definition.');
-        }
-
         // Use prefill when there is a schema and tools are not being used
         if (
             supportsJSONPrefill &&
@@ -1600,8 +1616,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         const supportsForcedToolChoice = options.model.includes('claude') || options.model.includes('amazon.nova');
         if (forcedToolRequested && !supportsForcedToolChoice) {
-            throw new Error(
+            throw createToolChoiceConfigurationError(
                 `Bedrock model ${options.model} cannot enforce the requested tool choice; use a tool-choice-capable model.`,
+                { provider: this.provider, model: options.model, operation: 'stream' },
             );
         }
         if (tool_defs?.length) {

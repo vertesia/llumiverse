@@ -540,6 +540,27 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
             }
         } catch (error: unknown) {
             if (this.abortSignal.aborted) return;
+            // Some transports report final usage immediately before a terminal error. Preserve
+            // that partial completion so server-side failed-call telemetry records the tokens
+            // that were actually billed even though no canonical conversation can be finalized.
+            if (resultTokens !== undefined) {
+                this.completion = {
+                    result: accumulatedResults,
+                    prompt: this.driver.formatDebugPrompt(this.prompt),
+                    execution_time: Date.now() - start,
+                    token_usage: {
+                        prompt: promptTokens,
+                        result: resultTokens,
+                        total: resultTokens + promptTokens,
+                        ...(promptCachedTokens != null && { prompt_cached: promptCachedTokens }),
+                        ...(promptCacheWriteTokens != null && { prompt_cache_write: promptCacheWriteTokens }),
+                        ...(promptNewTokens != null && { prompt_new: promptNewTokens }),
+                    },
+                    service_tier: serviceTier,
+                    finish_reason,
+                    chunks: this.chunks,
+                };
+            }
             // Don't wrap if already a LlumiverseError
             if (LlumiverseError.isLlumiverseError(error)) {
                 throw error;

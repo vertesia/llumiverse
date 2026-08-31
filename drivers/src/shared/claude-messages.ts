@@ -58,6 +58,7 @@ import {
     type Logger,
     PromptRole,
     type PromptSegment,
+    parseClaudeVersion,
     readStreamAsBase64,
     readStreamAsString,
     type StatelessExecutionOptions,
@@ -70,6 +71,7 @@ import { asyncMap } from '@llumiverse/core/async';
 import { claudeFinishReason, logClaudeTruncation } from './claude-stop-reason.js';
 import { resolveClaudeThinking } from './claude-thinking.js';
 import { truncateBinaryForDebug } from './debug-prompt.js';
+import { createToolChoiceConfigurationError } from './tool-choice-error.js';
 
 // ============================================================================
 // Types
@@ -745,6 +747,8 @@ function stripClaudeCacheControlFromTools(
 export function getClaudePayload(
     options: ExecutionOptions,
     prompt: ClaudePrompt,
+    provider = 'anthropic',
+    operation: 'execute' | 'stream' = 'stream',
 ): { payload: MessageCreateParamsBase; requestOptions: RequestOptions | undefined } {
     const modelName = options.model;
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
@@ -870,13 +874,19 @@ export function getClaudePayload(
           ? ({ type: 'any' } as const)
           : undefined;
     if (forcedToolChoice && !hasTools) {
-        throw new Error('A forced Claude tool turn requires at least one tool definition.');
+        throw createToolChoiceConfigurationError('A forced Claude tool turn requires at least one tool definition.', {
+            provider,
+            model: modelName,
+            operation,
+        });
     }
-    const thinkingEnabled = thinking !== undefined && thinking.type !== 'disabled';
-    // Anthropic rejects forced tool choice together with extended thinking. A
-    // constrained action turn must preserve the tool contract, so disable
-    // thinking for that one call instead of silently weakening the contract.
-    const disableThinkingForForcedTool = forcedToolChoice !== undefined && thinkingEnabled;
+    if (forcedToolChoice && parseClaudeVersion(modelName)?.variant === 'mythos') {
+        throw createToolChoiceConfigurationError(
+            `Claude model ${modelName} cannot combine required adaptive thinking with forced tool choice.`,
+            { provider, model: modelName, operation },
+        );
+    }
+    const disableManualThinkingForForcedTool = forcedToolChoice !== undefined && thinking?.type === 'enabled';
     const toolChoice = !hasTools
         ? undefined
         : forcedToolChoice
@@ -902,9 +912,9 @@ export function getClaudePayload(
               : model_options?.top_p,
         top_k: hasSamplingRestriction ? undefined : model_options?.top_k,
         stop_sequences: model_options?.stop_sequence,
-        thinking: disableThinkingForForcedTool ? { type: 'disabled' } : thinking,
+        thinking: disableManualThinkingForForcedTool ? { type: 'disabled' } : thinking,
         stream: true,
-        ...(!disableThinkingForForcedTool && outputConfig && { output_config: outputConfig }),
+        ...(!disableManualThinkingForForcedTool && outputConfig && { output_config: outputConfig }),
     };
 
     return { payload, requestOptions };
@@ -1085,7 +1095,7 @@ export async function executeClaudeCompletion(
 
     const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
 
-    const { payload, requestOptions } = getClaudePayload(options, conversation);
+    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'execute');
 
     const responseStream = await streamClaudeMessages(
         client,
@@ -1125,7 +1135,7 @@ export async function streamClaudeCompletion(
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
     const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
 
-    const { payload, requestOptions } = getClaudePayload(options, conversation);
+    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'stream');
     const streamingPayload: MessageStreamParams = { ...payload, stream: true };
 
     const response_stream = await streamClaudeMessages(

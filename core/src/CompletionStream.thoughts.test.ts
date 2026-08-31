@@ -34,6 +34,17 @@ class ThoughtsStreamDriver extends AbstractDriver<DriverOptions, string> {
 
     async requestTextCompletionStream(prompt: string): Promise<DriverCompletionStream> {
         const nativeAssistant = { role: 'assistant', id: prompt };
+        if (prompt === 'failed') {
+            return {
+                async *[Symbol.asyncIterator]() {
+                    yield {
+                        result: [],
+                        token_usage: { prompt: 10, prompt_cached: 4, prompt_new: 6, result: 2, total: 12 },
+                    };
+                    throw new Error('provider failed after usage');
+                },
+            };
+        }
         if (prompt === 'video') {
             return {
                 async *[Symbol.asyncIterator]() {
@@ -72,6 +83,24 @@ class ThoughtsStreamDriver extends AbstractDriver<DriverOptions, string> {
 }
 
 describe('DefaultCompletionStream thoughts', () => {
+    it('preserves terminal usage on a partial completion when the provider stream fails', async () => {
+        const driver = new ThoughtsStreamDriver({});
+        const stream = new DefaultCompletionStream(driver, 'failed', { model: 'test' });
+
+        await expect(async () => {
+            for await (const _chunk of stream) {
+                // drain
+            }
+        }).rejects.toThrow('provider failed after usage');
+        expect(stream.completion?.token_usage).toEqual({
+            prompt: 10,
+            prompt_cached: 4,
+            prompt_new: 6,
+            result: 2,
+            total: 12,
+        });
+    });
+
     it('streams visible thoughts before the answer while preserving typed results', async () => {
         const driver = new ThoughtsStreamDriver({});
         const stream = new DefaultCompletionStream(driver, 'one', { model: 'test' });

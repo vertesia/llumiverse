@@ -1095,7 +1095,12 @@ describe('OpenAIChatCompletionsProtocol', () => {
                 tools: [],
                 model_options: { _option_id: 'text-fallback', tool_choice: 'required' },
             }),
-        ).rejects.toThrow('required tool choice was requested, but no tools are available');
+        ).rejects.toMatchObject({
+            name: 'ToolChoiceConfigurationError',
+            retryable: false,
+            code: 400,
+            message: expect.stringContaining('required tool choice was requested, but no tools are available'),
+        });
         expect(model.payloads).toHaveLength(0);
     });
 

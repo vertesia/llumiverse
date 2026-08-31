@@ -41,6 +41,7 @@ import {
 import type OpenAI from 'openai';
 import type { AzureOpenAI } from 'openai';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
+import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
 import { mergeOpenAIExtraBody, type OpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAILikeMultimodalPrompt } from './openai_format.js';
@@ -77,13 +78,19 @@ function getOpenAIResponseToolChoice(
 function assertOpenAIResponseToolChoiceAvailable(
     modelOptions: OpenAIRequestOptions | undefined,
     useTools: boolean,
+    model: string,
+    provider: string,
+    operation: 'execute' | 'stream',
 ): void {
     const forced =
         typeof modelOptions?.required_tool_name === 'string' ||
         modelOptions?.tool_choice === 'required' ||
         modelOptions?.tool_choice === 'any';
     if (forced && !useTools) {
-        throw new Error('[OpenAI Responses API] A required tool choice was requested, but no tools are available.');
+        throw createToolChoiceConfigurationError(
+            '[OpenAI Responses API] A required tool choice was requested, but no tools are available.',
+            { provider, model, operation },
+        );
     }
 }
 
@@ -259,7 +266,7 @@ export class OpenAIResponsesProtocol {
         convertRoles(prompt, options.model);
 
         const model_options = options.model_options as OpenAIRequestOptions | undefined;
-        assertOpenAIResponseToolChoiceAvailable(model_options, useTools);
+        assertOpenAIResponseToolChoiceAvailable(model_options, useTools, options.model, driver.provider, 'stream');
         insert_image_detail(prompt, model_options?.image_detail ?? 'auto');
 
         let parsedSchema: JSONSchema | undefined;
@@ -350,7 +357,7 @@ export class OpenAIResponsesProtocol {
 
         const toolDefs = getToolDefinitions(options.tools);
         const useTools = Boolean(toolDefs?.length && supportsToolUse(options.model, driver.provider));
-        assertOpenAIResponseToolChoiceAvailable(model_options, useTools);
+        assertOpenAIResponseToolChoiceAvailable(model_options, useTools, options.model, driver.provider, 'execute');
 
         // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
         let conversation = fixOrphanedToolResults(fixOrphanedToolUse(updateConversation(options.conversation, prompt)));
