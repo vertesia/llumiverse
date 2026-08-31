@@ -118,8 +118,16 @@ describe('streaming tool_use argument finalization', () => {
         expect(accumulated?.tool_input).toBe('{"name":"report"}');
     });
 
+    test('normalizes empty streamed arguments for parameterless tools', () => {
+        const tools: StreamingToolUse[] = [{ id: 'inspect', tool_name: 'inspect_status', tool_input: '' }];
+
+        expect(finalizeStreamingToolUse(tools, 'tool_use', context)).toEqual([
+            { id: 'inspect', tool_name: 'inspect_status', tool_input: {} },
+        ]);
+    });
+
     test('rejects malformed arguments with a stable non-retryable identity', () => {
-        const tools: StreamingToolUse[] = [{ id: 'write', tool_name: 'write_artifact', tool_input: '' }];
+        const tools: StreamingToolUse[] = [{ id: 'write', tool_name: 'write_artifact', tool_input: '{' }];
 
         try {
             finalizeStreamingToolUse(tools, undefined, context);
@@ -130,7 +138,7 @@ describe('streaming tool_use argument finalization', () => {
                 expect(error).toBeInstanceOf(MalformedStreamingToolArgumentsError);
                 expect(error.name).toBe('MalformedStreamingToolArgumentsError');
                 expect(error.message).toContain(
-                    'streamed tool "write_artifact" (finish_reason=unknown, argument_chars=0)',
+                    'streamed tool "write_artifact" (finish_reason=unknown, argument_chars=1)',
                 );
                 expect(error.retryable).toBe(false);
                 expect(error.context).toEqual({ ...context, operation: 'stream' });

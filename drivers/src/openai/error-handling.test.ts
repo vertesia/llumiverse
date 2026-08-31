@@ -99,6 +99,26 @@ describe('OpenAI Responses failed-response handling', () => {
         );
     });
 
+    it('treats an unknown failed-response code as non-retryable', () => {
+        const driver = new TestOpenAIResponsesDriver();
+        let thrown: unknown;
+
+        try {
+            driver.extractDataFromResponse(
+                { model: 'gpt-5.6-sol' },
+                failedResponse({ code: 'provider_specific_failure', message: 'Request rejected.' }),
+            );
+        } catch (error: unknown) {
+            thrown = error;
+        }
+
+        expect(thrown).toMatchObject({
+            name: 'OpenAIResponseError',
+            code: 'provider_specific_failure',
+            status: 400,
+        });
+    });
+
     it('surfaces the provider cause from response.failed streams before result validation', async () => {
         const driver = new TestOpenAIResponsesDriver();
         const response = failedResponse({ code: 'server_error', message: 'Provider could not generate a response.' });

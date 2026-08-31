@@ -13,7 +13,7 @@ import {
     type PromptSegment,
 } from '@llumiverse/common';
 import { AbstractDriver } from '@llumiverse/core/driver';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Tree } from '../../test/__helpers__/test-utils.js';
 import { BedrockDriver, type BedrockPrompt } from './index.js';
 
@@ -159,7 +159,7 @@ describe('BedrockDriver private tool-choice mapping', () => {
         expect(payload.toolConfig?.toolChoice).toBeUndefined();
     });
 
-    it('does not force a Claude tool choice while thinking is enabled', () => {
+    it('disables Claude thinking for a forced tool turn', () => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
         const payload = driver.preparePayload(prompt, {
             model: 'anthropic.claude-sonnet-4-6',
@@ -173,11 +173,28 @@ describe('BedrockDriver private tool-choice mapping', () => {
         } as unknown as ExecutionOptions);
 
         expect(payload.toolConfig?.tools).toHaveLength(1);
-        expect(payload.toolConfig?.toolChoice).toBeUndefined();
+        expect(payload.toolConfig?.toolChoice).toEqual({ tool: { name: 'write_artifact' } });
+        expect(payload.additionalModelRequestFields).toBeUndefined();
+    });
+
+    it('rejects a forced Converse tool turn when no tools are available', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+
+        expect(() =>
+            driver.preparePayload(prompt, {
+                model: 'anthropic.claude-sonnet-4-6',
+                model_options: {
+                    _option_id: 'bedrock-claude',
+                    tool_choice: 'required',
+                    required_tool_name: 'write_artifact',
+                },
+            } as unknown as ExecutionOptions),
+        ).toThrow('requires at least one tool definition');
     });
 
     it('does not force tool choice on unsupported Converse model families', () => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
+        const warn = vi.spyOn((driver as unknown as { logger: { warn: (...args: unknown[]) => void } }).logger, 'warn');
         const payload = driver.preparePayload({ ...prompt, modelId: 'meta.llama3-3-70b-instruct-v1:0' }, {
             model: 'meta.llama3-3-70b-instruct-v1:0',
             tools,
@@ -190,6 +207,10 @@ describe('BedrockDriver private tool-choice mapping', () => {
 
         expect(payload.toolConfig?.tools).toHaveLength(1);
         expect(payload.toolConfig?.toolChoice).toBeUndefined();
+        expect(warn).toHaveBeenCalledWith(
+            { model: 'meta.llama3-3-70b-instruct-v1:0' },
+            expect.stringContaining('does not support forced Converse tool choice'),
+        );
     });
 });
 

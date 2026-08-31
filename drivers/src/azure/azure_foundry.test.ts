@@ -137,6 +137,7 @@ describe('AzureFoundryDriver protocol composition', () => {
         expect(path).toHaveBeenCalledWith('/chat/completions');
         expect(post).toHaveBeenCalledWith({
             timeout: 900_000,
+            headers: { 'extra-parameters': 'pass-through' },
             body: expect.objectContaining({
                 model: 'llama-deployment',
                 stream: false,

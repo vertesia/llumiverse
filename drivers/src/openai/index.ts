@@ -1324,9 +1324,7 @@ function responseErrorStatus(code: string): number {
     if (code === 'server_error') return 500;
     if (code === 'vector_store_timeout') return 408;
     if (code === 'image_file_not_found') return 404;
-    // Known policy, prompt, residency, and image-validation failures are request errors. Unknown
-    // proxy/provider codes are treated as server failures so the normal driver retry policy can
-    // recover from transient OpenAI-compatible backends.
+    // Known policy, prompt, residency, and image-validation failures are request errors.
     if (
         code === 'invalid_prompt' ||
         code === 'data_residency_mismatch' ||
@@ -1342,7 +1340,9 @@ function responseErrorStatus(code: string): number {
     ) {
         return 400;
     }
-    return 500;
+    // Unknown failed-response codes are not evidence of a transient provider failure. Treat them
+    // as non-retryable request errors so one billed failure cannot fan out into a retry storm.
+    return 400;
 }
 
 function openAIResponseFailure(response: OpenAI.Responses.Response): OpenAIResponseFailure {

@@ -1373,6 +1373,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const model_options: TextFallbackOptions = (options.model_options as TextFallbackOptions) ?? {
             _option_id: 'text-fallback',
         };
+        const privateToolOptions = model_options as typeof model_options & {
+            tool_choice?: 'auto' | 'none' | 'any' | 'required';
+            required_tool_name?: string;
+        };
+        const forcedToolRequested =
+            privateToolOptions.required_tool_name !== undefined ||
+            privateToolOptions.tool_choice === 'required' ||
+            privateToolOptions.tool_choice === 'any';
 
         let additionalField: Record<string, unknown> = {};
         let supportsJSONPrefill = false;
@@ -1382,7 +1390,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             options.model,
             options.model_options as BedrockClaudeOptions | undefined,
         );
-        const hasSamplingRestriction = claudeThinking.hasSamplingRestriction;
+        const disableClaudeThinkingForForcedTool = options.model.includes('claude') && forcedToolRequested;
+        const hasSamplingRestriction = disableClaudeThinkingForForcedTool
+            ? false
+            : claudeThinking.hasSamplingRestriction;
 
         if (options.model.includes('amazon')) {
             supportsJSONPrefill = true;
@@ -1399,7 +1410,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             // they have no native JSON adherence.
 
             // Claude 3.7+ supports thinking — use shared helper for reasoning_config
-            if (claudeThinking.supportsThinking) {
+            if (claudeThinking.supportsThinking && !disableClaudeThinkingForForcedTool) {
                 if (claudeThinking.thinking) {
                     additionalField = {
                         ...additionalField,
@@ -1419,7 +1430,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 }
             }
             // Add effort parameter via output_config (Opus 4.5+, Sonnet 4.6+, all 4.7+)
-            if (claudeThinking.outputConfig) {
+            if (claudeThinking.outputConfig && !disableClaudeThinkingForForcedTool) {
                 additionalField = {
                     ...additionalField,
                     output_config: claudeThinking.outputConfig,
@@ -1515,6 +1526,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
 
         const tool_defs = getToolDefinitions(options.tools);
+        if (forcedToolRequested && !tool_defs?.length) {
+            throw new Error('A forced Bedrock tool turn requires at least one tool definition.');
+        }
 
         // Use prefill when there is a schema and tools are not being used
         if (
@@ -1583,14 +1597,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             };
         }
 
-        const privateToolOptions = model_options as typeof model_options & {
-            tool_choice?: 'auto' | 'none' | 'any' | 'required';
-            required_tool_name?: string;
-        };
-        const thinkingEnabled = claudeThinking.thinking !== undefined && claudeThinking.thinking.type !== 'disabled';
-        const supportsForcedToolChoice =
-            (options.model.includes('claude') && !thinkingEnabled) || options.model.includes('amazon.nova');
+        const supportsForcedToolChoice = options.model.includes('claude') || options.model.includes('amazon.nova');
         if (tool_defs?.length) {
+            if (forcedToolRequested && !supportsForcedToolChoice) {
+                this.logger.warn(
+                    { model: options.model },
+                    '[Bedrock] Model family does not support forced Converse tool choice; using automatic tool choice',
+                );
+            }
             request.toolConfig = {
                 tools: tool_defs,
                 ...(supportsForcedToolChoice && privateToolOptions.required_tool_name

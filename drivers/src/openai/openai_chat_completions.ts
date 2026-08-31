@@ -164,6 +164,8 @@ export interface OpenAIChatCompletionsProtocolOptions {
     resultSchemaMode?: 'response_format' | 'prompt';
     /** Supplement native structured output with prompt alignment for providers with unreliable enforcement. */
     includeResultSchemaInPrompt?: boolean;
+    /** Model-specific form of the prompt alignment guard for mixed-model providers. */
+    includeResultSchemaInPromptForModel?: (model: string) => boolean;
     /**
      * OpenAI supports strict function schemas. Some OpenAI-compatible providers reject
      * or mis-handle those OpenAI-specific fields, so adapters can request a looser
@@ -889,7 +891,9 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             ? `IMPORTANT: only answer using JSON, and respecting the schema included below, between the <response_schema> tags. <response_schema>${JSON.stringify(_options.result_schema)}</response_schema>`
             : undefined;
         if (
-            (this.options.resultSchemaMode === 'prompt' || this.options.includeResultSchemaInPrompt) &&
+            (this.options.resultSchemaMode === 'prompt' ||
+                this.options.includeResultSchemaInPrompt ||
+                this.options.includeResultSchemaInPromptForModel?.(_options.model)) &&
             resultSchemaInstruction
         ) {
             messages.push({
@@ -1242,6 +1246,7 @@ export interface OpenAIChatCompletionsDriverOptions extends DriverOptions {
     extraBody?: Record<string, unknown>;
     resultSchemaMode?: OpenAIChatCompletionsProtocolOptions['resultSchemaMode'];
     includeResultSchemaInPrompt?: OpenAIChatCompletionsProtocolOptions['includeResultSchemaInPrompt'];
+    includeResultSchemaInPromptForModel?: OpenAIChatCompletionsProtocolOptions['includeResultSchemaInPromptForModel'];
     toolSchemaMode?: OpenAIChatCompletionsProtocolOptions['toolSchemaMode'];
 }
 
@@ -1433,6 +1438,7 @@ export abstract class OpenAIChatCompletionsDriverBase<
             extraBody: options.extraBody,
             resultSchemaMode: options.resultSchemaMode,
             includeResultSchemaInPrompt: options.includeResultSchemaInPrompt,
+            includeResultSchemaInPromptForModel: options.includeResultSchemaInPromptForModel,
             toolSchemaMode: options.toolSchemaMode,
         });
     }

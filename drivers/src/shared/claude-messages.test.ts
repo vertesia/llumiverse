@@ -294,7 +294,7 @@ describe('formatClaudePrompt', () => {
         });
     });
 
-    it('falls back to auto tool choice when Claude thinking prevents forcing', () => {
+    it('disables thinking for a forced Claude tool turn without weakening tool choice', () => {
         const { payload } = getClaudePayload(
             {
                 model: 'claude-sonnet-4-6',
@@ -309,7 +309,29 @@ describe('formatClaudePrompt', () => {
             { messages: [{ role: 'user', content: [{ type: 'text', text: 'Act now.' }] }] },
         );
 
-        expect(payload.tool_choice).toEqual({ type: 'auto' });
+        expect(payload.tool_choice).toEqual({
+            type: 'tool',
+            name: 'write_artifact',
+            disable_parallel_tool_use: false,
+        });
+        expect(payload.thinking).toBeUndefined();
+        expect(payload.output_config).toBeUndefined();
+    });
+
+    it('rejects a forced Claude tool turn when no tools are available', () => {
+        expect(() =>
+            getClaudePayload(
+                {
+                    model: 'claude-sonnet-4-6',
+                    model_options: {
+                        _option_id: 'anthropic-claude',
+                        tool_choice: 'required',
+                        required_tool_name: 'write_artifact',
+                    } as never,
+                },
+                { messages: [{ role: 'user', content: [{ type: 'text', text: 'Act now.' }] }] },
+            ),
+        ).toThrow('requires at least one tool definition');
     });
 
     it('preserves model-option cache controls when no routing identity is supplied', () => {

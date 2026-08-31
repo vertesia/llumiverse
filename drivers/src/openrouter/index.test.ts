@@ -12,6 +12,20 @@ describe('OpenRouterDriver native SDK transport', () => {
         expect(() => new OpenRouterDriver({ apiKey: '' })).toThrow('apiKey is required');
     });
 
+    it('supplements native structured output only for GLM 5.3', async () => {
+        const driver = new OpenRouterDriver({ apiKey: 'test-key' });
+        const resultSchema = { type: 'object' as const, properties: { answer: { type: 'string' as const } } };
+        const segments = [{ role: PromptRole.user, content: 'Answer.' }];
+
+        const glmPrompt = await driver.createPrompt(segments, { model: 'z-ai/glm-5.3', result_schema: resultSchema });
+        const grokPrompt = await driver.createPrompt(segments, { model: 'x-ai/grok-4.6', result_schema: resultSchema });
+
+        expect(glmPrompt.messages.some((message) => JSON.stringify(message).includes('<response_schema>'))).toBe(true);
+        expect(grokPrompt.messages.some((message) => JSON.stringify(message).includes('<response_schema>'))).toBe(
+            false,
+        );
+    });
+
     it('maps chat, structured output, tools, timeout, and the native response', async () => {
         const driver = new OpenRouterDriver({ apiKey: 'test-key' });
         const response = {

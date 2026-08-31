@@ -255,6 +255,10 @@ export function finalizeStreamingToolUse(
             delete tool._actual_id;
         }
         if (typeof tool.tool_input === 'string') {
+            if (tool.tool_input.trim() === '') {
+                tool.tool_input = {};
+                continue;
+            }
             try {
                 tool.tool_input = JSON.parse(tool.tool_input);
             } catch (error: unknown) {

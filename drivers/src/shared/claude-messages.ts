@@ -869,37 +869,43 @@ export function getClaudePayload(
         : model_options?.tool_choice === 'required' || model_options?.tool_choice === 'any'
           ? ({ type: 'any' } as const)
           : undefined;
+    if (forcedToolChoice && !hasTools) {
+        throw new Error('A forced Claude tool turn requires at least one tool definition.');
+    }
     const thinkingEnabled = thinking !== undefined && thinking.type !== 'disabled';
+    // Anthropic rejects forced tool choice together with extended thinking. A
+    // constrained action turn must preserve the tool contract, so disable
+    // thinking for that one call instead of silently weakening the contract.
+    const disableThinkingForForcedTool = forcedToolChoice !== undefined && thinkingEnabled;
+    const effectiveSamplingRestriction = disableThinkingForForcedTool ? false : hasSamplingRestriction;
     const toolChoice = !hasTools
         ? undefined
-        : forcedToolChoice && thinkingEnabled
-          ? ({ type: 'auto' } as const)
-          : forcedToolChoice
-            ? { ...forcedToolChoice, disable_parallel_tool_use: model_options?.parallel_tool_calls === false }
-            : model_options?.tool_choice === 'none'
-              ? ({ type: 'none' } as const)
-              : model_options?.tool_choice === 'auto'
-                ? ({ type: 'auto' } as const)
-                : undefined;
+        : forcedToolChoice
+          ? { ...forcedToolChoice, disable_parallel_tool_use: model_options?.parallel_tool_calls === false }
+          : model_options?.tool_choice === 'none'
+            ? ({ type: 'none' } as const)
+            : model_options?.tool_choice === 'auto'
+              ? ({ type: 'auto' } as const)
+              : undefined;
 
     const payload: MessageCreateParamsBase = {
         messages: sanitizedMessages,
         system: sanitizedSystem,
         tools: sanitizedTools,
         tool_choice: toolChoice,
-        temperature: hasSamplingRestriction ? undefined : model_options?.temperature,
+        temperature: effectiveSamplingRestriction ? undefined : model_options?.temperature,
         model: modelName,
         max_tokens: claudeMaxTokens(options),
-        top_p: hasSamplingRestriction
+        top_p: effectiveSamplingRestriction
             ? undefined
             : model_options?.temperature != null
               ? undefined
               : model_options?.top_p,
-        top_k: hasSamplingRestriction ? undefined : model_options?.top_k,
+        top_k: effectiveSamplingRestriction ? undefined : model_options?.top_k,
         stop_sequences: model_options?.stop_sequence,
-        thinking,
+        thinking: disableThinkingForForcedTool ? undefined : thinking,
         stream: true,
-        ...(outputConfig && { output_config: outputConfig }),
+        ...(!disableThinkingForForcedTool && outputConfig && { output_config: outputConfig }),
     };
 
     return { payload, requestOptions };

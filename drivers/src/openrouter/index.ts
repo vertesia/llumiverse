@@ -54,6 +54,7 @@ export class OpenRouterDriver extends OpenAIChatCompletionsDriverBase<OpenRouter
         super({
             ...options,
             resultSchemaMode: 'response_format',
+            includeResultSchemaInPromptForModel: (model) => /(?:^|\/)glm-5\.3(?:$|[-:])/i.test(model),
             toolSchemaMode: 'compatible',
         });
         if (!options.apiKey) {

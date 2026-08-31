@@ -99,6 +99,7 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
     ): Promise<OpenAIChatCompletionsResponse> {
         const response = await this.service.path('/chat/completions').post({
             body: toAzureInferenceRequest(payload, false),
+            headers: { 'extra-parameters': 'pass-through' },
             timeout: this.getDriverRequestTimeoutMs(_options.httpTimeout),
             ...(signal ? { abortSignal: signal } : {}),
         });
@@ -122,6 +123,7 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
             .path('/chat/completions')
             .post({
                 body: toAzureInferenceRequest(payload, true),
+                headers: { 'extra-parameters': 'pass-through' },
                 timeout: this.getDriverRequestTimeoutMs(_options.httpTimeout),
                 ...(signal ? { abortSignal: signal } : {}),
             })
