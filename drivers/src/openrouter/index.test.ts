@@ -203,13 +203,7 @@ describe('OpenRouterDriver native SDK transport', () => {
             chatRequest: {
                 stream: true,
                 streamOptions: { includeUsage: true },
-                messages: [
-                    {
-                        role: 'system',
-                        content: expect.stringMatching(/only answer using JSON[\s\S]*<response_schema>[\s\S]*"answer"/),
-                    },
-                    { role: 'user', content: 'Weather?' },
-                ],
+                messages: [{ role: 'user', content: 'Weather?' }],
                 responseFormat: {
                     type: 'json_schema',
                     jsonSchema: expect.objectContaining({ name: 'output' }),

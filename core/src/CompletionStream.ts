@@ -328,6 +328,12 @@ export function accumulateToolUseChunk(
                 ...existingInput,
                 ...newInput,
             };
+        } else if (
+            (typeof existingInput === 'string' && isEmptyObject(newInput)) ||
+            (typeof newInput === 'string' && newInput.length === 0)
+        ) {
+            // Some OpenAI-compatible providers emit an empty placeholder between argument
+            // string fragments. It carries no information and must not erase prior bytes.
         } else {
             existing.tool_input = tool.tool_input;
         }
@@ -345,6 +351,10 @@ export function accumulateToolUseChunk(
     if (tool._actual_id) {
         existing._actual_id = tool._actual_id;
     }
+}
+
+function isEmptyObject(value: unknown): boolean {
+    return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0);
 }
 
 export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletionStream<PromptT> {

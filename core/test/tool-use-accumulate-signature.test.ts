@@ -108,6 +108,16 @@ describe('streaming tool_use argument finalization', () => {
         ]);
     });
 
+    test('does not let an empty object placeholder erase accumulated argument bytes', () => {
+        const accumulated = accumulate([
+            { id: 'write', tool_name: 'write_artifact', tool_input: '{"name"' },
+            { id: 'write', tool_name: '', tool_input: {} },
+            { id: 'write', tool_name: '', tool_input: ':"report"}' },
+        ]);
+
+        expect(accumulated?.tool_input).toBe('{"name":"report"}');
+    });
+
     test('rejects malformed arguments with a stable non-retryable identity', () => {
         const tools: StreamingToolUse[] = [{ id: 'write', tool_name: 'write_artifact', tool_input: '' }];
 

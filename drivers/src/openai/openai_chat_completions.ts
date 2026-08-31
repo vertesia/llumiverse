@@ -381,6 +381,9 @@ function normalizeOpenAIChatCompletionsFinishReason(
     reason: string | null | undefined,
     hasToolUse: boolean = false,
 ): string | undefined {
+    // A provider may include a partial tool-call delta on the token-limit chunk. Preserve
+    // truncation so core drops the incomplete call instead of classifying it as malformed JSON.
+    if (reason === 'length') return 'length';
     if (hasToolUse || reason === 'tool_calls' || reason === 'function_call') {
         return 'tool_use';
     }
@@ -1111,10 +1114,9 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                     const toolUse: StreamingOpenAIToolUse = {
                         id: `tool_${index}`,
                         tool_name: tc.function?.name ?? '',
-                        tool_input:
-                            typeof tc.function?.arguments === 'string' && tc.function.arguments.length > 0
-                                ? tc.function.arguments
-                                : {},
+                        // Empty deltas are zero-byte string fragments, not parsed empty objects.
+                        // Keeping one representation prevents a placeholder from replacing prior JSON bytes.
+                        tool_input: typeof tc.function?.arguments === 'string' ? tc.function.arguments : '',
                     };
                     if (tc.id) {
                         toolUse._actual_id = tc.id;

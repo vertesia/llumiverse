@@ -147,7 +147,7 @@ describe('BedrockDriver private tool-choice mapping', () => {
         expect(payload.toolConfig?.toolChoice).toEqual({ tool: { name: 'write_artifact' } });
     });
 
-    it('omits Converse tools for a private no-tool completion turn', () => {
+    it('keeps Converse tools in auto mode for a private no-tool completion turn', () => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
         const payload = driver.preparePayload(prompt, {
             model: 'anthropic.claude-sonnet-4-6',
@@ -155,7 +155,41 @@ describe('BedrockDriver private tool-choice mapping', () => {
             model_options: { _option_id: 'bedrock-claude', tool_choice: 'none' },
         } as unknown as ExecutionOptions);
 
-        expect(payload.toolConfig).toBeUndefined();
+        expect(payload.toolConfig?.tools).toHaveLength(1);
+        expect(payload.toolConfig?.toolChoice).toBeUndefined();
+    });
+
+    it('does not force a Claude tool choice while thinking is enabled', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const payload = driver.preparePayload(prompt, {
+            model: 'anthropic.claude-sonnet-4-6',
+            tools,
+            model_options: {
+                _option_id: 'bedrock-claude',
+                effort: 'medium',
+                tool_choice: 'required',
+                required_tool_name: 'write_artifact',
+            },
+        } as unknown as ExecutionOptions);
+
+        expect(payload.toolConfig?.tools).toHaveLength(1);
+        expect(payload.toolConfig?.toolChoice).toBeUndefined();
+    });
+
+    it('does not force tool choice on unsupported Converse model families', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const payload = driver.preparePayload({ ...prompt, modelId: 'meta.llama3-3-70b-instruct-v1:0' }, {
+            model: 'meta.llama3-3-70b-instruct-v1:0',
+            tools,
+            model_options: {
+                _option_id: 'text-fallback',
+                tool_choice: 'required',
+                required_tool_name: 'write_artifact',
+            },
+        } as unknown as ExecutionOptions);
+
+        expect(payload.toolConfig?.tools).toHaveLength(1);
+        expect(payload.toolConfig?.toolChoice).toBeUndefined();
     });
 });
 

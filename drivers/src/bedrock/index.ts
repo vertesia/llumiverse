@@ -1587,12 +1587,16 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             tool_choice?: 'auto' | 'none' | 'any' | 'required';
             required_tool_name?: string;
         };
-        if (tool_defs?.length && privateToolOptions.tool_choice !== 'none') {
+        const thinkingEnabled = claudeThinking.thinking !== undefined && claudeThinking.thinking.type !== 'disabled';
+        const supportsForcedToolChoice =
+            (options.model.includes('claude') && !thinkingEnabled) || options.model.includes('amazon.nova');
+        if (tool_defs?.length) {
             request.toolConfig = {
                 tools: tool_defs,
-                ...(privateToolOptions.required_tool_name
+                ...(supportsForcedToolChoice && privateToolOptions.required_tool_name
                     ? { toolChoice: { tool: { name: privateToolOptions.required_tool_name } } }
-                    : privateToolOptions.tool_choice === 'required' || privateToolOptions.tool_choice === 'any'
+                    : supportsForcedToolChoice &&
+                        (privateToolOptions.tool_choice === 'required' || privateToolOptions.tool_choice === 'any')
                       ? { toolChoice: { any: {} } }
                       : {}),
             };

@@ -204,6 +204,11 @@ export interface ClaudeBaseOptions {
     include_thoughts?: boolean;
     cache_enabled?: boolean;
     cache_ttl?: string;
+    tool_choice?: 'auto' | 'none' | 'any' | 'required';
+    /** Internal execution hint supplied after public model-option validation. */
+    required_tool_name?: string;
+    /** Internal execution hint used with a required named tool. */
+    parallel_tool_calls?: boolean;
 }
 
 interface RequestOptions {
@@ -859,11 +864,29 @@ export function getClaudePayload(
         modelName,
         model_options as Parameters<typeof resolveClaudeThinking>[1],
     );
+    const forcedToolChoice = model_options?.required_tool_name
+        ? ({ type: 'tool', name: model_options.required_tool_name } as const)
+        : model_options?.tool_choice === 'required' || model_options?.tool_choice === 'any'
+          ? ({ type: 'any' } as const)
+          : undefined;
+    const thinkingEnabled = thinking !== undefined && thinking.type !== 'disabled';
+    const toolChoice = !hasTools
+        ? undefined
+        : forcedToolChoice && thinkingEnabled
+          ? ({ type: 'auto' } as const)
+          : forcedToolChoice
+            ? { ...forcedToolChoice, disable_parallel_tool_use: model_options?.parallel_tool_calls === false }
+            : model_options?.tool_choice === 'none'
+              ? ({ type: 'none' } as const)
+              : model_options?.tool_choice === 'auto'
+                ? ({ type: 'auto' } as const)
+                : undefined;
 
     const payload: MessageCreateParamsBase = {
         messages: sanitizedMessages,
         system: sanitizedSystem,
         tools: sanitizedTools,
+        tool_choice: toolChoice,
         temperature: hasSamplingRestriction ? undefined : model_options?.temperature,
         model: modelName,
         max_tokens: claudeMaxTokens(options),

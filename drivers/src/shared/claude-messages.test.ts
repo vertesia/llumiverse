@@ -272,6 +272,46 @@ describe('formatClaudePrompt', () => {
         expect(payload.messages[payload.messages.length - 1]?.role).toBe('user');
     });
 
+    it('maps private required-tool hints to native Claude tool choice', () => {
+        const { payload } = getClaudePayload(
+            {
+                model: 'claude-haiku-4-5',
+                tools: [{ name: 'write_artifact', input_schema: { type: 'object', properties: {} } }],
+                model_options: {
+                    _option_id: 'anthropic-claude',
+                    tool_choice: 'required',
+                    required_tool_name: 'write_artifact',
+                    parallel_tool_calls: false,
+                } as never,
+            },
+            { messages: [{ role: 'user', content: [{ type: 'text', text: 'Act now.' }] }] },
+        );
+
+        expect(payload.tool_choice).toEqual({
+            type: 'tool',
+            name: 'write_artifact',
+            disable_parallel_tool_use: true,
+        });
+    });
+
+    it('falls back to auto tool choice when Claude thinking prevents forcing', () => {
+        const { payload } = getClaudePayload(
+            {
+                model: 'claude-sonnet-4-6',
+                tools: [{ name: 'write_artifact', input_schema: { type: 'object', properties: {} } }],
+                model_options: {
+                    _option_id: 'anthropic-claude',
+                    effort: 'medium',
+                    tool_choice: 'required',
+                    required_tool_name: 'write_artifact',
+                } as never,
+            },
+            { messages: [{ role: 'user', content: [{ type: 'text', text: 'Act now.' }] }] },
+        );
+
+        expect(payload.tool_choice).toEqual({ type: 'auto' });
+    });
+
     it('preserves model-option cache controls when no routing identity is supplied', () => {
         const options: ExecutionOptions = {
             model: 'claude-sonnet-4-6',

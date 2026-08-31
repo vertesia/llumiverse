@@ -1161,6 +1161,58 @@ describe('OpenAIChatCompletionsProtocol', () => {
         expect(chunks[chunks.length - 1].finish_reason).toBe('tool_use');
     });
 
+    it('keeps empty argument deltas as strings and preserves a length stop', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol(
+            undefined,
+            createSSEStream([
+                {
+                    type: 'event',
+                    data: JSON.stringify({
+                        id: 'chatcmpl-1',
+                        object: 'chat.completion.chunk',
+                        created: 1,
+                        model: 'test/model',
+                        choices: [
+                            {
+                                index: 0,
+                                delta: {
+                                    tool_calls: [
+                                        {
+                                            index: 0,
+                                            id: 'call_real_id',
+                                            type: 'function',
+                                            function: { name: 'write_artifact', arguments: '{"name"' },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    }),
+                },
+                {
+                    type: 'event',
+                    data: JSON.stringify({
+                        id: 'chatcmpl-1',
+                        object: 'chat.completion.chunk',
+                        created: 1,
+                        model: 'test/model',
+                        choices: [
+                            {
+                                index: 0,
+                                delta: { tool_calls: [{ index: 0, function: { arguments: '' } }] },
+                                finish_reason: 'length',
+                            },
+                        ],
+                    }),
+                },
+            ]),
+        );
+
+        const chunks = await collectChunks(await model.requestTextCompletionStream(undefined, prompt, options));
+        expect(chunks.flatMap((chunk) => chunk.tool_use ?? []).map((tool) => tool.tool_input)).toEqual(['{"name"', '']);
+        expect(chunks.at(-1)?.finish_reason).toBe('length');
+    });
+
     it('normalizes tool schemas and structured-output schemas for Chat Completions payloads', async () => {
         const model = new TestOpenAIChatCompletionsProtocol({
             id: 'chatcmpl-1',

@@ -1,4 +1,4 @@
-import { Base64DataSource, ModelType, PromptRole, Providers } from '@llumiverse/core';
+import { Base64DataSource, type ExecutionOptions, ModelType, PromptRole, Providers } from '@llumiverse/core';
 import { InvalidRequestError, RequestTimeoutError } from '@mistralai/mistralai/models/errors';
 import { describe, expect, it, vi } from 'vitest';
 import { MistralAIDriver } from './index.js';
@@ -141,6 +141,34 @@ describe('MistralAIDriver official SDK transport', () => {
         );
 
         expect(complete).toHaveBeenCalledWith(expect.objectContaining({ reasoningEffort: 'high' }));
+    });
+
+    it('maps the private required-tool hint to a named Mistral tool choice', async () => {
+        const driver = new MistralAIDriver({ apiKey: 'test-key' });
+        const complete = vi.fn(async () => ({
+            choices: [{ index: 0, finishReason: 'stop', message: { role: 'assistant' as const, content: 'Done' } }],
+            usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+        }));
+        Object.defineProperty(driver.client.chat, 'complete', { value: complete });
+
+        await driver.requestTextCompletion(
+            { messages: [{ role: 'user', content: 'Act now.' }] },
+            {
+                model: 'mistral-small-latest',
+                model_options: {
+                    _option_id: 'mistral-text',
+                    tool_choice: 'required',
+                    required_tool_name: 'write_artifact',
+                } as ExecutionOptions['model_options'] & { required_tool_name: string },
+                tools: [{ name: 'write_artifact', input_schema: { type: 'object', properties: {} } }],
+            },
+        );
+
+        expect(complete).toHaveBeenCalledWith(
+            expect.objectContaining({
+                toolChoice: { type: 'function', function: { name: 'write_artifact' } },
+            }),
+        );
     });
 
     it('preserves signed thinking for replay after JSON roundtrip while projecting thoughts by default', async () => {

@@ -54,10 +54,6 @@ export class OpenRouterDriver extends OpenAIChatCompletionsDriverBase<OpenRouter
         super({
             ...options,
             resultSchemaMode: 'response_format',
-            // OpenRouter exposes one protocol across many model families. Some routed models accept
-            // response_format but do not enforce it, so keep the provider-native constraint and give
-            // the model the same stable schema instruction as a compatibility fallback.
-            includeResultSchemaInPrompt: true,
             toolSchemaMode: 'compatible',
         });
         if (!options.apiKey) {
