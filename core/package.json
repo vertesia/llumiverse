@@ -1,6 +1,6 @@
 {
     "name": "@llumiverse/core",
-    "version": "1.5.0-dev.20260826.063042Z",
+    "version": "1.5.0-dev.20260831.235912Z",
     "type": "module",
     "description": "Provide an universal API to LLMs. Support for existing LLMs can be added by writing a driver.",
     "files": [
