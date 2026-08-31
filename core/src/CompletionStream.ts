@@ -15,6 +15,26 @@ import { DEFAULT_DRIVER_REQUEST_TIMEOUT_MS } from './http-agent.js';
 
 type StreamingToolUse = ToolUse<unknown> & { _actual_id?: string };
 
+export class MalformedStreamingToolArgumentsError extends LlumiverseError {
+    constructor(
+        tool: StreamingToolUse,
+        finishReason: string | undefined,
+        context: { provider: string; model: string },
+        originalError: unknown,
+    ) {
+        const argumentChars = typeof tool.tool_input === 'string' ? tool.tool_input.length : 0;
+        super(
+            `[${context.provider}] Received malformed JSON arguments for streamed tool "${tool.tool_name || 'unknown'}" ` +
+                `(finish_reason=${finishReason ?? 'unknown'}, argument_chars=${argumentChars})`,
+            false,
+            { ...context, operation: 'stream' },
+            originalError,
+            undefined,
+            'MalformedStreamingToolArgumentsError',
+        );
+    }
+}
+
 export const DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS = DEFAULT_DRIVER_REQUEST_TIMEOUT_MS;
 
 class CompletionStreamLease {
@@ -253,15 +273,13 @@ export function finalizeStreamingToolUse(
         return completeTools.length > 0 ? completeTools : undefined;
     }
 
-    // Without an explicit length stop, malformed arguments indicate an incomplete or corrupt
-    // provider stream. Never coerce them to {}, because that can execute a tool with invented
-    // arguments. Surface a retryable stream error instead.
-    throw new LlumiverseError(
-        `[${context.provider}] Received malformed JSON arguments for a streamed tool call`,
-        true,
-        { ...context, operation: 'stream' },
-        parseError,
-    );
+    // Without an explicit length stop, malformed arguments indicate model/provider output that
+    // must be regenerated with feedback. Never coerce them to {}, because that can execute a tool
+    // with invented arguments, and never let Temporal retry the identical opaque activity. The
+    // conversation controller owns one bounded corrective turn with this stable error identity.
+    const malformedTool = toolUseArray.find((tool) => malformedToolIds.has(tool.id));
+    if (!malformedTool) return toolUseArray;
+    throw new MalformedStreamingToolArgumentsError(malformedTool, finishReason, context, parseError);
 }
 
 /**
