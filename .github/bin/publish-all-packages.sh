@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib-package-channel.sh"
+
 # Script to publish all llumiverse packages to NPM
 # Usage: publish-all-packages.sh --ref <ref> --release-type <type> --bump-type <type> [--dry-run [true|false]]
 #   --ref: Git reference (main for dev builds, release/X.Y for releases, e.g. release/1.4)
@@ -21,13 +24,6 @@ PACKAGES=(
 
 update_package_versions() {
   echo "=== Updating package versions ==="
-
-  # Determine npm tag based on release type
-  if [ "$RELEASE_TYPE" = "snapshot" ]; then
-    npm_tag="dev"
-  else
-    npm_tag="latest"
-  fi
 
   # Get current version and strip any existing -dev* suffix to get base version
   current_version=$(npm pkg get version | tr -d '"')
@@ -343,6 +339,14 @@ if [ "$DRY_RUN" = "true" ]; then
 else
   DRY_RUN_FLAG=""
 fi
+
+source_sha=$(git rev-parse HEAD)
+npm_tag=$(resolve_package_channel "$REF" "$RELEASE_TYPE" "$source_sha")
+
+echo "=== Package channel ==="
+echo "Source ref: ${REF}"
+echo "Source SHA: ${source_sha}"
+echo "Target tag: ${npm_tag}"
 
 # =============================================================================
 # Main flow
