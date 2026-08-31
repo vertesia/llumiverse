@@ -877,7 +877,6 @@ export function getClaudePayload(
     // constrained action turn must preserve the tool contract, so disable
     // thinking for that one call instead of silently weakening the contract.
     const disableThinkingForForcedTool = forcedToolChoice !== undefined && thinkingEnabled;
-    const effectiveSamplingRestriction = disableThinkingForForcedTool ? false : hasSamplingRestriction;
     const toolChoice = !hasTools
         ? undefined
         : forcedToolChoice
@@ -893,17 +892,17 @@ export function getClaudePayload(
         system: sanitizedSystem,
         tools: sanitizedTools,
         tool_choice: toolChoice,
-        temperature: effectiveSamplingRestriction ? undefined : model_options?.temperature,
+        temperature: hasSamplingRestriction ? undefined : model_options?.temperature,
         model: modelName,
         max_tokens: claudeMaxTokens(options),
-        top_p: effectiveSamplingRestriction
+        top_p: hasSamplingRestriction
             ? undefined
             : model_options?.temperature != null
               ? undefined
               : model_options?.top_p,
-        top_k: effectiveSamplingRestriction ? undefined : model_options?.top_k,
+        top_k: hasSamplingRestriction ? undefined : model_options?.top_k,
         stop_sequences: model_options?.stop_sequence,
-        thinking: disableThinkingForForcedTool ? undefined : thinking,
+        thinking: disableThinkingForForcedTool ? { type: 'disabled' } : thinking,
         stream: true,
         ...(!disableThinkingForForcedTool && outputConfig && { output_config: outputConfig }),
     };

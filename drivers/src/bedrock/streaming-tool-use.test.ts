@@ -13,7 +13,7 @@ import {
     type PromptSegment,
 } from '@llumiverse/common';
 import { AbstractDriver } from '@llumiverse/core/driver';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import type { Tree } from '../../test/__helpers__/test-utils.js';
 import { BedrockDriver, type BedrockPrompt } from './index.js';
 
@@ -174,7 +174,29 @@ describe('BedrockDriver private tool-choice mapping', () => {
 
         expect(payload.toolConfig?.tools).toHaveLength(1);
         expect(payload.toolConfig?.toolChoice).toEqual({ tool: { name: 'write_artifact' } });
-        expect(payload.additionalModelRequestFields).toBeUndefined();
+        expect(payload.additionalModelRequestFields).toEqual({ reasoning_config: { type: 'disabled' } });
+    });
+
+    it('keeps sampling parameters suppressed for a forced future-Claude Converse turn', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const payload = driver.preparePayload(prompt, {
+            model: 'anthropic.claude-fable-5',
+            tools,
+            model_options: {
+                _option_id: 'bedrock-claude',
+                effort: 'medium',
+                temperature: 0.4,
+                top_p: 0.8,
+                top_k: 20,
+                tool_choice: 'required',
+                required_tool_name: 'write_artifact',
+            },
+        } as unknown as ExecutionOptions);
+
+        expect(payload.toolConfig?.toolChoice).toEqual({ tool: { name: 'write_artifact' } });
+        expect(payload.additionalModelRequestFields).toEqual({ reasoning_config: { type: 'disabled' } });
+        expect(payload.inferenceConfig).not.toHaveProperty('temperature');
+        expect(payload.inferenceConfig).not.toHaveProperty('topP');
     });
 
     it('rejects a forced Converse tool turn when no tools are available', () => {
@@ -192,25 +214,19 @@ describe('BedrockDriver private tool-choice mapping', () => {
         ).toThrow('requires at least one tool definition');
     });
 
-    it('does not force tool choice on unsupported Converse model families', () => {
+    it('fails explicitly when a Converse model family cannot enforce tool choice', () => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
-        const warn = vi.spyOn((driver as unknown as { logger: { warn: (...args: unknown[]) => void } }).logger, 'warn');
-        const payload = driver.preparePayload({ ...prompt, modelId: 'meta.llama3-3-70b-instruct-v1:0' }, {
-            model: 'meta.llama3-3-70b-instruct-v1:0',
-            tools,
-            model_options: {
-                _option_id: 'text-fallback',
-                tool_choice: 'required',
-                required_tool_name: 'write_artifact',
-            },
-        } as unknown as ExecutionOptions);
-
-        expect(payload.toolConfig?.tools).toHaveLength(1);
-        expect(payload.toolConfig?.toolChoice).toBeUndefined();
-        expect(warn).toHaveBeenCalledWith(
-            { model: 'meta.llama3-3-70b-instruct-v1:0' },
-            expect.stringContaining('does not support forced Converse tool choice'),
-        );
+        expect(() =>
+            driver.preparePayload({ ...prompt, modelId: 'meta.llama3-3-70b-instruct-v1:0' }, {
+                model: 'meta.llama3-3-70b-instruct-v1:0',
+                tools,
+                model_options: {
+                    _option_id: 'text-fallback',
+                    tool_choice: 'required',
+                    required_tool_name: 'write_artifact',
+                },
+            } as unknown as ExecutionOptions),
+        ).toThrow('cannot enforce the requested tool choice');
     });
 });
 

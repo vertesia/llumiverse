@@ -314,8 +314,33 @@ describe('formatClaudePrompt', () => {
             name: 'write_artifact',
             disable_parallel_tool_use: false,
         });
-        expect(payload.thinking).toBeUndefined();
+        expect(payload.thinking).toEqual({ type: 'disabled' });
         expect(payload.output_config).toBeUndefined();
+    });
+
+    it('keeps sampling parameters suppressed for a forced future-Claude tool turn', () => {
+        const { payload } = getClaudePayload(
+            {
+                model: 'claude-fable-5',
+                tools: [{ name: 'write_artifact', input_schema: { type: 'object', properties: {} } }],
+                model_options: {
+                    _option_id: 'anthropic-claude',
+                    effort: 'medium',
+                    temperature: 0.4,
+                    top_p: 0.8,
+                    top_k: 20,
+                    tool_choice: 'required',
+                    required_tool_name: 'write_artifact',
+                } as never,
+            },
+            { messages: [{ role: 'user', content: [{ type: 'text', text: 'Act now.' }] }] },
+        );
+
+        expect(payload.tool_choice).toMatchObject({ type: 'tool', name: 'write_artifact' });
+        expect(payload.thinking).toEqual({ type: 'disabled' });
+        expect(payload.temperature).toBeUndefined();
+        expect(payload.top_p).toBeUndefined();
+        expect(payload.top_k).toBeUndefined();
     });
 
     it('rejects a forced Claude tool turn when no tools are available', () => {

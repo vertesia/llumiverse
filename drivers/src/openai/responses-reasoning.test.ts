@@ -134,6 +134,20 @@ describe('OpenAI Responses reasoning', () => {
         );
     });
 
+    it('rejects a required tool choice when no tools are available', async () => {
+        const create = vi.fn(async (_request: unknown) => response());
+        const driver = new TestResponsesDriver(create);
+
+        await expect(
+            driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
+                model: 'gpt-5.6-sol',
+                model_options: { _option_id: 'openai-thinking', tool_choice: 'required' },
+                tools: [],
+            }),
+        ).rejects.toThrow('required tool choice was requested, but no tools are available');
+        expect(create).not.toHaveBeenCalled();
+    });
+
     it('returns the processing tier reported by OpenAI', async () => {
         const driver = new TestResponsesDriver(vi.fn(async () => response()));
 

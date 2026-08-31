@@ -1391,9 +1391,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             options.model_options as BedrockClaudeOptions | undefined,
         );
         const disableClaudeThinkingForForcedTool = options.model.includes('claude') && forcedToolRequested;
-        const hasSamplingRestriction = disableClaudeThinkingForForcedTool
-            ? false
-            : claudeThinking.hasSamplingRestriction;
+        const hasSamplingRestriction = claudeThinking.hasSamplingRestriction;
 
         if (options.model.includes('amazon')) {
             supportsJSONPrefill = true;
@@ -1403,6 +1401,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
         } else if (options.model.includes('claude')) {
             const claude_options = model_options as ModelOptions as BedrockClaudeOptions;
+            if (disableClaudeThinkingForForcedTool) {
+                additionalField = { ...additionalField, reasoning_config: { type: 'disabled' } };
+            }
             // Claude never uses JSON prefill: newer models (4.6+) reject assistant
             // message prefill outright, and every supported Claude follows the
             // schema instruction injected into the prompt — so the model-version
@@ -1598,13 +1599,12 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
 
         const supportsForcedToolChoice = options.model.includes('claude') || options.model.includes('amazon.nova');
+        if (forcedToolRequested && !supportsForcedToolChoice) {
+            throw new Error(
+                `Bedrock model ${options.model} cannot enforce the requested tool choice; use a tool-choice-capable model.`,
+            );
+        }
         if (tool_defs?.length) {
-            if (forcedToolRequested && !supportsForcedToolChoice) {
-                this.logger.warn(
-                    { model: options.model },
-                    '[Bedrock] Model family does not support forced Converse tool choice; using automatic tool choice',
-                );
-            }
             request.toolConfig = {
                 tools: tool_defs,
                 ...(supportsForcedToolChoice && privateToolOptions.required_tool_name

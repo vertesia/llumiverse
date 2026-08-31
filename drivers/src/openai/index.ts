@@ -74,6 +74,19 @@ function getOpenAIResponseToolChoice(
     return modelOptions?.tool_choice === 'any' ? 'required' : modelOptions?.tool_choice;
 }
 
+function assertOpenAIResponseToolChoiceAvailable(
+    modelOptions: OpenAIRequestOptions | undefined,
+    useTools: boolean,
+): void {
+    const forced =
+        typeof modelOptions?.required_tool_name === 'string' ||
+        modelOptions?.tool_choice === 'required' ||
+        modelOptions?.tool_choice === 'any';
+    if (forced && !useTools) {
+        throw new Error('[OpenAI Responses API] A required tool choice was requested, but no tools are available.');
+    }
+}
+
 function asOpenAIResponseServiceTier(serviceTier?: string): OpenAIResponseServiceTier {
     // The public option deliberately accepts future provider values that may predate the installed SDK union.
     return serviceTier as OpenAIResponseServiceTier;
@@ -235,7 +248,7 @@ export class OpenAIResponsesProtocol {
         let conversation = fixOrphanedToolResults(fixOrphanedToolUse(updateConversation(options.conversation, prompt)));
 
         const toolDefs = getToolDefinitions(options.tools);
-        const useTools: boolean = toolDefs ? supportsToolUse(options.model, driver.provider, true) : false;
+        const useTools = Boolean(toolDefs?.length && supportsToolUse(options.model, driver.provider, true));
 
         // When no tools are provided but conversation contains function_call/function_call_output
         // items (e.g. checkpoint summary calls), convert them to text to avoid API errors
@@ -246,6 +259,7 @@ export class OpenAIResponsesProtocol {
         convertRoles(prompt, options.model);
 
         const model_options = options.model_options as OpenAIRequestOptions | undefined;
+        assertOpenAIResponseToolChoiceAvailable(model_options, useTools);
         insert_image_detail(prompt, model_options?.image_detail ?? 'auto');
 
         let parsedSchema: JSONSchema | undefined;
@@ -335,7 +349,8 @@ export class OpenAIResponsesProtocol {
         insert_image_detail(prompt, model_options?.image_detail ?? 'auto');
 
         const toolDefs = getToolDefinitions(options.tools);
-        const useTools: boolean = toolDefs ? supportsToolUse(options.model, driver.provider) : false;
+        const useTools = Boolean(toolDefs?.length && supportsToolUse(options.model, driver.provider));
+        assertOpenAIResponseToolChoiceAvailable(model_options, useTools);
 
         // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
         let conversation = fixOrphanedToolResults(fixOrphanedToolUse(updateConversation(options.conversation, prompt)));
@@ -1050,7 +1065,6 @@ export function mapResponseStream(
                     event.type === 'response.incomplete' ||
                     event.type === 'response.failed'
                 ) {
-                    assertOpenAIResponseSucceeded(event.response);
                     finalResponse = event.response;
                     const finalTools = collectTools(event.response.output);
                     yield {
@@ -1059,6 +1073,9 @@ export function mapResponseStream(
                         token_usage: mapUsage(event.response.usage),
                         service_tier: event.response.service_tier ?? undefined,
                     } satisfies CompletionChunkObject;
+                    // Preserve provider usage even when the terminal response is failed/incomplete;
+                    // the next iterator step surfaces the provider error to the caller.
+                    assertOpenAIResponseSucceeded(event.response);
                 }
             }
         },

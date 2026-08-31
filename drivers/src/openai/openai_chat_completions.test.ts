@@ -1080,6 +1080,25 @@ describe('OpenAIChatCompletionsProtocol', () => {
         ]);
     });
 
+    it('rejects a required tool choice when no tools are available', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol({
+            id: 'chatcmpl-1',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [],
+        });
+
+        await expect(
+            model.requestTextCompletion(undefined, prompt, {
+                ...options,
+                tools: [],
+                model_options: { _option_id: 'text-fallback', tool_choice: 'required' },
+            }),
+        ).rejects.toThrow('required tool choice was requested, but no tools are available');
+        expect(model.payloads).toHaveLength(0);
+    });
+
     it('throws when a non-streaming response has no content or tool calls', async () => {
         const model = new TestOpenAIChatCompletionsProtocol({
             id: 'chatcmpl-1',

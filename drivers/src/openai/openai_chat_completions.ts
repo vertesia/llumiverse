@@ -1201,6 +1201,15 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         }
 
         const toolsPayload = convertToolsToOpenAIChatCompletionsFormat(options.tools, this.options.toolSchemaMode);
+        const forcedToolChoice =
+            typeof modelOptions?.required_tool_name === 'string' ||
+            modelOptions?.tool_choice === 'required' ||
+            modelOptions?.tool_choice === 'any';
+        if (forcedToolChoice && (!toolsPayload || toolsPayload.length === 0)) {
+            throw new Error(
+                '[OpenAI Chat Completions API] A required tool choice was requested, but no tools are available.',
+            );
+        }
         if (toolsPayload && toolsPayload.length > 0) {
             payload.tools = toolsPayload;
             payload.tool_choice = modelOptions?.required_tool_name

@@ -121,7 +121,10 @@ describe('OpenAI Responses failed-response handling', () => {
 
     it('surfaces the provider cause from response.failed streams before result validation', async () => {
         const driver = new TestOpenAIResponsesDriver();
-        const response = failedResponse({ code: 'server_error', message: 'Provider could not generate a response.' });
+        const response = {
+            ...failedResponse({ code: 'server_error', message: 'Provider could not generate a response.' }),
+            usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+        } as OpenAI.Responses.Response;
         driver.service = {
             responses: {
                 create: vi.fn().mockResolvedValue(
@@ -135,9 +138,10 @@ describe('OpenAI Responses failed-response handling', () => {
         const stream = await driver.requestTextCompletionStream([{ role: 'user', content: 'hello' }], {
             model: 'gpt-5.6-sol',
         });
+        let failedUsage: unknown;
         const consume = async () => {
-            for await (const _chunk of stream) {
-                // Consume the provider stream.
+            for await (const chunk of stream) {
+                failedUsage = chunk.token_usage;
             }
         };
 
@@ -147,6 +151,12 @@ describe('OpenAI Responses failed-response handling', () => {
             status: 500,
             message:
                 '[OpenAI Responses API] Provider could not generate a response. (server_error) [response resp_failed_123]',
+        });
+        expect(failedUsage).toEqual({
+            prompt: 10,
+            prompt_new: 10,
+            result: 2,
+            total: 12,
         });
     });
 });
