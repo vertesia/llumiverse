@@ -141,8 +141,8 @@ importers:
         specifier: ^2.0.0
         version: 2.0.0
       '@google-cloud/aiplatform':
-        specifier: ^7.1.0
-        version: 7.1.0
+        specifier: ^7.2.0
+        version: 7.2.0
       '@google/genai':
         specifier: ^2.18.0
         version: 2.18.0
@@ -618,8 +618,8 @@ packages:
   '@emnapi/wasi-threads@1.2.1':
     resolution: {integrity: sha512-uTII7OYF+/Mes/MrcIOYp5yOtSMLBWSIoLPpcgwipoiKbli6k322tcoFsxoIIxPDqW01SQGAgko4EzZi2BNv2w==}
 
-  '@google-cloud/aiplatform@7.1.0':
-    resolution: {integrity: sha512-2vBc4dQK6/qhulcMzSR7FZTkYJmUYBFdZuam9ZF9pusYHaOuUDZd7yI3oHdeQXiE3WY0jv7G9yS6tltcjaepaw==}
+  '@google-cloud/aiplatform@7.2.0':
+    resolution: {integrity: sha512-piGe968bAkxrVlrD6dTwWak1xBiWKk9SlXbMv41Hb/CLTLa3DqAi8eapl4iuQE8SwVQsSfMmWFsewfroIqMubw==}
     engines: {node: '>=22'}
 
   '@google/genai@2.18.0':
@@ -2797,7 +2797,7 @@ snapshots:
       tslib: 2.8.1
     optional: true
 
-  '@google-cloud/aiplatform@7.1.0':
+  '@google-cloud/aiplatform@7.2.0':
     dependencies:
       google-gax: 6.0.2
     transitivePeerDependencies:
