@@ -1,4 +1,4 @@
-import { Providers } from '@llumiverse/core';
+import { PromptRole, Providers } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import { OpenAIResponsesDriverBase } from './index.js';
@@ -56,6 +56,103 @@ function response() {
 }
 
 describe('OpenAI Responses reasoning', () => {
+    it('uses prompt-schema fallback for GLM 5.3 on OpenAI-compatible Responses', async () => {
+        const create = vi.fn(async () => ({
+            ...response(),
+            model: 'z-ai/glm-5.3',
+            output: [
+                {
+                    ...messageItem,
+                    content: [{ type: 'output_text', text: '{"value":"ok"}', annotations: [], logprobs: [] }],
+                },
+            ],
+        }));
+        const driver = new TestResponsesDriver(create, Providers.openai_compatible);
+        const options = {
+            model: 'z-ai/glm-5.3',
+            result_schema: {
+                type: 'object' as const,
+                properties: { value: { type: 'string' as const } },
+                required: ['value'],
+                additionalProperties: false,
+            },
+        };
+        const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Return the value.' }], options);
+
+        await driver.requestTextCompletion(prompt, options);
+
+        expect(JSON.stringify(prompt)).toContain('<response_schema>');
+        expect(create).toHaveBeenCalledWith(expect.not.objectContaining({ text: expect.anything() }));
+    });
+
+    it.each([
+        ['required', 'required'],
+        ['any', 'required'],
+    ] as const)('forwards explicit %s tool choice as %s', async (configured, expected) => {
+        const create = vi.fn(async (_request: unknown) => response());
+        const driver = new TestResponsesDriver(create);
+
+        await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
+            model: 'gpt-5.6-sol',
+            model_options: { _option_id: 'openai-thinking', tool_choice: configured },
+            tools: [{ name: 'think', description: 'Think', input_schema: { type: 'object' } }],
+        });
+
+        expect(create).toHaveBeenCalledWith(expect.objectContaining({ tool_choice: expected }));
+    });
+
+    it('forces one named tool without changing the visible tool definitions', async () => {
+        const create = vi.fn(async (_request: unknown) => response());
+        const driver = new TestResponsesDriver(create);
+
+        await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
+            model: 'gpt-5.6-sol',
+            model_options: {
+                _option_id: 'openai-thinking',
+                tool_choice: 'required',
+                required_tool_name: 'write_artifact',
+                parallel_tool_calls: false,
+            } as Parameters<typeof driver.requestTextCompletion>[1]['model_options'] & {
+                required_tool_name: string;
+                parallel_tool_calls: false;
+            },
+            tools: [
+                { name: 'read_artifact', description: 'Read', input_schema: { type: 'object' } },
+                { name: 'write_artifact', description: 'Write', input_schema: { type: 'object' } },
+            ],
+        });
+
+        expect(create).toHaveBeenCalledWith(
+            expect.objectContaining({
+                tools: expect.arrayContaining([
+                    expect.objectContaining({ name: 'read_artifact' }),
+                    expect.objectContaining({ name: 'write_artifact' }),
+                ]),
+                tool_choice: { type: 'function', name: 'write_artifact' },
+                parallel_tool_calls: false,
+            }),
+        );
+    });
+
+    it('rejects a required tool choice when no tools are available', async () => {
+        const create = vi.fn(async (_request: unknown) => response());
+        const driver = new TestResponsesDriver(create);
+
+        await expect(
+            driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
+                model: 'gpt-5.6-sol',
+                model_options: { _option_id: 'openai-thinking', tool_choice: 'required' },
+                tools: [],
+            }),
+        ).rejects.toMatchObject({
+            name: 'ToolChoiceConfigurationError',
+            retryable: false,
+            code: 400,
+            message: expect.stringContaining('required tool choice was requested, but no tools are available'),
+        });
+        expect(create).not.toHaveBeenCalled();
+    });
+
     it('returns the processing tier reported by OpenAI', async () => {
         const driver = new TestResponsesDriver(vi.fn(async () => response()));
 

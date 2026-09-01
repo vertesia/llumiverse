@@ -3,7 +3,8 @@ import { PromptRole } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import { exposePrivate } from '../../test/__helpers__/test-utils.js';
-import { AzureFoundryDriver } from './azure_foundry.js';
+import type { OpenAIChatCompletionsPayload } from '../openai/openai_chat_completions.js';
+import { AzureFoundryDriver, toAzureInferenceRequest } from './azure_foundry.js';
 
 const credential: TokenCredential = {
     getToken: vi.fn(async () => ({ token: 'test-token', expiresOnTimestamp: Date.now() + 60_000 })),
@@ -24,6 +25,27 @@ function createDriver(): AzureFoundryDriver {
 }
 
 describe('AzureFoundryDriver protocol composition', () => {
+    it('preserves required tool choice when adapting an OpenAI chat request', () => {
+        const body = toAzureInferenceRequest(
+            {
+                model: 'deployment',
+                messages: [{ role: 'user', content: 'Act now.' }],
+                tools: [
+                    {
+                        type: 'function',
+                        function: { name: 'write_artifact', parameters: { type: 'object', properties: {} } },
+                    },
+                ],
+                tool_choice: { type: 'function', function: { name: 'write_artifact' } },
+                parallel_tool_calls: false,
+                stream: false,
+            } satisfies OpenAIChatCompletionsPayload,
+            false,
+        );
+
+        expect(body.tool_choice).toEqual({ type: 'function', function: { name: 'write_artifact' } });
+        expect(body.parallel_tool_calls).toBe(false);
+    });
     it('parses string capability flags and excludes dedicated endpoint deployments from inference listing', async () => {
         const driver = createDriver();
         const deployments = [
@@ -115,6 +137,7 @@ describe('AzureFoundryDriver protocol composition', () => {
         expect(path).toHaveBeenCalledWith('/chat/completions');
         expect(post).toHaveBeenCalledWith({
             timeout: 900_000,
+            headers: { 'extra-parameters': 'pass-through' },
             body: expect.objectContaining({
                 model: 'llama-deployment',
                 stream: false,

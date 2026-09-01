@@ -144,6 +144,45 @@ const options: ExecutionOptions = {
 };
 
 describe('OpenAIChatCompletionsProtocol', () => {
+    it('preserves compatible-provider prompt cache usage', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol({
+            id: 'chatcmpl-cache',
+            object: 'chat.completion',
+            created: 1,
+            model: 'compatible-model',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: 'ok' },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+            usage: {
+                prompt_tokens: 1_000,
+                completion_tokens: 20,
+                total_tokens: 1_020,
+                prompt_tokens_details: { cached_tokens: 800, audio_tokens: 0 },
+                completion_tokens_details: {
+                    accepted_prediction_tokens: 0,
+                    audio_tokens: 0,
+                    reasoning_tokens: 0,
+                    rejected_prediction_tokens: 0,
+                },
+            },
+        });
+
+        const completion = await model.requestTextCompletion(undefined, prompt, options);
+
+        expect(completion.token_usage).toMatchObject({
+            prompt: 1_000,
+            prompt_cached: 800,
+            prompt_new: 200,
+            result: 20,
+            total: 1_020,
+        });
+    });
+
     it('preserves compatible reasoning fields at the OpenAI SDK transport boundary', async () => {
         const response = {
             id: 'chatcmpl-1',
@@ -296,6 +335,65 @@ describe('OpenAIChatCompletionsProtocol', () => {
         });
 
         expect(model.payloads[0].tool_choice).toBeUndefined();
+    });
+
+    it.each([
+        ['required', 'required'],
+        ['any', 'required'],
+    ] as const)('forwards explicit %s tool choice as %s', async (configured, expected) => {
+        const model = new TestOpenAIChatCompletionsProtocol({
+            id: 'chatcmpl-1',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: 'ok' },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+        });
+
+        await model.requestTextCompletion(undefined, prompt, {
+            ...options,
+            model_options: { _option_id: 'text-fallback', tool_choice: configured },
+            tools: [{ name: 'think', description: 'Think', input_schema: { type: 'object' } }],
+        });
+
+        expect(model.payloads[0].tool_choice).toBe(expected);
+    });
+
+    it('forces one named tool without changing the visible tool definitions', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol({
+            id: 'chatcmpl-1',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+        });
+
+        await model.requestTextCompletion(undefined, prompt, {
+            ...options,
+            model_options: {
+                _option_id: 'text-fallback',
+                tool_choice: 'required',
+                required_tool_name: 'write_artifact',
+                parallel_tool_calls: false,
+            } as ExecutionOptions['model_options'] & { required_tool_name: string; parallel_tool_calls: false },
+            tools: [
+                { name: 'read_artifact', description: 'Read', input_schema: { type: 'object' } },
+                { name: 'write_artifact', description: 'Write', input_schema: { type: 'object' } },
+            ],
+        });
+
+        expect(model.payloads[0].tools).toHaveLength(2);
+        expect(model.payloads[0].tool_choice).toEqual({
+            type: 'function',
+            function: { name: 'write_artifact' },
+        });
+        expect(model.payloads[0].parallel_tool_calls).toBe(false);
     });
 
     it('reads text from non-streaming content arrays', async () => {
@@ -982,6 +1080,30 @@ describe('OpenAIChatCompletionsProtocol', () => {
         ]);
     });
 
+    it('rejects a required tool choice when no tools are available', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol({
+            id: 'chatcmpl-1',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [],
+        });
+
+        await expect(
+            model.requestTextCompletion(undefined, prompt, {
+                ...options,
+                tools: [],
+                model_options: { _option_id: 'text-fallback', tool_choice: 'required' },
+            }),
+        ).rejects.toMatchObject({
+            name: 'ToolChoiceConfigurationError',
+            retryable: false,
+            code: 400,
+            message: expect.stringContaining('required tool choice was requested, but no tools are available'),
+        });
+        expect(model.payloads).toHaveLength(0);
+    });
+
     it('throws when a non-streaming response has no content or tool calls', async () => {
         const model = new TestOpenAIChatCompletionsProtocol({
             id: 'chatcmpl-1',
@@ -1061,6 +1183,58 @@ describe('OpenAIChatCompletionsProtocol', () => {
         });
         expect(toolChunks.map((tool) => tool.tool_input).join('')).toBe('{"location":"Paris"}');
         expect(chunks[chunks.length - 1].finish_reason).toBe('tool_use');
+    });
+
+    it('keeps empty argument deltas as strings and preserves a length stop', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol(
+            undefined,
+            createSSEStream([
+                {
+                    type: 'event',
+                    data: JSON.stringify({
+                        id: 'chatcmpl-1',
+                        object: 'chat.completion.chunk',
+                        created: 1,
+                        model: 'test/model',
+                        choices: [
+                            {
+                                index: 0,
+                                delta: {
+                                    tool_calls: [
+                                        {
+                                            index: 0,
+                                            id: 'call_real_id',
+                                            type: 'function',
+                                            function: { name: 'write_artifact', arguments: '{"name"' },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    }),
+                },
+                {
+                    type: 'event',
+                    data: JSON.stringify({
+                        id: 'chatcmpl-1',
+                        object: 'chat.completion.chunk',
+                        created: 1,
+                        model: 'test/model',
+                        choices: [
+                            {
+                                index: 0,
+                                delta: { tool_calls: [{ index: 0, function: { arguments: '' } }] },
+                                finish_reason: 'length',
+                            },
+                        ],
+                    }),
+                },
+            ]),
+        );
+
+        const chunks = await collectChunks(await model.requestTextCompletionStream(undefined, prompt, options));
+        expect(chunks.flatMap((chunk) => chunk.tool_use ?? []).map((tool) => tool.tool_input)).toEqual(['{"name"', '']);
+        expect(chunks.at(-1)?.finish_reason).toBe('length');
     });
 
     it('normalizes tool schemas and structured-output schemas for Chat Completions payloads', async () => {

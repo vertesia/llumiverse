@@ -389,10 +389,12 @@ function buildMistralRequest(
     // Continue reading effort from the previously advertised OpenAI-compatible shape so persisted configurations
     // remain usable; Mistral-native fields are only accepted through the transport-specific discriminator.
     const modelOptions = options.model_options as
-        | MistralTextOptions
-        | (TextFallbackOptions & { effort?: unknown })
+        | ((MistralTextOptions | (TextFallbackOptions & { effort?: unknown })) & { required_tool_name?: string })
         | undefined;
     const mistralOptions = modelOptions?._option_id === 'mistral-text' ? modelOptions : undefined;
+    const toolChoice = modelOptions?.required_tool_name
+        ? ({ type: 'function', function: { name: modelOptions.required_tool_name } } as const)
+        : mistralOptions?.tool_choice;
     return {
         model: options.model,
         messages: conversation.messages,
@@ -405,7 +407,7 @@ function buildMistralRequest(
         randomSeed: mistralOptions?.random_seed,
         safePrompt: mistralOptions?.safe_prompt,
         parallelToolCalls: mistralOptions?.parallel_tool_calls,
-        toolChoice: mistralOptions?.tool_choice,
+        toolChoice,
         promptMode: mistralOptions?.prompt_mode,
         promptCacheKey: options.prompt_cache_key,
         n: 1,

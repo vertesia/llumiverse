@@ -49,6 +49,7 @@ import {
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
 import { truncateBinaryForDebug } from '../../shared/debug-prompt.js';
+import { createToolChoiceConfigurationError } from '../../shared/tool-choice-error.js';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
 import type { ModelDefinition } from '../models.js';
 import { generateWithGeminiContextCache } from './gemini-context-cache.js';
@@ -227,9 +228,28 @@ function getProminentPeopleOption(
     }
 }
 
-export function getGeminiPayload(options: ExecutionOptions, prompt: GenerateContentPrompt): GenerateContentParameters {
-    const model_options = options.model_options as VertexAIGeminiOptions | undefined;
+export function getGeminiPayload(
+    options: ExecutionOptions,
+    prompt: GenerateContentPrompt,
+    operation: LlumiverseErrorContext['operation'] = 'execute',
+): GenerateContentParameters {
+    const model_options = options.model_options as
+        | (VertexAIGeminiOptions & {
+              tool_choice?: 'auto' | 'none' | 'any' | 'required';
+              required_tool_name?: string;
+          })
+        | undefined;
     const tools = getToolDefinitions(options.tools);
+    const forcedToolRequested =
+        model_options?.required_tool_name !== undefined ||
+        model_options?.tool_choice === 'required' ||
+        model_options?.tool_choice === 'any';
+    if (forcedToolRequested && !tools) {
+        throw createToolChoiceConfigurationError(
+            '[Vertex AI Gemini] A required tool choice was requested, but no tools are available.',
+            { provider: 'vertexai', model: options.model, operation },
+        );
+    }
 
     // When no tools are provided but conversation contains functionCall/functionResponse parts
     // (e.g. checkpoint summary calls), convert them to text to avoid API errors.
@@ -278,7 +298,15 @@ export function getGeminiPayload(options: ExecutionOptions, prompt: GenerateCont
         toolConfig: tools
             ? {
                   functionCallingConfig: {
-                      mode: FunctionCallingConfigMode.AUTO,
+                      mode:
+                          model_options?.tool_choice === 'none'
+                              ? FunctionCallingConfigMode.NONE
+                              : model_options?.tool_choice === 'required' || model_options?.tool_choice === 'any'
+                                ? FunctionCallingConfigMode.ANY
+                                : FunctionCallingConfigMode.AUTO,
+                      ...(model_options?.required_tool_name
+                          ? { allowedFunctionNames: [model_options.required_tool_name] }
+                          : {}),
                   },
               }
             : undefined,
@@ -796,7 +824,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             options.httpTimeout,
         );
 
-        const payload = getGeminiPayload(options, prompt);
+        const payload = getGeminiPayload(options, prompt, 'execute');
         if (signal) payload.config = { ...payload.config, abortSignal: signal };
         // Routes through an explicit Vertex context cache when this execution carries a
         // prompt_cache_key; sends `payload` untouched otherwise, and on any cache failure.
@@ -911,7 +939,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             options.httpTimeout,
         );
 
-        const payload = getGeminiPayload(options, prompt);
+        const payload = getGeminiPayload(options, prompt, 'stream');
         payload.config = { ...payload.config, abortSignal: signal };
         const cacheExecution = await generateWithGeminiContextCache(
             driver,

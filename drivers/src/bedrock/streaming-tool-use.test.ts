@@ -1,3 +1,4 @@
+import type { ConverseRequest } from '@aws-sdk/client-bedrock-runtime';
 import {
     type AIModel,
     type Completion,
@@ -121,6 +122,139 @@ describe('BedrockDriver getExtractedStream — tool use', () => {
         );
 
         expect(chunk.finish_reason).toBe('tool_use');
+    });
+});
+
+describe('BedrockDriver private tool-choice mapping', () => {
+    const prompt = {
+        modelId: 'anthropic.claude-sonnet-4-6',
+        messages: [{ role: 'user', content: [{ text: 'Act now.' }] }],
+    } satisfies ConverseRequest;
+    const tools = [{ name: 'write_artifact', description: '', input_schema: { type: 'object', properties: {} } }];
+
+    it('requires a named Converse tool when the private hint names one', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const payload = driver.preparePayload(prompt, {
+            model: 'anthropic.claude-sonnet-4-6',
+            tools,
+            model_options: {
+                _option_id: 'bedrock-claude',
+                tool_choice: 'required',
+                required_tool_name: 'write_artifact',
+            },
+        } as unknown as ExecutionOptions);
+
+        expect(payload.toolConfig?.toolChoice).toEqual({ tool: { name: 'write_artifact' } });
+    });
+
+    it('keeps Converse tools in auto mode for a private no-tool completion turn', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const payload = driver.preparePayload(prompt, {
+            model: 'anthropic.claude-sonnet-4-6',
+            tools,
+            model_options: { _option_id: 'bedrock-claude', tool_choice: 'none' },
+        } as unknown as ExecutionOptions);
+
+        expect(payload.toolConfig?.tools).toHaveLength(1);
+        expect(payload.toolConfig?.toolChoice).toBeUndefined();
+    });
+
+    it('disables adaptive Claude thinking for a forced tool turn on Bedrock', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const payload = driver.preparePayload(prompt, {
+            model: 'anthropic.claude-sonnet-4-6',
+            tools,
+            model_options: {
+                _option_id: 'bedrock-claude',
+                effort: 'medium',
+                tool_choice: 'required',
+                required_tool_name: 'write_artifact',
+            },
+        } as unknown as ExecutionOptions);
+
+        expect(payload.toolConfig?.tools).toHaveLength(1);
+        expect(payload.toolConfig?.toolChoice).toEqual({ tool: { name: 'write_artifact' } });
+        expect(payload.additionalModelRequestFields).toEqual({ reasoning_config: { type: 'disabled' } });
+    });
+
+    it('disables only legacy manual extended thinking for a forced tool turn', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const payload = driver.preparePayload(prompt, {
+            model: 'anthropic.claude-3-7-sonnet',
+            tools,
+            model_options: {
+                _option_id: 'bedrock-claude',
+                thinking_budget_tokens: 8_000,
+                tool_choice: 'required',
+                required_tool_name: 'write_artifact',
+            },
+        } as unknown as ExecutionOptions);
+
+        expect(payload.toolConfig?.toolChoice).toEqual({ tool: { name: 'write_artifact' } });
+        expect(payload.additionalModelRequestFields).toEqual({ reasoning_config: { type: 'disabled' } });
+    });
+
+    it('degrades forced tool choice to auto for adaptive-only Claude families on Bedrock', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const payload = driver.preparePayload(prompt, {
+            model: 'anthropic.claude-fable-5',
+            tools,
+            model_options: {
+                _option_id: 'bedrock-claude',
+                effort: 'medium',
+                tool_choice: 'required',
+                required_tool_name: 'write_artifact',
+            },
+        } as unknown as ExecutionOptions);
+
+        expect(payload.toolConfig?.tools).toHaveLength(1);
+        expect(payload.toolConfig?.toolChoice).toBeUndefined();
+        expect(payload.additionalModelRequestFields).toEqual({
+            reasoning_config: { type: 'adaptive', display: 'omitted' },
+            output_config: { effort: 'medium' },
+        });
+    });
+
+    it('rejects a forced Converse tool turn when no tools are available', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+
+        expect(() =>
+            driver.preparePayload(prompt, {
+                model: 'anthropic.claude-sonnet-4-6',
+                model_options: {
+                    _option_id: 'bedrock-claude',
+                    tool_choice: 'required',
+                    required_tool_name: 'write_artifact',
+                },
+            } as unknown as ExecutionOptions),
+        ).toThrowError(
+            expect.objectContaining({
+                name: 'ToolChoiceConfigurationError',
+                retryable: false,
+                code: 400,
+            }),
+        );
+    });
+
+    it('fails explicitly when a Converse model family cannot enforce tool choice', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        expect(() =>
+            driver.preparePayload({ ...prompt, modelId: 'meta.llama3-3-70b-instruct-v1:0' }, {
+                model: 'meta.llama3-3-70b-instruct-v1:0',
+                tools,
+                model_options: {
+                    _option_id: 'text-fallback',
+                    tool_choice: 'required',
+                    required_tool_name: 'write_artifact',
+                },
+            } as unknown as ExecutionOptions),
+        ).toThrowError(
+            expect.objectContaining({
+                name: 'ToolChoiceConfigurationError',
+                retryable: false,
+                code: 400,
+            }),
+        );
     });
 });
 

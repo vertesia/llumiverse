@@ -15,6 +15,26 @@ import { DEFAULT_DRIVER_REQUEST_TIMEOUT_MS } from './http-agent.js';
 
 type StreamingToolUse = ToolUse<unknown> & { _actual_id?: string };
 
+export class MalformedStreamingToolArgumentsError extends LlumiverseError {
+    constructor(
+        tool: StreamingToolUse,
+        finishReason: string | undefined,
+        context: { provider: string; model: string },
+        originalError: unknown,
+    ) {
+        const argumentChars = typeof tool.tool_input === 'string' ? tool.tool_input.length : 0;
+        super(
+            `[${context.provider}] Received malformed JSON arguments for streamed tool "${tool.tool_name || 'unknown'}" ` +
+                `(finish_reason=${finishReason ?? 'unknown'}, argument_chars=${argumentChars})`,
+            false,
+            { ...context, operation: 'stream' },
+            originalError,
+            undefined,
+            'MalformedStreamingToolArgumentsError',
+        );
+    }
+}
+
 export const DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS = DEFAULT_DRIVER_REQUEST_TIMEOUT_MS;
 
 class CompletionStreamLease {
@@ -235,6 +255,10 @@ export function finalizeStreamingToolUse(
             delete tool._actual_id;
         }
         if (typeof tool.tool_input === 'string') {
+            if (tool.tool_input.trim() === '') {
+                tool.tool_input = {};
+                continue;
+            }
             try {
                 tool.tool_input = JSON.parse(tool.tool_input);
             } catch (error: unknown) {
@@ -253,15 +277,13 @@ export function finalizeStreamingToolUse(
         return completeTools.length > 0 ? completeTools : undefined;
     }
 
-    // Without an explicit length stop, malformed arguments indicate an incomplete or corrupt
-    // provider stream. Never coerce them to {}, because that can execute a tool with invented
-    // arguments. Surface a retryable stream error instead.
-    throw new LlumiverseError(
-        `[${context.provider}] Received malformed JSON arguments for a streamed tool call`,
-        true,
-        { ...context, operation: 'stream' },
-        parseError,
-    );
+    // Without an explicit length stop, malformed arguments indicate model/provider output that
+    // must be regenerated with feedback. Never coerce them to {}, because that can execute a tool
+    // with invented arguments, and never let Temporal retry the identical opaque activity. The
+    // conversation controller owns one bounded corrective turn with this stable error identity.
+    const malformedTool = toolUseArray.find((tool) => malformedToolIds.has(tool.id));
+    if (!malformedTool) return toolUseArray;
+    throw new MalformedStreamingToolArgumentsError(malformedTool, finishReason, context, parseError);
 }
 
 /**
@@ -310,6 +332,12 @@ export function accumulateToolUseChunk(
                 ...existingInput,
                 ...newInput,
             };
+        } else if (
+            (typeof existingInput === 'string' && isEmptyObject(newInput)) ||
+            (typeof newInput === 'string' && newInput.length === 0)
+        ) {
+            // Some OpenAI-compatible providers emit an empty placeholder between argument
+            // string fragments. It carries no information and must not erase prior bytes.
         } else {
             existing.tool_input = tool.tool_input;
         }
@@ -327,6 +355,10 @@ export function accumulateToolUseChunk(
     if (tool._actual_id) {
         existing._actual_id = tool._actual_id;
     }
+}
+
+function isEmptyObject(value: unknown): boolean {
+    return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0);
 }
 
 export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletionStream<PromptT> {
@@ -508,6 +540,27 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
             }
         } catch (error: unknown) {
             if (this.abortSignal.aborted) return;
+            // Some transports report final usage immediately before a terminal error. Preserve
+            // that partial completion so server-side failed-call telemetry records the tokens
+            // that were actually billed even though no canonical conversation can be finalized.
+            if (resultTokens !== undefined) {
+                this.completion = {
+                    result: accumulatedResults,
+                    prompt: this.driver.formatDebugPrompt(this.prompt),
+                    execution_time: Date.now() - start,
+                    token_usage: {
+                        prompt: promptTokens,
+                        result: resultTokens,
+                        total: resultTokens + promptTokens,
+                        ...(promptCachedTokens != null && { prompt_cached: promptCachedTokens }),
+                        ...(promptCacheWriteTokens != null && { prompt_cache_write: promptCacheWriteTokens }),
+                        ...(promptNewTokens != null && { prompt_new: promptNewTokens }),
+                    },
+                    service_tier: serviceTier,
+                    finish_reason,
+                    chunks: this.chunks,
+                };
+            }
             // Don't wrap if already a LlumiverseError
             if (LlumiverseError.isLlumiverseError(error)) {
                 throw error;

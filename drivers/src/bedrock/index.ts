@@ -50,6 +50,7 @@ import {
     type NovaCanvasOptions,
     type PromptSegment,
     Providers,
+    parseClaudeVersion,
     type StatelessExecutionOptions,
     stripBinaryFromConversation,
     stripHeartbeatsFromConversation,
@@ -70,6 +71,7 @@ import { logClaudeTruncation } from '../shared/claude-stop-reason.js';
 import { resolveClaudeThinking } from '../shared/claude-thinking.js';
 import { truncateBinaryForDebug, uint8ArrayToBase64ForDebug } from '../shared/debug-prompt.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
+import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
 import {
     converseConcatMessages,
     converseJSONprefill,
@@ -1373,6 +1375,21 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         const model_options: TextFallbackOptions = (options.model_options as TextFallbackOptions) ?? {
             _option_id: 'text-fallback',
         };
+        const privateToolOptions = model_options as typeof model_options & {
+            tool_choice?: 'auto' | 'none' | 'any' | 'required';
+            required_tool_name?: string;
+        };
+        const forcedToolRequested =
+            privateToolOptions.required_tool_name !== undefined ||
+            privateToolOptions.tool_choice === 'required' ||
+            privateToolOptions.tool_choice === 'any';
+        const tool_defs = getToolDefinitions(options.tools);
+        if (forcedToolRequested && !tool_defs?.length) {
+            throw createToolChoiceConfigurationError(
+                'A forced Bedrock tool turn requires at least one tool definition.',
+                { provider: this.provider, model: options.model, operation: 'stream' },
+            );
+        }
 
         let additionalField: Record<string, unknown> = {};
         let supportsJSONPrefill = false;
@@ -1382,6 +1399,20 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             options.model,
             options.model_options as BedrockClaudeOptions | undefined,
         );
+        const claudeVersion = parseClaudeVersion(options.model);
+        const onlySupportsAdaptiveThinking = claudeVersion?.variant === 'fable' || claudeVersion?.variant === 'mythos';
+        const useAutomaticToolChoiceForAdaptiveClaude =
+            options.model.includes('claude') && forcedToolRequested && onlySupportsAdaptiveThinking;
+        // Bedrock only permits auto/none tool choice while thinking is active. Disable thinking
+        // for the constrained turn on models that support the disabled form. Adaptive-only
+        // families keep thinking and use automatic tool choice; the caller's required-tool
+        // validator remains authoritative and triggers the bounded recovery path if the model
+        // does not call the requested tool.
+        const disableClaudeThinkingForForcedTool =
+            options.model.includes('claude') &&
+            forcedToolRequested &&
+            claudeThinking.supportsThinking &&
+            !useAutomaticToolChoiceForAdaptiveClaude;
         const hasSamplingRestriction = claudeThinking.hasSamplingRestriction;
 
         if (options.model.includes('amazon')) {
@@ -1392,6 +1423,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
         } else if (options.model.includes('claude')) {
             const claude_options = model_options as ModelOptions as BedrockClaudeOptions;
+            if (disableClaudeThinkingForForcedTool) {
+                additionalField = { ...additionalField, reasoning_config: { type: 'disabled' } };
+            }
             // Claude never uses JSON prefill: newer models (4.6+) reject assistant
             // message prefill outright, and every supported Claude follows the
             // schema instruction injected into the prompt — so the model-version
@@ -1399,7 +1433,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             // they have no native JSON adherence.
 
             // Claude 3.7+ supports thinking — use shared helper for reasoning_config
-            if (claudeThinking.supportsThinking) {
+            if (claudeThinking.supportsThinking && !disableClaudeThinkingForForcedTool) {
                 if (claudeThinking.thinking) {
                     additionalField = {
                         ...additionalField,
@@ -1419,7 +1453,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 }
             }
             // Add effort parameter via output_config (Opus 4.5+, Sonnet 4.6+, all 4.7+)
-            if (claudeThinking.outputConfig) {
+            if (claudeThinking.outputConfig && !disableClaudeThinkingForForcedTool) {
                 additionalField = {
                     ...additionalField,
                     output_config: claudeThinking.outputConfig,
@@ -1514,8 +1548,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             }
         }
 
-        const tool_defs = getToolDefinitions(options.tools);
-
         // Use prefill when there is a schema and tools are not being used
         if (
             supportsJSONPrefill &&
@@ -1583,9 +1615,25 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             };
         }
 
+        const supportsForcedToolChoice = options.model.includes('claude') || options.model.includes('amazon.nova');
+        if (forcedToolRequested && !supportsForcedToolChoice) {
+            throw createToolChoiceConfigurationError(
+                `Bedrock model ${options.model} cannot enforce the requested tool choice; use a tool-choice-capable model.`,
+                { provider: this.provider, model: options.model, operation: 'stream' },
+            );
+        }
         if (tool_defs?.length) {
             request.toolConfig = {
                 tools: tool_defs,
+                ...(supportsForcedToolChoice &&
+                !useAutomaticToolChoiceForAdaptiveClaude &&
+                privateToolOptions.required_tool_name
+                    ? { toolChoice: { tool: { name: privateToolOptions.required_tool_name } } }
+                    : supportsForcedToolChoice &&
+                        !useAutomaticToolChoiceForAdaptiveClaude &&
+                        (privateToolOptions.tool_choice === 'required' || privateToolOptions.tool_choice === 'any')
+                      ? { toolChoice: { any: {} } }
+                      : {}),
             };
         } else if (request.messages && messagesContainToolBlocks(request.messages)) {
             // Bedrock requires toolConfig when conversation contains toolUse/toolResult blocks.

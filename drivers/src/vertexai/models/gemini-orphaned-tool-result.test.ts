@@ -101,6 +101,66 @@ describe('fixOrphanedToolResults - Gemini', () => {
 });
 
 describe('getGeminiPayload - orphaned tool results', () => {
+    test('maps the private required-tool hint to Gemini ANY mode and an allowed function', () => {
+        const payload = getGeminiPayload(
+            {
+                ...OPTIONS_WITH_TOOLS,
+                model_options: {
+                    _option_id: 'vertexai-gemini',
+                    tool_choice: 'required',
+                    required_tool_name: 'a',
+                },
+            } as unknown as ExecutionOptions,
+            { contents: [{ role: 'user', parts: [{ text: 'Act now.' }] }] },
+        );
+
+        expect(payload.config?.toolConfig?.functionCallingConfig).toMatchObject({
+            mode: 'ANY',
+            allowedFunctionNames: ['a'],
+        });
+    });
+
+    test('maps the private no-tool hint to Gemini NONE mode', () => {
+        const payload = getGeminiPayload(
+            {
+                ...OPTIONS_WITH_TOOLS,
+                model_options: { _option_id: 'vertexai-gemini', tool_choice: 'none' },
+            } as unknown as ExecutionOptions,
+            { contents: [{ role: 'user', parts: [{ text: 'Return the receipt.' }] }] },
+        );
+
+        expect(payload.config?.toolConfig?.functionCallingConfig?.mode).toBe('NONE');
+    });
+
+    test('rejects a required tool choice when no tools are available', () => {
+        let thrown: unknown;
+        try {
+            getGeminiPayload(
+                {
+                    model: 'gemini-2.5-flash',
+                    tools: [],
+                    model_options: { _option_id: 'vertexai-gemini', tool_choice: 'required' },
+                } as unknown as ExecutionOptions,
+                { contents: [{ role: 'user', parts: [{ text: 'Act now.' }] }] },
+                'stream',
+            );
+        } catch (error: unknown) {
+            thrown = error;
+        }
+
+        expect(thrown).toMatchObject({
+            name: 'ToolChoiceConfigurationError',
+            retryable: false,
+            code: 400,
+            context: {
+                provider: 'vertexai',
+                model: 'gemini-2.5-flash',
+                operation: 'stream',
+            },
+            message: expect.stringContaining('required tool choice was requested, but no tools are available'),
+        });
+    });
+
     test('recombines split parallel functionResponses into one user turn matching the call turn', () => {
         // Gemini rejects a function-call turn whose responses are split across consecutive user
         // contents: "Please ensure that the number of function response parts is equal to the

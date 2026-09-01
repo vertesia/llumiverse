@@ -1,6 +1,10 @@
 import { LlumiverseError, type ToolUse } from '@llumiverse/common';
 import { describe, expect, test } from 'vitest';
-import { accumulateToolUseChunk, finalizeStreamingToolUse } from '../src/CompletionStream.js';
+import {
+    accumulateToolUseChunk,
+    finalizeStreamingToolUse,
+    MalformedStreamingToolArgumentsError,
+} from '../src/CompletionStream.js';
 
 type StreamingToolUse = ToolUse<unknown> & { _actual_id?: string };
 
@@ -104,8 +108,26 @@ describe('streaming tool_use argument finalization', () => {
         ]);
     });
 
-    test('rejects malformed arguments as retryable when the stream has no finish reason', () => {
-        const tools: StreamingToolUse[] = [{ id: 'write', tool_name: 'write_artifact', tool_input: '' }];
+    test('does not let an empty object placeholder erase accumulated argument bytes', () => {
+        const accumulated = accumulate([
+            { id: 'write', tool_name: 'write_artifact', tool_input: '{"name"' },
+            { id: 'write', tool_name: '', tool_input: {} },
+            { id: 'write', tool_name: '', tool_input: ':"report"}' },
+        ]);
+
+        expect(accumulated?.tool_input).toBe('{"name":"report"}');
+    });
+
+    test('normalizes empty streamed arguments for parameterless tools', () => {
+        const tools: StreamingToolUse[] = [{ id: 'inspect', tool_name: 'inspect_status', tool_input: '' }];
+
+        expect(finalizeStreamingToolUse(tools, 'tool_use', context)).toEqual([
+            { id: 'inspect', tool_name: 'inspect_status', tool_input: {} },
+        ]);
+    });
+
+    test('rejects malformed arguments with a stable non-retryable identity', () => {
+        const tools: StreamingToolUse[] = [{ id: 'write', tool_name: 'write_artifact', tool_input: '{' }];
 
         try {
             finalizeStreamingToolUse(tools, undefined, context);
@@ -113,7 +135,12 @@ describe('streaming tool_use argument finalization', () => {
         } catch (error: unknown) {
             expect(LlumiverseError.isLlumiverseError(error)).toBe(true);
             if (LlumiverseError.isLlumiverseError(error)) {
-                expect(error.retryable).toBe(true);
+                expect(error).toBeInstanceOf(MalformedStreamingToolArgumentsError);
+                expect(error.name).toBe('MalformedStreamingToolArgumentsError');
+                expect(error.message).toContain(
+                    'streamed tool "write_artifact" (finish_reason=unknown, argument_chars=1)',
+                );
+                expect(error.retryable).toBe(false);
                 expect(error.context).toEqual({ ...context, operation: 'stream' });
             }
         }

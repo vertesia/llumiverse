@@ -76,6 +76,91 @@ describe('OpenAIResponsesDriverBase usage mapping', () => {
     });
 });
 
+describe('OpenAI Responses failed-response handling', () => {
+    const failedResponse = (error: { code: string; message: string }) =>
+        ({
+            id: 'resp_failed_123',
+            status: 'failed',
+            error,
+            output: [],
+            usage: null,
+        }) as unknown as OpenAI.Responses.Response;
+
+    it('surfaces the provider cause for blocking failed responses', () => {
+        const driver = new TestOpenAIResponsesDriver();
+
+        expect(() =>
+            driver.extractDataFromResponse(
+                { model: 'gpt-5.6-sol' },
+                failedResponse({ code: 'invalid_prompt', message: 'Schema keyword is not supported.' }),
+            ),
+        ).toThrow(
+            '[OpenAI Responses API] Schema keyword is not supported. (invalid_prompt) [response resp_failed_123]',
+        );
+    });
+
+    it('treats an unknown failed-response code as non-retryable', () => {
+        const driver = new TestOpenAIResponsesDriver();
+        let thrown: unknown;
+
+        try {
+            driver.extractDataFromResponse(
+                { model: 'gpt-5.6-sol' },
+                failedResponse({ code: 'provider_specific_failure', message: 'Request rejected.' }),
+            );
+        } catch (error: unknown) {
+            thrown = error;
+        }
+
+        expect(thrown).toMatchObject({
+            name: 'OpenAIResponseError',
+            code: 'provider_specific_failure',
+            status: 400,
+        });
+    });
+
+    it('surfaces the provider cause from response.failed streams before result validation', async () => {
+        const driver = new TestOpenAIResponsesDriver();
+        const response = {
+            ...failedResponse({ code: 'server_error', message: 'Provider could not generate a response.' }),
+            usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+        } as OpenAI.Responses.Response;
+        driver.service = {
+            responses: {
+                create: vi.fn().mockResolvedValue(
+                    (async function* () {
+                        yield { type: 'response.failed', sequence_number: 1, response };
+                    })(),
+                ),
+            },
+        } as unknown as OpenAI;
+
+        const stream = await driver.requestTextCompletionStream([{ role: 'user', content: 'hello' }], {
+            model: 'gpt-5.6-sol',
+        });
+        let failedUsage: unknown;
+        const consume = async () => {
+            for await (const chunk of stream) {
+                failedUsage = chunk.token_usage;
+            }
+        };
+
+        await expect(consume()).rejects.toMatchObject({
+            name: 'OpenAIResponseError',
+            code: 'server_error',
+            status: 500,
+            message:
+                '[OpenAI Responses API] Provider could not generate a response. (server_error) [response resp_failed_123]',
+        });
+        expect(failedUsage).toEqual({
+            prompt: 10,
+            prompt_new: 10,
+            result: 2,
+            total: 12,
+        });
+    });
+});
+
 describe('OpenAIResponsesDriverBase prompt caching', () => {
     it('passes prompt_cache_key to blocking Responses requests', async () => {
         const driver = new TestOpenAIResponsesDriver();

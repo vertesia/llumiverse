@@ -99,6 +99,7 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
     ): Promise<OpenAIChatCompletionsResponse> {
         const response = await this.service.path('/chat/completions').post({
             body: toAzureInferenceRequest(payload, false),
+            headers: { 'extra-parameters': 'pass-through' },
             timeout: this.getDriverRequestTimeoutMs(_options.httpTimeout),
             ...(signal ? { abortSignal: signal } : {}),
         });
@@ -122,6 +123,7 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
             .path('/chat/completions')
             .post({
                 body: toAzureInferenceRequest(payload, true),
+                headers: { 'extra-parameters': 'pass-through' },
                 timeout: this.getDriverRequestTimeoutMs(_options.httpTimeout),
                 ...(signal ? { abortSignal: signal } : {}),
             })
@@ -571,10 +573,24 @@ function toAzureFoundryChatOptions(options: ExecutionOptions, deploymentName: st
     };
 }
 
-function toAzureInferenceRequest(
+type AzureInferenceRequestBody = GetChatCompletionsParameters['body'] & {
+    parallel_tool_calls?: boolean;
+};
+
+function toAzureToolChoice(
+    toolChoice: OpenAIChatCompletionsPayload['tool_choice'],
+): GetChatCompletionsParameters['body']['tool_choice'] {
+    if (typeof toolChoice === 'string') return toolChoice;
+    if (toolChoice?.type === 'function' && 'function' in toolChoice) {
+        return { type: 'function', function: { name: toolChoice.function.name } };
+    }
+    return undefined;
+}
+
+export function toAzureInferenceRequest(
     payload: OpenAIChatCompletionsPayload,
     stream: boolean,
-): GetChatCompletionsParameters['body'] {
+): AzureInferenceRequestBody {
     const responseFormat = payload.response_format
         ? ({ ...payload.response_format } satisfies ChatCompletionsResponseFormat)
         : undefined;
@@ -604,8 +620,10 @@ function toAzureInferenceRequest(
         seed: payload.seed ?? undefined,
         response_format: responseFormat,
         tools,
+        tool_choice: toAzureToolChoice(payload.tool_choice),
+        parallel_tool_calls: payload.parallel_tool_calls,
         stream,
-    } satisfies GetChatCompletionsParameters['body'];
+    } satisfies AzureInferenceRequestBody;
 }
 
 function parseCapabilityFlag(value: unknown): boolean | undefined {

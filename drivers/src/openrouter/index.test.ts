@@ -1,4 +1,4 @@
-import { Base64DataSource, ModelType, PromptRole, Providers } from '@llumiverse/core';
+import { Base64DataSource, type ExecutionOptions, ModelType, PromptRole, Providers } from '@llumiverse/core';
 import { RequestTimeoutError } from '@openrouter/sdk/models/errors';
 import { describe, expect, it, vi } from 'vitest';
 import { OpenRouterDriver } from './index.js';
@@ -10,6 +10,20 @@ function setService(driver: OpenRouterDriver, service: unknown): void {
 describe('OpenRouterDriver native SDK transport', () => {
     it('requires an API key', () => {
         expect(() => new OpenRouterDriver({ apiKey: '' })).toThrow('apiKey is required');
+    });
+
+    it('supplements native structured output only for GLM 5.3', async () => {
+        const driver = new OpenRouterDriver({ apiKey: 'test-key' });
+        const resultSchema = { type: 'object' as const, properties: { answer: { type: 'string' as const } } };
+        const segments = [{ role: PromptRole.user, content: 'Answer.' }];
+
+        const glmPrompt = await driver.createPrompt(segments, { model: 'z-ai/glm-5.3', result_schema: resultSchema });
+        const grokPrompt = await driver.createPrompt(segments, { model: 'x-ai/grok-4.6', result_schema: resultSchema });
+
+        expect(glmPrompt.messages.some((message) => JSON.stringify(message).includes('<response_schema>'))).toBe(true);
+        expect(grokPrompt.messages.some((message) => JSON.stringify(message).includes('<response_schema>'))).toBe(
+            false,
+        );
     });
 
     it('maps chat, structured output, tools, timeout, and the native response', async () => {
@@ -70,6 +84,12 @@ describe('OpenRouterDriver native SDK transport', () => {
                     provider_sort: 'throughput',
                     provider_order: ['google-vertex', 'amazon-bedrock'],
                     provider_allow_fallbacks: false,
+                    tool_choice: 'required',
+                    required_tool_name: 'lookup',
+                    parallel_tool_calls: false,
+                } as ExecutionOptions['model_options'] & {
+                    required_tool_name: string;
+                    parallel_tool_calls: false;
                 },
                 result_schema: {
                     type: 'object',
@@ -112,6 +132,8 @@ describe('OpenRouterDriver native SDK transport', () => {
                         function: expect.objectContaining({ name: 'lookup' }),
                     },
                 ],
+                toolChoice: { type: 'function', function: { name: 'lookup' } },
+                parallelToolCalls: false,
             },
         });
         expect(requestOptions).toEqual({ timeoutMs: 1_800_000 });
@@ -177,8 +199,13 @@ describe('OpenRouterDriver native SDK transport', () => {
         const send = vi.fn(async (_request: unknown, _options?: unknown) => nativeStream);
         setService(driver, { chat: { send } });
 
-        const options = {
+        const options: ExecutionOptions = {
             model: 'openai/gpt-5.6-sol',
+            result_schema: {
+                type: 'object',
+                properties: { answer: { type: 'string' } },
+                required: ['answer'],
+            },
             tools: [{ name: 'lookup', input_schema: { type: 'object' } }],
         };
         const stream = await driver.stream([{ role: PromptRole.user, content: 'Weather?' }], options);
@@ -186,14 +213,19 @@ describe('OpenRouterDriver native SDK transport', () => {
             // Consume all native chunks so the final completion and conversation are assembled.
         }
 
-        expect(send.mock.calls[0][0]).toEqual({
-            chatRequest: expect.objectContaining({
+        expect(send.mock.calls[0][0]).toMatchObject({
+            chatRequest: {
                 stream: true,
                 streamOptions: { includeUsage: true },
-            }),
+                messages: [{ role: 'user', content: 'Weather?' }],
+                responseFormat: {
+                    type: 'json_schema',
+                    jsonSchema: expect.objectContaining({ name: 'output' }),
+                },
+            },
         });
         expect(stream.completion?.result).toContainEqual({ type: 'thoughts', value: 'thinking' });
-        expect(stream.completion?.token_usage).toEqual({ prompt: 2, result: 1, total: 3 });
+        expect(stream.completion?.token_usage).toEqual({ prompt: 2, prompt_new: 2, result: 1, total: 3 });
         expect(stream.completion?.tool_use).toEqual([
             { id: 'call_actual', tool_name: 'lookup', tool_input: { city: 'Paris' } },
         ]);

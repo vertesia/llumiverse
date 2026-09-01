@@ -51,7 +51,12 @@ export class OpenRouterDriver extends OpenAIChatCompletionsDriverBase<OpenRouter
     service: OpenRouter;
 
     constructor(options: OpenRouterDriverOptions) {
-        super({ ...options, resultSchemaMode: 'response_format', toolSchemaMode: 'compatible' });
+        super({
+            ...options,
+            resultSchemaMode: 'response_format',
+            includeResultSchemaInPromptForModel: (model) => /(?:^|\/)glm-5\.3(?:$|[-:])/i.test(model),
+            toolSchemaMode: 'compatible',
+        });
         if (!options.apiKey) {
             throw new Error('apiKey is required');
         }
@@ -260,6 +265,8 @@ function toOpenRouterRequest(
         reasoningEffort: payload.reasoning_effort,
         serviceTier: payload.service_tier,
         tools: payload.tools?.flatMap(toOpenRouterTool),
+        toolChoice: payload.tool_choice as ChatRequest['toolChoice'],
+        parallelToolCalls: payload.parallel_tool_calls,
         responseFormat: toOpenRouterResponseFormat(payload.response_format),
         provider: toOpenRouterProviderPreferences(modelOptions),
         stream,

@@ -70,6 +70,7 @@ import { asyncMap } from '@llumiverse/core/async';
 import { claudeFinishReason, logClaudeTruncation } from './claude-stop-reason.js';
 import { resolveClaudeThinking } from './claude-thinking.js';
 import { truncateBinaryForDebug } from './debug-prompt.js';
+import { createToolChoiceConfigurationError } from './tool-choice-error.js';
 
 // ============================================================================
 // Types
@@ -204,6 +205,11 @@ export interface ClaudeBaseOptions {
     include_thoughts?: boolean;
     cache_enabled?: boolean;
     cache_ttl?: string;
+    tool_choice?: 'auto' | 'none' | 'any' | 'required';
+    /** Internal execution hint supplied after public model-option validation. */
+    required_tool_name?: string;
+    /** Internal execution hint used with a required named tool. */
+    parallel_tool_calls?: boolean;
 }
 
 interface RequestOptions {
@@ -740,6 +746,8 @@ function stripClaudeCacheControlFromTools(
 export function getClaudePayload(
     options: ExecutionOptions,
     prompt: ClaudePrompt,
+    provider = 'anthropic',
+    operation: 'execute' | 'stream' = 'stream',
 ): { payload: MessageCreateParamsBase; requestOptions: RequestOptions | undefined } {
     const modelName = options.model;
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
@@ -859,11 +867,40 @@ export function getClaudePayload(
         modelName,
         model_options as Parameters<typeof resolveClaudeThinking>[1],
     );
+    const forcedToolChoice = model_options?.required_tool_name
+        ? ({ type: 'tool', name: model_options.required_tool_name } as const)
+        : model_options?.tool_choice === 'required' || model_options?.tool_choice === 'any'
+          ? ({ type: 'any' } as const)
+          : undefined;
+    if (forcedToolChoice && !hasTools) {
+        throw createToolChoiceConfigurationError('A forced Claude tool turn requires at least one tool definition.', {
+            provider,
+            model: modelName,
+            operation,
+        });
+    }
+    if (forcedToolChoice && modelName.toLowerCase().includes('claude-mythos-preview')) {
+        throw createToolChoiceConfigurationError(
+            `Claude preview model ${modelName} does not support forced tool choice.`,
+            { provider, model: modelName, operation },
+        );
+    }
+    const disableManualThinkingForForcedTool = forcedToolChoice !== undefined && thinking?.type === 'enabled';
+    const toolChoice = !hasTools
+        ? undefined
+        : forcedToolChoice
+          ? { ...forcedToolChoice, disable_parallel_tool_use: model_options?.parallel_tool_calls === false }
+          : model_options?.tool_choice === 'none'
+            ? ({ type: 'none' } as const)
+            : model_options?.tool_choice === 'auto'
+              ? ({ type: 'auto' } as const)
+              : undefined;
 
     const payload: MessageCreateParamsBase = {
         messages: sanitizedMessages,
         system: sanitizedSystem,
         tools: sanitizedTools,
+        tool_choice: toolChoice,
         temperature: hasSamplingRestriction ? undefined : model_options?.temperature,
         model: modelName,
         max_tokens: claudeMaxTokens(options),
@@ -874,9 +911,9 @@ export function getClaudePayload(
               : model_options?.top_p,
         top_k: hasSamplingRestriction ? undefined : model_options?.top_k,
         stop_sequences: model_options?.stop_sequence,
-        thinking,
+        thinking: disableManualThinkingForForcedTool ? { type: 'disabled' } : thinking,
         stream: true,
-        ...(outputConfig && { output_config: outputConfig }),
+        ...(!disableManualThinkingForForcedTool && outputConfig && { output_config: outputConfig }),
     };
 
     return { payload, requestOptions };
@@ -1057,7 +1094,7 @@ export async function executeClaudeCompletion(
 
     const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
 
-    const { payload, requestOptions } = getClaudePayload(options, conversation);
+    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'execute');
 
     const responseStream = await streamClaudeMessages(
         client,
@@ -1097,7 +1134,7 @@ export async function streamClaudeCompletion(
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
     const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
 
-    const { payload, requestOptions } = getClaudePayload(options, conversation);
+    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'stream');
     const streamingPayload: MessageStreamParams = { ...payload, stream: true };
 
     const response_stream = await streamClaudeMessages(
