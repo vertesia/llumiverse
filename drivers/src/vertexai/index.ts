@@ -33,6 +33,9 @@ import {
 import { type ClaudePrompt, formatClaudeDebugPrompt, isClaudePromptCacheEnabled } from '../shared/claude-messages.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { generateVertexAiEmbeddings } from './embeddings/embed.js';
+
+export * from './embeddings/batch.js';
+
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
 import { formatGeminiDebugPrompt } from './models/gemini.js';
 import {

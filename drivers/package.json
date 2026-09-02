@@ -38,6 +38,10 @@
             "types": "./lib/vertexai/index.d.ts",
             "default": "./lib/vertexai/index.js"
         },
+        "./vertexai/embedding-batch": {
+            "types": "./lib/vertexai/embeddings/batch.d.ts",
+            "default": "./lib/vertexai/embeddings/batch.js"
+        },
         "./groq": {
             "types": "./lib/groq/index.d.ts",
             "default": "./lib/groq/index.js"

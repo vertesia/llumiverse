@@ -1,21 +1,21 @@
-import type { Content, EmbedContentConfig, Part } from '@google/genai';
+import type { EmbedContentConfig } from '@google/genai';
 import { VERTEX_DEFAULT_EMBEDDING_MODEL, VERTEX_MULTIMODAL_EMBEDDING_MODEL } from '@llumiverse/common';
 import {
     buildEmbeddingsResult,
-    type DataSource,
     type EmbeddingInput,
     type EmbeddingResultItem,
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type EmbeddingsTokenUsage,
-    type EmbeddingTaskType,
     LlumiverseError,
     normalizeEmbeddingsOptions,
     type TextEmbeddingInput,
 } from '@llumiverse/core';
 import type { VertexAIDriver } from '../index.js';
 import { generateLegacyMultimodalEmbeddings } from './embed-legacy-multimodal.js';
-import { dataSourceToVertexSourceData } from './source-utils.js';
+import { toGoogleTaskType, vertexEmbeddingInputToContent } from './format.js';
+
+export { buildVertexEmbeddingText, toGoogleTaskType, vertexEmbeddingInputToContent } from './format.js';
 
 /**
  * Models that do not accept task_type as an API parameter and instead expect
@@ -30,30 +30,6 @@ const TASK_TYPE_PREFIX_MODELS = new Set<string>(['gemini-embedding-2']);
  *   query    → "task: search result | query: {text}"
  *   document → "title: {title} | text: {text}"  (uses "none" when title is absent)
  */
-function buildPrefixText(input: TextEmbeddingInput): string {
-    if (!input.task_type) return input.text;
-    if (input.task_type === 'query') {
-        return `task: search result | query: ${input.text}`;
-    }
-    // document
-    const title = input.title ?? 'none';
-    return `title: ${title} | text: ${input.text}`;
-}
-
-/** Maps llumiverse task types to Google's embedContent taskType strings. */
-type GoogleEmbedTaskType = 'RETRIEVAL_QUERY' | 'RETRIEVAL_DOCUMENT';
-
-function toGoogleTaskType(taskType: EmbeddingTaskType | undefined): GoogleEmbedTaskType | undefined {
-    switch (taskType) {
-        case 'query':
-            return 'RETRIEVAL_QUERY';
-        case 'document':
-            return 'RETRIEVAL_DOCUMENT';
-        default:
-            return undefined;
-    }
-}
-
 /**
  * Models only available in the Vertex "global" location.
  */
@@ -63,19 +39,6 @@ const GLOBAL_ONLY_MODELS = new Set<string>(['gemini-embedding-2']);
  * Models that only support one input content per embedContent request.
  */
 const NON_GROUPING_MODELS = new Set<string>(['gemini-embedding-001', 'gemini-embedding-2']);
-
-async function dataSourceToPart(ds: DataSource): Promise<Part> {
-    const source = await dataSourceToVertexSourceData(ds);
-    if (source.gcsUri) {
-        return { fileData: { fileUri: source.gcsUri, mimeType: ds.mime_type } };
-    }
-
-    if (!source.bytesBase64Encoded) {
-        throw new Error('Data source conversion produced neither GCS URI nor inline bytes');
-    }
-
-    return { inlineData: { data: source.bytesBase64Encoded, mimeType: ds.mime_type } };
-}
 
 type TextConfig = Pick<EmbedContentConfig, 'taskType' | 'title'>;
 
@@ -89,14 +52,6 @@ function textConfig(input: TextEmbeddingInput, viaPrefix: boolean): TextConfig {
 function configSignature(input: EmbeddingInput, viaPrefix: boolean): string {
     if (input.type !== 'text') return '{}';
     return JSON.stringify(textConfig(input, viaPrefix));
-}
-
-async function inputToContent(input: EmbeddingInput, viaPrefix: boolean): Promise<Content> {
-    if (input.type === 'text') {
-        const text = viaPrefix ? buildPrefixText(input) : input.text;
-        return { role: 'user', parts: [{ text }] };
-    }
-    return { role: 'user', parts: [await dataSourceToPart(input.source)] };
 }
 
 function configForGroup(
@@ -162,7 +117,7 @@ export async function generateVertexAiEmbeddings(
     const usage: EmbeddingsTokenUsage = {};
 
     for (const group of groups.values()) {
-        const contents = await Promise.all(group.map((entry) => inputToContent(entry.input, viaPrefix)));
+        const contents = await Promise.all(group.map((entry) => vertexEmbeddingInputToContent(entry.input, viaPrefix)));
         const config = configForGroup(group[0].input, viaPrefix, normalized);
 
         try {
