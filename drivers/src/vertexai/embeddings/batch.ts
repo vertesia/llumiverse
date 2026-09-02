@@ -78,11 +78,13 @@ export interface FormatVertexEmbeddingBatchRowOptions {
 
 type GeminiEmbeddingBatchRow = {
     key: string;
-    request: { content: { parts: NonNullable<Awaited<ReturnType<typeof vertexEmbeddingInputToContent>>['parts']> } };
-    embed_content_config: {
-        output_dimensionality: number;
-        task_type?: string;
-        title?: string;
+    request: {
+        content: { parts: NonNullable<Awaited<ReturnType<typeof vertexEmbeddingInputToContent>>['parts']> };
+        embed_content_config: {
+            output_dimensionality: number;
+            task_type?: string;
+            title?: string;
+        };
     };
 };
 
@@ -119,7 +121,7 @@ export async function formatVertexEmbeddingBatchRow(
 
     const viaPrefix = capability.model === 'gemini-embedding-2';
     const content = await vertexEmbeddingInputToContent(options.input, viaPrefix);
-    const config: GeminiEmbeddingBatchRow['embed_content_config'] = {
+    const config: GeminiEmbeddingBatchRow['request']['embed_content_config'] = {
         output_dimensionality: options.dimensions,
     };
     if (options.input.type === 'text' && !viaPrefix) {
@@ -129,8 +131,7 @@ export async function formatVertexEmbeddingBatchRow(
     }
     return {
         key: options.key,
-        request: { content: { parts: content.parts ?? [] } },
-        embed_content_config: config,
+        request: { content: { parts: content.parts ?? [] }, embed_content_config: config },
     };
 }
 

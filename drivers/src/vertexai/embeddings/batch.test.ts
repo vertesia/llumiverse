@@ -105,11 +105,13 @@ describe('Vertex embedding batch rows', () => {
             }),
         ).resolves.toEqual({
             key: 'text:1:etag',
-            request: { content: { parts: [{ text: 'hello' }] } },
-            embed_content_config: {
-                output_dimensionality: 768,
-                task_type: 'RETRIEVAL_DOCUMENT',
-                title: 'Greeting',
+            request: {
+                content: { parts: [{ text: 'hello' }] },
+                embed_content_config: {
+                    output_dimensionality: 768,
+                    task_type: 'RETRIEVAL_DOCUMENT',
+                    title: 'Greeting',
+                },
             },
         });
     });
@@ -124,8 +126,10 @@ describe('Vertex embedding batch rows', () => {
         });
         expect(row).toEqual({
             key: 'text:1:etag',
-            request: { content: { parts: [{ text: 'title: none | text: hello' }] } },
-            embed_content_config: { output_dimensionality: 1024 },
+            request: {
+                content: { parts: [{ text: 'title: none | text: hello' }] },
+                embed_content_config: { output_dimensionality: 1024 },
+            },
         });
         expect(vertexBatchTextForParity(input, 'gemini-embedding-2')).toBe('title: none | text: hello');
     });
@@ -151,8 +155,8 @@ describe('Vertex embedding batch rows', () => {
                         },
                     ],
                 },
+                embed_content_config: { output_dimensionality: 768 },
             },
-            embed_content_config: { output_dimensionality: 768 },
         });
     });
 
