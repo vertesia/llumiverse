@@ -12,33 +12,11 @@ import {
     type TextEmbeddingInput,
 } from '@llumiverse/core';
 import type { VertexAIDriver } from '../index.js';
+import { getVertexEmbeddingBatchCapability } from './batch.js';
 import { generateLegacyMultimodalEmbeddings } from './embed-legacy-multimodal.js';
 import { toGoogleTaskType, vertexEmbeddingInputToContent } from './format.js';
 
 export { buildVertexEmbeddingText, toGoogleTaskType, vertexEmbeddingInputToContent } from './format.js';
-
-/**
- * Models that do not accept task_type as an API parameter and instead expect
- * the task to be conveyed by a documented prompt prefix.
- */
-const TASK_TYPE_PREFIX_MODELS = new Set<string>(['gemini-embedding-2']);
-
-/**
- * Apply the documented prompt prefix for gemini-embedding-2 (prefix-only model).
- *
- * Prefixes per Google docs:
- *   query    → "task: search result | query: {text}"
- *   document → "title: {title} | text: {text}"  (uses "none" when title is absent)
- */
-/**
- * Models only available in the Vertex "global" location.
- */
-const GLOBAL_ONLY_MODELS = new Set<string>(['gemini-embedding-2']);
-
-/**
- * Models that only support one input content per embedContent request.
- */
-const NON_GROUPING_MODELS = new Set<string>(['gemini-embedding-001', 'gemini-embedding-2']);
 
 type TextConfig = Pick<EmbedContentConfig, 'taskType' | 'title'>;
 
@@ -97,9 +75,12 @@ export async function generateVertexAiEmbeddings(
         return generateLegacyMultimodalEmbeddings(driver, normalized);
     }
 
-    const viaPrefix = TASK_TYPE_PREFIX_MODELS.has(model);
-    const region = GLOBAL_ONLY_MODELS.has(model) ? 'global' : undefined;
-    const disableGrouping = NON_GROUPING_MODELS.has(model);
+    const textCapability = getVertexEmbeddingBatchCapability(model, 'text');
+    const imageCapability = getVertexEmbeddingBatchCapability(model, 'image');
+    const profile = textCapability ?? imageCapability;
+    const viaPrefix = profile?.taskEncoding === 'prefix';
+    const region = profile?.location === 'global' ? 'global' : undefined;
+    const disableGrouping = profile?.maxSynchronousInputs === 1;
 
     const groups = new Map<string, { index: number; input: EmbeddingInput }[]>();
     normalized.inputs.forEach((input, index) => {

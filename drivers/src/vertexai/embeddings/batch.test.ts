@@ -6,6 +6,7 @@ import {
     createVertexEmbeddingBatch,
     deleteVertexEmbeddingBatch,
     formatVertexEmbeddingBatchRow,
+    getVertexEmbeddingBatch,
     getVertexEmbeddingBatchCapability,
     normalizeVertexEmbeddingModelId,
     vertexBatchTextForParity,
@@ -17,6 +18,8 @@ describe('Vertex embedding batch capabilities', () => {
             schema: 'gemini',
             maxRows: 1_000_000,
             location: 'global',
+            taskEncoding: 'prefix',
+            maxSynchronousInputs: 1,
         });
         expect(getVertexEmbeddingBatchCapability('gemini-embedding-001', 'image')).toBeUndefined();
         expect(getVertexEmbeddingBatchCapability('text-embedding-005', 'text')).toMatchObject({
@@ -91,6 +94,21 @@ describe('Vertex embedding batch lifecycle', () => {
         expect(batches.cancel).toHaveBeenCalledWith({ name: 'jobs/1' });
         expect(batches.get).toHaveBeenCalledWith({ name: 'jobs/1' });
         expect(batches.delete).toHaveBeenCalledWith({ name: 'jobs/1' });
+    });
+
+    it('rejects a provider job that belongs to a different model', async () => {
+        const batches = {
+            get: vi.fn().mockResolvedValue({
+                name: 'jobs/1',
+                state: 'JOB_STATE_RUNNING',
+                model: 'publishers/google/models/text-embedding-005',
+            }),
+        };
+        const driver = { getGoogleGenAIClient: vi.fn(() => ({ batches })) } as unknown as VertexAIDriver;
+
+        await expect(getVertexEmbeddingBatch(driver, 'gemini-embedding-001', 'text', 'jobs/1')).rejects.toThrow(
+            'belongs to model',
+        );
     });
 });
 
@@ -173,5 +191,17 @@ describe('Vertex embedding batch rows', () => {
             content: '{"name":"Ada"}',
             outputDimensionality: 768,
         });
+    });
+
+    it('rejects a row format that does not match the snapshotted model profile', async () => {
+        await expect(
+            formatVertexEmbeddingBatchRow({
+                key: 'text:1:etag',
+                model: 'gemini-embedding-001',
+                dimensions: 768,
+                schema: 'legacy',
+                input: { type: 'text', text: 'hello' },
+            }),
+        ).rejects.toThrow('uses gemini batch rows');
     });
 });

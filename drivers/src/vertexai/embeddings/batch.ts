@@ -12,6 +12,8 @@ export interface VertexEmbeddingBatchCapability {
     modalities: readonly VertexEmbeddingBatchModality[];
     maxRows: number;
     location: 'environment' | 'global';
+    taskEncoding: 'config' | 'prefix';
+    maxSynchronousInputs?: number;
 }
 
 const CAPABILITIES = new Map<string, VertexEmbeddingBatchCapability>([
@@ -23,6 +25,8 @@ const CAPABILITIES = new Map<string, VertexEmbeddingBatchCapability>([
             modalities: ['text', 'image'],
             maxRows: 1_000_000,
             location: 'global',
+            taskEncoding: 'prefix',
+            maxSynchronousInputs: 1,
         },
     ],
     [
@@ -33,6 +37,8 @@ const CAPABILITIES = new Map<string, VertexEmbeddingBatchCapability>([
             modalities: ['text'],
             maxRows: 1_000_000,
             location: 'environment',
+            taskEncoding: 'config',
+            maxSynchronousInputs: 1,
         },
     ],
     [
@@ -43,6 +49,7 @@ const CAPABILITIES = new Map<string, VertexEmbeddingBatchCapability>([
             modalities: ['text'],
             maxRows: 30_000,
             location: 'environment',
+            taskEncoding: 'config',
         },
     ],
     [
@@ -53,6 +60,7 @@ const CAPABILITIES = new Map<string, VertexEmbeddingBatchCapability>([
             modalities: ['text'],
             maxRows: 30_000,
             location: 'environment',
+            taskEncoding: 'config',
         },
     ],
 ]);
@@ -74,6 +82,7 @@ export interface FormatVertexEmbeddingBatchRowOptions {
     model: string;
     input: EmbeddingInput;
     dimensions: number;
+    schema?: VertexEmbeddingBatchSchema;
 }
 
 type GeminiEmbeddingBatchRow = {
@@ -104,6 +113,11 @@ export async function formatVertexEmbeddingBatchRow(
     if (!capability) {
         throw new Error(`Vertex embedding model ${options.model} does not support batch ${modality} inputs`);
     }
+    if (options.schema && options.schema !== capability.schema) {
+        throw new Error(
+            `Vertex embedding model ${options.model} uses ${capability.schema} batch rows, not ${options.schema}`,
+        );
+    }
 
     if (capability.schema === 'legacy') {
         if (options.input.type !== 'text') {
@@ -119,7 +133,7 @@ export async function formatVertexEmbeddingBatchRow(
         };
     }
 
-    const viaPrefix = capability.model === 'gemini-embedding-2';
+    const viaPrefix = capability.taskEncoding === 'prefix';
     const content = await vertexEmbeddingInputToContent(options.input, viaPrefix);
     const config: GeminiEmbeddingBatchRow['request']['embed_content_config'] = {
         output_dimensionality: options.dimensions,
@@ -197,6 +211,13 @@ function toBatchJob(job: BatchJob): VertexEmbeddingBatchJob {
     };
 }
 
+function assertExpectedModel(job: VertexEmbeddingBatchJob, expectedModel: string): VertexEmbeddingBatchJob {
+    if (job.model && normalizeVertexEmbeddingModelId(job.model) !== normalizeVertexEmbeddingModelId(expectedModel)) {
+        throw new Error(`Vertex AI batch job ${job.name} belongs to model ${job.model}, not ${expectedModel}`);
+    }
+    return job;
+}
+
 function batchClient(driver: VertexAIDriver, capability: VertexEmbeddingBatchCapability) {
     return driver.getGoogleGenAIClient(capability.location === 'global' ? 'global' : undefined);
 }
@@ -232,7 +253,7 @@ export async function createVertexEmbeddingBatch(
             httpOptions: { apiVersion: 'v1' },
         },
     });
-    return toBatchJob(created);
+    return assertExpectedModel(toBatchJob(created), options.model);
 }
 
 export async function getVertexEmbeddingBatch(
@@ -243,7 +264,7 @@ export async function getVertexEmbeddingBatch(
 ): Promise<VertexEmbeddingBatchJob> {
     const capability = getVertexEmbeddingBatchCapability(model, modality);
     if (!capability) throw new Error(`Vertex embedding model ${model} is not batch capable`);
-    return toBatchJob(await batchClient(driver, capability).batches.get({ name }));
+    return assertExpectedModel(toBatchJob(await batchClient(driver, capability).batches.get({ name })), model);
 }
 
 export async function cancelVertexEmbeddingBatch(
@@ -272,7 +293,7 @@ export async function deleteVertexEmbeddingBatch(
 
 export function vertexBatchTextForParity(input: TextEmbeddingInput, model: string): string {
     const capability = getVertexEmbeddingBatchCapability(model, 'text');
-    return buildVertexEmbeddingText(input, capability?.model === 'gemini-embedding-2');
+    return buildVertexEmbeddingText(input, capability?.taskEncoding === 'prefix');
 }
 
 export function vertexBatchTaskTypeForParity(taskType: EmbeddingTaskType | undefined): string | undefined {
