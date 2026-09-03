@@ -1,5 +1,14 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  // Renovate reads this configuration from the default branch for every target branch.
+  // Release lines receive security fixes only through the final package rule below.
+  "baseBranchPatterns": [
+    "main",
+    // release-cut:renovate-base-branches:start
+    "release/1.4",
+    "release/1.5",
+    // release-cut:renovate-base-branches:end
+  ],
   // Default label applied to every Renovate PR (matches studio/composableai).
   // The automerge workflow's eligibility gate requires this label.
   "labels": ["dependencies"],
@@ -209,6 +218,12 @@
         "github-actions"
       ],
       "assignees": ["mincong-h"]
+    },
+    {
+      // Vulnerability alerts use Renovate's forced security-update path and override this rule.
+      "description": "Disable non-security updates on maintained release branches",
+      "matchBaseBranches": ["/^release\\/[0-9]+\\.[0-9]+$/"],
+      "enabled": false
     }
   ]
 }
