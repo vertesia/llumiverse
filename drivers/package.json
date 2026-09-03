@@ -145,7 +145,7 @@
         "groq-sdk": "^1.6.0",
         "mnemonist": "^0.40.4",
         "node-web-stream-adapters": "^0.2.1",
-        "openai": "^6.49.0",
+        "openai": "^7.7.0",
         "replicate": "^1.4.0",
         "together-ai": "^0.49.0"
     }
