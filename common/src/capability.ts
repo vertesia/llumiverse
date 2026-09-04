@@ -10,10 +10,13 @@ export function getModelCapabilities(model: string, provider: Providers): ModelC
         }
     }
     const modelName = model.split('/').pop()?.toLowerCase();
-    if (provider === 'vertexai' && modelName === 'gemini-omni-flash-preview') {
+    if (
+        provider === 'vertexai' &&
+        (modelName === 'gemini-omni-flash-preview' || modelName === 'gemini-omni-1.1-flash-preview')
+    ) {
         return {
-            input: { text: true, image: true, video: false, audio: false, embed: false },
-            output: { text: false, image: false, video: true, audio: false, embed: false },
+            input: { text: true, image: true, video: true, audio: false, embed: false },
+            output: { text: true, image: false, video: true, audio: false, embed: false },
             tool_support: false,
             tool_support_streaming: false,
         };

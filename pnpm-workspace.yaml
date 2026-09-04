@@ -15,6 +15,7 @@ minimumReleaseAgeStrict: true
 minimumReleaseAgeExclude:
   - '@vertesia/*'
   - '@llumiverse/*'
+  - '@google/genai@2.21.0'
 
 catalog:
   typescript: "7.0.2"
