@@ -101,7 +101,9 @@ export function isFlexSupportedGeminiModel(model: string): boolean {
 }
 
 export function getVertexAiOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
-    if (model.split('/').pop() === 'gemini-omni-flash-preview') {
+    const modelName = model.split('/').pop();
+    if (modelName === 'gemini-omni-flash-preview' || modelName === 'gemini-omni-1.1-flash-preview') {
+        const isOmni11 = modelName === 'gemini-omni-1.1-flash-preview';
         return {
             _option_id: 'vertexai-gemini-omni-video',
             options: [
@@ -111,9 +113,11 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
                     enum: {
                         'Text to video': 'text_to_video',
                         'Image to video': 'image_to_video',
-                        'Reference images to video': 'reference_to_video',
+                        'References to video': 'reference_to_video',
+                        'Edit video': 'edit',
+                        ...(isOmni11 ? { 'Extend video': 'extend' } : {}),
                     },
-                    description: 'Video generation task. Image inputs require an explicit image task.',
+                    description: 'Video generation task. Media inputs require an explicit task.',
                 },
                 {
                     name: 'aspect_ratio',
@@ -129,6 +133,14 @@ export function getVertexAiOptions(model: string, option?: ModelOptions): ModelO
                     default: 5,
                     integer: true,
                     description: 'Duration of the generated video in seconds.',
+                },
+                {
+                    name: 'resolution',
+                    type: OptionType.enum,
+                    enum: isOmni11
+                        ? { '360p': '360p', '720p': '720p', '1080p': '1080p', '4K': '4k' }
+                        : { '720p': '720p' },
+                    description: 'Resolution of the generated video.',
                 },
             ],
         };
