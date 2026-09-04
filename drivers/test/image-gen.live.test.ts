@@ -47,12 +47,9 @@ describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => 
         expect(res).toBeDefined();
         expect(res).toHaveProperty('textToImageParams');
         expect(res).toHaveProperty('taskType');
-        console.log(res);
     });
 
     test.each(models)(`${name}: text to image generation`, { timeout: 300 * 1000 }, async (model) => {
-        console.log(`Testing model ${model}`);
-
         const options: ExecutionOptions = {
             model: model,
             output_modality: imageOutputModality,
@@ -73,8 +70,6 @@ describe.concurrent.each(drivers)('Driver $name', ({ name, driver, models }) => 
     });
 
     test.each(models)(`${name}: text to image guidance`, { timeout: 300 * 1000 }, async (model) => {
-        console.log(`Testing model ${model}`);
-
         const options: ExecutionOptions = {
             model: model,
             output_modality: imageOutputModality,

@@ -17,12 +17,10 @@ describe('List models using API keys', () => {
         for await (const model of pager) {
             models.push(model);
         }
-        console.log(`Gemini API key: found ${models.length} models`);
         expect(models.length).toBeGreaterThan(0);
 
         // Verify we get gemini models
         const geminiModels = models.filter((m) => m.name?.includes('gemini'));
-        console.log(`  of which ${geminiModels.length} are Gemini models`);
         expect(geminiModels.length).toBeGreaterThan(0);
     });
 });

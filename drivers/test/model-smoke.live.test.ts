@@ -239,7 +239,6 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
     test(`${name}: list models`, { timeout: TIMEOUT, retry: 1 }, async () => {
         const r = await driver.listModels();
         fetchedModels = r;
-        console.log(r);
         expect(r.length).toBeGreaterThan(0);
     });
 
@@ -260,7 +259,6 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
 
     test.each(models)(`${name}: execute prompt on %s`, { timeout: TIMEOUT, retry: 2 }, async (model) => {
         const r = await driver.execute(testPrompt_color, getTestOptions(model));
-        console.log(`Result for execute ${model}`, JSON.stringify(r));
         assertCompletionOk(r, model, driver);
     });
 
@@ -275,8 +273,7 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
                 ...getTestOptions(model),
                 result_schema: testSchema_color,
             });
-            const out = await assertStreamingCompletionOk(r, true);
-            console.log(`Result for streaming with schema ${model}`, JSON.stringify(out));
+            await assertStreamingCompletionOk(r, true);
         },
     );
 
@@ -327,7 +324,6 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
 
             const isMultiModal = fetchedModels?.find((r) => r.id === model)?.is_multimodal;
 
-            console.log(`${model} is multimodal: ${isMultiModal}`);
             if (!isMultiModal) return;
 
             const r = await driver.execute(testPrompt_describeImage, {
@@ -339,7 +335,6 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
                 },
                 result_schema: testSchema_animalDescription,
             });
-            console.log('Result', r);
             assertCompletionOk(r);
         },
     );
