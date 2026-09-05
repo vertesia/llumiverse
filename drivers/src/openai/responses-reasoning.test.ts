@@ -38,6 +38,7 @@ function response() {
         object: 'response',
         created_at: 1,
         model: 'gpt-5',
+        service_tier: 'priority',
         status: 'completed',
         output: [reasoningItem, messageItem],
         output_text: 'answer',
@@ -55,6 +56,17 @@ function response() {
 }
 
 describe('OpenAI Responses reasoning', () => {
+    it('returns the processing tier reported by OpenAI', async () => {
+        const driver = new TestResponsesDriver(vi.fn(async () => response()));
+
+        const completion = await driver.requestTextCompletion(
+            [{ type: 'message', role: 'user', content: 'question' }],
+            { model: 'gpt-5' },
+        );
+
+        expect(completion.service_tier).toBe('priority');
+    });
+
     it('forwards a longer per-execution timeout to the SDK request', async () => {
         const create = vi.fn(async (_request: unknown, _options?: unknown) => response());
         const driver = new TestResponsesDriver(create);
