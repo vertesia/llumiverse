@@ -11,17 +11,19 @@ import {
     type ModelSearchPayload,
     PromptRole,
 } from '@llumiverse/common';
-import type { Agent } from 'undici';
+import { type Agent, getGlobalDispatcher, setGlobalDispatcher } from 'undici';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AbstractDriver } from './Driver.js';
 import {
     createAgentBackedFetch,
     createDriverHttpAgent,
+    createDriverHttpAgentScope,
     DEFAULT_DRIVER_HTTP_TIMEOUTS,
     DEFAULT_DRIVER_REQUEST_TIMEOUT_MS,
     mergeDriverHttpTimeoutOptions,
     resolveDriverHttpTimeouts,
     resolveDriverRequestTimeoutMs,
+    runWithDriverHttpAgent,
 } from './http-agent.js';
 
 class TestDriver extends AbstractDriver<DriverOptions, string> {
@@ -261,6 +263,55 @@ describe('driver HTTP agent helpers', () => {
             await expect(response.text()).rejects.toThrow();
             expect(Date.now() - startedAt).toBeLessThan(2_500);
         } finally {
+            await agent.close();
+            await server.close();
+        }
+    });
+
+    it('isolates global SDK fetch timeouts from concurrent and unrelated requests', async () => {
+        const previousDispatcher = getGlobalDispatcher();
+        const shortAgent = createDriverHttpAgent({ headersTimeout: 100 });
+        const longAgent = createDriverHttpAgent({ headersTimeout: 5_000 });
+        const server = await startServer((_req, res) => {
+            const timer = setTimeout(() => res.end('late'), 1_500);
+            res.on('close', () => clearTimeout(timer));
+        });
+        setGlobalDispatcher(shortAgent);
+        try {
+            const [long, short, unrelated] = await Promise.allSettled([
+                runWithDriverHttpAgent(longAgent, async () => (await fetch(server.url)).text()),
+                runWithDriverHttpAgent(shortAgent, () => fetch(server.url)),
+                fetch(server.url),
+            ]);
+            expect(long).toEqual({ status: 'fulfilled', value: 'late' });
+            expect(short).toMatchObject({ status: 'rejected', reason: { cause: { code: 'UND_ERR_HEADERS_TIMEOUT' } } });
+            expect(unrelated).toMatchObject({ status: 'rejected' });
+        } finally {
+            setGlobalDispatcher(previousDispatcher);
+            await Promise.all([shortAgent.close(), longAgent.close()]);
+            await server.close();
+        }
+    });
+
+    it('routes global SDK fetch through the per-call agent and supports aborting it', async () => {
+        const previousDispatcher = getGlobalDispatcher();
+        const agent = createDriverHttpAgent();
+        const scope = createDriverHttpAgentScope(undefined, { headersTimeout: 100 });
+        const server = await startServer((_req, res) => {
+            const timer = setTimeout(() => res.end('late'), 3_000);
+            res.on('close', () => clearTimeout(timer));
+        });
+        try {
+            await expect(runWithDriverHttpAgent(agent, () => scope.run(() => fetch(server.url)))).rejects.toMatchObject(
+                { cause: { code: 'UND_ERR_HEADERS_TIMEOUT' } },
+            );
+            const request = runWithDriverHttpAgent(agent, () => scope.run(() => fetch(server.url)));
+            const rejected = expect(request).rejects.toThrow();
+            await scope.abort();
+            await rejected;
+        } finally {
+            setGlobalDispatcher(previousDispatcher);
+            await scope.close();
             await agent.close();
             await server.close();
         }
