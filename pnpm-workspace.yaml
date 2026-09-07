@@ -1,8 +1,9 @@
 packages:
-  - ./common
-  - ./core
-  - ./drivers
-  - ./examples
+  # pnpm 12 workspace discovery requires patterns without a leading "./".
+  - common
+  - core
+  - drivers
+  - examples
 verifyDepsBeforeRun: false
 allowBuilds:
   '@openrouter/sdk': false
