@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { HttpTimeoutOptions } from '@llumiverse/common';
-import { Agent } from 'undici';
+import { Agent, getGlobalDispatcher, setGlobalDispatcher } from 'undici';
 
 /**
  * Default HTTP timeouts used by {@link createDriverHttpAgent} when the
@@ -26,6 +26,24 @@ export function resolveDriverRequestTimeoutMs(defaults?: HttpTimeoutOptions, ove
 }
 
 const scopedHttpAgent = new AsyncLocalStorage<Agent>();
+
+// SDKs without a fetch hook can opt in without changing unrelated HTTP traffic.
+const sdkHttpAgent = new AsyncLocalStorage<Agent>();
+let scopedGlobalDispatcher: ReturnType<typeof getGlobalDispatcher> | undefined;
+
+export function runWithDriverHttpAgent<T>(agent: Agent, callback: () => T): T {
+    const currentDispatcher = getGlobalDispatcher();
+    if (currentDispatcher !== scopedGlobalDispatcher) {
+        scopedGlobalDispatcher = currentDispatcher.compose((dispatch) => (options, handler) => {
+            const sdkAgent = sdkHttpAgent.getStore();
+            return sdkAgent
+                ? (scopedHttpAgent.getStore() ?? sdkAgent).dispatch(options, handler)
+                : dispatch(options, handler);
+        });
+        setGlobalDispatcher(scopedGlobalDispatcher);
+    }
+    return sdkHttpAgent.run(agent, callback);
+}
 
 export function resolveDriverHttpTimeouts(opts?: HttpTimeoutOptions): Required<HttpTimeoutOptions> {
     return {

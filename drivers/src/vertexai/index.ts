@@ -24,6 +24,7 @@ import {
     truncateLargeTextInConversation,
 } from '@llumiverse/core';
 import { AbstractDriver } from '@llumiverse/core/driver';
+import { runWithDriverHttpAgent } from '@llumiverse/core/http-agent';
 import { type FETCH_FN, FetchClient } from '@vertesia/api-fetch-client';
 import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from 'google-auth-library';
 import {
@@ -203,6 +204,11 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 }
             }
         });
+    }
+
+    protected override runInHttpContext<T>(operation: () => T): T {
+        // GoogleGenAI uses global fetch rather than accepting the driver's fetch hook.
+        return runWithDriverHttpAgent(this.getHttpAgent(), operation);
     }
 
     private async getAuthClient(): Promise<AuthClient> {
