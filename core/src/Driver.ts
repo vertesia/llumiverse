@@ -191,10 +191,15 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         }
     }
 
+    /** Provider SDKs without a fetch hook can scope their global HTTP requests here. */
+    protected runInHttpContext<T>(operation: () => T): T {
+        return operation();
+    }
+
     private async runOperation<T>(operation: () => Promise<T>): Promise<T> {
         const release = this.acquireOperationLease();
         try {
-            return await operation();
+            return await this.runInHttpContext(operation);
         } finally {
             release();
         }
@@ -203,7 +208,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
     private async runStreamOperation(operation: () => Promise<CompletionStream<PromptT>>, signal?: AbortSignal) {
         const release = this.acquireOperationLease();
         try {
-            const stream = await operation();
+            const stream = await this.runInHttpContext(operation);
             return leaseCompletionStream(
                 stream,
                 release,
@@ -269,7 +274,11 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         options: Pick<ExecutionOptions, 'httpTimeout'>,
         force = false,
     ): DriverHttpAgentScope {
-        return createDriverHttpAgentScope(this.options.httpTimeout, options.httpTimeout, force);
+        const scope = createDriverHttpAgentScope(this.options.httpTimeout, options.httpTimeout, force);
+        return {
+            ...scope,
+            run: <T>(callback: () => T): T => this.runInHttpContext(() => scope.run(callback)),
+        };
     }
 
     async createTrainingPrompt(options: TrainingPromptOptions): Promise<string> {
