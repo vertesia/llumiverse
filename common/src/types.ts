@@ -407,6 +407,8 @@ export type CompletionResult = TextResult | ThoughtsResult | JsonResult | ImageR
 export interface CompletionChunkObject {
     result: CompletionResult[];
     token_usage?: ExecutionTokenUsage;
+    /** The processing tier the provider actually used for this response. */
+    service_tier?: string;
     finish_reason?: 'stop' | 'length' | string;
     /**
      * Tool calls returned by the model during streaming.
@@ -466,6 +468,8 @@ export interface Completion {
     token_usage?: ExecutionTokenUsage;
     /** Safe diagnostics for the provider-side explicit prompt-cache path used by this completion. */
     prompt_cache_diagnostic?: PromptCacheDiagnostic;
+    /** The processing tier the provider actually used for this response. */
+    service_tier?: string;
     /**
      * Contains the tools from which the model awaits information.
      */

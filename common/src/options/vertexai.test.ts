@@ -4,6 +4,34 @@ import { Providers } from '../types.js';
 import { getMaxTokensLimitVertexAi, getVertexAiOptions, isFlexSupportedGeminiModel } from './vertexai.js';
 
 describe('Vertex AI MaaS metadata', () => {
+    it('exposes model-specific Gemini Omni tasks and resolutions', () => {
+        const omni10 = getVertexAiOptions('gemini-omni-flash-preview');
+        const omni11 = getVertexAiOptions('locations/global/publishers/google/models/gemini-omni-1.1-flash-preview');
+
+        expect(omni10.options.find((option) => option.name === 'task')).toMatchObject({
+            enum: {
+                'Text to video': 'text_to_video',
+                'Image to video': 'image_to_video',
+                'References to video': 'reference_to_video',
+                'Edit video': 'edit',
+            },
+        });
+        expect(omni10.options.find((option) => option.name === 'resolution')).toMatchObject({
+            enum: { '720p': '720p' },
+        });
+        expect(omni11.options.find((option) => option.name === 'task')).toMatchObject({
+            enum: { 'Extend video': 'extend' },
+        });
+        expect(omni11.options.find((option) => option.name === 'resolution')).toMatchObject({
+            enum: {
+                '360p': '360p',
+                '720p': '720p',
+                '1080p': '1080p',
+                '4K': '4k',
+            },
+        });
+    });
+
     it.each(['gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-4.0-flash'])(
         'supports current Gemini Flash Flex inference for %s',
         (model) => {

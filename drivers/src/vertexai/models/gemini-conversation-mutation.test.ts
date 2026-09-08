@@ -21,6 +21,7 @@ import {
     convertGeminiFunctionPartsToText,
     GeminiModelDefinition,
     getGeminiPayload,
+    normalizeVertexAIResolvedServiceTier,
     resolveVertexAIServiceTier,
 } from './gemini.js';
 
@@ -42,6 +43,18 @@ describe('resolveVertexAIServiceTier', () => {
                 flex: true,
             }),
         ).toBe('future-tier');
+    });
+});
+
+describe('normalizeVertexAIResolvedServiceTier', () => {
+    it.each([
+        ['ON_DEMAND', 'default'],
+        ['ON_DEMAND_PRIORITY', 'priority'],
+        ['ON_DEMAND_FLEX', 'flex'],
+        ['PROVISIONED_THROUGHPUT', 'provisioned'],
+        ['TRAFFIC_TYPE_UNSPECIFIED', undefined],
+    ])('maps %s to %s', (trafficType, expected) => {
+        expect(normalizeVertexAIResolvedServiceTier(trafficType)).toBe(expected);
     });
 });
 

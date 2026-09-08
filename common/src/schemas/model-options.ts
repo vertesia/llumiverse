@@ -464,9 +464,10 @@ export const VertexAIGeminiOptionsSchema = z
 export const VertexAIGeminiOmniVideoOptionsSchema = z
     .strictObject({
         _option_id: z.literal('vertexai-gemini-omni-video'),
-        task: z.enum(['text_to_video', 'image_to_video', 'reference_to_video']).optional(),
+        task: z.enum(['text_to_video', 'image_to_video', 'reference_to_video', 'edit', 'extend']).optional(),
         aspect_ratio: z.enum(['16:9', '9:16']).optional(),
         duration_seconds: z.number().int().min(3).max(10).optional(),
+        resolution: z.enum(['360p', '720p', '1080p', '4k']).optional(),
     })
     .meta({ id: 'VertexAIGeminiOmniVideoOptions' });
 

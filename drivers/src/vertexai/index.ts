@@ -24,6 +24,7 @@ import {
     truncateLargeTextInConversation,
 } from '@llumiverse/core';
 import { AbstractDriver } from '@llumiverse/core/driver';
+import { runWithDriverHttpAgent } from '@llumiverse/core/http-agent';
 import { type FETCH_FN, FetchClient } from '@vertesia/api-fetch-client';
 import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from 'google-auth-library';
 import {
@@ -44,7 +45,7 @@ import {
     GeminiContextCacheManager,
 } from './models/gemini-context-cache.js';
 import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
-import { GEMINI_OMNI_VIDEO_MODEL, type OmniVideoPrompt } from './models/omni-video.js';
+import { GEMINI_OMNI_VIDEO_MODELS, isGeminiOmniVideoModel, type OmniVideoPrompt } from './models/omni-video.js';
 import { getModelDefinition, trimModelName } from './models.js';
 import { getListedVertexOpenMaaSModels } from './open-maas-models.js';
 
@@ -206,6 +207,11 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 }
             }
         });
+    }
+
+    protected override runInHttpContext<T>(operation: () => T): T {
+        // GoogleGenAI uses global fetch rather than accepting the driver's fetch hook.
+        return runWithDriverHttpAgent(this.getHttpAgent(), operation);
     }
 
     private async getAuthClient(): Promise<AuthClient> {
@@ -435,7 +441,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         if ('messages' in prompt) {
             return prompt;
         }
-        if ('text' in prompt && 'images' in prompt) {
+        if ('text' in prompt && 'media' in prompt) {
             return prompt;
         }
         return formatImagenDebugPrompt(prompt);
@@ -736,7 +742,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                 ],
                 /** Additional models not in the listings, but we want to include.
                  * TODO: Remove once available in listing API. */
-                additional: ['imagen-3.0-fast-generate-001', 'gemini-omni-flash-preview'],
+                additional: ['imagen-3.0-fast-generate-001', ...GEMINI_OMNI_VIDEO_MODELS],
             },
             anthropic: {
                 families: ['claude'],
@@ -984,12 +990,13 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
 }
 
 function isGlobalOnlyPublisherModel(publisher: string, modelId: string): boolean {
-    return publisher === 'xai' || (publisher === 'google' && modelId.endsWith(`/models/${GEMINI_OMNI_VIDEO_MODEL}`));
+    const modelName = modelId.split('/').pop() ?? modelId;
+    return publisher === 'xai' || (publisher === 'google' && isGeminiOmniVideoModel(modelName));
 }
 
 function isExecutableGoogleModel(model: Model): boolean {
     const modelName = (model.name ?? '').toLowerCase();
-    if (modelName.endsWith('/gemini-omni-flash-preview') || modelName === 'gemini-omni-flash-preview') return true;
+    if (isGeminiOmniVideoModel(modelName.split('/').pop() ?? modelName)) return true;
     // Intentional execution-path allow-list: Vertex uses separate methods for embeddings, Live/TTS, music and video.
     // This driver currently implements generateContent and generateImages. Unknown actions are excluded only when
     // Google supplies them; absent action metadata falls back to the known-family/name policy above.

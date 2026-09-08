@@ -10,7 +10,7 @@ import type {
 import type { VertexAIDriver, VertexAIPrompt } from './index.js';
 import { ClaudeModelDefinition } from './models/claude.js';
 import { GeminiModelDefinition } from './models/gemini.js';
-import { GEMINI_OMNI_VIDEO_MODEL, GeminiOmniVideoModelDefinition } from './models/omni-video.js';
+import { GeminiOmniVideoModelDefinition, isGeminiOmniVideoModel } from './models/omni-video.js';
 import { OpenAIChatCompletionsModelDefinition } from './models/openai_chat_completions.js';
 import { getVertexOpenMaaSRequestModel } from './open-maas-models.js';
 
@@ -84,8 +84,8 @@ export function getModelDefinition(model: string): ModelDefinition {
         }
     }
 
-    if (modelName === GEMINI_OMNI_VIDEO_MODEL) {
-        return new GeminiOmniVideoModelDefinition();
+    if (isGeminiOmniVideoModel(modelName)) {
+        return new GeminiOmniVideoModelDefinition(modelName);
     }
 
     if (publisher === 'xai') {

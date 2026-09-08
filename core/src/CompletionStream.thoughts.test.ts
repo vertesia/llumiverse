@@ -48,7 +48,11 @@ class ThoughtsStreamDriver extends AbstractDriver<DriverOptions, string> {
                 yield { result: [{ type: 'thoughts', value: 'reason-' }] };
                 yield { result: [{ type: 'thoughts', value: prompt }] };
                 await Promise.resolve();
-                yield { result: [{ type: 'text', value: `answer-${prompt}` }], finish_reason: 'stop' };
+                yield {
+                    result: [{ type: 'text', value: `answer-${prompt}` }],
+                    finish_reason: 'stop',
+                    service_tier: 'priority',
+                };
             },
             finalizeConversation: () => nativeAssistant,
         };
@@ -81,6 +85,7 @@ describe('DefaultCompletionStream thoughts', () => {
             { type: 'text', value: 'answer-one' },
         ]);
         expect(stream.completion?.conversation).toEqual({ role: 'assistant', id: 'one' });
+        expect(stream.completion?.service_tier).toBe('priority');
     });
 
     it('separates thoughts from the answer in the fallback string stream', async () => {

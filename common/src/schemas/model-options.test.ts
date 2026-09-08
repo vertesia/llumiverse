@@ -29,6 +29,7 @@ describe('ModelOptionsSchema', () => {
                 task: 'reference_to_video',
                 aspect_ratio: '16:9',
                 duration_seconds: 3,
+                resolution: '4k',
             }).success,
         ).toBe(true);
         expect(
@@ -39,6 +40,12 @@ describe('ModelOptionsSchema', () => {
         ).toBe(false);
         expect(
             ModelOptionsSchema.safeParse({ _option_id: 'vertexai-gemini-omni-video', duration_seconds: 5.5 }).success,
+        ).toBe(false);
+        expect(ModelOptionsSchema.safeParse({ _option_id: 'vertexai-gemini-omni-video', task: 'edit' }).success).toBe(
+            true,
+        );
+        expect(
+            ModelOptionsSchema.safeParse({ _option_id: 'vertexai-gemini-omni-video', resolution: '1440p' }).success,
         ).toBe(false);
         expect(ModelOptionsSchema.safeParse({ _option_id: 'vertexai-gemini-omni-video', unknown: true }).success).toBe(
             false,
