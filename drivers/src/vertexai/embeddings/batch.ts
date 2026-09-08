@@ -100,7 +100,6 @@ type GeminiEmbeddingBatchRow = {
 type LegacyEmbeddingBatchRow = {
     key: string;
     content: string;
-    outputDimensionality: number;
     task_type?: string;
     title?: string;
 };
@@ -127,7 +126,6 @@ export async function formatVertexEmbeddingBatchRow(
         return {
             key: options.key,
             content: options.input.text,
-            outputDimensionality: options.dimensions,
             ...(taskType ? { task_type: taskType } : {}),
             ...(options.input.title ? { title: options.input.title } : {}),
         };
@@ -152,6 +150,8 @@ export async function formatVertexEmbeddingBatchRow(
 export interface CreateVertexEmbeddingBatchOptions {
     model: string;
     modality: VertexEmbeddingBatchModality;
+    /** Legacy models accept dimensionality as a job parameter, rather than per row. */
+    dimensions?: number;
     inputUri: string;
     outputUri: string;
     displayName: string;
@@ -175,6 +175,8 @@ function normalizedJobState(state: JobState | undefined): VertexEmbeddingBatchSt
             return 'succeeded';
         case 'JOB_STATE_FAILED':
         case 'JOB_STATE_EXPIRED':
+        // Terminal partial results must reach application, including successful rows.
+        case 'JOB_STATE_PARTIALLY_SUCCEEDED':
             return 'failed';
         case 'JOB_STATE_CANCELLED':
             return 'cancelled';
@@ -231,11 +233,16 @@ export async function createVertexEmbeddingBatch(
     const client = batchClient(driver, capability);
 
     const existing = await client.batches.list({
-        config: { filter: `displayName="${options.displayName}"`, pageSize: 10 },
+        config: {
+            filter: `displayName=${JSON.stringify(options.displayName)}`,
+            pageSize: 10,
+            httpOptions: { apiVersion: 'v1' },
+        },
     });
     for await (const candidate of existing) {
         const job = toBatchJob(candidate);
         if (
+            job.displayName === options.displayName &&
             normalizeVertexEmbeddingModelId(job.model ?? '') === normalizeVertexEmbeddingModelId(options.model) &&
             job.inputUri === options.inputUri &&
             job.outputUri === options.outputUri
@@ -250,7 +257,12 @@ export async function createVertexEmbeddingBatch(
         config: {
             displayName: options.displayName,
             dest: { gcsUri: options.outputUri, format: 'jsonl' },
-            httpOptions: { apiVersion: 'v1' },
+            httpOptions: {
+                apiVersion: 'v1',
+                ...(capability.schema === 'legacy' && options.dimensions !== undefined
+                    ? { extraBody: { modelParameters: { outputDimensionality: options.dimensions } } }
+                    : {}),
+            },
         },
     });
     return assertExpectedModel(toBatchJob(created), options.model);
@@ -264,7 +276,12 @@ export async function getVertexEmbeddingBatch(
 ): Promise<VertexEmbeddingBatchJob> {
     const capability = getVertexEmbeddingBatchCapability(model, modality);
     if (!capability) throw new Error(`Vertex embedding model ${model} is not batch capable`);
-    return assertExpectedModel(toBatchJob(await batchClient(driver, capability).batches.get({ name })), model);
+    return assertExpectedModel(
+        toBatchJob(
+            await batchClient(driver, capability).batches.get({ name, config: { httpOptions: { apiVersion: 'v1' } } }),
+        ),
+        model,
+    );
 }
 
 export async function cancelVertexEmbeddingBatch(
@@ -275,7 +292,7 @@ export async function cancelVertexEmbeddingBatch(
 ): Promise<VertexEmbeddingBatchJob> {
     const capability = getVertexEmbeddingBatchCapability(model, modality);
     if (!capability) throw new Error(`Vertex embedding model ${model} is not batch capable`);
-    await batchClient(driver, capability).batches.cancel({ name });
+    await batchClient(driver, capability).batches.cancel({ name, config: { httpOptions: { apiVersion: 'v1' } } });
     return getVertexEmbeddingBatch(driver, model, modality, name);
 }
 
@@ -287,7 +304,7 @@ export async function deleteVertexEmbeddingBatch(
 ): Promise<VertexEmbeddingBatchJob> {
     const capability = getVertexEmbeddingBatchCapability(model, modality);
     if (!capability) throw new Error(`Vertex embedding model ${model} is not batch capable`);
-    await batchClient(driver, capability).batches.delete({ name });
+    await batchClient(driver, capability).batches.delete({ name, config: { httpOptions: { apiVersion: 'v1' } } });
     return { name, state: 'cancelled' };
 }
 

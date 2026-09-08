@@ -91,9 +91,80 @@ describe('Vertex embedding batch lifecycle', () => {
         await cancelVertexEmbeddingBatch(driver, 'gemini-embedding-001', 'text', 'jobs/1');
         await deleteVertexEmbeddingBatch(driver, 'gemini-embedding-001', 'text', 'jobs/1');
         expect(batches.create).toHaveBeenCalledWith(expect.objectContaining({ model: 'gemini-embedding-001' }));
-        expect(batches.cancel).toHaveBeenCalledWith({ name: 'jobs/1' });
-        expect(batches.get).toHaveBeenCalledWith({ name: 'jobs/1' });
-        expect(batches.delete).toHaveBeenCalledWith({ name: 'jobs/1' });
+        const request = { name: 'jobs/1', config: { httpOptions: { apiVersion: 'v1' } } };
+        expect(batches.cancel).toHaveBeenCalledWith(request);
+        expect(batches.get).toHaveBeenCalledWith(request);
+        expect(batches.delete).toHaveBeenCalledWith(request);
+        expect(batches.list).toHaveBeenCalledWith({
+            config: { filter: 'displayName="stable-name"', pageSize: 10, httpOptions: { apiVersion: 'v1' } },
+        });
+    });
+
+    it('treats partial provider success as terminal so successful rows can be applied', async () => {
+        const get = vi.fn().mockResolvedValue({
+            name: 'jobs/1',
+            state: 'JOB_STATE_PARTIALLY_SUCCEEDED',
+            model: 'gemini-embedding-2',
+        });
+        const driver = { getGoogleGenAIClient: vi.fn(() => ({ batches: { get } })) } as unknown as VertexAIDriver;
+        await expect(getVertexEmbeddingBatch(driver, 'gemini-embedding-2', 'image', 'jobs/1')).resolves.toMatchObject({
+            state: 'failed',
+        });
+    });
+
+    it('passes legacy dimensions as job model parameters through the SDK request body', async () => {
+        const create = vi.fn().mockResolvedValue({ name: 'jobs/1', model: 'text-embedding-005' });
+        const batches = {
+            create,
+            list: vi.fn().mockResolvedValue({ async *[Symbol.asyncIterator]() {} }),
+        };
+        const driver = { getGoogleGenAIClient: vi.fn(() => ({ batches })) } as unknown as VertexAIDriver;
+        await createVertexEmbeddingBatch(driver, {
+            model: 'text-embedding-005',
+            modality: 'text',
+            dimensions: 256,
+            displayName: 'stable-name',
+            inputUri: 'gs://bucket/input.jsonl',
+            outputUri: 'gs://bucket/output/',
+        });
+        expect(create).toHaveBeenCalledWith({
+            model: 'text-embedding-005',
+            src: { gcsUri: ['gs://bucket/input.jsonl'], format: 'jsonl' },
+            config: {
+                displayName: 'stable-name',
+                dest: { gcsUri: 'gs://bucket/output/', format: 'jsonl' },
+                httpOptions: { apiVersion: 'v1', extraBody: { modelParameters: { outputDimensionality: 256 } } },
+            },
+        });
+    });
+
+    it('does not adopt a listed job with a different display name', async () => {
+        const create = vi.fn().mockResolvedValue({ name: 'jobs/new', model: 'gemini-embedding-2' });
+        const batches = {
+            create,
+            list: vi.fn().mockResolvedValue({
+                async *[Symbol.asyncIterator]() {
+                    yield {
+                        name: 'jobs/old',
+                        displayName: 'other-name',
+                        model: 'gemini-embedding-2',
+                        src: { gcsUri: ['gs://bucket/input.jsonl'] },
+                        dest: { gcsUri: 'gs://bucket/output/' },
+                    };
+                },
+            }),
+        };
+        const driver = { getGoogleGenAIClient: vi.fn(() => ({ batches })) } as unknown as VertexAIDriver;
+        await expect(
+            createVertexEmbeddingBatch(driver, {
+                model: 'gemini-embedding-2',
+                modality: 'text',
+                displayName: 'stable-name',
+                inputUri: 'gs://bucket/input.jsonl',
+                outputUri: 'gs://bucket/output/',
+            }),
+        ).resolves.toMatchObject({ name: 'jobs/new' });
+        expect(create).toHaveBeenCalledOnce();
     });
 
     it('rejects a provider job that belongs to a different model', async () => {
@@ -189,7 +260,6 @@ describe('Vertex embedding batch rows', () => {
         ).resolves.toEqual({
             key: 'properties:1:etag',
             content: '{"name":"Ada"}',
-            outputDimensionality: 768,
         });
     });
 
