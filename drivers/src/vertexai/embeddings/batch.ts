@@ -3,6 +3,42 @@ import type { EmbeddingInput, EmbeddingTaskType, TextEmbeddingInput } from '@llu
 import type { VertexAIDriver } from '../index.js';
 import { buildVertexEmbeddingText, toGoogleTaskType, vertexEmbeddingInputToContent } from './format.js';
 
+export interface ParsedVertexEmbeddingBatchResult {
+    key?: string;
+    vector?: number[];
+    providerError: boolean;
+    failureCategory?: string;
+}
+
+/** Normalize Gemini and legacy output rows without retaining input content or provider error messages. */
+export function parseVertexEmbeddingBatchResult(record: Record<string, unknown>): ParsedVertexEmbeddingBatchResult {
+    // Gemini JSONL encodes google.rpc.Status as a JSON string; legacy rows may use an object.
+    let status = record.status;
+    if (typeof status === 'string' && status.trim()) {
+        try {
+            status = JSON.parse(status);
+        } catch {
+            status = { code: -1 };
+        }
+    }
+    const code = status && typeof status === 'object' && 'code' in status ? status.code : undefined;
+    const statusError = code !== undefined && code !== 0;
+    const response = record.response as Record<string, unknown> | undefined;
+    const predictions = record.predictions as Array<Record<string, unknown>> | undefined;
+    const embeddings = (response?.embedding ?? response?.embeddings ?? predictions?.[0]?.embeddings) as
+        | Array<Record<string, unknown>>
+        | Record<string, unknown>
+        | undefined;
+    const candidate = Array.isArray(embeddings) ? embeddings[0]?.values : embeddings?.values;
+    const key = record.key ?? (record.instance as Record<string, unknown> | undefined)?.key;
+    return {
+        key: typeof key === 'string' ? key : undefined,
+        vector: Array.isArray(candidate) ? (candidate as number[]) : undefined,
+        providerError: statusError || !!record.error || !!response?.error,
+        ...(statusError ? { failureCategory: code === 7 ? 'provider_permission_denied' : 'provider_row_error' } : {}),
+    };
+}
+
 export type VertexEmbeddingBatchSchema = 'gemini' | 'legacy';
 export type VertexEmbeddingBatchModality = 'text' | 'image';
 
