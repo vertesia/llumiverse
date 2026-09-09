@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { BatchJob, JobState } from '@google/genai';
 import type { EmbeddingInput, EmbeddingTaskType, TextEmbeddingInput } from '@llumiverse/core';
 import type { VertexAIDriver } from '../index.js';
@@ -8,6 +9,18 @@ export interface ParsedVertexEmbeddingBatchResult {
     vector?: number[];
     providerError: boolean;
     failureCategory?: string;
+}
+
+/** Legacy batches echo only model input fields, dropping custom keys (including instanceConfig.keyField). */
+export function vertexEmbeddingBatchCorrelationKey(row: Record<string, unknown>): string | undefined {
+    if (typeof row.content === 'string') {
+        if (row.task_type != null && typeof row.task_type !== 'string') return undefined;
+        if (row.title != null && typeof row.title !== 'string') return undefined;
+        return `input:${createHash('sha256')
+            .update(JSON.stringify([row.content, row.task_type ?? null, row.title ?? null]))
+            .digest('hex')}`;
+    }
+    return typeof row.key === 'string' ? row.key : undefined;
 }
 
 /** Normalize Gemini and legacy output rows without retaining input content or provider error messages. */
@@ -30,7 +43,8 @@ export function parseVertexEmbeddingBatchResult(record: Record<string, unknown>)
         | Record<string, unknown>
         | undefined;
     const candidate = Array.isArray(embeddings) ? embeddings[0]?.values : embeddings?.values;
-    const key = record.key ?? (record.instance as Record<string, unknown> | undefined)?.key;
+    const instance = record.instance as Record<string, unknown> | undefined;
+    const key = record.key ?? (instance ? vertexEmbeddingBatchCorrelationKey(instance) : undefined);
     return {
         key: typeof key === 'string' ? key : undefined,
         vector: Array.isArray(candidate) ? (candidate as number[]) : undefined,
@@ -296,7 +310,8 @@ export async function createVertexEmbeddingBatch(
             httpOptions: {
                 apiVersion: 'v1',
                 ...(capability.schema === 'legacy' && options.dimensions !== undefined
-                    ? { extraBody: { modelParameters: { outputDimensionality: options.dimensions } } }
+                    ? // The legacy batch backend reads numeric JSON parameters as FLOAT64, not INT64.
+                      { extraBody: { modelParameters: { outputDimensionality: String(options.dimensions) } } }
                     : {}),
             },
         },

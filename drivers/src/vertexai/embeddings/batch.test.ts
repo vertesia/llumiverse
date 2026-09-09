@@ -112,31 +112,34 @@ describe('Vertex embedding batch lifecycle', () => {
         });
     });
 
-    it('passes legacy dimensions as job model parameters through the SDK request body', async () => {
-        const create = vi.fn().mockResolvedValue({ name: 'jobs/1', model: 'text-embedding-005' });
-        const batches = {
-            create,
-            list: vi.fn().mockResolvedValue({ async *[Symbol.asyncIterator]() {} }),
-        };
-        const driver = { getGoogleGenAIClient: vi.fn(() => ({ batches })) } as unknown as VertexAIDriver;
-        await createVertexEmbeddingBatch(driver, {
-            model: 'text-embedding-005',
-            modality: 'text',
-            dimensions: 256,
-            displayName: 'stable-name',
-            inputUri: 'gs://bucket/input.jsonl',
-            outputUri: 'gs://bucket/output/',
-        });
-        expect(create).toHaveBeenCalledWith({
-            model: 'text-embedding-005',
-            src: { gcsUri: ['gs://bucket/input.jsonl'], format: 'jsonl' },
-            config: {
+    it.each(['text-embedding-004', 'text-embedding-005'])(
+        'passes %s dimensions as integer strings for the legacy batch backend',
+        async (model) => {
+            const create = vi.fn().mockResolvedValue({ name: 'jobs/1', model });
+            const batches = {
+                create,
+                list: vi.fn().mockResolvedValue({ async *[Symbol.asyncIterator]() {} }),
+            };
+            const driver = { getGoogleGenAIClient: vi.fn(() => ({ batches })) } as unknown as VertexAIDriver;
+            await createVertexEmbeddingBatch(driver, {
+                model,
+                modality: 'text',
+                dimensions: 256,
                 displayName: 'stable-name',
-                dest: { gcsUri: 'gs://bucket/output/', format: 'jsonl' },
-                httpOptions: { apiVersion: 'v1', extraBody: { modelParameters: { outputDimensionality: 256 } } },
-            },
-        });
-    });
+                inputUri: 'gs://bucket/input.jsonl',
+                outputUri: 'gs://bucket/output/',
+            });
+            expect(create).toHaveBeenCalledWith({
+                model,
+                src: { gcsUri: ['gs://bucket/input.jsonl'], format: 'jsonl' },
+                config: {
+                    displayName: 'stable-name',
+                    dest: { gcsUri: 'gs://bucket/output/', format: 'jsonl' },
+                    httpOptions: { apiVersion: 'v1', extraBody: { modelParameters: { outputDimensionality: '256' } } },
+                },
+            });
+        },
+    );
 
     it('does not adopt a listed job with a different display name', async () => {
         const create = vi.fn().mockResolvedValue({ name: 'jobs/new', model: 'gemini-embedding-2' });

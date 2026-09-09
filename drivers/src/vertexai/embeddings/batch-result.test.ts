@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { parseVertexEmbeddingBatchResult } from './batch.js';
+import {
+    formatVertexEmbeddingBatchRow,
+    parseVertexEmbeddingBatchResult,
+    vertexEmbeddingBatchCorrelationKey,
+} from './batch.js';
 
 describe('embedding batch result parsing', () => {
     it('parses the alternate embeddings array and ignores non-string keys', () => {
@@ -40,13 +44,50 @@ describe('embedding batch result parsing', () => {
         );
     });
 
-    it('parses legacy output by the echoed instance key', () => {
+    it('parses legacy output by echoed input fields, not discarded custom keys', () => {
         expect(
             parseVertexEmbeddingBatchResult({
                 instance: { key: 'legacy', content: 'omitted' },
                 predictions: [{ embeddings: { values: [3, 4] } }],
             }),
-        ).toEqual({ key: 'legacy', vector: [3, 4], providerError: false });
+        ).toEqual({
+            key: vertexEmbeddingBatchCorrelationKey({ content: 'omitted' }),
+            vector: [3, 4],
+            providerError: false,
+        });
+    });
+
+    it('correlates actual legacy output independently of field order and preserves all input semantics', async () => {
+        const row = await formatVertexEmbeddingBatchRow({
+            key: 'object-snapshot',
+            model: 'text-embedding-004',
+            dimensions: 256,
+            input: { type: 'text', text: 'Café\nsecond line 🐈' },
+        });
+        const key = vertexEmbeddingBatchCorrelationKey(row);
+        expect(key).toMatch(/^input:[a-f0-9]{64}$/);
+        expect(
+            parseVertexEmbeddingBatchResult({
+                instance: { content: 'Café\nsecond line 🐈' },
+                status: '',
+                predictions: [{ embeddings: { values: [1, 2] } }],
+            }),
+        ).toEqual({ key, providerError: false, vector: [1, 2] });
+        expect(vertexEmbeddingBatchCorrelationKey({ key: 'another-object', content: 'Café\nsecond line 🐈' })).toBe(
+            key,
+        );
+        for (const changed of [
+            { content: 'different' },
+            { content: 'Café\nsecond line 🐈', task_type: 'RETRIEVAL_QUERY' },
+            { content: 'Café\nsecond line 🐈', title: 'title' },
+        ]) {
+            expect(vertexEmbeddingBatchCorrelationKey(changed)).not.toBe(key);
+        }
+        expect(vertexEmbeddingBatchCorrelationKey({ content: 'x', task_type: 42 })).toBeUndefined();
+        expect(vertexEmbeddingBatchCorrelationKey({ content: 42 })).toBeUndefined();
+        expect(
+            parseVertexEmbeddingBatchResult({ instance: { content: 'Café\nsecond line 🐈' }, status: 'row failed' }),
+        ).toMatchObject({ key, providerError: true });
     });
 
     it('classifies provider row errors without retaining their message', () => {
