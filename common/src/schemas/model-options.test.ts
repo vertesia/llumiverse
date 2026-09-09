@@ -14,12 +14,19 @@ function assertType<T extends true>(_ok: T): void {}
  * dropped member reads as a normal diff.
  */
 const emitted = z.toJSONSchema(ModelOptionsSchema, { target: 'draft-2020-12', io: 'input' }) as {
-    anyOf?: { $ref: string }[];
-    oneOf?: { $ref: string }[];
-    $defs: Record<string, { properties?: Record<string, unknown>; required?: string[] }>;
+    $defs: Record<
+        string,
+        {
+            anyOf?: { $ref: string }[];
+            oneOf?: { $ref: string }[];
+            properties?: Record<string, unknown>;
+            required?: string[];
+        }
+    >;
 };
 
-const MEMBERS = (emitted.oneOf ?? emitted.anyOf ?? []).map((member) => member.$ref.replace('#/$defs/', ''));
+const union = emitted.$defs.ModelOptions;
+const MEMBERS = (union.oneOf ?? union.anyOf ?? []).map((member) => member.$ref.replace('#/$defs/', ''));
 
 describe('ModelOptionsSchema', () => {
     it('validates strict Gemini Omni video option boundaries', () => {

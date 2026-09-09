@@ -14,10 +14,11 @@ function assertType<T extends true>(_ok: T): void {}
  * releases, and the conversion is only sound if the schema reproduces it exactly — including the run
  * of spaces where the scanner collapsed the defaults list onto one line.
  */
-const emitted = z.toJSONSchema(HttpTimeoutOptionsSchema, { target: 'draft-2020-12', io: 'input' }) as Record<
-    string,
-    unknown
->;
+// Zod emits schemas with a metadata id as references to named definitions.
+const document = z.toJSONSchema(HttpTimeoutOptionsSchema, { target: 'draft-2020-12', io: 'input' }) as {
+    $defs: Record<string, Record<string, unknown>>;
+};
+const emitted = document.$defs.HttpTimeoutOptions;
 
 describe('HttpTimeoutOptionsSchema', () => {
     it('is the only definition — the public type is inferred from it', () => {

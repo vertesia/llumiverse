@@ -24,11 +24,11 @@ const EXPECTED_JSON_SCHEMA = {
         type: {},
         description: { type: 'string' },
         properties: { $ref: '#/$defs/JSONSchemaProperties' },
-        items: { $ref: '#' },
+        items: { $ref: '#/$defs/JSONSchema' },
         format: { type: 'string' },
         editor: {},
         default: {},
-        additionalProperties: { anyOf: [{ type: 'boolean' }, { $ref: '#' }] },
+        additionalProperties: { anyOf: [{ type: 'boolean' }, { $ref: '#/$defs/JSONSchema' }] },
         required: { type: 'array', items: { type: 'string' } },
     },
 };
@@ -39,7 +39,9 @@ describe('JSONSchemaSchema', () => {
             string,
             unknown
         >;
-        const { $schema: _schema, $defs: _defs, additionalProperties, ...rest } = emitted;
+        expect(emitted.$ref).toBe('#/$defs/JSONSchema');
+        const definitions = emitted.$defs as Record<string, Record<string, unknown>>;
+        const { additionalProperties, ...rest } = definitions.JSONSchema;
         // Compared as text, so a reordered property fails here too. Deliberately stricter than the
         // agreement the generator enforces: this is the place a change to the emission should be
         // read and approved, not discovered downstream.
@@ -59,7 +61,7 @@ describe('JSONSchemaSchema', () => {
         expect(emitted.$defs.JSONSchemaProperties).toEqual({
             type: 'object',
             properties: {},
-            additionalProperties: { $ref: '#' },
+            additionalProperties: { $ref: '#/$defs/JSONSchema' },
         });
     });
 
@@ -88,9 +90,9 @@ describe('JSONSchemaSchema', () => {
         // even if someone loosens the mapped type: the emitted `properties` map IS the known-field
         // list, and a field added to the interface without a schema (or the reverse) moves it.
         const emitted = z.toJSONSchema(JSONSchemaSchema, { target: 'draft-2020-12', io: 'input' }) as {
-            properties: Record<string, unknown>;
+            $defs: Record<string, { properties: Record<string, unknown> }>;
         };
-        expect(Object.keys(emitted.properties)).toEqual([
+        expect(Object.keys(emitted.$defs.JSONSchema.properties)).toEqual([
             'type',
             'description',
             'properties',
