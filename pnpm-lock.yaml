@@ -141,8 +141,8 @@ importers:
   common:
     dependencies:
       zod:
-        specifier: ^4.4.3
-        version: 4.4.3
+        specifier: ^4.5.4
+        version: 4.5.4
     devDependencies:
       '@types/node':
         specifier: ^24.13.3
@@ -260,8 +260,8 @@ importers:
         specifier: ^2.6.4
         version: 2.6.4(@opentelemetry/api@1.9.1)
       '@openrouter/sdk':
-        specifier: ^1.2.71
-        version: 1.2.83
+        specifier: ^1.2.92
+        version: 1.2.107
       '@vertesia/api-fetch-client':
         specifier: ^1.4.1
         version: 1.4.1
@@ -287,8 +287,8 @@ importers:
         specifier: ^1.4.0
         version: 1.4.0
       together-ai:
-        specifier: ^0.49.0
-        version: 0.49.0
+        specifier: ^0.50.0
+        version: 0.50.0
     devDependencies:
       dotenv:
         specifier: ^17.4.2
@@ -716,8 +716,8 @@ packages:
   '@nodable/entities@2.1.0':
     resolution: {integrity: sha512-nyT7T3nbMyBI/lvr6L5TyWbFJAI9FTgVRakNoBqCD+PmID8DzFrrNdLLtHMwMszOtqZa8PAOV24ZqDnQrhQINA==}
 
-  '@openrouter/sdk@1.2.83':
-    resolution: {integrity: sha512-xgzL8gTElcAxalNGAJdkFf3ouRmLQQfeHL3KmmfY39MniUQC9z6uX/azKzADAoVM2Av56ujW6agbCcF+2lIZ9A==}
+  '@openrouter/sdk@1.2.107':
+    resolution: {integrity: sha512-y3bFctUufE+juGXKc4NEWm5htdMwoNvrHr/6s2h0cv/eZN1JO833qKa+Dcr1crJGYbG+PIjm34nYYVdXtfCehA==}
 
   '@opentelemetry/api@1.9.1':
     resolution: {integrity: sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q==}
@@ -1867,8 +1867,8 @@ packages:
     resolution: {integrity: sha512-Bf+ILmBgretUrdJxzXM0SgXLZ3XfiaUuOj/IKQHuTXip+05Xn+uyEYdVg0kYDipTBcLrCVyUzAPz7QmArb0mmw==}
     engines: {node: '>=14.0.0'}
 
-  together-ai@0.49.0:
-    resolution: {integrity: sha512-2+KVps52xTGnjt47s57BHPfeZHbXlJd8YXBBfhSlc8Kw70tq3tWoEutsjxstIbo5SLgs49vAJONU6T/Zx1JNXA==}
+  together-ai@0.50.0:
+    resolution: {integrity: sha512-U81YStywb4CWfPucEyQ9BMsIJEhKMHUg1Kr4LIQUEqB4rQzXOo20Lr2cMaC4fXT9f1YztM34+VSDAc9DFjE3BQ==}
     hasBin: true
 
   ts-algebra@2.0.0:
@@ -2034,6 +2034,9 @@ packages:
 
   zod@4.4.3:
     resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
+
+  zod@4.5.4:
+    resolution: {integrity: sha512-sC95tT5iHHH9gtpj6A81kh+NEaRAUFN+qlUPDUbRfOMvNf5QCBqsb3WgvnpVtK5Y+4UfA6KqufotuTvMGiTlsA==}
 
 snapshots:
 
@@ -2726,7 +2729,7 @@ snapshots:
 
   '@nodable/entities@2.1.0': {}
 
-  '@openrouter/sdk@1.2.83':
+  '@openrouter/sdk@1.2.107':
     dependencies:
       zod: 4.4.3
 
@@ -3820,7 +3823,7 @@ snapshots:
 
   tinyrainbow@3.1.0: {}
 
-  together-ai@0.49.0: {}
+  together-ai@0.50.0: {}
 
   ts-algebra@2.0.0: {}
 
@@ -3943,3 +3946,5 @@ snapshots:
       zod: 4.4.3
 
   zod@4.4.3: {}
+
+  zod@4.5.4: {}
