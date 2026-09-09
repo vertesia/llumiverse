@@ -1,15 +1,16 @@
 import { createHash } from 'node:crypto';
 import type { BatchJob, JobState } from '@google/genai';
-import type { EmbeddingInput } from '@llumiverse/core';
+import type {
+    EmbeddingBatchCreateOptions,
+    EmbeddingBatchJob,
+    EmbeddingBatchState,
+    EmbeddingInput,
+    ParsedEmbeddingBatchResult,
+} from '@llumiverse/core';
 import type { VertexAIDriver } from '../index.js';
 import { toGoogleTaskType, vertexEmbeddingInputToContent } from './format.js';
 
-export interface ParsedVertexEmbeddingBatchResult {
-    key?: string;
-    vector?: number[];
-    providerError: boolean;
-    failureCategory?: string;
-}
+export type ParsedVertexEmbeddingBatchResult = ParsedEmbeddingBatchResult;
 
 /** Legacy batches echo only model input fields, dropping custom keys (including instanceConfig.keyField). */
 export function vertexEmbeddingBatchCorrelationKey(row: Record<string, unknown>): string | undefined {
@@ -167,6 +168,10 @@ export async function formatVertexEmbeddingBatchRow(
             `Vertex embedding model ${options.model} uses ${capability.schema} batch rows, not ${options.schema}`,
         );
     }
+    // Batch media is referenced in place. Do not let synchronous inline/download fallback copy source media.
+    if (options.input.type === 'image' && !(await options.input.source.getURL()).startsWith('gs://')) {
+        throw new Error('Vertex embedding batch images require a gs:// source URI');
+    }
 
     if (capability.schema === 'legacy') {
         if (options.input.type !== 'text') {
@@ -197,27 +202,9 @@ export async function formatVertexEmbeddingBatchRow(
     };
 }
 
-export interface CreateVertexEmbeddingBatchOptions {
-    model: string;
-    modality: VertexEmbeddingBatchModality;
-    /** Legacy models accept dimensionality as a job parameter, rather than per row. */
-    dimensions?: number;
-    inputUri: string;
-    outputUri: string;
-    displayName: string;
-}
-
-export type VertexEmbeddingBatchState = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'paused';
-
-export interface VertexEmbeddingBatchJob {
-    name: string;
-    displayName?: string;
-    state: VertexEmbeddingBatchState;
-    model?: string;
-    inputUri?: string;
-    outputUri?: string;
-    error?: string;
-}
+export type CreateVertexEmbeddingBatchOptions = EmbeddingBatchCreateOptions;
+export type VertexEmbeddingBatchState = EmbeddingBatchState;
+export type VertexEmbeddingBatchJob = EmbeddingBatchJob;
 
 function normalizedJobState(state: JobState | undefined): VertexEmbeddingBatchState {
     switch (state as string | undefined) {
