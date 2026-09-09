@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import type { BatchJob, JobState } from '@google/genai';
-import type { EmbeddingInput, EmbeddingTaskType, TextEmbeddingInput } from '@llumiverse/core';
+import type { EmbeddingInput } from '@llumiverse/core';
 import type { VertexAIDriver } from '../index.js';
-import { buildVertexEmbeddingText, toGoogleTaskType, vertexEmbeddingInputToContent } from './format.js';
+import { toGoogleTaskType, vertexEmbeddingInputToContent } from './format.js';
 
 export interface ParsedVertexEmbeddingBatchResult {
     key?: string;
@@ -241,15 +241,6 @@ function normalizedJobState(state: JobState | undefined): VertexEmbeddingBatchSt
     }
 }
 
-function firstGcsUri(value: unknown): string | undefined {
-    if (typeof value === 'string') return value;
-    if (Array.isArray(value)) return value.find((item): item is string => typeof item === 'string');
-    if (value && typeof value === 'object' && 'gcsUri' in value) {
-        return firstGcsUri((value as { gcsUri?: unknown }).gcsUri);
-    }
-    return undefined;
-}
-
 function toBatchJob(job: BatchJob): VertexEmbeddingBatchJob {
     if (!job.name) throw new Error('Vertex AI batch job response did not contain a resource name');
     return {
@@ -257,8 +248,8 @@ function toBatchJob(job: BatchJob): VertexEmbeddingBatchJob {
         displayName: job.displayName,
         state: normalizedJobState(job.state),
         model: job.model,
-        inputUri: firstGcsUri(job.src),
-        outputUri: firstGcsUri(job.dest),
+        inputUri: job.src?.gcsUri?.[0],
+        outputUri: job.dest?.gcsUri,
         error: job.error?.message,
     };
 }
@@ -357,13 +348,4 @@ export async function deleteVertexEmbeddingBatch(
     if (!capability) throw new Error(`Vertex embedding model ${model} is not batch capable`);
     await batchClient(driver, capability).batches.delete({ name, config: { httpOptions: { apiVersion: 'v1' } } });
     return { name, state: 'cancelled' };
-}
-
-export function vertexBatchTextForParity(input: TextEmbeddingInput, model: string): string {
-    const capability = getVertexEmbeddingBatchCapability(model, 'text');
-    return buildVertexEmbeddingText(input, capability?.taskEncoding === 'prefix');
-}
-
-export function vertexBatchTaskTypeForParity(taskType: EmbeddingTaskType | undefined): string | undefined {
-    return toGoogleTaskType(taskType);
 }

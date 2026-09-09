@@ -9,8 +9,8 @@ import {
     getVertexEmbeddingBatch,
     getVertexEmbeddingBatchCapability,
     normalizeVertexEmbeddingModelId,
-    vertexBatchTextForParity,
 } from './batch.js';
+import { buildVertexEmbeddingText } from './format.js';
 
 describe('Vertex embedding batch capabilities', () => {
     it('uses an explicit model and modality matrix', () => {
@@ -223,7 +223,7 @@ describe('Vertex embedding batch rows', () => {
                 embed_content_config: { output_dimensionality: 1024 },
             },
         });
-        expect(vertexBatchTextForParity(input, 'gemini-embedding-2')).toBe('title: none | text: hello');
+        expect(buildVertexEmbeddingText(input, true)).toBe('title: none | text: hello');
     });
 
     it('formats Gemini 2 images as GCS file data', async () => {
