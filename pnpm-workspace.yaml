@@ -21,6 +21,8 @@ catalog:
   "@types/node": "^24.13.3"
   google-auth-library: "^11.0.2"
 overrides:
+  # GHSA-82fw-gwwq-j7x9: keep Vitest and its mocker on the patched release.
+  "vitest@>=2.1.0 <4.1.11": 4.1.11
   # ============================
   # Special Overrides
   # ============================
