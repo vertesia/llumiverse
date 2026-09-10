@@ -2,6 +2,7 @@ import type { z } from 'zod';
 import type {
     ExecutionTokenUsageSchema,
     PromptCacheDiagnosticSchema,
+    PromptCacheFailureReasonSchema,
     PromptCacheModeSchema,
     PromptCachePathSchema,
     StatelessExecutionOptionsSchema,
@@ -617,6 +618,8 @@ export type PromptCacheMode = z.infer<typeof PromptCacheModeSchema>;
 
 export type PromptCachePath = z.infer<typeof PromptCachePathSchema>;
 
+export type PromptCacheFailureReason = z.infer<typeof PromptCacheFailureReasonSchema>;
+
 export type PromptCacheDiagnostic = z.infer<typeof PromptCacheDiagnosticSchema>;
 
 /** Namespace used by agent conversations that require stable Claude cache layout. */
@@ -852,6 +855,8 @@ export interface PromptSegment {
      */
     thought_signature?: string;
     files?: DataSource[];
+    /** Marks the end of a reusable prompt prefix, including supported media in this segment. */
+    cache_control?: { type: 'ephemeral' };
 }
 
 export type ExecutionTokenUsage = z.infer<typeof ExecutionTokenUsageSchema>;

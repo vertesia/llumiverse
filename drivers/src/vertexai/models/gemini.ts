@@ -635,10 +635,12 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const schema = options.result_schema;
         let contents: Content[] = [];
         let system: Content | undefined = { role: 'user', parts: [] }; // Single content block for system messages
+        let cacheBoundaryContentCount: number | undefined;
 
         const safety: Content[] = [];
 
         for (const msg of segments) {
+            const contentCountBefore = contents.length;
             // Role specific handling
             if (msg.role === PromptRole.system) {
                 // Text only for system messages
@@ -710,6 +712,11 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                     }
                 }
             }
+
+            if (msg.cache_control && contents.length > contentCountBefore) {
+                // Multiple markers are legal; the last one defines the largest reusable prefix.
+                cacheBoundaryContentCount = contents.length;
+            }
         }
 
         // Adding JSON Schema to system message
@@ -744,7 +751,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         // Preserve PromptSegment boundaries through the provider request. Besides retaining the
         // explicit-cache breakpoint, this avoids changing the caller's conversation turn shape.
-        return { contents, system };
+        return { contents, system, cacheBoundaryContentCount };
     }
 
     usageMetadataToTokenUsage(
@@ -808,7 +815,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             prompt.system = existingSystem;
         }
 
-        const conversation = updateConversation(options.conversation, prompt.contents);
+        const conversation = updatePromptConversation(options.conversation, prompt);
         prompt.contents = conversation;
 
         // TODO: Remove hack, use global endpoint manually if needed.
@@ -924,7 +931,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         }
 
         // Include conversation history in prompt contents (same as non-streaming)
-        const conversation = updateConversation(options.conversation, prompt.contents);
+        const conversation = updatePromptConversation(options.conversation, prompt);
         prompt.contents = conversation;
 
         if (options.model.includes('gemini-2.5-flash-image')) {
@@ -1277,6 +1284,15 @@ function updateConversation(conversation: unknown, prompt: Content[]): Content[]
     const unwrapped = unwrapConversationArray<Content>(conversation);
     const convArray = unwrapped ?? ((conversation as Content[]) || []);
     return convArray.concat(prompt);
+}
+
+function updatePromptConversation(conversation: unknown, prompt: GenerateContentPrompt): Content[] {
+    const promptContentCount = prompt.contents.length;
+    const updated = updateConversation(conversation, prompt.contents);
+    if (prompt.cacheBoundaryContentCount !== undefined) {
+        prompt.cacheBoundaryContentCount += updated.length - promptContentCount;
+    }
+    return updated;
 }
 
 const SYSTEM_KEY = '_llumiverse_system';
