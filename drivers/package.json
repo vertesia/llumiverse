@@ -10,6 +10,10 @@
     "main": "./lib/index.js",
     "types": "./lib/index.d.ts",
     "exports": {
+        "./embedding-batch": {
+            "types": "./lib/embedding-batch.d.ts",
+            "default": "./lib/embedding-batch.js"
+        },
         ".": {
             "types": "./lib/index.d.ts",
             "default": "./lib/index.js"
@@ -37,6 +41,10 @@
         "./vertexai": {
             "types": "./lib/vertexai/index.d.ts",
             "default": "./lib/vertexai/index.js"
+        },
+        "./vertexai/embedding-batch": {
+            "types": "./lib/vertexai/embeddings/batch.d.ts",
+            "default": "./lib/vertexai/embeddings/batch.js"
         },
         "./groq": {
             "types": "./lib/groq/index.d.ts",
