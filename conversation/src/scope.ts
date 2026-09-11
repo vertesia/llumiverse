@@ -10,6 +10,7 @@ export const CONVERSATION_FOUNDATION_SCOPE = Object.freeze({
         'materialized_json_round_trip',
         'basic_builders_and_inspection',
         'deterministic_json_schema',
+        'idempotent_materialized_record_ingestion',
     ]),
 });
 
@@ -37,8 +38,9 @@ export const CONVERSATION_FOUNDATION_LIMITATIONS = Object.freeze([
     },
     {
         code: 'UNIMPLEMENTED_SCOPE',
-        feature: 'delivery_and_adapters',
-        message: 'Delivery, adapter, and migration contracts are not implemented in this revision.',
+        feature: 'remaining_delivery_adapters_and_migrations',
+        message:
+            'OpenAI Chat Completions and Claude Messages have native adapters; other provider adapters, delivery contracts, and migrations are not implemented.',
     },
     {
         code: 'UNIMPLEMENTED_SCOPE',

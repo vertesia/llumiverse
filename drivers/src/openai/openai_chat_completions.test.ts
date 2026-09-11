@@ -1,10 +1,20 @@
-import { type CompletionChunkObject, type ExecutionOptions, getConversationMeta } from '@llumiverse/core';
+import { type ConversationDocument, parseConversationDocument } from '@llumiverse/conversation';
+import {
+    type AIModel,
+    type CompletionChunkObject,
+    type EmbeddingsOptions,
+    type EmbeddingsResult,
+    type ExecutionOptions,
+    type ModelSearchPayload,
+    PromptRole,
+} from '@llumiverse/core';
 import type { ServerSentEvent } from '@vertesia/api-fetch-client';
 import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import {
     normalizeOpenAIChatCompletionsResponse,
     normalizeOpenAIChatCompletionsStream,
+    OpenAIChatCompletionsDriverBase,
     type OpenAIChatCompletionsPayload,
     type OpenAIChatCompletionsPrompt,
     OpenAIChatCompletionsProtocol,
@@ -14,6 +24,7 @@ import {
     parseOpenAIChatCompletionsToolCalls,
     prepareOpenAIChatCompletionsConversation,
 } from './openai_chat_completions.js';
+import { exportLegacyOpenAIChatCompletionsConversation } from './openai-chat-conversation-adapter.js';
 
 const streamChunk = {
     id: 'chatcmpl-stream',
@@ -99,6 +110,21 @@ async function collectChunks(stream: AsyncIterable<CompletionChunkObject>): Prom
     return chunks;
 }
 
+function latestGeneratedText(value: unknown): string | undefined {
+    const document = parseConversationDocument(value);
+    for (let index = document.turns.length - 1; index >= 0; index -= 1) {
+        const turn = document.turns[index];
+        if (turn.kind !== 'agent' || turn.provenance.type !== 'generated') continue;
+        return turn.blocks.find((block) => block.type === 'text')?.text;
+    }
+    return undefined;
+}
+
+function latestExecutedGeneration(value: unknown) {
+    const document = parseConversationDocument(value);
+    return Object.values(document.generations).find((generation) => generation.record_source === 'executed');
+}
+
 class TestOpenAIChatCompletionsProtocol extends OpenAIChatCompletionsProtocol<undefined> {
     payloads: OpenAIChatCompletionsPayload[] = [];
 
@@ -133,6 +159,42 @@ class TestOpenAIChatCompletionsProtocol extends OpenAIChatCompletionsProtocol<un
     }
 }
 
+class TestOpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase {
+    readonly provider = 'openai_compatible';
+    readonly payloads: OpenAIChatCompletionsPayload[] = [];
+
+    constructor(
+        private readonly response?: OpenAIChatCompletionsResponse,
+        private readonly responseStream?: ReadableStream,
+    ) {
+        super({});
+    }
+
+    async _postChatCompletion(payload: OpenAIChatCompletionsPayload): Promise<OpenAIChatCompletionsResponse> {
+        this.payloads.push(payload);
+        if (this.response === undefined) throw new Error('Missing test response');
+        return this.response;
+    }
+
+    async _postChatCompletionStream(payload: OpenAIChatCompletionsPayload): Promise<ReadableStream> {
+        this.payloads.push(payload);
+        if (this.responseStream === undefined) throw new Error('Missing test stream');
+        return this.responseStream;
+    }
+
+    async listModels(_params?: ModelSearchPayload): Promise<AIModel[]> {
+        return [];
+    }
+
+    async validateConnection(): Promise<boolean> {
+        return true;
+    }
+
+    async generateEmbeddings(_options: EmbeddingsOptions): Promise<EmbeddingsResult> {
+        return { model: 'test/model', results: [] };
+    }
+}
+
 const prompt: OpenAIChatCompletionsPrompt = {
     _is_openai_chat_completions: true,
     messages: [{ role: 'user', content: 'Hello' }],
@@ -142,6 +204,26 @@ const options: ExecutionOptions = {
     model: 'test/model',
     model_options: { _option_id: 'text-fallback' },
 };
+
+function legacyConversation(value: unknown): OpenAIChatCompletionsPrompt {
+    return exportLegacyOpenAIChatCompletionsConversation(value as ConversationDocument);
+}
+
+function canonicalOptions(attempt: string, recordedAt: string, conversation?: unknown): ExecutionOptions {
+    return {
+        model: 'test/model',
+        ...(conversation === undefined ? {} : { conversation }),
+        conversation_runtime: {
+            conversation_id: 'conversation:structured-output',
+            request_id: 'request:structured-output',
+            attempt_id: attempt,
+            input_operation_id: 'input:structured-output',
+            response_operation_id: 'response:structured-output',
+            recorded_at: recordedAt,
+            started_at: recordedAt,
+        },
+    };
+}
 
 describe('OpenAIChatCompletionsProtocol', () => {
     it('preserves compatible-provider prompt cache usage', async () => {
@@ -180,6 +262,17 @@ describe('OpenAIChatCompletionsProtocol', () => {
             prompt_new: 200,
             result: 20,
             total: 1_020,
+        });
+        expect(latestExecutedGeneration(completion.conversation)?.usage).toMatchObject({
+            input_tokens: 1_000,
+            output_tokens: 20,
+            reasoning_tokens: 0,
+            total_tokens: 1_020,
+            cache_read_tokens: 800,
+            input_new_tokens: 200,
+            accounting_provenance: {
+                reasoning_tokens: { method: 'reported', accounting_basis: 'openai_chat_tokens' },
+            },
         });
     });
 
@@ -461,14 +554,14 @@ describe('OpenAIChatCompletionsProtocol', () => {
             model_options: { _option_id: 'text-fallback', include_thoughts: false },
         });
         expect(hidden.result).toEqual([{ type: 'text', value: 'answer' }]);
-        expect(hidden.conversation).toMatchObject({
+        expect(legacyConversation(hidden.conversation)).toMatchObject({
             messages: expect.arrayContaining([
                 expect.objectContaining({ reasoning_content: 'signed-or-native-reasoning' }),
             ]),
         });
     });
 
-    it('removes DeepSeek R1 reasoning from replay while still projecting it as thoughts', async () => {
+    it('keeps exact DeepSeek R1 reasoning in canonical source while excluding it from the next request', async () => {
         const model = new TestOpenAIChatCompletionsProtocol({
             id: 'chatcmpl-r1',
             object: 'chat.completion',
@@ -493,7 +586,13 @@ describe('OpenAIChatCompletionsProtocol', () => {
             { type: 'thoughts', value: 'visible reasoning' },
             { type: 'text', value: 'answer' },
         ]);
-        expect(JSON.stringify(completion.conversation)).not.toContain('visible reasoning');
+        expect(JSON.stringify(completion.conversation)).toContain('visible reasoning');
+        await model.requestTextCompletion(undefined, prompt, {
+            ...options,
+            model: 'deepseek-ai/deepseek-r1-0528-maas',
+            conversation: completion.conversation,
+        });
+        expect(JSON.stringify(model.payloads[1].messages)).not.toContain('visible reasoning');
     });
 
     it('replays DeepSeek V3.2 reasoning only within the current user tool turn', () => {
@@ -577,7 +676,7 @@ describe('OpenAIChatCompletionsProtocol', () => {
             tools: [{ name: 'lookup', input_schema: { type: 'object' } }],
             stripImagesAfterTurns: 0,
         });
-        const conversation = completion.conversation as OpenAIChatCompletionsPrompt;
+        const conversation = legacyConversation(completion.conversation);
 
         expect(conversation.messages[0]).toEqual(imagePrompt.messages[0]);
         expect(conversation.messages[1].reasoning_content).toBe('tool reasoning');
@@ -677,7 +776,7 @@ describe('OpenAIChatCompletionsProtocol', () => {
             { type: 'thoughts', value: 'hidden reasoning' },
             { type: 'text', value: '{"answer":"Paris"}' },
         ]);
-        expect(completion.conversation).toMatchObject({
+        expect(legacyConversation(completion.conversation)).toMatchObject({
             messages: expect.arrayContaining([
                 expect.objectContaining({
                     role: 'assistant',
@@ -687,7 +786,7 @@ describe('OpenAIChatCompletionsProtocol', () => {
         });
     });
 
-    it('applies conversation stripping and turn metadata to non-streaming completions', async () => {
+    it('applies stripping to the request projection while preserving canonical source media', async () => {
         const model = new TestOpenAIChatCompletionsProtocol({
             id: 'chatcmpl-1',
             object: 'chat.completion',
@@ -722,12 +821,73 @@ describe('OpenAIChatCompletionsProtocol', () => {
             ...options,
             stripImagesAfterTurns: 0,
         });
-        const conversation = completion.conversation as OpenAIChatCompletionsPrompt;
+        expect(JSON.stringify(legacyConversation(completion.conversation).messages[0].content)).toContain('aW1hZ2U=');
 
-        expect(getConversationMeta(conversation).turnNumber).toBe(1);
-        expect(conversation.messages[0].content).toEqual([
-            { type: 'text', text: 'What is this?' },
-            { type: 'text', text: '[Image removed from conversation history]' },
+        await model.requestTextCompletion(undefined, prompt, {
+            ...options,
+            conversation: completion.conversation,
+            stripImagesAfterTurns: 0,
+        });
+        expect(model.payloads[1].messages[0].content).toBe('What is this?\n[Image removed from conversation history]');
+    });
+
+    it('preserves imported history age when applying the host retention projection', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol({
+            id: 'chatcmpl-aged-history',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: 'ok' },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+        });
+        const oldText = 'x'.repeat(32_001);
+        const agedHistory = {
+            _is_openai_chat_completions: true as const,
+            _llumiverse_meta: { turnNumber: 20 },
+            messages: [
+                {
+                    role: 'user' as const,
+                    content: [
+                        { type: 'text' as const, text: 'old image' },
+                        {
+                            type: 'image_url' as const,
+                            image_url: { url: 'data:image/png;base64,b2xkLWltYWdl', detail: 'auto' as const },
+                        },
+                    ],
+                },
+                { role: 'assistant' as const, content: oldText },
+                { role: 'user' as const, content: '<heartbeat>old status</heartbeat>' },
+            ],
+        };
+
+        await model.requestTextCompletion(
+            undefined,
+            { _is_openai_chat_completions: true, messages: [{ role: 'user', content: 'current request' }] },
+            {
+                ...canonicalOptions('attempt:aged', '2026-09-11T00:00:00.000Z', agedHistory),
+                stripImagesAfterTurns: 5,
+                stripTextMaxTokens: 8_000,
+                stripHeartbeatsAfterTurns: 1,
+            },
+        );
+
+        expect(model.payloads[0].messages).toEqual([
+            {
+                role: 'user',
+                content: 'old image\n[Image removed from conversation history]',
+            },
+            {
+                role: 'assistant',
+                content: `${oldText.slice(0, 32_000)}\n\n[Content truncated - exceeded token limit]`,
+            },
+            { role: 'user', content: '[Heartbeat removed from conversation history]' },
+            { role: 'user', content: 'current request' },
         ]);
     });
 
@@ -763,11 +923,16 @@ describe('OpenAIChatCompletionsProtocol', () => {
             stripImagesAfterTurns: 0,
             stripTextMaxTokens: 1,
         });
-        const conversation = completion.conversation as OpenAIChatCompletionsPrompt;
-
-        expect(JSON.stringify(conversation.messages[0].content)).not.toContain('aW1hZ2U=');
-        expect(JSON.stringify(conversation.messages[0].content)).toContain('Content truncated');
-        expect(conversation.messages[1].reasoning_content).toContain('Content truncated');
+        expect(JSON.stringify(completion.conversation)).toContain('aW1hZ2U=');
+        expect(JSON.stringify(completion.conversation)).toContain('reasoning projection');
+        await model.requestTextCompletion(undefined, prompt, {
+            ...options,
+            conversation: completion.conversation,
+            stripImagesAfterTurns: 0,
+            stripTextMaxTokens: 1,
+        });
+        expect(JSON.stringify(model.payloads[1].messages)).not.toContain('aW1hZ2U=');
+        expect(JSON.stringify(model.payloads[1].messages)).toContain('Content truncated');
     });
 
     it('reads streaming content arrays', async () => {
@@ -883,7 +1048,7 @@ describe('OpenAIChatCompletionsProtocol', () => {
         for await (const chunk of stream) results.push(...chunk.result);
         const conversation = await stream.finalizeConversation?.();
 
-        expect(conversation).toMatchObject({
+        expect(legacyConversation(conversation)).toMatchObject({
             messages: expect.arrayContaining([
                 expect.objectContaining({
                     role: 'assistant',
@@ -1304,5 +1469,134 @@ describe('OpenAIChatCompletionsProtocol', () => {
                 additionalProperties: false,
             },
         });
+    });
+
+    it('rejects a truncated stream before persisting a completed canonical response', async () => {
+        const model = new TestOpenAIChatCompletionsProtocol(
+            undefined,
+            createSSEStream([
+                {
+                    type: 'event',
+                    data: JSON.stringify({
+                        id: 'chatcmpl-truncated',
+                        object: 'chat.completion.chunk',
+                        created: 1,
+                        model: 'test/model',
+                        choices: [{ index: 0, delta: { content: 'partial' } }],
+                    }),
+                },
+            ]),
+        );
+
+        const stream = await model.requestTextCompletionStream(undefined, prompt, options);
+        await collectChunks(stream);
+        if (stream.finalizeConversation === undefined) throw new Error('Expected canonical stream finalizer');
+        await expect(stream.finalizeConversation()).rejects.toThrow(
+            'Chat Completions stream ended without a terminal finish reason',
+        );
+    });
+
+    it('validates structured output through the full driver and recovers it without a second provider call', async () => {
+        const rawText = '{ "answer" : "Tokyo" }';
+        const driver = new TestOpenAIChatCompletionsDriver({
+            id: 'chatcmpl-structured',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: rawText },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+        });
+        const resultSchema: NonNullable<ExecutionOptions['result_schema']> = {
+            type: 'object',
+            properties: { answer: { type: 'string' } },
+            required: ['answer'],
+            additionalProperties: false,
+        };
+        const segments = [{ role: PromptRole.user, content: 'Return the city.' }];
+        const first = await driver.execute(segments, {
+            ...canonicalOptions('attempt:first', '2026-09-11T00:00:00.000Z'),
+            result_schema: resultSchema,
+        });
+
+        expect(first.result).toEqual([{ type: 'json', value: { answer: 'Tokyo' } }]);
+        expect(latestGeneratedText(first.conversation)).toBe(rawText);
+
+        const retried = await driver.execute(segments, {
+            ...canonicalOptions('attempt:retry', '2026-09-11T00:01:00.000Z', first.conversation),
+            result_schema: resultSchema,
+        });
+        expect(retried.result).toEqual(first.result);
+        expect(retried.conversation).toEqual(first.conversation);
+        expect(driver.payloads).toHaveLength(1);
+    });
+
+    it('validates streamed structured output while retaining its exact canonical text', async () => {
+        const rawText = '{"answer":"Tokyo"}';
+        const driver = new TestOpenAIChatCompletionsDriver(
+            undefined,
+            createSSEStream([
+                {
+                    type: 'event',
+                    data: JSON.stringify({
+                        id: 'chatcmpl-stream-structured',
+                        object: 'chat.completion.chunk',
+                        created: 1,
+                        model: 'test/model',
+                        choices: [{ index: 0, delta: { content: rawText }, finish_reason: 'stop' }],
+                    }),
+                },
+            ]),
+        );
+        const stream = await driver.stream([{ role: PromptRole.user, content: 'Return the city.' }], {
+            ...canonicalOptions('attempt:stream', '2026-09-11T00:00:00.000Z'),
+            result_schema: {
+                type: 'object',
+                properties: { answer: { type: 'string' } },
+                required: ['answer'],
+                additionalProperties: false,
+            },
+        });
+
+        for await (const _chunk of stream) {
+            // Consume the public stream so core finalization and schema validation run.
+        }
+        expect(stream.completion?.result).toEqual([{ type: 'json', value: { answer: 'Tokyo' } }]);
+        expect(latestGeneratedText(stream.completion?.conversation)).toBe(rawText);
+    });
+
+    it('keeps invalid structured output as canonical source and reports the full-driver validation error', async () => {
+        const rawText = '{"answer":{}}';
+        const driver = new TestOpenAIChatCompletionsDriver({
+            id: 'chatcmpl-invalid-structured',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: rawText },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+        });
+        const completion = await driver.execute([{ role: PromptRole.user, content: 'Return the city.' }], {
+            ...canonicalOptions('attempt:invalid', '2026-09-11T00:00:00.000Z'),
+            result_schema: {
+                type: 'object',
+                properties: { answer: { type: 'string' } },
+                required: ['answer'],
+                additionalProperties: false,
+            },
+        });
+
+        expect(completion.error).toMatchObject({ code: 'validation_error' });
+        expect(latestGeneratedText(completion.conversation)).toBe(rawText);
     });
 });

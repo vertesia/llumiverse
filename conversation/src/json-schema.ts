@@ -1,10 +1,14 @@
 import type { z } from 'zod';
 import {
+    AppendConversationRecordsOptionsSchema,
+    AppendConversationRecordsResultSchema,
     ContentBlockSchema,
     ConversationDiagnosticSchema,
     ConversationDocumentSchema,
     ConversationInspectionSchema,
+    ConversationRecordBatchSchema,
     ConversationTurnSchema,
+    DecodedConversationResponseSchema,
     GenerationSchema,
 } from './schemas/index.js';
 import { CONVERSATION_EXPERIMENTAL_REVISION } from './schemas/primitives.js';
@@ -60,12 +64,29 @@ export const ConversationContentBlockJsonSchema = emitJsonSchema(ContentBlockSch
 export const ConversationGenerationJsonSchema = emitJsonSchema(GenerationSchema, 'generation');
 export const ConversationDiagnosticJsonSchema = emitJsonSchema(ConversationDiagnosticSchema, 'diagnostic');
 export const ConversationInspectionJsonSchema = emitJsonSchema(ConversationInspectionSchema, 'inspection');
+export const ConversationRecordBatchJsonSchema = emitJsonSchema(ConversationRecordBatchSchema, 'record-batch');
+export const AppendConversationRecordsOptionsJsonSchema = emitJsonSchema(
+    AppendConversationRecordsOptionsSchema,
+    'append-options',
+);
+export const AppendConversationRecordsResultJsonSchema = emitJsonSchema(
+    AppendConversationRecordsResultSchema,
+    'append-result',
+);
+export const DecodedConversationResponseJsonSchema = emitJsonSchema(
+    DecodedConversationResponseSchema,
+    'decoded-response',
+);
 
 export const CONVERSATION_JSON_SCHEMAS = Object.freeze({
+    append_options: AppendConversationRecordsOptionsJsonSchema,
+    append_result: AppendConversationRecordsResultJsonSchema,
     content_block: ConversationContentBlockJsonSchema,
     diagnostic: ConversationDiagnosticJsonSchema,
+    decoded_response: DecodedConversationResponseJsonSchema,
     document: ConversationDocumentJsonSchema,
     generation: ConversationGenerationJsonSchema,
     inspection: ConversationInspectionJsonSchema,
+    record_batch: ConversationRecordBatchJsonSchema,
     turn: ConversationTurnJsonSchema,
 });

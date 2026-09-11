@@ -1,3 +1,4 @@
+import { CONVERSATION_FORMAT } from './schemas/primitives.js';
 import type { AgentTurn, ConversationTurn, GeneratedAgentTurn, ProgramTurn, ToolTurn, UserTurn } from './types.js';
 
 export function isUserTurn(turn: ConversationTurn): turn is UserTurn {
@@ -18,4 +19,11 @@ export function isToolTurn(turn: ConversationTurn): turn is ToolTurn {
 
 export function isProgramTurn(turn: ConversationTurn): turn is ProgramTurn {
     return turn.kind === 'program';
+}
+
+/** Recognizes the envelope only. Parse before treating the value as a document. */
+export function isConversationDocumentFormat(value: unknown): boolean {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+    const descriptor = Object.getOwnPropertyDescriptor(value, 'format');
+    return descriptor !== undefined && 'value' in descriptor && descriptor.value === CONVERSATION_FORMAT;
 }

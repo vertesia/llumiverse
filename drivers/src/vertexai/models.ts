@@ -21,6 +21,7 @@ export function trimModelName(model: string): string {
 
 export interface ModelDefinition<PromptT = VertexAIPrompt> {
     model: AIModel;
+    canonical_conversation_supported?: boolean;
     versions?: string[]; // the versions of the model that are available. ex: ['001', '002']
     createPrompt(driver: VertexAIDriver, segments: PromptSegment[], options: ExecutionOptions): Promise<PromptT>;
     requestTextCompletion(

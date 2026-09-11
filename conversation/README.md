@@ -1,14 +1,17 @@
 # @llumiverse/conversation
 
-Experimental schema-first conversation records for Llumiverse. This package currently defines schema
-version `0` with the exact `experimental_revision` exported as `CONVERSATION_EXPERIMENTAL_REVISION`.
-Version `0` is not a stable compatibility promise.
+`@llumiverse/conversation` is the experimental canonical conversation record package for Llumiverse.
+It currently defines schema version `0` with the exact revision `2026-09-11.ingestion.1`, also exported
+as `CONVERSATION_EXPERIMENTAL_REVISION`. Version `0` has no stable compatibility promise. The ingestion
+revision adds strict persisted receipts and accepted-record identities; documents from the earlier
+`foundation.1` revision require an explicit migration and are rejected rather than guessed.
 
-The foundation revision supports fully materialized conversation documents. It includes strict Zod
-schemas and inferred TypeScript types for turns, content, tools, media assets, generations, accounting,
-receipts, context selection, compaction records, processing configuration, lineage, diagnostics, and
-basic inspection. It also provides bounded JSON preflight, full-document shape and semantic validation,
-JSON serialization, builders, type guards, and deterministic Draft 2020-12 JSON Schema exports.
+The package supports fully materialized documents. Strict Zod schemas are authoritative for turns,
+content, tools, media assets, generations, accounting, receipts, context selection, compaction records,
+processing configuration, lineage, diagnostics, and ingestion batches. Public TypeScript types are
+inferred from those schemas. Bounded JSON preflight, document-wide structural and semantic validation,
+JSON round trips, builders, type guards, basic rendering and inspection, idempotent append-only ingestion,
+and deterministic Draft 2020-12 JSON Schema exports are included.
 
 ```ts
 import {
@@ -27,6 +30,19 @@ const restored = conversationDocumentFromJson(conversationDocumentToJson(empty))
 console.log(inspectConversation(restored));
 ```
 
+Native execution adapters live in `@llumiverse/drivers`. OpenAI Chat Completions and Claude Messages
+import native history once, render canonical context into provider requests, ingest native responses
+directly into canonical records, and can produce read-only legacy projections at an API compatibility
+boundary. Internal retries use persisted operation receipts and stable host-supplied identities. Other
+driver protocols remain on their native histories and reject canonical input so a provider switch cannot
+silently discard conversation state.
+
+```ts
+import { exportLegacyConversation, OPENAI_CHAT_COMPLETIONS_PROTOCOL } from '@llumiverse/drivers';
+
+const legacyView = exportLegacyConversation(restored, OPENAI_CHAT_COMPLETIONS_PROTOCOL);
+```
+
 Import runtime schemas from `@llumiverse/conversation/schemas` and generated schemas from
 `@llumiverse/conversation/json-schema`. Ordinary `import type` use of the package is erased by
 TypeScript and does not load Zod.
@@ -41,11 +57,11 @@ Unknown measurements stay absent; builders do not invent usage, model, timestamp
 
 Processing configurations and compaction records are inert persisted data in this revision. They do
 not imply that a processor ran or that a document is ready for another request. The exported
-`CONVERSATION_FOUNDATION_LIMITATIONS` lists unavailable contract areas. In particular, this revision
-does not implement manifests and segmented storage, partial working-set validation, fragments,
-mutation operations, processing jobs and readiness, delivery streams, provider adapters, or legacy
-migrations. It does not satisfy the stable schema-version-1, core-preview, migration, or npm
-publication gates.
+`CONVERSATION_FOUNDATION_LIMITATIONS` lists unavailable contract areas. This revision does not implement
+manifests and segmented storage, partial working-set validation, fragments, mutation operations,
+processing jobs and readiness, delivery streams, adapters for the remaining protocols, or persisted
+legacy-document migrations. It does not satisfy the stable schema-version-1, core-preview, full runtime
+retirement, migration, or npm publication gates.
 
 The package remains private while its experimental publication gate is reviewed. A future publication
 must freeze the intended experimental surface, verify generated-contract compatibility, and define a

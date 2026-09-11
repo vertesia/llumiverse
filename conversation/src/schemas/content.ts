@@ -373,7 +373,9 @@ export const ToolResultBlockSchema = z
         id: IdentifierSchema,
         type: z.literal('tool_result'),
         call_id: IdentifierSchema,
-        status: z.enum(['success', 'error', 'cancelled', 'denied']),
+        // Some native histories and older hosts do not persist execution status. New application
+        // input records the explicit terminal status supplied through PromptSegment.
+        status: z.enum(['success', 'error', 'cancelled', 'denied', 'unknown']),
         content: z.array(NestedToolResultContentBlockSchema),
         native_id: NativeIdentitySchema.optional(),
     })
@@ -460,6 +462,7 @@ export const ImportedTurnProvenanceSchema = z
         type: z.literal('imported'),
         source: IdentifierSchema,
         native_id: NativeIdentitySchema.optional(),
+        source_history_turn_number: NonnegativeSafeIntegerSchema.optional(),
         missing_metadata: z
             .array(
                 z.enum(['actor_id', 'authority', 'generation', 'timestamps', 'usage', 'exchange', 'tool_definition']),

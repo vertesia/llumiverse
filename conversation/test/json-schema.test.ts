@@ -48,7 +48,7 @@ describe('generated JSON Schema', () => {
             ConversationInspectionJsonSchema,
         ]) {
             expect(schema.$schema).toBe('https://json-schema.org/draft/2020-12/schema');
-            expect(String(schema.$id)).toContain('2026-09-11.foundation.1');
+            expect(String(schema.$id)).toContain('2026-09-11.ingestion.1');
             expectSortedAndFrozen(schema);
         }
     });

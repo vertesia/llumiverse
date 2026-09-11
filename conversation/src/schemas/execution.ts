@@ -10,6 +10,20 @@ import {
     TimestampSchema,
 } from './primitives.js';
 
+export const ConversationRuntimeContextSchema = z
+    .strictObject({
+        conversation_id: IdentifierSchema.optional(),
+        request_id: IdentifierSchema,
+        attempt_id: IdentifierSchema,
+        input_operation_id: IdentifierSchema,
+        response_operation_id: IdentifierSchema,
+        recorded_at: TimestampSchema,
+        started_at: TimestampSchema.optional(),
+        completed_at: TimestampSchema.optional(),
+        purpose: IdentifierSchema.optional(),
+    })
+    .meta({ id: 'ConversationRuntimeContext' });
+
 export const UsageMetricSchema = z
     .enum([
         'input_tokens',
@@ -240,6 +254,12 @@ export const OperationReceiptSchema = z
         base_revision: NonnegativeSafeIntegerSchema,
         result_revision: NonnegativeSafeIntegerSchema,
         recorded_at: TimestampSchema,
+        accepted_turn_ids: z.array(IdentifierSchema).optional(),
+        accepted_generation_ids: z.array(IdentifierSchema).optional(),
+        accepted_asset_ids: z.array(IdentifierSchema).optional(),
+        accepted_tool_definition_ids: z.array(IdentifierSchema).optional(),
+        accepted_execution_receipt_ids: z.array(IdentifierSchema).optional(),
+        accepted_context_entry_ids: z.array(IdentifierSchema).optional(),
     })
     .meta({ id: 'ConversationOperationReceipt' });
 

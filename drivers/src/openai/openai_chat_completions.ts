@@ -33,10 +33,19 @@ import {
 } from '@llumiverse/core';
 import { transformSSEStream } from '@llumiverse/core/async';
 import OpenAI from 'openai';
+import { canonicalConversationTurnNumber } from '../conversation/canonical-runtime.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
 import { getOpenAIExtraBody, mergeOpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
+import {
+    appendOpenAIChatCanonicalResponse,
+    compileOpenAIChatCompletionsConversation,
+    decodeOpenAIChatCanonicalResponse,
+    finalizeOpenAIChatPreparedRequest,
+    type PreparedOpenAIChatConversation,
+    prepareOpenAIChatCanonicalState,
+} from './openai-chat-conversation-adapter.js';
 import { formatOpenAISchema, limitedSchemaFormat } from './schema.js';
 
 type OpenAIChatServiceTier = OpenAI.Chat.ChatCompletionCreateParams['service_tier'];
@@ -60,6 +69,8 @@ export type OpenAIChatCompletionsMessage = {
      * Per OpenAI API spec: https://platform.openai.com/docs/api-reference/chat/messages#message-role
      */
     tool_call_id?: string;
+    /** Internal canonical-ingestion status; removed when building the provider request. */
+    tool_result_status?: 'success' | 'error' | 'cancelled' | 'denied';
     /**
      * Tool calls from assistant messages - stored and sent back with tool results.
      */
@@ -818,6 +829,14 @@ function finalizeOpenAIChatCompletionsConversation(
     options: ExecutionOptions,
 ): OpenAIChatCompletionsPrompt {
     conversation = incrementConversationTurn(conversation) as OpenAIChatCompletionsPrompt;
+    return projectOpenAIChatCompletionsHistory(conversation, options, getConversationMeta(conversation).turnNumber);
+}
+
+function projectOpenAIChatCompletionsHistory(
+    conversation: OpenAIChatCompletionsPrompt,
+    options: ExecutionOptions,
+    currentTurn: number,
+): OpenAIChatCompletionsPrompt {
     const reasoningPolicy = getOpenAIChatReasoningReplayPolicy(options.model);
     if (reasoningPolicy === 'omit') {
         conversation = { ...conversation, messages: conversation.messages.map(withoutOpenAIChatReasoning) };
@@ -841,7 +860,6 @@ function finalizeOpenAIChatCompletionsConversation(
     if (reasoningPolicy === 'active_tool_turn') {
         conversation = { ...conversation, messages: conversation.messages.map(withoutOpenAIChatReasoning) };
     }
-    const currentTurn = getConversationMeta(conversation).turnNumber;
     const stripOptions = {
         keepForTurns: options.stripImagesAfterTurns ?? Infinity,
         currentTurn,
@@ -868,6 +886,86 @@ function getOpenAIChatDriverProvider(driver: unknown): string {
         return Providers.openai_compatible;
     }
     return typeof driver.provider === 'string' ? driver.provider : Providers.openai_compatible;
+}
+
+function prepareCanonicalOpenAIProjection(
+    prepared: Omit<PreparedOpenAIChatConversation, 'payload' | 'receipt' | 'diagnostics'>,
+    options: ExecutionOptions,
+): OpenAIChatCompletionsPrompt {
+    const native = prepared.native_conversation;
+    const prior: OpenAIChatCompletionsPrompt = {
+        _is_openai_chat_completions: true,
+        messages: native.messages.slice(0, prepared.prior_native_message_count),
+    };
+    const projectedPrior = projectOpenAIChatCompletionsHistory(
+        prior,
+        options,
+        canonicalConversationTurnNumber(prepared.document),
+    );
+    return prepareOpenAIChatCompletionsConversation(
+        {
+            _is_openai_chat_completions: true,
+            messages: [...projectedPrior.messages, ...native.messages.slice(prepared.prior_native_message_count)],
+        },
+        options,
+    );
+}
+
+function canonicalOpenAIUsage(
+    prepared: Omit<PreparedOpenAIChatConversation, 'payload' | 'receipt' | 'diagnostics'>,
+): ExecutionTokenUsage | undefined {
+    const usage = prepared.accepted_response?.generation.usage;
+    if (usage === undefined) return undefined;
+    return {
+        ...(usage.input_tokens === undefined ? {} : { prompt: usage.input_tokens }),
+        ...(usage.output_tokens === undefined ? {} : { result: usage.output_tokens }),
+        ...(usage.total_tokens === undefined ? {} : { total: usage.total_tokens }),
+        ...(usage.cache_read_tokens === undefined ? {} : { prompt_cached: usage.cache_read_tokens }),
+        ...(usage.cache_write_tokens === undefined ? {} : { prompt_cache_write: usage.cache_write_tokens }),
+        ...(usage.input_new_tokens === undefined ? {} : { prompt_new: usage.input_new_tokens }),
+    };
+}
+
+function recoverOpenAICompletion(
+    prepared: Omit<PreparedOpenAIChatConversation, 'payload' | 'receipt' | 'diagnostics'>,
+    options: ExecutionOptions,
+    includeThoughts: boolean,
+): Completion {
+    const accepted = prepared.accepted_response;
+    if (accepted === undefined) throw new Error('No accepted Chat Completions response is available');
+    if (options.include_original_response) {
+        throw new Error('An idempotently recovered Chat Completions response cannot reconstruct original_response');
+    }
+    const projection = compileOpenAIChatCompletionsConversation(prepared.document);
+    const mapping = projection.mappings.find(
+        (candidate) => candidate.kind === 'turn' && candidate.canonical_id === accepted.turn.id,
+    );
+    const match = mapping === undefined ? undefined : /^messages\/(\d+)$/.exec(mapping.native_id);
+    const message = match == null ? undefined : projection.conversation.messages[Number(match[1])];
+    if (message?.role !== 'assistant') {
+        throw new Error(`Accepted Chat Completions turn ${accepted.turn.id} has no native projection`);
+    }
+    const toolUse = parseOpenAIChatCompletionsToolCalls(message.tool_calls);
+    return {
+        result: extractOpenAIChatCompletionsResults(message, includeThoughts),
+        tool_use: toolUse,
+        token_usage: canonicalOpenAIUsage(prepared),
+        finish_reason: normalizeOpenAIChatCompletionsFinishReason(accepted.generation.finish_reason, !!toolUse?.length),
+        conversation: prepared.document,
+    };
+}
+
+function recoveredOpenAIStream(completion: Completion): DriverCompletionStream {
+    const stream = (async function* (): AsyncIterable<CompletionChunkObject> {
+        yield {
+            result: completion.result,
+            tool_use: completion.tool_use,
+            token_usage: completion.token_usage,
+            finish_reason: completion.finish_reason,
+            service_tier: completion.service_tier,
+        };
+    })();
+    return Object.assign(stream, { finalizeConversation: () => completion.conversation });
 }
 
 export abstract class OpenAIChatCompletionsProtocol<DriverT> {
@@ -951,6 +1049,9 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                 const toolMessage: OpenAIChatCompletionsMessage = {
                     role: 'tool',
                     tool_call_id: segment.tool_use_id,
+                    ...(segment.tool_result_status === undefined
+                        ? {}
+                        : { tool_result_status: segment.tool_result_status }),
                     content: content.length === 1 && content[0]?.type === 'text' ? content[0].text : content,
                 };
                 messages.push(toolMessage);
@@ -1007,14 +1108,24 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
-        let conversation = updateOpenAIChatCompletionsConversation(
-            options.conversation as OpenAIChatCompletionsPrompt,
+        const provider = getOpenAIChatDriverProvider(driver);
+        const canonicalState = await prepareOpenAIChatCanonicalState({
+            conversation: options.conversation,
             prompt,
-        );
-        conversation = prepareOpenAIChatCompletionsConversation(conversation, options);
+            options,
+            provider,
+        });
         const includeThoughts =
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
-        const payload = this.buildPayload(conversation, options, false, getOpenAIChatDriverProvider(driver));
+        if (canonicalState.accepted_response !== undefined) {
+            return recoverOpenAICompletion(canonicalState, options, includeThoughts);
+        }
+        const conversation = prepareCanonicalOpenAIProjection(canonicalState, options);
+        const payload = this.buildPayload(conversation, options, false, provider);
+        const prepared = await finalizeOpenAIChatPreparedRequest(
+            { ...canonicalState, native_conversation: conversation },
+            payload,
+        );
         const result = await this.postChatCompletion(driver, payload, options, signal);
 
         const choice = result?.choices?.[0];
@@ -1028,24 +1139,12 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             throw new Error('Chat Completions response is not valid: no data');
         }
 
-        const assistantMessage: OpenAIChatCompletionsMessage = {
-            role: 'assistant',
-            content: message.content ?? null,
-            reasoning_content: message.reasoning_content,
-            reasoning: message.reasoning,
-        };
-
-        if (tool_use && tool_use.length > 0 && message.tool_calls) {
-            assistantMessage.tool_calls = message.tool_calls.filter(
-                (toolCall): toolCall is OpenAI.Chat.ChatCompletionMessageFunctionToolCall =>
-                    toolCall.type === 'function',
-            );
-        }
-
-        conversation = updateOpenAIChatCompletionsConversation(conversation, {
-            messages: [assistantMessage],
-        });
-        conversation = finalizeOpenAIChatCompletionsConversation(conversation, options);
+        const decoded = await decodeOpenAIChatCanonicalResponse(
+            result,
+            prepared,
+            typeof choice?.finish_reason === 'string' ? choice.finish_reason : undefined,
+        );
+        const canonicalConversation = appendOpenAIChatCanonicalResponse(prepared, decoded);
 
         return {
             result: completionResults,
@@ -1056,7 +1155,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             original_response: options.include_original_response
                 ? ((result as OpenAIChatCompletionsResponseWithOriginal)[originalResponseSymbol] ?? result)
                 : undefined,
-            conversation,
+            conversation: canonicalConversation,
         };
     }
 
@@ -1066,20 +1165,38 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
-        let conversation = updateOpenAIChatCompletionsConversation(
-            options.conversation as OpenAIChatCompletionsPrompt,
+        const provider = getOpenAIChatDriverProvider(driver);
+        const canonicalState = await prepareOpenAIChatCanonicalState({
+            conversation: options.conversation,
             prompt,
-        );
-        conversation = prepareOpenAIChatCompletionsConversation(conversation, options);
+            options,
+            provider,
+        });
         const includeThoughts =
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
-        const payload = this.buildPayload(conversation, options, true, getOpenAIChatDriverProvider(driver));
+        if (canonicalState.accepted_response !== undefined) {
+            return recoveredOpenAIStream(recoverOpenAICompletion(canonicalState, options, includeThoughts));
+        }
+        const conversation = prepareCanonicalOpenAIProjection(canonicalState, options);
+        const payload = this.buildPayload(conversation, options, true, provider);
+        const prepared = await finalizeOpenAIChatPreparedRequest(
+            { ...canonicalState, native_conversation: conversation },
+            payload,
+        );
         const responseStream = await this.postChatCompletionStream(driver, payload, options, signal);
 
         const projector = new OpenAIThinkStreamProjector();
         let nativeContent = '';
         let nativeReasoningContent: string | undefined;
         let nativeReasoning: string | undefined;
+        let responseId: string | undefined;
+        let responseObject: string | undefined;
+        let responseCreated: number | undefined;
+        let responseModel: string | undefined;
+        let responseServiceTier: OpenAIChatServiceTier | undefined;
+        let responseSystemFingerprint: string | undefined;
+        let responseUsage: OpenAIChatCompletionsUsage | undefined;
+        let responseFinishReason: string | undefined;
         const nativeToolCalls = new Map<
             number,
             { id: string; type: 'function'; function: { name: string; arguments: string } }
@@ -1089,6 +1206,14 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             const json = JSON.parse(data) as OpenAIChatCompletionsStreamResponse;
             const choice = json.choices?.[0];
             const delta = choice?.delta;
+            responseId = json.id;
+            responseObject = json.object;
+            responseCreated = json.created;
+            responseModel = json.model;
+            responseServiceTier = json.service_tier;
+            if (typeof json.system_fingerprint === 'string') responseSystemFingerprint = json.system_fingerprint;
+            if (json.usage != null) responseUsage = json.usage;
+            if (typeof choice?.finish_reason === 'string') responseFinishReason = choice.finish_reason;
             const chunkResults: CompletionResult[] = [];
             const content = extractOpenAIChatCompletionsContentText(delta?.content);
             if (content) {
@@ -1149,9 +1274,9 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         });
 
         return Object.assign(stream, {
-            finalizeConversation: () => {
-                const assistantMessage: OpenAIChatCompletionsMessage = {
-                    role: 'assistant',
+            finalizeConversation: async () => {
+                const assistantMessage = {
+                    role: 'assistant' as const,
                     content: nativeContent || null,
                     ...(nativeReasoningContent !== undefined && { reasoning_content: nativeReasoningContent }),
                     ...(nativeReasoning !== undefined && { reasoning: nativeReasoning }),
@@ -1161,10 +1286,37 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                             .map(([, toolCall]) => toolCall),
                     }),
                 };
-                return finalizeOpenAIChatCompletionsConversation(
-                    updateOpenAIChatCompletionsConversation(conversation, { messages: [assistantMessage] }),
-                    options,
-                );
+                if (
+                    responseId === undefined ||
+                    responseObject === undefined ||
+                    responseCreated === undefined ||
+                    responseModel === undefined
+                ) {
+                    throw new Error('Chat Completions stream ended without a complete native response identity');
+                }
+                if (responseFinishReason === undefined) {
+                    throw new Error('Chat Completions stream ended without a terminal finish reason');
+                }
+                const response: OpenAIChatCompletionsResponse = {
+                    id: responseId,
+                    object: responseObject as OpenAI.Chat.ChatCompletion['object'],
+                    created: responseCreated,
+                    model: responseModel,
+                    choices: [
+                        {
+                            index: 0,
+                            message: assistantMessage,
+                            finish_reason: responseFinishReason,
+                        },
+                    ],
+                    ...(responseServiceTier === undefined ? {} : { service_tier: responseServiceTier }),
+                    ...(responseSystemFingerprint === undefined
+                        ? {}
+                        : { system_fingerprint: responseSystemFingerprint }),
+                    ...(responseUsage === undefined ? {} : { usage: responseUsage }),
+                };
+                const decoded = await decodeOpenAIChatCanonicalResponse(response, prepared, responseFinishReason);
+                return appendOpenAIChatCanonicalResponse(prepared, decoded);
             },
         });
     }
@@ -1460,6 +1612,10 @@ export abstract class OpenAIChatCompletionsDriverBase<
             includeResultSchemaInPromptForModel: options.includeResultSchemaInPromptForModel,
             toolSchemaMode: options.toolSchemaMode,
         });
+    }
+
+    protected supportsCanonicalConversation(_options: ExecutionOptions): boolean {
+        return true;
     }
 
     /** @internal Provider SDK transport boundary. */

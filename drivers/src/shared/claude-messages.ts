@@ -67,6 +67,15 @@ import {
     truncateLargeTextInConversation,
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
+import { canonicalConversationTurnNumber } from '../conversation/canonical-runtime.js';
+import {
+    appendClaudeCanonicalResponse,
+    type CanonicalClaudeToolResultBlockParam,
+    decodeClaudeCanonicalResponse,
+    finalizeClaudePreparedRequest,
+    type PreparedClaudeConversation,
+    prepareClaudeCanonicalState,
+} from './claude-messages-conversation-adapter.js';
 import { claudeFinishReason, logClaudeTruncation } from './claude-stop-reason.js';
 import { resolveClaudeThinking } from './claude-thinking.js';
 import { truncateBinaryForDebug } from './debug-prompt.js';
@@ -411,7 +420,10 @@ export async function formatClaudePrompt(
                         type: 'tool_result',
                         tool_use_id: segment.tool_use_id,
                         content: contentBlocks,
-                    } satisfies ToolResultBlockParam,
+                        ...(segment.tool_result_status === undefined
+                            ? {}
+                            : { _llumiverse_tool_result_status: segment.tool_result_status }),
+                    } satisfies CanonicalClaudeToolResultBlockParam,
                 ],
             });
         } else {
@@ -707,8 +719,16 @@ export function convertClaudeToolBlocksToText(messages: MessageParam[]): Message
 // ============================================================================
 
 function stripClaudeCacheControlFromBlock<T extends ContentBlockParam>(block: T): T {
-    if (typeof block === 'object' && block !== null && 'cache_control' in block) {
-        const { cache_control: _cc, ...rest } = block as T & { cache_control: unknown };
+    if (
+        typeof block === 'object' &&
+        block !== null &&
+        ('cache_control' in block || '_llumiverse_tool_result_status' in block)
+    ) {
+        const {
+            cache_control: _cc,
+            _llumiverse_tool_result_status: _status,
+            ...rest
+        } = block as T & { cache_control?: unknown; _llumiverse_tool_result_status?: unknown };
         return rest as T;
     }
     return block;
@@ -987,19 +1007,14 @@ export function buildClaudeStreamingConversation(
     return processed as ClaudePrompt;
 }
 
-function finalizeClaudeConversation(
+function projectClaudeConversation(
     conversation: ClaudePrompt,
-    result: Message,
     options: ExecutionOptions,
+    currentTurn: number,
 ): ClaudePrompt {
-    let completedConversation = updateClaudeConversation(conversation, createPromptFromResponse(result));
-    completedConversation = incrementConversationTurn(completedConversation) as ClaudePrompt;
-    completedConversation = pruneClaudeThinking(completedConversation);
-    const currentTurn = getConversationMeta(completedConversation).turnNumber;
-    const activeTurnStart = findClaudeActiveTurnStart(completedConversation);
-    const protectedMessages = new Set(
-        activeTurnStart >= 0 ? completedConversation.messages.slice(activeTurnStart) : [],
-    );
+    const prunedConversation = pruneClaudeThinking(conversation);
+    const activeTurnStart = findClaudeActiveTurnStart(prunedConversation);
+    const protectedMessages = new Set(activeTurnStart >= 0 ? prunedConversation.messages.slice(activeTurnStart) : []);
     const preserveSubtree = (value: unknown): boolean => {
         if (!value || typeof value !== 'object') return false;
         if (protectedMessages.has(value as MessageParam)) return true;
@@ -1014,7 +1029,7 @@ function finalizeClaudeConversation(
         textMaxTokens: isClaudePromptCacheEnabled(options) ? undefined : options.stripTextMaxTokens,
         preserveSubtree,
     };
-    let processedConversation = stripBase64ImagesFromConversation(completedConversation, stripOpts);
+    let processedConversation = stripBase64ImagesFromConversation(prunedConversation, stripOpts);
     processedConversation = truncateLargeTextInConversation(processedConversation, stripOpts);
     processedConversation = stripHeartbeatsFromConversation(processedConversation, {
         keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
@@ -1078,6 +1093,80 @@ function findClaudeActiveTurnStart(conversation: ClaudePrompt): number {
 // Execution helpers (standalone, take a client parameter)
 // ============================================================================
 
+function prepareCanonicalClaudeProjection(
+    prepared: Omit<PreparedClaudeConversation, 'payload' | 'receipt' | 'diagnostics'>,
+    options: ExecutionOptions,
+): ClaudePrompt {
+    return projectClaudeConversation(
+        prepared.native_conversation,
+        options,
+        canonicalConversationTurnNumber(prepared.document),
+    );
+}
+
+function canonicalClaudeUsage(
+    prepared: Omit<PreparedClaudeConversation, 'payload' | 'receipt' | 'diagnostics'>,
+): ExecutionTokenUsage | undefined {
+    const usage = prepared.accepted_response?.generation.usage;
+    if (usage === undefined) return undefined;
+    return {
+        ...(usage.input_tokens === undefined ? {} : { prompt: usage.input_tokens }),
+        ...(usage.output_tokens === undefined ? {} : { result: usage.output_tokens }),
+        ...(usage.total_tokens === undefined ? {} : { total: usage.total_tokens }),
+        ...(usage.cache_read_tokens === undefined ? {} : { prompt_cached: usage.cache_read_tokens }),
+        ...(usage.cache_write_tokens === undefined ? {} : { prompt_cache_write: usage.cache_write_tokens }),
+        ...(usage.input_new_tokens === undefined ? {} : { prompt_new: usage.input_new_tokens }),
+    };
+}
+
+function recoverClaudeCompletion(
+    prepared: Omit<PreparedClaudeConversation, 'payload' | 'receipt' | 'diagnostics'>,
+    options: ExecutionOptions,
+    includeThoughts: boolean,
+): Completion {
+    const accepted = prepared.accepted_response;
+    if (accepted === undefined) throw new Error('No accepted Claude Messages response is available');
+    if (options.include_original_response) {
+        throw new Error('An idempotently recovered Claude Messages response cannot reconstruct original_response');
+    }
+    const result = accepted.turn.blocks.flatMap((block): CompletionResult[] => {
+        if (block.type === 'text') return [{ type: 'text', value: block.text }];
+        if (block.type === 'json') return [{ type: 'json', value: block.value }];
+        if (block.type === 'reasoning' && includeThoughts) return [{ type: 'thoughts', value: block.text }];
+        return [];
+    });
+    const toolUse = accepted.turn.blocks.flatMap((block): ToolUse[] =>
+        block.type === 'tool_call'
+            ? [
+                  {
+                      id: block.call_id,
+                      tool_name: block.tool_name,
+                      tool_input: block.arguments.type === 'json' ? (block.arguments.value as JSONObject) : {},
+                  },
+              ]
+            : [],
+    );
+    return {
+        result: result.length > 0 ? result : [{ type: 'text', value: '' }],
+        ...(toolUse.length === 0 ? {} : { tool_use: toolUse }),
+        token_usage: canonicalClaudeUsage(prepared),
+        finish_reason: toolUse.length > 0 ? 'tool_use' : claudeFinishReason(accepted.generation.finish_reason),
+        conversation: prepared.document,
+    };
+}
+
+function recoveredClaudeStream(completion: Completion): DriverCompletionStream {
+    const stream = (async function* (): AsyncIterable<CompletionChunkObject> {
+        yield {
+            result: completion.result,
+            tool_use: completion.tool_use,
+            token_usage: completion.token_usage,
+            finish_reason: completion.finish_reason,
+        };
+    })();
+    return Object.assign(stream, { finalizeConversation: () => completion.conversation });
+}
+
 /**
  * Execute a non-streaming Claude completion.
  * Works with the Anthropic, Vertex AI, and Bedrock Mantle SDK clients.
@@ -1091,10 +1180,22 @@ export async function executeClaudeCompletion(
     transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
 ): Promise<Completion> {
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
-
-    const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
-
+    const canonicalState = await prepareClaudeCanonicalState({
+        conversation: options.conversation,
+        prompt,
+        options,
+        provider,
+    });
+    const includeThoughts = model_options?.include_thoughts ?? false;
+    if (canonicalState.accepted_response !== undefined) {
+        return recoverClaudeCompletion(canonicalState, options, includeThoughts);
+    }
+    const conversation = prepareCanonicalClaudeProjection(canonicalState, options);
     const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'execute');
+    const prepared = await finalizeClaudePreparedRequest(
+        { ...canonicalState, native_conversation: conversation },
+        payload,
+    );
 
     const responseStream = await streamClaudeMessages(
         client,
@@ -1104,11 +1205,10 @@ export async function executeClaudeCompletion(
     const result = await responseStream.finalMessage();
     logClaudeTruncation(logger, result.stop_reason, { provider, model: options.model });
 
-    const includeThoughts = model_options?.include_thoughts ?? false;
     const completionResults = collectClaudeResults(result.content, includeThoughts);
     const tool_use = collectClaudeTools(result.content);
-
-    const processedConversation = finalizeClaudeConversation(conversation, result, options);
+    const decoded = await decodeClaudeCanonicalResponse(result, prepared);
+    const processedConversation = appendClaudeCanonicalResponse(prepared, decoded);
 
     return {
         result: completionResults.length > 0 ? completionResults : [{ type: 'text', value: '' }],
@@ -1132,9 +1232,22 @@ export async function streamClaudeCompletion(
     transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
 ): Promise<DriverCompletionStream> {
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
-    const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
-
+    const canonicalState = await prepareClaudeCanonicalState({
+        conversation: options.conversation,
+        prompt,
+        options,
+        provider,
+    });
+    const includeThoughts = model_options?.include_thoughts ?? false;
+    if (canonicalState.accepted_response !== undefined) {
+        return recoveredClaudeStream(recoverClaudeCompletion(canonicalState, options, includeThoughts));
+    }
+    const conversation = prepareCanonicalClaudeProjection(canonicalState, options);
     const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'stream');
+    const prepared = await finalizeClaudePreparedRequest(
+        { ...canonicalState, native_conversation: conversation },
+        payload,
+    );
     const streamingPayload: MessageStreamParams = { ...payload, stream: true };
 
     const response_stream = await streamClaudeMessages(
@@ -1205,7 +1318,7 @@ export async function streamClaudeCompletion(
                         }
                         break;
                     case 'thinking_delta':
-                        if (model_options?.include_thoughts) {
+                        if (includeThoughts) {
                             return {
                                 result: streamEvent.delta.thinking
                                     ? [{ type: 'thoughts', value: streamEvent.delta.thinking }]
@@ -1232,7 +1345,8 @@ export async function streamClaudeCompletion(
         [Symbol.asyncIterator]: () => stream[Symbol.asyncIterator](),
         finalizeConversation: async () => {
             const finalMessage = await response_stream.finalMessage();
-            return finalizeClaudeConversation(conversation, finalMessage, options);
+            const decoded = await decodeClaudeCanonicalResponse(finalMessage, prepared);
+            return appendClaudeCanonicalResponse(prepared, decoded);
         },
     };
 }

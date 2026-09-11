@@ -107,6 +107,11 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
     private readonly anthropicService: AnthropicBedrockMantle;
     readonly provider = Providers.bedrock_mantle;
 
+    protected supportsCanonicalConversation(options: ExecutionOptions): boolean {
+        const protocol = getBedrockMantleProtocol(options.model);
+        return protocol === 'chat_completions' || protocol === 'messages';
+    }
+
     constructor(opts: BedrockMantleDriverOptions) {
         super(opts);
 

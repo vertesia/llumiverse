@@ -4,6 +4,8 @@ import type {
     AgentContentBlockSchema,
     AgentTurnProvenanceSchema,
     AgentTurnSchema,
+    AppendConversationRecordsOptionsSchema,
+    AppendConversationRecordsResultSchema,
     AssetKindSchema,
     AssetMediaMetadataSchema,
     AssetProvenanceSchema,
@@ -28,8 +30,11 @@ import type {
     ConversationInspectionSchema,
     ConversationLineageParentSchema,
     ConversationLineageSchema,
+    ConversationRecordBatchSchema,
     ConversationRefSchema,
+    ConversationRuntimeContextSchema,
     ConversationTurnSchema,
+    DecodedConversationResponseSchema,
     DerivedAgentTurnSchema,
     DerivedAssetProvenanceSchema,
     DerivedTurnProvenanceSchema,
@@ -119,6 +124,10 @@ export type ConversationDiagnostic = z.infer<typeof ConversationDiagnosticSchema
 export type ConversationDiagnosticCode = z.infer<typeof ConversationDiagnosticCodeSchema>;
 export type TurnKindCounts = z.infer<typeof TurnKindCountsSchema>;
 export type ConversationInspection = z.infer<typeof ConversationInspectionSchema>;
+export type ConversationRecordBatch = z.infer<typeof ConversationRecordBatchSchema>;
+export type AppendConversationRecordsOptions = z.infer<typeof AppendConversationRecordsOptionsSchema>;
+export type AppendConversationRecordsResult = z.infer<typeof AppendConversationRecordsResultSchema>;
+export type DecodedConversationResponse = z.infer<typeof DecodedConversationResponseSchema>;
 
 export type NativeIdentity = z.infer<typeof NativeIdentitySchema>;
 export type ImageRegion = z.infer<typeof ImageRegionSchema>;
@@ -188,6 +197,7 @@ export type AccountingProvenance = z.infer<typeof AccountingProvenanceSchema>;
 export type UsageAccountingProvenance = z.infer<typeof UsageAccountingProvenanceSchema>;
 export type ReportedUsage = z.infer<typeof ReportedUsageSchema>;
 export type CompleteInputPartition = z.infer<typeof CompleteInputPartitionSchema>;
+export type ConversationRuntimeContext = z.infer<typeof ConversationRuntimeContextSchema>;
 export type GenerationCost = z.infer<typeof GenerationCostSchema>;
 export type GenerationUsage = z.infer<typeof GenerationUsageSchema>;
 export type ContextMeasurement = z.infer<typeof ContextMeasurementSchema>;

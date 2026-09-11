@@ -1,11 +1,15 @@
 import type { Message, RawMessageStreamEvent } from '@anthropic-ai/sdk/resources/messages.js';
+import { type ConversationDocument, parseConversationDocument } from '@llumiverse/conversation';
+import { type ExecutionOptions, PromptRole } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
+import { AnthropicDriver } from '../anthropic/index.js';
 import {
     type ClaudePrompt,
     executeClaudeCompletion,
     pruneClaudeThinking,
     streamClaudeCompletion,
 } from './claude-messages.js';
+import { exportLegacyClaudeMessagesConversation } from './claude-messages-conversation-adapter.js';
 import { claudeFinishReason, logClaudeTruncation } from './claude-stop-reason.js';
 
 function sdkStream(events: RawMessageStreamEvent[], finalMessage: Message) {
@@ -40,6 +44,42 @@ function clientFor(message: Message, events: RawMessageStreamEvent[] = []) {
 }
 
 const prompt: ClaudePrompt = { messages: [{ role: 'user', content: 'question' }] };
+const expectedFinalToolContent = [
+    { type: 'thinking', thinking: 'plan', signature: 'signed-thinking' },
+    { type: 'redacted_thinking', data: 'encrypted-redaction' },
+    { type: 'text', text: 'checking' },
+    { type: 'tool_use', id: 'call-1', name: 'lookup', input: { city: 'Paris' } },
+];
+
+function legacyConversation(value: unknown): ClaudePrompt {
+    return exportLegacyClaudeMessagesConversation(value as ConversationDocument);
+}
+
+function latestGeneratedText(value: unknown): string | undefined {
+    const document = parseConversationDocument(value);
+    for (let index = document.turns.length - 1; index >= 0; index -= 1) {
+        const turn = document.turns[index];
+        if (turn.kind !== 'agent' || turn.provenance.type !== 'generated') continue;
+        return turn.blocks.find((block) => block.type === 'text')?.text;
+    }
+    return undefined;
+}
+
+function canonicalOptions(attempt: string, recordedAt: string, conversation?: unknown): ExecutionOptions {
+    return {
+        model: 'claude-sonnet-4-6',
+        ...(conversation === undefined ? {} : { conversation }),
+        conversation_runtime: {
+            conversation_id: 'conversation:claude-structured',
+            request_id: 'request:claude-structured',
+            attempt_id: attempt,
+            input_operation_id: 'input:claude-structured',
+            response_operation_id: 'response:claude-structured',
+            recorded_at: recordedAt,
+            started_at: recordedAt,
+        },
+    };
+}
 
 describe('Claude native reasoning replay', () => {
     it('normalizes both Claude truncation stop reasons to length', () => {
@@ -85,8 +125,8 @@ describe('Claude native reasoning replay', () => {
         });
 
         expect(completion.result).toEqual([{ type: 'text', value: 'checking' }]);
-        expect(completion.conversation).toMatchObject({
-            messages: expect.arrayContaining([{ role: 'assistant', content: finalToolMessage.content }]),
+        expect(legacyConversation(completion.conversation)).toMatchObject({
+            messages: expect.arrayContaining([{ role: 'assistant', content: expectedFinalToolContent }]),
         });
     });
 
@@ -104,8 +144,16 @@ describe('Claude native reasoning replay', () => {
         });
 
         expect(completion.result).toEqual([{ type: 'text', value: 'final answer' }]);
-        expect(completion.conversation).toMatchObject({
-            messages: expect.arrayContaining([{ role: 'assistant', content: finalMessage.content }]),
+        expect(legacyConversation(completion.conversation)).toMatchObject({
+            messages: expect.arrayContaining([
+                {
+                    role: 'assistant',
+                    content: [
+                        { type: 'thinking', thinking: 'final plan', signature: 'final-signature' },
+                        { type: 'text', text: 'final answer' },
+                    ],
+                },
+            ]),
         });
     });
 
@@ -122,8 +170,8 @@ describe('Claude native reasoning replay', () => {
         const conversation = await stream.finalizeConversation?.();
 
         expect(results).toEqual([{ type: 'text', value: 'checking' }]);
-        expect(conversation).toMatchObject({
-            messages: expect.arrayContaining([{ role: 'assistant', content: finalToolMessage.content }]),
+        expect(legacyConversation(conversation)).toMatchObject({
+            messages: expect.arrayContaining([{ role: 'assistant', content: expectedFinalToolContent }]),
         });
 
         const nextMessage = {
@@ -149,10 +197,92 @@ describe('Claude native reasoning replay', () => {
 
         expect(nextStream).toHaveBeenCalledWith(
             expect.objectContaining({
-                messages: expect.arrayContaining([{ role: 'assistant', content: finalToolMessage.content }]),
+                messages: expect.arrayContaining([{ role: 'assistant', content: expectedFinalToolContent }]),
             }),
             undefined,
         );
+    });
+
+    it('validates structured output through the full Claude driver and retries without another provider call', async () => {
+        const rawText = '{ "answer" : "Tokyo" }';
+        const finalMessage = {
+            id: 'msg-structured',
+            type: 'message',
+            role: 'assistant',
+            model: 'claude-sonnet-4-6',
+            content: [{ type: 'text', text: rawText }],
+            stop_reason: 'end_turn',
+            stop_sequence: null,
+            usage: { input_tokens: 2, output_tokens: 3 },
+        } as unknown as Message;
+        const providerCall = vi.fn(() => sdkStream([], finalMessage));
+        const driver = new AnthropicDriver({ apiKey: 'test' });
+        driver.client = { messages: { stream: providerCall } } as never;
+        const resultSchema: NonNullable<ExecutionOptions['result_schema']> = {
+            type: 'object',
+            properties: { answer: { type: 'string' } },
+            required: ['answer'],
+            additionalProperties: false,
+        };
+        const segments = [{ role: PromptRole.user, content: 'Return the city.' }];
+
+        const first = await driver.execute(segments, {
+            ...canonicalOptions('attempt:first', '2026-09-11T00:00:00.000Z'),
+            result_schema: resultSchema,
+        });
+        expect(first.result).toEqual([{ type: 'json', value: { answer: 'Tokyo' } }]);
+        expect(latestGeneratedText(first.conversation)).toBe(rawText);
+
+        const retried = await driver.execute(segments, {
+            ...canonicalOptions('attempt:retry', '2026-09-11T00:01:00.000Z', first.conversation),
+            result_schema: resultSchema,
+        });
+        expect(retried.result).toEqual(first.result);
+        expect(retried.conversation).toEqual(first.conversation);
+        expect(providerCall).toHaveBeenCalledOnce();
+    });
+
+    it('validates streamed structured output through the full Claude driver while retaining source text', async () => {
+        const rawText = '{"answer":"Tokyo"}';
+        const finalMessage = {
+            id: 'msg-stream-structured',
+            type: 'message',
+            role: 'assistant',
+            model: 'claude-sonnet-4-6',
+            content: [{ type: 'text', text: rawText }],
+            stop_reason: 'end_turn',
+            stop_sequence: null,
+            usage: { input_tokens: 2, output_tokens: 3 },
+        } as unknown as Message;
+        const events = [
+            {
+                type: 'message_start',
+                message: { ...finalMessage, content: [], stop_reason: null },
+            },
+            { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: rawText } },
+            {
+                type: 'message_delta',
+                delta: { stop_reason: 'end_turn', stop_sequence: null },
+                usage: { output_tokens: 3 },
+            },
+        ] as RawMessageStreamEvent[];
+        const driver = new AnthropicDriver({ apiKey: 'test' });
+        driver.client = { messages: { stream: () => sdkStream(events, finalMessage) } } as never;
+        const stream = await driver.stream([{ role: PromptRole.user, content: 'Return the city.' }], {
+            ...canonicalOptions('attempt:stream', '2026-09-11T00:00:00.000Z'),
+            result_schema: {
+                type: 'object',
+                properties: { answer: { type: 'string' } },
+                required: ['answer'],
+                additionalProperties: false,
+            },
+        });
+
+        for await (const _chunk of stream) {
+            // Consume the public stream so core finalization and schema validation run.
+        }
+        expect(stream.completion?.result).toEqual([{ type: 'json', value: { answer: 'Tokyo' } }]);
+        expect(latestGeneratedText(stream.completion?.conversation)).toBe(rawText);
     });
 
     it('prunes only completed historical reasoning and keeps an active tool chain intact', () => {

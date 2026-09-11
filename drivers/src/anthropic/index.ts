@@ -37,6 +37,10 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
     provider = Providers.anthropic;
     client: Anthropic;
 
+    protected supportsCanonicalConversation(_options: ExecutionOptions): boolean {
+        return true;
+    }
+
     constructor(opts: AnthropicDriverOptions) {
         super(opts);
         this.client = new Anthropic({

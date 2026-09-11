@@ -12,6 +12,7 @@ import {
     PromptRole,
     type PromptSegment,
 } from '@llumiverse/common';
+import { createConversationDocument } from '@llumiverse/conversation';
 import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS } from './CompletionStream.js';
 import { AbstractDriver } from './Driver.js';
@@ -32,6 +33,8 @@ class LifecycleTestDriver extends AbstractDriver<DriverOptions, string> {
             yield { result: [{ type: 'text', value: 'first' }] } satisfies CompletionChunkObject;
         },
     };
+    requestTextCompletionCalls = 0;
+    requestTextCompletionStreamCalls = 0;
 
     constructor(
         private readonly cleanup: () => void,
@@ -45,6 +48,7 @@ class LifecycleTestDriver extends AbstractDriver<DriverOptions, string> {
         _options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
+        this.requestTextCompletionCalls += 1;
         this.completionSignal = signal;
         if (this.waitForCompletionAbort) {
             return new Promise((_resolve, reject) => {
@@ -61,6 +65,7 @@ class LifecycleTestDriver extends AbstractDriver<DriverOptions, string> {
         _options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
+        this.requestTextCompletionStreamCalls += 1;
         this.completionStreamSignal = signal;
         return this.completionStream;
     }
@@ -149,6 +154,24 @@ function holdStreamCancellation(driver: OverriddenStreamDriver): () => void {
 }
 
 describe('AbstractDriver lifecycle', () => {
+    it('rejects canonical input on unadopted drivers before invoking provider methods', async () => {
+        const driver = new LifecycleTestDriver(vi.fn());
+        const conversation = createConversationDocument({
+            id: 'conversation:unsupported',
+            created_at: '2026-09-11T00:00:00.000Z',
+        });
+        const canonicalOptions = { ...options, conversation };
+
+        await expect(driver.execute(segments, canonicalOptions)).rejects.toThrow(
+            'Provider lifecycle-test model test-model does not support canonical conversation input',
+        );
+        await expect(driver.stream(segments, canonicalOptions)).rejects.toThrow(
+            'Provider lifecycle-test model test-model does not support canonical conversation input',
+        );
+        expect(driver.requestTextCompletionCalls).toBe(0);
+        expect(driver.requestTextCompletionStreamCalls).toBe(0);
+    });
+
     it('defers destruction until an in-flight execution finishes', async () => {
         let resolveCompletion!: (completion: Completion) => void;
         const cleanup = vi.fn();

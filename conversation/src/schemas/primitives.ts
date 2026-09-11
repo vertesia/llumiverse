@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export const CONVERSATION_FORMAT = 'llumiverse.conversation' as const;
 export const CONVERSATION_SCHEMA_VERSION = 0 as const;
-export const CONVERSATION_EXPERIMENTAL_REVISION = '2026-09-11.foundation.1' as const;
+export const CONVERSATION_EXPERIMENTAL_REVISION = '2026-09-11.ingestion.1' as const;
 
 export const IdentifierSchema = z.string().min(1).meta({ id: 'ConversationIdentifier' });
 

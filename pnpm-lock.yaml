@@ -140,6 +140,9 @@ importers:
 
   common:
     dependencies:
+      '@llumiverse/conversation':
+        specifier: workspace:*
+        version: link:../conversation
       zod:
         specifier: ^4.5.4
         version: 4.5.4
@@ -187,6 +190,9 @@ importers:
       '@llumiverse/common':
         specifier: workspace:*
         version: link:../common
+      '@llumiverse/conversation':
+        specifier: workspace:*
+        version: link:../conversation
       '@types/node':
         specifier: ^24.13.3
         version: 24.13.3
@@ -278,6 +284,9 @@ importers:
       '@llumiverse/common':
         specifier: workspace:*
         version: link:../common
+      '@llumiverse/conversation':
+        specifier: workspace:*
+        version: link:../conversation
       '@llumiverse/core':
         specifier: workspace:*
         version: link:../core
