@@ -38,6 +38,12 @@ function expectSortedAndFrozen(value: unknown): void {
 }
 
 describe('generated JSON Schema', () => {
+    it('names recursive JSON without anonymous generator components', () => {
+        const schema = ConversationDocumentSchema.toJSONSchema({ target: 'draft-2020-12', io: 'input' });
+        expect(Object.keys(schema.$defs ?? {}).some((name) => name.startsWith('__'))).toBe(false);
+        expect(schema.$defs?.ConversationJsonValue).toHaveProperty('anyOf');
+    });
+
     it('exports deterministic, deeply frozen Draft 2020-12 schema objects', () => {
         for (const schema of [
             ConversationDocumentJsonSchema,

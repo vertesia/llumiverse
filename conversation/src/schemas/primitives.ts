@@ -32,7 +32,8 @@ export const Base64Schema = z
 // Zod 4's built-in recursive JSON schema provides both a real recursive runtime validator and a
 // recursive draft-2020-12 schema. Public parsing runs the bounded preflight first; callers should
 // use that boundary when they need preservation rather than Zod's reconstructed output value.
-export const JsonValueSchema = z.json().meta({ id: 'ConversationJsonValue' });
+// Register the recursive instance itself: meta() clones it and leaves its recursion anonymously named.
+export const JsonValueSchema = z.json().register(z.globalRegistry, { id: 'ConversationJsonValue' });
 
 export const JsonObjectSchema = z.record(z.string(), JsonValueSchema).meta({ id: 'ConversationJsonObject' });
 
