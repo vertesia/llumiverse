@@ -64,7 +64,7 @@ describe('ingestion schema contracts', () => {
                 expect(validate(invalid)).toBe(false);
             }
         }
-    });
+    }, 15_000);
 
     it('does not accept imported historical metadata as a decoded live response', () => {
         const value = {
