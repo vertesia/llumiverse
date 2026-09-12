@@ -1,3 +1,4 @@
+import { isConversationDocumentFormat } from '@llumiverse/conversation';
 import {
     type AIModel,
     type Completion,
@@ -40,11 +41,20 @@ import {
 } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import type { AzureOpenAI } from 'openai';
+import { canonicalConversationTurnNumber } from '../conversation/canonical-runtime.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
 import { mergeOpenAIExtraBody, type OpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAILikeMultimodalPrompt } from './openai_format.js';
+import {
+    appendOpenAIResponsesCanonicalResponse,
+    compileOpenAIResponsesConversation,
+    decodeOpenAIResponsesCanonicalResponse,
+    finalizeOpenAIResponsesPreparedRequest,
+    type PreparedOpenAIResponsesConversation,
+    prepareOpenAIResponsesCanonicalState,
+} from './openai-responses-conversation-adapter.js';
 import { formatOpenAISchema } from './schema.js';
 
 // Response API types
@@ -114,7 +124,7 @@ type OpenAIFunctionItem = ResponseInputItem & {
     type?: string;
     name?: string;
     arguments?: string;
-    output?: string;
+    output?: unknown;
 };
 type OpenAIPromptCacheConfig = {
     input: ResponseInputItem[];
@@ -225,6 +235,134 @@ const supportFineTunning = new Set([
 
 export interface OpenAIResponsesDriverBaseOptions extends DriverOptions {}
 
+function projectCanonicalResponsesHistory(
+    prepared: Omit<PreparedOpenAIResponsesConversation, 'payload' | 'receipt' | 'diagnostics'>,
+    options: ExecutionOptions,
+): { conversation: ResponseInputItem[]; current_items: ResponseInputItem[] } {
+    const currentTurn = canonicalConversationTurnNumber(prepared.document);
+    const preserveSubtree = (value: unknown): boolean => {
+        if (!value || typeof value !== 'object') return false;
+        const encryptedContent = (value as { encrypted_content?: unknown }).encrypted_content;
+        return typeof encryptedContent === 'string' && encryptedContent.length > 0;
+    };
+    const stripOptions = {
+        keepForTurns: options.stripImagesAfterTurns ?? Infinity,
+        currentTurn,
+        textMaxTokens: options.stripTextMaxTokens,
+        preserveSubtree,
+    };
+    const prior = prepared.native_conversation.slice(0, prepared.prior_native_item_count);
+    let projectedPrior = stripBase64ImagesFromConversation(prior, stripOptions);
+    projectedPrior = truncateLargeTextInConversation(projectedPrior, stripOptions);
+    projectedPrior = stripHeartbeatsFromConversation(projectedPrior, {
+        keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
+        currentTurn,
+        preserveSubtree,
+    });
+    const currentItems = prepared.native_conversation.slice(prepared.prior_native_item_count);
+    return { conversation: [...(projectedPrior as ResponseInputItem[]), ...currentItems], current_items: currentItems };
+}
+
+function withoutCanonicalIngestionFields(items: ResponseInputItem[]): ResponseInputItem[] {
+    return items.map((item) => {
+        if (!('type' in item) || item.type !== 'function_call_output') return item;
+        const clone = { ...item } as Record<string, unknown>;
+        delete clone._llumiverse_tool_result_status;
+        return clone as unknown as ResponseInputItem;
+    });
+}
+
+function canonicalResponsesUsage(
+    prepared: Omit<PreparedOpenAIResponsesConversation, 'payload' | 'receipt' | 'diagnostics'>,
+): ExecutionTokenUsage | undefined {
+    const usage = prepared.accepted_response?.generation.usage;
+    if (usage === undefined) return undefined;
+    // The long-standing Responses Completion projection defines prompt_new as all non-cache-read
+    // input. Canonical accounting additionally separates cache writes, so its input_new_tokens can
+    // be smaller. Keep the existing outward convention stable when replaying an accepted response.
+    const legacyPromptNew =
+        usage.input_tokens === undefined ? usage.input_new_tokens : usage.input_tokens - (usage.cache_read_tokens ?? 0);
+    return {
+        ...(usage.input_tokens === undefined ? {} : { prompt: usage.input_tokens }),
+        ...(usage.output_tokens === undefined ? {} : { result: usage.output_tokens }),
+        ...(usage.total_tokens === undefined ? {} : { total: usage.total_tokens }),
+        ...(usage.cache_read_tokens === undefined ? {} : { prompt_cached: usage.cache_read_tokens }),
+        ...(usage.cache_write_tokens === undefined ? {} : { prompt_cache_write: usage.cache_write_tokens }),
+        ...(legacyPromptNew === undefined ? {} : { prompt_new: legacyPromptNew }),
+    };
+}
+
+function canonicalResponsesServiceTier(
+    prepared: Omit<PreparedOpenAIResponsesConversation, 'payload' | 'receipt' | 'diagnostics'>,
+): string | undefined {
+    const metadata = prepared.accepted_response?.generation.metadata?.openai_responses;
+    if (metadata === null || typeof metadata !== 'object' || Array.isArray(metadata)) return undefined;
+    const serviceTier = metadata.service_tier;
+    return typeof serviceTier === 'string' ? serviceTier : undefined;
+}
+
+function acceptedResponsesItems(
+    prepared: Omit<PreparedOpenAIResponsesConversation, 'payload' | 'receipt' | 'diagnostics'>,
+): OpenAI.Responses.ResponseOutputItem[] {
+    const accepted = prepared.accepted_response;
+    if (accepted === undefined) throw new Error('No accepted OpenAI Responses response is available');
+    const projection = compileOpenAIResponsesConversation(prepared.document, {
+        provider: prepared.provider,
+        model: prepared.requested_model,
+    });
+    const turnMappings = projection.mappings.flatMap((mapping) => {
+        if (mapping.kind !== 'turn') return [];
+        const match = /^items\/(\d+)$/.exec(mapping.native_id);
+        return match === null ? [] : [{ turn_id: mapping.canonical_id, index: Number(match[1]) }];
+    });
+    const start = turnMappings.find((mapping) => mapping.turn_id === accepted.turn.id)?.index;
+    if (start === undefined)
+        throw new Error(`Accepted OpenAI Responses turn ${accepted.turn.id} has no native projection`);
+    const end =
+        turnMappings.map((mapping) => mapping.index).find((index) => index > start) ?? projection.conversation.length;
+    return projection.conversation.slice(start, end) as OpenAI.Responses.ResponseOutputItem[];
+}
+
+function recoverOpenAIResponsesCompletion(
+    prepared: Omit<PreparedOpenAIResponsesConversation, 'payload' | 'receipt' | 'diagnostics'>,
+    options: ExecutionOptions,
+    includeThoughts: boolean,
+): Completion {
+    const accepted = prepared.accepted_response;
+    if (accepted === undefined) throw new Error('No accepted OpenAI Responses response is available');
+    if (options.include_original_response) {
+        throw new Error('An idempotently recovered OpenAI Responses response cannot reconstruct original_response');
+    }
+    const items = acceptedResponsesItems(prepared);
+    const toolUse = collectTools(items);
+    const finishReason = toolUse?.length
+        ? 'tool_use'
+        : accepted.generation.finish_reason === 'max_output_tokens'
+          ? 'length'
+          : accepted.generation.finish_reason;
+    return {
+        result: extractCompletionResults(items, includeThoughts),
+        tool_use: toolUse,
+        token_usage: canonicalResponsesUsage(prepared),
+        service_tier: canonicalResponsesServiceTier(prepared),
+        finish_reason: finishReason,
+        conversation: prepared.document,
+    };
+}
+
+function recoveredOpenAIResponsesStream(completion: Completion): DriverCompletionStream {
+    const stream = (async function* (): AsyncIterable<CompletionChunkObject> {
+        yield {
+            result: completion.result,
+            tool_use: completion.tool_use,
+            token_usage: completion.token_usage,
+            finish_reason: completion.finish_reason,
+            service_tier: completion.service_tier,
+        };
+    })();
+    return Object.assign(stream, { finalizeConversation: () => completion.conversation });
+}
+
 /** Reusable Responses text protocol shared by OpenAI-compatible transports. */
 export class OpenAIResponsesProtocol {
     constructor(
@@ -250,24 +388,36 @@ export class OpenAIResponsesProtocol {
             driver.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
 
-        // Include conversation history (same as non-streaming)
-        // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
-        let conversation = fixOrphanedToolResults(fixOrphanedToolUse(updateConversation(options.conversation, prompt)));
+        const canonicalState = await prepareOpenAIResponsesCanonicalState({
+            conversation: options.conversation,
+            prompt,
+            options,
+            provider: driver.provider,
+        });
 
         const toolDefs = getToolDefinitions(options.tools);
         const useTools = Boolean(toolDefs?.length && supportsToolUse(options.model, driver.provider, true));
 
+        const model_options = options.model_options as OpenAIRequestOptions | undefined;
+        assertOpenAIResponseToolChoiceAvailable(model_options, useTools, options.model, driver.provider, 'stream');
+        const includeThoughts = model_options?.include_thoughts !== false;
+        if (canonicalState.accepted_response !== undefined) {
+            return recoveredOpenAIResponsesStream(
+                recoverOpenAIResponsesCompletion(canonicalState, options, includeThoughts),
+            );
+        }
+        const projection = projectCanonicalResponsesHistory(canonicalState, options);
+        let conversation = projection.conversation;
+        const currentItems = projection.current_items;
+        convertRoles(currentItems, options.model);
+        insert_image_detail(currentItems, model_options?.image_detail ?? 'auto');
+        conversation = fixOrphanedToolResults(fixOrphanedToolUse(withoutCanonicalIngestionFields(conversation)));
+
         // When no tools are provided but conversation contains function_call/function_call_output
-        // items (e.g. checkpoint summary calls), convert them to text to avoid API errors
+        // items (e.g. checkpoint summary calls), convert them to text to avoid API errors.
         if (!useTools) {
             conversation = convertOpenAIFunctionItemsToText(conversation);
         }
-
-        convertRoles(prompt, options.model);
-
-        const model_options = options.model_options as OpenAIRequestOptions | undefined;
-        assertOpenAIResponseToolChoiceAvailable(model_options, useTools, options.model, driver.provider, 'stream');
-        insert_image_detail(prompt, model_options?.image_detail ?? 'auto');
 
         let parsedSchema: JSONSchema | undefined;
         let strictMode = false;
@@ -288,7 +438,6 @@ export class OpenAIResponsesProtocol {
             isReasoningModel,
             supportsOpenAICurrentTurnReasoning(driver.provider, options.model),
         );
-        const includeThoughts = model_options?.include_thoughts !== false;
         const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
         const promptCacheRetention = model_options?.prompt_cache_retention;
 
@@ -324,14 +473,19 @@ export class OpenAIResponsesProtocol {
             },
             model_options?.extra_body,
         );
+        const prepared = await finalizeOpenAIResponsesPreparedRequest(
+            { ...canonicalState, native_conversation: conversation },
+            request,
+        );
         const requestOptions = this.resolveRequestOptions(options, signal);
         const stream = requestOptions
             ? await driver.service.responses.create(request, requestOptions)
             : await driver.service.responses.create(request);
 
-        return mapResponseStream(stream, includeThoughts, (response) =>
-            finalizeOpenAIResponsesConversation(conversation, response.output, options),
-        );
+        return mapResponseStream(stream, includeThoughts, async (response) => {
+            const decoded = await decodeOpenAIResponsesCanonicalResponse({ response, prepared });
+            return appendOpenAIResponsesCanonicalResponse(prepared, decoded);
+        });
     }
 
     async requestTextCompletion(
@@ -350,17 +504,26 @@ export class OpenAIResponsesProtocol {
             driver.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
 
-        convertRoles(prompt, options.model);
-
+        const canonicalState = await prepareOpenAIResponsesCanonicalState({
+            conversation: options.conversation,
+            prompt,
+            options,
+            provider: driver.provider,
+        });
         const model_options = options.model_options as OpenAIRequestOptions | undefined;
-        insert_image_detail(prompt, model_options?.image_detail ?? 'auto');
-
         const toolDefs = getToolDefinitions(options.tools);
         const useTools = Boolean(toolDefs?.length && supportsToolUse(options.model, driver.provider));
         assertOpenAIResponseToolChoiceAvailable(model_options, useTools, options.model, driver.provider, 'execute');
-
-        // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
-        let conversation = fixOrphanedToolResults(fixOrphanedToolUse(updateConversation(options.conversation, prompt)));
+        const includeThoughts = model_options?.include_thoughts !== false;
+        if (canonicalState.accepted_response !== undefined) {
+            return recoverOpenAIResponsesCompletion(canonicalState, options, includeThoughts);
+        }
+        const projection = projectCanonicalResponsesHistory(canonicalState, options);
+        let conversation = projection.conversation;
+        const currentItems = projection.current_items;
+        convertRoles(currentItems, options.model);
+        insert_image_detail(currentItems, model_options?.image_detail ?? 'auto');
+        conversation = fixOrphanedToolResults(fixOrphanedToolUse(withoutCanonicalIngestionFields(conversation)));
 
         // When no tools are provided but conversation contains function_call/function_call_output
         // items (e.g. checkpoint summary calls), convert them to text to avoid API errors
@@ -422,6 +585,10 @@ export class OpenAIResponsesProtocol {
             },
             model_options?.extra_body,
         );
+        const prepared = await finalizeOpenAIResponsesPreparedRequest(
+            { ...canonicalState, native_conversation: conversation },
+            request,
+        );
         const requestOptions = this.resolveRequestOptions(options, signal);
         const res = requestOptions
             ? await driver.service.responses.create(request, requestOptions)
@@ -432,9 +599,13 @@ export class OpenAIResponsesProtocol {
             completion.original_response = res;
         }
 
-        completion.conversation = res.output.length
-            ? finalizeOpenAIResponsesConversation(conversation, res.output, options)
-            : updateConversation(conversation, createAssistantMessageFromCompletion(completion));
+        const fallbackItems = res.output.length === 0 ? createAssistantMessageFromCompletion(completion) : undefined;
+        const decoded = await decodeOpenAIResponsesCanonicalResponse({
+            response: res,
+            prepared,
+            fallback_items: fallbackItems,
+        });
+        completion.conversation = appendOpenAIResponsesCanonicalResponse(prepared, decoded);
 
         return completion;
     }
@@ -460,6 +631,10 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         this.responsesProtocol = new OpenAIResponsesProtocol((options, signal) =>
             this.getDriverRequestOptions(options, signal),
         );
+    }
+
+    protected supportsCanonicalConversation(_options: ExecutionOptions): boolean {
+        return true;
     }
 
     protected async formatPrompt(segments: PromptSegment[], options: PromptOptions): Promise<ResponseInputItem[]> {
@@ -542,6 +717,9 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         toolUse: unknown[] | undefined,
         options: ExecutionOptions,
     ): ResponseInputItem[] | undefined {
+        if (isConversationDocumentFormat(options.conversation)) {
+            throw new Error('OpenAI Responses canonical streaming requires an authoritative terminal response');
+        }
         // Build assistant message from accumulated CompletionResult[]
         const completionResults = result as CompletionResult[];
 
@@ -1176,8 +1354,9 @@ export function convertOpenAIFunctionItemsToText(items: ResponseInputItem[]): Re
             };
         }
         if (typed.type === 'function_call_output') {
-            const output = typed.output || 'No output';
-            const truncated = output.length > 500 ? `${output.substring(0, 500)}...` : output;
+            const output = typed.output ?? 'No output';
+            const outputText = typeof output === 'string' ? output : (JSON.stringify(output) ?? String(output));
+            const truncated = outputText.length > 500 ? `${outputText.substring(0, 500)}...` : outputText;
             return {
                 role: 'user' as const,
                 content: `[Tool result: ${truncated}]`,
@@ -1222,35 +1401,6 @@ function updateConversation(conversation: unknown, items: ResponseInputItem[]): 
     const unwrapped = unwrapConversationArray<ResponseInputItem>(conversation);
     const convArray = unwrapped ?? (conversation as ResponseInputItem[]);
     return [...convArray, ...items];
-}
-
-function finalizeOpenAIResponsesConversation(
-    conversation: ResponseInputItem[],
-    output: OpenAI.Responses.ResponseOutputItem[],
-    options: ExecutionOptions,
-): ResponseInputItem[] {
-    let completed = updateConversation(conversation, output as ResponseInputItem[]);
-    completed = incrementConversationTurn(completed) as ResponseInputItem[];
-    const currentTurn = getConversationMeta(completed).turnNumber;
-    const preserveSubtree = (value: unknown): boolean => {
-        if (!value || typeof value !== 'object') return false;
-        const encryptedContent = (value as { encrypted_content?: unknown }).encrypted_content;
-        return typeof encryptedContent === 'string' && encryptedContent.length > 0;
-    };
-    const stripOptions = {
-        keepForTurns: options.stripImagesAfterTurns ?? Infinity,
-        currentTurn,
-        textMaxTokens: options.stripTextMaxTokens,
-        preserveSubtree,
-    };
-    let processed = stripBase64ImagesFromConversation(completed, stripOptions);
-    processed = truncateLargeTextInConversation(processed, stripOptions);
-    processed = stripHeartbeatsFromConversation(processed, {
-        keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
-        currentTurn,
-        preserveSubtree,
-    });
-    return processed as ResponseInputItem[];
 }
 
 export function collectTools(output?: OpenAI.Responses.ResponseOutputItem[]): ToolUse<unknown>[] | undefined {

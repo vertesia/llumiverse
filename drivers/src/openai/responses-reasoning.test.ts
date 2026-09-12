@@ -344,15 +344,22 @@ describe('OpenAI Responses reasoning', () => {
 
         const serialized = JSON.stringify(completion.conversation);
         expect(serialized).toContain('encrypted-replay-state');
-        expect(serialized).toContain('[Content truncated - exceeded token limit]');
+        expect(serialized).toContain('old tool output that should be truncated');
+        await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'next text request' }], {
+            model: 'gpt-5',
+            conversation: completion.conversation,
+            model_options: { _option_id: 'openai-thinking' },
+            stripTextMaxTokens: 1,
+        });
+        expect(JSON.stringify(create.mock.calls[1]?.[0])).toContain('[Content truncated - exceeded token limit]');
 
         const imageCompletion = await driver.requestTextCompletion(
             [
                 {
                     type: 'message',
                     role: 'user',
-                    content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,aW1hZ2U=' } }],
-                } as unknown as OpenAI.Responses.ResponseInputItem,
+                    content: [{ type: 'input_image', image_url: 'data:image/png;base64,aW1hZ2U=', detail: 'auto' }],
+                },
             ],
             {
                 model: 'gpt-5',
@@ -360,7 +367,14 @@ describe('OpenAI Responses reasoning', () => {
                 stripImagesAfterTurns: 0,
             },
         );
-        expect(JSON.stringify(imageCompletion.conversation)).toContain('[Image removed from conversation history]');
+        expect(JSON.stringify(imageCompletion.conversation)).toContain('aW1hZ2U=');
+        await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'next image request' }], {
+            model: 'gpt-5',
+            conversation: imageCompletion.conversation,
+            model_options: { _option_id: 'openai-thinking' },
+            stripImagesAfterTurns: 0,
+        });
+        expect(JSON.stringify(create.mock.calls[3]?.[0])).toContain('[Image removed from conversation history]');
 
         const heartbeatCompletion = await driver.requestTextCompletion(
             [{ type: 'message', role: 'user', content: '<heartbeat>old status</heartbeat>' }],
@@ -370,9 +384,14 @@ describe('OpenAI Responses reasoning', () => {
                 stripHeartbeatsAfterTurns: 0,
             },
         );
-        expect(JSON.stringify(heartbeatCompletion.conversation)).toContain(
-            '[Heartbeat removed from conversation history]',
-        );
+        expect(JSON.stringify(heartbeatCompletion.conversation)).toContain('<heartbeat>old status</heartbeat>');
+        await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'next heartbeat request' }], {
+            model: 'gpt-5',
+            conversation: heartbeatCompletion.conversation,
+            model_options: { _option_id: 'openai-thinking' },
+            stripHeartbeatsAfterTurns: 0,
+        });
+        expect(JSON.stringify(create.mock.calls[5]?.[0])).toContain('[Heartbeat removed from conversation history]');
     });
 
     it.each([false, true])('forwards OpenAI prompt cache controls when stream=%s', async (streaming) => {

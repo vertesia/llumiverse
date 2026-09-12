@@ -186,6 +186,10 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     private readonly deploymentProtocols = new Map<string, 'responses' | 'chat_completions'>();
     readonly provider = Providers.azure_foundry;
 
+    protected supportsCanonicalConversation(_options: ExecutionOptions): boolean {
+        return true;
+    }
+
     OPENAI_API_VERSION = '2025-01-01-preview';
     INFERENCE_API_VERSION = '2024-05-01-preview';
 
@@ -517,6 +521,15 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 }
 
 function toAzureFoundryChatPrompt(items: ResponseInputItem[]): OpenAIChatCompletionsPrompt {
+    const toolResultStatuses = new Map<string, 'success' | 'error' | 'cancelled' | 'denied'>();
+    for (const item of items) {
+        if (item.type !== 'function_call_output') continue;
+        const status = (item as typeof item & { _llumiverse_tool_result_status?: unknown })
+            ._llumiverse_tool_result_status;
+        if (status === 'success' || status === 'error' || status === 'cancelled' || status === 'denied') {
+            toolResultStatuses.set(item.call_id, status);
+        }
+    }
     const messages = convertResponseItemsToChatMessages(items).map((message) => {
         switch (message.role) {
             case 'assistant':
@@ -536,6 +549,9 @@ function toAzureFoundryChatPrompt(items: ResponseInputItem[]): OpenAIChatComplet
                     role: message.role,
                     content: typeof message.content === 'string' ? message.content : '',
                     tool_call_id: message.tool_call_id,
+                    ...(message.tool_call_id === undefined || !toolResultStatuses.has(message.tool_call_id)
+                        ? {}
+                        : { tool_result_status: toolResultStatuses.get(message.tool_call_id) }),
                 };
             case 'user':
                 return {

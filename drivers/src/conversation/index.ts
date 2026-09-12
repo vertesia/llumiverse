@@ -4,6 +4,10 @@ import {
     OPENAI_CHAT_COMPLETIONS_PROTOCOL,
 } from '../openai/openai-chat-conversation-adapter.js';
 import {
+    exportLegacyOpenAIResponsesConversation,
+    OPENAI_RESPONSES_PROTOCOL,
+} from '../openai/openai-responses-conversation-adapter.js';
+import {
     CLAUDE_MESSAGES_PROTOCOL,
     exportLegacyClaudeMessagesConversation,
 } from '../shared/claude-messages-conversation-adapter.js';
@@ -14,6 +18,11 @@ export {
     OPENAI_CHAT_COMPLETIONS_PROTOCOL,
 } from '../openai/openai-chat-conversation-adapter.js';
 export {
+    exportLegacyOpenAIResponsesConversation,
+    OPENAI_RESPONSES_ADAPTER_VERSION,
+    OPENAI_RESPONSES_PROTOCOL,
+} from '../openai/openai-responses-conversation-adapter.js';
+export {
     CLAUDE_MESSAGES_ADAPTER_VERSION,
     CLAUDE_MESSAGES_PROTOCOL,
     exportLegacyClaudeMessagesConversation,
@@ -21,10 +30,12 @@ export {
 
 export type CanonicalNativeConversationProtocol =
     | typeof OPENAI_CHAT_COMPLETIONS_PROTOCOL
+    | typeof OPENAI_RESPONSES_PROTOCOL
     | typeof CLAUDE_MESSAGES_PROTOCOL;
 
 export type LegacyConversationProjection =
     | ReturnType<typeof exportLegacyOpenAIChatCompletionsConversation>
+    | ReturnType<typeof exportLegacyOpenAIResponsesConversation>
     | ReturnType<typeof exportLegacyClaudeMessagesConversation>;
 
 function latestSupportedProtocol(document: ConversationDocument): CanonicalNativeConversationProtocol | undefined {
@@ -35,10 +46,12 @@ function latestSupportedProtocol(document: ConversationDocument): CanonicalNativ
                 ? document.generations[turn.generation_id]
                 : undefined;
             if (generation?.protocol === OPENAI_CHAT_COMPLETIONS_PROTOCOL) return OPENAI_CHAT_COMPLETIONS_PROTOCOL;
+            if (generation?.protocol === OPENAI_RESPONSES_PROTOCOL) return OPENAI_RESPONSES_PROTOCOL;
             if (generation?.protocol === CLAUDE_MESSAGES_PROTOCOL) return CLAUDE_MESSAGES_PROTOCOL;
         }
         if (turn.provenance.type === 'imported') {
             if (turn.provenance.source === OPENAI_CHAT_COMPLETIONS_PROTOCOL) return OPENAI_CHAT_COMPLETIONS_PROTOCOL;
+            if (turn.provenance.source === OPENAI_RESPONSES_PROTOCOL) return OPENAI_RESPONSES_PROTOCOL;
             if (turn.provenance.source === CLAUDE_MESSAGES_PROTOCOL) return CLAUDE_MESSAGES_PROTOCOL;
         }
     }
@@ -57,6 +70,9 @@ export function exportLegacyConversation(
     const resolvedProtocol = protocol ?? latestSupportedProtocol(document);
     if (resolvedProtocol === OPENAI_CHAT_COMPLETIONS_PROTOCOL) {
         return exportLegacyOpenAIChatCompletionsConversation(document);
+    }
+    if (resolvedProtocol === OPENAI_RESPONSES_PROTOCOL) {
+        return exportLegacyOpenAIResponsesConversation(document);
     }
     if (resolvedProtocol === CLAUDE_MESSAGES_PROTOCOL) {
         return exportLegacyClaudeMessagesConversation(document);

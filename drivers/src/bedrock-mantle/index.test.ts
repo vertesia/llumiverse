@@ -1,12 +1,14 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import { getTokenProvider } from '@aws/bedrock-token-generator';
 import type { AwsCredentialIdentity } from '@aws-sdk/types';
+import { parseConversationDocument } from '@llumiverse/conversation';
 import { getBedrockMantleProtocol, PromptRole, type PromptSegment, Providers } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BedrockDriver } from '../bedrock/index.js';
 import { OpenAIResponsesDriverBase } from '../openai/index.js';
 import type { OpenAIChatCompletionsPrompt } from '../openai/openai_chat_completions.js';
+import { prepareOpenAIResponsesCanonicalState } from '../openai/openai-responses-conversation-adapter.js';
 import { BedrockMantleDriver, isBedrockMantleModel } from './index.js';
 
 vi.mock('@aws/bedrock-token-generator', () => ({
@@ -64,6 +66,7 @@ function createResponse(): OpenAI.Responses.Response {
         instructions: null,
         metadata: null,
         model: 'openai.gpt-5.5',
+        status: 'completed',
         output: [
             {
                 id: 'msg-test',
@@ -79,6 +82,31 @@ function createResponse(): OpenAI.Responses.Response {
         tools: [],
         top_p: null,
     } satisfies OpenAI.Responses.Response;
+}
+
+async function canonicalResponsesConversation(id: string) {
+    return (
+        await prepareOpenAIResponsesCanonicalState({
+            conversation: [{ type: 'message', role: 'user', content: 'prior question' }],
+            prompt: [],
+            options: canonicalOptions('openai.gpt-5.5', id, 'seed'),
+            provider: Providers.bedrock_mantle,
+        })
+    ).document;
+}
+
+function canonicalOptions(model: string, id: string, operation = 'next') {
+    return {
+        model,
+        conversation_runtime: {
+            conversation_id: id,
+            request_id: `${id}:${operation}:request`,
+            attempt_id: `${id}:${operation}:attempt`,
+            input_operation_id: `${id}:${operation}:input`,
+            response_operation_id: `${id}:${operation}:response`,
+            recorded_at: '2026-09-12T00:00:00.000Z',
+        },
+    };
 }
 
 describe('Bedrock Mantle model routing', () => {
@@ -277,6 +305,41 @@ describe('BedrockMantleDriver model listing', () => {
 });
 
 describe('BedrockMantleDriver protocol execution', () => {
+    it('accepts canonical Responses history through parent execute and stream', async () => {
+        const driver = new BedrockMantleDriver({ region: 'us-west-2' });
+        const finalResponse = createResponse();
+        const create = vi.fn((request: OpenAI.Responses.ResponseCreateParams) => {
+            if (request.stream) {
+                return Promise.resolve(
+                    (async function* () {
+                        yield { type: 'response.completed', sequence_number: 1, response: finalResponse };
+                    })(),
+                );
+            }
+            return Promise.resolve(finalResponse);
+        });
+        const responsesDelegate = getObjectProperty(driver, 'responsesDelegate');
+        Reflect.set(responsesDelegate, 'service', { responses: { create } });
+
+        const blockingId = 'mantle-responses-blocking';
+        const blocking = await driver.execute(promptSegments, {
+            ...canonicalOptions('openai.gpt-5.5', blockingId),
+            conversation: await canonicalResponsesConversation(blockingId),
+        });
+        expect(parseConversationDocument(blocking.conversation).id).toBe(blockingId);
+
+        const streamId = 'mantle-responses-stream';
+        const stream = await driver.stream(promptSegments, {
+            ...canonicalOptions('openai.gpt-5.5', streamId),
+            conversation: await canonicalResponsesConversation(streamId),
+        });
+        for await (const _chunk of stream) {
+            // Consume the parent stream so terminal canonical finalization runs.
+        }
+        expect(parseConversationDocument(stream.completion?.conversation).id).toBe(streamId);
+        expect(create).toHaveBeenCalledTimes(2);
+    });
+
     it('rejects prompts that do not match the selected model protocol', () => {
         const driver = new BedrockMantleDriver({ region: 'us-west-2' });
         const chatPrompt = {

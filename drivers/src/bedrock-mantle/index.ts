@@ -109,7 +109,7 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
 
     protected supportsCanonicalConversation(options: ExecutionOptions): boolean {
         const protocol = getBedrockMantleProtocol(options.model);
-        return protocol === 'chat_completions' || protocol === 'messages';
+        return protocol === 'responses' || protocol === 'chat_completions' || protocol === 'messages';
     }
 
     constructor(opts: BedrockMantleDriverOptions) {

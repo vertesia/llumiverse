@@ -108,7 +108,10 @@ export function canonicalConversationTurnNumber(document: ConversationDocument):
     return Number.isSafeInteger(total) ? total : Number.MAX_SAFE_INTEGER;
 }
 
-export function selectedCanonicalTurns(document: ConversationDocument): ConversationTurn[] {
+export function selectedCanonicalTurns(
+    document: ConversationDocument,
+    options?: { allow_interrupted_with_replay_protocol?: string },
+): ConversationTurn[] {
     const turnsById = new Map(document.turns.map((turn) => [turn.id, turn]));
     const selected: ConversationTurn[] = [];
     for (const entry of document.context.entries) {
@@ -117,7 +120,16 @@ export function selectedCanonicalTurns(document: ConversationDocument): Conversa
             throw new Error(`Conversation context entry ${entry.id} references missing turn ${entry.turn_id}`);
         }
         if (turn.model_visibility === 'exclude') continue;
-        if (turn.status !== 'completed') {
+        const selectedBlockIds = entry.block_ids === undefined ? undefined : new Set(entry.block_ids);
+        const hasSelectedInterruptedReplay =
+            turn.status === 'interrupted' &&
+            turn.blocks.some(
+                (block) =>
+                    block.type === 'native_replay' &&
+                    block.protocol === options?.allow_interrupted_with_replay_protocol &&
+                    (selectedBlockIds === undefined || selectedBlockIds.has(block.id)),
+            );
+        if (turn.status !== 'completed' && !hasSelectedInterruptedReplay) {
             throw new Error(
                 `Conversation context turn ${turn.id} has status ${turn.status}, which ${'cannot be represented by a completed native history message'}`,
             );
