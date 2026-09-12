@@ -223,7 +223,7 @@ describe('OpenAIResponsesDriverBase prompt caching', () => {
                 content: [
                     {
                         type: 'input_image' as const,
-                        image_url: 'data:image/jpeg;base64,source',
+                        image_url: 'data:image/jpeg;base64,c291cmNl',
                         detail: 'auto' as const,
                     },
                     { type: 'input_text' as const, text: 'stable document blocks' },
@@ -247,7 +247,7 @@ describe('OpenAIResponsesDriverBase prompt caching', () => {
                         content: [
                             {
                                 type: 'input_image',
-                                image_url: 'data:image/jpeg;base64,source',
+                                image_url: 'data:image/jpeg;base64,c291cmNl',
                                 detail: 'auto',
                             },
                             {
@@ -310,7 +310,7 @@ describe('OpenAIResponsesDriverBase prompt caching', () => {
                 content: [
                     {
                         type: 'input_image' as const,
-                        image_url: 'data:image/jpeg;base64,source',
+                        image_url: 'data:image/jpeg;base64,c291cmNl',
                         detail: 'auto' as const,
                     },
                     { type: 'input_text' as const, text: 'stable document blocks' },
@@ -345,7 +345,7 @@ describe('OpenAIResponsesDriverBase prompt caching', () => {
                         content: [
                             {
                                 type: 'input_image',
-                                image_url: 'data:image/jpeg;base64,source',
+                                image_url: 'data:image/jpeg;base64,c291cmNl',
                                 detail: 'auto',
                             },
                             {
@@ -356,7 +356,10 @@ describe('OpenAIResponsesDriverBase prompt caching', () => {
                         ],
                     },
                     prompt[2],
-                    prompt[3],
+                    {
+                        role: 'user',
+                        content: `IMPORTANT: only answer using JSON. <response_schema>${JSON.stringify(resultSchema)}</response_schema>`,
+                    },
                 ],
                 text: { format: { type: 'json_object' } },
             }),

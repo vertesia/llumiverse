@@ -1,4 +1,8 @@
+import type { ConversationRuntimeContext } from '@llumiverse/conversation';
 import type { z } from 'zod';
+
+export type { ConversationRuntimeContext } from '@llumiverse/conversation';
+
 import type {
     ExecutionTokenUsageSchema,
     PromptCacheDiagnosticSchema,
@@ -691,6 +695,11 @@ export interface ExecutionOptions extends ExecutionOptionsBase {
      */
     conversation?: unknown | null;
     /**
+     * Stable canonical request identity for adapters that have adopted `@llumiverse/conversation`.
+     * Remaining legacy-native drivers ignore this field until their adapter migration.
+     */
+    conversation_runtime?: ConversationRuntimeContext;
+    /**
      * Labels for billing attribution and cost tracking.
      * Passed through to provider APIs that support request-level labels (e.g. Vertex AI).
      * Keys and values must be lowercase, max 64 characters, containing only letters, numbers, underscores, and dashes.
@@ -846,6 +855,8 @@ export interface PromptSegment {
      * The tool use id if the segment is a tool response
      */
     tool_use_id?: string;
+    /** Terminal status of a tool response supplied by the application. */
+    tool_result_status?: 'success' | 'error' | 'cancelled' | 'denied';
     /**
      * Gemini thinking models require thought_signature to be passed back with tool results.
      * This should be copied from the ToolUse.thought_signature when sending tool responses.

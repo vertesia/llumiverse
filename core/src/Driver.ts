@@ -27,6 +27,7 @@ import {
     type TrainingOptions,
     type TrainingPromptOptions,
 } from '@llumiverse/common';
+import { isConversationDocumentFormat } from '@llumiverse/conversation';
 import type { Agent } from 'undici';
 import {
     DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS,
@@ -165,6 +166,19 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         this.options = opts;
         this.logger = createLogger(opts.logger);
         this.installOperationGuards();
+    }
+
+    /** Whether this concrete model path has adopted canonical conversation input. */
+    protected supportsCanonicalConversation(_options: ExecutionOptions): boolean {
+        return false;
+    }
+
+    private assertConversationInputSupported(options: ExecutionOptions): void {
+        if (isConversationDocumentFormat(options.conversation) && !this.supportsCanonicalConversation(options)) {
+            throw new Error(
+                `Provider ${this.provider} model ${options.model} does not support canonical conversation input`,
+            );
+        }
     }
 
     /**
@@ -329,6 +343,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<ExecutionResponse<PromptT>> {
+        this.assertConversationInputSupported(options);
         const prompt = await this.createPrompt(segments, options);
         return await this._execute(prompt, options, signal).catch((error: unknown) => {
             // Don't wrap if already a LlumiverseError
@@ -348,6 +363,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<ExecutionResponse<PromptT>> {
+        this.assertConversationInputSupported(options);
         const httpScope = this.createExecutionHttpAgentScope(options, signal !== undefined);
         const abort = () => void httpScope.abort();
         if (signal?.aborted) abort();
@@ -409,6 +425,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<CompletionStream<PromptT>> {
+        this.assertConversationInputSupported(options);
         signal?.throwIfAborted();
         this.logger.debug(
             options,

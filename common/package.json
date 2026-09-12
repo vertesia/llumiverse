@@ -54,6 +54,7 @@
         "url": "git+ssh://git@github.com/vertesia/llumiverse.git"
     },
     "dependencies": {
+        "@llumiverse/conversation": "workspace:*",
         "zod": "^4.5.4"
     },
     "devDependencies": {

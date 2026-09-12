@@ -49,6 +49,7 @@ function resolveVertexAIModelPath(options: ExecutionOptions): {
 
 export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
     model: AIModel;
+    readonly canonical_conversation_supported = true;
 
     constructor(modelId: string) {
         this.model = {

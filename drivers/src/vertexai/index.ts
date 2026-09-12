@@ -111,6 +111,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     static readonly PROVIDER = Providers.vertexai;
     provider = VertexAIDriver.PROVIDER;
 
+    protected supportsCanonicalConversation(options: ExecutionOptions): boolean {
+        return getModelDefinition(options.model).canonical_conversation_supported === true;
+    }
+
     aiplatform: v1beta1.ModelServiceClient | undefined;
     anthropicClient: AnthropicVertex | undefined;
     fetchClient: FetchClient | undefined;

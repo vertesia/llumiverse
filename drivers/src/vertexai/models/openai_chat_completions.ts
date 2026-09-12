@@ -37,6 +37,7 @@ export class OpenAIChatCompletionsModelDefinition
     implements ModelDefinition<OpenAIChatCompletionsPrompt>
 {
     model: AIModel;
+    readonly canonical_conversation_supported = true;
     private readonly vertexOptions: VertexOpenAIChatCompletionsOptions;
 
     constructor(options: VertexOpenAIChatCompletionsOptions) {

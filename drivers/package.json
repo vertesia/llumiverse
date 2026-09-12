@@ -136,6 +136,7 @@
         "@google/genai": "^2.21.0",
         "@huggingface/inference": "^4.13.28",
         "@llumiverse/common": "workspace:*",
+        "@llumiverse/conversation": "workspace:*",
         "@llumiverse/core": "workspace:*",
         "@mistralai/mistralai": "^2.6.4",
         "@openrouter/sdk": "^1.2.93",

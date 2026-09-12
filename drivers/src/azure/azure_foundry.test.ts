@@ -1,9 +1,12 @@
 import type { TokenCredential } from '@azure/identity';
+import { parseConversationDocument } from '@llumiverse/conversation';
 import { PromptRole } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import { exposePrivate } from '../../test/__helpers__/test-utils.js';
 import type { OpenAIChatCompletionsPayload } from '../openai/openai_chat_completions.js';
+import { prepareOpenAIChatCanonicalState } from '../openai/openai-chat-conversation-adapter.js';
+import { prepareOpenAIResponsesCanonicalState } from '../openai/openai-responses-conversation-adapter.js';
 import { AzureFoundryDriver, toAzureInferenceRequest } from './azure_foundry.js';
 
 const credential: TokenCredential = {
@@ -24,7 +27,207 @@ function createDriver(): AzureFoundryDriver {
     });
 }
 
+function canonicalOptions(model: string, id: string, operation = 'next') {
+    return {
+        model,
+        conversation_runtime: {
+            conversation_id: id,
+            request_id: `${id}:${operation}:request`,
+            attempt_id: `${id}:${operation}:attempt`,
+            input_operation_id: `${id}:${operation}:input`,
+            response_operation_id: `${id}:${operation}:response`,
+            recorded_at: '2026-09-12T00:00:00.000Z',
+        },
+    };
+}
+
 describe('AzureFoundryDriver protocol composition', () => {
+    it('accepts canonical history through the parent Chat execution path', async () => {
+        const driver = createDriver();
+        driver.service = {
+            deployments: { get: vi.fn(async () => ({ modelPublisher: 'Meta' })) },
+        } as unknown as AzureFoundryDriver['service'];
+        const post = vi.fn(async () => ({
+            status: '200',
+            body: {
+                id: 'foundry-chat-canonical',
+                created: 1,
+                model: 'llama-deployment',
+                choices: [
+                    {
+                        index: 0,
+                        finish_reason: 'stop',
+                        message: { role: 'assistant', content: 'chat answer' },
+                    },
+                ],
+                usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+            },
+        }));
+        const inferenceAdapter = exposePrivate<FoundryInternals>(driver).inferenceProtocolDriver;
+        Object.defineProperty(inferenceAdapter, 'service', { value: { path: vi.fn(() => ({ post })) } });
+        const model = 'llama-deployment::llama';
+        const id = 'foundry-chat';
+        const state = await prepareOpenAIChatCanonicalState({
+            conversation: { _is_openai_chat_completions: true, messages: [{ role: 'user', content: 'prior' }] },
+            prompt: { _is_openai_chat_completions: true, messages: [] },
+            options: canonicalOptions(model, id, 'seed'),
+            provider: 'azure_foundry',
+        });
+
+        const completion = await driver.execute([{ role: PromptRole.user, content: 'next' }], {
+            ...canonicalOptions(model, id),
+            conversation: state.document,
+        });
+
+        expect(parseConversationDocument(completion.conversation).id).toBe(id);
+        expect(post).toHaveBeenCalledOnce();
+    });
+
+    it('preserves tool result status through Chat ingestion without sending private evidence', async () => {
+        const driver = createDriver();
+        driver.service = {
+            deployments: { get: vi.fn(async () => ({ modelPublisher: 'Meta' })) },
+        } as unknown as AzureFoundryDriver['service'];
+        const responses = [
+            {
+                id: 'foundry-tool-call',
+                created: 1,
+                model: 'llama-deployment',
+                choices: [
+                    {
+                        index: 0,
+                        finish_reason: 'tool_calls',
+                        message: {
+                            role: 'assistant',
+                            content: null,
+                            tool_calls: [
+                                {
+                                    id: 'call:lookup',
+                                    type: 'function',
+                                    function: { name: 'lookup', arguments: '{"city":"Tokyo"}' },
+                                },
+                            ],
+                        },
+                    },
+                ],
+                usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+            },
+            {
+                id: 'foundry-tool-result',
+                created: 2,
+                model: 'llama-deployment',
+                choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'unavailable' } }],
+                usage: { prompt_tokens: 4, completion_tokens: 1, total_tokens: 5 },
+            },
+        ];
+        const post = vi.fn(async (_request: unknown) => ({ status: '200', body: responses.shift() }));
+        const inferenceAdapter = exposePrivate<FoundryInternals>(driver).inferenceProtocolDriver;
+        Object.defineProperty(inferenceAdapter, 'service', { value: { path: vi.fn(() => ({ post })) } });
+        const model = 'llama-deployment::llama';
+        const id = 'foundry-tool-status';
+
+        const first = await driver.execute([{ role: PromptRole.user, content: 'Weather?' }], {
+            ...canonicalOptions(model, id, 'ask'),
+            tools: [{ name: 'lookup', input_schema: { type: 'object' } }],
+        });
+        const second = await driver.execute(
+            [
+                {
+                    role: PromptRole.tool,
+                    content: '{"error":"offline"}',
+                    tool_use_id: 'call:lookup',
+                    tool_result_status: 'error',
+                },
+            ],
+            {
+                ...canonicalOptions(model, id, 'answer'),
+                conversation: first.conversation,
+                tools: [{ name: 'lookup', input_schema: { type: 'object' } }],
+            },
+        );
+
+        const persisted = parseConversationDocument(second.conversation);
+        expect(persisted.turns.find((turn) => turn.kind === 'tool')?.blocks[0]).toMatchObject({
+            type: 'tool_result',
+            call_id: 'call:lookup',
+            status: 'error',
+        });
+        expect(JSON.stringify(post.mock.calls[1]?.[0])).not.toContain('tool_result_status');
+        expect(JSON.stringify(post.mock.calls[1]?.[0])).not.toContain('_llumiverse_tool_result_status');
+    });
+
+    it('accepts canonical history through the parent Responses streaming path', async () => {
+        const driver = createDriver();
+        const model = 'gpt-deployment::gpt-5';
+        const id = 'foundry-responses';
+        const response = {
+            id: 'foundry-response-canonical',
+            object: 'response',
+            created_at: 1,
+            model: 'gpt-deployment',
+            status: 'completed',
+            output: [
+                {
+                    id: 'message-canonical',
+                    type: 'message',
+                    role: 'assistant',
+                    status: 'completed',
+                    content: [{ type: 'output_text', text: 'response answer', annotations: [], logprobs: [] }],
+                },
+            ],
+            output_text: 'response answer',
+            error: null,
+            incomplete_details: null,
+            instructions: null,
+            metadata: {},
+            parallel_tool_calls: true,
+            temperature: 1,
+            tool_choice: 'auto',
+            tools: [],
+            top_p: 1,
+            usage: {
+                input_tokens: 2,
+                input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+                output_tokens: 2,
+                output_tokens_details: { reasoning_tokens: 0 },
+                total_tokens: 4,
+            },
+        } satisfies OpenAI.Responses.Response;
+        const create = vi.fn((_request: OpenAI.Responses.ResponseCreateParamsStreaming, _options?: unknown) =>
+            Promise.resolve(
+                (async function* () {
+                    yield { type: 'response.completed', sequence_number: 1, response };
+                })(),
+            ),
+        );
+        driver.service = {
+            deployments: { get: vi.fn(async () => ({ modelPublisher: 'OpenAI' })) },
+            getOpenAIClient: vi.fn(() => ({ responses: { create } })),
+        } as unknown as AzureFoundryDriver['service'];
+        const state = await prepareOpenAIResponsesCanonicalState({
+            conversation: [{ type: 'message', role: 'user', content: 'prior' }],
+            prompt: [],
+            options: canonicalOptions(model, id, 'seed'),
+            provider: 'azure_foundry',
+        });
+
+        const stream = await driver.stream([{ role: PromptRole.user, content: 'next' }], {
+            ...canonicalOptions(model, id),
+            conversation: state.document,
+        });
+        for await (const _chunk of stream) {
+            // Consume the parent stream so terminal canonical finalization runs.
+        }
+
+        const conversation = parseConversationDocument(stream.completion?.conversation);
+        expect(conversation.id).toBe(id);
+        expect(Object.values(conversation.generations)).toEqual(
+            expect.arrayContaining([expect.objectContaining({ requested_model: model })]),
+        );
+        expect(create.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ model: 'gpt-deployment', stream: true }));
+        expect(create).toHaveBeenCalledOnce();
+    });
+
     it('preserves required tool choice when adapting an OpenAI chat request', () => {
         const body = toAzureInferenceRequest(
             {

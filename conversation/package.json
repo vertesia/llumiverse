@@ -1,0 +1,56 @@
+{
+    "name": "@llumiverse/conversation",
+    "version": "0.0.0-experimental.0",
+    "private": true,
+    "type": "module",
+    "description": "Experimental schema-first canonical conversation data model for Llumiverse.",
+    "files": [
+        "lib",
+        "src",
+        "README.md"
+    ],
+    "sideEffects": false,
+    "main": "./lib/index.js",
+    "types": "./lib/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./lib/index.d.ts",
+            "default": "./lib/index.js"
+        },
+        "./schemas": {
+            "types": "./lib/schemas/index.d.ts",
+            "default": "./lib/schemas/index.js"
+        },
+        "./json-schema": {
+            "types": "./lib/json-schema.d.ts",
+            "default": "./lib/json-schema.js"
+        },
+        "./package.json": "./package.json"
+    },
+    "scripts": {
+        "lint": "biome lint src",
+        "test": "vitest run",
+        "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
+        "build": "pnpm exec rimraf ./lib ./tsconfig.tsbuildinfo && tsc",
+        "clean": "rimraf ./lib ./tsconfig.tsbuildinfo ./.verify",
+        "verify:exports": "node ./scripts/verify-exports.mjs"
+    },
+    "author": "Llumiverse",
+    "license": "Apache-2.0",
+    "homepage": "https://github.com/vertesia/llumiverse",
+    "repository": {
+        "type": "git",
+        "url": "git+ssh://git@github.com/vertesia/llumiverse.git"
+    },
+    "dependencies": {
+        "zod": "^4.5.4"
+    },
+    "devDependencies": {
+        "@types/node": "catalog:",
+        "ajv": "^8.20.0",
+        "ajv-formats": "^3.0.1",
+        "rimraf": "^6.1.3",
+        "typescript": "catalog:",
+        "vitest": "^4.1.11"
+    }
+}
