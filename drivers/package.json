@@ -1,6 +1,6 @@
 {
     "name": "@llumiverse/drivers",
-    "version": "1.6.0-dev",
+    "version": "1.6.0-dev.20260912.104205Z",
     "type": "module",
     "description": "LLM driver implementations. Currently supported are: openai, huggingface, bedrock, replicate.",
     "files": [
