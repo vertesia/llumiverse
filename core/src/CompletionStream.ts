@@ -10,6 +10,7 @@ import {
     LlumiverseError,
     type ToolUse,
 } from '@llumiverse/common';
+import { stripAudioPayloads } from './conversation-utils.js';
 import type { AbstractDriver } from './Driver.js';
 import { DEFAULT_DRIVER_REQUEST_TIMEOUT_MS } from './http-agent.js';
 
@@ -604,7 +605,7 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
             { provider: this.driver.provider, model: this.options.model },
         );
 
-        this.completion = {
+        this.completion = stripAudioPayloads({
             result: accumulatedResults, // Return the accumulated CompletionResult[] instead of text
             prompt: this.driver.formatDebugPrompt(this.prompt),
             execution_time: Date.now() - start,
@@ -614,14 +615,14 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
             chunks: this.chunks,
             tool_use: toolUseArray,
             prompt_cache_diagnostic: stream?.finalizePromptCacheDiagnostic?.(),
-        };
+        });
 
         // Build conversation context for multi-turn support
         const conversation = stream?.finalizeConversation
             ? await stream.finalizeConversation()
             : this.driver.buildStreamingConversation(this.prompt, accumulatedResults, toolUseArray, this.options);
         if (conversation !== undefined) {
-            this.completion.conversation = conversation;
+            this.completion.conversation = stripAudioPayloads(conversation);
         }
 
         try {
@@ -691,7 +692,7 @@ export class FallbackCompletionStream<PromptT = unknown> extends ManagedCompleti
                 })
                 .join('');
             yield content;
-            this.completion = completion; // Return the original completion with untouched CompletionResult[]
+            this.completion = stripAudioPayloads(completion); // Return the original completion with untouched CompletionResult[]
         } catch (error: unknown) {
             if (this.abortSignal.aborted) return;
             // Don't wrap if already a LlumiverseError

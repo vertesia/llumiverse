@@ -23,12 +23,17 @@ export function getModelCapabilities(model: string, provider: Providers): ModelC
     }
     const profile = resolveModelProfile(model, provider);
     const capabilities = profile.capabilities;
-    // Only expose generated audio for the dedicated speech transport implemented by the OpenAI driver.
-    // Other audio/video generation families retain their discovery metadata but remain masked here.
+    // Advertise speech output only for implemented file synthesis transports.
     return {
         ...capabilities,
         input: { ...capabilities.input },
-        output: { ...capabilities.output, audio: provider === 'openai' && profile.family === 'speech', video: false },
+        output: {
+            ...capabilities.output,
+            audio:
+                ['openai', 'azure_foundry', 'openai_compatible', 'vertexai'].includes(provider) &&
+                profile.family === 'speech',
+            video: false,
+        },
     };
 }
 

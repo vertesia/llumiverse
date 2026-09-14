@@ -107,6 +107,8 @@ describe('ModelOptionsSchema', () => {
             'OpenRouterTextOptions',
             'OpenAiDalleOptions',
             'OpenAiGptImageOptions',
+            'OpenAiTranscriptionOptions',
+            'OpenAiSpeechOptions',
             'XAIGrokImageOptions',
             'GroqOptions',
             'MistralTextOptions',

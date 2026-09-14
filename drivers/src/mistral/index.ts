@@ -276,9 +276,11 @@ function legacyOpenAIMessageToMistral(
     const contentParts = Array.isArray(message.content)
         ? message.content.map(
               (part): ContentChunk =>
-                  part.type === 'text'
-                      ? { type: 'text', text: part.text }
-                      : { type: 'image_url', imageUrl: part.image_url.url },
+                  part.type === 'input_audio'
+                      ? unsupportedAudioPart()
+                      : part.type === 'text'
+                        ? { type: 'text', text: part.text }
+                        : { type: 'image_url', imageUrl: part.image_url.url },
           )
         : undefined;
     switch (message.role) {
@@ -562,4 +564,8 @@ function finalizeMistralConversation(
         preserveSubtree,
     }) as MistralPrompt;
     return completed;
+}
+
+function unsupportedAudioPart(): never {
+    throw new Error('This inference endpoint does not support audio input');
 }

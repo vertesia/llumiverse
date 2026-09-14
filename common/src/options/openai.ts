@@ -82,7 +82,12 @@ export function getOpenAiOptions(
                     default: 'alloy',
                     description: 'Provider voice name; additional voices can be supplied through the API.',
                 },
-                { name: 'response_format', type: OptionType.enum, enum: { MP3: 'mp3', WAV: 'wav' }, default: 'mp3' },
+                {
+                    name: 'response_format',
+                    type: OptionType.enum,
+                    enum: { MP3: 'mp3', WAV: 'wav', Opus: 'opus', AAC: 'aac', FLAC: 'flac', PCM: 'pcm' },
+                    default: 'mp3',
+                },
                 { name: 'speed', type: OptionType.numeric, min: 0.25, max: 4, default: 1 },
             ],
         };
@@ -384,6 +389,7 @@ export function getOpenAiCompatibleOptions(
     profile: ModelProfile = resolveModelProfile(model, Providers.openai_compatible),
 ): ModelOptionsInfo {
     const options = getOpenAiOptions(model, option, profile);
+    if (profile.family === 'speech' || profile.family === 'transcription') return options;
     const compatibleOptions = options.options.filter((item) => item.name !== 'service_tier');
     const maxOutputTokens = profile.max_output_tokens;
     const profileEffortLevels = profile.reasoning_effort_levels?.length

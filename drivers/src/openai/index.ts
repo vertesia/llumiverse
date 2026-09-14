@@ -3,6 +3,7 @@ import {
     type Completion,
     type CompletionChunkObject,
     type CompletionResult,
+    type CompletionStream,
     type DataSource,
     type DriverCompletionStream,
     type DriverOptions,
@@ -10,6 +11,7 @@ import {
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
+    type ExecutionResponse,
     type ExecutionTokenUsage,
     getConversationMeta,
     incrementConversationTurn,
@@ -38,11 +40,12 @@ import {
     truncateLargeTextInConversation,
     unwrapConversationArray,
 } from '@llumiverse/core';
+import { FallbackCompletionStream } from '@llumiverse/core/driver';
 import type OpenAI from 'openai';
 import type { AzureOpenAI } from 'openai';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
-import { openAIAudioTask } from './audio.js';
+import { executeOpenAIAudioRequest, openAIAudioTask } from './audio.js';
 import { mergeOpenAIExtraBody, type OpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAILikeMultimodalPrompt } from './openai_format.js';
@@ -61,39 +64,7 @@ type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
     prompt_cache_retention?: 'in_memory' | '24h';
     service_tier?: string;
     extra_body?: OpenAIExtraBody;
-    /** Internal execution hint supplied after public model-option validation. */
-    required_tool_name?: string;
-    /** Internal execution hint used with a required named tool. */
-    parallel_tool_calls?: boolean;
 };
-
-function getOpenAIResponseToolChoice(
-    modelOptions: OpenAIRequestOptions | undefined,
-): OpenAI.Responses.ResponseCreateParams['tool_choice'] {
-    if (modelOptions?.required_tool_name) {
-        return { type: 'function', name: modelOptions.required_tool_name };
-    }
-    return modelOptions?.tool_choice === 'any' ? 'required' : modelOptions?.tool_choice;
-}
-
-function assertOpenAIResponseToolChoiceAvailable(
-    modelOptions: OpenAIRequestOptions | undefined,
-    useTools: boolean,
-    model: string,
-    provider: string,
-    operation: 'execute' | 'stream',
-): void {
-    const forced =
-        typeof modelOptions?.required_tool_name === 'string' ||
-        modelOptions?.tool_choice === 'required' ||
-        modelOptions?.tool_choice === 'any';
-    if (forced && !useTools) {
-        throw createToolChoiceConfigurationError(
-            '[OpenAI Responses API] A required tool choice was requested, but no tools are available.',
-            { provider, model, operation },
-        );
-    }
-}
 
 function asOpenAIResponseServiceTier(serviceTier?: string): OpenAIResponseServiceTier {
     // The public option deliberately accepts future provider values that may predate the installed SDK union.
@@ -256,7 +227,7 @@ export class OpenAIResponsesProtocol {
         let conversation = fixOrphanedToolResults(fixOrphanedToolUse(updateConversation(options.conversation, prompt)));
 
         const toolDefs = getToolDefinitions(options.tools);
-        const useTools = Boolean(toolDefs?.length && supportsToolUse(options.model, driver.provider, true));
+        const useTools: boolean = toolDefs ? supportsToolUse(options.model, driver.provider, true) : false;
 
         // When no tools are provided but conversation contains function_call/function_call_output
         // items (e.g. checkpoint summary calls), convert them to text to avoid API errors
@@ -267,7 +238,6 @@ export class OpenAIResponsesProtocol {
         convertRoles(prompt, options.model);
 
         const model_options = options.model_options as OpenAIRequestOptions | undefined;
-        assertOpenAIResponseToolChoiceAvailable(model_options, useTools, options.model, driver.provider, 'stream');
         insert_image_detail(prompt, model_options?.image_detail ?? 'auto');
 
         let parsedSchema: JSONSchema | undefined;
@@ -298,7 +268,6 @@ export class OpenAIResponsesProtocol {
             driver.getResponsesRequestModel(options.model),
             promptCacheKey,
         );
-        const toolChoice = getOpenAIResponseToolChoice(model_options);
         const request = mergeOpenAIExtraBody<OpenAI.Responses.ResponseCreateParamsStreaming>(
             {
                 stream: true,
@@ -314,8 +283,6 @@ export class OpenAIResponsesProtocol {
                 max_output_tokens: model_options?.max_tokens,
                 service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
                 tools: useTools ? toolDefs : undefined,
-                tool_choice: useTools ? toolChoice : undefined,
-                parallel_tool_calls: useTools ? model_options?.parallel_tool_calls : undefined,
                 text: buildResponseTextConfig(
                     parsedSchema,
                     strictMode,
@@ -357,8 +324,7 @@ export class OpenAIResponsesProtocol {
         insert_image_detail(prompt, model_options?.image_detail ?? 'auto');
 
         const toolDefs = getToolDefinitions(options.tools);
-        const useTools = Boolean(toolDefs?.length && supportsToolUse(options.model, driver.provider));
-        assertOpenAIResponseToolChoiceAvailable(model_options, useTools, options.model, driver.provider, 'execute');
+        const useTools: boolean = toolDefs ? supportsToolUse(options.model, driver.provider) : false;
 
         // Fix orphaned function_call items (can occur when agent is stopped mid-tool-execution)
         let conversation = fixOrphanedToolResults(fixOrphanedToolUse(updateConversation(options.conversation, prompt)));
@@ -396,7 +362,6 @@ export class OpenAIResponsesProtocol {
             driver.getResponsesRequestModel(options.model),
             promptCacheKey,
         );
-        const toolChoice = getOpenAIResponseToolChoice(model_options);
         const request = mergeOpenAIExtraBody<OpenAI.Responses.ResponseCreateParamsNonStreaming>(
             {
                 stream: false,
@@ -412,8 +377,6 @@ export class OpenAIResponsesProtocol {
                 max_output_tokens: model_options?.max_tokens,
                 service_tier: asOpenAIResponseServiceTier(model_options?.service_tier),
                 tools: useTools ? toolDefs : undefined,
-                tool_choice: useTools ? toolChoice : undefined,
-                parallel_tool_calls: useTools ? model_options?.parallel_tool_calls : undefined,
                 text: buildResponseTextConfig(
                     parsedSchema,
                     strictMode,
@@ -456,6 +419,51 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
     abstract service: OpenAI | AzureOpenAI;
     private readonly responsesProtocol: OpenAIResponsesProtocol;
 
+    protected isFileAudioModel(model: string): boolean {
+        return (
+            [Providers.openai, Providers.azure_foundry, Providers.openai_compatible].includes(this.provider) &&
+            !!openAIAudioTask(model)
+        );
+    }
+
+    override async execute(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<ExecutionResponse<OpenAI.Responses.ResponseInputItem[]>> {
+        if (!this.isFileAudioModel(options.model)) return super.execute(segments, options, signal);
+        return this.executeFileAudio(segments, options, signal);
+    }
+
+    protected async executeFileAudio(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<ExecutionResponse<OpenAI.Responses.ResponseInputItem[]>> {
+        return executeOpenAIAudioRequest(
+            this,
+            this.service,
+            segments,
+            options,
+            [],
+            signal,
+            this.getResponsesRequestModel(options.model),
+            this.getDriverRequestOptions(options, signal),
+        );
+    }
+
+    override async stream(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CompletionStream<OpenAI.Responses.ResponseInputItem[]>> {
+        if (!this.isFileAudioModel(options.model)) return super.stream(segments, options, signal);
+        signal?.throwIfAborted();
+        return new FallbackCompletionStream(this, [], options, (streamSignal) =>
+            this.executeFileAudio(segments, options, signal ? AbortSignal.any([signal, streamSignal]) : streamSignal),
+        );
+    }
+
     constructor(opts: OpenAIResponsesDriverBaseOptions) {
         super(opts);
         this.responsesProtocol = new OpenAIResponsesProtocol((options, signal) =>
@@ -480,7 +488,6 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
     }
 
     extractDataFromResponse(_options: ExecutionOptions, result: OpenAI.Responses.Response): Completion {
-        assertOpenAIResponseSucceeded(result);
         const tokenInfo = mapUsage(result.usage);
 
         const tools = collectTools(result.output);
@@ -656,7 +663,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 
         //OpenAI has very little information, filtering based on name.
         result = result.filter((m) => {
-            if (this.provider === Providers.openai && openAIAudioTask(m.id)) return true;
+            if (this.isFileAudioModel(m.id)) return true;
             return (
                 !unsupportedEndpointPattern.test(m.id.toLowerCase()) && !isDedicatedInferenceModel(m.id, this.provider)
             );
@@ -672,8 +679,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
                 }
 
                 // Determine model type based on capabilities
-                let modelType =
-                    this.provider === Providers.openai && openAIAudioTask(m.id) ? ModelType.Audio : ModelType.Text;
+                let modelType = this.isFileAudioModel(m.id) ? ModelType.Audio : ModelType.Text;
                 if (m.id.includes('dall-e') || m.id.includes('gpt-image')) {
                     modelType = ModelType.Image;
                 }
@@ -1029,6 +1035,18 @@ export function mapResponseStream(
                         result: [],
                         tool_use: [toolUse],
                     } satisfies CompletionChunkObject;
+                }
+                // Note: We don't emit response.function_call_arguments.done because the arguments were already
+                // streamed via delta events. Emitting it again would duplicate the tool_input content.
+                // We only update the metadata to ensure the tool name is captured.
+                else if (event.type === 'response.function_call_arguments.done') {
+                    // Just update metadata, don't yield (arguments already accumulated from delta events)
+                    const metadata = toolCallMetadata.get(event.item_id);
+                    const syntheticId = metadata?.syntheticId ?? `tool_${event.output_index}`;
+                    const tool_name = metadata?.name ?? event.name ?? '';
+                    if (event.item_id) {
+                        toolCallMetadata.set(event.item_id, { syntheticId, callId: metadata?.callId, name: tool_name });
+                    }
                 } else if (event.type === 'response.output_text.delta') {
                     hasTextDeltas = true;
                     yield {
@@ -1072,9 +1090,6 @@ export function mapResponseStream(
                         token_usage: mapUsage(event.response.usage),
                         service_tier: event.response.service_tier ?? undefined,
                     } satisfies CompletionChunkObject;
-                    // Preserve provider usage even when the terminal response is failed/incomplete;
-                    // the next iterator step surfaces the provider error to the caller.
-                    assertOpenAIResponseSucceeded(event.response);
                 }
             }
         },
@@ -1133,13 +1148,6 @@ function convertRoles(items: ResponseInputItem[], model: string): ResponseInputI
 function supportsSchema(model: string, provider: Providers): boolean {
     const realtimeModel = model.includes('realtime');
     if (realtimeModel) {
-        return false;
-    }
-    // OpenRouter's OpenAI-compatible Responses surface advertises native structured output for
-    // GLM 5.3, but the model returns unconstrained prose and downstream validation fails. Keep
-    // this generation on the existing prompt-schema fallback; later GLM generations remain
-    // eligible for native support unless runtime evidence says otherwise.
-    if (provider === Providers.openai_compatible && /^z-ai\/glm-5\.3(?:$|[-/:])/.test(model)) {
         return false;
     }
     return supportsToolUse(model, provider);
@@ -1330,54 +1338,6 @@ function responseFinishReason(
     return 'stop';
 }
 
-type OpenAIResponseFailure = Error & {
-    code: string;
-    status: number;
-};
-
-function responseErrorStatus(code: string): number {
-    if (code === 'rate_limit_exceeded') return 429;
-    if (code === 'server_error') return 500;
-    if (code === 'vector_store_timeout') return 408;
-    if (code === 'image_file_not_found') return 404;
-    // Known policy, prompt, residency, and image-validation failures are request errors.
-    if (
-        code === 'invalid_prompt' ||
-        code === 'data_residency_mismatch' ||
-        code === 'bio_policy' ||
-        code.startsWith('invalid_image') ||
-        code === 'image_too_large' ||
-        code === 'image_too_small' ||
-        code === 'image_parse_error' ||
-        code === 'image_content_policy_violation' ||
-        code === 'unsupported_image_media_type' ||
-        code === 'empty_image_file' ||
-        code === 'image_file_too_large'
-    ) {
-        return 400;
-    }
-    // Unknown failed-response codes are not evidence of a transient provider failure. Treat them
-    // as non-retryable request errors so one billed failure cannot fan out into a retry storm.
-    return 400;
-}
-
-function openAIResponseFailure(response: OpenAI.Responses.Response): OpenAIResponseFailure {
-    const code = response.error?.code ?? 'response_failed';
-    const detail = response.error?.message ?? 'The provider returned a failed response without error details.';
-    const responseId = response.id ? ` [response ${response.id}]` : '';
-    const error = new Error(`[OpenAI Responses API] ${detail} (${code})${responseId}`) as OpenAIResponseFailure;
-    error.name = 'OpenAIResponseError';
-    error.code = code;
-    error.status = responseErrorStatus(code);
-    return error;
-}
-
-function assertOpenAIResponseSucceeded(response: OpenAI.Responses.Response): void {
-    if (response.status === 'failed') {
-        throw openAIResponseFailure(response);
-    }
-}
-
 /**
  * Fix orphaned function_call items in the OpenAI Responses API conversation.
  *
@@ -1394,8 +1354,8 @@ export function fixOrphanedToolUse(items: ResponseInputItem[]): ResponseInputIte
     // First pass: collect all function_call_output call_ids
     const outputCallIds = new Set<string>();
     for (const item of items) {
-        if ('type' in item && item.type === 'function_call_output' && item.call_id != null) {
-            outputCallIds.add(item.call_id);
+        if ('type' in item && item.type === 'function_call_output') {
+            outputCallIds.add((item as OpenAI.Responses.ResponseInputItem.FunctionCallOutput).call_id);
         }
     }
 
@@ -1461,7 +1421,7 @@ export function fixOrphanedToolResults(items: ResponseInputItem[]): ResponseInpu
     }
     return items.filter((item) => {
         if ('type' in item && item.type === 'function_call_output') {
-            return item.call_id != null && callIds.has(item.call_id);
+            return callIds.has(item.call_id);
         }
         return true;
     });
