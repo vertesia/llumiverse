@@ -75,6 +75,7 @@ import {
     converseJSONprefill,
     converseSystemToMessages,
     formatConversePrompt,
+    relocateConverseToolImages,
     shouldIncludeSchemaInConversePrompt,
     supportsConverseOutputConfig,
 } from './converse.js';
@@ -1553,7 +1554,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
 
         if (prompt.messages) {
-            request.messages = prompt.messages;
+            request.messages = relocateConverseToolImages(prompt.messages, options.model);
         }
 
         if (prompt.system) {
