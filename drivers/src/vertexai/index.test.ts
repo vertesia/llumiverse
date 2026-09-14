@@ -93,6 +93,6 @@ describe('VertexAIDriver listModels', () => {
         expect(modelIds).not.toContain('locations/global/models/text-embedding-future');
         expect(modelIds).not.toContain('locations/global/models/veo-4');
         expect(modelIds).not.toContain('publishers/google/models/gemini-live-future');
-        expect(modelIds).not.toContain('publishers/google/models/gemini-4-tts');
+        expect(modelIds).toContain('publishers/google/models/gemini-4-tts');
     });
 });

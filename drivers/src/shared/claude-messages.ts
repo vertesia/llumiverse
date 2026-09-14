@@ -325,6 +325,8 @@ async function collectFileBlocks(
                     media_type: mimeType,
                 },
             } satisfies ImageBlockParam);
+        } else if (file.mime_type?.startsWith('audio/')) {
+            throw new Error('Claude does not support audio input; supply a transcript instead');
         } else if (file.mime_type?.startsWith('video/')) {
             logger?.warn(
                 {

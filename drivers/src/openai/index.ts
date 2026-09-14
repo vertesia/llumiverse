@@ -3,6 +3,7 @@ import {
     type Completion,
     type CompletionChunkObject,
     type CompletionResult,
+    type CompletionStream,
     type DataSource,
     type DriverCompletionStream,
     type DriverOptions,
@@ -10,6 +11,7 @@ import {
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
+    type ExecutionResponse,
     type ExecutionTokenUsage,
     getConversationMeta,
     incrementConversationTurn,
@@ -38,10 +40,11 @@ import {
     truncateLargeTextInConversation,
     unwrapConversationArray,
 } from '@llumiverse/core';
+import { FallbackCompletionStream } from '@llumiverse/core/driver';
 import type OpenAI from 'openai';
 import type { AzureOpenAI } from 'openai';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
-import { openAIAudioTask } from './audio.js';
+import { executeOpenAIAudioRequest, openAIAudioTask } from './audio.js';
 import { mergeOpenAIExtraBody, type OpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAILikeMultimodalPrompt } from './openai_format.js';
@@ -415,6 +418,51 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
     abstract service: OpenAI | AzureOpenAI;
     private readonly responsesProtocol: OpenAIResponsesProtocol;
 
+    protected isFileAudioModel(model: string): boolean {
+        return (
+            [Providers.openai, Providers.azure_foundry, Providers.openai_compatible].includes(this.provider) &&
+            !!openAIAudioTask(model)
+        );
+    }
+
+    override async execute(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<ExecutionResponse<OpenAI.Responses.ResponseInputItem[]>> {
+        if (!this.isFileAudioModel(options.model)) return super.execute(segments, options, signal);
+        return this.executeFileAudio(segments, options, signal);
+    }
+
+    protected async executeFileAudio(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<ExecutionResponse<OpenAI.Responses.ResponseInputItem[]>> {
+        return executeOpenAIAudioRequest(
+            this,
+            this.service,
+            segments,
+            options,
+            [],
+            signal,
+            this.getResponsesRequestModel(options.model),
+            this.getDriverRequestOptions(options, signal),
+        );
+    }
+
+    override async stream(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CompletionStream<OpenAI.Responses.ResponseInputItem[]>> {
+        if (!this.isFileAudioModel(options.model)) return super.stream(segments, options, signal);
+        signal?.throwIfAborted();
+        return new FallbackCompletionStream(this, [], options, (streamSignal) =>
+            this.executeFileAudio(segments, options, signal ? AbortSignal.any([signal, streamSignal]) : streamSignal),
+        );
+    }
+
     constructor(opts: OpenAIResponsesDriverBaseOptions) {
         super(opts);
         this.responsesProtocol = new OpenAIResponsesProtocol((options, signal) =>
@@ -614,7 +662,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 
         //OpenAI has very little information, filtering based on name.
         result = result.filter((m) => {
-            if (this.provider === Providers.openai && openAIAudioTask(m.id)) return true;
+            if (this.isFileAudioModel(m.id)) return true;
             return (
                 !unsupportedEndpointPattern.test(m.id.toLowerCase()) && !isDedicatedInferenceModel(m.id, this.provider)
             );
@@ -630,8 +678,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
                 }
 
                 // Determine model type based on capabilities
-                let modelType =
-                    this.provider === Providers.openai && openAIAudioTask(m.id) ? ModelType.Audio : ModelType.Text;
+                let modelType = this.isFileAudioModel(m.id) ? ModelType.Audio : ModelType.Text;
                 if (m.id.includes('dall-e') || m.id.includes('gpt-image')) {
                     modelType = ModelType.Image;
                 }

@@ -450,6 +450,12 @@ export const VertexAIGeminiOptionsSchema = z
                 'x-deprecated-message': 'Use service_tier="flex" instead.',
             })
             .optional(),
+        speech_voice: z.string().optional(),
+        speech_language: z.string().optional(),
+        transcription_language_codes: z.array(z.string()).optional(),
+        transcription_diarization: z.boolean().optional(),
+        transcription_word_timestamps: z.boolean().optional(),
+        transcription_vocabulary: z.array(z.string()).optional(),
         image_aspect_ratio: z.enum(['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9', '21:9']).optional(),
         image_size: z.enum(['1K', '2K', '4K']).optional(),
         person_generation: z.enum(['ALLOW_ALL', 'ALLOW_ADULT', 'ALLOW_NONE']).optional(),
@@ -495,7 +501,7 @@ export const OpenAiSpeechOptionsSchema = z
     .strictObject({
         _option_id: z.literal('openai-speech'),
         voice: z.string().min(1).optional(),
-        response_format: z.enum(['mp3', 'wav']).optional(),
+        response_format: z.enum(['mp3', 'wav', 'opus', 'aac', 'flac', 'pcm']).optional(),
         speed: z.number().min(0.25).max(4).optional(),
         instructions: z.string().optional(),
     })

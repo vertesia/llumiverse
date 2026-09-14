@@ -1,42 +1,29 @@
+import { boundedAudioStream, storeAudioResult } from '../shared/audio.js';
+
+export { boundedAudioStream } from '../shared/audio.js';
+
 import { OpenAiSpeechOptionsSchema, OpenAiTranscriptionOptionsSchema } from '@llumiverse/common/schemas';
 import {
     type AudioResult,
     type Completion,
     type ExecutionOptions,
+    type ExecutionResponse,
     type PromptSegment,
     Providers,
     resolveModelProfile,
 } from '@llumiverse/core';
+import type { AbstractDriver } from '@llumiverse/core/driver';
 import type OpenAI from 'openai';
 import { toStreamingFile } from 'openai';
 
-export function openAIAudioTask(model: string): 'transcription' | 'speech' | undefined {
-    const { family } = resolveModelProfile(model, Providers.openai);
-    return family === 'transcription' || family === 'speech' ? family : undefined;
-}
-
-/** Consume lazily, enforce the byte budget even without Content-Length, and close the source on failure. */
-export function boundedAudioStream(
-    source: ReadableStream<Uint8Array | string>,
-    maximumBytes: number,
-    signal?: AbortSignal,
-): ReadableStream<Uint8Array> {
-    let bytes = 0;
-    return source.pipeThrough(
-        new TransformStream<Uint8Array | string, Uint8Array>({
-            transform(chunk, controller) {
-                signal?.throwIfAborted();
-                if (typeof chunk === 'string') throw new Error('Audio sources must contain binary bytes');
-                bytes += chunk.byteLength;
-                if (bytes > maximumBytes) throw new Error(`Audio exceeds the ${maximumBytes} byte limit`);
-                controller.enqueue(chunk);
-            },
-            flush() {
-                if (bytes === 0) throw new Error('Audio file is empty');
-            },
-        }),
-        { signal },
-    );
+export function openAIAudioTask(model: string): 'transcription' | 'speech' | 'understanding' | undefined {
+    const { family } = resolveModelProfile(model.split('::').pop() ?? model, Providers.openai);
+    if (/(?:realtime|live)/i.test(model)) return undefined;
+    return family === 'audio'
+        ? 'understanding'
+        : family === 'transcription' || family === 'speech'
+          ? family
+          : undefined;
 }
 
 export async function executeOpenAIAudio(
@@ -44,6 +31,7 @@ export async function executeOpenAIAudio(
     segments: PromptSegment[],
     options: ExecutionOptions,
     requestOptions: { signal?: AbortSignal; timeout?: number } | undefined,
+    requestModel = options.model,
 ): Promise<Completion> {
     const signal = requestOptions?.signal;
     signal?.throwIfAborted();
@@ -60,6 +48,35 @@ export async function executeOpenAIAudio(
     if (segments.some((segment) => segment.role === 'tool' || segment.role === 'assistant')) {
         throw new Error('File audio operations accept only user and system input');
     }
+    if (openAIAudioTask(options.model) === 'understanding') {
+        if (files.length !== 1) throw new Error('Audio understanding requires exactly one audio file');
+        const content: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [{ type: 'text', text }];
+        for (const file of files) {
+            const format =
+                file.mime_type === 'audio/wav' || file.mime_type === 'audio/x-wav'
+                    ? 'wav'
+                    : file.mime_type === 'audio/mpeg' || file.mime_type === 'audio/mp3'
+                      ? 'mp3'
+                      : undefined;
+            if (!format) throw new Error('OpenAI audio chat requires MP3 or WAV input');
+            const stream = boundedAudioStream(await file.getStream(), 25_000_000, signal);
+            const data = Buffer.from(await new Response(stream).arrayBuffer()).toString('base64');
+            content.push({ type: 'input_audio', input_audio: { data, format } });
+        }
+        const result = await service.chat.completions.create(
+            {
+                model: requestModel,
+                messages: [{ role: 'user', content }],
+                modalities: ['text'],
+            },
+            requestOptions,
+        );
+        signal?.throwIfAborted();
+        return {
+            result: [{ type: 'text', value: result.choices[0]?.message.content ?? '' }],
+            finish_reason: result.choices[0]?.finish_reason,
+        };
+    }
     if (openAIAudioTask(options.model) === 'transcription') {
         const params = OpenAiTranscriptionOptionsSchema.parse(
             options.model_options ?? {
@@ -71,9 +88,41 @@ export async function executeOpenAIAudio(
         const file = files[0];
         const stream = boundedAudioStream(await file.getStream(), 25_000_000, signal);
         try {
+            if (options.model.includes('diarize')) {
+                if (text) throw new Error('Diarized transcription does not accept a prompt');
+                const result = (await service.audio.transcriptions.create(
+                    {
+                        model: requestModel,
+                        file: toStreamingFile(stream, file.name, { type: file.mime_type }),
+                        response_format: 'diarized_json',
+                        chunking_strategy: 'auto',
+                        language: params.language,
+                    },
+                    requestOptions,
+                )) as OpenAI.Audio.TranscriptionDiarized; // SDK overload omits its exported diarized response type.
+                signal?.throwIfAborted();
+                return {
+                    result: [
+                        { type: 'text', value: result.text },
+                        {
+                            type: 'json',
+                            value: {
+                                segments: result.segments.map((segment) => ({
+                                    id: segment.id,
+                                    speaker: segment.speaker,
+                                    start: segment.start,
+                                    end: segment.end,
+                                    text: segment.text,
+                                })),
+                            },
+                        },
+                    ],
+                    finish_reason: 'stop',
+                };
+            }
             const result = await service.audio.transcriptions.create(
                 {
-                    model: options.model,
+                    model: requestModel,
                     file: toStreamingFile(stream, file.name, { type: file.mime_type }),
                     response_format: 'json',
                     language: params.language,
@@ -97,7 +146,7 @@ export async function executeOpenAIAudio(
     const format = params.response_format ?? 'mp3';
     const response = await service.audio.speech.create(
         {
-            model: options.model,
+            model: requestModel,
             input: text,
             voice: params.voice ?? 'alloy',
             response_format: format,
@@ -107,21 +156,53 @@ export async function executeOpenAIAudio(
         requestOptions,
     );
     if (!response.body) throw new Error('Speech endpoint returned no audio body');
-    // Complete files only. Raw PCM is deliberately excluded until its metadata contract is selected.
     const metadata: Omit<AudioResult, 'type' | 'value'> = {
-        mime_type: format === 'mp3' ? 'audio/mpeg' : 'audio/wav',
-        container: format,
-        ...(format === 'mp3' && { codec: 'mp3' }),
+        mime_type: {
+            mp3: 'audio/mpeg',
+            wav: 'audio/wav',
+            opus: 'audio/ogg',
+            aac: 'audio/aac',
+            flac: 'audio/flac',
+            pcm: 'audio/pcm',
+        }[format],
+        container: format === 'opus' ? 'ogg' : format === 'pcm' ? 'raw' : format,
+        ...(format === 'mp3' ? { codec: 'mp3' } : {}),
+        ...(format === 'pcm'
+            ? { codec: 'pcm', sample_rate: 24000, channels: 1, sample_encoding: 'int16', byte_order: 'little' }
+            : {}),
     };
-    const stream = boundedAudioStream(response.body, 50_000_000, signal);
+    return { result: [await storeAudioResult(response.body, metadata, options, signal)], finish_reason: 'stop' };
+}
+
+/** Execute a finite SDK audio request without retaining multipart input in a prompt or conversation. */
+export async function executeOpenAIAudioRequest<PromptT>(
+    driver: Pick<AbstractDriver, 'createExecutionHttpAgentScope' | 'formatLlumiverseError' | 'provider'>,
+    service: OpenAI,
+    segments: PromptSegment[],
+    options: ExecutionOptions,
+    emptyPrompt: PromptT,
+    signal?: AbortSignal,
+    requestModel = options.model,
+    requestOptions?: { signal?: AbortSignal; timeout?: number },
+): Promise<ExecutionResponse<PromptT>> {
+    const start = Date.now();
+    const scope = driver.createExecutionHttpAgentScope(options, signal !== undefined);
+    const abort = () => void scope.abort();
+    if (signal?.aborted) abort();
+    else signal?.addEventListener('abort', abort, { once: true });
     try {
-        const value = await options.store_audio(stream, metadata, signal);
-        signal?.throwIfAborted();
-        if (!/^(?:gs|s3):\/\/[^/]+\/.+/.test(value)) {
-            throw new Error('Audio storage must return a durable object URI');
-        }
-        return { result: [{ type: 'audio', value, ...metadata }], finish_reason: 'stop' };
+        const completion = await scope.run(() =>
+            executeOpenAIAudio(service, segments, options, requestOptions ?? { signal }, requestModel),
+        );
+        return { ...completion, prompt: emptyPrompt, execution_time: Date.now() - start };
+    } catch (error) {
+        throw driver.formatLlumiverseError(error, {
+            provider: driver.provider,
+            model: options.model,
+            operation: 'execute',
+        });
     } finally {
-        if (!stream.locked) await stream.cancel().catch(() => undefined);
+        signal?.removeEventListener('abort', abort);
+        await scope.close();
     }
 }

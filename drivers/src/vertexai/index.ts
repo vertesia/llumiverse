@@ -735,8 +735,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                     'embedding',
                     'embed',
                     'gemini-live',
+                    'transcribe-live',
                     'native-audio',
-                    '-tts',
                     'computer-use-preview',
                 ],
                 /** Additional models not in the listings, but we want to include.
@@ -996,17 +996,18 @@ function isGlobalOnlyPublisherModel(publisher: string, modelId: string): boolean
 function isExecutableGoogleModel(model: Model): boolean {
     const modelName = (model.name ?? '').toLowerCase();
     if (isGeminiOmniVideoModel(modelName.split('/').pop() ?? modelName)) return true;
-    // Intentional execution-path allow-list: Vertex uses separate methods for embeddings, Live/TTS, music and video.
+    // Intentional execution-path allow-list: Vertex uses separate methods for embeddings, Live, music and video.
     // This driver currently implements generateContent and generateImages. Unknown actions are excluded only when
     // Google supplies them; absent action metadata falls back to the known-family/name policy above.
     if (!modelName.includes('gemini') && !modelName.includes('imagen')) return false;
 
+    if (/(?:embedding|embed|live|native-audio|veo|lyria)/.test(modelName)) return false;
     if (model.supportedActions?.length) {
         const actions = model.supportedActions.map((action) => action.toLowerCase().replace(/[^a-z]/g, ''));
         return actions.some((action) => action === 'generatecontent' || action === 'generateimages');
     }
 
-    return !/(?:embedding|embed|tts|live|native-audio|veo|lyria)/.test(modelName);
+    return !/(?:embedding|embed|live|native-audio|veo|lyria)/.test(modelName);
 }
 
 //'us-central1-aiplatform.googleapis.com',
