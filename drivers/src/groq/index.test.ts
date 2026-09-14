@@ -238,7 +238,7 @@ describe('GroqDriver shared Chat Completions transport', () => {
         });
     });
 
-    it('preserves array-shaped tool results at the Groq SDK boundary', async () => {
+    it('preserves tool image attachments at the Groq SDK boundary', async () => {
         const driver = new GroqDriver({ apiKey: 'test-key' });
         const create = vi.fn(async (_request: unknown) => ({
             id: 'groq-1',
@@ -278,13 +278,19 @@ describe('GroqDriver shared Chat Completions transport', () => {
         );
 
         const request = create.mock.calls[0][0] as { messages: unknown[] };
-        expect(request.messages[1]).toEqual({
-            role: 'tool',
-            tool_call_id: 'call_1',
-            content: [
-                { type: 'text', text: 'result' },
-                { type: 'image_url', image_url: { url: 'https://example.test/image.png' } },
-            ],
-        });
+        expect(request.messages.slice(1)).toEqual([
+            {
+                role: 'tool',
+                tool_call_id: 'call_1',
+                content: 'result\n[Image 1 attached below]',
+            },
+            {
+                role: 'user',
+                content: [
+                    { type: 'text', text: 'Image 1 from tool result call_1:' },
+                    { type: 'image_url', image_url: { url: 'https://example.test/image.png' } },
+                ],
+            },
+        ]);
     });
 });
