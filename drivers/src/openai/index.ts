@@ -42,6 +42,7 @@ import type OpenAI from 'openai';
 import type { AzureOpenAI } from 'openai';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
+import { openAIAudioTask } from './audio.js';
 import { mergeOpenAIExtraBody, type OpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAILikeMultimodalPrompt } from './openai_format.js';
@@ -655,6 +656,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 
         //OpenAI has very little information, filtering based on name.
         result = result.filter((m) => {
+            if (this.provider === Providers.openai && openAIAudioTask(m.id)) return true;
             return (
                 !unsupportedEndpointPattern.test(m.id.toLowerCase()) && !isDedicatedInferenceModel(m.id, this.provider)
             );
@@ -670,7 +672,8 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
                 }
 
                 // Determine model type based on capabilities
-                let modelType = ModelType.Text;
+                let modelType =
+                    this.provider === Providers.openai && openAIAudioTask(m.id) ? ModelType.Audio : ModelType.Text;
                 if (m.id.includes('dall-e') || m.id.includes('gpt-image')) {
                     modelType = ModelType.Image;
                 }
@@ -911,6 +914,7 @@ function completionResultsToText(completionResults: CompletionResult[] | undefin
                 case 'image':
                     // Skip images in conversation - they're in the result
                     return '';
+                case 'audio':
                 case 'video':
                     return '';
                 default: {

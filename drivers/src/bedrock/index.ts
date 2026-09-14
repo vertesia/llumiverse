@@ -1069,6 +1069,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     case 'image':
                         // Skip images in conversation - they're in the result
                         return '';
+                    case 'audio':
                     case 'video':
                         return '';
                     default: {

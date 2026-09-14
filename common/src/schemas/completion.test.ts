@@ -2,6 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { CompletionResultSchema, PromptCacheDiagnosticSchema, StatelessExecutionOptionsSchema } from './completion.js';
 
 describe('CompletionResultSchema', () => {
+    it('round trips durable audio metadata and rejects embedded or temporary payloads', () => {
+        const result = { type: 'audio', value: 'gs://bucket/speech.wav', mime_type: 'audio/wav', container: 'wav' };
+        expect(CompletionResultSchema.parse(JSON.parse(JSON.stringify(result)))).toEqual(result);
+        for (const value of ['data:audio/wav;base64,AAAA', 'https://example.com/speech.wav', 'gs://bucket']) {
+            expect(CompletionResultSchema.safeParse({ ...result, value }).success).toBe(false);
+        }
+        expect(CompletionResultSchema.safeParse({ ...result, data: 'AAAA' }).success).toBe(false);
+    });
+
     it('accepts thoughts as a separate completion result type', () => {
         expect(CompletionResultSchema.parse({ type: 'thoughts', value: 'Reasoning summary' })).toEqual({
             type: 'thoughts',

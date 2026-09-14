@@ -486,6 +486,7 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
                                             }
                                             break;
                                         case 'image':
+                                        case 'audio':
                                         case 'video':
                                             // Media outputs are discrete results and must retain their original boundaries.
                                             accumulatedResults.push(result);
@@ -520,8 +521,9 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
                                                     : String(r.value).slice(0, 10);
                                             return `\n[Image: ${truncatedValue}...]\n`;
                                         }
+                                        case 'audio':
                                         case 'video':
-                                            return `\n[Video: ${r.value}]\n`;
+                                            return `\n[${r.type === 'audio' ? 'Audio' : 'Video'}: ${r.value}]\n`;
                                         default: {
                                             const _exhaustive: never = r;
                                             return String(_exhaustive);
@@ -645,6 +647,7 @@ export class FallbackCompletionStream<PromptT = unknown> extends ManagedCompleti
         protected readonly driver: AbstractDriver<DriverOptions, PromptT>,
         protected readonly prompt: PromptT,
         protected readonly options: ExecutionOptions,
+        private readonly execute?: (signal: AbortSignal) => Promise<ExecutionResponse<PromptT>>,
     ) {
         super();
     }
@@ -656,7 +659,9 @@ export class FallbackCompletionStream<PromptT = unknown> extends ManagedCompleti
             `[${this.driver.provider}] Streaming is not supported, falling back to blocking execution`,
         );
         try {
-            const completion = await this.driver._execute(this.prompt, this.options, this.abortSignal);
+            const completion = this.execute
+                ? await this.execute(this.abortSignal)
+                : await this.driver._execute(this.prompt, this.options, this.abortSignal);
             // For fallback streaming, yield the text content but keep the original completion
             let previousResultType: CompletionResult['type'] | undefined;
             const content = completion.result
@@ -675,8 +680,9 @@ export class FallbackCompletionStream<PromptT = unknown> extends ManagedCompleti
                                 typeof r.value === 'string' ? r.value.slice(0, 10) : String(r.value).slice(0, 10);
                             return `[Image: ${truncatedValue}...]`;
                         }
+                        case 'audio':
                         case 'video':
-                            return `[Video: ${r.value}]`;
+                            return `[${r.type === 'audio' ? 'Audio' : 'Video'}: ${r.value}]`;
                         default: {
                             const _exhaustive: never = r;
                             return String(_exhaustive);

@@ -547,6 +547,22 @@ export const VertexAIGrokOptionsSchema = z
 // When supplied, each literal ID still restricts validation to its named family.
 // Register every new option schema here: ModelOptionsInfo derives its allowed IDs from this union.
 // Keep provider aliases inferred from their schemas; see common/README.md for the maintenance checklist.
+export const OpenAiTranscriptionOptionsSchema = z
+    .strictObject({
+        _option_id: z.literal('openai-transcription'),
+        language: z.string().optional(),
+    })
+    .meta({ id: 'OpenAiTranscriptionOptions' });
+
+export const OpenAiSpeechOptionsSchema = z
+    .strictObject({
+        _option_id: z.literal('openai-speech'),
+        voice: z.string().min(1).optional(),
+        response_format: z.enum(['mp3', 'wav']).optional(),
+        speed: z.number().min(0.25).max(4).optional(),
+        instructions: z.string().optional(),
+    })
+    .meta({ id: 'OpenAiSpeechOptions' });
 export const ModelOptionsSchema = z
     .union([
         TextFallbackOptionsSchema,
@@ -574,6 +590,8 @@ export const ModelOptionsSchema = z
         OpenRouterTextOptionsSchema,
         OpenAiDalleOptionsSchema,
         OpenAiGptImageOptionsSchema,
+        OpenAiTranscriptionOptionsSchema,
+        OpenAiSpeechOptionsSchema,
         XAIGrokImageOptionsSchema,
         GroqOptionsSchema,
         MistralTextOptionsSchema,

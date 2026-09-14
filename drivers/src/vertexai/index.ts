@@ -509,6 +509,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                     case 'image':
                         // Skip images in conversation - they're in the result
                         return '';
+                    case 'audio':
                     case 'video':
                         return '';
                     default: {
@@ -613,6 +614,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                         return typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
                     case 'image':
                         return '';
+                    case 'audio':
                     case 'video':
                         return '';
                     default: {
