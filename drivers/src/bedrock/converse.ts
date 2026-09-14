@@ -359,6 +359,37 @@ export function converseConcatMessages(messages: Message[] | undefined): Message
     return result;
 }
 
+/** Keep tool images visible on models that only accept them as ordinary user content. */
+export function relocateConverseToolImages(messages: Message[], model: string): Message[] {
+    // AWS only documents nested tool-result images for Nova and Claude.
+    // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolResultContentBlock.html
+    if (model.includes('anthropic.claude') || model.includes('amazon.nova')) return messages;
+
+    return messages.map((message) => {
+        if (message.role !== ConversationRole.USER) return message;
+        const attachments: ContentBlock[] = [];
+        const content = message.content?.map((block) => {
+            const result = block.toolResult;
+            if (!result?.content?.some((part) => part.image)) return block;
+
+            const remaining: ToolResultContentBlock[] = [];
+            for (const part of result.content) {
+                if (part.image) {
+                    attachments.push({ text: `Image from tool result ${result.toolUseId}:` }, { image: part.image });
+                } else {
+                    remaining.push(part);
+                }
+            }
+            // Image-only results still need a nonempty content array for tool pairing.
+            if (remaining.length === 0) remaining.push({ text: 'See the attached tool-result image(s).' });
+            return { toolResult: { ...result, content: remaining } } satisfies ContentBlock;
+        });
+        // Append after all tool results so parallel tool calls stay together. Do not mutate
+        // stored history: the same conversation may subsequently be used with another model.
+        return attachments.length ? { ...message, content: [...(content ?? []), ...attachments] } : message;
+    });
+}
+
 export function converseSystemToMessages(system: SystemContentBlock[]): Message {
     return {
         content: [
