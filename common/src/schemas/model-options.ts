@@ -484,6 +484,23 @@ export const VertexAIGrokOptionsSchema = z
 // The discriminated union. Member order is the order the derived component lists, which the adapter
 // turns back into a `discriminator` + `mapping` keyed on `_option_id`; a generated Java or Go client
 // reads that mapping to pick the concrete subtype.
+export const OpenAiTranscriptionOptionsSchema = z
+    .strictObject({
+        _option_id: z.literal('openai-transcription'),
+        language: z.string().optional(),
+    })
+    .meta({ id: 'OpenAiTranscriptionOptions' });
+
+export const OpenAiSpeechOptionsSchema = z
+    .strictObject({
+        _option_id: z.literal('openai-speech'),
+        voice: z.string().min(1).optional(),
+        response_format: z.enum(['mp3', 'wav']).optional(),
+        speed: z.number().min(0.25).max(4).optional(),
+        instructions: z.string().optional(),
+    })
+    .meta({ id: 'OpenAiSpeechOptions' });
+
 export const ModelOptionsSchema = z
     .discriminatedUnion('_option_id', [
         TextFallbackOptionsSchema,
@@ -510,6 +527,8 @@ export const ModelOptionsSchema = z
         OpenAiTextOptionsSchema,
         OpenAiDalleOptionsSchema,
         OpenAiGptImageOptionsSchema,
+        OpenAiTranscriptionOptionsSchema,
+        OpenAiSpeechOptionsSchema,
         XAIGrokImageOptionsSchema,
         GroqOptionsSchema,
         MistralTextOptionsSchema,

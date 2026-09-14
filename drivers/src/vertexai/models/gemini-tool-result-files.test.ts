@@ -48,6 +48,17 @@ async function createPrompt(segments: PromptSegment[]): Promise<Content[]> {
 }
 
 describe('Gemini tool result attachments', () => {
+    it('passes GCS audio on a user prompt as fileData without reading or signing it', async () => {
+        const file = source('gs://bucket/recording.mp3', 'audio/mpeg');
+        const contents = await createPrompt([{ role: PromptRole.user, content: 'Transcribe', files: [file] }]);
+        expect(contents[0].parts).toEqual([
+            { text: 'Transcribe' },
+            { fileData: { fileUri: 'gs://bucket/recording.mp3', mimeType: 'audio/mpeg' } },
+        ]);
+        expect(file.getStream).not.toHaveBeenCalled();
+        expect(file.getURL).not.toHaveBeenCalled();
+    });
+
     it('inlines an image attached to a tool result as a functionResponse part', async () => {
         const contents = await createPrompt([toolSegment([source('https://signed.example/plot.png')])]);
 

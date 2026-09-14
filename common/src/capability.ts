@@ -21,13 +21,14 @@ export function getModelCapabilities(model: string, provider: Providers): ModelC
             tool_support_streaming: false,
         };
     }
-    const capabilities = resolveModelProfile(model, provider).capabilities;
-    // The platform accepts audio/video inputs but cannot return those modalities yet. Keep source output metadata in
-    // the directory so enabling output support later only requires removing this execution-path mask.
+    const profile = resolveModelProfile(model, provider);
+    const capabilities = profile.capabilities;
+    // Only expose generated audio for the dedicated speech transport implemented by the OpenAI driver.
+    // Other audio/video generation families retain their discovery metadata but remain masked here.
     return {
         ...capabilities,
         input: { ...capabilities.input },
-        output: { ...capabilities.output, audio: false, video: false },
+        output: { ...capabilities.output, audio: provider === 'openai' && profile.family === 'speech', video: false },
     };
 }
 

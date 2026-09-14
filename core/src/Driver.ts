@@ -654,3 +654,5 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         }
     }
 }
+
+export { FallbackCompletionStream } from './CompletionStream.js';

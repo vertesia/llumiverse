@@ -3,8 +3,10 @@ import { type ModelProfile, resolveModelProfile } from '../model-directory.js';
 import type {
     OpenAiDalleOptionsSchema,
     OpenAiGptImageOptionsSchema,
+    OpenAiSpeechOptionsSchema,
     OpenAiTextOptionsSchema,
     OpenAiThinkingOptionsSchema,
+    OpenAiTranscriptionOptionsSchema,
 } from '../schemas/model-options.js';
 import {
     type ModelOptionInfoItem,
@@ -30,11 +32,20 @@ export type OpenAiTextOptions = z.infer<typeof OpenAiTextOptionsSchema>;
 export type OpenAiDalleOptions = z.infer<typeof OpenAiDalleOptionsSchema>;
 export type OpenAiGptImageOptions = z.infer<typeof OpenAiGptImageOptionsSchema>;
 
+export type OpenAiTranscriptionOptions = z.infer<typeof OpenAiTranscriptionOptionsSchema>;
+export type OpenAiSpeechOptions = z.infer<typeof OpenAiSpeechOptionsSchema>;
+
 // Union type of all OpenAI options
 /**
  * @discriminator _option_id
  */
-export type OpenAiOptions = OpenAiThinkingOptions | OpenAiTextOptions | OpenAiDalleOptions | OpenAiGptImageOptions;
+export type OpenAiOptions =
+    | OpenAiThinkingOptions
+    | OpenAiTextOptions
+    | OpenAiDalleOptions
+    | OpenAiGptImageOptions
+    | OpenAiTranscriptionOptions
+    | OpenAiSpeechOptions;
 
 /** OpenAI model families with published Flex processing support. */
 export function isFlexSupportedOpenAIModel(model: string): boolean {
@@ -57,6 +68,25 @@ export function getOpenAiOptions(
     // Option matching follows the resolved source ID so provider/path-qualified and uppercase IDs expose the same
     // controls as their canonical model.
     model = profile.canonical_id;
+    if (profile.family === 'transcription') {
+        return { _option_id: 'openai-transcription', options: [] };
+    }
+    if (profile.family === 'speech') {
+        return {
+            _option_id: 'openai-speech',
+            options: [
+                {
+                    name: 'voice',
+                    type: OptionType.enum,
+                    enum: { Alloy: 'alloy', Coral: 'coral', Nova: 'nova', Onyx: 'onyx', Shimmer: 'shimmer' },
+                    default: 'alloy',
+                    description: 'Provider voice name; additional voices can be supplied through the API.',
+                },
+                { name: 'response_format', type: OptionType.enum, enum: { MP3: 'mp3', WAV: 'wav' }, default: 'mp3' },
+                { name: 'speed', type: OptionType.numeric, min: 0.25, max: 4, default: 1 },
+            ],
+        };
+    }
     const visionOptions: ModelOptionInfoItem[] =
         profile.capabilities.input.image === true
             ? [
