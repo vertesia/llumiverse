@@ -514,3 +514,32 @@ describe('Bedrock Mantle Responses options', () => {
         );
     });
 });
+
+it('sends tool images through the Mantle Chat Completions SDK as user image parts', async () => {
+    const model = 'mistral.mistral-large-3-675b-instruct';
+    const driver = new BedrockMantleDriver({ region: 'us-west-2' });
+    const create = vi.fn<ChatCreate>(async () => createChatCompletion(model));
+    Reflect.set(driver, 'service', { chat: { completions: { create } } });
+    const image = { type: 'image_url' as const, image_url: { url: 'data:image/png;base64,YQ==' } };
+    const prompt: OpenAIChatCompletionsPrompt = {
+        _is_openai_chat_completions: true,
+        messages: [
+            { role: 'user', content: 'Read the preview.' },
+            {
+                role: 'assistant',
+                content: null,
+                tool_calls: [{ id: 'preview01', type: 'function', function: { name: 'preview', arguments: '{}' } }],
+            },
+            { role: 'tool', tool_call_id: 'preview01', content: [image] },
+        ],
+    };
+    await driver.requestTextCompletion(prompt, {
+        model,
+        tools: [{ name: 'preview', input_schema: { type: 'object' } }],
+    });
+    expect(create.mock.calls[0][0].messages).toEqual([
+        ...prompt.messages.slice(0, 2),
+        { role: 'tool', tool_call_id: 'preview01', content: '[Image 1 attached below]' },
+        { role: 'user', content: [{ type: 'text', text: 'Image 1 from tool result preview01:' }, image] },
+    ]);
+});
