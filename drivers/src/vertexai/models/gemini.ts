@@ -432,6 +432,27 @@ function collectToolUseParts(content: Content): ToolUse[] | undefined {
     return out.length > 0 ? out : undefined;
 }
 
+type StreamingToolUse = ToolUse & { _actual_id?: string };
+
+/**
+ * Collect streamed function calls under accumulator keys that are unique per call.
+ *
+ * Gemini identifies a function call by name only, so `collectToolUseParts` uses the name as the
+ * tool-use id and parallel calls to one tool share it. The core completion stream merges streamed
+ * fragments by id, which folded such a batch into a single call: the model turn kept every
+ * functionCall part but only one tool ran, and the next request was rejected by Vertex with 400
+ * "number of function response parts is equal to the number of function call parts". A Gemini
+ * functionCall part always arrives complete, so each one gets its own key; `_actual_id` restores
+ * the name-based id once the stream is finalized.
+ */
+function collectStreamingToolUseParts(content: Content, nextCallIndex: () => number): StreamingToolUse[] | undefined {
+    return collectToolUseParts(content)?.map((tool) => ({
+        ...tool,
+        id: `${tool.id}#${nextCallIndex()}`,
+        _actual_id: tool.id,
+    }));
+}
+
 /** True when `content` is a user turn holding nothing but functionResponse parts. */
 function isFunctionResponseOnlyContent(content: Content): boolean {
     return content.role === 'user' && !!content.parts?.length && content.parts.every((part) => part.functionResponse);
@@ -953,11 +974,12 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const response = cacheExecution.value;
 
         const nativeParts: Part[] = [];
+        let streamedToolCallCount = 0;
         const stream = asyncMap(response, async (item) => {
             const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(driver, item.usageMetadata);
             if (item.candidates && item.candidates.length > 0) {
                 for (const candidate of item.candidates) {
-                    let tool_use: ToolUse[] | undefined;
+                    let tool_use: StreamingToolUse[] | undefined;
                     let finish_reason: string | undefined;
                     switch (candidate.finishReason) {
                         case FinishReason.MAX_TOKENS:
@@ -974,7 +996,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                         appendGeminiStreamParts(nativeParts, candidate.content.parts ?? []);
                         // Collect all parts in order (text and images)
                         const combinedResults = extractCompletionResults(candidate.content, includeThoughts);
-                        tool_use = collectToolUseParts(candidate.content);
+                        tool_use = collectStreamingToolUseParts(candidate.content, () => ++streamedToolCallCount);
                         if (tool_use) {
                             finish_reason = 'tool_use';
                             // Log warning for recoverable tool call issues — see the
