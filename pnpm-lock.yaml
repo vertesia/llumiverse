@@ -178,8 +178,8 @@ importers:
         specifier: ^3.15.0
         version: 3.15.0
       undici:
-        specifier: ^7.29.0
-        version: 7.29.0
+        specifier: ^7.29.1
+        version: 7.29.1
     devDependencies:
       '@vertesia/api-fetch-client':
         specifier: ^1.4.1
@@ -263,8 +263,8 @@ importers:
         specifier: ^2.6.4
         version: 2.6.4(@opentelemetry/api@1.9.1)
       '@openrouter/sdk':
-        specifier: ^1.2.93
-        version: 1.2.107
+        specifier: ^1.2.113
+        version: 1.2.119
       '@vertesia/api-fetch-client':
         specifier: ^1.4.1
         version: 1.4.1
@@ -290,8 +290,8 @@ importers:
         specifier: ^1.4.0
         version: 1.4.0
       together-ai:
-        specifier: ^0.50.0
-        version: 0.50.0
+        specifier: ^0.51.0
+        version: 0.51.0
     devDependencies:
       dotenv:
         specifier: ^17.4.2
@@ -716,8 +716,8 @@ packages:
   '@nodable/entities@2.1.0':
     resolution: {integrity: sha512-nyT7T3nbMyBI/lvr6L5TyWbFJAI9FTgVRakNoBqCD+PmID8DzFrrNdLLtHMwMszOtqZa8PAOV24ZqDnQrhQINA==}
 
-  '@openrouter/sdk@1.2.107':
-    resolution: {integrity: sha512-y3bFctUufE+juGXKc4NEWm5htdMwoNvrHr/6s2h0cv/eZN1JO833qKa+Dcr1crJGYbG+PIjm34nYYVdXtfCehA==}
+  '@openrouter/sdk@1.2.119':
+    resolution: {integrity: sha512-HpfsANnkAQqBG9i+TpBQ2ab1zc60Lv/M+IMdQTZf44y+begYds6xSmJEI8SPGjKU+s6Vs4aQ3fuV0MJJUfJtHg==}
 
   '@opentelemetry/api@1.9.1':
     resolution: {integrity: sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q==}
@@ -1845,8 +1845,8 @@ packages:
     resolution: {integrity: sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g==}
     engines: {node: '>=12.0.0'}
 
-  together-ai@0.50.0:
-    resolution: {integrity: sha512-U81YStywb4CWfPucEyQ9BMsIJEhKMHUg1Kr4LIQUEqB4rQzXOo20Lr2cMaC4fXT9f1YztM34+VSDAc9DFjE3BQ==}
+  together-ai@0.51.0:
+    resolution: {integrity: sha512-H9umjrMymWoEGum0/xRDq7Vjm01XYBKgS2dYCqIVMsGqVbPY5u8DubGWh6a0tDSJlAUNcFBOd91xdKAA4JMjaA==}
     hasBin: true
 
   ts-algebra@2.0.0:
@@ -1870,8 +1870,8 @@ packages:
   undici-types@7.18.2:
     resolution: {integrity: sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w==}
 
-  undici@7.29.0:
-    resolution: {integrity: sha512-IDxfleLmmbSskfWSUATiN1nfn2rDuvnMOqb5CWR92iIfojA0Ud+ulOAAEQ57LPr9rWmsreUyf5lwyao+7GNNVw==}
+  undici@7.29.1:
+    resolution: {integrity: sha512-RYONW2MeafgYlkVOKYKkA/Ag7BmXqgIWCa8t1m0JcxrQg9pI9lEqRhAOruOBCbAohOa/gkCF+iPi9hrgvTzu6Q==}
     engines: {node: '>=20.18.1'}
 
   util-deprecate@1.0.2:
@@ -2690,9 +2690,9 @@ snapshots:
 
   '@nodable/entities@2.1.0': {}
 
-  '@openrouter/sdk@1.2.107':
+  '@openrouter/sdk@1.2.119':
     dependencies:
-      zod: 4.4.3
+      zod: 4.5.4
 
   '@opentelemetry/api@1.9.1': {}
 
@@ -3748,7 +3748,7 @@ snapshots:
       fdir: 6.5.0(picomatch@4.0.4)
       picomatch: 4.0.4
 
-  together-ai@0.50.0: {}
+  together-ai@0.51.0: {}
 
   ts-algebra@2.0.0: {}
 
@@ -3790,14 +3790,14 @@ snapshots:
 
   undici-types@7.18.2: {}
 
-  undici@7.29.0: {}
+  undici@7.29.1: {}
 
   util-deprecate@1.0.2: {}
 
   vite@8.0.16(@types/node@24.13.3):
     dependencies:
       lightningcss: 1.32.0
-      picomatch: 4.0.4
+      picomatch: 4.0.7
       postcss: 8.5.23
       rolldown: 1.0.3
       tinyglobby: 0.2.17
