@@ -77,6 +77,8 @@ export interface VertexAIDriverOptions extends DriverOptions {
 export interface GenerateContentPrompt {
     contents: Content[];
     system?: Content;
+    /** Number of leading content blocks selected by an explicit PromptSegment cache boundary. */
+    cacheBoundaryContentCount?: number;
 }
 type ClaudeStreamingPrompt = { messages: unknown[]; system?: unknown[] };
 type ConversationWrapper = { messages?: unknown[]; system?: unknown[] };
