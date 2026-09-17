@@ -15,6 +15,8 @@ on:
 
 env:
   COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  # Local commands default to read-only remote caching; CI produces reusable results.
+  TURBO_CACHE_OPTS: --cache=local:rw,remote:rw
 
 # Cancel superseded runs for the same event ref (latest push or PR update wins).
 concurrency:
@@ -33,7 +35,7 @@ jobs:
     # dedicated environment (zizmor: secrets-outside-env).
     environment: build
     permissions:
-      id-token: write # required for OIDC federation with GCP and AWS
+      id-token: write # required for OIDC federation with Turbo, GCP and AWS
       contents: read
     strategy:
       matrix:
@@ -72,8 +74,16 @@ jobs:
         with:
           path: ${{ steps.pnpm-store.outputs.path }}
           key: ${{ steps.pnpm-cache.outputs.cache-primary-key }}
+      - name: Authenticate Turbo remote cache
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: vercel/setup-turborepo-remote-cache-action@49d7b1b46ba4c9251e1977986bfe18336feabc8f # v1.1.0
+        with:
+          team: ${{ vars.TURBO_TEAM }}
       - name: Build workspace
         run: pnpm build
+
+      - name: Typecheck and functional tests
+        run: pnpm typecheck:test && pnpm test:unit
 
       - name: Authenticate with Google Cloud
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
@@ -89,18 +99,6 @@ jobs:
           role-to-assume: arn:aws:iam::716085231028:role/ComposablePromptExecutor
           role-session-name: github-actions
           aws-region: us-east-1
-
-      - name: Typecheck and functional tests
-        env:
-          TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
-          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          BEDROCK_REGION: us-east-1
-          GOOGLE_PROJECT_ID: dengenlabs
-          GOOGLE_REGION: us-central1
-        # Node-runner automation tests are exercised separately by the lint workflow.
-        run: pnpm typecheck:test && npx vitest --exclude '**/*.live.test.ts' --exclude '.github/**'
 
       - name: Curated live provider smoke tests
         env:
