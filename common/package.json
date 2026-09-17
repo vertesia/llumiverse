@@ -44,7 +44,8 @@
         "test": "vitest run",
         "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
         "build": "pnpm exec rimraf ./lib ./tsconfig.tsbuildinfo && tsc",
-        "clean": "rimraf ./lib tsconfig.tsbuildinfo"
+        "clean": "rimraf ./lib tsconfig.tsbuildinfo",
+        "test:unit": "vitest run --exclude '**/*.live.test.ts'"
     },
     "author": "Llumiverse",
     "license": "Apache-2.0",
