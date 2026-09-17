@@ -491,6 +491,12 @@ export function convertOpenAIChatCompletionsToolMessagesToText(
         }
 
         if (message.role === 'tool') {
+            if (Array.isArray(message.content) && message.content.some((part) => part.type === 'image_url')) {
+                return {
+                    role: 'user',
+                    content: [{ type: 'text', text: `Tool result ${message.tool_call_id}:` }, ...message.content],
+                };
+            }
             const output = extractOpenAIChatCompletionsContentText(message.content) || 'No output';
             return { role: 'user', content: `[Tool result: ${truncateToolText(output)}]` };
         }
@@ -687,7 +693,15 @@ export function convertToOpenAIChatCompletionsMessages(
     messages: OpenAIChatCompletionsMessage[],
 ): OpenAIChatCompletionsRequestMessage[] {
     const converted: OpenAIChatCompletionsRequestMessage[] = [];
+    let attachments: OpenAIChatCompletionsContentPart[] = [];
+    const flushAttachments = () => {
+        if (attachments.length === 0) return;
+        converted.push({ role: 'user', content: attachments });
+        attachments = [];
+    };
     for (const msg of messages) {
+        // Complete all parallel tool results before adding ordinary user content.
+        if (msg.role !== 'tool') flushAttachments();
         const result: OpenAIChatCompletionsRequestMessage = {
             role: msg.role,
         };
@@ -712,27 +726,20 @@ export function convertToOpenAIChatCompletionsMessages(
         }
 
         if (Array.isArray(msg.content)) {
-            const textParts: string[] = [];
-            const imageUrls: OpenAIChatCompletionsImageUrlPart['image_url'][] = [];
+            // Preserve interleaved captions and images, including on replay. Tool messages
+            // only support text in the SDK/API, so retain an indexed reference at each image's
+            // original position and carry its bytes in a following user message.
+            let imageIndex = 0;
+            const content = msg.content.map((part): OpenAIChatCompletionsContentPart => {
+                if (msg.role !== 'tool' || part.type !== 'image_url') return part;
+                imageIndex++;
+                const label = `Image ${imageIndex} from tool result ${msg.tool_call_id}:`;
+                attachments.push({ type: 'text', text: label }, part);
+                return { type: 'text', text: `[Image ${imageIndex} attached below]` };
+            });
 
-            for (const part of msg.content) {
-                if (part.type === 'text') {
-                    textParts.push(part.text);
-                } else if (part.type === 'image_url') {
-                    imageUrls.push(part.image_url);
-                }
-            }
-
-            const content: OpenAIChatCompletionsContentPart[] = [];
-            if (textParts.length > 0) {
-                content.push({ type: 'text', text: textParts.join('\n') });
-            }
-            for (const img of imageUrls) {
-                content.push({ type: 'image_url', image_url: img });
-            }
-
-            if (content.length === 1 && content[0].type === 'text') {
-                result.content = content[0].text;
+            if (content.length > 0 && content.every((part) => part.type === 'text')) {
+                result.content = content.map((part) => part.text).join('\n');
             } else if (content.length > 0) {
                 result.content = content;
             }
@@ -744,6 +751,7 @@ export function convertToOpenAIChatCompletionsMessages(
 
         converted.push(result);
     }
+    flushAttachments();
     return converted;
 }
 
