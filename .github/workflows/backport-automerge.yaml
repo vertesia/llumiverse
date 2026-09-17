@@ -52,6 +52,8 @@ jobs:
     concurrency:
       group: backport-automerge-${{ github.event.workflow_run.head_branch }}
       cancel-in-progress: false
+    outputs:
+      attention_reason: ${{ steps.eligibility.outputs.attention_reason }}
     steps:
       - name: Check automerge eligibility
         id: eligibility
@@ -155,11 +157,13 @@ jobs:
           # required-CI checks below.
           if [[ "$commit_count" != "1" ]]; then
             echo "Skipping PR #$pr_number: expected exactly 1 commit, found $commit_count."
+            echo "attention_reason=Backport has multiple commits and requires manual review before merging." >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           if [[ "$merge_state" == "DIRTY" ]]; then
             echo "Skipping PR #$pr_number: merge state is DIRTY (target advanced into a conflict); leaving for manual resolution."
+            echo "attention_reason=Backport has merge conflicts with the target branch. Resolve them before merging." >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -288,3 +292,14 @@ jobs:
             --squash \
             --delete-branch \
             --match-head-commit "$HEAD_SHA"
+
+  notify-failure:
+    needs: approve-and-merge
+    if: >-
+      always() && (needs.approve-and-merge.result == 'failure' ||
+      needs.approve-and-merge.outputs.attention_reason != '')
+    uses: ./.github/workflows/notify-automation.yaml # zizmor: ignore[self-repository] actionlint does not yet support $/ workflow references.
+    with:
+      branch: ${{ github.event.workflow_run.head_branch }}
+      sha: ${{ github.event.workflow_run.head_sha }}
+      reason: ${{ needs.approve-and-merge.outputs.attention_reason || 'Automatic merge or conflict repair failed. Review the workflow run and merge the PR manually once resolved.' }}
