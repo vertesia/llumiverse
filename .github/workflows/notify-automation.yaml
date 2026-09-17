@@ -27,19 +27,24 @@ on:
         type: string
         default: ""
 
+concurrency:
+  group: automation-notification-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
 permissions:
-  contents: read
-  pull-requests: read
-  actions: read
+  contents: read # Checkout trusted helpers and inspect source commits.
+  pull-requests: read # Resolve the original contributor from PR metadata.
+  actions: read # Ignore failures superseded by a newer run or attempt.
 
 jobs:
   resolve:
+    name: Resolve notification recipient
     if: >-
       inputs.reason != '' ||
       (github.event_name == 'pull_request_target' && github.event.pull_request.draft &&
        startsWith(github.event.pull_request.head.ref, 'backport-') &&
        github.event.pull_request.head.repo.full_name == github.repository &&
-       github.event.pull_request.user.login == 'vertesia-release-bot[bot]') ||
+       contains(fromJSON('["vertesia-release-bot[bot]","app/vertesia-release-bot"]'), github.event.pull_request.user.login)) ||
       (github.event_name == 'workflow_run' && contains(fromJSON('["pull_request","push"]'), github.event.workflow_run.event) &&
        contains(fromJSON('["failure","timed_out","cancelled","action_required","startup_failure"]'), github.event.workflow_run.conclusion))
     runs-on: ubuntu-latest
@@ -62,6 +67,7 @@ jobs:
         run: node .github/bin/automation-notification.mjs
 
   notify:
+    name: Notify contributor
     needs: resolve
     if: needs.resolve.outputs.login != ''
     runs-on: ubuntu-latest

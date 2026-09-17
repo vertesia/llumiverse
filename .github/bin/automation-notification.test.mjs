@@ -210,3 +210,36 @@ test('feature branch push failures are outside the notification scope', async ()
     const sourceRun = { ...run, event: 'push', head_branch: 'feature/example' };
     assert.equal(await notification({ ...context, event: { workflow_run: sourceRun } }, async () => ({ workflow_runs: [sourceRun] })), null);
 });
+
+for (const login of ['app/vertesia-release-bot', 'vertesia-release-bot[bot]']) {
+    test(`backport CI and draft notifications accept ${login}`, async () => {
+        const draft = { ...pr, draft: true, user: { login } };
+        const baseApi = apiFor();
+        const api = (path) => path.includes('/pulls?') ? [draft] : baseApi(path);
+        assert.equal((await notification(context, api)).login, user.login);
+        assert.equal((await notification({ ...context, eventName: 'pull_request_target',
+            event: { pull_request: draft } }, api)).login, user.login);
+    });
+}
+
+test('unknown app aliases cannot impersonate the backport bot', async () => {
+    const baseApi = apiFor();
+    assert.equal(await notification(context, (path) => path.includes('/pulls?')
+        ? [{ ...pr, user: { login: 'app/another-bot' } }] : baseApi(path)), null);
+});
+
+test('sync app aliases resolve through source backports instead of notifying a bot', async () => {
+    const syncBranch = 'sync-composableai-main-aaaaaaa';
+    const syncPr = { ...pr, user: { login: 'app/vertesia-submodule-sync' },
+        head: { ...pr.head, ref: syncBranch } };
+    const result = await notification({ ...context, inputs: { branch: syncBranch, sha, reason: 'Sync failed' } }, async (path) => {
+        if (path.startsWith(`repos/${repo}/pulls?`)) return [syncPr];
+        if (path === `repos/${repo}/contents/composableai?ref=${sha}`) return { sha: childSha };
+        if (path === `repos/vertesia/composableai/commits/${childSha}/pulls?per_page=100`) {
+            return [{ ...pr, merged_at: 'today', merge_commit_sha: childSha, user: { login: 'app/vertesia-release-bot' } }];
+        }
+        if (path === 'repos/vertesia/composableai/pulls/7313') return { user };
+        throw new Error(path);
+    });
+    assert.equal(result.login, user.login);
+});

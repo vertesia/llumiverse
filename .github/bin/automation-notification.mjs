@@ -5,7 +5,8 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 const failureConclusions = new Set(['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure']);
-const human = (user) => user?.login && user.type !== 'Bot' && !user.login.endsWith('[bot]');
+const normalizeBotLogin = (login) => login?.startsWith('app/') ? `${login.slice(4)}[bot]` : login;
+const human = (user) => user?.login && user.type !== 'Bot' && !normalizeBotLogin(user.login).endsWith('[bot]');
 const escapeSlack = (value) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 
 function kindOf(repo, branch) {
@@ -100,7 +101,7 @@ export async function notification({ repo, eventName, event, inputs = {}, runUrl
     const prs = await api(`repos/${repo}/pulls?state=open&head=${repo.split('/')[0]}:${encodeURIComponent(branch)}&per_page=100`);
     if (prs.length !== 1) return null;
     const pr = prs[0];
-    if (pr.head.repo?.full_name !== repo || pr.head.sha !== sha || pr.user.login !== kind.bot) return null;
+    if (pr.head.repo?.full_name !== repo || pr.head.sha !== sha || normalizeBotLogin(pr.user.login) !== kind.bot) return null;
     if (!/^(main|preview|release\/\d+\.\d+)$/.test(pr.base.ref)) return null;
     // Creation precedes label/assignee updates; resolve provenance from GitHub instead.
     if (!called && eventName === 'pull_request_target' && !pr.draft) return null;
