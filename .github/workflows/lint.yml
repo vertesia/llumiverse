@@ -44,6 +44,8 @@ jobs:
         with:
           node-version: 24.20.0
           package-manager-cache: false
+      - name: Test automation notifications
+        run: node --test .github/bin/automation-notification.test.mjs
       - name: Locate pnpm store
         id: pnpm-store
         shell: bash
