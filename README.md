@@ -221,3 +221,13 @@ Please see [CONTRIBUTING.md](https://github.com/vertesia/llumiverse/blob/main/CO
 ## License
 
 Apache 2.0
+
+## Coordinated submodule updates
+
+Add the `skip-submodule-sync` label to a PR before merging when a coordinated PR in composableai
+already handles the submodule update. The automatic sync checks the merged PR's label before
+creating or updating a downstream sync PR. CI still runs and failure notifications remain enabled.
+
+The opt-out applies only to that merge commit and target branch (`main` or `release/*`); later
+unlabeled merges can trigger sync again. A manually dispatched downstream submodule update
+bypasses the label. Adding the label after a sync has already started does not cancel that sync.
