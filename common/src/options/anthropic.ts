@@ -1,3 +1,5 @@
+import type { z } from 'zod';
+import type { AnthropicClaudeOptionsSchema } from '../schemas/model-options.js';
 import { type ModelOptions, type ModelOptionsInfo, OptionType, SharedOptions } from '../types.js';
 import { textOptionsFallback } from './fallback.js';
 import {
@@ -10,19 +12,7 @@ import {
 } from './shared-parsing.js';
 import { hasSamplingParameterRestriction } from './version-parsing.js';
 
-export interface AnthropicClaudeOptions {
-    _option_id: 'anthropic-claude';
-    max_tokens?: number;
-    temperature?: number;
-    top_p?: number;
-    top_k?: number;
-    stop_sequence?: string[];
-    effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-    thinking_budget_tokens?: number;
-    include_thoughts?: boolean;
-    cache_enabled?: boolean;
-    cache_ttl?: '5m' | '1h';
-}
+export type AnthropicClaudeOptions = z.infer<typeof AnthropicClaudeOptionsSchema>;
 
 export function getAnthropicOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
     const max_tokens_limit = getClaudeMaxTokensLimit(model);

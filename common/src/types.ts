@@ -763,7 +763,8 @@ export type ModelOptions = z.infer<typeof ModelOptionsSchema>;
 
 export interface ModelOptionsInfo {
     options: ModelOptionInfoItem[];
-    _option_id: string; //Should follow same ids as ModelOptions
+    // Adding a factory ID requires registering its schema in ModelOptionsSchema first.
+    _option_id: ModelOptions['_option_id'];
 }
 
 export type ModelOptionInfoItem =

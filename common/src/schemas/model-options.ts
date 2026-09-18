@@ -53,6 +53,24 @@ export const TextFallbackOptionsSchema = z
     })
     .meta({ id: 'TextFallbackOptions' });
 
+// ===== anthropic =====
+
+export const AnthropicClaudeOptionsSchema = z
+    .strictObject({
+        _option_id: z.literal('anthropic-claude'),
+        max_tokens: z.number().optional(),
+        temperature: z.number().optional(),
+        top_p: z.number().optional(),
+        top_k: z.number().optional(),
+        stop_sequence: z.array(z.string()).optional(),
+        effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
+        thinking_budget_tokens: z.number().optional(),
+        include_thoughts: z.boolean().optional(),
+        cache_enabled: z.boolean().optional(),
+        cache_ttl: z.enum(['5m', '1h']).optional(),
+    })
+    .meta({ id: 'AnthropicClaudeOptions' });
+
 // ===== azure_foundry =====
 
 export const AzureFoundryChatOptionsSchema = z
@@ -484,6 +502,8 @@ export const VertexAIGrokOptionsSchema = z
 // The discriminated union. Member order is the order the derived component lists, which the adapter
 // turns back into a `discriminator` + `mapping` keyed on `_option_id`; a generated Java or Go client
 // reads that mapping to pick the concrete subtype.
+// Register every new option schema here: ModelOptionsInfo derives its allowed IDs from this union.
+// Keep provider aliases inferred from their schemas; see common/README.md for the maintenance checklist.
 export const ModelOptionsSchema = z
     .discriminatedUnion('_option_id', [
         TextFallbackOptionsSchema,
@@ -513,5 +533,6 @@ export const ModelOptionsSchema = z
         XAIGrokImageOptionsSchema,
         GroqOptionsSchema,
         MistralTextOptionsSchema,
+        AnthropicClaudeOptionsSchema,
     ])
     .meta({ id: 'ModelOptions' });
