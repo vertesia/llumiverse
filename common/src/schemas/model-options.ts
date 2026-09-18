@@ -450,6 +450,12 @@ export const VertexAIGeminiOptionsSchema = z
                 'x-deprecated-message': 'Use service_tier="flex" instead.',
             })
             .optional(),
+        speech_voice: z.string().optional(),
+        speech_language: z.string().optional(),
+        transcription_language_codes: z.array(z.string()).optional(),
+        transcription_diarization: z.boolean().optional(),
+        transcription_word_timestamps: z.boolean().optional(),
+        transcription_vocabulary: z.array(z.string()).optional(),
         image_aspect_ratio: z.enum(['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9', '21:9']).optional(),
         image_size: z.enum(['1K', '2K', '4K']).optional(),
         person_generation: z.enum(['ALLOW_ALL', 'ALLOW_ADULT', 'ALLOW_NONE']).optional(),
@@ -484,6 +490,23 @@ export const VertexAIGrokOptionsSchema = z
 // The discriminated union. Member order is the order the derived component lists, which the adapter
 // turns back into a `discriminator` + `mapping` keyed on `_option_id`; a generated Java or Go client
 // reads that mapping to pick the concrete subtype.
+export const OpenAiTranscriptionOptionsSchema = z
+    .strictObject({
+        _option_id: z.literal('openai-transcription'),
+        language: z.string().optional(),
+    })
+    .meta({ id: 'OpenAiTranscriptionOptions' });
+
+export const OpenAiSpeechOptionsSchema = z
+    .strictObject({
+        _option_id: z.literal('openai-speech'),
+        voice: z.string().min(1).optional(),
+        response_format: z.enum(['mp3', 'wav', 'opus', 'aac', 'flac', 'pcm']).optional(),
+        speed: z.number().min(0.25).max(4).optional(),
+        instructions: z.string().optional(),
+    })
+    .meta({ id: 'OpenAiSpeechOptions' });
+
 export const ModelOptionsSchema = z
     .discriminatedUnion('_option_id', [
         TextFallbackOptionsSchema,
@@ -510,6 +533,8 @@ export const ModelOptionsSchema = z
         OpenAiTextOptionsSchema,
         OpenAiDalleOptionsSchema,
         OpenAiGptImageOptionsSchema,
+        OpenAiTranscriptionOptionsSchema,
+        OpenAiSpeechOptionsSchema,
         XAIGrokImageOptionsSchema,
         GroqOptionsSchema,
         MistralTextOptionsSchema,

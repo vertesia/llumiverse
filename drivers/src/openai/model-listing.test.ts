@@ -21,10 +21,12 @@ describe('OpenAI model listing', () => {
         driver.service = { models: { list } } as unknown as OpenAIDriver['service'];
 
         const models = await driver.listModels();
-        expect(models).toHaveLength(3);
+        expect(models.map((model) => model.id)).not.toContain('sora-3');
         expect(models).toEqual(
             expect.arrayContaining([
                 expect.objectContaining({ id: 'gpt-5.6-codex', provider: Providers.openai }),
+                expect.objectContaining({ id: 'gpt-4o-mini-tts', provider: Providers.openai }),
+                expect.objectContaining({ id: 'gpt-4o-transcribe', provider: Providers.openai }),
                 expect.objectContaining({ id: 'o1-pro', provider: Providers.openai }),
                 expect.objectContaining({ id: 'gpt-5-audiovisual', provider: Providers.openai }),
             ]),

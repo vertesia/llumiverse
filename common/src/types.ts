@@ -368,7 +368,7 @@ export class LlumiverseError extends Error {
 // ============== Result Types ===============
 
 export interface BaseResult {
-    type: 'text' | 'thoughts' | 'json' | 'image' | 'video';
+    type: 'text' | 'thoughts' | 'json' | 'image' | 'video' | 'audio';
     value: unknown;
 }
 
@@ -393,6 +393,19 @@ export interface ImageResult extends BaseResult {
     value: string; // base64 data url or real url
 }
 
+/** File-based audio. value is a durable object URI, never inline bytes or a signed download URL. */
+export interface AudioResult extends BaseResult {
+    type: 'audio';
+    value: string;
+    mime_type: string;
+    container?: string;
+    codec?: string;
+    sample_rate?: number;
+    channels?: number;
+    sample_encoding?: string;
+    byte_order?: 'little' | 'big';
+}
+
 export interface VideoResult extends BaseResult {
     type: 'video';
     value: string;
@@ -401,7 +414,7 @@ export interface VideoResult extends BaseResult {
 /**
  * @discriminator type
  */
-export type CompletionResult = TextResult | ThoughtsResult | JsonResult | ImageResult | VideoResult;
+export type CompletionResult = TextResult | ThoughtsResult | JsonResult | ImageResult | VideoResult | AudioResult;
 
 //Internal structure used in driver implementation.
 export interface CompletionChunkObject {
@@ -672,6 +685,12 @@ export interface ExecutionOptions extends ExecutionOptionsBase {
      * absent from StatelessExecutionOptions so API callers cannot select an arbitrary bucket.
      */
     output_storage_uri?: string;
+    /** Runtime-only sink. Must consume the complete file and return a durable object URI before resolving. */
+    store_audio?: (
+        stream: ReadableStream<Uint8Array>,
+        metadata: Omit<AudioResult, 'type' | 'value'>,
+        signal?: AbortSignal,
+    ) => Promise<string>;
     /**
      * Available tools for the request
      */

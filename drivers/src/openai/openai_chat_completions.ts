@@ -3,12 +3,14 @@ import {
     type Completion,
     type CompletionChunkObject,
     type CompletionResult,
+    type CompletionStream,
     type DriverCompletionStream,
     type DriverOptions,
     type EmbeddingResultItem,
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
+    type ExecutionResponse,
     type ExecutionTokenUsage,
     getConversationMeta,
     incrementConversationTurn,
@@ -32,8 +34,11 @@ import {
     truncateLargeTextInConversation,
 } from '@llumiverse/core';
 import { transformSSEStream } from '@llumiverse/core/async';
+import { FallbackCompletionStream } from '@llumiverse/core/driver';
 import OpenAI from 'openai';
+import { boundedAudioStream } from '../shared/audio.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
+import { executeOpenAIAudioRequest, openAIAudioTask } from './audio.js';
 import { getOpenAIExtraBody, mergeOpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAISchema, limitedSchemaFormat } from './schema.js';
@@ -47,7 +52,10 @@ function asOpenAIChatServiceTier(serviceTier?: string): OpenAIChatServiceTier {
 
 export type OpenAIChatCompletionsTextPart = OpenAI.Chat.ChatCompletionContentPartText;
 export type OpenAIChatCompletionsImageUrlPart = OpenAI.Chat.ChatCompletionContentPartImage;
-export type OpenAIChatCompletionsContentPart = OpenAIChatCompletionsTextPart | OpenAIChatCompletionsImageUrlPart;
+export type OpenAIChatCompletionsContentPart =
+    | OpenAIChatCompletionsTextPart
+    | OpenAIChatCompletionsImageUrlPart
+    | OpenAI.Chat.ChatCompletionContentPartInputAudio;
 export type OpenAIChatCompletionsToolCall = OpenAI.Chat.ChatCompletionMessageFunctionToolCall;
 export type OpenAIChatCompletionsToolDefinition = OpenAI.Chat.ChatCompletionTool;
 
@@ -965,6 +973,18 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                                     detail: 'auto',
                                 },
                             });
+                        } else if (file.mime_type?.startsWith('audio/')) {
+                            const format =
+                                file.mime_type === 'audio/wav' || file.mime_type === 'audio/x-wav'
+                                    ? 'wav'
+                                    : file.mime_type === 'audio/mpeg' || file.mime_type === 'audio/mp3'
+                                      ? 'mp3'
+                                      : undefined;
+                            if (!format) throw new Error('Chat audio input requires MP3 or WAV');
+                            const data = await readStreamAsBase64(
+                                boundedAudioStream(await file.getStream(), 25_000_000),
+                            );
+                            parts.push({ type: 'input_audio', input_audio: { data, format } });
                         } else if (file.mime_type?.startsWith('text/')) {
                             const fileStream = await file.getStream();
                             const fileContent = await streamToString(fileStream);
@@ -1483,6 +1503,39 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
     readonly provider = Providers.openai_compatible;
     service: OpenAI;
 
+    override async execute(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<ExecutionResponse<OpenAIChatCompletionsPrompt>> {
+        if (!openAIAudioTask(options.model)) return super.execute(segments, options, signal);
+        return executeOpenAIAudioRequest(
+            this,
+            this.service,
+            segments,
+            options,
+            { _is_openai_chat_completions: true, messages: [] },
+            signal,
+            options.model,
+            this.getDriverRequestOptions(options, signal),
+        );
+    }
+
+    override async stream(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CompletionStream<OpenAIChatCompletionsPrompt>> {
+        if (!openAIAudioTask(options.model)) return super.stream(segments, options, signal);
+        return new FallbackCompletionStream(
+            this,
+            { _is_openai_chat_completions: true, messages: [] },
+            options,
+            (streamSignal) =>
+                this.execute(segments, options, signal ? AbortSignal.any([signal, streamSignal]) : streamSignal),
+        );
+    }
+
     constructor(options: OpenAIChatCompletionsDriverConfig) {
         super(options);
         this.service = new OpenAI({
@@ -1531,7 +1584,7 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
             .filter(
                 (model) =>
                     !isEmbeddingModel({ id: model.id }, this.provider) &&
-                    !isDedicatedInferenceModel(model.id, this.provider),
+                    (!isDedicatedInferenceModel(model.id, this.provider) || !!openAIAudioTask(model.id)),
             )
             .map((model) => {
                 const modelMetadata = resolveModelListingMetadata(model.id, this.provider);

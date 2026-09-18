@@ -132,7 +132,13 @@ export function getAzureFoundryOptions(model: string, _option?: ModelOptions): M
     const modelLower = baseModel.toLowerCase();
     const max_tokens_limit = getMaxTokensLimitAzureFoundry(model);
     const profile = resolveModelProfile(model, Providers.azure_foundry);
-    if (modelLower.includes('gpt-') || modelLower.includes('dall-e') || /(?:^|[~/.])o\d+(?:[-_.]|$)/.test(modelLower)) {
+    if (
+        profile.family === 'speech' ||
+        profile.family === 'transcription' ||
+        modelLower.includes('gpt-') ||
+        modelLower.includes('dall-e') ||
+        /(?:^|[~/.])o\d+(?:[-_.]|$)/.test(modelLower)
+    ) {
         return getOpenAiOptions(baseModel, _option, profile);
     }
     // Vision model options

@@ -790,3 +790,24 @@ function stripHeartbeatsInternal(obj: unknown, preserveSubtree?: (value: unknown
 
     return obj;
 }
+
+/** Remove provider inline audio at persistence/debug boundaries, independently of image retention. */
+export function stripAudioPayloads<T>(value: T): T {
+    const visit = (node: unknown): unknown => {
+        if (!node || typeof node !== 'object' || ArrayBuffer.isView(node)) return node;
+        if (Array.isArray(node)) return node.map(visit);
+        if (node instanceof Date) return node;
+        const object = node as Record<string, unknown>;
+        const inline = object.inlineData as { mimeType?: string } | undefined;
+        if (inline?.mimeType?.startsWith('audio/')) return { text: '[Audio file omitted from history]' };
+        if (object.type === 'input_audio') return { type: 'text', text: '[Audio file omitted from history]' };
+        const audio = object.audio as { source?: { bytes?: unknown }; data?: unknown } | undefined;
+        if (audio?.source?.bytes !== undefined) return { text: '[Audio file omitted from history]' };
+        const entries = Object.entries(object).map(([key, item]) => [
+            key,
+            key === 'audio' && audio?.data !== undefined ? undefined : visit(item),
+        ]);
+        return Object.fromEntries(entries);
+    };
+    return visit(value) as T;
+}

@@ -158,6 +158,20 @@ export const ImageResultSchema = z
     .strictObject({ type: z.literal('image'), value: z.string() })
     .meta({ id: 'ImageResult' });
 
+export const AudioResultSchema = z
+    .strictObject({
+        type: z.literal('audio'),
+        value: z.string().regex(/^(?:gs|s3):\/\/[^/]+\/.+|^artifact:.+/),
+        mime_type: z.string().startsWith('audio/'),
+        container: z.string().optional(),
+        codec: z.string().optional(),
+        sample_rate: z.number().int().positive().optional(),
+        channels: z.number().int().positive().optional(),
+        sample_encoding: z.string().optional(),
+        byte_order: z.enum(['little', 'big']).optional(),
+    })
+    .meta({ id: 'AudioResult' });
+
 export const VideoResultSchema = z
     .strictObject({ type: z.literal('video'), value: z.string() })
     .meta({ id: 'VideoResult' });
@@ -169,6 +183,7 @@ export const CompletionResultSchema = z
         JsonResultSchema,
         ImageResultSchema,
         VideoResultSchema,
+        AudioResultSchema,
     ])
     .meta({ id: 'CompletionResult' });
 

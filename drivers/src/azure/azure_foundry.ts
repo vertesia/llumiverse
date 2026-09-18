@@ -14,6 +14,7 @@ import ModelClient, { isUnexpected } from '@azure-rest/ai-inference';
 import {
     type AIModel,
     type Completion,
+    type CompletionStream,
     type DriverCompletionStream,
     type DriverOptions,
     dataSourceToBase64,
@@ -21,16 +22,19 @@ import {
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
+    type ExecutionResponse,
     type ImageEmbeddingInput,
     LlumiverseError,
     type LlumiverseErrorContext,
     normalizeEmbeddingsOptions,
+    type PromptSegment,
     Providers,
     resolveModelProfile,
     type TextEmbeddingInput,
 } from '@llumiverse/core';
 import { AbstractDriver } from '@llumiverse/core/driver';
 import type OpenAI from 'openai';
+import { openAIAudioTask } from '../openai/audio.js';
 import { OpenAIResponsesDriverBase } from '../openai/index.js';
 import {
     type OpenAIChatCompletionsContentPart,
@@ -183,6 +187,34 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     private openAIProtocolDriver?: AzureFoundryOpenAIProtocolDriver;
     private readonly deploymentProtocols = new Map<string, 'responses' | 'chat_completions'>();
     readonly provider = Providers.azure_foundry;
+
+    override async execute(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<ExecutionResponse<ResponseInputItem[]>> {
+        if (
+            openAIAudioTask(options.model) &&
+            (await this.isOpenAIDeployment(options.model, signal, options.httpTimeout))
+        ) {
+            return this.getOpenAIProtocolDriver().execute(segments, options, signal);
+        }
+        return super.execute(segments, options, signal);
+    }
+
+    override async stream(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CompletionStream<ResponseInputItem[]>> {
+        if (
+            openAIAudioTask(options.model) &&
+            (await this.isOpenAIDeployment(options.model, signal, options.httpTimeout))
+        ) {
+            return this.getOpenAIProtocolDriver().stream(segments, options, signal);
+        }
+        return super.stream(segments, options, signal);
+    }
 
     OPENAI_API_VERSION = '2025-01-01-preview';
     INFERENCE_API_VERSION = '2024-05-01-preview';
@@ -626,6 +658,7 @@ function parseCapabilityFlag(value: unknown): boolean | undefined {
 }
 
 function isStandardInferenceDeployment(deployment: ModelDeployment): boolean {
+    if (deployment.modelPublisher?.toLowerCase() === 'openai' && openAIAudioTask(deployment.modelName)) return true;
     const profile = resolveModelProfile(deployment.modelName, Providers.azure_foundry);
     const sourceModel = deployment.modelName.toLowerCase();
     // These source families use dedicated endpoint contracts, not Foundry chat or Responses inference.
@@ -671,9 +704,11 @@ function toAzureInferenceMessage(message: OpenAIChatCompletionsPayload['messages
                     typeof message.content === 'string'
                         ? message.content
                         : (message.content?.map((part) =>
-                              part.type === 'text'
-                                  ? { type: 'text' as const, text: part.text }
-                                  : { type: 'image_url' as const, image_url: part.image_url },
+                              part.type === 'input_audio'
+                                  ? unsupportedAudioPart()
+                                  : part.type === 'text'
+                                    ? { type: 'text' as const, text: part.text }
+                                    : { type: 'image_url' as const, image_url: part.image_url },
                           ) ?? ''),
             };
     }
@@ -766,4 +801,8 @@ export function parseAzureFoundryModelId(compositeId: string): { deploymentName:
 
 export function isCompositeModelId(modelId: string): boolean {
     return modelId.includes('::');
+}
+
+function unsupportedAudioPart(): never {
+    throw new Error('This inference endpoint does not support audio input');
 }
