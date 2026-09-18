@@ -1,3 +1,5 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import type { TokenCredential } from '@azure/identity';
 import { PromptRole } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
@@ -165,9 +167,7 @@ describe('AzureFoundryDriver protocol composition', () => {
         expect(completion.original_response).toBe(nativeResponse);
     });
 
-    it('memoizes the OpenAI Responses adapter and deployment decision', async () => {
-        const driver = createDriver();
-        const deploymentGet = vi.fn(async () => ({ modelPublisher: 'OpenAI' }));
+    it('sends authenticated Responses requests and caches deployment discovery', async ({ onTestFinished }) => {
         const response = {
             id: 'response-1',
             object: 'response',
@@ -195,21 +195,40 @@ describe('AzureFoundryDriver protocol composition', () => {
             top_p: 1,
             usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 },
         };
-        const fetch = vi.fn<typeof globalThis.fetch>(
-            async () =>
-                new Response(JSON.stringify(response), {
-                    headers: { 'Content-Type': 'application/json' },
-                }),
-        );
-        const internals = exposePrivate<{
-            getDriverFetch(): typeof globalThis.fetch;
-            openAIProtocolDriver?: { service: { timeout: number } };
-        }>(driver);
-        const getFetch = vi.spyOn(internals, 'getDriverFetch').mockReturnValue(fetch);
-        driver.service = {
-            endpoint: 'https://foundry.example.test/projects/demo/',
-            deployments: { get: deploymentGet },
-        } as unknown as AzureFoundryDriver['service'];
+        const requests: Array<{ url?: string; authorization?: string; body: string }> = [];
+        const server = createServer((req, res) => {
+            let body = '';
+            req.setEncoding('utf8');
+            req.on('data', (chunk: string) => {
+                body += chunk;
+            });
+            req.on('end', () => {
+                requests.push({ url: req.url, authorization: req.headers.authorization, body });
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(response));
+            });
+        });
+        onTestFinished(async () => {
+            server.closeAllConnections();
+            await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+        });
+        await new Promise<void>((resolve, reject) => {
+            server.once('error', reject);
+            server.listen(0, '127.0.0.1', resolve);
+        });
+        const { port } = server.address() as AddressInfo;
+        const driver = new AzureFoundryDriver({
+            endpoint: `http://127.0.0.1:${port}/projects/demo/`,
+            azureADTokenProvider: credential,
+        });
+        onTestFinished(() => driver.destroy());
+        const deploymentGet = vi.spyOn(driver.service.deployments, 'get').mockResolvedValue({
+            type: 'ModelDeployment',
+            name: 'gpt-deployment',
+            modelName: 'gpt-5',
+            modelVersion: '1',
+            modelPublisher: 'OpenAI',
+        });
         const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Hello' }], {
             model: 'gpt-deployment::gpt-5',
         });
@@ -236,14 +255,13 @@ describe('AzureFoundryDriver protocol composition', () => {
             expect.objectContaining({ result: [{ type: 'text', value: 'ok' }] }),
         );
         expect(deploymentGet).toHaveBeenCalledOnce();
-        expect(getFetch).toHaveBeenCalledOnce();
-        expect(internals.openAIProtocolDriver?.service.timeout).toBe(900_000);
-        expect(fetch).toHaveBeenCalledTimes(2);
-        const [url, init] = fetch.mock.calls[0];
-        expect(String(url)).toBe('https://foundry.example.test/projects/demo/openai/v1/responses');
-        expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer test-token');
+        expect(requests).toHaveLength(2);
+        for (const request of requests) {
+            expect(request.url).toBe('/projects/demo/openai/v1/responses');
+            expect(request.authorization).toBe('Bearer test-token');
+        }
         expect(credential.getToken).toHaveBeenCalledWith(['https://ai.azure.com/.default'], expect.anything());
-        const payload = JSON.parse(String(init?.body));
+        const payload = JSON.parse(requests[0].body);
         expect(payload).not.toHaveProperty('temperature');
         expect(payload).not.toHaveProperty('top_p');
         expect(payload).toEqual(
