@@ -336,6 +336,9 @@ export function convertResponseItemsToChatMessages(items: ResponseInputItem[]): 
         // Handle function_call_output (tool response)
         if ('type' in item && item.type === 'function_call_output') {
             const output = item as OpenAI.Responses.ResponseInputItem.FunctionCallOutput;
+            if (!output.call_id) {
+                throw new Error('Cannot convert a function_call_output without call_id to Chat Completions.');
+            }
             messages.push({
                 role: 'tool',
                 tool_call_id: output.call_id,

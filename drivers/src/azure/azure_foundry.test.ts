@@ -1,6 +1,5 @@
 import type { TokenCredential } from '@azure/identity';
 import { PromptRole } from '@llumiverse/core';
-import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import { exposePrivate } from '../../test/__helpers__/test-utils.js';
 import type { OpenAIChatCompletionsPayload } from '../openai/openai_chat_completions.js';
@@ -196,12 +195,20 @@ describe('AzureFoundryDriver protocol composition', () => {
             top_p: 1,
             usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 },
         };
-        const create = vi.fn(async () => response);
-        const openAIClient = { responses: { create } } as unknown as OpenAI;
-        const getOpenAIClient = vi.fn(() => openAIClient);
+        const fetch = vi.fn<typeof globalThis.fetch>(
+            async () =>
+                new Response(JSON.stringify(response), {
+                    headers: { 'Content-Type': 'application/json' },
+                }),
+        );
+        const internals = exposePrivate<{
+            getDriverFetch(): typeof globalThis.fetch;
+            openAIProtocolDriver?: { service: { timeout: number } };
+        }>(driver);
+        const getFetch = vi.spyOn(internals, 'getDriverFetch').mockReturnValue(fetch);
         driver.service = {
+            endpoint: 'https://foundry.example.test/projects/demo/',
             deployments: { get: deploymentGet },
-            getOpenAIClient,
         } as unknown as AzureFoundryDriver['service'];
         const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Hello' }], {
             model: 'gpt-deployment::gpt-5',
@@ -229,19 +236,22 @@ describe('AzureFoundryDriver protocol composition', () => {
             expect.objectContaining({ result: [{ type: 'text', value: 'ok' }] }),
         );
         expect(deploymentGet).toHaveBeenCalledOnce();
-        expect(getOpenAIClient).toHaveBeenCalledOnce();
-        expect(getOpenAIClient).toHaveBeenCalledWith({
-            fetch: expect.any(Function),
-            timeout: 900_000,
-        });
-        expect(create).toHaveBeenCalledWith(
+        expect(getFetch).toHaveBeenCalledOnce();
+        expect(internals.openAIProtocolDriver?.service.timeout).toBe(900_000);
+        expect(fetch).toHaveBeenCalledTimes(2);
+        const [url, init] = fetch.mock.calls[0];
+        expect(String(url)).toBe('https://foundry.example.test/projects/demo/openai/v1/responses');
+        expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer test-token');
+        expect(credential.getToken).toHaveBeenCalledWith(['https://ai.azure.com/.default'], expect.anything());
+        const payload = JSON.parse(String(init?.body));
+        expect(payload).not.toHaveProperty('temperature');
+        expect(payload).not.toHaveProperty('top_p');
+        expect(payload).toEqual(
             expect.objectContaining({
                 model: 'gpt-deployment',
                 stream: false,
                 reasoning: { effort: 'high', summary: 'auto' },
                 include: ['reasoning.encrypted_content'],
-                temperature: undefined,
-                top_p: undefined,
                 tools: [expect.objectContaining({ type: 'function', name: 'lookup' })],
                 text: expect.objectContaining({
                     format: expect.objectContaining({ type: 'json_schema', name: 'format_output' }),
