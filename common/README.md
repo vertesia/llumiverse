@@ -7,14 +7,19 @@ Shared types, enums and model option metadata for Llumiverse clients and drivers
 `src/schemas/model-options.ts` is the canonical wire contract. Keep its
 `ModelOptionsSchema` union updated whenever a factory emits a new `_option_id`.
 Defining or exporting a branch schema alone does not register it in the union.
+Payloads may omit `_option_id`; factories must still return a registered ID.
+Use `z.union`, which emits `anyOf`: untagged payloads can match multiple families.
+Do not synthesize an OpenAPI discriminator or promote this to `oneOf`, since that
+would require the ID or reject valid overlapping objects. Supplied IDs and other
+fields remain validated; parsing never invents an ID or strips unknown fields.
 
-1. Add a `z.strictObject` schema with a unique, required `_option_id` literal and a
+1. Add a `z.strictObject` schema with a unique, optional `_option_id` literal and a
    stable `.meta({ id: 'ProviderOptions' })` component name. Append it to the union
    to preserve existing generated-client branch order.
 2. Derive the public option type with `z.infer<typeof ProviderOptionsSchema>` using
    type-only imports. Keep runtime schemas on the `/schemas` subpath.
 3. Return `ModelOptionsInfo` from option metadata factories and route through
-   `getOptions()`. Its `_option_id` is `ModelOptions['_option_id']`: an unregistered
+   `getOptions()`. Its required `_option_id` is `NonNullable<ModelOptions['_option_id']>`: an unregistered
    ID fails compilation. Do not widen it to `string` or bypass it with a cast.
 4. Add factory/routing and schema tests for representative valid options, invalid
    values and unknown fields. Metadata may be model-dependent; the wire schema
@@ -33,7 +38,7 @@ Defining or exporting a branch schema alone does not register it in the union.
    only when constructing the provider request.
 5. Run `pnpm lint`, `pnpm build`, `pnpm typecheck:test`, and `pnpm test` in `common`,
    then `pnpm build` at the repository root. Consumers publishing OpenAPI must
-   regenerate their schema artifacts and verify discriminator mappings and request
+   regenerate their schema artifacts and verify optional IDs, union members, and request
    validation. Publish the updated common package before consumers require it.
 
 Tests derive component membership from the union rather than repeating an ID list.

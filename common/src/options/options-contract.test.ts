@@ -119,13 +119,15 @@ describe('option factory contracts', () => {
         );
         // Kept for saved payloads; Vertex Grok now routes through the OpenAI-compatible surface.
         exercised.add('vertexai-grok');
-        expect([...exercised].sort()).toEqual(ModelOptionsSchema.options.map((s) => s.shape._option_id.value).sort());
+        expect([...exercised].sort()).toEqual(
+            ModelOptionsSchema.options.map((s) => s.shape._option_id.unwrap().value).sort(),
+        );
         expect(ModelOptionsSchema.safeParse({ _option_id: 'vertexai-grok', max_tokens: 100 }).success).toBe(true);
     });
 
     for (const provider of Object.values(Providers)) {
         it.each(routes[provider])(`${provider} / %s routes to %s and exposes valid metadata`, (model, id) => {
-            const schema = ModelOptionsSchema.options.find((s) => s.shape._option_id.value === id);
+            const schema = ModelOptionsSchema.options.find((s) => s.shape._option_id.unwrap().value === id);
             if (!schema) throw new Error(`Missing schema for ${id}`);
             const fields: Record<string, z.ZodType> = schema.shape;
             const states: (ModelOptions | undefined)[] = [undefined];
