@@ -123,7 +123,7 @@ function getImagenParameters(taskType: string, options: ImagenOptions) {
         sampleCount: options?.number_of_images,
         seed: options?.seed,
         safetySetting: options?.safety_setting,
-        personGeneration: options?.person_generation,
+        personGeneration: options?.person_generation === 'allow_adults' ? 'allow_adult' : options?.person_generation,
         negativePrompt: taskType ? undefined : '', //Filled in later from the prompt
         //TODO: Add more safety and prompt rejection information
         //includeSafetyAttributes: true,

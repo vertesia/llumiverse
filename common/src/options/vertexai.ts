@@ -328,7 +328,7 @@ function getImagenOptions(model: string, option?: ModelOptions): ModelOptionsInf
                 ? [
                       {
                           name: 'mask_class',
-                          type: OptionType.string_list,
+                          type: OptionType.numeric_list,
                           default: [],
                           description:
                               'Input Class IDs. Create a mask based on image class, based on https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/imagen-api-customization#segment-ids',

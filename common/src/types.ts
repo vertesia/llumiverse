@@ -738,6 +738,7 @@ export enum OptionType {
     enum = 'enum',
     boolean = 'boolean',
     string_list = 'string_list',
+    numeric_list = 'numeric_list',
     json_object = 'json_object',
 }
 
@@ -772,6 +773,7 @@ export type ModelOptionInfoItem =
     | EnumOptionInfo
     | BooleanOptionInfo
     | StringListOptionInfo
+    | NumericListOptionInfo
     | JSONObjectOptionInfo;
 interface OptionInfoPrototype {
     type: OptionType;
@@ -810,6 +812,12 @@ export interface StringListOptionInfo extends OptionInfoPrototype {
     type: OptionType.string_list;
     value?: string[];
     default?: string[];
+}
+
+export interface NumericListOptionInfo extends OptionInfoPrototype {
+    type: OptionType.numeric_list;
+    value?: number[];
+    default?: number[];
 }
 
 export interface JSONObjectOptionInfo extends OptionInfoPrototype {

@@ -19,6 +19,12 @@ Defining or exporting a branch schema alone does not register it in the union.
 4. Add factory/routing and schema tests for representative valid options, invalid
    values and unknown fields. Metadata may be model-dependent; the wire schema
    must cover supported fields without imposing one model's limits on all models.
+   Extend `src/options/options-contract.test.ts` with representative routing boundaries.
+   It checks defaults, values, enum choices, field types, and conditional controls
+   against the selected schema, and derives required family coverage from the union.
+   Use `numeric_list` for numeric arrays, not `string_list`. The provider switch is
+   exhaustive: select a factory or explicitly choose the generic fallback for every
+   new provider. Retained legacy schemas need a documented compatibility test.
 5. Run `pnpm lint`, `pnpm build`, `pnpm typecheck:test`, and `pnpm test` in `common`,
    then `pnpm build` at the repository root. Consumers publishing OpenAPI must
    regenerate their schema artifacts and verify discriminator mappings and request
