@@ -738,6 +738,7 @@ export enum OptionType {
     enum = 'enum',
     boolean = 'boolean',
     string_list = 'string_list',
+    numeric_list = 'numeric_list',
     json_object = 'json_object',
 }
 
@@ -763,7 +764,8 @@ export type ModelOptions = z.infer<typeof ModelOptionsSchema>;
 
 export interface ModelOptionsInfo {
     options: ModelOptionInfoItem[];
-    _option_id: string; //Should follow same ids as ModelOptions
+    // Adding a factory ID requires registering its schema in ModelOptionsSchema first.
+    _option_id: ModelOptions['_option_id'];
 }
 
 export type ModelOptionInfoItem =
@@ -771,6 +773,7 @@ export type ModelOptionInfoItem =
     | EnumOptionInfo
     | BooleanOptionInfo
     | StringListOptionInfo
+    | NumericListOptionInfo
     | JSONObjectOptionInfo;
 interface OptionInfoPrototype {
     type: OptionType;
@@ -809,6 +812,12 @@ export interface StringListOptionInfo extends OptionInfoPrototype {
     type: OptionType.string_list;
     value?: string[];
     default?: string[];
+}
+
+export interface NumericListOptionInfo extends OptionInfoPrototype {
+    type: OptionType.numeric_list;
+    value?: number[];
+    default?: number[];
 }
 
 export interface JSONObjectOptionInfo extends OptionInfoPrototype {

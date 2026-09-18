@@ -53,6 +53,24 @@ export const TextFallbackOptionsSchema = z
     })
     .meta({ id: 'TextFallbackOptions' });
 
+// ===== anthropic =====
+
+export const AnthropicClaudeOptionsSchema = z
+    .strictObject({
+        _option_id: z.literal('anthropic-claude'),
+        max_tokens: z.number().optional(),
+        temperature: z.number().optional(),
+        top_p: z.number().optional(),
+        top_k: z.number().optional(),
+        stop_sequence: z.array(z.string()).optional(),
+        effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
+        thinking_budget_tokens: z.number().optional(),
+        include_thoughts: z.boolean().optional(),
+        cache_enabled: z.boolean().optional(),
+        cache_ttl: z.enum(['5m', '1h']).optional(),
+    })
+    .meta({ id: 'AnthropicClaudeOptions' });
+
 // ===== azure_foundry =====
 
 export const AzureFoundryChatOptionsSchema = z
@@ -126,6 +144,7 @@ export const BedrockNovaOptionsSchema = z
         max_tokens: z.number().optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
+        top_k: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
         include_thoughts: z.boolean().optional(),
         service_tier: ServiceTierSchema.optional(),
@@ -138,6 +157,7 @@ export const BedrockMistralOptionsSchema = z
         max_tokens: z.number().optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
+        top_k: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
         include_thoughts: z.boolean().optional(),
         service_tier: ServiceTierSchema.optional(),
@@ -150,6 +170,8 @@ export const BedrockAI21OptionsSchema = z
         max_tokens: z.number().optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
+        presence_penalty: z.number().optional(),
+        frequency_penalty: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
         include_thoughts: z.boolean().optional(),
         service_tier: ServiceTierSchema.optional(),
@@ -162,6 +184,9 @@ export const BedrockCohereCommandOptionsSchema = z
         max_tokens: z.number().optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
+        top_k: z.number().optional(),
+        presence_penalty: z.number().optional(),
+        frequency_penalty: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
         include_thoughts: z.boolean().optional(),
         service_tier: ServiceTierSchema.optional(),
@@ -257,8 +282,8 @@ export const BedrockMantleResponsesOptionsSchema = z
         max_tokens: z.number().optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
-        effort: z.enum(['none', 'low', 'medium', 'high', 'xhigh']).optional(),
-        reasoning_effort: z.enum(['none', 'low', 'medium', 'high', 'xhigh']).optional(),
+        effort: z.enum(['none', 'low', 'medium', 'high', 'xhigh', 'max']).optional(),
+        reasoning_effort: z.enum(['none', 'low', 'medium', 'high', 'xhigh', 'max']).optional(),
         verbosity: z.enum(['low', 'medium', 'high']).optional(),
         image_detail: z.enum(['low', 'high', 'auto']).optional(),
         include_thoughts: z.boolean().optional(),
@@ -386,7 +411,8 @@ export const ImagenOptionsSchema = z
         _option_id: z.literal('vertexai-imagen'),
         number_of_images: z.number().optional(),
         seed: z.number().optional(),
-        person_generation: z.enum(['dont_allow', 'allow_adults', 'allow_all']).optional(),
+        // Retain the previously published plural spelling as a compatibility alias.
+        person_generation: z.enum(['dont_allow', 'allow_adults', 'allow_all', 'allow_adult']).optional(),
         safety_setting: z
             .enum(['block_none', 'block_only_high', 'block_medium_and_above', 'block_low_and_above'])
             .optional(),
@@ -484,6 +510,8 @@ export const VertexAIGrokOptionsSchema = z
 // The discriminated union. Member order is the order the derived component lists, which the adapter
 // turns back into a `discriminator` + `mapping` keyed on `_option_id`; a generated Java or Go client
 // reads that mapping to pick the concrete subtype.
+// Register every new option schema here: ModelOptionsInfo derives its allowed IDs from this union.
+// Keep provider aliases inferred from their schemas; see common/README.md for the maintenance checklist.
 export const ModelOptionsSchema = z
     .discriminatedUnion('_option_id', [
         TextFallbackOptionsSchema,
@@ -513,5 +541,6 @@ export const ModelOptionsSchema = z
         XAIGrokImageOptionsSchema,
         GroqOptionsSchema,
         MistralTextOptionsSchema,
+        AnthropicClaudeOptionsSchema,
     ])
     .meta({ id: 'ModelOptions' });
