@@ -44,6 +44,8 @@ jobs:
         with:
           node-version: 24.19.0
           package-manager-cache: false
+      - name: Test automerge CI policy
+        run: node --test .github/bin/automerge-ci.node-test.mjs
       - name: Locate pnpm store
         id: pnpm-store
         shell: bash
