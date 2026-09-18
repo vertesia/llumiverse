@@ -274,7 +274,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                     name: 'outPaintingMode',
                     type: OptionType.enum,
                     enum: { DEFAULT: 'DEFAULT', PRECISE: 'PRECISE' },
-                    default: 'default',
+                    default: 'DEFAULT',
                     description: 'The outpainting mode of the generated image',
                 });
                 break;
@@ -467,6 +467,10 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                     options: [...baseConverseOptions, ...cohereCommandOptions, ...cohereCommandROptions],
                 };
             }
+            return {
+                _option_id: 'bedrock-cohere-command',
+                options: [...baseConverseOptions, ...cohereCommandOptions],
+            };
         } else if (model.includes('writer')) {
             const palmyraConverseOptions: ModelOptionInfoItem[] = [
                 {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import type { ModelOptions } from '../types.js';
+import { getOptions } from '../options.js';
+import { type ModelOptions, type ModelOptionsInfo, Providers } from '../types.js';
 import { ModelOptionsSchema } from './model-options.js';
 
 /** Exact type identity — `extends` in both directions is too weak (`any`/`unknown` slip through). */
@@ -8,18 +9,15 @@ type Equals<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B 
 function assertType<T extends true>(_ok: T): void {}
 
 /**
-<<<<<<< HEAD
  * `ModelOptions` is published by Vertesia as a discriminated union whose members are named components.
  * These pin the properties that a consumer of the published document
-=======
- * `ModelOptions` is published by Vertesia as a union component with named
- * members, each its own component. These pin the properties that a consumer of the published document
->>>>>>> f2675a8 (fix: make model option family IDs optional (#675))
  * depends on and that a careless edit here would break silently — the union is large enough that a
  * dropped member reads as a normal diff.
  */
 const emitted = z.toJSONSchema(ModelOptionsSchema, { target: 'draft-2020-12', io: 'input' }) as {
-<<<<<<< HEAD
+    type?: string;
+    anyOf?: { $ref: string }[];
+    oneOf?: { $ref: string }[];
     $defs: Record<
         string,
         {
@@ -29,12 +27,6 @@ const emitted = z.toJSONSchema(ModelOptionsSchema, { target: 'draft-2020-12', io
             required?: string[];
         }
     >;
-=======
-    type?: string;
-    anyOf?: { $ref: string }[];
-    oneOf?: { $ref: string }[];
-    $defs: Record<string, { properties?: Record<string, unknown>; required?: string[] }>;
->>>>>>> f2675a8 (fix: make model option family IDs optional (#675))
 };
 
 const union = emitted.$defs.ModelOptions;
@@ -82,7 +74,6 @@ describe('ModelOptionsSchema', () => {
         ).toBe(true);
     });
 
-<<<<<<< HEAD
     it('carries every driver option set, in the published order', () => {
         // Order is significant: it becomes the `oneOf` order in the document, which decides the branch
         // order a generated Java or Go client tries.
@@ -115,8 +106,10 @@ describe('ModelOptionsSchema', () => {
             'XAIGrokImageOptions',
             'GroqOptions',
             'MistralTextOptions',
+            'AnthropicClaudeOptions',
         ]);
-=======
+    });
+
     it('publishes every registered schema in union order', () => {
         expect(MEMBERS).toEqual(ModelOptionsSchema.options.map((schema) => schema.meta()?.id));
     });
@@ -153,13 +146,12 @@ describe('ModelOptionsSchema', () => {
         for (const invalid of [{ effort: 'none' }, { cache_ttl: '2h' }, { max_tokens: '4096' }, { unknown: true }]) {
             expect(ModelOptionsSchema.safeParse({ ...options, ...invalid }).success).toBe(false);
         }
->>>>>>> f2675a8 (fix: make model option family IDs optional (#675))
     });
 
     it('publishes optional unique IDs and anyOf for overlapping untagged objects', () => {
-        expect(emitted.type).toBe('object');
         expect(emitted.oneOf).toBeUndefined();
-        expect(emitted.anyOf).toBeDefined();
+        expect(union.oneOf).toBeUndefined();
+        expect(union.anyOf).toBeDefined();
         const ids = MEMBERS.map((name) => {
             const member = emitted.$defs[name];
             expect(member.required ?? [], name).not.toContain('_option_id');

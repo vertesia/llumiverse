@@ -21,6 +21,7 @@ const routes: Record<Providers, readonly (readonly [string, ModelOptions['_optio
         ['dall-e-3', 'openai-dalle'],
         ['gpt-image-1', 'openai-gpt-image'],
     ],
+    openrouter: [['openai/gpt-4o', 'openrouter-text']],
     azure_openai: [['deployment::gpt-5.6-sol', 'openai-thinking']],
     openai_compatible: [
         ['custom-model', 'openai-text'],
@@ -90,7 +91,7 @@ function sampleValues(option: ModelOptionInfoItem): unknown[] {
         case OptionType.numeric:
             return [option.min ?? option.default ?? 1, option.max].filter((v) => v !== undefined);
         case OptionType.string_list:
-            return [['example']];
+            return [option.name === 'provider_quantizations' ? ['int4'] : ['example']];
         case OptionType.numeric_list:
             return [[1]];
         case OptionType.json_object:

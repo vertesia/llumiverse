@@ -1484,8 +1484,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 //Support no additional fields.
             }
         } else if (options.model.includes('ai21')) {
-            //Jamba models support no additional options
-            //Jurassic 2 models do.
+            // Jurassic uses nested penalty scales; Jamba accepts the numeric fields directly.
             if (options.model.includes('j2')) {
                 additionalField = {
                     presencePenalty: { scale: model_options.presence_penalty },
@@ -1497,6 +1496,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     prompt.system = undefined;
                     prompt.messages = converseConcatMessages(prompt.messages);
                 }
+            } else if (options.model.includes('jamba')) {
+                additionalField = {
+                    presence_penalty: model_options.presence_penalty,
+                    frequency_penalty: model_options.frequency_penalty,
+                };
             }
         } else if (options.model.includes('cohere.command')) {
             // If last message is "```json", remove it.

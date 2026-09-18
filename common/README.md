@@ -1,8 +1,5 @@
-# Llumiverse - Universal LLM Connectors for Node.js
+# Llumiverse common
 
-<<<<<<< HEAD
- This package contains the types / enums shared between core and drivers and clients.
-=======
 Shared types, enums and model option metadata for Llumiverse clients and drivers.
 
 ## Adding or changing model options
@@ -54,4 +51,3 @@ registry would add runtime coupling to Zod and still needs to represent factorie
 that select several option sets by model. Reconsider it if routing and metadata
 registration develop further independent lists; any registry must preserve the
 schema subpath boundary and many-to-many provider/option relationships.
->>>>>>> f2675a8 (fix: make model option family IDs optional (#675))
