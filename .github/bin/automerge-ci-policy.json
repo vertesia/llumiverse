@@ -15,7 +15,11 @@
     "lint.yml": {
         "jobs": [
             {
-                "name": "^Check codebase$"
+                "name": "^Check codebase$",
+                "steps": [
+                    "Test automerge CI policy",
+                    "Check codebase"
+                ]
             }
         ]
     }

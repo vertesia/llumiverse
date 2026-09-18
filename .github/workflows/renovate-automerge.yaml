@@ -33,7 +33,7 @@ jobs:
       - name: Checkout trusted CI policy
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
           sparse-checkout: .github/bin
       - name: Set up Node.js for CI policy
