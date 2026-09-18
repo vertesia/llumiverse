@@ -24,6 +24,12 @@ on:
     branches:
       - "backport-*"
 
+# Serialize eligibility, notification, and its marker so CI completions cannot
+# both notify before either has recorded the one-time manual-review warning.
+concurrency:
+  group: backport-automerge-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
 permissions:
   actions: read # required to inspect workflow run status for the exact backport head SHA
   contents: read # required for repository metadata access through gh
@@ -49,11 +55,9 @@ jobs:
     runs-on: ubuntu-slim
     environment: renovate-automerge
     timeout-minutes: 10
-    concurrency:
-      group: backport-automerge-${{ github.event.workflow_run.head_branch }}
-      cancel-in-progress: false
     outputs:
       attention_reason: ${{ steps.eligibility.outputs.attention_reason }}
+      manual_review_pr: ${{ steps.eligibility.outputs.manual_review_pr }}
     steps:
       # workflow_run is privileged: execute policy only from the trusted workflow commit.
       - name: Checkout trusted CI policy
@@ -169,6 +173,17 @@ jobs:
           # required-CI checks below.
           if [[ "$commit_count" != "1" ]]; then
             echo "Skipping PR #$pr_number: expected exactly 1 commit, found $commit_count."
+            # This condition persists across CI workflows, reruns, and new commits.
+            # Trust only a marker posted by this repository's Actions bot.
+            comments="$(gh api --paginate --slurp "repos/$REPO/issues/$pr_number/comments?per_page=100")"
+            if jq -e 'any(.[][];
+              .user.login == "github-actions[bot]" and .user.type == "Bot" and
+              ((.body // "") | contains("<!-- backport-multiple-commits-notified:v1 -->"))
+            )' <<< "$comments" >/dev/null; then
+              echo "Manual-review notification already requested for PR #$pr_number."
+              exit 0
+            fi
+            echo "manual_review_pr=$pr_number" >> "$GITHUB_OUTPUT"
             echo "attention_reason=Backport has multiple commits and requires manual review before merging." >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -290,3 +305,25 @@ jobs:
       branch: ${{ github.event.workflow_run.head_branch }}
       sha: ${{ github.event.workflow_run.head_sha }}
       reason: ${{ needs.approve-and-merge.outputs.attention_reason || 'Automatic merge or conflict repair failed. Review the workflow run and merge the PR manually once resolved.' }}
+
+  record-manual-review-notification:
+    name: Record manual-review notification
+    needs: [approve-and-merge, notify-failure]
+    if: >-
+      needs.notify-failure.result == 'success' &&
+      needs.notify-failure.outputs.notification_requested == 'true' &&
+      needs.approve-and-merge.outputs.manual_review_pr != ''
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write # Persist the notification marker as a PR comment.
+    steps:
+      - name: Mark the multiple-commit warning as requested
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.approve-and-merge.outputs.manual_review_pr }}
+        run: |
+          gh api "repos/$REPO/issues/$PR_NUMBER/comments" --method POST \
+            --raw-field 'body=<!-- backport-multiple-commits-notified:v1 -->
+          This backport has multiple commits and requires manual review. A contributor notification has been requested; subsequent automerge checks will not repeat this warning.'

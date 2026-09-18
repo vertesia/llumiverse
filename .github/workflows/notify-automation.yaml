@@ -10,6 +10,10 @@ on:
     types: [completed]
     branches: ["backport-*", "sync-composableai-*", "sync-llumiverse-*", "main", "preview", "release/**"]
   workflow_call:
+    outputs:
+      notification_requested:
+        description: A recipient was resolved; callers must also require workflow success.
+        value: ${{ jobs.resolve.outputs.login != '' }}
     inputs:
       branch:
         type: string
