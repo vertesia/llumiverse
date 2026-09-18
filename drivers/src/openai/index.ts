@@ -1025,18 +1025,6 @@ export function mapResponseStream(
                         result: [],
                         tool_use: [toolUse],
                     } satisfies CompletionChunkObject;
-                }
-                // Note: We don't emit response.function_call_arguments.done because the arguments were already
-                // streamed via delta events. Emitting it again would duplicate the tool_input content.
-                // We only update the metadata to ensure the tool name is captured.
-                else if (event.type === 'response.function_call_arguments.done') {
-                    // Just update metadata, don't yield (arguments already accumulated from delta events)
-                    const metadata = toolCallMetadata.get(event.item_id);
-                    const syntheticId = metadata?.syntheticId ?? `tool_${event.output_index}`;
-                    const tool_name = metadata?.name ?? event.name ?? '';
-                    if (event.item_id) {
-                        toolCallMetadata.set(event.item_id, { syntheticId, callId: metadata?.callId, name: tool_name });
-                    }
                 } else if (event.type === 'response.output_text.delta') {
                     hasTextDeltas = true;
                     yield {
@@ -1402,8 +1390,8 @@ export function fixOrphanedToolUse(items: ResponseInputItem[]): ResponseInputIte
     // First pass: collect all function_call_output call_ids
     const outputCallIds = new Set<string>();
     for (const item of items) {
-        if ('type' in item && item.type === 'function_call_output') {
-            outputCallIds.add((item as OpenAI.Responses.ResponseInputItem.FunctionCallOutput).call_id);
+        if ('type' in item && item.type === 'function_call_output' && item.call_id != null) {
+            outputCallIds.add(item.call_id);
         }
     }
 
@@ -1469,7 +1457,7 @@ export function fixOrphanedToolResults(items: ResponseInputItem[]): ResponseInpu
     }
     return items.filter((item) => {
         if ('type' in item && item.type === 'function_call_output') {
-            return callIds.has(item.call_id);
+            return item.call_id != null && callIds.has(item.call_id);
         }
         return true;
     });

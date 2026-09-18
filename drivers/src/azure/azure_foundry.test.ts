@@ -1,6 +1,7 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import type { TokenCredential } from '@azure/identity';
 import { PromptRole } from '@llumiverse/core';
-import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import { exposePrivate } from '../../test/__helpers__/test-utils.js';
 import type { OpenAIChatCompletionsPayload } from '../openai/openai_chat_completions.js';
@@ -166,9 +167,7 @@ describe('AzureFoundryDriver protocol composition', () => {
         expect(completion.original_response).toBe(nativeResponse);
     });
 
-    it('memoizes the OpenAI Responses adapter and deployment decision', async () => {
-        const driver = createDriver();
-        const deploymentGet = vi.fn(async () => ({ modelPublisher: 'OpenAI' }));
+    it('sends authenticated Responses requests and caches deployment discovery', async ({ onTestFinished }) => {
         const response = {
             id: 'response-1',
             object: 'response',
@@ -196,13 +195,40 @@ describe('AzureFoundryDriver protocol composition', () => {
             top_p: 1,
             usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 },
         };
-        const create = vi.fn(async () => response);
-        const openAIClient = { responses: { create } } as unknown as OpenAI;
-        const getOpenAIClient = vi.fn(() => openAIClient);
-        driver.service = {
-            deployments: { get: deploymentGet },
-            getOpenAIClient,
-        } as unknown as AzureFoundryDriver['service'];
+        const requests: Array<{ url?: string; authorization?: string; body: string }> = [];
+        const server = createServer((req, res) => {
+            let body = '';
+            req.setEncoding('utf8');
+            req.on('data', (chunk: string) => {
+                body += chunk;
+            });
+            req.on('end', () => {
+                requests.push({ url: req.url, authorization: req.headers.authorization, body });
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(response));
+            });
+        });
+        onTestFinished(async () => {
+            server.closeAllConnections();
+            await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+        });
+        await new Promise<void>((resolve, reject) => {
+            server.once('error', reject);
+            server.listen(0, '127.0.0.1', resolve);
+        });
+        const { port } = server.address() as AddressInfo;
+        const driver = new AzureFoundryDriver({
+            endpoint: `http://127.0.0.1:${port}/projects/demo/`,
+            azureADTokenProvider: credential,
+        });
+        onTestFinished(() => driver.destroy());
+        const deploymentGet = vi.spyOn(driver.service.deployments, 'get').mockResolvedValue({
+            type: 'ModelDeployment',
+            name: 'gpt-deployment',
+            modelName: 'gpt-5',
+            modelVersion: '1',
+            modelPublisher: 'OpenAI',
+        });
         const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Hello' }], {
             model: 'gpt-deployment::gpt-5',
         });
@@ -229,19 +255,21 @@ describe('AzureFoundryDriver protocol composition', () => {
             expect.objectContaining({ result: [{ type: 'text', value: 'ok' }] }),
         );
         expect(deploymentGet).toHaveBeenCalledOnce();
-        expect(getOpenAIClient).toHaveBeenCalledOnce();
-        expect(getOpenAIClient).toHaveBeenCalledWith({
-            fetch: expect.any(Function),
-            timeout: 900_000,
-        });
-        expect(create).toHaveBeenCalledWith(
+        expect(requests).toHaveLength(2);
+        for (const request of requests) {
+            expect(request.url).toBe('/projects/demo/openai/v1/responses');
+            expect(request.authorization).toBe('Bearer test-token');
+        }
+        expect(credential.getToken).toHaveBeenCalledWith(['https://ai.azure.com/.default'], expect.anything());
+        const payload = JSON.parse(requests[0].body);
+        expect(payload).not.toHaveProperty('temperature');
+        expect(payload).not.toHaveProperty('top_p');
+        expect(payload).toEqual(
             expect.objectContaining({
                 model: 'gpt-deployment',
                 stream: false,
                 reasoning: { effort: 'high', summary: 'auto' },
                 include: ['reasoning.encrypted_content'],
-                temperature: undefined,
-                top_p: undefined,
                 tools: [expect.objectContaining({ type: 'function', name: 'lookup' })],
                 text: expect.objectContaining({
                     format: expect.objectContaining({ type: 'json_schema', name: 'format_output' }),
