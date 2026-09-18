@@ -316,7 +316,6 @@ function getImagenOptions(model: string, option?: ModelOptions): ModelOptionsInf
                       type: OptionType.numeric,
                       min: 0,
                       max: 1,
-                      integer: true,
                       description:
                           'The mask dilation, grows the mask by a percentage of image width to compensate for imprecise masks.',
                   },
@@ -328,7 +327,7 @@ function getImagenOptions(model: string, option?: ModelOptions): ModelOptionsInf
                 ? [
                       {
                           name: 'mask_class',
-                          type: OptionType.string_list,
+                          type: OptionType.numeric_list,
                           default: [],
                           description:
                               'Input Class IDs. Create a mask based on image class, based on https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/imagen-api-customization#segment-ids',

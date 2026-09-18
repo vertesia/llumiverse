@@ -46,7 +46,13 @@ export function getOptions(model: string, provider?: Providers, options?: ModelO
             return getXAIOptions(model, options, resolveModelProfile(model, provider));
         case Providers.azure_foundry:
             return getAzureFoundryOptions(model, options);
+        case Providers.huggingface_ie:
+        case Providers.replicate:
+        case Providers.watsonx:
+            return textOptionsFallback;
         default:
+            // A new provider must explicitly choose its metadata factory or the generic surface.
+            void (provider satisfies never);
             return textOptionsFallback;
     }
 }

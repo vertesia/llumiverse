@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import type { ModelOptions } from '../types.js';
+import { getOptions } from '../options.js';
+import { type ModelOptions, type ModelOptionsInfo, Providers } from '../types.js';
 import { ModelOptionsSchema } from './model-options.js';
 
 /** Exact type identity — `extends` in both directions is too weak (`any`/`unknown` slip through). */
@@ -102,7 +103,42 @@ describe('ModelOptionsSchema', () => {
             'XAIGrokImageOptions',
             'GroqOptions',
             'MistralTextOptions',
+            'AnthropicClaudeOptions',
         ]);
+    });
+
+    it('publishes every registered schema in union order', () => {
+        expect(MEMBERS).toEqual(ModelOptionsSchema.options.map((schema) => schema.meta()?.id));
+    });
+
+    it('requires factory IDs to belong to the schema union at compile time', () => {
+        assertType<Equals<ModelOptionsInfo['_option_id'], ModelOptions['_option_id']>>(true);
+        // This must fail compilation even if no model fixture exercises the new factory branch.
+        // @ts-expect-error An unregistered option ID cannot be returned by a typed factory.
+        const unregistered: ModelOptionsInfo['_option_id'] = 'unregistered-provider';
+        expect(ModelOptionsSchema.safeParse({ _option_id: unregistered }).success).toBe(false);
+    });
+
+    it('validates Anthropic factory options and rejects invalid fields', () => {
+        const { _option_id } = getOptions('claude-sonnet-4-6', Providers.anthropic);
+        expect(_option_id).toBe('anthropic-claude');
+        const options = {
+            _option_id,
+            max_tokens: 4096,
+            temperature: 0.5,
+            top_p: 0.9,
+            top_k: 10,
+            stop_sequence: ['STOP'],
+            effort: 'high',
+            thinking_budget_tokens: 1024,
+            include_thoughts: true,
+            cache_enabled: true,
+            cache_ttl: '1h',
+        };
+        expect(ModelOptionsSchema.parse(options)).toEqual(options);
+        for (const invalid of [{ effort: 'none' }, { cache_ttl: '2h' }, { max_tokens: '4096' }, { unknown: true }]) {
+            expect(ModelOptionsSchema.safeParse({ ...options, ...invalid }).success).toBe(false);
+        }
     });
 
     it('discriminates on a required, unique _option_id in every member', () => {
