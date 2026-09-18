@@ -15,6 +15,9 @@ function assertType<T extends true>(_ok: T): void {}
  * dropped member reads as a normal diff.
  */
 const emitted = z.toJSONSchema(ModelOptionsSchema, { target: 'draft-2020-12', io: 'input' }) as {
+    type?: string;
+    anyOf?: { $ref: string }[];
+    oneOf?: { $ref: string }[];
     $defs: Record<
         string,
         {
@@ -112,7 +115,11 @@ describe('ModelOptionsSchema', () => {
     });
 
     it('requires factory IDs to belong to the schema union at compile time', () => {
-        assertType<Equals<ModelOptionsInfo['_option_id'], ModelOptions['_option_id']>>(true);
+        assertType<Equals<ModelOptionsInfo['_option_id'], NonNullable<ModelOptions['_option_id']>>>(true);
+        // Factory metadata must still identify a family, unlike caller-authored payloads.
+        // @ts-expect-error Metadata factories cannot omit their registered ID.
+        const missing: ModelOptionsInfo = { options: [] };
+        expect(missing._option_id).toBeUndefined();
         // This must fail compilation even if no model fixture exercises the new factory branch.
         // @ts-expect-error An unregistered option ID cannot be returned by a typed factory.
         const unregistered: ModelOptionsInfo['_option_id'] = 'unregistered-provider';
@@ -141,18 +148,40 @@ describe('ModelOptionsSchema', () => {
         }
     });
 
-    it('discriminates on a required, unique _option_id in every member', () => {
-        // What makes the union a `discriminator` + `mapping` in the document rather than a bare
-        // `oneOf`. Two members sharing a literal, or one leaving `_option_id` optional, silently
-        // demotes it and generated clients fall back to a loose map.
+    it('publishes optional unique IDs and anyOf for overlapping untagged objects', () => {
+        expect(emitted.oneOf).toBeUndefined();
+        expect(union.oneOf).toBeUndefined();
+        expect(union.anyOf).toBeDefined();
         const ids = MEMBERS.map((name) => {
             const member = emitted.$defs[name];
-            expect(member.required, `${name} must require _option_id`).toContain('_option_id');
-            const discriminant = member.properties?._option_id as { const?: string } | undefined;
-            expect(discriminant?.const, `${name} must pin a literal _option_id`).toBeTypeOf('string');
-            return discriminant?.const;
+            expect(member.required ?? [], name).not.toContain('_option_id');
+            const hint = member.properties?._option_id as { const?: string } | undefined;
+            expect(hint?.const, name).toBeTypeOf('string');
+            return hint?.const;
         });
         expect(new Set(ids).size).toBe(ids.length);
+    });
+
+    it.each([
+        {},
+        { temperature: 0.2, max_tokens: 1024 },
+        { cache_enabled: true, cache_ttl: '1h', thinking_budget_tokens: 1024 },
+        { extra_body: { provider_extension: true } },
+    ] satisfies ModelOptions[])('accepts untagged options without adding a family: %j', (options) => {
+        expect(ModelOptionsSchema.parse(options)).toEqual(options);
+        expect(ModelOptionsSchema.parse(options)).not.toHaveProperty('_option_id');
+    });
+
+    it.each([
+        { _option_id: null },
+        { _option_id: 12 },
+        { _option_id: 'unknown' },
+        { max_tokens: '1024' },
+        { cache_ttl: '2h' },
+        { unknown_option: true },
+        { _option_id: 'openai-text', cache_ttl: '1h' },
+    ])('still rejects invalid fields and supplied IDs: %j', (options) => {
+        expect(ModelOptionsSchema.safeParse(options).success).toBe(false);
     });
 
     it('closes every member, so an unknown option is rejected rather than dropped', () => {

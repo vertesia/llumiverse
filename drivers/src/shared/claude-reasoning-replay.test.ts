@@ -42,6 +42,24 @@ function clientFor(message: Message, events: RawMessageStreamEvent[] = []) {
 const prompt: ClaudePrompt = { messages: [{ role: 'user', content: 'question' }] };
 
 describe('Claude native reasoning replay', () => {
+    it('sends the same Anthropic request with or without the optional family ID', async () => {
+        const stream = vi.fn(() => sdkStream([], finalToolMessage));
+        const client = { messages: { stream } } as never;
+        const model_options = { max_tokens: 1024, temperature: 0.2, cache_enabled: false };
+        for (const tagged of [false, true]) {
+            await executeClaudeCompletion(client, prompt, {
+                model: 'claude-3-haiku-20240307',
+                model_options: tagged ? { ...model_options, _option_id: 'anthropic-claude' } : model_options,
+            });
+        }
+        expect(stream).toHaveBeenCalledTimes(2);
+        expect(stream.mock.calls[0]).toEqual(stream.mock.calls[1]);
+        expect(stream).toHaveBeenCalledWith(
+            expect.objectContaining({ model: 'claude-3-haiku-20240307', max_tokens: 1024, temperature: 0.2 }),
+            undefined,
+        );
+    });
+
     it('normalizes both Claude truncation stop reasons to length', () => {
         expect(claudeFinishReason('max_tokens')).toBe('length');
         expect(claudeFinishReason('model_context_window_exceeded')).toBe('length');
