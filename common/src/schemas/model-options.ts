@@ -41,7 +41,7 @@ const ExtraBodySchema = z
 
 export const TextFallbackOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('text-fallback'),
+        _option_id: z.literal('text-fallback').optional(),
         max_tokens: z.number().optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
@@ -57,7 +57,7 @@ export const TextFallbackOptionsSchema = z
 
 export const AnthropicClaudeOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('anthropic-claude'),
+        _option_id: z.literal('anthropic-claude').optional(),
         max_tokens: z.number().optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
@@ -75,7 +75,7 @@ export const AnthropicClaudeOptionsSchema = z
 
 export const AzureFoundryChatOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('azure-foundry-chat'),
+        _option_id: z.literal('azure-foundry-chat').optional(),
         max_tokens: z.number().optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
@@ -92,7 +92,7 @@ export const AzureFoundryChatOptionsSchema = z
 
 export const GroqOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('groq-deepseek-thinking'),
+        _option_id: z.literal('groq-deepseek-thinking').optional(),
         max_tokens: z.number().optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
@@ -107,7 +107,7 @@ export const GroqOptionsSchema = z
 
 export const MistralTextOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('mistral-text'),
+        _option_id: z.literal('mistral-text').optional(),
         max_tokens: z.number().optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
@@ -128,7 +128,7 @@ export const MistralTextOptionsSchema = z
 
 export const BedrockConverseOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('bedrock-converse'),
+        _option_id: z.literal('bedrock-converse').optional(),
         max_tokens: z.number().optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
@@ -140,7 +140,7 @@ export const BedrockConverseOptionsSchema = z
 
 export const BedrockNovaOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('bedrock-nova'),
+        _option_id: z.literal('bedrock-nova').optional(),
         max_tokens: z.number().optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
@@ -153,7 +153,7 @@ export const BedrockNovaOptionsSchema = z
 
 export const BedrockMistralOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('bedrock-mistral'),
+        _option_id: z.literal('bedrock-mistral').optional(),
         max_tokens: z.number().optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
@@ -166,7 +166,7 @@ export const BedrockMistralOptionsSchema = z
 
 export const BedrockAI21OptionsSchema = z
     .strictObject({
-        _option_id: z.literal('bedrock-ai21'),
+        _option_id: z.literal('bedrock-ai21').optional(),
         max_tokens: z.number().optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
@@ -180,7 +180,7 @@ export const BedrockAI21OptionsSchema = z
 
 export const BedrockCohereCommandOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('bedrock-cohere-command'),
+        _option_id: z.literal('bedrock-cohere-command').optional(),
         max_tokens: z.number().optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
@@ -195,7 +195,7 @@ export const BedrockCohereCommandOptionsSchema = z
 
 export const BedrockClaudeOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('bedrock-claude'),
+        _option_id: z.literal('bedrock-claude').optional(),
         max_tokens: z.number().optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
@@ -212,7 +212,7 @@ export const BedrockClaudeOptionsSchema = z
 
 export const BedrockPalmyraOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('bedrock-palmyra'),
+        _option_id: z.literal('bedrock-palmyra').optional(),
         max_tokens: z.number().optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
@@ -227,7 +227,7 @@ export const BedrockPalmyraOptionsSchema = z
 
 export const BedrockGptOssOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('bedrock-gpt-oss'),
+        _option_id: z.literal('bedrock-gpt-oss').optional(),
         max_tokens: z.number().optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
@@ -241,7 +241,7 @@ export const BedrockGptOssOptionsSchema = z
 
 export const TwelvelabsPegasusOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('bedrock-twelvelabs-pegasus'),
+        _option_id: z.literal('bedrock-twelvelabs-pegasus').optional(),
         temperature: z.number().optional(),
         max_tokens: z.number().optional(),
         service_tier: ServiceTierSchema.optional(),
@@ -250,7 +250,7 @@ export const TwelvelabsPegasusOptionsSchema = z
 
 export const NovaCanvasOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('bedrock-nova-canvas'),
+        _option_id: z.literal('bedrock-nova-canvas').optional(),
         taskType: z.enum([
             'TEXT_IMAGE',
             'TEXT_IMAGE_WITH_IMAGE_CONDITIONING',
@@ -278,7 +278,7 @@ export const NovaCanvasOptionsSchema = z
 
 export const BedrockMantleResponsesOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('bedrock-mantle-responses'),
+        _option_id: z.literal('bedrock-mantle-responses').optional(),
         max_tokens: z.number().optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
@@ -292,7 +292,7 @@ export const BedrockMantleResponsesOptionsSchema = z
 
 export const BedrockMantleChatCompletionsOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('bedrock-mantle-chat-completions'),
+        _option_id: z.literal('bedrock-mantle-chat-completions').optional(),
         max_tokens: z.number().optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
@@ -305,7 +305,7 @@ export const BedrockMantleChatCompletionsOptionsSchema = z
 
 export const BedrockMantleClaudeOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('bedrock-mantle-claude'),
+        _option_id: z.literal('bedrock-mantle-claude').optional(),
         max_tokens: z.number().optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
@@ -323,7 +323,7 @@ export const BedrockMantleClaudeOptionsSchema = z
 
 export const OpenAiThinkingOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('openai-thinking'),
+        _option_id: z.literal('openai-thinking').optional(),
         max_tokens: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
         effort: ReasoningEffortSchema.optional(),
@@ -337,7 +337,7 @@ export const OpenAiThinkingOptionsSchema = z
 
 export const OpenAiTextOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('openai-text'),
+        _option_id: z.literal('openai-text').optional(),
         max_tokens: z.number().optional(),
         effort: ReasoningEffortSchema.optional(),
         reasoning_effort: ReasoningEffortSchema.optional(),
@@ -355,7 +355,7 @@ export const OpenAiTextOptionsSchema = z
 
 export const OpenAiDalleOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('openai-dalle'),
+        _option_id: z.literal('openai-dalle').optional(),
         size: z.enum(['256x256', '512x512', '1024x1024', '1792x1024', '1024x1792']).optional(),
         image_quality: z.enum(['standard', 'hd']).optional(),
         style: z.enum(['vivid', 'natural']).optional(),
@@ -366,7 +366,7 @@ export const OpenAiDalleOptionsSchema = z
 
 export const OpenAiGptImageOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('openai-gpt-image'),
+        _option_id: z.literal('openai-gpt-image').optional(),
         size: z.enum(['1024x1024', '1024x1536', '1536x1024', 'auto']).optional(),
         image_quality: z.enum(['low', 'medium', 'high', 'auto']).optional(),
         background: z.enum(['transparent', 'opaque', 'auto']).optional(),
@@ -378,7 +378,7 @@ export const OpenAiGptImageOptionsSchema = z
 
 export const XAIGrokImageOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('xai-grok-image'),
+        _option_id: z.literal('xai-grok-image').optional(),
         aspect_ratio: z
             .enum([
                 '1:1',
@@ -408,7 +408,7 @@ export const XAIGrokImageOptionsSchema = z
 
 export const ImagenOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('vertexai-imagen'),
+        _option_id: z.literal('vertexai-imagen').optional(),
         number_of_images: z.number().optional(),
         seed: z.number().optional(),
         // Retain the previously published plural spelling as a compatibility alias.
@@ -437,7 +437,7 @@ export const ImagenOptionsSchema = z
 
 export const VertexAIClaudeOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('vertexai-claude'),
+        _option_id: z.literal('vertexai-claude').optional(),
         max_tokens: z.number().optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
@@ -453,7 +453,7 @@ export const VertexAIClaudeOptionsSchema = z
 
 export const VertexAIGeminiOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('vertexai-gemini'),
+        _option_id: z.literal('vertexai-gemini').optional(),
         max_tokens: z.number().optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
@@ -489,7 +489,7 @@ export const VertexAIGeminiOptionsSchema = z
 
 export const VertexAIGeminiOmniVideoOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('vertexai-gemini-omni-video'),
+        _option_id: z.literal('vertexai-gemini-omni-video').optional(),
         task: z.enum(['text_to_video', 'image_to_video', 'reference_to_video', 'edit', 'extend']).optional(),
         aspect_ratio: z.enum(['16:9', '9:16']).optional(),
         duration_seconds: z.number().int().min(3).max(10).optional(),
@@ -499,7 +499,7 @@ export const VertexAIGeminiOmniVideoOptionsSchema = z
 
 export const VertexAIGrokOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('vertexai-grok'),
+        _option_id: z.literal('vertexai-grok').optional(),
         max_tokens: z.number().optional(),
         temperature: z.number().optional(),
         top_p: z.number().optional(),
@@ -507,13 +507,13 @@ export const VertexAIGrokOptionsSchema = z
     })
     .meta({ id: 'VertexAIGrokOptions' });
 
-// The discriminated union. Member order is the order the derived component lists, which the adapter
-// turns back into a `discriminator` + `mapping` keyed on `_option_id`; a generated Java or Go client
-// reads that mapping to pick the concrete subtype.
+// Option payloads may omit the family hint. Keep this an ordinary union: untagged
+// objects can match several families, so JSON Schema must publish anyOf, not oneOf.
+// When supplied, each literal ID still restricts validation to its named family.
 // Register every new option schema here: ModelOptionsInfo derives its allowed IDs from this union.
 // Keep provider aliases inferred from their schemas; see common/README.md for the maintenance checklist.
 export const ModelOptionsSchema = z
-    .discriminatedUnion('_option_id', [
+    .union([
         TextFallbackOptionsSchema,
         AzureFoundryChatOptionsSchema,
         ImagenOptionsSchema,
@@ -543,4 +543,4 @@ export const ModelOptionsSchema = z
         MistralTextOptionsSchema,
         AnthropicClaudeOptionsSchema,
     ])
-    .meta({ id: 'ModelOptions' });
+    .meta({ id: 'ModelOptions', type: 'object' });
