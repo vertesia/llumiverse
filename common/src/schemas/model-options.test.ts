@@ -8,12 +8,18 @@ type Equals<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B 
 function assertType<T extends true>(_ok: T): void {}
 
 /**
+<<<<<<< HEAD
  * `ModelOptions` is published by Vertesia as a discriminated union whose members are named components.
  * These pin the properties that a consumer of the published document
+=======
+ * `ModelOptions` is published by Vertesia as a union component with named
+ * members, each its own component. These pin the properties that a consumer of the published document
+>>>>>>> f2675a8 (fix: make model option family IDs optional (#675))
  * depends on and that a careless edit here would break silently — the union is large enough that a
  * dropped member reads as a normal diff.
  */
 const emitted = z.toJSONSchema(ModelOptionsSchema, { target: 'draft-2020-12', io: 'input' }) as {
+<<<<<<< HEAD
     $defs: Record<
         string,
         {
@@ -23,6 +29,12 @@ const emitted = z.toJSONSchema(ModelOptionsSchema, { target: 'draft-2020-12', io
             required?: string[];
         }
     >;
+=======
+    type?: string;
+    anyOf?: { $ref: string }[];
+    oneOf?: { $ref: string }[];
+    $defs: Record<string, { properties?: Record<string, unknown>; required?: string[] }>;
+>>>>>>> f2675a8 (fix: make model option family IDs optional (#675))
 };
 
 const union = emitted.$defs.ModelOptions;
@@ -70,6 +82,7 @@ describe('ModelOptionsSchema', () => {
         ).toBe(true);
     });
 
+<<<<<<< HEAD
     it('carries every driver option set, in the published order', () => {
         // Order is significant: it becomes the `oneOf` order in the document, which decides the branch
         // order a generated Java or Go client tries.
@@ -103,20 +116,80 @@ describe('ModelOptionsSchema', () => {
             'GroqOptions',
             'MistralTextOptions',
         ]);
+=======
+    it('publishes every registered schema in union order', () => {
+        expect(MEMBERS).toEqual(ModelOptionsSchema.options.map((schema) => schema.meta()?.id));
     });
 
-    it('discriminates on a required, unique _option_id in every member', () => {
-        // What makes the union a `discriminator` + `mapping` in the document rather than a bare
-        // `oneOf`. Two members sharing a literal, or one leaving `_option_id` optional, silently
-        // demotes it and generated clients fall back to a loose map.
+    it('requires factory IDs to belong to the schema union at compile time', () => {
+        assertType<Equals<ModelOptionsInfo['_option_id'], NonNullable<ModelOptions['_option_id']>>>(true);
+        // Factory metadata must still identify a family, unlike caller-authored payloads.
+        // @ts-expect-error Metadata factories cannot omit their registered ID.
+        const missing: ModelOptionsInfo = { options: [] };
+        expect(missing._option_id).toBeUndefined();
+        // This must fail compilation even if no model fixture exercises the new factory branch.
+        // @ts-expect-error An unregistered option ID cannot be returned by a typed factory.
+        const unregistered: ModelOptionsInfo['_option_id'] = 'unregistered-provider';
+        expect(ModelOptionsSchema.safeParse({ _option_id: unregistered }).success).toBe(false);
+    });
+
+    it('validates Anthropic factory options and rejects invalid fields', () => {
+        const { _option_id } = getOptions('claude-sonnet-4-6', Providers.anthropic);
+        expect(_option_id).toBe('anthropic-claude');
+        const options = {
+            _option_id,
+            max_tokens: 4096,
+            temperature: 0.5,
+            top_p: 0.9,
+            top_k: 10,
+            stop_sequence: ['STOP'],
+            effort: 'high',
+            thinking_budget_tokens: 1024,
+            include_thoughts: true,
+            cache_enabled: true,
+            cache_ttl: '1h',
+        };
+        expect(ModelOptionsSchema.parse(options)).toEqual(options);
+        for (const invalid of [{ effort: 'none' }, { cache_ttl: '2h' }, { max_tokens: '4096' }, { unknown: true }]) {
+            expect(ModelOptionsSchema.safeParse({ ...options, ...invalid }).success).toBe(false);
+        }
+>>>>>>> f2675a8 (fix: make model option family IDs optional (#675))
+    });
+
+    it('publishes optional unique IDs and anyOf for overlapping untagged objects', () => {
+        expect(emitted.type).toBe('object');
+        expect(emitted.oneOf).toBeUndefined();
+        expect(emitted.anyOf).toBeDefined();
         const ids = MEMBERS.map((name) => {
             const member = emitted.$defs[name];
-            expect(member.required, `${name} must require _option_id`).toContain('_option_id');
-            const discriminant = member.properties?._option_id as { const?: string } | undefined;
-            expect(discriminant?.const, `${name} must pin a literal _option_id`).toBeTypeOf('string');
-            return discriminant?.const;
+            expect(member.required ?? [], name).not.toContain('_option_id');
+            const hint = member.properties?._option_id as { const?: string } | undefined;
+            expect(hint?.const, name).toBeTypeOf('string');
+            return hint?.const;
         });
         expect(new Set(ids).size).toBe(ids.length);
+    });
+
+    it.each([
+        {},
+        { temperature: 0.2, max_tokens: 1024 },
+        { cache_enabled: true, cache_ttl: '1h', thinking_budget_tokens: 1024 },
+        { extra_body: { provider_extension: true } },
+    ] satisfies ModelOptions[])('accepts untagged options without adding a family: %j', (options) => {
+        expect(ModelOptionsSchema.parse(options)).toEqual(options);
+        expect(ModelOptionsSchema.parse(options)).not.toHaveProperty('_option_id');
+    });
+
+    it.each([
+        { _option_id: null },
+        { _option_id: 12 },
+        { _option_id: 'unknown' },
+        { max_tokens: '1024' },
+        { cache_ttl: '2h' },
+        { unknown_option: true },
+        { _option_id: 'openai-text', cache_ttl: '1h' },
+    ])('still rejects invalid fields and supplied IDs: %j', (options) => {
+        expect(ModelOptionsSchema.safeParse(options).success).toBe(false);
     });
 
     it('closes every member, so an unknown option is rejected rather than dropped', () => {

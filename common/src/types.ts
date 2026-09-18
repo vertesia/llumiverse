@@ -763,15 +763,20 @@ export type ReasoningEffort = z.infer<typeof ReasoningEffortSchema>;
 // own.
 //
 // No `@discriminator` tag: the scanner short-circuits this alias to the published `ModelOptions`
-// component rather than deriving it, and that component already carries the discriminator the
-// schema's `discriminatedUnion` produced.
+// component rather than deriving it. Its optional family IDs deliberately use anyOf,
+// since untagged options may satisfy more than one provider schema.
 export type ModelOptions = z.infer<typeof ModelOptionsSchema>;
 
 // ============== Option Info ===============
 
 export interface ModelOptionsInfo {
     options: ModelOptionInfoItem[];
+<<<<<<< HEAD
     _option_id: string; //Should follow same ids as ModelOptions
+=======
+    // Adding a factory ID requires registering its schema in ModelOptionsSchema first.
+    _option_id: NonNullable<ModelOptions['_option_id']>;
+>>>>>>> f2675a8 (fix: make model option family IDs optional (#675))
 }
 
 export type ModelOptionInfoItem =
