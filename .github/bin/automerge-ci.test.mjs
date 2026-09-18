@@ -101,7 +101,7 @@ test('API errors block merging', () => {
     );
 });
 test('reads all pages and validates every configured workflow', () => {
-    const policies = JSON.parse(readFileSync(new URL('./automerge-ci-policy.json', import.meta.url)));
+    const policies = JSON.parse(readFileSync(new URL('./automerge-ci-policy.json', import.meta.url), 'utf8'));
     const names = Object.keys(policies);
     let index = -1;
     const pages = (endpoint) => {
@@ -127,8 +127,26 @@ test('all automerge workflows use trusted policy and the shared gate', () => {
     for (const file of readdirSync(dir).filter((name) => name.includes('automerge'))) {
         const yaml = readFileSync(new URL(file, dir), 'utf8');
         if (!yaml.includes('required_workflows=(')) continue;
-        assert.match(yaml, /ref: \$\{\{ github.sha \}\}/, file);
+        assert.match(yaml, /ref: \$\{\{ github.workflow_sha \}\}/, file);
         assert.match(yaml, /node \.github\/bin\/automerge-ci.mjs/, file);
         assert.doesNotMatch(yaml, /sort_by\(\.id\) \| last/, file);
+    }
+});
+
+
+test('every configured required step must actually run', () => {
+    const policies = JSON.parse(readFileSync(new URL('./automerge-ci-policy.json', import.meta.url), 'utf8'));
+    for (const configured of Object.values(policies)) {
+        const jobs = configured.jobs.map((required) => ({
+            ...job(required.example ?? required.name.slice(1, -1)),
+            steps: required.steps.map((name) => job(name)),
+        }));
+        for (const required of jobs) {
+            for (const step of required.steps) {
+                step.conclusion = 'skipped';
+                assert.equal(verifyWorkflow([run(1)], () => jobs, configured, context), false, step.name);
+                step.conclusion = 'success';
+            }
+        }
     }
 });
