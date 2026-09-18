@@ -3,6 +3,7 @@ import type { z } from 'zod';
 import { getOptions } from '../options.js';
 import { ModelOptionsSchema } from '../schemas/model-options.js';
 import { type ModelOptionInfoItem, type ModelOptions, OptionType, Providers } from '../types.js';
+import { ImagenTaskType } from './vertexai.js';
 
 // Representative routing boundaries, not a model catalog. Future models inherit family rules.
 const routes: Record<Providers, readonly (readonly [string, ModelOptions['_option_id']])[]> = {
@@ -98,6 +99,18 @@ function sampleValues(option: ModelOptionInfoItem): unknown[] {
 }
 
 describe('option factory contracts', () => {
+    it('allows fractional Imagen mask dilation', () => {
+        const info = getOptions('imagen-3.0-capability-001', Providers.vertexai, {
+            _option_id: 'vertexai-imagen',
+            edit_mode: ImagenTaskType.EDIT_MODE_INPAINT_INSERTION,
+        });
+        const dilation = info.options.find((option) => option.name === 'mask_dilation');
+        expect(dilation?.type).toBe(OptionType.numeric);
+        if (dilation?.type !== OptionType.numeric) throw new Error('Expected numeric dilation metadata');
+        expect(dilation.integer).not.toBe(true);
+        expect(ModelOptionsSchema.safeParse({ _option_id: 'vertexai-imagen', mask_dilation: 0.01 }).success).toBe(true);
+    });
+
     it('exercises every registered option family', () => {
         const exercised = new Set(
             Object.values(routes)

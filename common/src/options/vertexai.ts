@@ -316,7 +316,6 @@ function getImagenOptions(model: string, option?: ModelOptions): ModelOptionsInf
                       type: OptionType.numeric,
                       min: 0,
                       max: 1,
-                      integer: true,
                       description:
                           'The mask dilation, grows the mask by a percentage of image width to compensate for imprecise masks.',
                   },

@@ -25,6 +25,12 @@ Defining or exporting a branch schema alone does not register it in the union.
    Use `numeric_list` for numeric arrays, not `string_list`. The provider switch is
    exhaustive: select a factory or explicitly choose the generic fallback for every
    new provider. Retained legacy schemas need a documented compatibility test.
+   These checks establish internal consistency, not provider correctness. Verify
+   field types, enum spellings, and wire names against the installed provider SDK
+   or official API documentation. Add driver tests at the outbound SDK request
+   boundary: an option accepted by the schema can still be dropped or mistranslated
+   by the driver. Keep legacy aliases at the public boundary and normalize them
+   only when constructing the provider request.
 5. Run `pnpm lint`, `pnpm build`, `pnpm typecheck:test`, and `pnpm test` in `common`,
    then `pnpm build` at the repository root. Consumers publishing OpenAPI must
    regenerate their schema artifacts and verify discriminator mappings and request
