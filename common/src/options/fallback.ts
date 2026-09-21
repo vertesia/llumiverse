@@ -27,7 +27,6 @@ export const textOptionsFallback: ModelOptionsInfo = {
             name: SharedOptions.temperature,
             type: OptionType.numeric,
             min: 0.0,
-            default: 0.7,
             integer: false,
             step: 0.1,
             description: 'A higher temperature biases toward less likely tokens, making the model more creative',
