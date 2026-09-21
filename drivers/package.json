@@ -151,13 +151,8 @@
         "@vertesia/api-fetch-client": "^1.4.1",
         "eventsource": "^5.1.1",
         "google-auth-library": "catalog:",
-<<<<<<< HEAD
         "groq-sdk": "^1.6.0",
-        "mnemonist": "^0.40.4",
-=======
-        "groq-sdk": "^1.5.0",
         "lru-cache": "^11.1.0",
->>>>>>> e3f070e (refactor: use lru-cache for Bedrock cache (#677))
         "node-web-stream-adapters": "^0.2.1",
         "openai": "^7.15.0",
         "replicate": "^1.4.0",
