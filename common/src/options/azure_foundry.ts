@@ -215,7 +215,6 @@ export function getAzureFoundryOptions(model: string, _option?: ModelOptions): M
             type: OptionType.numeric,
             min: 0.0,
             max: 1.0,
-            default: 0.7,
             step: 0.1,
             description: 'Controls randomness in the output',
         },
