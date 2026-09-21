@@ -152,7 +152,7 @@
         "eventsource": "^5.1.1",
         "google-auth-library": "catalog:",
         "groq-sdk": "^1.6.0",
-        "mnemonist": "^0.40.4",
+        "lru-cache": "^11.1.0",
         "node-web-stream-adapters": "^0.2.1",
         "openai": "^7.15.0",
         "replicate": "^1.4.0",

@@ -66,7 +66,7 @@ import { transformAsyncIterator } from '@llumiverse/core/async';
 import { AbstractDriver } from '@llumiverse/core/driver';
 import { formatNovaPrompt, type NovaMessagesPrompt } from '@llumiverse/core/formatters';
 import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
-import { LRUCache } from 'mnemonist';
+import { LRUCache } from 'lru-cache';
 import { logClaudeTruncation } from '../shared/claude-stop-reason.js';
 import { resolveClaudeThinking } from '../shared/claude-thinking.js';
 import { truncateBinaryForDebug, uint8ArrayToBase64ForDebug } from '../shared/debug-prompt.js';
@@ -86,7 +86,7 @@ import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from '.
 import { forceUploadFile } from './s3.js';
 import { formatTwelvelabsPegasusPrompt, type TwelvelabsPegasusRequest } from './twelvelabs.js';
 
-const supportStreamingCache = new LRUCache<string, boolean>(4096);
+const supportStreamingCache = new LRUCache<string, boolean>({ max: 4096 });
 
 type AwsSdkError = {
     name?: string;
