@@ -319,7 +319,6 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                 name: 'temperature',
                 type: OptionType.numeric,
                 min: 0.0,
-                default: 0.7,
                 step: 0.1,
                 description: 'A higher temperature biases toward less likely tokens, making the model more creative',
             });
