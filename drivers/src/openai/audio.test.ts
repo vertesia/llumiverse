@@ -180,7 +180,13 @@ describe('OpenAI file audio', () => {
             }
             result = stream.completion;
         }
-        expect(result?.token_usage).toEqual({ prompt: 10, result: 20, total: 30 });
+        expect(result?.token_usage).toEqual({
+            prompt: 10,
+            result: 20,
+            total: 30,
+            prompt_cached: undefined,
+            prompt_new: 10,
+        });
         expect(result?.result).toContainEqual({
             type: 'audio',
             value: 'gs://bucket/output.pcm',

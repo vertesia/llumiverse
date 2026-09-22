@@ -58,6 +58,7 @@ describe('primary provider file audio', () => {
             azureADTokenProvider: { getToken: async () => ({ token: 'test', expiresOnTimestamp: Date.now() + 60000 }) },
         });
         driver.service = {
+            endpoint: 'https://example.test',
             deployments: { get: async () => ({ modelPublisher: 'OpenAI' }) },
             getOpenAIClient: () => service,
         } as unknown as AzureFoundryDriver['service'];
