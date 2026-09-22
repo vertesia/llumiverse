@@ -1042,7 +1042,7 @@ export function mapResponseStream(
                     // Just update metadata, don't yield (arguments already accumulated from delta events)
                     const metadata = toolCallMetadata.get(event.item_id);
                     const syntheticId = metadata?.syntheticId ?? `tool_${event.output_index}`;
-                    const tool_name = metadata?.name ?? event.name ?? '';
+                    const tool_name = metadata?.name ?? '';
                     if (event.item_id) {
                         toolCallMetadata.set(event.item_id, { syntheticId, callId: metadata?.callId, name: tool_name });
                     }
@@ -1354,7 +1354,8 @@ export function fixOrphanedToolUse(items: ResponseInputItem[]): ResponseInputIte
     const outputCallIds = new Set<string>();
     for (const item of items) {
         if ('type' in item && item.type === 'function_call_output') {
-            outputCallIds.add((item as OpenAI.Responses.ResponseInputItem.FunctionCallOutput).call_id);
+            const callId = (item as OpenAI.Responses.ResponseInputItem.FunctionCallOutput).call_id;
+            if (typeof callId === 'string') outputCallIds.add(callId);
         }
     }
 
@@ -1420,7 +1421,7 @@ export function fixOrphanedToolResults(items: ResponseInputItem[]): ResponseInpu
     }
     return items.filter((item) => {
         if ('type' in item && item.type === 'function_call_output') {
-            return callIds.has(item.call_id);
+            return typeof item.call_id === 'string' && callIds.has(item.call_id);
         }
         return true;
     });

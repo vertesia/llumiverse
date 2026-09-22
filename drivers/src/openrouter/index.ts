@@ -54,7 +54,6 @@ export class OpenRouterDriver extends OpenAIChatCompletionsDriverBase<OpenRouter
         super({
             ...options,
             resultSchemaMode: 'response_format',
-            includeResultSchemaInPromptForModel: (model) => /(?:^|\/)glm-5\.3(?:$|[-:])/i.test(model),
             toolSchemaMode: 'compatible',
         });
         if (!options.apiKey) {
@@ -326,11 +325,11 @@ function toOpenRouterContent(
     content: OpenAIChatCompletionsRequestMessage['content'],
 ): string | ChatContentItems[] | null | undefined {
     if (!Array.isArray(content)) return content;
-    return content.map((part) =>
-        part.type === 'text'
-            ? { type: 'text' as const, text: part.text }
-            : { type: 'image_url' as const, imageUrl: { ...part.image_url } },
-    );
+    return content.map((part) => {
+        if (part.type === 'text') return { type: 'text' as const, text: part.text };
+        if (part.type === 'image_url') return { type: 'image_url' as const, imageUrl: { ...part.image_url } };
+        throw new Error('OpenRouter does not support audio input');
+    });
 }
 
 function toOpenRouterTextContent(

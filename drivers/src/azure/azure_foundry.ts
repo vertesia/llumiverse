@@ -289,7 +289,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             this.service.getOpenAIClient({
                 fetch: this.getDriverFetch(),
                 timeout: this.getDriverRequestTimeoutMs(),
-            }),
+            }) as unknown as OpenAI,
             this.options,
         );
         return this.openAIProtocolDriver;
