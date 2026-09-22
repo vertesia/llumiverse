@@ -52,7 +52,7 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
             region: process.env.GOOGLE_REGION as string,
         }),
         models: [
-            'publishers/google/models/gemini-2.5-flash-lite',
+            'locations/global/publishers/google/models/gemini-3.5-flash-lite',
             'locations/global/publishers/anthropic/models/claude-sonnet-5',
         ],
     });
@@ -218,8 +218,6 @@ function getTestOptions(model: string): ExecutionOptions {
         };
     }
 
-    const isGemini35FlashLite = model.toLowerCase().includes('gemini-3.5-flash-lite');
-
     return {
         model: model,
         model_options: {
@@ -229,12 +227,8 @@ function getTestOptions(model: string): ExecutionOptions {
             top_k: 40,
             top_p: 0.7, //Some models do not support top_p = 1.0, set to 0.99 or lower.
             //   top_logprobs: 5,        //Currently not supported, option will be ignored
-            ...(isGemini35FlashLite
-                ? {}
-                : {
-                      presence_penalty: 0.1, //Cohere Command R does not support using presence & frequency penalty at the same time
-                      frequency_penalty: -0.1,
-                  }),
+            presence_penalty: 0.1, //Cohere Command R does not support using presence & frequency penalty at the same time
+            frequency_penalty: -0.1,
             stop_sequence: ['haemoglobin'],
         },
     };
