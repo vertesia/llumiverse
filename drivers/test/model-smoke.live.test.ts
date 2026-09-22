@@ -218,6 +218,8 @@ function getTestOptions(model: string): ExecutionOptions {
         };
     }
 
+    const isGemini35FlashLite = model.toLowerCase().includes('gemini-3.5-flash-lite');
+
     return {
         model: model,
         model_options: {
@@ -227,8 +229,12 @@ function getTestOptions(model: string): ExecutionOptions {
             top_k: 40,
             top_p: 0.7, //Some models do not support top_p = 1.0, set to 0.99 or lower.
             //   top_logprobs: 5,        //Currently not supported, option will be ignored
-            presence_penalty: 0.1, //Cohere Command R does not support using presence & frequency penalty at the same time
-            frequency_penalty: -0.1,
+            ...(isGemini35FlashLite
+                ? {}
+                : {
+                      presence_penalty: 0.1, //Cohere Command R does not support using presence & frequency penalty at the same time
+                      frequency_penalty: -0.1,
+                  }),
             stop_sequence: ['haemoglobin'],
         },
     };
