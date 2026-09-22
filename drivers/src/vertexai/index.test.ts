@@ -29,6 +29,8 @@ class TestVertexAIDriver extends VertexAIDriver {
                             { name: 'publishers/google/models/gemini-omni-flash-preview' },
                             { name: 'publishers/google/models/gemini-omni-1.1-flash-preview' },
                             { name: 'publishers/google/models/gemini-live-future' },
+                            { name: 'publishers/google/models/gemini-robotics-er-2-preview-info' },
+                            { name: 'publishers/google/models/gemini-3.5-live-translate-preview' },
                             { name: 'publishers/google/models/gemini-4-tts' },
                         ],
                     ];
@@ -93,6 +95,8 @@ describe('VertexAIDriver listModels', () => {
         expect(modelIds).not.toContain('locations/global/models/text-embedding-future');
         expect(modelIds).not.toContain('locations/global/models/veo-4');
         expect(modelIds).not.toContain('publishers/google/models/gemini-live-future');
+        expect(modelIds).not.toContain('publishers/google/models/gemini-robotics-er-2-preview-info');
+        expect(modelIds).not.toContain('publishers/google/models/gemini-3.5-live-translate-preview');
         expect(modelIds).toContain('publishers/google/models/gemini-4-tts');
     });
 });

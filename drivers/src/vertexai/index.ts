@@ -738,8 +738,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                     'embedding',
                     'embed',
                     'gemini-live',
+                    'live-',
                     'transcribe-live',
                     'native-audio',
+                    'robotics',
                     'computer-use-preview',
                 ],
                 /** Additional models not in the listings, but we want to include.
