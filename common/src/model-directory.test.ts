@@ -281,6 +281,19 @@ describe('central model directory', () => {
         });
     });
 
+    it('keeps Vertex file transcription and speech modalities distinct from generic Gemini', () => {
+        expect(getModelCapabilities('gemini-3.5-transcribe-preview', Providers.vertexai)).toMatchObject({
+            input: { audio: true, text: false, image: false, video: false },
+            output: { text: true, audio: false },
+            tool_support: false,
+        });
+        expect(getModelCapabilities('gemini-3.1-flash-tts-preview', Providers.vertexai)).toMatchObject({
+            input: { text: true, audio: false, image: false, video: false },
+            output: { audio: true, text: false },
+            tool_support: false,
+        });
+    });
+
     it('uses image-generation metadata for Gemini 3.1 Flash Image', () => {
         expect(resolveModelProfile('gemini-3.1-flash-image-preview', Providers.vertexai)).toMatchObject({
             context_window: 131_072,
