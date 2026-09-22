@@ -1,4 +1,5 @@
 import { boundedAudioStream, storeAudioResult } from '../shared/audio.js';
+import { mapOpenAIChatCompletionsUsage, mapOpenAITranscriptionUsage } from './usage.js';
 
 export { boundedAudioStream } from '../shared/audio.js';
 
@@ -15,7 +16,7 @@ import {
     type PromptSegment,
     Providers,
     resolveModelProfile,
-    stripAudioPayloads,
+    stripAudioFromCompletion,
 } from '@llumiverse/core';
 import type { AbstractDriver } from '@llumiverse/core/driver';
 import type OpenAI from 'openai';
@@ -95,7 +96,9 @@ export async function executeOpenAIAudio(
                 }[format],
                 container: format === 'opus' ? 'ogg' : format === 'pcm16' ? 'raw' : format,
                 ...(format === 'mp3' ? { codec: 'mp3' } : {}),
-                ...(format === 'pcm16' ? { codec: 'pcm', sample_encoding: 'int16', byte_order: 'little' } : {}),
+                ...(format === 'pcm16'
+                    ? { codec: 'pcm', sample_rate: 24000, channels: 1, sample_encoding: 'int16', byte_order: 'little' }
+                    : {}),
             },
             options,
             signal,
@@ -108,6 +111,7 @@ export async function executeOpenAIAudio(
                 audio,
             ],
             finish_reason: result.choices[0]?.finish_reason,
+            token_usage: mapOpenAIChatCompletionsUsage(result.usage),
             original_response: options.include_original_response ? result : undefined,
         };
     }
@@ -152,6 +156,7 @@ export async function executeOpenAIAudio(
                         },
                     ],
                     finish_reason: 'stop',
+                    token_usage: mapOpenAITranscriptionUsage(result.usage),
                     original_response: options.include_original_response ? result : undefined,
                 };
             }
@@ -169,6 +174,7 @@ export async function executeOpenAIAudio(
             return {
                 result: [{ type: 'text', value: result.text }],
                 finish_reason: 'stop',
+                token_usage: mapOpenAITranscriptionUsage(result.usage),
                 original_response: options.include_original_response ? result : undefined,
             };
         } finally {
@@ -237,7 +243,7 @@ export async function executeOpenAIAudioRequest<PromptT>(
         const completion = await scope.run(() =>
             executeOpenAIAudio(service, segments, options, requestOptions ?? { signal }, requestModel),
         );
-        return stripAudioPayloads({ ...completion, prompt: emptyPrompt, execution_time: Date.now() - start });
+        return stripAudioFromCompletion({ ...completion, prompt: emptyPrompt, execution_time: Date.now() - start });
     } catch (error) {
         throw driver.formatLlumiverseError(error, {
             provider: driver.provider,

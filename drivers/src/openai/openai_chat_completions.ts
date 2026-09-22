@@ -11,7 +11,6 @@ import {
     type EmbeddingsResult,
     type ExecutionOptions,
     type ExecutionResponse,
-    type ExecutionTokenUsage,
     getConversationMeta,
     incrementConversationTurn,
     isDedicatedInferenceModel,
@@ -43,6 +42,7 @@ import { executeOpenAIAudioRequest, openAIAudioTask } from './audio.js';
 import { getOpenAIExtraBody, mergeOpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAISchema, limitedSchemaFormat } from './schema.js';
+import { mapOpenAIChatCompletionsUsage } from './usage.js';
 
 type OpenAIChatServiceTier = OpenAI.Chat.ChatCompletionCreateParams['service_tier'];
 
@@ -370,17 +370,6 @@ function safeJsonParse(value: string | undefined): JSONObject {
     } catch {
         return {};
     }
-}
-
-function mapOpenAIChatCompletionsUsage(usage?: OpenAIChatCompletionsUsage | null): ExecutionTokenUsage | undefined {
-    if (!usage) {
-        return undefined;
-    }
-    return {
-        prompt: usage.prompt_tokens,
-        result: usage.completion_tokens,
-        total: usage.total_tokens,
-    };
 }
 
 function normalizeOpenAIChatCompletionsFinishReason(

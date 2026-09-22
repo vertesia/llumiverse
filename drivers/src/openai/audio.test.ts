@@ -1,4 +1,11 @@
-import { type DataSource, type ExecutionOptions, getModelCapabilities, PromptRole, Providers } from '@llumiverse/core';
+import {
+    type DataSource,
+    type ExecutionOptions,
+    type ExecutionResponse,
+    getModelCapabilities,
+    PromptRole,
+    Providers,
+} from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import { boundedAudioStream } from './audio.js';
 import { OpenAIDriver } from './openai.js';
@@ -26,7 +33,10 @@ describe('OpenAI file audio', () => {
             fetch: async (url, init) => {
                 expect(String(url)).toContain('/audio/transcriptions');
                 multipart = await new Response(init?.body).text();
-                return Response.json({ text: 'Hello.' });
+                return Response.json({
+                    text: 'Hello.',
+                    usage: { type: 'tokens', input_tokens: 8, output_tokens: 2, total_tokens: 10 },
+                });
             },
         });
         const file = source();
@@ -38,6 +48,7 @@ describe('OpenAI file audio', () => {
         expect(multipart).toContain('audio/wav');
         expect(multipart).toContain('gpt-transcribe');
         expect(result.result).toEqual([{ type: 'text', value: 'Hello.' }]);
+        expect(result.token_usage).toEqual({ prompt: 8, result: 2, total: 10 });
         expect(result.prompt).toEqual([]);
         expect(result.conversation).toBeUndefined();
         expect(file.getURL).not.toHaveBeenCalled();
@@ -121,6 +132,68 @@ describe('OpenAI file audio', () => {
         ]);
         expect(JSON.stringify(result)).not.toContain('base64');
         expect(result.conversation).toBeUndefined();
+    });
+
+    it.each(['blocking', 'fallback'] as const)('preserves PCM format and usage in %s audio results', async (mode) => {
+        const driver = new OpenAIDriver({ apiKey: 'test' });
+        vi.spyOn(driver.service.chat.completions, 'create').mockResolvedValue({
+            id: 'completion',
+            object: 'chat.completion',
+            created: 1,
+            model: 'gpt-audio',
+            choices: [
+                {
+                    index: 0,
+                    finish_reason: 'stop',
+                    logprobs: null,
+                    message: {
+                        role: 'assistant',
+                        content: null,
+                        refusal: null,
+                        audio: {
+                            id: 'audio',
+                            expires_at: 1,
+                            data: Buffer.from(bytes).toString('base64'),
+                            transcript: 'Hello',
+                        },
+                    },
+                },
+            ],
+            usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 },
+        });
+        const options: ExecutionOptions = {
+            model: 'gpt-audio',
+            model_options: { _option_id: 'openai-audio', response_format: 'pcm16' },
+            include_original_response: true,
+            store_audio: async (stream) => {
+                await new Response(stream).arrayBuffer();
+                return 'gs://bucket/output.pcm';
+            },
+        };
+        const segments = [{ ...prompt[0], files: [source()] }];
+        let result: ExecutionResponse | undefined;
+        if (mode === 'blocking') result = await driver.execute(segments, options);
+        else {
+            const stream = await driver.stream(segments, options);
+            for await (const _chunk of stream) {
+                /* consume */
+            }
+            result = stream.completion;
+        }
+        expect(result?.token_usage).toEqual({ prompt: 10, result: 20, total: 30 });
+        expect(result?.result).toContainEqual({
+            type: 'audio',
+            value: 'gs://bucket/output.pcm',
+            mime_type: 'audio/pcm',
+            container: 'raw',
+            codec: 'pcm',
+            sample_rate: 24000,
+            channels: 1,
+            sample_encoding: 'int16',
+            byte_order: 'little',
+        });
+        expect(JSON.stringify(result)).not.toContain(Buffer.from(bytes).toString('base64'));
+        driver.destroy();
     });
 
     it('fails before provider work for missing storage, oversized text, and audio-to-audio input', async () => {

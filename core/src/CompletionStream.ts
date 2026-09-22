@@ -10,7 +10,7 @@ import {
     LlumiverseError,
     type ToolUse,
 } from '@llumiverse/common';
-import { stripAudioPayloads } from './conversation-utils.js';
+import { stripAudioFromCompletion, stripAudioPayloads } from './conversation-utils.js';
 import type { AbstractDriver } from './Driver.js';
 import { DEFAULT_DRIVER_REQUEST_TIMEOUT_MS } from './http-agent.js';
 
@@ -605,7 +605,7 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
             { provider: this.driver.provider, model: this.options.model },
         );
 
-        this.completion = stripAudioPayloads({
+        this.completion = stripAudioFromCompletion({
             result: accumulatedResults, // Return the accumulated CompletionResult[] instead of text
             prompt: this.driver.formatDebugPrompt(this.prompt),
             execution_time: Date.now() - start,
@@ -692,7 +692,7 @@ export class FallbackCompletionStream<PromptT = unknown> extends ManagedCompleti
                 })
                 .join('');
             yield content;
-            this.completion = stripAudioPayloads(completion); // Return the original completion with untouched CompletionResult[]
+            this.completion = stripAudioFromCompletion(completion); // Return the original completion with untouched CompletionResult[]
         } catch (error: unknown) {
             if (this.abortSignal.aborted) return;
             // Don't wrap if already a LlumiverseError
