@@ -603,7 +603,7 @@ function toAzureFoundryChatOptions(options: ExecutionOptions, deploymentName: st
     };
 }
 
-function toAzureInferenceRequest(
+export function toAzureInferenceRequest(
     payload: OpenAIChatCompletionsPayload,
     stream: boolean,
 ): GetChatCompletionsParameters['body'] {

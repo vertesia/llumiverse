@@ -555,14 +555,14 @@ export const VertexAIGrokOptionsSchema = z
 // Keep provider aliases inferred from their schemas; see common/README.md for the maintenance checklist.
 export const OpenAiTranscriptionOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('openai-transcription'),
+        _option_id: z.literal('openai-transcription').optional(),
         language: z.string().optional(),
     })
     .meta({ id: 'OpenAiTranscriptionOptions' });
 
 export const OpenAiSpeechOptionsSchema = z
     .strictObject({
-        _option_id: z.literal('openai-speech'),
+        _option_id: z.literal('openai-speech').optional(),
         voice: z.string().min(1).optional(),
         response_format: z.enum(['mp3', 'wav', 'opus', 'aac', 'flac', 'pcm']).optional(),
         speed: z.number().min(0.25).max(4).optional(),
