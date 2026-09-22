@@ -246,7 +246,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             this.logger.info(`[Azure Foundry] Overriding default API version, using API version: ${opts.apiVersion}`);
         }
 
-        const endpoint = opts.endpoint.replace(/\/+$/, '');
+        const endpoint = opts.endpoint.endsWith('/') ? opts.endpoint.slice(0, -1) : opts.endpoint;
         this.service = new AIProjectClient(endpoint, opts.azureADTokenProvider);
         this.inferenceClient = ModelClient(endpoint, opts.azureADTokenProvider, {
             apiVersion: this.INFERENCE_API_VERSION,
