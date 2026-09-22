@@ -35,10 +35,9 @@ import {
 import { transformSSEStream } from '@llumiverse/core/async';
 import { FallbackCompletionStream } from '@llumiverse/core/driver';
 import OpenAI from 'openai';
-import { boundedAudioStream } from '../shared/audio.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
-import { executeOpenAIAudioRequest, openAIAudioTask } from './audio.js';
+import { executeOpenAIAudioRequest, openAIAudioTask, openAIInputAudioPart } from './audio.js';
 import { getOpenAIExtraBody, mergeOpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAISchema, limitedSchemaFormat } from './schema.js';
@@ -965,17 +964,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                                 },
                             });
                         } else if (file.mime_type?.startsWith('audio/')) {
-                            const format =
-                                file.mime_type === 'audio/wav' || file.mime_type === 'audio/x-wav'
-                                    ? 'wav'
-                                    : file.mime_type === 'audio/mpeg' || file.mime_type === 'audio/mp3'
-                                      ? 'mp3'
-                                      : undefined;
-                            if (!format) throw new Error('Chat audio input requires MP3 or WAV');
-                            const data = await readStreamAsBase64(
-                                boundedAudioStream(await file.getStream(), 25_000_000),
-                            );
-                            parts.push({ type: 'input_audio', input_audio: { data, format } });
+                            parts.push(await openAIInputAudioPart(file));
                         } else if (file.mime_type?.startsWith('text/')) {
                             const fileStream = await file.getStream();
                             const fileContent = await streamToString(fileStream);

@@ -70,9 +70,14 @@ describe('primary provider file audio', () => {
         expect(result.prompt).toEqual([]);
     });
 
-    it.each(['openai', 'compatible'] as const)(
-        'uses bounded Chat audio for %s and persists the generated output',
-        async (provider) => {
+    it.each([
+        ['openai', true],
+        ['compatible', true],
+        ['openai', false],
+        ['compatible', false],
+    ] as const)(
+        'uses Chat audio for %s with attachment=%s and persists the generated output',
+        async (provider, hasAttachment) => {
             const driver =
                 provider === 'openai'
                     ? new OpenAIDriver({ apiKey: 'test' })
@@ -80,11 +85,14 @@ describe('primary provider file audio', () => {
             const create = vi
                 .spyOn(driver.service.chat.completions, 'create')
                 .mockResolvedValue(chatResponse('gpt-audio', { data: base64, transcript: 'A greeting.' }));
-            const result = await driver.execute([{ role: PromptRole.user, content: 'Describe', files: [file()] }], {
-                model: 'gpt-audio',
-                include_original_response: true,
-                store_audio: store,
-            });
+            const result = await driver.execute(
+                [{ role: PromptRole.user, content: 'Describe', files: hasAttachment ? [file()] : [] }],
+                {
+                    model: 'gpt-audio',
+                    include_original_response: true,
+                    store_audio: store,
+                },
+            );
             expect(create).toHaveBeenCalledWith(
                 expect.objectContaining({
                     modalities: ['text', 'audio'],
@@ -93,7 +101,9 @@ describe('primary provider file audio', () => {
                             role: 'user',
                             content: [
                                 { type: 'text', text: 'Describe' },
-                                { type: 'input_audio', input_audio: { data: base64, format: 'wav' } },
+                                ...(hasAttachment
+                                    ? [{ type: 'input_audio', input_audio: { data: base64, format: 'wav' } }]
+                                    : []),
                             ],
                         },
                     ],
@@ -109,6 +119,19 @@ describe('primary provider file audio', () => {
             expect(result.conversation).toBeUndefined();
         },
     );
+
+    it('rejects empty and multiple-file audio chat inputs before calling the provider', async () => {
+        const driver = new OpenAIDriver({ apiKey: 'test' });
+        const create = vi.spyOn(driver.service.chat.completions, 'create');
+        const options = { model: 'gpt-audio', store_audio: store };
+        await expect(driver.execute([{ role: PromptRole.user, content: '  ' }], options)).rejects.toThrow(
+            'requires text or an audio file',
+        );
+        await expect(
+            driver.execute([{ role: PromptRole.user, content: '', files: [file(), file()] }], options),
+        ).rejects.toThrow('at most one audio file');
+        expect(create).not.toHaveBeenCalled();
+    });
 
     it('requests diarized JSON and retains speaker segments', async () => {
         const driver = new OpenAIDriver({ apiKey: 'test' });
@@ -187,10 +210,17 @@ describe('primary provider file audio', () => {
         const generate = vi.spyOn(client.models, 'generateContent').mockResolvedValue(response);
         vi.spyOn(driver, 'getGoogleGenAIClient').mockReturnValue(client);
         const audio = file();
-        const result = await driver.execute([{ role: PromptRole.user, content: '', files: [audio] }], {
-            model: 'gemini-3.5-transcribe-preview',
-            model_options: { _option_id: 'vertexai-gemini', transcription_diarization: true },
-        });
+        const result = await driver.execute(
+            [
+                { role: PromptRole.system, content: 'Preserve punctuation.' },
+                { role: PromptRole.system, content: 'Keep speaker labels.' },
+                { role: PromptRole.user, content: '', files: [audio] },
+            ],
+            {
+                model: 'gemini-3.5-transcribe-preview',
+                model_options: { _option_id: 'vertexai-gemini', transcription_diarization: true },
+            },
+        );
         expect(generate).toHaveBeenCalledWith(
             expect.objectContaining({
                 contents: [
@@ -200,6 +230,10 @@ describe('primary provider file audio', () => {
                     },
                 ],
                 config: expect.objectContaining({
+                    systemInstruction: {
+                        role: 'user',
+                        parts: [{ text: 'Preserve punctuation.' }, { text: 'Keep speaker labels.' }],
+                    },
                     audioTranscriptionConfig: expect.objectContaining({ diarization: true }),
                 }),
             }),

@@ -868,6 +868,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                       },
                   }
                 : {
+                      systemInstruction: prompt.system,
                       audioTranscriptionConfig: {
                           languageCodes: modelOptions?.transcription_language_codes,
                           diarization: modelOptions?.transcription_diarization,
@@ -892,11 +893,12 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 config,
             });
             const parts = response.candidates?.[0]?.content?.parts ?? [];
+            const hasText = parts.some((part) => part.text);
             const results: CompletionResult[] = [];
             for (const part of parts) {
                 if (part.text) results.push({ type: 'text', value: part.text });
                 if (part.audioTranscription) {
-                    if (part.audioTranscription.text && !parts.some((candidate) => candidate.text))
+                    if (part.audioTranscription.text && !hasText)
                         results.push({ type: 'text', value: part.audioTranscription.text });
                     const transcription = part.audioTranscription;
                     results.push({

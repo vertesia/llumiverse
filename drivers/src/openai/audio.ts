@@ -11,16 +11,55 @@ import {
 import {
     type AudioResult,
     type Completion,
+    type DataSource,
     type ExecutionOptions,
     type ExecutionResponse,
     type PromptSegment,
     Providers,
+    readStreamAsBase64,
     resolveModelProfile,
     stripAudioFromCompletion,
 } from '@llumiverse/core';
 import type { AbstractDriver } from '@llumiverse/core/driver';
 import type OpenAI from 'openai';
 import { toStreamingFile } from 'openai';
+
+export async function openAIInputAudioPart(
+    file: DataSource,
+    signal?: AbortSignal,
+    unsupportedFormatMessage = 'Chat audio input requires MP3 or WAV',
+): Promise<OpenAI.Chat.ChatCompletionContentPartInputAudio> {
+    const format =
+        file.mime_type === 'audio/wav' || file.mime_type === 'audio/x-wav'
+            ? 'wav'
+            : file.mime_type === 'audio/mpeg' || file.mime_type === 'audio/mp3'
+              ? 'mp3'
+              : undefined;
+    if (!format) throw new Error(unsupportedFormatMessage);
+    const data = await readStreamAsBase64(boundedAudioStream(await file.getStream(), 25_000_000, signal));
+    return { type: 'input_audio', input_audio: { data, format } };
+}
+
+function openAIAudioMetadata(
+    responseFormat: NonNullable<OpenAI.Audio.SpeechCreateParams['response_format']> | 'pcm16',
+): Omit<AudioResult, 'type' | 'value'> {
+    const format = responseFormat === 'pcm16' ? 'pcm' : responseFormat;
+    return {
+        mime_type: {
+            mp3: 'audio/mpeg',
+            wav: 'audio/wav',
+            opus: 'audio/ogg',
+            aac: 'audio/aac',
+            flac: 'audio/flac',
+            pcm: 'audio/pcm',
+        }[format],
+        container: format === 'opus' ? 'ogg' : format === 'pcm' ? 'raw' : format,
+        ...(format === 'mp3' ? { codec: 'mp3' } : {}),
+        ...(format === 'pcm'
+            ? { codec: 'pcm', sample_rate: 24000, channels: 1, sample_encoding: 'int16', byte_order: 'little' }
+            : {}),
+    };
+}
 
 export function openAIAudioTask(model: string): 'transcription' | 'speech' | 'understanding' | undefined {
     const { family } = resolveModelProfile(model.split('::').pop() ?? model, Providers.openai);
@@ -55,19 +94,11 @@ export async function executeOpenAIAudio(
         throw new Error('File audio operations accept only user and system input');
     }
     if (openAIAudioTask(options.model) === 'understanding') {
-        if (files.length !== 1) throw new Error('Audio understanding requires exactly one audio file');
+        if (files.length > 1) throw new Error('Audio understanding accepts at most one audio file');
+        if (!files.length && !text) throw new Error('Audio understanding requires text or an audio file');
         const content: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [{ type: 'text', text }];
-        for (const file of files) {
-            const format =
-                file.mime_type === 'audio/wav' || file.mime_type === 'audio/x-wav'
-                    ? 'wav'
-                    : file.mime_type === 'audio/mpeg' || file.mime_type === 'audio/mp3'
-                      ? 'mp3'
-                      : undefined;
-            if (!format) throw new Error('OpenAI audio chat requires MP3 or WAV input');
-            const stream = boundedAudioStream(await file.getStream(), 25_000_000, signal);
-            const data = Buffer.from(await new Response(stream).arrayBuffer()).toString('base64');
-            content.push({ type: 'input_audio', input_audio: { data, format } });
+        if (files[0]) {
+            content.push(await openAIInputAudioPart(files[0], signal, 'OpenAI audio chat requires MP3 or WAV input'));
         }
         const params = OpenAiAudioOptionsSchema.parse(options.model_options ?? { _option_id: 'openai-audio' });
         if (!options.store_audio) throw new Error('Audio generation requires a durable audio storage sink');
@@ -86,20 +117,7 @@ export async function executeOpenAIAudio(
         if (!message?.audio?.data) throw new Error('OpenAI audio chat returned no audio data');
         const audio = await storeAudioResult(
             new Blob([Buffer.from(message.audio.data, 'base64')]).stream(),
-            {
-                mime_type: {
-                    wav: 'audio/wav',
-                    mp3: 'audio/mpeg',
-                    flac: 'audio/flac',
-                    opus: 'audio/ogg',
-                    pcm16: 'audio/pcm',
-                }[format],
-                container: format === 'opus' ? 'ogg' : format === 'pcm16' ? 'raw' : format,
-                ...(format === 'mp3' ? { codec: 'mp3' } : {}),
-                ...(format === 'pcm16'
-                    ? { codec: 'pcm', sample_rate: 24000, channels: 1, sample_encoding: 'int16', byte_order: 'little' }
-                    : {}),
-            },
+            openAIAudioMetadata(format),
             options,
             signal,
         );
@@ -201,23 +219,8 @@ export async function executeOpenAIAudio(
         requestOptions,
     );
     if (!response.body) throw new Error('Speech endpoint returned no audio body');
-    const metadata: Omit<AudioResult, 'type' | 'value'> = {
-        mime_type: {
-            mp3: 'audio/mpeg',
-            wav: 'audio/wav',
-            opus: 'audio/ogg',
-            aac: 'audio/aac',
-            flac: 'audio/flac',
-            pcm: 'audio/pcm',
-        }[format],
-        container: format === 'opus' ? 'ogg' : format === 'pcm' ? 'raw' : format,
-        ...(format === 'mp3' ? { codec: 'mp3' } : {}),
-        ...(format === 'pcm'
-            ? { codec: 'pcm', sample_rate: 24000, channels: 1, sample_encoding: 'int16', byte_order: 'little' }
-            : {}),
-    };
     return {
-        result: [await storeAudioResult(response.body, metadata, options, signal)],
+        result: [await storeAudioResult(response.body, openAIAudioMetadata(format), options, signal)],
         finish_reason: 'stop',
         original_response: options.include_original_response ? response : undefined,
     };
