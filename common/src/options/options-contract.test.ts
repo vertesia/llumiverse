@@ -20,6 +20,8 @@ const routes: Record<Providers, readonly (readonly [string, ModelOptions['_optio
         ['dall-e-2', 'openai-dalle'],
         ['dall-e-3', 'openai-dalle'],
         ['gpt-image-1', 'openai-gpt-image'],
+        ['gpt-4o-mini-transcribe', 'openai-transcription'],
+        ['tts-1', 'openai-speech'],
     ],
     openrouter: [['openai/gpt-4o', 'openrouter-text']],
     azure_openai: [['deployment::gpt-5.6-sol', 'openai-thinking']],
