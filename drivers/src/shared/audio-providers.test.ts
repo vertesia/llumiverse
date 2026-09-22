@@ -27,7 +27,7 @@ const store = vi.fn<NonNullable<ExecutionOptions['store_audio']>>(async (stream)
     expect(new Uint8Array(await new Response(stream).arrayBuffer())).toEqual(bytes);
     return 'gs://bucket/speech.pcm';
 });
-function chatResponse(model: string) {
+function chatResponse(model: string, audio?: Pick<OpenAI.Chat.Completions.ChatCompletionAudio, 'data' | 'transcript'>) {
     return {
         id: 'test',
         object: 'chat.completion' as const,
@@ -36,7 +36,12 @@ function chatResponse(model: string) {
         choices: [
             {
                 index: 0,
-                message: { role: 'assistant' as const, content: 'A greeting.', refusal: null },
+                message: {
+                    role: 'assistant' as const,
+                    content: 'A greeting.',
+                    audio: audio && { id: 'audio', expires_at: 1, ...audio },
+                    refusal: null,
+                },
                 finish_reason: 'stop' as const,
                 logprobs: null,
             },
@@ -66,7 +71,7 @@ describe('primary provider file audio', () => {
     });
 
     it.each(['openai', 'compatible'] as const)(
-        'uses bounded Chat audio for %s without retaining bytes',
+        'uses bounded Chat audio for %s and persists the generated output',
         async (provider) => {
             const driver =
                 provider === 'openai'
@@ -74,14 +79,15 @@ describe('primary provider file audio', () => {
                     : new OpenAIChatCompletionsDriver({ apiKey: 'test', endpoint: 'https://example.test/v1' });
             const create = vi
                 .spyOn(driver.service.chat.completions, 'create')
-                .mockResolvedValue(chatResponse('gpt-audio'));
+                .mockResolvedValue(chatResponse('gpt-audio', { data: base64, transcript: 'A greeting.' }));
             const result = await driver.execute([{ role: PromptRole.user, content: 'Describe', files: [file()] }], {
                 model: 'gpt-audio',
                 include_original_response: true,
+                store_audio: store,
             });
             expect(create).toHaveBeenCalledWith(
                 expect.objectContaining({
-                    modalities: ['text'],
+                    modalities: ['text', 'audio'],
                     messages: [
                         {
                             role: 'user',
@@ -93,6 +99,10 @@ describe('primary provider file audio', () => {
                     ],
                 }),
                 expect.anything(),
+            );
+            expect(store).toHaveBeenCalled();
+            expect(result.result).toContainEqual(
+                expect.objectContaining({ type: 'audio', value: 'gs://bucket/speech.pcm', mime_type: 'audio/wav' }),
             );
             expect(JSON.stringify(result)).not.toContain(base64);
             expect(result.conversation).toBeUndefined();
