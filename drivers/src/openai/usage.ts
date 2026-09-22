@@ -5,10 +5,13 @@ export function mapOpenAIChatCompletionsUsage(usage?: OpenAI.CompletionUsage | n
     if (!usage) {
         return undefined;
     }
+    const cachedTokens = usage.prompt_tokens_details?.cached_tokens ?? 0;
     return {
         prompt: usage.prompt_tokens,
         result: usage.completion_tokens,
         total: usage.total_tokens,
+        prompt_cached: cachedTokens || undefined,
+        prompt_new: Math.max(0, usage.prompt_tokens - cachedTokens),
     };
 }
 

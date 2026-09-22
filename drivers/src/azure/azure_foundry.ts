@@ -33,7 +33,7 @@ import {
     type TextEmbeddingInput,
 } from '@llumiverse/core';
 import { AbstractDriver } from '@llumiverse/core/driver';
-import type OpenAI from 'openai';
+import OpenAI from 'openai';
 import { openAIAudioTask } from '../openai/audio.js';
 import { OpenAIResponsesDriverBase } from '../openai/index.js';
 import {
@@ -103,6 +103,7 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
     ): Promise<OpenAIChatCompletionsResponse> {
         const response = await this.service.path('/chat/completions').post({
             body: toAzureInferenceRequest(payload, false),
+            headers: { 'extra-parameters': 'pass-through' },
             timeout: this.getDriverRequestTimeoutMs(_options.httpTimeout),
             ...(signal ? { abortSignal: signal } : {}),
         });
@@ -126,6 +127,7 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
             .path('/chat/completions')
             .post({
                 body: toAzureInferenceRequest(payload, true),
+                headers: { 'extra-parameters': 'pass-through' },
                 timeout: this.getDriverRequestTimeoutMs(_options.httpTimeout),
                 ...(signal ? { abortSignal: signal } : {}),
             })
@@ -184,6 +186,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
     service: AIProjectClient;
     private readonly inferenceClient: AzureInferenceClient;
     private readonly inferenceProtocolDriver: AzureFoundryInferenceProtocolDriver;
+    private readonly openAITokenProvider: () => Promise<string>;
     private openAIProtocolDriver?: AzureFoundryOpenAIProtocolDriver;
     private readonly deploymentProtocols = new Map<string, 'responses' | 'chat_completions'>();
     readonly provider = Providers.azure_foundry;
@@ -244,6 +247,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             this.logger.info(`[Azure Foundry] Overriding default API version, using API version: ${opts.apiVersion}`);
         }
 
+        this.openAITokenProvider = getBearerTokenProvider(opts.azureADTokenProvider, 'https://ai.azure.com/.default');
         this.service = new AIProjectClient(opts.endpoint, opts.azureADTokenProvider);
         this.inferenceClient = ModelClient(opts.endpoint, opts.azureADTokenProvider, {
             apiVersion: this.INFERENCE_API_VERSION,
@@ -286,10 +290,13 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
     private getOpenAIProtocolDriver(): AzureFoundryOpenAIProtocolDriver {
         this.openAIProtocolDriver ??= new AzureFoundryOpenAIProtocolDriver(
-            this.service.getOpenAIClient({
+            new OpenAI({
+                // ai-projects bundles OpenAI v6; construct our v7 transport directly.
+                baseURL: `${this.service.endpoint.replace(/\/$/, '')}/openai/v1`,
+                apiKey: this.openAITokenProvider,
                 fetch: this.getDriverFetch(),
                 timeout: this.getDriverRequestTimeoutMs(),
-            }) as unknown as OpenAI,
+            }),
             this.options,
         );
         return this.openAIProtocolDriver;

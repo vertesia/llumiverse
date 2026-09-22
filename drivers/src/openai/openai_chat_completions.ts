@@ -36,6 +36,7 @@ import { transformSSEStream } from '@llumiverse/core/async';
 import { FallbackCompletionStream } from '@llumiverse/core/driver';
 import OpenAI from 'openai';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
+import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
 import { executeOpenAIAudioRequest, openAIAudioTask, openAIInputAudioPart } from './audio.js';
 import { getOpenAIExtraBody, mergeOpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
@@ -171,6 +172,8 @@ export interface OpenAIChatCompletionsProtocolOptions {
     resultSchemaMode?: 'response_format' | 'prompt';
     /** Supplement native structured output with prompt alignment for providers with unreliable enforcement. */
     includeResultSchemaInPrompt?: boolean;
+    /** Model-specific form of the prompt alignment guard for mixed-model providers. */
+    includeResultSchemaInPromptForModel?: (model: string) => boolean;
     /**
      * OpenAI supports strict function schemas. Some OpenAI-compatible providers reject
      * or mis-handle those OpenAI-specific fields, so adapters can request a looser
@@ -374,6 +377,9 @@ function normalizeOpenAIChatCompletionsFinishReason(
     reason: string | null | undefined,
     hasToolUse: boolean = false,
 ): string | undefined {
+    // A provider may include a partial tool-call delta on the token-limit chunk. Preserve
+    // truncation so core drops the incomplete call instead of classifying it as malformed JSON.
+    if (reason === 'length') return 'length';
     if (hasToolUse || reason === 'tool_calls' || reason === 'function_call') {
         return 'tool_use';
     }
@@ -487,6 +493,12 @@ export function convertOpenAIChatCompletionsToolMessagesToText(
         }
 
         if (message.role === 'tool') {
+            if (Array.isArray(message.content) && message.content.some((part) => part.type === 'image_url')) {
+                return {
+                    role: 'user',
+                    content: [{ type: 'text', text: `Tool result ${message.tool_call_id}:` }, ...message.content],
+                };
+            }
             const output = extractOpenAIChatCompletionsContentText(message.content) || 'No output';
             return { role: 'user', content: `[Tool result: ${truncateToolText(output)}]` };
         }
@@ -690,6 +702,7 @@ export function convertToOpenAIChatCompletionsMessages(
         attachments = [];
     };
     for (const msg of messages) {
+        // Complete all parallel tool results before adding ordinary user content.
         if (msg.role !== 'tool') flushAttachments();
         const result: OpenAIChatCompletionsRequestMessage = {
             role: msg.role,
@@ -715,28 +728,20 @@ export function convertToOpenAIChatCompletionsMessages(
         }
 
         if (Array.isArray(msg.content)) {
-            const textParts: string[] = [];
-            const mediaParts: Exclude<OpenAIChatCompletionsContentPart, OpenAIChatCompletionsTextPart>[] = [];
-
+            // Preserve interleaved captions and images, including on replay. Tool messages
+            // only support text in the SDK/API, so retain an indexed reference at each image's
+            // original position and carry its bytes in a following user message.
             let imageIndex = 0;
-            for (const part of msg.content) {
-                if (msg.role === 'tool' && part.type === 'image_url') {
-                    imageIndex++;
-                    const label = `Image ${imageIndex} from tool result ${msg.tool_call_id}:`;
-                    attachments.push({ type: 'text', text: label }, part);
-                    textParts.push(`[Image ${imageIndex} attached below]`);
-                } else if (part.type === 'text') textParts.push(part.text);
-                else mediaParts.push(part);
-            }
+            const content = msg.content.map((part): OpenAIChatCompletionsContentPart => {
+                if (msg.role !== 'tool' || part.type !== 'image_url') return part;
+                imageIndex++;
+                const label = `Image ${imageIndex} from tool result ${msg.tool_call_id}:`;
+                attachments.push({ type: 'text', text: label }, part);
+                return { type: 'text', text: `[Image ${imageIndex} attached below]` };
+            });
 
-            const content: OpenAIChatCompletionsContentPart[] = [];
-            if (textParts.length > 0) {
-                content.push({ type: 'text', text: textParts.join('\n') });
-            }
-            content.push(...mediaParts);
-
-            if (content.length === 1 && content[0].type === 'text') {
-                result.content = content[0].text;
+            if (content.length > 0 && content.every((part) => part.type === 'text')) {
+                result.content = content.map((part) => part.text).join('\n');
             } else if (content.length > 0) {
                 result.content = content;
             }
@@ -859,6 +864,13 @@ function finalizeOpenAIChatCompletionsConversation(
     return processedConversation;
 }
 
+function getOpenAIChatDriverProvider(driver: unknown): string {
+    if (typeof driver !== 'object' || driver === null || !('provider' in driver)) {
+        return Providers.openai_compatible;
+    }
+    return typeof driver.provider === 'string' ? driver.provider : Providers.openai_compatible;
+}
+
 export abstract class OpenAIChatCompletionsProtocol<DriverT> {
     protected readonly options: OpenAIChatCompletionsProtocolOptions;
 
@@ -888,7 +900,9 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             ? `IMPORTANT: only answer using JSON, and respecting the schema included below, between the <response_schema> tags. <response_schema>${JSON.stringify(_options.result_schema)}</response_schema>`
             : undefined;
         if (
-            (this.options.resultSchemaMode === 'prompt' || this.options.includeResultSchemaInPrompt) &&
+            (this.options.resultSchemaMode === 'prompt' ||
+                this.options.includeResultSchemaInPrompt ||
+                this.options.includeResultSchemaInPromptForModel?.(_options.model)) &&
             resultSchemaInstruction
         ) {
             messages.push({
@@ -1003,7 +1017,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         conversation = prepareOpenAIChatCompletionsConversation(conversation, options);
         const includeThoughts =
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
-        const payload = this.buildPayload(conversation, options, false);
+        const payload = this.buildPayload(conversation, options, false, getOpenAIChatDriverProvider(driver));
         const result = await this.postChatCompletion(driver, payload, options, signal);
 
         const choice = result?.choices?.[0];
@@ -1062,7 +1076,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         conversation = prepareOpenAIChatCompletionsConversation(conversation, options);
         const includeThoughts =
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
-        const payload = this.buildPayload(conversation, options, true);
+        const payload = this.buildPayload(conversation, options, true, getOpenAIChatDriverProvider(driver));
         const responseStream = await this.postChatCompletionStream(driver, payload, options, signal);
 
         const projector = new OpenAIThinkStreamProjector();
@@ -1115,10 +1129,9 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                     const toolUse: StreamingOpenAIToolUse = {
                         id: `tool_${index}`,
                         tool_name: tc.function?.name ?? '',
-                        tool_input:
-                            typeof tc.function?.arguments === 'string' && tc.function.arguments.length > 0
-                                ? tc.function.arguments
-                                : {},
+                        // Empty deltas are zero-byte string fragments, not parsed empty objects.
+                        // Keeping one representation prevents a placeholder from replacing prior JSON bytes.
+                        tool_input: typeof tc.function?.arguments === 'string' ? tc.function.arguments : '',
                     };
                     if (tc.id) {
                         toolUse._actual_id = tc.id;
@@ -1163,12 +1176,18 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         conversation: OpenAIChatCompletionsPrompt,
         options: ExecutionOptions,
         stream: boolean,
+        provider: string = Providers.openai_compatible,
     ): OpenAIChatCompletionsPayload {
         const modelOptions = options.model_options as TextFallbackOptions & {
             effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
             reasoning_effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
             seed?: number;
             service_tier?: string;
+            tool_choice?: 'auto' | 'none' | 'any' | 'required';
+            /** Internal execution hint supplied after public model-option validation. */
+            required_tool_name?: string;
+            /** Internal execution hint used with a required named tool. */
+            parallel_tool_calls?: boolean;
         };
         const payload: OpenAIChatCompletionsPayload = {
             model: this.getModelName(options),
@@ -1194,8 +1213,24 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         }
 
         const toolsPayload = convertToolsToOpenAIChatCompletionsFormat(options.tools, this.options.toolSchemaMode);
+        const forcedToolChoice =
+            typeof modelOptions?.required_tool_name === 'string' ||
+            modelOptions?.tool_choice === 'required' ||
+            modelOptions?.tool_choice === 'any';
+        if (forcedToolChoice && (!toolsPayload || toolsPayload.length === 0)) {
+            throw createToolChoiceConfigurationError(
+                '[OpenAI Chat Completions API] A required tool choice was requested, but no tools are available.',
+                { provider, model: options.model, operation: stream ? 'stream' : 'execute' },
+            );
+        }
         if (toolsPayload && toolsPayload.length > 0) {
             payload.tools = toolsPayload;
+            payload.tool_choice = modelOptions?.required_tool_name
+                ? { type: 'function', function: { name: modelOptions.required_tool_name } }
+                : modelOptions?.tool_choice === 'any'
+                  ? 'required'
+                  : modelOptions?.tool_choice;
+            payload.parallel_tool_calls = modelOptions?.parallel_tool_calls;
         }
 
         if (options.result_schema && this.options.resultSchemaMode !== 'prompt') {
@@ -1232,6 +1267,8 @@ export interface OpenAIChatCompletionsDriverOptions extends DriverOptions {
     defaultMaxTokens?: number;
     extraBody?: Record<string, unknown>;
     resultSchemaMode?: OpenAIChatCompletionsProtocolOptions['resultSchemaMode'];
+    includeResultSchemaInPrompt?: OpenAIChatCompletionsProtocolOptions['includeResultSchemaInPrompt'];
+    includeResultSchemaInPromptForModel?: OpenAIChatCompletionsProtocolOptions['includeResultSchemaInPromptForModel'];
     toolSchemaMode?: OpenAIChatCompletionsProtocolOptions['toolSchemaMode'];
 }
 
@@ -1422,6 +1459,8 @@ export abstract class OpenAIChatCompletionsDriverBase<
             defaultMaxTokens: options.defaultMaxTokens,
             extraBody: options.extraBody,
             resultSchemaMode: options.resultSchemaMode,
+            includeResultSchemaInPrompt: options.includeResultSchemaInPrompt,
+            includeResultSchemaInPromptForModel: options.includeResultSchemaInPromptForModel,
             toolSchemaMode: options.toolSchemaMode,
         });
     }
