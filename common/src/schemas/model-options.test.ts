@@ -14,12 +14,16 @@ function assertType<T extends true>(_ok: T): void {}
  * depends on and that a careless edit here would break silently — the union is large enough that a
  * dropped member reads as a normal diff.
  */
-const emitted = z.toJSONSchema(ModelOptionsSchema, { target: 'draft-2020-12', io: 'input' }) as {
+const rawEmitted = z.toJSONSchema(ModelOptionsSchema, { target: 'draft-2020-12', io: 'input' }) as {
+    $ref?: string;
     type?: string;
     anyOf?: { $ref: string }[];
     oneOf?: { $ref: string }[];
     $defs: Record<string, { properties?: Record<string, unknown>; required?: string[] }>;
 };
+const emitted = rawEmitted.$ref
+    ? { ...rawEmitted.$defs[rawEmitted.$ref.replace('#/$defs/', '')], $defs: rawEmitted.$defs }
+    : rawEmitted;
 
 const MEMBERS = (emitted.oneOf ?? emitted.anyOf ?? []).map((member) => member.$ref.replace('#/$defs/', ''));
 
