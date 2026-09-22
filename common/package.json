@@ -55,11 +55,7 @@
         "url": "git+ssh://git@github.com/vertesia/llumiverse.git"
     },
     "dependencies": {
-<<<<<<< HEAD
-        "zod": "^4.5.4"
-=======
         "zod": "catalog:"
->>>>>>> 38e4edf (chore(deps): align Zod catalog and schema tests (#684))
     },
     "devDependencies": {
         "@types/node": "catalog:",

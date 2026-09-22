@@ -19,13 +19,10 @@ minimumReleaseAgeExclude:
   - '@google/genai@2.21.0'
 
 catalog:
-<<<<<<< HEAD
-  vitest: "5.0.0"
-=======
   # Keep this synchronized with Studio and ComposableAI: each repository generates schemas from
   # its own local workspace and lockfile, so an override in another repository cannot control it.
   zod: "4.6.5"
->>>>>>> 38e4edf (chore(deps): align Zod catalog and schema tests (#684))
+  vitest: "5.0.0"
   typescript: "7.0.2"
   "@types/node": "^24.13.3"
   google-auth-library: "^11.0.2"
