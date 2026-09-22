@@ -44,7 +44,6 @@ import { FallbackCompletionStream } from '@llumiverse/core/driver';
 import type OpenAI from 'openai';
 import type { AzureOpenAI } from 'openai';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
-import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
 import { executeOpenAIAudioRequest, openAIAudioTask } from './audio.js';
 import { mergeOpenAIExtraBody, type OpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';

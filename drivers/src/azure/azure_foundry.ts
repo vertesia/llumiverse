@@ -33,7 +33,7 @@ import {
     type TextEmbeddingInput,
 } from '@llumiverse/core';
 import { AbstractDriver } from '@llumiverse/core/driver';
-import OpenAI from 'openai';
+import type OpenAI from 'openai';
 import { openAIAudioTask } from '../openai/audio.js';
 import { OpenAIResponsesDriverBase } from '../openai/index.js';
 import {

@@ -36,7 +36,6 @@ import { transformSSEStream } from '@llumiverse/core/async';
 import { FallbackCompletionStream } from '@llumiverse/core/driver';
 import OpenAI from 'openai';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
-import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
 import { executeOpenAIAudioRequest, openAIAudioTask, openAIInputAudioPart } from './audio.js';
 import { getOpenAIExtraBody, mergeOpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
