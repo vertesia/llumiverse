@@ -1,3 +1,5 @@
+import type { ExecutionResponse } from '@llumiverse/common';
+
 /**
  * Utilities for cleaning up conversation objects before storage.
  *
@@ -789,4 +791,95 @@ function stripHeartbeatsInternal(obj: unknown, preserveSubtree?: (value: unknown
     }
 
     return obj;
+}
+
+/** Sanitize provider envelopes only. Results, tool arguments and error data are application-owned. */
+export function stripAudioFromCompletion<T extends ExecutionResponse>(completion: T): T {
+    return {
+        ...completion,
+        prompt: stripAudioPayloads(completion.prompt),
+        ...(completion.conversation !== undefined && { conversation: stripAudioPayloads(completion.conversation) }),
+        ...(completion.original_response !== undefined && {
+            original_response: stripAudioPayloads(completion.original_response),
+        }),
+    };
+}
+
+/**
+ * Visit only provider message/content positions, never arbitrary object subtrees. In particular,
+ * JSON results, function arguments, tool responses, schemas and provider extension data are opaque.
+ * Unchanged objects retain their identity (including SDK response instances).
+ */
+export function stripAudioPayloads<T>(value: T): T {
+    return audioEnvelope(value) as T;
+}
+
+function audioRecord(value: unknown): value is Record<string, unknown> {
+    return value !== null && typeof value === 'object' && !Array.isArray(value) && !ArrayBuffer.isView(value);
+}
+
+function mapAudioArray(value: unknown, map: (item: unknown) => unknown): unknown {
+    if (!Array.isArray(value)) return value;
+    const mapped = value.map(map);
+    return mapped.some((item, index) => item !== value[index]) ? mapped : value;
+}
+
+function mapAudioField(value: unknown, key: string, map: (item: unknown) => unknown): unknown {
+    if (!audioRecord(value) || !(key in value)) return value;
+    const mapped = map(value[key]);
+    return mapped === value[key] ? value : { ...value, [key]: mapped };
+}
+
+function audioBlock(value: unknown): unknown {
+    if (!audioRecord(value)) return value;
+    const inline = value.inlineData;
+    if (audioRecord(inline) && typeof inline.mimeType === 'string' && inline.mimeType.startsWith('audio/')) {
+        return { text: '[Audio file omitted from history]' };
+    }
+    if (value.type === 'input_audio' && audioRecord(value.input_audio)) {
+        return { type: 'text', text: '[Audio file omitted from history]' };
+    }
+    const audio = value.audio;
+    if (audioRecord(audio) && audioRecord(audio.source) && audio.source.bytes !== undefined) {
+        return { text: '[Audio file omitted from history]' };
+    }
+    // Gemini function-response media is separate from its application-owned `response` object.
+    return mapAudioField(value, 'functionResponse', (response) =>
+        mapAudioField(response, 'parts', (parts) => mapAudioArray(parts, audioBlock)),
+    );
+}
+
+function audioMessage(value: unknown): unknown {
+    if (!audioRecord(value) || typeof value.role !== 'string') return value;
+    let message = mapAudioField(value, 'parts', (parts) => mapAudioArray(parts, audioBlock));
+    message = mapAudioField(message, 'content', (content) => mapAudioArray(content, audioBlock));
+    if (value.role === 'assistant' && audioRecord(value.audio) && typeof value.audio.data === 'string') {
+        const { data: _data, ...metadata } = value.audio;
+        return { ...(message as Record<string, unknown>), audio: metadata };
+    }
+    return message;
+}
+
+function audioEnvelope(value: unknown): unknown {
+    if (Array.isArray(value)) return mapAudioArray(value, audioMessage);
+    let envelope = value;
+    for (const key of ['messages', 'contents', '_arrayConversation']) {
+        envelope = mapAudioField(envelope, key, (messages) => mapAudioArray(messages, audioMessage));
+    }
+    envelope = mapAudioField(envelope, 'system', audioMessage);
+    envelope = mapAudioField(envelope, 'candidates', (candidates) =>
+        mapAudioArray(candidates, (candidate) =>
+            mapAudioField(candidate, 'content', (content) =>
+                // Gemini response content may omit its role.
+                mapAudioField(content, 'parts', (parts) => mapAudioArray(parts, audioBlock)),
+            ),
+        ),
+    );
+    envelope = mapAudioField(envelope, 'choices', (choices) =>
+        mapAudioArray(choices, (choice) => mapAudioField(choice, 'message', audioMessage)),
+    );
+    envelope = mapAudioField(envelope, 'output', (output) =>
+        Array.isArray(output) ? mapAudioArray(output, audioMessage) : mapAudioField(output, 'message', audioMessage),
+    );
+    return envelope;
 }

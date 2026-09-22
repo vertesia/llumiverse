@@ -205,9 +205,11 @@ function toGroqMessage(message: OpenAIChatCompletionsPayload['messages'][number]
     const textContent = typeof message.content === 'string' || message.content === null ? message.content : undefined;
     const contentParts = Array.isArray(message.content)
         ? message.content.map((part) =>
-              part.type === 'text'
-                  ? { type: 'text' as const, text: part.text }
-                  : { type: 'image_url' as const, image_url: part.image_url },
+              part.type === 'input_audio'
+                  ? unsupportedAudioPart()
+                  : part.type === 'text'
+                    ? { type: 'text' as const, text: part.text }
+                    : { type: 'image_url' as const, image_url: part.image_url },
           )
         : undefined;
     switch (message.role) {
@@ -327,4 +329,8 @@ async function* normalizeGroqStream(
                 : undefined,
         };
     }
+}
+
+function unsupportedAudioPart(): never {
+    throw new Error('This inference endpoint does not support audio input');
 }

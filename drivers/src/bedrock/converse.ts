@@ -15,6 +15,7 @@ import {
     readStreamAsString,
     readStreamAsUint8Array,
 } from '@llumiverse/core';
+import { boundedAudioStream } from '../shared/audio.js';
 import { isAmazonS3Hostname, parseS3UrlToUri } from './s3.js';
 
 export function supportsConverseOutputConfig(model: string): boolean {
@@ -188,14 +189,14 @@ async function processFile<T extends FileProcessingMode>(
     f: DataSource,
     mode: T,
 ): Promise<T extends 'content' ? ContentBlock : ToolResultContentBlock> {
-    const source = await f.getStream();
+    const source = () => f.getStream();
 
     //Image file - "png" | "jpeg" | "gif" | "webp"
     if (f.mime_type?.startsWith('image')) {
         const imageBlock = {
             image: {
                 format: mimeToImageType(f.mime_type),
-                source: { bytes: await readStreamAsUint8Array(source) },
+                source: { bytes: await readStreamAsUint8Array(await source()) },
             },
         };
 
@@ -207,7 +208,7 @@ async function processFile<T extends FileProcessingMode>(
     else if (f.mime_type && (f.mime_type.startsWith('text') || f.mime_type?.startsWith('application'))) {
         // Handle JSON files specially
         if (f.mime_type === 'application/json' || f.name?.endsWith('.json')) {
-            const jsonContent = await readStreamAsString(source);
+            const jsonContent = await readStreamAsString(await source());
             try {
                 const parsedJson = JSON.parse(jsonContent);
                 if (mode === 'tool') {
@@ -229,7 +230,7 @@ async function processFile<T extends FileProcessingMode>(
                 document: {
                     format: mimeToDocType(f.mime_type),
                     name: cleanBedrockFilename(f.name),
-                    source: { bytes: await readStreamAsUint8Array(source) },
+                    source: { bytes: await readStreamAsUint8Array(await source()) },
                 },
             };
 
@@ -265,7 +266,7 @@ async function processFile<T extends FileProcessingMode>(
                 : {
                       video: {
                           format: mimeToVideoType(f.mime_type),
-                          source: { bytes: await readStreamAsUint8Array(source) },
+                          source: { bytes: await readStreamAsUint8Array(await source()) },
                       },
                   };
 
@@ -278,7 +279,7 @@ async function processFile<T extends FileProcessingMode>(
         if (mode === 'tool') {
             throw new Error('Bedrock Converse does not support audio blocks in tool results');
         }
-        let urlString = await f.getURL();
+        let urlString = await f.getURI();
         let url = new URL(urlString);
         if (isAmazonS3Hostname(url.hostname)) {
             urlString = parseS3UrlToUri(url);
@@ -295,7 +296,9 @@ async function processFile<T extends FileProcessingMode>(
                 : {
                       audio: {
                           format: mimeToAudioType(f.mime_type),
-                          source: { bytes: await readStreamAsUint8Array(source) },
+                          source: {
+                              bytes: await readStreamAsUint8Array(boundedAudioStream(await source(), 25_000_000)),
+                          },
                       },
                   };
         return audioBlock satisfies ContentBlock.AudioMember as T extends 'content'
@@ -304,7 +307,7 @@ async function processFile<T extends FileProcessingMode>(
     }
     //Fallback, send as text
     else {
-        const textBlock = { text: await readStreamAsString(source) };
+        const textBlock = { text: await readStreamAsString(await source()) };
         return mode === 'content'
             ? (textBlock satisfies ContentBlock.TextMember)
             : (textBlock satisfies ToolResultContentBlock.TextMember);

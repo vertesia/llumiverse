@@ -13,6 +13,7 @@ describe('OpenAI model listing', () => {
                 { id: 'text-embedding-3-small', object: 'model', created: 1, owned_by: 'system' },
                 { id: 'gpt-4o-mini-tts', object: 'model', created: 1, owned_by: 'system' },
                 { id: 'gpt-4o-transcribe', object: 'model', created: 1, owned_by: 'system' },
+                { id: 'gpt-audio', object: 'model', created: 1, owned_by: 'system' },
                 { id: 'gpt-image-1', object: 'model', created: 1, owned_by: 'system' },
                 { id: 'omni-moderation-latest', object: 'model', created: 1, owned_by: 'system' },
                 { id: 'sora-3', object: 'model', created: 1, owned_by: 'system' },
@@ -21,10 +22,13 @@ describe('OpenAI model listing', () => {
         driver.service = { models: { list } } as unknown as OpenAIDriver['service'];
 
         const models = await driver.listModels();
-        expect(models).toHaveLength(3);
+        expect(models.map((model) => model.id)).not.toContain('sora-3');
         expect(models).toEqual(
             expect.arrayContaining([
                 expect.objectContaining({ id: 'gpt-5.6-codex', provider: Providers.openai }),
+                expect.objectContaining({ id: 'gpt-4o-mini-tts', provider: Providers.openai }),
+                expect.objectContaining({ id: 'gpt-4o-transcribe', provider: Providers.openai }),
+                expect.objectContaining({ id: 'gpt-audio', provider: Providers.openai, type: 'audio' }),
                 expect.objectContaining({ id: 'o1-pro', provider: Providers.openai }),
                 expect.objectContaining({ id: 'gpt-5-audiovisual', provider: Providers.openai }),
             ]),

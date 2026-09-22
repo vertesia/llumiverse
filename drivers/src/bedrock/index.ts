@@ -1069,6 +1069,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     case 'image':
                         // Skip images in conversation - they're in the result
                         return '';
+                    case 'audio':
                     case 'video':
                         return '';
                     default: {
@@ -1912,7 +1913,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             'zai',
         ];
         const unsupportedModelsByPublisher = {
-            amazon: ['nova-reel', 'nova-sonic', 'titan-image-generator', 'rerank'],
+            amazon: ['nova-reel', 'nova-sonic', 'nova-2-sonic', 'titan-image-generator', 'rerank'],
             anthropic: [],
             cohere: ['rerank', 'embed'],
             ai21: [],

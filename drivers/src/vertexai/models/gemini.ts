@@ -48,6 +48,7 @@ import {
     type VertexAIGeminiOptions,
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
+import { boundedAudioStream, storeAudioResult } from '../../shared/audio.js';
 import { truncateBinaryForDebug } from '../../shared/debug-prompt.js';
 import { createToolChoiceConfigurationError } from '../../shared/tool-choice-error.js';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
@@ -350,6 +351,8 @@ function extractCompletionResults(content: Content, includeThoughts = true): Com
                     results.push({ type: 'text', value: part.text });
                 }
             } else if (part.inlineData) {
+                if (part.inlineData.mimeType?.startsWith('audio/'))
+                    throw new Error('Audio output requires a file speech model');
                 const base64ImageBytes: string = part.inlineData.data ?? '';
                 const mimeType = part.inlineData.mimeType ?? 'image/png';
                 const imageUrl = `data:${mimeType};base64,${base64ImageBytes}`;
@@ -631,6 +634,10 @@ export function geminiThinkingConfig(option: StatelessExecutionOptions): Thinkin
     }
 }
 
+function isFileAudioModel(model: string): boolean {
+    return /(?:tts|transcribe)/.test(model) && !/(?:live|native-audio)/.test(model);
+}
+
 export class GeminiModelDefinition implements ModelDefinition<GenerateContentPrompt> {
     model: AIModel;
 
@@ -639,8 +646,8 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             id: modelId,
             name: modelId,
             provider: 'vertexai',
-            type: ModelType.Text,
-            can_stream: true,
+            type: isFileAudioModel(modelId) ? ModelType.Audio : ModelType.Text,
+            can_stream: !isFileAudioModel(modelId),
         } satisfies AIModel;
     }
 
@@ -652,6 +659,30 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const splits = options.model.split('/');
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
+
+        if (isFileAudioModel(modelName)) {
+            if (options.conversation || options.tools?.length || options.result_schema || options.format) {
+                throw new Error(
+                    'File audio operations do not accept conversation, tools, result schemas, or custom formatting',
+                );
+            }
+            if (segments.some((segment) => segment.role === PromptRole.tool || segment.role === PromptRole.assistant)) {
+                throw new Error('File audio operations accept only user and system input');
+            }
+            const files = segments.flatMap((segment) => segment.files ?? []);
+            if (modelName.includes('tts')) {
+                const text = segments
+                    .map((segment) => segment.content ?? '')
+                    .join('\n')
+                    .trim();
+                if (files.length || !text || text.length > 4096) {
+                    throw new Error('Speech synthesis requires 1–4096 characters and no files');
+                }
+                if (!options.store_audio) throw new Error('Speech synthesis requires a durable audio storage sink');
+            } else if (files.length !== 1 || !files[0].mime_type.startsWith('audio/')) {
+                throw new Error('Transcription requires exactly one audio file');
+            }
+        }
 
         const schema = options.result_schema;
         let contents: Content[] = [];
@@ -819,6 +850,106 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         }
         const modelName = splits[splits.length - 1];
         options = { ...options, model: modelName };
+
+        if (isFileAudioModel(modelName)) {
+            const modelOptions = options.model_options as VertexAIGeminiOptions | undefined;
+            const client = driver.getGoogleGenAIClient(
+                region,
+                resolveVertexAIServiceTier(modelOptions),
+                options.httpTimeout,
+            );
+            const speech = modelName.includes('tts');
+            const config: GenerateContentConfig = speech
+                ? {
+                      responseModalities: [Modality.AUDIO],
+                      speechConfig: {
+                          languageCode: modelOptions?.speech_language,
+                          voiceConfig: { prebuiltVoiceConfig: { voiceName: modelOptions?.speech_voice ?? 'Kore' } },
+                      },
+                  }
+                : {
+                      systemInstruction: prompt.system,
+                      audioTranscriptionConfig: {
+                          languageCodes: modelOptions?.transcription_language_codes,
+                          diarization: modelOptions?.transcription_diarization,
+                          wordTimestamp: modelOptions?.transcription_word_timestamps,
+                          customVocabulary: modelOptions?.transcription_vocabulary,
+                      },
+                  };
+            config.abortSignal = signal;
+            const response = await client.models.generateContent({
+                model: modelName,
+                contents: speech
+                    ? [
+                          {
+                              role: 'user',
+                              parts: [
+                                  ...(prompt.system?.parts ?? []),
+                                  ...prompt.contents.flatMap((content) => content.parts ?? []),
+                              ],
+                          },
+                      ]
+                    : prompt.contents,
+                config,
+            });
+            const parts = response.candidates?.[0]?.content?.parts ?? [];
+            const hasText = parts.some((part) => part.text);
+            const results: CompletionResult[] = [];
+            for (const part of parts) {
+                if (part.text) results.push({ type: 'text', value: part.text });
+                if (part.audioTranscription) {
+                    if (part.audioTranscription.text && !hasText)
+                        results.push({ type: 'text', value: part.audioTranscription.text });
+                    const transcription = part.audioTranscription;
+                    results.push({
+                        type: 'json',
+                        value: {
+                            text: transcription.text ?? '',
+                            language_code: transcription.languageCode ?? null,
+                            speaker_label: transcription.speakerLabel ?? null,
+                            words:
+                                transcription.words?.map((word) => ({
+                                    word: word.word ?? '',
+                                    start_offset: word.startOffset ?? null,
+                                    end_offset: word.endOffset ?? null,
+                                })) ?? [],
+                        },
+                    });
+                }
+                if (part.inlineData?.mimeType?.startsWith('audio/')) {
+                    if (!speech) throw new Error('Unexpected audio output from transcription model');
+                    const data = part.inlineData.data ?? '';
+                    if (data.length > Math.ceil(50_000_000 / 3) * 4)
+                        throw new Error('Audio exceeds the 50000000 byte limit');
+                    const bytes = Buffer.from(data, 'base64');
+                    results.push(
+                        await storeAudioResult(
+                            new Blob([bytes]).stream(),
+                            {
+                                mime_type: part.inlineData.mimeType,
+                                container: 'raw',
+                                codec: 'pcm',
+                                sample_rate: 24000,
+                                channels: 1,
+                                sample_encoding: 'int16',
+                                byte_order: 'little',
+                            },
+                            options,
+                            signal,
+                        ),
+                    );
+                }
+            }
+            if (!results.length || (speech && !results.some((result) => result.type === 'audio'))) {
+                throw new Error('Audio model returned no usable result');
+            }
+            return {
+                result: results,
+                finish_reason: response.candidates?.[0]?.finishReason,
+                token_usage: this.usageMetadataToTokenUsage(driver, response.usageMetadata),
+                original_response: options.include_original_response ? response : undefined,
+            };
+        }
 
         // Restore system instruction from stored conversation on resume.
         // The stored _llumiverse_system contains the complete system (interaction prompt + schema)
@@ -1345,7 +1476,10 @@ async function fileToMediaPart(file: DataSource): Promise<GeminiMediaPart> {
     if (fileUri.startsWith('gs://') || fileUri.startsWith('https://storage.googleapis.com/')) {
         return { fileData: { fileUri, mimeType: file.mime_type } };
     }
-    const data = await readStreamAsBase64(await file.getStream());
+    const source = await file.getStream();
+    const data = await readStreamAsBase64(
+        file.mime_type.startsWith('audio/') ? boundedAudioStream(source, 25_000_000) : source,
+    );
     return { inlineData: { data, mimeType: file.mime_type } };
 }
 

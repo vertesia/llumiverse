@@ -511,6 +511,12 @@ export const VertexAIGeminiOptionsSchema = z
                 'x-deprecated-message': 'Use service_tier="flex" instead.',
             })
             .optional(),
+        speech_voice: z.string().optional(),
+        speech_language: z.string().optional(),
+        transcription_language_codes: z.array(z.string()).optional(),
+        transcription_diarization: z.boolean().optional(),
+        transcription_word_timestamps: z.boolean().optional(),
+        transcription_vocabulary: z.array(z.string()).optional(),
         image_aspect_ratio: z.enum(['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9', '21:9']).optional(),
         image_size: z.enum(['1K', '2K', '4K']).optional(),
         person_generation: z.enum(['ALLOW_ALL', 'ALLOW_ADULT', 'ALLOW_NONE']).optional(),
@@ -547,6 +553,36 @@ export const VertexAIGrokOptionsSchema = z
 // When supplied, each literal ID still restricts validation to its named family.
 // Register every new option schema here: ModelOptionsInfo derives its allowed IDs from this union.
 // Keep provider aliases inferred from their schemas; see common/README.md for the maintenance checklist.
+export const OpenAiTranscriptionOptionsSchema = z
+    .strictObject({
+        _option_id: z.literal('openai-transcription').optional(),
+        language: z.string().optional(),
+    })
+    .meta({ id: 'OpenAiTranscriptionOptions' });
+
+export const OpenAiSpeechOptionsSchema = z
+    .strictObject({
+        _option_id: z.literal('openai-speech').optional(),
+        voice: z.string().min(1).optional(),
+        response_format: z.enum(['mp3', 'wav', 'opus', 'aac', 'flac', 'pcm']).optional(),
+        speed: z.number().min(0.25).max(4).optional(),
+        instructions: z.string().optional(),
+    })
+    .meta({ id: 'OpenAiSpeechOptions' });
+
+export const OpenAiAudioOptionsSchema = z
+    .strictObject({
+        _option_id: z.literal('openai-audio').optional(),
+        voice: z.string().min(1).optional(),
+        response_format: z.enum(['wav', 'mp3', 'flac', 'opus', 'pcm16']).optional(),
+    })
+    .meta({ id: 'OpenAiAudioOptions' });
+
+// Option payloads may omit the family hint. Keep this an ordinary union: untagged
+// objects can match several families, so JSON Schema must publish anyOf, not oneOf.
+// When supplied, each literal ID still restricts validation to its named family.
+// Register every new option schema here: ModelOptionsInfo derives its allowed IDs from this union.
+// Keep provider aliases inferred from their schemas; see common/README.md for the maintenance checklist.
 export const ModelOptionsSchema = z
     .union([
         TextFallbackOptionsSchema,
@@ -574,6 +610,9 @@ export const ModelOptionsSchema = z
         OpenRouterTextOptionsSchema,
         OpenAiDalleOptionsSchema,
         OpenAiGptImageOptionsSchema,
+        OpenAiTranscriptionOptionsSchema,
+        OpenAiSpeechOptionsSchema,
+        OpenAiAudioOptionsSchema,
         XAIGrokImageOptionsSchema,
         GroqOptionsSchema,
         MistralTextOptionsSchema,
