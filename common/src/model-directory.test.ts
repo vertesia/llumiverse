@@ -105,6 +105,10 @@ describe('central model directory', () => {
         expect(profile.capabilities.tool_support).toBe(false);
     });
 
+    it('advertises compatible gpt-audio output through the implemented audio path', () => {
+        expect(getModelCapabilities('gpt-audio', Providers.openai_compatible).output.audio).toBe(true);
+    });
+
     it('classifies listing aliases and provider-qualified IDs without losing family semantics', () => {
         expect(resolveModelProfile('~openai/gpt-latest', Providers.openai_compatible).capabilities).toMatchObject({
             input: { text: true, image: true },

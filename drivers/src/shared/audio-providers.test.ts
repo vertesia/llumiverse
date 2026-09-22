@@ -104,6 +104,7 @@ describe('primary provider file audio', () => {
             expect(result.result).toContainEqual(
                 expect.objectContaining({ type: 'audio', value: 'gs://bucket/speech.pcm', mime_type: 'audio/wav' }),
             );
+            expect(result.original_response).toMatchObject({ choices: [{ message: { content: 'A greeting.' } }] });
             expect(JSON.stringify(result)).not.toContain(base64);
             expect(result.conversation).toBeUndefined();
         },
@@ -140,7 +141,11 @@ describe('primary provider file audio', () => {
         ];
         const generate = vi.spyOn(client.models, 'generateContent').mockResolvedValue(response);
         vi.spyOn(driver, 'getGoogleGenAIClient').mockReturnValue(client);
-        const stream = await driver.stream(prompt, { model: 'gemini-3.1-flash-tts-preview', store_audio: store });
+        const stream = await driver.stream(prompt, {
+            model: 'gemini-3.1-flash-tts-preview',
+            store_audio: store,
+            include_original_response: true,
+        });
         for await (const _chunk of stream) {
             /* consume finite completion */
         }
@@ -155,6 +160,7 @@ describe('primary provider file audio', () => {
             byte_order: 'little',
         });
         expect(JSON.stringify(stream.completion)).not.toContain(base64);
+        expect(stream.completion?.original_response).toBeDefined();
         expect(stream.completion?.conversation).toBeUndefined();
     });
 

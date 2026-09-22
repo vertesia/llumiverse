@@ -32,7 +32,7 @@ export function getModelCapabilities(model: string, provider: Providers): ModelC
             audio:
                 (['openai', 'azure_foundry', 'openai_compatible', 'vertexai'].includes(provider) &&
                     profile.family === 'speech') ||
-                (provider === 'openai' && profile.family === 'audio'),
+                (['openai', 'openai_compatible'].includes(provider) && profile.family === 'audio'),
             video: false,
         },
     };

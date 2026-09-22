@@ -31,15 +31,18 @@ export async function storeAudioResult(
     signal?: AbortSignal,
 ): Promise<AudioResult> {
     if (!options.store_audio) throw new Error('Speech synthesis requires a durable audio storage sink');
-    const stream = boundedAudioStream(source, 50_000_000, signal);
+    const abortController = new AbortController();
+    const abortSignal = signal ? AbortSignal.any([signal, abortController.signal]) : abortController.signal;
+    const stream = boundedAudioStream(source, 50_000_000, abortSignal);
     try {
         const value = await options.store_audio(stream, metadata, signal);
         signal?.throwIfAborted();
-        if (!/^(?:gs|s3):\/\/[^/]+\/.+/.test(value)) {
+        if (!/^(?:(?:gs|s3):\/\/[^/]+\/.+|artifact:.+)/.test(value)) {
             throw new Error('Audio storage must return a durable object URI');
         }
         return { type: 'audio', value, ...metadata };
     } finally {
+        abortController.abort();
         if (!stream.locked) await stream.cancel().catch(() => undefined);
     }
 }

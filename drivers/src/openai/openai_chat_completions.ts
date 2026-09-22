@@ -1595,7 +1595,7 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
                     name: model.id,
                     owner: model.owned_by,
                     provider: this.provider,
-                    type: ModelType.Text,
+                    type: openAIAudioTask(model.id) ? ModelType.Audio : ModelType.Text,
                     ...modelMetadata,
                 } satisfies AIModel;
             });

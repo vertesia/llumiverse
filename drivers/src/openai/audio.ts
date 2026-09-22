@@ -15,6 +15,7 @@ import {
     type PromptSegment,
     Providers,
     resolveModelProfile,
+    stripAudioPayloads,
 } from '@llumiverse/core';
 import type { AbstractDriver } from '@llumiverse/core/driver';
 import type OpenAI from 'openai';
@@ -107,6 +108,7 @@ export async function executeOpenAIAudio(
                 audio,
             ],
             finish_reason: result.choices[0]?.finish_reason,
+            original_response: options.include_original_response ? result : undefined,
         };
     }
     if (openAIAudioTask(options.model) === 'transcription') {
@@ -150,6 +152,7 @@ export async function executeOpenAIAudio(
                         },
                     ],
                     finish_reason: 'stop',
+                    original_response: options.include_original_response ? result : undefined,
                 };
             }
             const result = await service.audio.transcriptions.create(
@@ -163,7 +166,11 @@ export async function executeOpenAIAudio(
                 requestOptions,
             );
             signal?.throwIfAborted();
-            return { result: [{ type: 'text', value: result.text }], finish_reason: 'stop' };
+            return {
+                result: [{ type: 'text', value: result.text }],
+                finish_reason: 'stop',
+                original_response: options.include_original_response ? result : undefined,
+            };
         } finally {
             if (!stream.locked) await stream.cancel().catch(() => undefined);
         }
@@ -203,7 +210,11 @@ export async function executeOpenAIAudio(
             ? { codec: 'pcm', sample_rate: 24000, channels: 1, sample_encoding: 'int16', byte_order: 'little' }
             : {}),
     };
-    return { result: [await storeAudioResult(response.body, metadata, options, signal)], finish_reason: 'stop' };
+    return {
+        result: [await storeAudioResult(response.body, metadata, options, signal)],
+        finish_reason: 'stop',
+        original_response: options.include_original_response ? response : undefined,
+    };
 }
 
 /** Execute a finite SDK audio request without retaining multipart input in a prompt or conversation. */
@@ -226,7 +237,7 @@ export async function executeOpenAIAudioRequest<PromptT>(
         const completion = await scope.run(() =>
             executeOpenAIAudio(service, segments, options, requestOptions ?? { signal }, requestModel),
         );
-        return { ...completion, prompt: emptyPrompt, execution_time: Date.now() - start };
+        return stripAudioPayloads({ ...completion, prompt: emptyPrompt, execution_time: Date.now() - start });
     } catch (error) {
         throw driver.formatLlumiverseError(error, {
             provider: driver.provider,

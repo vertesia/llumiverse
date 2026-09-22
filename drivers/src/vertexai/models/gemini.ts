@@ -945,6 +945,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 result: results,
                 finish_reason: response.candidates?.[0]?.finishReason,
                 token_usage: this.usageMetadataToTokenUsage(driver, response.usageMetadata),
+                original_response: options.include_original_response ? response : undefined,
             };
         }
 
