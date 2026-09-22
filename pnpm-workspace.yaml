@@ -17,6 +17,9 @@ minimumReleaseAgeExclude:
   - '@google/genai@2.21.0'
 
 catalog:
+  # Keep this synchronized with Studio and ComposableAI: each repository generates schemas from
+  # its own local workspace and lockfile, so an override in another repository cannot control it.
+  zod: "4.6.5"
   typescript: "7.0.2"
   "@types/node": "^24.13.3"
   google-auth-library: "^11.0.2"
