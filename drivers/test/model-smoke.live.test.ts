@@ -52,7 +52,7 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
             region: process.env.GOOGLE_REGION as string,
         }),
         models: [
-            'locations/global/publishers/google/models/gemini-3.5-flash-lite',
+            'publishers/google/models/gemini-3.5-flash-lite',
             'locations/global/publishers/anthropic/models/claude-sonnet-5',
         ],
     });
