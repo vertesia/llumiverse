@@ -187,8 +187,8 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
             return {
                 input: { text: true, audio: true },
                 output: { text: true, audio: true },
-                tool_support: true,
-                tool_support_streaming: true,
+                tool_support: false,
+                tool_support_streaming: false,
             };
         case 'video':
             return {

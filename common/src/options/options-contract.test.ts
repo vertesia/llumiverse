@@ -22,6 +22,7 @@ const routes: Record<Providers, readonly (readonly [string, ModelOptions['_optio
         ['gpt-image-1', 'openai-gpt-image'],
         ['gpt-4o-mini-transcribe', 'openai-transcription'],
         ['tts-1', 'openai-speech'],
+        ['gpt-audio-1.5', 'openai-audio'],
     ],
     openrouter: [['openai/gpt-4o', 'openrouter-text']],
     azure_openai: [['deployment::gpt-5.6-sol', 'openai-thinking']],

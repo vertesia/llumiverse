@@ -2,7 +2,11 @@ import { boundedAudioStream, storeAudioResult } from '../shared/audio.js';
 
 export { boundedAudioStream } from '../shared/audio.js';
 
-import { OpenAiSpeechOptionsSchema, OpenAiTranscriptionOptionsSchema } from '@llumiverse/common/schemas';
+import {
+    OpenAiAudioOptionsSchema,
+    OpenAiSpeechOptionsSchema,
+    OpenAiTranscriptionOptionsSchema,
+} from '@llumiverse/common/schemas';
 import {
     type AudioResult,
     type Completion,
@@ -63,17 +67,45 @@ export async function executeOpenAIAudio(
             const data = Buffer.from(await new Response(stream).arrayBuffer()).toString('base64');
             content.push({ type: 'input_audio', input_audio: { data, format } });
         }
+        const params = OpenAiAudioOptionsSchema.parse(options.model_options ?? { _option_id: 'openai-audio' });
+        if (!options.store_audio) throw new Error('Audio generation requires a durable audio storage sink');
+        const format = params.response_format ?? 'wav';
         const result = await service.chat.completions.create(
             {
                 model: requestModel,
                 messages: [{ role: 'user', content }],
-                modalities: ['text'],
+                modalities: ['text', 'audio'],
+                audio: { voice: params.voice ?? 'alloy', format },
             },
             requestOptions,
         );
         signal?.throwIfAborted();
+        const message = result.choices[0]?.message;
+        if (!message?.audio?.data) throw new Error('OpenAI audio chat returned no audio data');
+        const audio = await storeAudioResult(
+            new Blob([Buffer.from(message.audio.data, 'base64')]).stream(),
+            {
+                mime_type: {
+                    wav: 'audio/wav',
+                    mp3: 'audio/mpeg',
+                    flac: 'audio/flac',
+                    opus: 'audio/ogg',
+                    pcm16: 'audio/pcm',
+                }[format],
+                container: format === 'opus' ? 'ogg' : format === 'pcm16' ? 'raw' : format,
+                ...(format === 'mp3' ? { codec: 'mp3' } : {}),
+                ...(format === 'pcm16' ? { codec: 'pcm', sample_encoding: 'int16', byte_order: 'little' } : {}),
+            },
+            options,
+            signal,
+        );
         return {
-            result: [{ type: 'text', value: result.choices[0]?.message.content ?? '' }],
+            result: [
+                ...(message.content || message.audio.transcript
+                    ? [{ type: 'text' as const, value: message.content ?? message.audio.transcript }]
+                    : []),
+                audio,
+            ],
             finish_reason: result.choices[0]?.finish_reason,
         };
     }

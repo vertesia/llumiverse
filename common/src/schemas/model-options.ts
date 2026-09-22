@@ -569,6 +569,20 @@ export const OpenAiSpeechOptionsSchema = z
         instructions: z.string().optional(),
     })
     .meta({ id: 'OpenAiSpeechOptions' });
+
+export const OpenAiAudioOptionsSchema = z
+    .strictObject({
+        _option_id: z.literal('openai-audio').optional(),
+        voice: z.string().min(1).optional(),
+        response_format: z.enum(['wav', 'mp3', 'flac', 'opus', 'pcm16']).optional(),
+    })
+    .meta({ id: 'OpenAiAudioOptions' });
+
+// Option payloads may omit the family hint. Keep this an ordinary union: untagged
+// objects can match several families, so JSON Schema must publish anyOf, not oneOf.
+// When supplied, each literal ID still restricts validation to its named family.
+// Register every new option schema here: ModelOptionsInfo derives its allowed IDs from this union.
+// Keep provider aliases inferred from their schemas; see common/README.md for the maintenance checklist.
 export const ModelOptionsSchema = z
     .union([
         TextFallbackOptionsSchema,
@@ -598,6 +612,7 @@ export const ModelOptionsSchema = z
         OpenAiGptImageOptionsSchema,
         OpenAiTranscriptionOptionsSchema,
         OpenAiSpeechOptionsSchema,
+        OpenAiAudioOptionsSchema,
         XAIGrokImageOptionsSchema,
         GroqOptionsSchema,
         MistralTextOptionsSchema,

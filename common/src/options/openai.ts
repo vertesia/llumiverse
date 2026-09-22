@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import { type ModelProfile, resolveModelProfile } from '../model-directory.js';
 import type {
+    OpenAiAudioOptionsSchema,
     OpenAiDalleOptionsSchema,
     OpenAiGptImageOptionsSchema,
     OpenAiSpeechOptionsSchema,
@@ -34,6 +35,7 @@ export type OpenAiGptImageOptions = z.infer<typeof OpenAiGptImageOptionsSchema>;
 
 export type OpenAiTranscriptionOptions = z.infer<typeof OpenAiTranscriptionOptionsSchema>;
 export type OpenAiSpeechOptions = z.infer<typeof OpenAiSpeechOptionsSchema>;
+export type OpenAiAudioOptions = z.infer<typeof OpenAiAudioOptionsSchema>;
 
 // Union type of all OpenAI options
 /**
@@ -45,7 +47,8 @@ export type OpenAiOptions =
     | OpenAiDalleOptions
     | OpenAiGptImageOptions
     | OpenAiTranscriptionOptions
-    | OpenAiSpeechOptions;
+    | OpenAiSpeechOptions
+    | OpenAiAudioOptions;
 
 /** OpenAI model families with published Flex processing support. */
 export function isFlexSupportedOpenAIModel(model: string): boolean {
@@ -89,6 +92,33 @@ export function getOpenAiOptions(
                     default: 'mp3',
                 },
                 { name: 'speed', type: OptionType.numeric, min: 0.25, max: 4, default: 1 },
+            ],
+        };
+    }
+    if (profile.family === 'audio') {
+        return {
+            _option_id: 'openai-audio',
+            options: [
+                {
+                    name: 'voice',
+                    type: OptionType.enum,
+                    enum: {
+                        Alloy: 'alloy',
+                        Ash: 'ash',
+                        Coral: 'coral',
+                        Marin: 'marin',
+                        Sage: 'sage',
+                        Shimmer: 'shimmer',
+                    },
+                    default: 'alloy',
+                    description: 'Provider voice name; additional voices can be supplied through the API.',
+                },
+                {
+                    name: 'response_format',
+                    type: OptionType.enum,
+                    enum: { WAV: 'wav', MP3: 'mp3', FLAC: 'flac', Opus: 'opus', PCM16: 'pcm16' },
+                    default: 'wav',
+                },
             ],
         };
     }

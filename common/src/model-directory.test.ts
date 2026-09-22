@@ -261,7 +261,7 @@ describe('central model directory', () => {
             capabilities: {
                 input: { text: true, audio: true },
                 output: { text: true, audio: true },
-                tool_support: true,
+                tool_support: false,
             },
         });
         expect(resolveModelProfile('gpt-realtime-3', Providers.openai)).toMatchObject({

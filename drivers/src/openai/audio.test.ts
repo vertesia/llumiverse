@@ -85,6 +85,44 @@ describe('OpenAI file audio', () => {
         },
     );
 
+    it('stores gpt-audio output as WAV without retaining provider base64 data', async () => {
+        const driver = new OpenAIDriver({ apiKey: 'test' });
+        const create = vi.spyOn(driver.service.chat.completions, 'create').mockResolvedValue({
+            choices: [
+                {
+                    finish_reason: 'stop',
+                    message: {
+                        content: null,
+                        audio: { data: Buffer.from(bytes).toString('base64'), transcript: 'Spoken response.' },
+                    },
+                },
+            ],
+        } as never);
+        const store = vi.fn<NonNullable<ExecutionOptions['store_audio']>>(async (stream) => {
+            expect(new Uint8Array(await new Response(stream).arrayBuffer())).toEqual(bytes);
+            return 'gs://bucket/response.wav';
+        });
+        const result = await driver.execute([{ ...prompt[0], files: [source()] }], {
+            model: 'gpt-audio-1.5',
+            store_audio: store,
+            model_options: { _option_id: 'openai-audio', voice: 'marin', response_format: 'wav' },
+        });
+        expect(create).toHaveBeenCalledWith(
+            expect.objectContaining({
+                modalities: ['text', 'audio'],
+                audio: { voice: 'marin', format: 'wav' },
+            }),
+            expect.anything(),
+        );
+        expect(store).toHaveBeenCalledOnce();
+        expect(result.result).toEqual([
+            { type: 'text', value: 'Spoken response.' },
+            expect.objectContaining({ type: 'audio', value: 'gs://bucket/response.wav', mime_type: 'audio/wav' }),
+        ]);
+        expect(JSON.stringify(result)).not.toContain('base64');
+        expect(result.conversation).toBeUndefined();
+    });
+
     it('fails before provider work for missing storage, oversized text, and audio-to-audio input', async () => {
         const driver = new OpenAIDriver({ apiKey: 'test' });
         const create = vi.spyOn(driver.service.audio.speech, 'create');
@@ -229,7 +267,7 @@ describe('OpenAI file audio', () => {
 
     it('reports audio output only for the implemented provider operation', () => {
         expect(getModelCapabilities('gpt-4o-mini-tts', Providers.openai).output.audio).toBe(true);
-        expect(getModelCapabilities('gpt-audio', Providers.openai).output.audio).toBe(false);
+        expect(getModelCapabilities('gpt-audio', Providers.openai).output.audio).toBe(true);
         expect(getModelCapabilities('gpt-4o-mini-tts', Providers.azure_openai).output.audio).toBe(false);
         expect(getModelCapabilities('gpt-transcribe', Providers.openai).input.audio).toBe(true);
     });
