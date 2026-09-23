@@ -147,7 +147,7 @@
         "@llumiverse/common": "workspace:*",
         "@llumiverse/core": "workspace:*",
         "@mistralai/mistralai": "^2.7.0",
-        "@openrouter/sdk": "^1.2.126",
+        "@openrouter/sdk": "^1.2.128",
         "@vertesia/api-fetch-client": "^1.5.0",
         "eventsource": "^5.1.1",
         "google-auth-library": "catalog:",
