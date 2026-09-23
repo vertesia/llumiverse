@@ -99,7 +99,7 @@ describe('OpenAI Responses reasoning', () => {
     it.each([
         ['gpt-6-astra', 'none'],
         ['gpt-6-sol', 'minimal'],
-    ])('passes effort %s through unchanged for %s', async (model, effort) => {
+    ] as const)('passes effort %s through unchanged for %s', async (model, effort) => {
         const create = vi.fn(async (_request: unknown) => response());
         const driver = new TestResponsesDriver(create);
 
@@ -143,7 +143,7 @@ describe('OpenAI Responses reasoning', () => {
         expect(create.mock.calls[0][0]).not.toHaveProperty('extra_body');
     });
 
-    it.each(['gpt-5.4', 'gpt-5.5'])('uses current-turn reasoning context for %s', async (model) => {
+    it.each(['gpt-5.4', 'gpt-5.5'])('uses the model default reasoning context for %s', async (model) => {
         const create = vi.fn(async (_request: unknown) => response());
         const driver = new TestResponsesDriver(create);
 
@@ -152,10 +152,9 @@ describe('OpenAI Responses reasoning', () => {
             model_options: { _option_id: 'openai-thinking' },
         });
 
-        expect(create).toHaveBeenCalledWith(
-            expect.objectContaining({
-                reasoning: expect.objectContaining({ context: 'current_turn' }),
-            }),
+        expect(create.mock.calls[0][0]).toMatchObject({ reasoning: { summary: 'auto' } });
+        expect((create.mock.calls[0][0] as { reasoning: Record<string, unknown> }).reasoning).not.toHaveProperty(
+            'context',
         );
     });
 
@@ -174,6 +173,56 @@ describe('OpenAI Responses reasoning', () => {
             expect(reasoning).not.toHaveProperty('context');
         },
     );
+
+    it.each(['current_turn', 'all_turns', 'auto'] as const)(
+        'passes an explicit reasoning_context option through for supported models: %s',
+        async (reasoning_context) => {
+            const create = vi.fn(async (_request: unknown) => response());
+            const driver = new TestResponsesDriver(create);
+
+            await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
+                model: 'gpt-6-astra',
+                model_options: { _option_id: 'openai-thinking', reasoning_context },
+            });
+
+            expect(create.mock.calls[0][0]).toMatchObject({ reasoning: { context: reasoning_context } });
+        },
+    );
+
+    it('passes an explicit reasoning_context option through for streaming requests', async () => {
+        const create = vi.fn(async (_request: unknown) =>
+            (async function* () {
+                yield { type: 'response.completed', sequence_number: 1, response: response() };
+            })(),
+        );
+        const driver = new TestResponsesDriver(create);
+
+        const stream = await driver.requestTextCompletionStream(
+            [{ type: 'message', role: 'user', content: 'question' }],
+            {
+                model: 'gpt-5.6',
+                model_options: { _option_id: 'openai-thinking', reasoning_context: 'current_turn' },
+            },
+        );
+        for await (const _chunk of stream) {
+            // Consume the provider stream.
+        }
+
+        expect(create.mock.calls[0][0]).toMatchObject({ reasoning: { context: 'current_turn' } });
+    });
+
+    it('rejects an explicit reasoning_context option for models without documented support', async () => {
+        const create = vi.fn(async (_request: unknown) => response());
+        const driver = new TestResponsesDriver(create);
+
+        await expect(
+            driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
+                model: 'gpt-5.5',
+                model_options: { _option_id: 'openai-thinking', reasoning_context: 'all_turns' },
+            }),
+        ).rejects.toThrow('reasoning_context is not supported for model gpt-5.5');
+        expect(create).not.toHaveBeenCalled();
+    });
 
     it('does not request cross-turn reasoning controls for models without documented support', async () => {
         const create = vi.fn(async (_request: unknown) => response());

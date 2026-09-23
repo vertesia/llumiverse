@@ -54,6 +54,7 @@ type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
     image_detail?: 'low' | 'high' | 'auto';
     effort?: string;
     reasoning_effort?: string;
+    reasoning_context?: 'auto' | 'current_turn' | 'all_turns';
     verbosity?: 'low' | 'medium' | 'high';
     prompt_cache_key?: string;
     prompt_cache_retention?: 'in_memory' | '24h';
@@ -110,22 +111,32 @@ function isOpenAIReasoningModel(model: string): boolean {
 function openAIReasoning(
     effort: string | undefined,
     isReasoningModel: boolean,
-    preserveCurrentTurn: boolean,
+    context: OpenAIRequestOptions['reasoning_context'],
 ): OpenAI.Responses.ResponseCreateParams['reasoning'] {
     if (!effort && !isReasoningModel) return undefined;
     return {
         effort,
         summary: 'auto',
-        ...(preserveCurrentTurn && { context: 'current_turn' }),
+        ...(context && { context }),
     } as OpenAI.Responses.ResponseCreateParams['reasoning'];
 }
 
-function supportsOpenAICurrentTurnReasoning(provider: Providers, model: string): boolean {
+function supportsOpenAIReasoningContext(provider: Providers, model: string): boolean {
     if (provider !== Providers.openai) return false;
     const modelId = model.toLowerCase().split('/').pop() ?? '';
-    // GPT-5.6 and later default to all-turn persisted reasoning. Omitting context
-    // lets the API use that default; earlier supported models need current_turn.
-    return isOpenAIGptVersionGTE(modelId, 5, 4) && !isOpenAIGptVersionGTE(modelId, 5, 6);
+    return isOpenAIGptVersionGTE(modelId, 5, 6);
+}
+
+function openAIReasoningContext(
+    provider: Providers,
+    model: string,
+    requestedContext: OpenAIRequestOptions['reasoning_context'],
+): OpenAIRequestOptions['reasoning_context'] {
+    if (requestedContext === undefined) return undefined;
+    if (!supportsOpenAIReasoningContext(provider, model)) {
+        throw new Error(`reasoning_context is not supported for model ${model} through provider ${provider}`);
+    }
+    return requestedContext;
 }
 
 function hasExplicitPromptCacheBreakpoint(item: ResponseInputItem): boolean {
@@ -269,11 +280,12 @@ export class OpenAIResponsesProtocol {
 
         const requestedEffort = model_options?.effort ?? model_options?.reasoning_effort;
         const isReasoningModel = isOpenAIReasoningModel(options.model);
-        const reasoning = openAIReasoning(
-            requestedEffort,
-            isReasoningModel,
-            supportsOpenAICurrentTurnReasoning(driver.provider, options.model),
+        const reasoningContext = openAIReasoningContext(
+            driver.provider,
+            options.model,
+            model_options?.reasoning_context,
         );
+        const reasoning = openAIReasoning(requestedEffort, isReasoningModel, reasoningContext);
         const includeThoughts = model_options?.include_thoughts !== false;
         const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
         const promptCacheRetention = model_options?.prompt_cache_retention;
@@ -368,11 +380,12 @@ export class OpenAIResponsesProtocol {
 
         const requestedEffort = model_options?.effort ?? model_options?.reasoning_effort;
         const isReasoningModel = isOpenAIReasoningModel(options.model);
-        const reasoning = openAIReasoning(
-            requestedEffort,
-            isReasoningModel,
-            supportsOpenAICurrentTurnReasoning(driver.provider, options.model),
+        const reasoningContext = openAIReasoningContext(
+            driver.provider,
+            options.model,
+            model_options?.reasoning_context,
         );
+        const reasoning = openAIReasoning(requestedEffort, isReasoningModel, reasoningContext);
         const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
         const promptCacheRetention = model_options?.prompt_cache_retention;
 
