@@ -327,6 +327,10 @@ export function isOpenAIGptProModel(modelString: string): boolean {
     return /(?:^|[./:])(?:openai\.)?gpt-\d+(?:\.\d+)?-pro(?:-|[.:@]|$)/i.test(modelString);
 }
 
+export function isOpenAIGptAstraModel(modelString: string): boolean {
+    return isOpenAIGptVersionGTE(modelString, 6, 0) && /(?:^|[-_.])astra(?:[-_.]|$)/i.test(modelString);
+}
+
 /** Current reasoning-effort metadata, expressed with version thresholds for future GPT releases. */
 export function getOpenAIReasoningEffortLevels(modelString: string): Record<string, string> | null {
     if (!isOpenAIGptVersionGTE(modelString, 5, 0)) return null;
@@ -338,17 +342,27 @@ export function getOpenAIReasoningEffortLevels(modelString: string): Record<stri
         return { 'High (only)': 'high' };
     }
     if (isOpenAIGptVersionGTE(modelString, 5, 6)) {
-        return {
-            None: 'none',
+        const levels: Record<string, string> = {
             Low: 'low',
-            Medium: 'medium',
+            ...(isOpenAIGptVersionGTE(modelString, 5, 5) ? { 'Medium (default)': 'medium' } : { Medium: 'medium' }),
             High: 'high',
             'Extra High': 'xhigh',
             Max: 'max',
         };
+        // GPT-6 Astra rejects `none`; GPT-6 Sol and Luna accept it.
+        if (!isOpenAIGptAstraModel(modelString)) {
+            return { None: 'none', ...levels };
+        }
+        return levels;
     }
     if (isOpenAIGptVersionGTE(modelString, 5, 2)) {
-        return { None: 'none', Low: 'low', Medium: 'medium', High: 'high', 'Extra High': 'xhigh' };
+        return {
+            None: 'none',
+            Low: 'low',
+            ...(isOpenAIGptVersionGTE(modelString, 5, 5) ? { 'Medium (default)': 'medium' } : { Medium: 'medium' }),
+            High: 'high',
+            'Extra High': 'xhigh',
+        };
     }
     if (isOpenAIGptVersionGTE(modelString, 5, 1)) {
         return { None: 'none', Low: 'low', Medium: 'medium', High: 'high' };
@@ -370,18 +384,20 @@ export function getAvailableEffortLevels(modelString: string): Record<string, Cl
     if (!supportsEffort(modelString)) {
         return null;
     }
+    const version = parseClaudeVersion(modelString);
+    const mediumIsDefault = version?.variant === 'opus' && version.major === 5 && version.minor >= 5;
     const levels: Record<string, ClaudeEffortLevel> = {
         Low: 'low',
-        Medium: 'medium',
-        'High (default)': 'high',
+        ...(mediumIsDefault ? { 'Medium (default)': 'medium' } : { Medium: 'medium' }),
+        ...(mediumIsDefault ? { High: 'high' } : { 'High (default)': 'high' }),
         Max: 'max',
     };
     if (supportsXHighEffort(modelString)) {
         // Insert xhigh between high and max
         return {
             Low: 'low',
-            Medium: 'medium',
-            'High (default)': 'high',
+            ...(mediumIsDefault ? { 'Medium (default)': 'medium' } : { Medium: 'medium' }),
+            ...(mediumIsDefault ? { High: 'high' } : { 'High (default)': 'high' }),
             'Extra High': 'xhigh',
             Max: 'max',
         };

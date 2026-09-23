@@ -22,7 +22,7 @@ describe('current reasoning model options', () => {
         expect(effortValues('claude-sonnet-5', Providers.anthropic)).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
     });
 
-    it('advertises version-specific GPT-5 effort without adding a default', () => {
+    it('advertises GPT effort levels and labels documented defaults', () => {
         const options = getOptions('gpt-5.6-sol', Providers.openai);
         expect(effortValues('gpt-5.6-sol', Providers.openai)).toEqual([
             'none',
@@ -33,7 +33,17 @@ describe('current reasoning model options', () => {
             'max',
         ]);
         expect(options.options.find((option) => option.name === SharedOptions.effort)).not.toHaveProperty('default');
+        expect(effortValues('gpt-5.5', Providers.openai)).toEqual(['none', 'low', 'medium', 'high', 'xhigh']);
+        expect(
+            getOptions('gpt-5.5', Providers.openai).options.find((option) => option.name === SharedOptions.effort),
+        ).toMatchObject({ enum: { 'Medium (default)': 'medium' } });
+        expect(
+            getOptions('gpt-5.6-sol', Providers.openai).options.find((option) => option.name === SharedOptions.effort),
+        ).toMatchObject({ enum: { 'Medium (default)': 'medium' } });
         expect(effortValues('gpt-6', Providers.openai)).toEqual(['none', 'low', 'medium', 'high', 'xhigh', 'max']);
+        expect(effortValues('gpt-6-astra', Providers.openai)).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+        expect(effortValues('gpt-6-sol', Providers.openai)).toEqual(['none', 'low', 'medium', 'high', 'xhigh', 'max']);
+        expect(effortValues('gpt-6-luna', Providers.openai)).toEqual(['none', 'low', 'medium', 'high', 'xhigh', 'max']);
     });
 
     it('does not advertise unverified effort for unknown OpenAI-compatible models', () => {
