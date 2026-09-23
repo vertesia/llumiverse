@@ -14,6 +14,7 @@ import {
     getConversationMeta,
     incrementConversationTurn,
     isDedicatedInferenceModel,
+    isOpenAIGptAstraModel,
     isOpenAIGptVersionGTE,
     type JSONSchema,
     LlumiverseError,
@@ -107,6 +108,12 @@ function isOpenAIReasoningModel(model: string): boolean {
     );
 }
 
+function normalizeOpenAIReasoningEffort(model: string, effort: string | undefined): string | undefined {
+    if (isOpenAIGptVersionGTE(model, 6, 0) && effort === 'minimal') return 'low';
+    if (effort === 'none' && isOpenAIGptAstraModel(model)) return 'low';
+    return effort;
+}
+
 function openAIReasoning(
     effort: string | undefined,
     isReasoningModel: boolean,
@@ -123,7 +130,9 @@ function openAIReasoning(
 function supportsOpenAICurrentTurnReasoning(provider: Providers, model: string): boolean {
     if (provider !== Providers.openai) return false;
     const modelId = model.toLowerCase().split('/').pop() ?? '';
-    return isOpenAIGptVersionGTE(modelId, 5, 4);
+    // GPT-5.6 and later default to all-turn persisted reasoning. Omitting context
+    // lets the API use that default; earlier supported models need current_turn.
+    return isOpenAIGptVersionGTE(modelId, 5, 4) && !isOpenAIGptVersionGTE(modelId, 5, 6);
 }
 
 function hasExplicitPromptCacheBreakpoint(item: ResponseInputItem): boolean {
@@ -179,6 +188,23 @@ function configureOpenAIPromptCaching(
     const markedInput = [...input];
     markedInput[sourceIndex] = { ...source, content };
     return { input: markedInput, options: { mode: 'explicit' } };
+}
+
+function getPromptCacheRequestOptions(
+    model: string,
+    retention: OpenAIRequestOptions['prompt_cache_retention'],
+    options: OpenAIPromptCacheConfig['options'],
+): Pick<OpenAI.Responses.ResponseCreateParams, 'prompt_cache_retention' | 'prompt_cache_options'> {
+    if (isOpenAIGptVersionGTE(model, 5, 6)) {
+        return {
+            prompt_cache_options: retention ? { ...options, ttl: '30m' } : options,
+        };
+    }
+    if (isOpenAIGptVersionGTE(model, 5, 5) && retention === 'in_memory') {
+        // GPT-5.5 only supports extended (24h) retention; omit unsupported in-memory retention.
+        return { prompt_cache_options: options };
+    }
+    return { prompt_cache_retention: retention, prompt_cache_options: options };
 }
 
 //TODO: Do we need a list?, replace with if statements and modernize?
@@ -247,7 +273,10 @@ export class OpenAIResponsesProtocol {
             strictMode = formattedSchema.strict;
         }
 
-        const requestedEffort = model_options?.effort ?? model_options?.reasoning_effort;
+        const requestedEffort = normalizeOpenAIReasoningEffort(
+            options.model,
+            model_options?.effort ?? model_options?.reasoning_effort,
+        );
         const isReasoningModel = isOpenAIReasoningModel(options.model);
         const reasoning = openAIReasoning(
             requestedEffort,
@@ -263,13 +292,17 @@ export class OpenAIResponsesProtocol {
             driver.getResponsesRequestModel(options.model),
             promptCacheKey,
         );
+        const promptCacheRequestOptions = getPromptCacheRequestOptions(
+            options.model,
+            promptCacheRetention,
+            promptCache.options,
+        );
         const request = mergeOpenAIExtraBody<OpenAI.Responses.ResponseCreateParamsStreaming>(
             {
                 stream: true,
                 model: driver.getResponsesRequestModel(options.model),
                 prompt_cache_key: promptCacheKey,
-                prompt_cache_retention: promptCacheRetention,
-                prompt_cache_options: promptCache.options,
+                ...promptCacheRequestOptions,
                 input: promptCache.input,
                 reasoning,
                 include: reasoning ? ['reasoning.encrypted_content'] : undefined,
@@ -342,7 +375,10 @@ export class OpenAIResponsesProtocol {
             strictMode = formattedSchema.strict;
         }
 
-        const requestedEffort = model_options?.effort ?? model_options?.reasoning_effort;
+        const requestedEffort = normalizeOpenAIReasoningEffort(
+            options.model,
+            model_options?.effort ?? model_options?.reasoning_effort,
+        );
         const isReasoningModel = isOpenAIReasoningModel(options.model);
         const reasoning = openAIReasoning(
             requestedEffort,
@@ -357,13 +393,17 @@ export class OpenAIResponsesProtocol {
             driver.getResponsesRequestModel(options.model),
             promptCacheKey,
         );
+        const promptCacheRequestOptions = getPromptCacheRequestOptions(
+            options.model,
+            promptCacheRetention,
+            promptCache.options,
+        );
         const request = mergeOpenAIExtraBody<OpenAI.Responses.ResponseCreateParamsNonStreaming>(
             {
                 stream: false,
                 model: driver.getResponsesRequestModel(options.model),
                 prompt_cache_key: promptCacheKey,
-                prompt_cache_retention: promptCacheRetention,
-                prompt_cache_options: promptCache.options,
+                ...promptCacheRequestOptions,
                 input: promptCache.input,
                 reasoning,
                 include: reasoning ? ['reasoning.encrypted_content'] : undefined,
