@@ -132,7 +132,13 @@ export function getAzureFoundryOptions(model: string, _option?: ModelOptions): M
     const modelLower = baseModel.toLowerCase();
     const max_tokens_limit = getMaxTokensLimitAzureFoundry(model);
     const profile = resolveModelProfile(model, Providers.azure_foundry);
-    if (modelLower.includes('gpt-') || modelLower.includes('dall-e') || /(?:^|[~/.])o\d+(?:[-_.]|$)/.test(modelLower)) {
+    if (
+        profile.family === 'speech' ||
+        profile.family === 'transcription' ||
+        modelLower.includes('gpt-') ||
+        modelLower.includes('dall-e') ||
+        /(?:^|[~/.])o\d+(?:[-_.]|$)/.test(modelLower)
+    ) {
         return getOpenAiOptions(baseModel, _option, profile);
     }
     // Vision model options
@@ -166,7 +172,6 @@ export function getAzureFoundryOptions(model: string, _option?: ModelOptions): M
                     type: OptionType.numeric,
                     min: 0.0,
                     max: 1.0,
-                    default: 0.7,
                     step: 0.1,
                     description: 'Lower temperatures recommended for DeepSeek R1 (0.3-0.7)',
                 },
@@ -215,7 +220,6 @@ export function getAzureFoundryOptions(model: string, _option?: ModelOptions): M
             type: OptionType.numeric,
             min: 0.0,
             max: 1.0,
-            default: 0.7,
             step: 0.1,
             description: 'Controls randomness in the output',
         },

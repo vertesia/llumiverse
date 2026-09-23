@@ -67,7 +67,7 @@ export class OpenAIResponsesDriver extends OpenAIResponsesDriverBase {
                 .filter(
                     (m) =>
                         !isEmbeddingModel({ id: m.id }, this.provider) &&
-                        !isDedicatedInferenceModel(m.id, this.provider),
+                        (!isDedicatedInferenceModel(m.id, this.provider) || this.isFileAudioModel(m.id)),
                 )
                 .map((m) => {
                     const modelMetadata = resolveModelListingMetadata(m.id, this.provider);
@@ -80,7 +80,7 @@ export class OpenAIResponsesDriver extends OpenAIResponsesDriverBase {
                         name: m.id,
                         provider: this.provider,
                         owner: owner,
-                        type: ModelType.Text,
+                        type: this.isFileAudioModel(m.id) ? ModelType.Audio : ModelType.Text,
                         can_stream: true,
                         is_multimodal: modelMetadata.input_modalities.includes('image'),
                         ...modelMetadata,

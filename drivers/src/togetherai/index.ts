@@ -213,7 +213,13 @@ function toTogetherMessage(message: OpenAIChatCompletionsPayload['messages'][num
     const textContent = typeof message.content === 'string' || message.content === null ? message.content : undefined;
     const flattenedContent = Array.isArray(message.content)
         ? message.content
-              .map((part) => (part.type === 'text' ? part.text : `[Image: ${part.image_url.url}]`))
+              .map((part) =>
+                  part.type === 'input_audio'
+                      ? unsupportedAudioPart()
+                      : part.type === 'text'
+                        ? part.text
+                        : `[Image: ${part.image_url.url}]`,
+              )
               .join('\n')
         : textContent;
     switch (message.role) {
@@ -243,9 +249,11 @@ function toTogetherMessage(message: OpenAIChatCompletionsPayload['messages'][num
                     typeof message.content === 'string'
                         ? message.content
                         : (message.content?.map((part) =>
-                              part.type === 'text'
-                                  ? { type: 'text' as const, text: part.text }
-                                  : { type: 'image_url' as const, image_url: { ...part.image_url } },
+                              part.type === 'input_audio'
+                                  ? unsupportedAudioPart()
+                                  : part.type === 'text'
+                                    ? { type: 'text' as const, text: part.text }
+                                    : { type: 'image_url' as const, image_url: { ...part.image_url } },
                           ) ?? ''),
             };
     }
@@ -353,4 +361,8 @@ function togetherModelType(type?: string): ModelType {
         default:
             return ModelType.Text;
     }
+}
+
+function unsupportedAudioPart(): never {
+    throw new Error('This inference endpoint does not support audio input');
 }
