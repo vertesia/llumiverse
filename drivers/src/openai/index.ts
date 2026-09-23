@@ -14,7 +14,6 @@ import {
     getConversationMeta,
     incrementConversationTurn,
     isDedicatedInferenceModel,
-    isOpenAIGptAstraModel,
     isOpenAIGptVersionGTE,
     type JSONSchema,
     LlumiverseError,
@@ -106,12 +105,6 @@ function isOpenAIReasoningModel(model: string): boolean {
         normalized.includes('o4') ||
         isOpenAIGptVersionGTE(model, 5, 0)
     );
-}
-
-function normalizeOpenAIReasoningEffort(model: string, effort: string | undefined): string | undefined {
-    if (isOpenAIGptVersionGTE(model, 6, 0) && effort === 'minimal') return 'low';
-    if (effort === 'none' && isOpenAIGptAstraModel(model)) return 'low';
-    return effort;
 }
 
 function openAIReasoning(
@@ -274,10 +267,7 @@ export class OpenAIResponsesProtocol {
             strictMode = formattedSchema.strict;
         }
 
-        const requestedEffort = normalizeOpenAIReasoningEffort(
-            options.model,
-            model_options?.effort ?? model_options?.reasoning_effort,
-        );
+        const requestedEffort = model_options?.effort ?? model_options?.reasoning_effort;
         const isReasoningModel = isOpenAIReasoningModel(options.model);
         const reasoning = openAIReasoning(
             requestedEffort,
@@ -376,10 +366,7 @@ export class OpenAIResponsesProtocol {
             strictMode = formattedSchema.strict;
         }
 
-        const requestedEffort = normalizeOpenAIReasoningEffort(
-            options.model,
-            model_options?.effort ?? model_options?.reasoning_effort,
-        );
+        const requestedEffort = model_options?.effort ?? model_options?.reasoning_effort;
         const isReasoningModel = isOpenAIReasoningModel(options.model);
         const reasoning = openAIReasoning(
             requestedEffort,

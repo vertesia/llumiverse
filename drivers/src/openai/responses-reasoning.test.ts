@@ -96,31 +96,20 @@ describe('OpenAI Responses reasoning', () => {
         );
     });
 
-    it('maps stale none effort to low for GPT-6 Astra', async () => {
+    it.each([
+        ['gpt-6-astra', 'none'],
+        ['gpt-6-sol', 'minimal'],
+    ])('passes effort %s through unchanged for %s', async (model, effort) => {
         const create = vi.fn(async (_request: unknown) => response());
         const driver = new TestResponsesDriver(create);
 
         await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
-            model: 'gpt-6-astra',
-            model_options: { _option_id: 'openai-thinking', effort: 'none' },
+            model,
+            model_options: { _option_id: 'openai-thinking', effort },
         });
 
         expect(create).toHaveBeenCalledWith(
-            expect.objectContaining({ reasoning: expect.objectContaining({ effort: 'low', summary: 'auto' }) }),
-        );
-    });
-
-    it('maps stale minimal effort to low across GPT-6 models', async () => {
-        const create = vi.fn(async (_request: unknown) => response());
-        const driver = new TestResponsesDriver(create);
-
-        await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
-            model: 'gpt-6-sol',
-            model_options: { _option_id: 'openai-thinking', effort: 'minimal' },
-        });
-
-        expect(create).toHaveBeenCalledWith(
-            expect.objectContaining({ reasoning: expect.objectContaining({ effort: 'low', summary: 'auto' }) }),
+            expect.objectContaining({ reasoning: expect.objectContaining({ effort, summary: 'auto' }) }),
         );
     });
 
