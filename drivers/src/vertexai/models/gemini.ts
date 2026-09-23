@@ -638,6 +638,17 @@ function isFileAudioModel(model: string): boolean {
     return /(?:tts|transcribe)/.test(model) && !/(?:live|native-audio)/.test(model);
 }
 
+function normalizeGeminiFinishReason(finishReason: FinishReason | undefined): string | undefined {
+    switch (finishReason) {
+        case FinishReason.MAX_TOKENS:
+            return 'length';
+        case FinishReason.STOP:
+            return 'stop';
+        default:
+            return finishReason;
+    }
+}
+
 export class GeminiModelDefinition implements ModelDefinition<GenerateContentPrompt> {
     model: AIModel;
 
@@ -945,7 +956,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             }
             return {
                 result: results,
-                finish_reason: response.candidates?.[0]?.finishReason,
+                finish_reason: normalizeGeminiFinishReason(response.candidates?.[0]?.finishReason),
                 token_usage: this.usageMetadataToTokenUsage(driver, response.usageMetadata),
                 original_response: options.include_original_response ? response : undefined,
             };
@@ -998,16 +1009,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         let finish_reason: string | undefined, result: CompletionResult[] | undefined;
         const candidate = response.candidates?.[0];
         if (candidate) {
-            switch (candidate.finishReason) {
-                case FinishReason.MAX_TOKENS:
-                    finish_reason = 'length';
-                    break;
-                case FinishReason.STOP:
-                    finish_reason = 'stop';
-                    break;
-                default:
-                    finish_reason = candidate.finishReason;
-            }
+            finish_reason = normalizeGeminiFinishReason(candidate.finishReason);
             const content = candidate.content;
 
             // Provider finish reasons are terminal responses, not transport failures. Classify them
@@ -1112,16 +1114,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 for (const candidate of item.candidates) {
                     let tool_use: StreamingToolUse[] | undefined;
                     let finish_reason: string | undefined;
-                    switch (candidate.finishReason) {
-                        case FinishReason.MAX_TOKENS:
-                            finish_reason = 'length';
-                            break;
-                        case FinishReason.STOP:
-                            finish_reason = 'stop';
-                            break;
-                        default:
-                            finish_reason = candidate.finishReason;
-                    }
+                    finish_reason = normalizeGeminiFinishReason(candidate.finishReason);
                     const isRecoverableToolCall = assertSupportedGeminiFinishReason(candidate);
                     if (candidate.content?.role === 'model') {
                         appendGeminiStreamParts(nativeParts, candidate.content.parts ?? []);
