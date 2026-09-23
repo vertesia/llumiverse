@@ -22,7 +22,7 @@
         "test:unit": "pnpm exec turbo run test:unit ${TURBO_CACHE_OPTS:---cache=local:rw,remote:r}"
     },
     "devDependencies": {
-        "@biomejs/biome": "2.5.13",
+        "@biomejs/biome": "2.5.14",
         "turbo": "^2.10.13",
         "typescript": "catalog:",
         "vitest": "catalog:"
