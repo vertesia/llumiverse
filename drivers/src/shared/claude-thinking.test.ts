@@ -52,4 +52,40 @@ describe('resolveClaudeThinking', () => {
             outputConfig: { effort: 'medium' },
         });
     });
+
+    it('uses Opus 5.5 always-on thinking and honors the thinking display option', () => {
+        expect(
+            resolveClaudeThinking('claude-opus-5-5', {
+                include_thoughts: true,
+                thinking_budget_tokens: 12_000,
+            }),
+        ).toMatchObject({
+            thinking: { type: 'adaptive', display: 'summarized' },
+            outputConfig: undefined,
+            hasSamplingRestriction: true,
+        });
+        expect(resolveClaudeThinking('claude-opus-5-5', { include_thoughts: false })).toMatchObject({
+            thinking: { type: 'adaptive', display: 'omitted' },
+        });
+    });
+
+    it.each(['claude-opus-5', 'claude-fable-5', 'claude-fable-5-1'])(
+        'requests summarized output for always-on %s when include_thoughts is enabled',
+        (model) => {
+            expect(resolveClaudeThinking(model, { include_thoughts: true })).toMatchObject({
+                thinking: { type: 'adaptive', display: 'summarized' },
+            });
+            expect(resolveClaudeThinking(model, { include_thoughts: false })).toMatchObject({
+                thinking: { type: 'adaptive', display: 'omitted' },
+            });
+        },
+    );
+
+    it('drops legacy budget settings on models that only support adaptive thinking', () => {
+        expect(
+            resolveClaudeThinking('claude-opus-4-7', {
+                thinking_budget_tokens: 12_000,
+            }).thinking,
+        ).toBeUndefined();
+    });
 });
