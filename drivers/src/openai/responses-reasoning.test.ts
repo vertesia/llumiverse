@@ -391,37 +391,46 @@ describe('OpenAI Responses reasoning', () => {
         expect(request).not.toHaveProperty('prompt_cache_retention');
     });
 
-    it.each([false, true])('omits unsupported GPT-5.5 in-memory cache retention when stream=%s', async (streaming) => {
-        const create = vi.fn(async (request: unknown) =>
-            (request as { stream?: boolean }).stream
-                ? (async function* () {
-                      yield { type: 'response.completed', sequence_number: 1, response: response() };
-                  })()
-                : response(),
-        );
-        const driver = new TestResponsesDriver(create);
-        const options = {
-            model: 'gpt-5.5',
-            model_options: {
-                _option_id: 'openai-thinking' as const,
-                prompt_cache_retention: 'in_memory' as const,
-            },
-        };
-
-        if (streaming) {
-            const stream = await driver.requestTextCompletionStream(
-                [{ type: 'message', role: 'user', content: 'question' }],
-                options,
+    it.each([false, true])(
+        'rejects unsupported GPT-5.5 in-memory cache retention when stream=%s',
+        async (streaming) => {
+            const create = vi.fn(async (request: unknown) =>
+                (request as { stream?: boolean }).stream
+                    ? (async function* () {
+                          yield { type: 'response.completed', sequence_number: 1, response: response() };
+                      })()
+                    : response(),
             );
-            for await (const _chunk of stream) {
-                // Consume the provider stream.
-            }
-        } else {
-            await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], options);
-        }
+            const driver = new TestResponsesDriver(create);
+            const options = {
+                model: 'gpt-5.5',
+                model_options: {
+                    _option_id: 'openai-thinking' as const,
+                    prompt_cache_retention: 'in_memory' as const,
+                },
+            };
 
-        expect(create.mock.calls[0][0]).not.toHaveProperty('prompt_cache_retention');
-    });
+            const request = async () => {
+                if (streaming) {
+                    const stream = await driver.requestTextCompletionStream(
+                        [{ type: 'message', role: 'user', content: 'question' }],
+                        options,
+                    );
+                    for await (const _chunk of stream) {
+                        // Consume the provider stream.
+                    }
+                } else {
+                    await driver.requestTextCompletion(
+                        [{ type: 'message', role: 'user', content: 'question' }],
+                        options,
+                    );
+                }
+            };
+
+            await expect(request()).rejects.toThrow('GPT-5.5 does not support in_memory prompt cache retention');
+            expect(create).not.toHaveBeenCalled();
+        },
+    );
 
     it.each([false, true])('forwards the Flex service tier when stream=%s', async (streaming) => {
         const create = vi.fn(async (request: unknown) =>

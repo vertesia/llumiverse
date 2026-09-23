@@ -201,8 +201,9 @@ function getPromptCacheRequestOptions(
         };
     }
     if (isOpenAIGptVersionGTE(model, 5, 5) && retention === 'in_memory') {
-        // GPT-5.5 only supports extended (24h) retention; omit unsupported in-memory retention.
-        return { prompt_cache_options: options };
+        throw new Error(
+            'GPT-5.5 does not support in_memory prompt cache retention; configure 24h or remove the override.',
+        );
     }
     return { prompt_cache_retention: retention, prompt_cache_options: options };
 }
