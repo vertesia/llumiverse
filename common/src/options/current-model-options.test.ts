@@ -46,6 +46,20 @@ describe('current reasoning model options', () => {
         expect(effortValues('gpt-6-luna', Providers.openai)).toEqual(['none', 'low', 'medium', 'high', 'xhigh', 'max']);
     });
 
+    it('advertises reasoning context only for supported OpenAI Responses models', () => {
+        const reasoningContext = (model: string, provider: Providers) =>
+            getOptions(model, provider).options.find((option) => option.name === SharedOptions.reasoning_context);
+
+        expect(reasoningContext('gpt-5.6-sol', Providers.openai)).toMatchObject({
+            type: OptionType.enum,
+            enum: { Auto: 'auto', 'Current turn': 'current_turn', 'All turns': 'all_turns' },
+        });
+        expect(reasoningContext('gpt-6-astra', Providers.openai)).toBeDefined();
+        expect(reasoningContext('gpt-5.5', Providers.openai)).toBeUndefined();
+        expect(reasoningContext('gpt-5.6-sol', Providers.azure_openai)).toBeUndefined();
+        expect(reasoningContext('gpt-5.6-sol', Providers.openai_compatible)).toBeUndefined();
+    });
+
     it('does not advertise unverified effort for unknown OpenAI-compatible models', () => {
         const options = getOptions('custom-reasoning-model', Providers.openai_compatible).options;
         expect(options.map((option) => option.name)).not.toContain(SharedOptions.effort);

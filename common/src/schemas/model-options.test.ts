@@ -195,4 +195,12 @@ describe('ModelOptionsSchema', () => {
         ).toBe(true);
         expect(ModelOptionsSchema.safeParse({ _option_id: 'openai-text', extra_body: [] }).success).toBe(false);
     });
+
+    it('accepts persisted reasoning context choices for OpenAI thinking options', () => {
+        for (const reasoning_context of ['auto', 'current_turn', 'all_turns']) {
+            expect(ModelOptionsSchema.safeParse({ _option_id: 'openai-thinking', reasoning_context }).success).toBe(
+                true,
+            );
+        }
+    });
 });
