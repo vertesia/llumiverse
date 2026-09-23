@@ -69,7 +69,7 @@ describe('resolveClaudeThinking', () => {
         });
     });
 
-    it.each(['claude-opus-5', 'claude-fable-5', 'claude-fable-5-1'])(
+    it.each(['claude-opus-5', 'claude-sonnet-5', 'claude-fable-5', 'claude-fable-5-1'])(
         'requests summarized output for always-on %s when include_thoughts is enabled',
         (model) => {
             expect(resolveClaudeThinking(model, { include_thoughts: true })).toMatchObject({
