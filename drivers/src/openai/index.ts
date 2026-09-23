@@ -200,8 +200,14 @@ function getPromptCacheRequestOptions(
     options: OpenAIPromptCacheConfig['options'],
 ): Pick<OpenAI.Responses.ResponseCreateParams, 'prompt_cache_retention' | 'prompt_cache_options'> {
     if (isOpenAIGptVersionGTE(model, 5, 6)) {
+        if (retention === 'in_memory') {
+            throw new Error(
+                'GPT-5.6 and later do not support in_memory prompt cache retention; configure 24h or remove the override.',
+            );
+        }
         return {
-            prompt_cache_options: retention ? { ...options, ttl: '30m' } : options,
+            prompt_cache_retention: retention,
+            prompt_cache_options: retention === '24h' ? { ...options, ttl: '30m' } : options,
         };
     }
     if (isOpenAIGptVersionGTE(model, 5, 5) && retention === 'in_memory') {

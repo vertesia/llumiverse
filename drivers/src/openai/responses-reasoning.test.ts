@@ -395,7 +395,7 @@ describe('OpenAI Responses reasoning', () => {
         );
     });
 
-    it.each([false, true])('uses the GPT-5.6+ prompt cache TTL field when stream=%s', async (streaming) => {
+    it.each([false, true])('preserves GPT-5.6+ cache controls when stream=%s', async (streaming) => {
         const create = vi.fn(async (request: unknown) =>
             (request as { stream?: boolean }).stream
                 ? (async function* () {
@@ -426,11 +426,11 @@ describe('OpenAI Responses reasoning', () => {
 
         const request = create.mock.calls[0][0] as Record<string, unknown>;
         expect(request.prompt_cache_options).toEqual({ ttl: '30m' });
-        expect(request).not.toHaveProperty('prompt_cache_retention');
+        expect(request.prompt_cache_retention).toBe('24h');
     });
 
     it.each([false, true])(
-        'rejects unsupported GPT-5.5 in-memory cache retention when stream=%s',
+        'rejects unsupported GPT-5.5+ in-memory cache retention when stream=%s',
         async (streaming) => {
             const create = vi.fn(async (request: unknown) =>
                 (request as { stream?: boolean }).stream
@@ -440,32 +440,34 @@ describe('OpenAI Responses reasoning', () => {
                     : response(),
             );
             const driver = new TestResponsesDriver(create);
-            const options = {
-                model: 'gpt-5.5',
-                model_options: {
-                    _option_id: 'openai-thinking' as const,
-                    prompt_cache_retention: 'in_memory' as const,
-                },
-            };
+            for (const model of ['gpt-5.5', 'gpt-5.6', 'gpt-6-astra']) {
+                const options = {
+                    model,
+                    model_options: {
+                        _option_id: 'openai-thinking' as const,
+                        prompt_cache_retention: 'in_memory' as const,
+                    },
+                };
 
-            const request = async () => {
-                if (streaming) {
-                    const stream = await driver.requestTextCompletionStream(
-                        [{ type: 'message', role: 'user', content: 'question' }],
-                        options,
-                    );
-                    for await (const _chunk of stream) {
-                        // Consume the provider stream.
+                const request = async () => {
+                    if (streaming) {
+                        const stream = await driver.requestTextCompletionStream(
+                            [{ type: 'message', role: 'user', content: 'question' }],
+                            options,
+                        );
+                        for await (const _chunk of stream) {
+                            // Consume the provider stream.
+                        }
+                    } else {
+                        await driver.requestTextCompletion(
+                            [{ type: 'message', role: 'user', content: 'question' }],
+                            options,
+                        );
                     }
-                } else {
-                    await driver.requestTextCompletion(
-                        [{ type: 'message', role: 'user', content: 'question' }],
-                        options,
-                    );
-                }
-            };
+                };
 
-            await expect(request()).rejects.toThrow('GPT-5.5 does not support in_memory prompt cache retention');
+                await expect(request()).rejects.toThrow('support in_memory prompt cache retention');
+            }
             expect(create).not.toHaveBeenCalled();
         },
     );
