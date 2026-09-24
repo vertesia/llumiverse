@@ -269,4 +269,12 @@ describe('ModelOptionsSchema', () => {
             ModelOptionsSchema.safeParse({ _option_id: 'openrouter-text', extra_body: { unsupported: true } }).success,
         ).toBe(false);
     });
+
+    it('accepts persisted reasoning context choices for OpenAI thinking options', () => {
+        for (const reasoning_context of ['auto', 'current_turn', 'all_turns']) {
+            expect(ModelOptionsSchema.safeParse({ _option_id: 'openai-thinking', reasoning_context }).success).toBe(
+                true,
+            );
+        }
+    });
 });

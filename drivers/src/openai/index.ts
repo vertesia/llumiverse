@@ -59,6 +59,7 @@ type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
     image_detail?: 'low' | 'high' | 'auto';
     effort?: string;
     reasoning_effort?: string;
+    reasoning_context?: 'auto' | 'current_turn' | 'all_turns';
     verbosity?: 'low' | 'medium' | 'high';
     prompt_cache_key?: string;
     prompt_cache_retention?: 'in_memory' | '24h';
@@ -147,20 +148,32 @@ function isOpenAIReasoningModel(model: string): boolean {
 function openAIReasoning(
     effort: string | undefined,
     isReasoningModel: boolean,
-    preserveCurrentTurn: boolean,
+    context: OpenAIRequestOptions['reasoning_context'],
 ): OpenAI.Responses.ResponseCreateParams['reasoning'] {
     if (!effort && !isReasoningModel) return undefined;
     return {
         effort,
         summary: 'auto',
-        ...(preserveCurrentTurn && { context: 'current_turn' }),
+        ...(context && { context }),
     } as OpenAI.Responses.ResponseCreateParams['reasoning'];
 }
 
-function supportsOpenAICurrentTurnReasoning(provider: Providers, model: string): boolean {
+function supportsOpenAIReasoningContext(provider: Providers, model: string): boolean {
     if (provider !== Providers.openai) return false;
     const modelId = model.toLowerCase().split('/').pop() ?? '';
-    return isOpenAIGptVersionGTE(modelId, 5, 4);
+    return isOpenAIGptVersionGTE(modelId, 5, 6);
+}
+
+function openAIReasoningContext(
+    provider: Providers,
+    model: string,
+    requestedContext: OpenAIRequestOptions['reasoning_context'],
+): OpenAIRequestOptions['reasoning_context'] {
+    if (requestedContext === undefined) return undefined;
+    if (!supportsOpenAIReasoningContext(provider, model)) {
+        throw new Error(`reasoning_context is not supported for model ${model} through provider ${provider}`);
+    }
+    return requestedContext;
 }
 
 function hasExplicitPromptCacheBreakpoint(item: ResponseInputItem): boolean {
@@ -216,6 +229,30 @@ function configureOpenAIPromptCaching(
     const markedInput = [...input];
     markedInput[sourceIndex] = { ...source, content };
     return { input: markedInput, options: { mode: 'explicit' } };
+}
+
+function getPromptCacheRequestOptions(
+    model: string,
+    retention: OpenAIRequestOptions['prompt_cache_retention'],
+    options: OpenAIPromptCacheConfig['options'],
+): Pick<OpenAI.Responses.ResponseCreateParams, 'prompt_cache_retention' | 'prompt_cache_options'> {
+    if (isOpenAIGptVersionGTE(model, 5, 6)) {
+        if (retention === 'in_memory') {
+            throw new Error(
+                'GPT-5.6 and later do not support in_memory prompt cache retention; configure 24h or remove the override.',
+            );
+        }
+        return {
+            prompt_cache_retention: retention,
+            prompt_cache_options: retention === '24h' ? { ...options, ttl: '30m' } : options,
+        };
+    }
+    if (isOpenAIGptVersionGTE(model, 5, 5) && retention === 'in_memory') {
+        throw new Error(
+            'GPT-5.5 does not support in_memory prompt cache retention; configure 24h or remove the override.',
+        );
+    }
+    return { prompt_cache_retention: retention, prompt_cache_options: options };
 }
 
 //TODO: Do we need a list?, replace with if statements and modernize?
@@ -287,11 +324,12 @@ export class OpenAIResponsesProtocol {
 
         const requestedEffort = model_options?.effort ?? model_options?.reasoning_effort;
         const isReasoningModel = isOpenAIReasoningModel(options.model);
-        const reasoning = openAIReasoning(
-            requestedEffort,
-            isReasoningModel,
-            supportsOpenAICurrentTurnReasoning(driver.provider, options.model),
+        const reasoningContext = openAIReasoningContext(
+            driver.provider,
+            options.model,
+            model_options?.reasoning_context,
         );
+        const reasoning = openAIReasoning(requestedEffort, isReasoningModel, reasoningContext);
         const includeThoughts = model_options?.include_thoughts !== false;
         const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
         const promptCacheRetention = model_options?.prompt_cache_retention;
@@ -302,13 +340,17 @@ export class OpenAIResponsesProtocol {
             promptCacheKey,
         );
         const toolChoice = getOpenAIResponseToolChoice(model_options);
+        const promptCacheRequestOptions = getPromptCacheRequestOptions(
+            options.model,
+            promptCacheRetention,
+            promptCache.options,
+        );
         const request = mergeOpenAIExtraBody<OpenAI.Responses.ResponseCreateParamsStreaming>(
             {
                 stream: true,
                 model: driver.getResponsesRequestModel(options.model),
                 prompt_cache_key: promptCacheKey,
-                prompt_cache_retention: promptCacheRetention,
-                prompt_cache_options: promptCache.options,
+                ...promptCacheRequestOptions,
                 input: promptCache.input,
                 reasoning,
                 include: reasoning ? ['reasoning.encrypted_content'] : undefined,
@@ -386,11 +428,12 @@ export class OpenAIResponsesProtocol {
 
         const requestedEffort = model_options?.effort ?? model_options?.reasoning_effort;
         const isReasoningModel = isOpenAIReasoningModel(options.model);
-        const reasoning = openAIReasoning(
-            requestedEffort,
-            isReasoningModel,
-            supportsOpenAICurrentTurnReasoning(driver.provider, options.model),
+        const reasoningContext = openAIReasoningContext(
+            driver.provider,
+            options.model,
+            model_options?.reasoning_context,
         );
+        const reasoning = openAIReasoning(requestedEffort, isReasoningModel, reasoningContext);
         const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
         const promptCacheRetention = model_options?.prompt_cache_retention;
 
@@ -400,13 +443,17 @@ export class OpenAIResponsesProtocol {
             promptCacheKey,
         );
         const toolChoice = getOpenAIResponseToolChoice(model_options);
+        const promptCacheRequestOptions = getPromptCacheRequestOptions(
+            options.model,
+            promptCacheRetention,
+            promptCache.options,
+        );
         const request = mergeOpenAIExtraBody<OpenAI.Responses.ResponseCreateParamsNonStreaming>(
             {
                 stream: false,
                 model: driver.getResponsesRequestModel(options.model),
                 prompt_cache_key: promptCacheKey,
-                prompt_cache_retention: promptCacheRetention,
-                prompt_cache_options: promptCache.options,
+                ...promptCacheRequestOptions,
                 input: promptCache.input,
                 reasoning,
                 include: reasoning ? ['reasoning.encrypted_content'] : undefined,
