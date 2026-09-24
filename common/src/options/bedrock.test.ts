@@ -125,16 +125,22 @@ describe('Bedrock Mantle metadata', () => {
         ).toMatchObject({ max: 64_000 });
     });
 
-    it('keeps Bedrock Runtime Sonnet 4.5 below its exclusive 64K ceiling', () => {
+    it('uses the full 64K output limit for Claude 4.5 models on Bedrock', () => {
         expect(getBedrockModelKnowledge('anthropic.claude-sonnet-4-5')).toMatchObject({
             max_output_tokens: 64_000,
         });
-        expect(getMaxTokensLimitBedrock('anthropic.claude-sonnet-4-5-20250929-v1:0')).toBe(63_999);
+        expect(getMaxTokensLimitBedrock('anthropic.claude-sonnet-4-5-20250929-v1:0')).toBe(64_000);
+        expect(getMaxTokensLimitBedrock('anthropic.claude-haiku-4-5-20251001-v1:0')).toBe(64_000);
         expect(
             getOptions('anthropic.claude-sonnet-4-5', Providers.bedrock).options.find(
                 (option) => option.name === 'max_tokens',
             ),
-        ).toMatchObject({ max: 63_999 });
+        ).toMatchObject({ max: 64_000 });
+        expect(
+            getOptions('anthropic.claude-haiku-4-5', Providers.bedrock_mantle).options.find(
+                (option) => option.name === 'max_tokens',
+            ),
+        ).toMatchObject({ max: 64_000 });
     });
 
     it('uses the endpoint-specific Claude Sonnet 5 limit on Bedrock', () => {
@@ -322,7 +328,7 @@ describe('Bedrock Mantle metadata', () => {
 
     it.each([
         ['amazon.nova-2-lite-v1:0', 1_000_000, 65_536],
-        ['anthropic.claude-haiku-4-5-20251001-v1:0', 200_000, 63_999],
+        ['anthropic.claude-haiku-4-5-20251001-v1:0', 200_000, 64_000],
         ['google.gemma-3-12b-it', 128_000, 8_192],
         ['meta.llama4-scout-17b-instruct-v1:0', 10_000_000, 8_192],
         ['meta.llama5-scout-17b-instruct-v1:0', 10_000_000, 8_192],
@@ -353,7 +359,7 @@ describe('Bedrock Mantle metadata', () => {
         ['anthropic.claude-haiku-4-7-v1:0', 1_000_000, 127_999],
         ['anthropic.claude-opus-4-6-v1:0', 1_000_000, 127_999],
         ['anthropic.claude-sonnet-4-6-v1:0', 1_000_000, 64_000],
-        ['anthropic.claude-haiku-4-5-20251001-v1:0', 200_000, 63_999],
+        ['anthropic.claude-haiku-4-5-20251001-v1:0', 200_000, 64_000],
         ['anthropic.claude-sonnet-4-5-20250929-v1:0', 200_000, 64_000],
         ['anthropic.claude-opus-4-5-v1:0', 200_000, 64_000],
         ['anthropic.claude-sonnet-4-20250514-v1:0', 200_000, 64_000],

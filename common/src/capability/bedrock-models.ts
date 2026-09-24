@@ -112,17 +112,16 @@ function getLimits(model: string): Pick<BedrockModelKnowledge, 'context_window' 
             if (atLeast(4, 7) || (claude.variant === 'opus' && atLeast(4, 6))) {
                 // Bedrock enforces an EXCLUSIVE 128K bound for this family: it rejects
                 // max_tokens >= 128000 with "Try again with a maximum tokens value that
-                // is lower than 128000" (same exclusive-bound quirk as Haiku 4.5 below).
+                // is lower than 128000".
                 return { context_window: 1_000_000, max_output_tokens: 127_999 };
             }
             if (claude.variant === 'sonnet' && atLeast(4, 6)) {
                 return { context_window: 1_000_000, max_output_tokens: 64_000 };
             }
             if (atLeast(4, 5)) {
-                // Bedrock documents 64K for Haiku 4.5 but rejects max_tokens=64000; its bound is exclusive.
                 return {
                     context_window: 200_000,
-                    max_output_tokens: claude.variant === 'haiku' ? 63_999 : 64_000,
+                    max_output_tokens: 64_000,
                 };
             }
             if (atLeast(4, 0)) {

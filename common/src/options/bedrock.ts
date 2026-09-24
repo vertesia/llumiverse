@@ -71,9 +71,6 @@ export type BedrockOptions =
 export function getMaxTokensLimitBedrock(model: string): number | undefined {
     const documentedLimit = getBedrockModelKnowledge(model).max_output_tokens;
     if (documentedLimit) {
-        // Bedrock Runtime rejects Sonnet 4.5's documented 64K ceiling when
-        // max_tokens is exactly 64,000, so keep the request below that bound.
-        if (model.includes('anthropic.claude-sonnet-4-5') && documentedLimit === 64_000) return 63_999;
         return documentedLimit;
     }
 
