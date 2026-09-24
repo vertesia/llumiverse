@@ -308,8 +308,12 @@ describe('Bedrock Mantle metadata', () => {
 
     it.each([
         ['anthropic.claude-opus-5-v1:0', 1_000_000, 127_999],
+        ['anthropic.claude-opus-5-5', 1_000_000, 127_999],
         ['anthropic.claude-fable-5-v1:0', 1_000_000, 127_999],
+        ['anthropic.claude-fable-5-1', 1_000_000, 127_999],
         ['anthropic.claude-sonnet-5-20260701-v1:0', 1_000_000, 127_999],
+        ['anthropic.claude-sonnet-5', 1_000_000, 127_999],
+        ['anthropic.claude-mythos-5-1', 1_000_000, 127_999],
         ['anthropic.claude-mythos-preview-v1:0', 1_000_000, 127_999],
         ['anthropic.claude-opus-4-8-v1:0', 1_000_000, 127_999],
         ['anthropic.claude-haiku-4-7-v1:0', 1_000_000, 127_999],
