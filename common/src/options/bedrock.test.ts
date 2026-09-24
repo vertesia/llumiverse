@@ -115,6 +115,28 @@ describe('Bedrock Mantle metadata', () => {
         expect(hasSamplingParameterRestriction('anthropic.claude-mythos-preview')).toBe(true);
     });
 
+    it('applies the Bedrock Runtime-specific 64K cap to Sonnet 4.6', () => {
+        expect(getClaudeMaxTokensLimit('claude-sonnet-4-6')).toBe(128_000);
+        expect(getMaxTokensLimitBedrock('anthropic.claude-sonnet-4-6')).toBe(64_000);
+        expect(
+            getOptions('anthropic.claude-sonnet-4-6', Providers.bedrock).options.find(
+                (option) => option.name === 'max_tokens',
+            ),
+        ).toMatchObject({ max: 64_000 });
+    });
+
+    it('uses the endpoint-specific Claude Sonnet 5 limit on Bedrock', () => {
+        const runtimeMax = getOptions('anthropic.claude-sonnet-5', Providers.bedrock).options.find(
+            (option) => option.name === 'max_tokens',
+        );
+        const mantleMax = getOptions('anthropic.claude-sonnet-5', Providers.bedrock_mantle).options.find(
+            (option) => option.name === 'max_tokens',
+        );
+
+        expect(runtimeMax).toMatchObject({ max: 127_999 });
+        expect(mantleMax).toMatchObject({ max: 128_000 });
+    });
+
     it('uses Responses options for GPT-5.5 under the Bedrock Mantle provider', () => {
         const options = getOptions('openai.gpt-5.5', Providers.bedrock_mantle);
         const optionNames = options.options.map((option) => option.name);
