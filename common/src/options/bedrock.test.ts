@@ -314,11 +314,13 @@ describe('Bedrock Mantle metadata', () => {
         ['anthropic.claude-opus-4-8-v1:0', 1_000_000, 127_999],
         ['anthropic.claude-haiku-4-7-v1:0', 1_000_000, 127_999],
         ['anthropic.claude-opus-4-6-v1:0', 1_000_000, 127_999],
-        ['anthropic.claude-sonnet-4-6-v1:0', 1_000_000, 65_536],
+        ['anthropic.claude-sonnet-4-6-v1:0', 1_000_000, 64_000],
         ['anthropic.claude-haiku-4-5-20251001-v1:0', 200_000, 63_999],
-        ['anthropic.claude-opus-4-5-v1:0', 200_000, 65_536],
-        ['anthropic.claude-sonnet-4-20250514-v1:0', 200_000, 65_536],
+        ['anthropic.claude-sonnet-4-5-20250929-v1:0', 200_000, 64_000],
+        ['anthropic.claude-opus-4-5-v1:0', 200_000, 64_000],
+        ['anthropic.claude-sonnet-4-20250514-v1:0', 200_000, 64_000],
         ['anthropic.claude-opus-4-1-20250805-v1:0', 200_000, 32_000],
+        ['anthropic.claude-sonnet-4-6-v1:0', 1_000_000, 64_000],
     ] as const)('derives Claude limits from the model version for %s', (model, contextWindow, maxOutputTokens) => {
         expect(getBedrockModelKnowledge(model)).toMatchObject({
             context_window: contextWindow,
