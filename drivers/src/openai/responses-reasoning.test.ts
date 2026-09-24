@@ -193,6 +193,23 @@ describe('OpenAI Responses reasoning', () => {
         );
     });
 
+    it.each([
+        ['gpt-6-astra', 'none'],
+        ['gpt-6-sol', 'minimal'],
+    ] as const)('passes effort %s through unchanged for %s', async (model, effort) => {
+        const create = vi.fn(async (_request: unknown) => response());
+        const driver = new TestResponsesDriver(create);
+
+        await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
+            model,
+            model_options: { _option_id: 'openai-thinking', effort },
+        });
+
+        expect(create).toHaveBeenCalledWith(
+            expect.objectContaining({ reasoning: expect.objectContaining({ effort, summary: 'auto' }) }),
+        );
+    });
+
     it('merges provider-specific extra body fields without allowing core request overrides', async () => {
         const create = vi.fn(async (_request: unknown) => response());
         const driver = new TestResponsesDriver(create, Providers.openai_compatible);
@@ -223,8 +240,23 @@ describe('OpenAI Responses reasoning', () => {
         expect(create.mock.calls[0][0]).not.toHaveProperty('extra_body');
     });
 
-    it.each(['gpt-5.4', 'gpt-5.5', 'gpt-5.6', 'gpt-5.6-sol', 'gpt-5.7'])(
-        'uses current-turn reasoning context for %s',
+    it.each(['gpt-5.4', 'gpt-5.5'])('uses the model default reasoning context for %s', async (model) => {
+        const create = vi.fn(async (_request: unknown) => response());
+        const driver = new TestResponsesDriver(create);
+
+        await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
+            model,
+            model_options: { _option_id: 'openai-thinking' },
+        });
+
+        expect(create.mock.calls[0][0]).toMatchObject({ reasoning: { summary: 'auto' } });
+        expect((create.mock.calls[0][0] as { reasoning: Record<string, unknown> }).reasoning).not.toHaveProperty(
+            'context',
+        );
+    });
+
+    it.each(['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.7', 'gpt-6-astra'])(
+        'leaves persisted reasoning context at the API default for %s',
         async (model) => {
             const create = vi.fn(async (_request: unknown) => response());
             const driver = new TestResponsesDriver(create);
@@ -234,13 +266,60 @@ describe('OpenAI Responses reasoning', () => {
                 model_options: { _option_id: 'openai-thinking' },
             });
 
-            expect(create).toHaveBeenCalledWith(
-                expect.objectContaining({
-                    reasoning: expect.objectContaining({ context: 'current_turn' }),
-                }),
-            );
+            const reasoning = (create.mock.calls[0][0] as { reasoning: Record<string, unknown> }).reasoning;
+            expect(reasoning).not.toHaveProperty('context');
         },
     );
+
+    it.each(['current_turn', 'all_turns', 'auto'] as const)(
+        'passes an explicit reasoning_context option through for supported models: %s',
+        async (reasoning_context) => {
+            const create = vi.fn(async (_request: unknown) => response());
+            const driver = new TestResponsesDriver(create);
+
+            await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
+                model: 'gpt-6-astra',
+                model_options: { _option_id: 'openai-thinking', reasoning_context },
+            });
+
+            expect(create.mock.calls[0][0]).toMatchObject({ reasoning: { context: reasoning_context } });
+        },
+    );
+
+    it('passes an explicit reasoning_context option through for streaming requests', async () => {
+        const create = vi.fn(async (_request: unknown) =>
+            (async function* () {
+                yield { type: 'response.completed', sequence_number: 1, response: response() };
+            })(),
+        );
+        const driver = new TestResponsesDriver(create);
+
+        const stream = await driver.requestTextCompletionStream(
+            [{ type: 'message', role: 'user', content: 'question' }],
+            {
+                model: 'gpt-5.6',
+                model_options: { _option_id: 'openai-thinking', reasoning_context: 'current_turn' },
+            },
+        );
+        for await (const _chunk of stream) {
+            // Consume the provider stream.
+        }
+
+        expect(create.mock.calls[0][0]).toMatchObject({ reasoning: { context: 'current_turn' } });
+    });
+
+    it('rejects an explicit reasoning_context option for models without documented support', async () => {
+        const create = vi.fn(async (_request: unknown) => response());
+        const driver = new TestResponsesDriver(create);
+
+        await expect(
+            driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], {
+                model: 'gpt-5.5',
+                model_options: { _option_id: 'openai-thinking', reasoning_context: 'all_turns' },
+            }),
+        ).rejects.toThrow('reasoning_context is not supported for model gpt-5.5');
+        expect(create).not.toHaveBeenCalled();
+    });
 
     it('does not request cross-turn reasoning controls for models without documented support', async () => {
         const create = vi.fn(async (_request: unknown) => response());
@@ -412,6 +491,83 @@ describe('OpenAI Responses reasoning', () => {
             }),
         );
     });
+
+    it.each([false, true])('preserves GPT-5.6+ cache controls when stream=%s', async (streaming) => {
+        const create = vi.fn(async (request: unknown) =>
+            (request as { stream?: boolean }).stream
+                ? (async function* () {
+                      yield { type: 'response.completed', sequence_number: 1, response: response() };
+                  })()
+                : response(),
+        );
+        const driver = new TestResponsesDriver(create);
+        const options = {
+            model: 'gpt-6-astra',
+            model_options: {
+                _option_id: 'openai-thinking' as const,
+                prompt_cache_retention: '24h' as const,
+            },
+        };
+
+        if (streaming) {
+            const stream = await driver.requestTextCompletionStream(
+                [{ type: 'message', role: 'user', content: 'question' }],
+                options,
+            );
+            for await (const _chunk of stream) {
+                // Consume the provider stream.
+            }
+        } else {
+            await driver.requestTextCompletion([{ type: 'message', role: 'user', content: 'question' }], options);
+        }
+
+        const request = create.mock.calls[0][0] as Record<string, unknown>;
+        expect(request.prompt_cache_options).toEqual({ ttl: '30m' });
+        expect(request.prompt_cache_retention).toBe('24h');
+    });
+
+    it.each([false, true])(
+        'rejects unsupported GPT-5.5+ in-memory cache retention when stream=%s',
+        async (streaming) => {
+            const create = vi.fn(async (request: unknown) =>
+                (request as { stream?: boolean }).stream
+                    ? (async function* () {
+                          yield { type: 'response.completed', sequence_number: 1, response: response() };
+                      })()
+                    : response(),
+            );
+            const driver = new TestResponsesDriver(create);
+            for (const model of ['gpt-5.5', 'gpt-5.6', 'gpt-6-astra']) {
+                const options = {
+                    model,
+                    model_options: {
+                        _option_id: 'openai-thinking' as const,
+                        prompt_cache_retention: 'in_memory' as const,
+                    },
+                };
+
+                const request = async () => {
+                    if (streaming) {
+                        const stream = await driver.requestTextCompletionStream(
+                            [{ type: 'message', role: 'user', content: 'question' }],
+                            options,
+                        );
+                        for await (const _chunk of stream) {
+                            // Consume the provider stream.
+                        }
+                    } else {
+                        await driver.requestTextCompletion(
+                            [{ type: 'message', role: 'user', content: 'question' }],
+                            options,
+                        );
+                    }
+                };
+
+                await expect(request()).rejects.toThrow('support in_memory prompt cache retention');
+            }
+            expect(create).not.toHaveBeenCalled();
+        },
+    );
 
     it.each([false, true])('forwards the Flex service tier when stream=%s', async (streaming) => {
         const create = vi.fn(async (request: unknown) =>
