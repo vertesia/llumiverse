@@ -70,7 +70,9 @@ export type BedrockOptions =
 
 export function getMaxTokensLimitBedrock(model: string): number | undefined {
     const documentedLimit = getBedrockModelKnowledge(model).max_output_tokens;
-    if (documentedLimit) return documentedLimit;
+    if (documentedLimit) {
+        return documentedLimit;
+    }
 
     // Claude models — delegate to shared limit logic (128K for 3.7 and Opus 4.7+)
     if (model.includes('claude')) {
