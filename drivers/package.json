@@ -143,7 +143,7 @@
         "@azure/openai": "^2.0.0",
         "@google-cloud/aiplatform": "^7.4.0",
         "@google/genai": "^2.23.0",
-        "@huggingface/inference": "^4.13.28",
+        "@huggingface/inference": "^4.13.30",
         "@llumiverse/common": "workspace:*",
         "@llumiverse/core": "workspace:*",
         "@mistralai/mistralai": "^2.7.0",
