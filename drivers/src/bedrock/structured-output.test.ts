@@ -90,7 +90,7 @@ describe('Bedrock Converse structured output', () => {
             { model: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0' },
         );
 
-        expect(payload.inferenceConfig?.maxTokens).toBe(64_000);
+        expect(payload.inferenceConfig?.maxTokens).toBe(63_999);
     });
 
     it('uses outputConfig for non-Claude models', () => {

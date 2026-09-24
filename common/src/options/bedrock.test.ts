@@ -125,6 +125,18 @@ describe('Bedrock Mantle metadata', () => {
         ).toMatchObject({ max: 64_000 });
     });
 
+    it('keeps Bedrock Runtime Sonnet 4.5 below its exclusive 64K ceiling', () => {
+        expect(getBedrockModelKnowledge('anthropic.claude-sonnet-4-5')).toMatchObject({
+            max_output_tokens: 64_000,
+        });
+        expect(getMaxTokensLimitBedrock('anthropic.claude-sonnet-4-5-20250929-v1:0')).toBe(63_999);
+        expect(
+            getOptions('anthropic.claude-sonnet-4-5', Providers.bedrock).options.find(
+                (option) => option.name === 'max_tokens',
+            ),
+        ).toMatchObject({ max: 63_999 });
+    });
+
     it('uses the endpoint-specific Claude Sonnet 5 limit on Bedrock', () => {
         const runtimeMax = getOptions('anthropic.claude-sonnet-5', Providers.bedrock).options.find(
             (option) => option.name === 'max_tokens',
