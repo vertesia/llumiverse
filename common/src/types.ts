@@ -754,6 +754,7 @@ export enum SharedOptions {
     frequency_penalty = 'frequency_penalty',
     stop_sequence = 'stop_sequence',
     effort = 'effort',
+    reasoning_context = 'reasoning_context',
 
     //Image
     seed = 'seed',
