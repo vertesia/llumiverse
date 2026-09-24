@@ -328,6 +328,7 @@ export const OpenAiThinkingOptionsSchema = z
         stop_sequence: z.array(z.string()).optional(),
         effort: ReasoningEffortSchema.optional(),
         reasoning_effort: ReasoningEffortSchema.optional(),
+        reasoning_context: z.enum(['auto', 'current_turn', 'all_turns']).optional(),
         image_detail: z.enum(['low', 'high', 'auto']).optional(),
         include_thoughts: z.boolean().optional(),
         service_tier: ServiceTierSchema.optional(),

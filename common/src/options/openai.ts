@@ -53,6 +53,7 @@ export function getOpenAiOptions(
     model: string,
     _option?: ModelOptions,
     profile: ModelProfile = resolveModelProfile(model, Providers.openai),
+    provider: Providers = Providers.openai,
 ): ModelOptionsInfo {
     // Option matching follows the resolved source ID so provider/path-qualified and uppercase IDs expose the same
     // controls as their canonical model.
@@ -240,9 +241,28 @@ export function getOpenAiOptions(
                   ]
                 : [];
 
+        const reasoningContextOptions: ModelOptionInfoItem[] =
+            provider === Providers.openai && isOpenAIGptVersionGTE(model, 5, 6)
+                ? [
+                      {
+                          name: SharedOptions.reasoning_context,
+                          type: OptionType.enum,
+                          enum: { Auto: 'auto', 'Current turn': 'current_turn', 'All turns': 'all_turns' },
+                          description:
+                              'Controls whether compatible reasoning from earlier turns is rendered into the next request. Leave unset to use the model default.',
+                      },
+                  ]
+                : [];
+
         return {
             _option_id: 'openai-thinking',
-            options: [...commonOptions, ...reasoningOptions, ...visionOptions, ...serviceTierOptions],
+            options: [
+                ...commonOptions,
+                ...reasoningOptions,
+                ...reasoningContextOptions,
+                ...visionOptions,
+                ...serviceTierOptions,
+            ],
         };
     } else {
         let max_tokens_limit = 4096;
@@ -331,7 +351,7 @@ export function getAzureOpenAiOptions(
     option?: ModelOptions,
     profile: ModelProfile = resolveModelProfile(model, Providers.azure_openai),
 ): ModelOptionsInfo {
-    const options = getOpenAiOptions(model, option, profile);
+    const options = getOpenAiOptions(model, option, profile, Providers.azure_openai);
     return {
         ...options,
         options: options.options.map((item) =>
@@ -352,7 +372,7 @@ export function getOpenAiCompatibleOptions(
     option?: ModelOptions,
     profile: ModelProfile = resolveModelProfile(model, Providers.openai_compatible),
 ): ModelOptionsInfo {
-    const options = getOpenAiOptions(model, option, profile);
+    const options = getOpenAiOptions(model, option, profile, Providers.openai_compatible);
     const compatibleOptions = options.options.filter((item) => item.name !== 'service_tier');
     const maxOutputTokens = profile.max_output_tokens;
     const profileEffortLevels = profile.reasoning_effort_levels?.length
