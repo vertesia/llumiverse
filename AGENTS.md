@@ -15,6 +15,13 @@ The main abstractions are:
 - `PromptSegment` - Represents a piece of a prompt with a role (user, system, assistant)
 - `CompletionStream` - Handles streaming responses from LLMs
 
+### Finish Reasons
+
+Drivers must return the shared finish reasons `stop`, `length`, and `tool_use` in lowercase, mapping each
+provider's equivalent value to the shared spelling in both streaming and non-streaming completions. Other finish
+reasons may retain the provider's native spelling and format. Keep provider-specific reasons intact so callers can
+still inspect them.
+
 ## Build & Test Commands
 
 - **Build all packages**: `pnpm build`
