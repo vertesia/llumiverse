@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { CompletionResultSchema, PromptCacheDiagnosticSchema, StatelessExecutionOptionsSchema } from './completion.js';
+import {
+    CompletionResultSchema,
+    PromptCacheDiagnosticSchema,
+    PromptSegmentSchema,
+    StatelessExecutionOptionsSchema,
+} from './completion.js';
 
 describe('CompletionResultSchema', () => {
     it('round trips durable audio metadata and rejects embedded or temporary payloads', () => {
@@ -54,7 +59,35 @@ describe('StatelessExecutionOptionsSchema', () => {
                 scope: 'environment:project:us-central1',
                 cacheable_part_count: 2,
                 preparation_latency_ms: 4,
+                provider_code: 'INVALID_ARGUMENT',
+                failure_reason: 'provider_rejected',
             }),
         ).not.toHaveProperty('resource_name');
+    });
+});
+
+describe('PromptSegmentSchema', () => {
+    it('accepts an explicit reusable-prefix boundary', () => {
+        expect(
+            PromptSegmentSchema.parse({
+                role: 'user',
+                content: 'stable photo',
+                cache_control: { type: 'ephemeral' },
+            }),
+        ).toMatchObject({ cache_control: { type: 'ephemeral' } });
+    });
+
+    it('rejects unknown cache-control modes and fields', () => {
+        expect(
+            PromptSegmentSchema.safeParse({ role: 'user', content: 'photo', cache_control: { type: 'forever' } })
+                .success,
+        ).toBe(false);
+        expect(
+            PromptSegmentSchema.safeParse({
+                role: 'user',
+                content: 'photo',
+                cache_control: { type: 'ephemeral', ttl: 3600 },
+            }).success,
+        ).toBe(false);
     });
 });

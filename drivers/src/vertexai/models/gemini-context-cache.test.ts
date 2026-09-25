@@ -1,5 +1,6 @@
 import {
     type CachedContent,
+    type Content,
     type CreateCachedContentParameters,
     FinishReason,
     type GenerateContentParameters,
@@ -7,6 +8,7 @@ import {
     type GoogleGenAI,
     type ListCachedContentsParameters,
     type Pager,
+    type Part,
     type UpdateCachedContentParameters,
 } from '@google/genai';
 import { type DataSource, type ExecutionOptions, type Logger, PromptRole, type PromptSegment } from '@llumiverse/core';
@@ -46,6 +48,26 @@ function baliseRoutePrompt(): GenerateContentPrompt {
                 parts: [{ text: 'Photo 42: route it.' }, { inlineData: { data: 'aW1hZ2U=', mimeType: 'image/jpeg' } }],
             },
         ],
+    };
+}
+
+function balisePhotoPrompt(
+    imageData = 'c2FtZS1waG90bw==',
+    task = 'Route this photo.',
+    media: 'inline' | 'gcs' = 'inline',
+): GenerateContentPrompt {
+    const imagePart: Part =
+        media === 'gcs'
+            ? { fileData: { fileUri: `gs://balise-dev/${imageData}.jpg`, mimeType: 'image/jpeg' } }
+            : { inlineData: { data: imageData, mimeType: 'image/jpeg' } };
+    return {
+        system: { role: 'user', parts: [{ text: 'Route each photo to a domain.' }] },
+        contents: [
+            { role: 'user', parts: [{ text: CATALOG_TEXT }] },
+            { role: 'user', parts: [{ text: 'Stable photo.' }, imagePart] },
+            { role: 'user', parts: [{ text: task }] },
+        ],
+        cacheBoundaryContentCount: 2,
     };
 }
 
@@ -267,6 +289,28 @@ describe('deriveGeminiCachePrefix', () => {
     it('has nothing to cache for a single-turn prompt without a system instruction', () => {
         expect(deriveGeminiCachePrefix({ contents: [{ role: 'user', parts: [{ text: 'hello' }] }] })).toBeUndefined();
     });
+
+    it.each(['inline', 'gcs'] as const)('includes explicitly marked %s media in the prefix', (media) => {
+        const prompt = balisePhotoPrompt('photo-one', 'Extract fields.', media);
+        const prefix = deriveGeminiCachePrefix(prompt);
+
+        expect(prefix?.contents).toEqual(prompt.contents.slice(0, 2));
+        expect(prefix?.partCount).toBe(3);
+    });
+
+    it('rejects an explicit prefix that ends in a model turn', () => {
+        const prompt = balisePhotoPrompt();
+        prompt.contents[1] = { role: 'model', parts: [{ text: 'cached answer' }] };
+
+        expect(deriveGeminiCachePrefix(prompt)).toBeUndefined();
+    });
+
+    it('rejects tool traffic even behind an explicit boundary', () => {
+        const prompt = balisePhotoPrompt();
+        prompt.contents[1] = { role: 'user', parts: [{ functionCall: { name: 'lookup', args: {} } }] };
+
+        expect(deriveGeminiCachePrefix(prompt)).toBeUndefined();
+    });
 });
 
 describe('cache identity', () => {
@@ -352,6 +396,46 @@ describe('Gemini explicit context caching', () => {
         // Vertex rejects a request that repeats the cached system instruction.
         expect(requests[0].config?.systemInstruction).toBeUndefined();
         expect(warn).not.toHaveBeenCalled();
+    });
+
+    it.each(['inline', 'gcs'] as const)('caches explicitly marked %s image content', async (media) => {
+        const harness = makeDriver();
+        const prompt = balisePhotoPrompt('photo-one', 'Extract fields.', media);
+
+        const completion = await new GeminiModelDefinition(MODEL).requestTextCompletion(
+            harness.driver,
+            prompt,
+            cachedOptions(),
+        );
+
+        expect(harness.create.mock.calls[0][0].config?.contents).toEqual(prompt.contents.slice(0, 2));
+        expect(harness.requests[0].contents).toEqual([prompt.contents[2]]);
+        expect(completion.prompt_cache_diagnostic).toMatchObject({
+            path: 'created',
+            explicit_cache_used: true,
+            cacheable_part_count: 3,
+        });
+    });
+
+    it('keeps the explicit boundary aligned when conversation history is prepended', async () => {
+        const harness = makeDriver();
+        const prompt = balisePhotoPrompt();
+        const conversation: Content[] = [
+            { role: 'user', parts: [{ text: 'Earlier question.' }] },
+            { role: 'model', parts: [{ text: 'Earlier answer.' }] },
+        ];
+
+        await new GeminiModelDefinition(MODEL).requestTextCompletion(
+            harness.driver,
+            prompt,
+            cachedOptions({ conversation }),
+        );
+
+        expect(harness.create.mock.calls[0][0].config?.contents).toEqual([
+            ...conversation,
+            ...balisePhotoPrompt().contents.slice(0, 2),
+        ]);
+        expect(harness.requests[0].contents).toEqual([balisePhotoPrompt().contents[2]]);
     });
 
     it('reuses the memoized cache without listing or creating again', async () => {
@@ -621,7 +705,28 @@ describe('Gemini explicit context caching', () => {
         expect(completion.prompt_cache_diagnostic).toMatchObject({
             path: 'fallback_provider_error',
             provider_status: 503,
+            provider_code: 'UNAVAILABLE',
+            failure_reason: 'provider_rejected',
         });
+    });
+
+    it('classifies a provider model-turn rejection without exposing its message', async () => {
+        const { driver, create } = makeDriver();
+        create.mockRejectedValue(apiError(400, 'Requests ending with a model turn are not supported. gs://secret'));
+
+        const completion = await new GeminiModelDefinition(MODEL).requestTextCompletion(
+            driver,
+            balisePhotoPrompt(),
+            cachedOptions(),
+        );
+
+        expect(completion.prompt_cache_diagnostic).toMatchObject({
+            path: 'fallback_provider_error',
+            provider_status: 400,
+            provider_code: 'REQUEST_ENDS_WITH_MODEL_TURN',
+            failure_reason: 'provider_rejected',
+        });
+        expect(JSON.stringify(completion.prompt_cache_diagnostic)).not.toContain('gs://secret');
     });
 });
 
@@ -671,6 +776,70 @@ describe('Gemini distributed context cache coordination', () => {
 
         expect(route.create.mock.calls.length + extraction.create.mock.calls.length).toBe(1);
         expect(route.requests[0].config?.cachedContent).toBe(extraction.requests[0].config?.cachedContent);
+    });
+
+    it('shares one image cache across route and extraction for the same photo', async () => {
+        const coordinator = new FakeDistributedCoordinator();
+        const route = makeDriver(coordinatedOptions(coordinator));
+        const extraction = makeDriver(coordinatedOptions(coordinator));
+
+        await Promise.all([
+            new GeminiModelDefinition(MODEL).requestTextCompletion(
+                route.driver,
+                balisePhotoPrompt('same-photo', 'Route this photo.'),
+                cachedOptions(),
+            ),
+            new GeminiModelDefinition(MODEL).requestTextCompletion(
+                extraction.driver,
+                balisePhotoPrompt('same-photo', 'Extract fields.'),
+                cachedOptions(),
+            ),
+        ]);
+
+        expect(route.create.mock.calls.length + extraction.create.mock.calls.length).toBe(1);
+        expect(route.requests[0].config?.cachedContent).toBe(extraction.requests[0].config?.cachedContent);
+        expect(route.requests[0].contents).toEqual([{ role: 'user', parts: [{ text: 'Route this photo.' }] }]);
+        expect(extraction.requests[0].contents).toEqual([{ role: 'user', parts: [{ text: 'Extract fields.' }] }]);
+    });
+
+    it('creates distinct resources for different photos even when logical keys match', async () => {
+        const coordinator = new FakeDistributedCoordinator();
+        const first = makeDriver(coordinatedOptions(coordinator));
+        const second = makeDriver(coordinatedOptions(coordinator));
+
+        await Promise.all([
+            new GeminiModelDefinition(MODEL).requestTextCompletion(
+                first.driver,
+                balisePhotoPrompt('photo-one'),
+                cachedOptions(),
+            ),
+            new GeminiModelDefinition(MODEL).requestTextCompletion(
+                second.driver,
+                balisePhotoPrompt('photo-two'),
+                cachedOptions(),
+            ),
+        ]);
+
+        expect(first.create.mock.calls.length + second.create.mock.calls.length).toBe(2);
+        expect(coordinator.entries.size).toBe(2);
+    });
+
+    it('coordinates eight concurrent calls for one photo into one create', async () => {
+        const coordinator = new FakeDistributedCoordinator();
+        const harnesses = Array.from({ length: 8 }, () => makeDriver(coordinatedOptions(coordinator)));
+
+        const completions = await Promise.all(
+            harnesses.map(({ driver }, index) =>
+                new GeminiModelDefinition(MODEL).requestTextCompletion(
+                    driver,
+                    balisePhotoPrompt('same-photo', index % 2 === 0 ? 'Route this photo.' : 'Extract fields.'),
+                    cachedOptions(),
+                ),
+            ),
+        );
+
+        expect(harnesses.reduce((sum, harness) => sum + harness.create.mock.calls.length, 0)).toBe(1);
+        expect(completions.every((result) => result.prompt_cache_diagnostic?.explicit_cache_used)).toBe(true);
     });
 
     it('never shares a resource for different cache contents even when keys match', async () => {
@@ -809,6 +978,18 @@ describe('Gemini PromptSegment cache breakpoint', () => {
         { role: PromptRole.user, content: 'Route this photo.', files: [image()] },
     ];
 
+    const cacheablePhotoSegments = (): PromptSegment[] => [
+        { role: PromptRole.system, content: 'Route each photo to a domain.' },
+        { role: PromptRole.user, content: CATALOG_TEXT },
+        {
+            role: PromptRole.user,
+            content: 'Stable photo.',
+            files: [image()],
+            cache_control: { type: 'ephemeral' },
+        },
+        { role: PromptRole.user, content: 'Route this photo.' },
+    ];
+
     it('keeps stable user text in cachedContents and the image task in both provider paths', async () => {
         const blocking = makeDriver();
         const streaming = makeDriver();
@@ -837,6 +1018,27 @@ describe('Gemini PromptSegment cache breakpoint', () => {
                 },
             ]);
         }
+    });
+
+    it('translates the segment marker into a media-inclusive Gemini boundary', async () => {
+        const harness = makeDriver();
+        const model = new GeminiModelDefinition(MODEL);
+        const prompt = await model.createPrompt(harness.driver, cacheablePhotoSegments(), cachedOptions());
+
+        expect(prompt.cacheBoundaryContentCount).toBe(2);
+        await model.requestTextCompletion(harness.driver, prompt, cachedOptions());
+
+        expect(harness.create.mock.calls[0][0].config?.contents).toEqual([
+            { role: 'user', parts: [{ text: CATALOG_TEXT }] },
+            {
+                role: 'user',
+                parts: [
+                    { text: 'Stable photo.' },
+                    { fileData: { fileUri: 'gs://balise-dev/photo.jpg', mimeType: 'image/jpeg' } },
+                ],
+            },
+        ]);
+        expect(harness.requests[0].contents).toEqual([{ role: 'user', parts: [{ text: 'Route this photo.' }] }]);
     });
 
     it('keeps a trailing model segment out of cachedContents.create', async () => {
@@ -902,6 +1104,33 @@ describe('Gemini explicit context caching opt-out', () => {
             ),
         ).rejects.toBeInstanceOf(GeminiContextCacheRequiredError);
         expect(generateContent).not.toHaveBeenCalled();
+    });
+
+    it('reports an invalid explicit boundary in auto and required modes', async () => {
+        const automatic = makeDriver();
+        const required = makeDriver();
+        const prompt = balisePhotoPrompt();
+        prompt.cacheBoundaryContentCount = prompt.contents.length;
+
+        const completion = await new GeminiModelDefinition(MODEL).requestTextCompletion(
+            automatic.driver,
+            prompt,
+            cachedOptions(),
+        );
+
+        expect(automatic.create).not.toHaveBeenCalled();
+        expect(completion.prompt_cache_diagnostic).toMatchObject({
+            path: 'fallback_provider_error',
+            failure_reason: 'invalid_cache_boundary',
+        });
+        await expect(
+            new GeminiModelDefinition(MODEL).requestTextCompletion(
+                required.driver,
+                prompt,
+                cachedOptions({ prompt_cache_mode: 'required' }),
+            ),
+        ).rejects.toThrow('fallback_provider_error: invalid_cache_boundary');
+        expect(required.generateContent).not.toHaveBeenCalled();
     });
 
     it('exposes no registry when the driver kill switch is off', () => {
