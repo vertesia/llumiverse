@@ -28,7 +28,6 @@ import {
     type ExecutionOptions,
     type ExecutionTokenUsage,
     getConversationMeta,
-    incrementConversationTurn,
     isGeminiModelVersionGte,
     type JSONObject,
     LlumiverseError,
@@ -39,6 +38,7 @@ import {
     type PromptSegment,
     readStreamAsBase64,
     type StatelessExecutionOptions,
+    setConversationMeta,
     stripBase64ImagesFromConversation,
     stripHeartbeatsFromConversation,
     type ToolDefinition,
@@ -369,9 +369,15 @@ function finalizeGeminiConversation(
     system: Content | undefined,
     options: ExecutionOptions,
 ): GenerateContentPrompt['contents'] {
-    let completed = assistantContent ? updateConversation(conversation, [assistantContent]) : conversation;
-    completed = incrementConversationTurn(completed) as Content[];
-    const currentTurn = getConversationMeta(completed).turnNumber;
+    const completed = assistantContent ? updateConversation(conversation, [assistantContent]) : conversation;
+    const previousMeta = getConversationMeta(options.conversation);
+    const metadata = {
+        ...previousMeta,
+        turnNumber: previousMeta.turnNumber + (assistantContent ? 1 : 0),
+        geminiToolIds: 'turn-index-v1' as const,
+    };
+    const marked = setConversationMeta(completed, metadata);
+    const currentTurn = metadata.turnNumber;
     const preserveSubtree = (value: unknown): boolean => {
         if (!value || typeof value !== 'object') return false;
         const thoughtSignature = (value as { thoughtSignature?: unknown }).thoughtSignature;
@@ -383,13 +389,14 @@ function finalizeGeminiConversation(
         textMaxTokens: options.stripTextMaxTokens,
         preserveSubtree,
     };
-    let processed = stripBase64ImagesFromConversation(completed, stripOptions);
+    let processed = stripBase64ImagesFromConversation(marked, stripOptions);
     processed = truncateLargeTextInConversation(processed, stripOptions);
     processed = stripHeartbeatsFromConversation(processed, {
         keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
         currentTurn,
         preserveSubtree,
     });
+    // The workflow reconstructs position-based IDs from metadata, leaving signed Parts untouched.
     return storeSystemInConversation(processed, system) as Content[];
 }
 
@@ -411,13 +418,27 @@ function appendGeminiStreamParts(target: Part[], incoming: Part[]): void {
     }
 }
 
-function collectToolUseParts(content: Content): ToolUse[] | undefined {
+/** Gemini identifies function responses by name, but parallel calls need distinct workflow IDs. */
+function geminiToolUseId(name: string, turn: number, index: number, nativeId?: string): string {
+    return `gemini-tool-call:${turn}:${index}:${encodeURIComponent(nativeId ?? '')}:${name}`;
+}
+
+function geminiToolName(id: string): string {
+    return /^gemini-tool-call:\d+:\d+:[^:]*:(.+)$/.exec(id)?.[1] ?? id;
+}
+
+function geminiResponseId(id: string): string | undefined {
+    const nativeId = /^gemini-tool-call:\d+:\d+:([^:]*):.+$/.exec(id)?.[1];
+    return nativeId ? decodeURIComponent(nativeId) : undefined;
+}
+
+function collectToolUseParts(content: Content, turn: number, firstIndex = 0): ToolUse[] | undefined {
     const out: ToolUse[] = [];
     const parts = content.parts ?? [];
     for (const part of parts) {
         if (part.functionCall) {
             const toolUse: ToolUse = {
-                id: part.functionCall.name ?? '',
+                id: geminiToolUseId(part.functionCall.name ?? '', turn, firstIndex + out.length, part.functionCall.id),
                 tool_name: part.functionCall.name ?? '',
                 tool_input: part.functionCall.args as JSONObject,
             };
@@ -665,10 +686,12 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 for (const f of msg.files ?? []) {
                     responseParts.push(await fileToMediaPart(f));
                 }
+                const responseId = geminiResponseId(msg.tool_use_id);
                 // Build functionResponse part with optional thought_signature for Gemini thinking models
                 const functionResponsePart: Part = {
                     functionResponse: {
-                        name: msg.tool_use_id,
+                        name: geminiToolName(msg.tool_use_id),
+                        ...(responseId && { id: responseId }),
                         response: formatFunctionResponse(msg.content || ''),
                         ...(responseParts.length > 0 && { parts: responseParts }),
                     },
@@ -863,7 +886,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             const isRecoverableToolCall = assertSupportedGeminiFinishReason(candidate);
 
             if (content) {
-                tool_use = collectToolUseParts(content);
+                tool_use = collectToolUseParts(content, getConversationMeta(options.conversation).turnNumber + 1);
 
                 // For recoverable tool call issues, log warning but continue processing
                 // The workflow will handle the invalid tool call gracefully.
@@ -971,10 +994,15 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                     }
                     const isRecoverableToolCall = assertSupportedGeminiFinishReason(candidate);
                     if (candidate.content?.role === 'model') {
+                        const firstToolIndex = nativeParts.filter((part) => part.functionCall).length;
                         appendGeminiStreamParts(nativeParts, candidate.content.parts ?? []);
                         // Collect all parts in order (text and images)
                         const combinedResults = extractCompletionResults(candidate.content, includeThoughts);
-                        tool_use = collectToolUseParts(candidate.content);
+                        tool_use = collectToolUseParts(
+                            candidate.content,
+                            getConversationMeta(options.conversation).turnNumber + 1,
+                            firstToolIndex,
+                        );
                         if (tool_use) {
                             finish_reason = 'tool_use';
                             // Log warning for recoverable tool call issues — see the
