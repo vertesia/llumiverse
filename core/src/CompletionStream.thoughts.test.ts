@@ -8,7 +8,7 @@ import type {
     ExecutionOptions,
     ModelSearchPayload,
 } from '@llumiverse/common';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { DefaultCompletionStream, FallbackCompletionStream } from './CompletionStream.js';
 import { AbstractDriver } from './Driver.js';
 
@@ -173,4 +173,44 @@ describe('DefaultCompletionStream thoughts', () => {
         expect(visible).toEqual(['[Video: gs://bucket/one.mp4][Video: gs://bucket/two.mp4]']);
         expect(stream.completion?.result).toHaveLength(2);
     });
+});
+
+describe('non-audio completion isolation', () => {
+    it.each(['blocking', 'streaming', 'fallback'] as const)(
+        'preserves structured data and tool arguments through %s execution',
+        async (mode) => {
+            const data = { audio: { data: 'business value' }, inlineData: { mimeType: 123 } };
+            const completion: Completion = {
+                result: [{ type: 'json', value: data }],
+                tool_use: [{ id: 'call-1', tool_name: 'save_record', tool_input: data }],
+                finish_reason: 'tool_use',
+            };
+            const driver = new ThoughtsStreamDriver({});
+            vi.spyOn(driver, 'requestTextCompletion').mockResolvedValue(completion);
+            vi.spyOn(driver, 'requestTextCompletionStream').mockResolvedValue({
+                async *[Symbol.asyncIterator]() {
+                    yield completion;
+                },
+            });
+            try {
+                if (mode === 'blocking') {
+                    const result = await driver._execute('test', { model: 'test' });
+                    expect(result.result).toEqual(completion.result);
+                    expect(result.tool_use).toEqual(completion.tool_use);
+                } else {
+                    const stream =
+                        mode === 'streaming'
+                            ? new DefaultCompletionStream(driver, 'test', { model: 'test' })
+                            : new FallbackCompletionStream(driver, 'test', { model: 'test' });
+                    for await (const _chunk of stream) {
+                        /* consume */
+                    }
+                    expect(stream.completion?.result).toEqual(completion.result);
+                    expect(stream.completion?.tool_use).toEqual(completion.tool_use);
+                }
+            } finally {
+                driver.destroy();
+            }
+        },
+    );
 });

@@ -66,7 +66,7 @@ import { transformAsyncIterator } from '@llumiverse/core/async';
 import { AbstractDriver } from '@llumiverse/core/driver';
 import { formatNovaPrompt, type NovaMessagesPrompt } from '@llumiverse/core/formatters';
 import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
-import { LRUCache } from 'mnemonist';
+import { LRUCache } from 'lru-cache';
 import { logClaudeTruncation } from '../shared/claude-stop-reason.js';
 import { resolveClaudeThinking } from '../shared/claude-thinking.js';
 import { truncateBinaryForDebug, uint8ArrayToBase64ForDebug } from '../shared/debug-prompt.js';
@@ -77,6 +77,7 @@ import {
     converseJSONprefill,
     converseSystemToMessages,
     formatConversePrompt,
+    relocateConverseToolImages,
     shouldIncludeSchemaInConversePrompt,
     supportsConverseOutputConfig,
 } from './converse.js';
@@ -85,7 +86,7 @@ import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from '.
 import { forceUploadFile } from './s3.js';
 import { formatTwelvelabsPegasusPrompt, type TwelvelabsPegasusRequest } from './twelvelabs.js';
 
-const supportStreamingCache = new LRUCache<string, boolean>(4096);
+const supportStreamingCache = new LRUCache<string, boolean>({ max: 4096 });
 
 type AwsSdkError = {
     name?: string;
@@ -1068,6 +1069,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     case 'image':
                         // Skip images in conversation - they're in the result
                         return '';
+                    case 'audio':
                     case 'video':
                         return '';
                     default: {
@@ -1483,8 +1485,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 //Support no additional fields.
             }
         } else if (options.model.includes('ai21')) {
-            //Jamba models support no additional options
-            //Jurassic 2 models do.
+            // Jurassic uses nested penalty scales; Jamba accepts the numeric fields directly.
             if (options.model.includes('j2')) {
                 additionalField = {
                     presencePenalty: { scale: model_options.presence_penalty },
@@ -1496,6 +1497,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     prompt.system = undefined;
                     prompt.messages = converseConcatMessages(prompt.messages);
                 }
+            } else if (options.model.includes('jamba')) {
+                additionalField = {
+                    presence_penalty: model_options.presence_penalty,
+                    frequency_penalty: model_options.frequency_penalty,
+                };
             }
         } else if (options.model.includes('cohere.command')) {
             // If last message is "```json", remove it.
@@ -1585,7 +1591,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
 
         if (prompt.messages) {
-            request.messages = prompt.messages;
+            request.messages = relocateConverseToolImages(prompt.messages, options.model);
         }
 
         if (prompt.system) {
@@ -1907,7 +1913,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             'zai',
         ];
         const unsupportedModelsByPublisher = {
-            amazon: ['nova-reel', 'nova-sonic', 'titan-image-generator', 'rerank'],
+            amazon: ['nova-reel', 'nova-sonic', 'nova-2-sonic', 'titan-image-generator', 'rerank'],
             anthropic: [],
             cohere: ['rerank', 'embed'],
             ai21: [],

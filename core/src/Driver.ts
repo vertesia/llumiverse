@@ -34,6 +34,7 @@ import {
     FallbackCompletionStream,
     leaseCompletionStream,
 } from './CompletionStream.js';
+import { stripAudioFromCompletion, stripAudioPayloads } from './conversation-utils.js';
 import { formatTextPrompt } from './formatters/index.js';
 import {
     createAgentBackedFetch,
@@ -368,7 +369,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
                     }
 
                     const execution_time = Date.now() - start;
-                    return { ...result, prompt, execution_time };
+                    return stripAudioFromCompletion({ ...result, prompt, execution_time });
                 } catch (error) {
                     // Don't wrap if already a LlumiverseError
                     if (LlumiverseError.isLlumiverseError(error)) {
@@ -378,7 +379,12 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
                     this.logger.error(
                         {
                             err: error,
-                            data: { provider: this.provider, model: options.model, operation: 'execute', prompt },
+                            data: {
+                                provider: this.provider,
+                                model: options.model,
+                                operation: 'execute',
+                                prompt: stripAudioPayloads(prompt),
+                            },
                         },
                         `Error during execution in provider ${this.provider}:`,
                     );
@@ -654,3 +660,5 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         }
     }
 }
+
+export { FallbackCompletionStream } from './CompletionStream.js';

@@ -105,6 +105,10 @@ describe('central model directory', () => {
         expect(profile.capabilities.tool_support).toBe(false);
     });
 
+    it('advertises compatible gpt-audio output through the implemented audio path', () => {
+        expect(getModelCapabilities('gpt-audio', Providers.openai_compatible).output.audio).toBe(true);
+    });
+
     it('classifies listing aliases and provider-qualified IDs without losing family semantics', () => {
         expect(resolveModelProfile('~openai/gpt-latest', Providers.openai_compatible).capabilities).toMatchObject({
             input: { text: true, image: true },
@@ -261,7 +265,7 @@ describe('central model directory', () => {
             capabilities: {
                 input: { text: true, audio: true },
                 output: { text: true, audio: true },
-                tool_support: true,
+                tool_support: false,
             },
         });
         expect(resolveModelProfile('gpt-realtime-3', Providers.openai)).toMatchObject({
@@ -278,6 +282,19 @@ describe('central model directory', () => {
                 output: { text: true, audio: true },
                 tool_support: false,
             },
+        });
+    });
+
+    it('keeps Vertex file transcription and speech modalities distinct from generic Gemini', () => {
+        expect(getModelCapabilities('gemini-3.5-transcribe-preview', Providers.vertexai)).toMatchObject({
+            input: { audio: true, text: false, image: false, video: false },
+            output: { text: true, audio: false },
+            tool_support: false,
+        });
+        expect(getModelCapabilities('gemini-3.1-flash-tts-preview', Providers.vertexai)).toMatchObject({
+            input: { text: true, audio: false, image: false, video: false },
+            output: { audio: true, text: false },
+            tool_support: false,
         });
     });
 

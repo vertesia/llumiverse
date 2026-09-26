@@ -1,6 +1,6 @@
 {
     "name": "@llumiverse/drivers",
-    "version": "1.6.0-dev",
+    "version": "1.6.0-dev.20260923.085100Z",
     "type": "module",
     "description": "LLM driver implementations. Currently supported are: openai, huggingface, bedrock, replicate.",
     "files": [
@@ -10,6 +10,10 @@
     "main": "./lib/index.js",
     "types": "./lib/index.d.ts",
     "exports": {
+        "./embedding-batch": {
+            "types": "./lib/embedding-batch.d.ts",
+            "default": "./lib/embedding-batch.js"
+        },
         ".": {
             "types": "./lib/index.d.ts",
             "default": "./lib/index.js"
@@ -41,6 +45,10 @@
         "./vertexai": {
             "types": "./lib/vertexai/index.d.ts",
             "default": "./lib/vertexai/index.js"
+        },
+        "./vertexai/embedding-batch": {
+            "types": "./lib/vertexai/embeddings/batch.d.ts",
+            "default": "./lib/vertexai/embeddings/batch.js"
         },
         "./groq": {
             "types": "./lib/groq/index.d.ts",
@@ -80,7 +88,8 @@
         "test": "vitest run --retry 3 --passWithNoTests",
         "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
         "build": "pnpm exec rimraf ./lib ./tsconfig.tsbuildinfo && tsc",
-        "clean": "rimraf ./lib tsconfig.tsbuildinfo"
+        "clean": "rimraf ./lib tsconfig.tsbuildinfo",
+        "test:unit": "vitest run --exclude '**/*.live.test.ts'"
     },
     "author": "Llumiverse",
     "license": "Apache-2.0",
@@ -113,40 +122,40 @@
         "dotenv": "^17.4.2",
         "rimraf": "^6.1.3",
         "typescript": "catalog:",
-        "vitest": "^4.1.11"
+        "vitest": "catalog:"
     },
     "dependencies": {
-        "@anthropic-ai/bedrock-sdk": "^0.33.3",
-        "@anthropic-ai/sdk": "^0.123.0",
-        "@anthropic-ai/vertex-sdk": "^0.19.6",
-        "@aws-sdk/client-bedrock": "^3.1125.0",
-        "@aws-sdk/client-bedrock-runtime": "^3.1125.0",
-        "@aws-sdk/client-s3": "^3.1125.0",
-        "@aws-sdk/credential-providers": "^3.1125.0",
-        "@aws-sdk/lib-storage": "^3.1125.0",
+        "@anthropic-ai/bedrock-sdk": "^0.33.6",
+        "@anthropic-ai/sdk": "^0.126.0",
+        "@anthropic-ai/vertex-sdk": "^0.19.9",
+        "@aws-sdk/client-bedrock": "^3.1134.0",
+        "@aws-sdk/client-bedrock-runtime": "^3.1134.0",
+        "@aws-sdk/client-s3": "^3.1134.0",
+        "@aws-sdk/credential-providers": "^3.1134.0",
+        "@aws-sdk/lib-storage": "^3.1134.0",
         "@aws-sdk/types": "^3.974.5",
         "@aws/bedrock-token-generator": "^1.1.0",
         "@azure-rest/ai-inference": "1.0.0-beta.6",
-        "@azure/ai-projects": "^2.5.0",
+        "@azure/ai-projects": "^2.6.0",
         "@azure/core-auth": "^1.11.0",
         "@azure/core-sse": "^2.4.0",
-        "@azure/identity": "^4.13.2",
+        "@azure/identity": "^4.13.3",
         "@azure/openai": "^2.0.0",
-        "@google-cloud/aiplatform": "^7.2.0",
-        "@google/genai": "^2.21.0",
-        "@huggingface/inference": "^4.13.28",
+        "@google-cloud/aiplatform": "^7.4.0",
+        "@google/genai": "^2.23.0",
+        "@huggingface/inference": "^4.13.30",
         "@llumiverse/common": "workspace:*",
         "@llumiverse/core": "workspace:*",
-        "@mistralai/mistralai": "^2.6.4",
-        "@openrouter/sdk": "^1.2.93",
-        "@vertesia/api-fetch-client": "^1.4.1",
+        "@mistralai/mistralai": "^2.7.0",
+        "@openrouter/sdk": "^1.2.128",
+        "@vertesia/api-fetch-client": "^1.5.0",
         "eventsource": "^5.1.1",
         "google-auth-library": "catalog:",
         "groq-sdk": "^1.6.0",
-        "mnemonist": "^0.40.4",
+        "lru-cache": "^11.5.2",
         "node-web-stream-adapters": "^0.2.1",
-        "openai": "^6.49.0",
+        "openai": "^7.17.0",
         "replicate": "^1.4.0",
-        "together-ai": "^0.50.0"
+        "together-ai": "^0.53.0"
     }
 }

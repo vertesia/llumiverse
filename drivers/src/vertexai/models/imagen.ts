@@ -1,4 +1,6 @@
 // Import the helper module for converting arbitrary protobuf.Value objects
+
+import type { MaskReferenceConfig } from '@google/genai';
 import { helpers, type protos } from '@google-cloud/aiplatform';
 import {
     type AIModel,
@@ -54,7 +56,7 @@ interface ImagenReferenceMask extends Omit<ImagenBaseReference, 'referenceImage'
     referenceType: 'REFERENCE_TYPE_MASK';
     maskImageConfig: {
         maskMode?: ImagenMaskMode;
-        maskClasses?: number[]; //Used for MASK_MODE_SEMANTIC, based on https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/imagen-api-customization#segment-ids
+        maskClasses?: MaskReferenceConfig['segmentationClasses'];
         dilation?: number; //Recommendation depends on mode: Inpaint: 0.01, BGSwap: 0.0, Outpaint: 0.01-0.03
     };
     referenceImage?: {
@@ -123,7 +125,17 @@ function getImagenParameters(taskType: string, options: ImagenOptions) {
         sampleCount: options?.number_of_images,
         seed: options?.seed,
         safetySetting: options?.safety_setting,
-        personGeneration: options?.person_generation,
+        personGeneration: options?.person_generation === 'allow_adults' ? 'allow_adult' : options?.person_generation,
+        guidanceScale: options?.guidance_scale,
+        outputOptions:
+            options?.image_file_type !== undefined || options?.jpeg_compression_quality !== undefined
+                ? {
+                      ...(options.image_file_type !== undefined ? { mimeType: options.image_file_type } : {}),
+                      ...(options.jpeg_compression_quality !== undefined
+                          ? { compressionQuality: options.jpeg_compression_quality }
+                          : {}),
+                  }
+                : undefined,
         negativePrompt: taskType ? undefined : '', //Filled in later from the prompt
         //TODO: Add more safety and prompt rejection information
         //includeSafetyAttributes: true,
@@ -131,36 +143,13 @@ function getImagenParameters(taskType: string, options: ImagenOptions) {
     };
     switch (taskType) {
         case ImagenTaskType.EDIT_MODE_INPAINT_REMOVAL:
-            return {
-                ...commonParameters,
-                editMode: 'EDIT_MODE_INPAINT_REMOVAL',
-                editConfig: {
-                    baseSteps: options?.edit_steps,
-                },
-            };
         case ImagenTaskType.EDIT_MODE_INPAINT_INSERTION:
-            return {
-                ...commonParameters,
-                editMode: 'EDIT_MODE_INPAINT_INSERTION',
-                editConfig: {
-                    baseSteps: options?.edit_steps,
-                },
-            };
         case ImagenTaskType.EDIT_MODE_BGSWAP:
-            return {
-                ...commonParameters,
-                editMode: 'EDIT_MODE_BGSWAP',
-                editConfig: {
-                    baseSteps: options?.edit_steps,
-                },
-            };
         case ImagenTaskType.EDIT_MODE_OUTPAINT:
             return {
                 ...commonParameters,
-                editMode: 'EDIT_MODE_OUTPAINT',
-                editConfig: {
-                    baseSteps: options?.edit_steps,
-                },
+                editMode: taskType,
+                editConfig: options?.edit_steps !== undefined ? { baseSteps: options.edit_steps } : undefined,
             };
         case ImagenTaskType.TEXT_IMAGE:
             return {
@@ -215,8 +204,15 @@ export class ImagenModelDefinition {
         const safety: string[] = [];
         const negative: string[] = [];
 
-        const mask_mode = (options.model_options as ImagenOptions)?.mask_mode;
         const imagenOptions = options.model_options as ImagenOptions;
+        const mask_mode = imagenOptions?.mask_mode ?? ImagenMaskMode.MASK_MODE_USER_PROVIDED;
+        const maskImageConfig: ImagenReferenceMask['maskImageConfig'] = {
+            maskMode: mask_mode,
+            ...(mask_mode === ImagenMaskMode.MASK_MODE_SEMANTIC && imagenOptions?.mask_class !== undefined
+                ? { maskClasses: imagenOptions.mask_class }
+                : {}),
+            ...(imagenOptions?.mask_dilation !== undefined ? { dilation: imagenOptions.mask_dilation } : {}),
+        };
 
         for (const msg of segments) {
             if (msg.role === PromptRole.safety) {
@@ -256,10 +252,7 @@ export class ImagenModelDefinition {
                                     prompt.referenceImages.push({
                                         referenceType: 'REFERENCE_TYPE_MASK',
                                         referenceId: refId,
-                                        maskImageConfig: {
-                                            maskMode: mask_mode,
-                                            dilation: imagenOptions?.mask_dilation,
-                                        },
+                                        maskImageConfig,
                                     });
                                 }
                             } else if (
@@ -276,10 +269,7 @@ export class ImagenModelDefinition {
                                             bytesBase64Encoded: await readStreamAsBase64(await img.getStream()),
                                         },
                                         controlImageConfig: {
-                                            controlType:
-                                                imagenOptions?.controlType === 'CONTROL_TYPE_FACE_MESH'
-                                                    ? 'CONTROL_TYPE_FACE_MESH'
-                                                    : 'CONTROL_TYPE_CANNY',
+                                            controlType: imagenOptions?.controlType ?? 'CONTROL_TYPE_CANNY',
                                             enableControlImageComputation: imagenOptions?.controlImageComputation,
                                         },
                                     });
@@ -324,10 +314,7 @@ export class ImagenModelDefinition {
                                         bytesBase64Encoded: await readStreamAsBase64(await img.getStream()),
                                     },
                                     controlImageConfig: {
-                                        controlType:
-                                            imagenOptions?.controlType === 'CONTROL_TYPE_FACE_MESH'
-                                                ? 'CONTROL_TYPE_FACE_MESH'
-                                                : 'CONTROL_TYPE_CANNY',
+                                        controlType: imagenOptions?.controlType ?? 'CONTROL_TYPE_CANNY',
                                         enableControlImageComputation: imagenOptions?.controlImageComputation,
                                     },
                                 });
@@ -353,10 +340,7 @@ export class ImagenModelDefinition {
                                 referenceImage: {
                                     bytesBase64Encoded: await readStreamAsBase64(await img.getStream()),
                                 },
-                                maskImageConfig: {
-                                    maskMode: mask_mode,
-                                    dilation: imagenOptions?.mask_dilation,
-                                },
+                                maskImageConfig,
                             });
                         }
                     }

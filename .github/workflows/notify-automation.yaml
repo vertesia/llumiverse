@@ -1,0 +1,98 @@
+name: Notify blocked automation
+
+on:
+  # zizmor: ignore[dangerous-triggers] Reads PR metadata only; never checks out or executes PR code.
+  pull_request_target:
+    types: [opened, converted_to_draft]
+  # zizmor: ignore[dangerous-triggers] Reads failed run metadata; checkout is always the default branch.
+  workflow_run:
+    workflows: ["*"]
+    types: [completed]
+    branches: ["backport-*", "sync-composableai-*", "sync-llumiverse-*", "main", "preview", "release/**"]
+  workflow_call:
+    outputs:
+      notification_requested:
+        description: A recipient was resolved; callers must also require workflow success.
+        value: ${{ jobs.resolve.outputs.login != '' }}
+    inputs:
+      branch:
+        type: string
+        default: ""
+      sha:
+        type: string
+        default: ""
+      reason:
+        type: string
+        required: true
+      source_repository:
+        type: string
+        default: ""
+      source_sha:
+        type: string
+        default: ""
+
+concurrency:
+  group: automation-notification-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read # Checkout trusted helpers and inspect source commits.
+  pull-requests: read # Resolve the original contributor from PR metadata.
+  actions: read # Ignore failures superseded by a newer run or attempt.
+
+jobs:
+  resolve:
+    name: Resolve notification recipient
+    if: >-
+      inputs.reason != '' ||
+      (github.event_name == 'pull_request_target' && github.event.pull_request.draft &&
+       startsWith(github.event.pull_request.head.ref, 'backport-') &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(fromJSON('["vertesia-release-bot[bot]","app/vertesia-release-bot"]'), github.event.pull_request.user.login)) ||
+      (github.event_name == 'workflow_run' && contains(fromJSON('["pull_request","push"]'), github.event.workflow_run.event) &&
+       contains(fromJSON('["failure","timed_out","cancelled","action_required","startup_failure"]'), github.event.workflow_run.conclusion))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      login: ${{ steps.notification.outputs.login }}
+      message: ${{ steps.notification.outputs.message }}
+    steps:
+      - name: Checkout trusted notification code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          submodules: false
+      - name: Resolve source author and failure
+        id: notification
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTIFICATION_INPUTS: ${{ toJSON(inputs) }}
+        run: node .github/bin/automation-notification.mjs
+
+  notify:
+    name: Notify contributor
+    needs: resolve
+    if: needs.resolve.outputs.login != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: submodule-sync
+    steps:
+      - name: Generate Studio dispatch token
+        id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.APP_VERTESIA_SUBMODULE_SYNC_CLIENT_ID }}
+          private-key: ${{ secrets.APP_VERTESIA_SUBMODULE_SYNC_PEM }}
+          owner: ${{ github.repository_owner }}
+          repositories: studio
+          permission-contents: write
+      - name: Request Slack notification through private Studio relay
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          LOGIN: ${{ needs.resolve.outputs.login }}
+          MESSAGE: ${{ fromJSON(needs.resolve.outputs.message) }}
+        run: |
+          jq -nc --arg login "$LOGIN" --arg message "$MESSAGE" \
+            '{event_type: "developer-notification", client_payload: {github_login: $login, message: $message}}' |
+            gh api repos/vertesia/studio/dispatches --method POST --input -

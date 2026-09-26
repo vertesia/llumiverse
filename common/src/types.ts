@@ -376,7 +376,7 @@ export class LlumiverseError extends Error {
 // ============== Result Types ===============
 
 export interface BaseResult {
-    type: 'text' | 'thoughts' | 'json' | 'image' | 'video';
+    type: 'text' | 'thoughts' | 'json' | 'image' | 'video' | 'audio';
     value: unknown;
 }
 
@@ -401,6 +401,19 @@ export interface ImageResult extends BaseResult {
     value: string; // base64 data url or real url
 }
 
+/** File-based audio. value is a durable object URI, never inline bytes or a signed download URL. */
+export interface AudioResult extends BaseResult {
+    type: 'audio';
+    value: string;
+    mime_type: string;
+    container?: string;
+    codec?: string;
+    sample_rate?: number;
+    channels?: number;
+    sample_encoding?: string;
+    byte_order?: 'little' | 'big';
+}
+
 export interface VideoResult extends BaseResult {
     type: 'video';
     value: string;
@@ -409,7 +422,7 @@ export interface VideoResult extends BaseResult {
 /**
  * @discriminator type
  */
-export type CompletionResult = TextResult | ThoughtsResult | JsonResult | ImageResult | VideoResult;
+export type CompletionResult = TextResult | ThoughtsResult | JsonResult | ImageResult | VideoResult | AudioResult;
 
 //Internal structure used in driver implementation.
 export interface CompletionChunkObject {
@@ -680,6 +693,12 @@ export interface ExecutionOptions extends ExecutionOptionsBase {
      * absent from StatelessExecutionOptions so API callers cannot select an arbitrary bucket.
      */
     output_storage_uri?: string;
+    /** Runtime-only sink. Must consume the complete file and return a durable object URI before resolving. */
+    store_audio?: (
+        stream: ReadableStream<Uint8Array>,
+        metadata: Omit<AudioResult, 'type' | 'value'>,
+        signal?: AbortSignal,
+    ) => Promise<string>;
     /**
      * Available tools for the request
      */
@@ -735,6 +754,7 @@ export enum SharedOptions {
     frequency_penalty = 'frequency_penalty',
     stop_sequence = 'stop_sequence',
     effort = 'effort',
+    reasoning_context = 'reasoning_context',
 
     //Image
     seed = 'seed',
@@ -746,6 +766,7 @@ export enum OptionType {
     enum = 'enum',
     boolean = 'boolean',
     string_list = 'string_list',
+    numeric_list = 'numeric_list',
     json_object = 'json_object',
 }
 
@@ -763,15 +784,16 @@ export type ReasoningEffort = z.infer<typeof ReasoningEffortSchema>;
 // own.
 //
 // No `@discriminator` tag: the scanner short-circuits this alias to the published `ModelOptions`
-// component rather than deriving it, and that component already carries the discriminator the
-// schema's `discriminatedUnion` produced.
+// component rather than deriving it. Its optional family IDs deliberately use anyOf,
+// since untagged options may satisfy more than one provider schema.
 export type ModelOptions = z.infer<typeof ModelOptionsSchema>;
 
 // ============== Option Info ===============
 
 export interface ModelOptionsInfo {
     options: ModelOptionInfoItem[];
-    _option_id: string; //Should follow same ids as ModelOptions
+    // Adding a factory ID requires registering its schema in ModelOptionsSchema first.
+    _option_id: NonNullable<ModelOptions['_option_id']>;
 }
 
 export type ModelOptionInfoItem =
@@ -779,6 +801,7 @@ export type ModelOptionInfoItem =
     | EnumOptionInfo
     | BooleanOptionInfo
     | StringListOptionInfo
+    | NumericListOptionInfo
     | JSONObjectOptionInfo;
 interface OptionInfoPrototype {
     type: OptionType;
@@ -817,6 +840,12 @@ export interface StringListOptionInfo extends OptionInfoPrototype {
     type: OptionType.string_list;
     value?: string[];
     default?: string[];
+}
+
+export interface NumericListOptionInfo extends OptionInfoPrototype {
+    type: OptionType.numeric_list;
+    value?: number[];
+    default?: number[];
 }
 
 export interface JSONObjectOptionInfo extends OptionInfoPrototype {

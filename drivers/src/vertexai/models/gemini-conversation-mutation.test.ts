@@ -814,6 +814,58 @@ describe('GeminiModelDefinition - no conversation mutation', () => {
         expect(originalContents[1].parts[0]).toHaveProperty('functionResponse');
     });
 
+    it('normalizes the transcription model finish reason', async () => {
+        const modelDef = new GeminiModelDefinition('gemini-4-transcribe');
+        const driver = makeDriver({
+            generateContent: async () => ({
+                candidates: [
+                    {
+                        finishReason: FinishReason.STOP,
+                        content: { parts: [{ audioTranscription: { text: 'recognized words' } }] },
+                    },
+                ],
+            }),
+        });
+        const prompt = {
+            contents: [{ role: 'user', parts: [{ text: 'Transcribe this recording.' }] }],
+            system: undefined,
+        } as unknown as GenerateContentPrompt;
+
+        const completion = await modelDef.requestTextCompletion(driver, prompt, {
+            model: 'publishers/google/models/gemini-4-transcribe',
+        });
+
+        expect(completion.finish_reason).toBe('stop');
+    });
+
+    it('normalizes the speech synthesis model finish reason', async () => {
+        const modelDef = new GeminiModelDefinition('gemini-4-tts');
+        const driver = makeDriver({
+            generateContent: async () => ({
+                candidates: [
+                    {
+                        finishReason: FinishReason.STOP,
+                        content: { parts: [{ inlineData: { mimeType: 'audio/pcm', data: 'AQIDBA==' } }] },
+                    },
+                ],
+            }),
+        });
+        const prompt = {
+            contents: [{ role: 'user', parts: [{ text: 'Say hello.' }] }],
+            system: undefined,
+        } as unknown as GenerateContentPrompt;
+
+        const completion = await modelDef.requestTextCompletion(driver, prompt, {
+            model: 'publishers/google/models/gemini-4-tts',
+            store_audio: async (stream) => {
+                await new Response(stream).arrayBuffer();
+                return 'gs://bucket/speech.pcm';
+            },
+        });
+
+        expect(completion.finish_reason).toBe('stop');
+    });
+
     it('requestTextCompletionStream: does not mutate prompt.contents when tools=[] and conversation has function parts', async () => {
         const modelDef = new GeminiModelDefinition('gemini-2.0-flash');
         const originalContents = makeContentsWithFunctionParts();

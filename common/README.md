@@ -1,3 +1,53 @@
-# Llumiverse - Universal LLM Connectors for Node.js
+# Llumiverse common
 
- This package contains the types / enums shared between core and drivers and clients.
+Shared types, enums and model option metadata for Llumiverse clients and drivers.
+
+## Adding or changing model options
+
+`src/schemas/model-options.ts` is the canonical wire contract. Keep its
+`ModelOptionsSchema` union updated whenever a factory emits a new `_option_id`.
+Defining or exporting a branch schema alone does not register it in the union.
+Payloads may omit `_option_id`; factories must still return a registered ID.
+Use `z.union`, which emits `anyOf`: untagged payloads can match multiple families.
+Do not synthesize an OpenAPI discriminator or promote this to `oneOf`, since that
+would require the ID or reject valid overlapping objects. Supplied IDs and other
+fields remain validated; parsing never invents an ID or strips unknown fields.
+
+1. Add a `z.strictObject` schema with a unique, optional `_option_id` literal and a
+   stable `.meta({ id: 'ProviderOptions' })` component name. Append it to the union
+   to preserve existing generated-client branch order.
+2. Derive the public option type with `z.infer<typeof ProviderOptionsSchema>` using
+   type-only imports. Keep runtime schemas on the `/schemas` subpath.
+3. Return `ModelOptionsInfo` from option metadata factories and route through
+   `getOptions()`. Its required `_option_id` is `NonNullable<ModelOptions['_option_id']>`: an unregistered
+   ID fails compilation. Do not widen it to `string` or bypass it with a cast.
+4. Add factory/routing and schema tests for representative valid options, invalid
+   values and unknown fields. Metadata may be model-dependent; the wire schema
+   must cover supported fields without imposing one model's limits on all models.
+   Extend `src/options/options-contract.test.ts` with representative routing boundaries.
+   It checks defaults, values, enum choices, field types, and conditional controls
+   against the selected schema, and derives required family coverage from the union.
+   Use `numeric_list` for numeric arrays, not `string_list`. The provider switch is
+   exhaustive: select a factory or explicitly choose the generic fallback for every
+   new provider. Retained legacy schemas need a documented compatibility test.
+   These checks establish internal consistency, not provider correctness. Verify
+   field types, enum spellings, and wire names against the installed provider SDK
+   or official API documentation. Add driver tests at the outbound SDK request
+   boundary: an option accepted by the schema can still be dropped or mistranslated
+   by the driver. Keep legacy aliases at the public boundary and normalize them
+   only when constructing the provider request.
+5. Run `pnpm lint`, `pnpm build`, `pnpm typecheck:test`, and `pnpm test` in `common`,
+   then `pnpm build` at the repository root. Consumers publishing OpenAPI must
+   regenerate their schema artifacts and verify optional IDs, union members, and request
+   validation. Publish the updated common package before consumers require it.
+
+Tests derive component membership from the union rather than repeating an ID list.
+That checks emission, not factory completeness; the typed factory return contract
+provides the independent completeness check. The negative compile-time regression
+assertion must run through `typecheck:test`, since Vitest does not typecheck.
+
+Retain this schema union and typed factory boundary for now. A combined provider
+registry would add runtime coupling to Zod and still needs to represent factories
+that select several option sets by model. Reconsider it if routing and metadata
+registration develop further independent lists; any registry must preserve the
+schema subpath boundary and many-to-many provider/option relationships.

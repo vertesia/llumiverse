@@ -41,8 +41,9 @@ describe('OpenAI Responses streaming tool ids', () => {
                 type: 'response.function_call_arguments.done',
                 output_index: 0,
                 item_id: 'fc_response_item',
-                name: 'plan',
-            },
+                arguments: '{"plan":[]}',
+                sequence_number: 3,
+            } satisfies OpenAI.Responses.ResponseFunctionCallArgumentsDoneEvent,
         ] as ResponseStreamEvent[];
 
         const chunks = [];
@@ -52,7 +53,8 @@ describe('OpenAI Responses streaming tool ids', () => {
 
         const tools = chunks.flatMap((chunk) => chunk.tool_use ?? []);
         expect(tools).toHaveLength(3);
-        expect(tools[0]).toMatchObject({ id: 'tool_0', tool_name: 'plan' });
+        expect(tools.every((tool) => tool.tool_name === 'plan')).toBe(true);
+        expect(tools.map((tool) => tool.tool_input).join('')).toBe('{"plan":[]}');
         expect(tools.map((tool) => (tool as unknown as Tree as Tree)._actual_id)).toEqual([
             'call_plan_tool',
             'call_plan_tool',
