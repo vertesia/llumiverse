@@ -17,6 +17,7 @@ import {
     type InvokeModelCommandOutput,
     type Message,
     type ServiceTierType,
+    type TokenUsage,
     type Tool,
     type ToolResultContentBlock,
 } from '@aws-sdk/client-bedrock-runtime';
@@ -121,6 +122,14 @@ enum BedrockModelType {
     InferenceProfile = 'inference-profile',
     CustomModel = 'custom-model',
     Unknown = 'unknown',
+}
+
+/** Of the cache-write tokens, those written with a one-hour lifetime (the rest used the five-minute default). */
+function oneHourCacheWriteTokens(usage: TokenUsage | undefined): number | undefined {
+    const tokens = usage?.cacheDetails
+        ?.filter((detail) => detail.ttl === '1h')
+        .reduce((sum, detail) => sum + (detail.inputTokens ?? 0), 0);
+    return tokens || undefined;
 }
 
 function converseFinishReason(reason: string | undefined) {
@@ -809,6 +818,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 total: result.usage?.totalTokens,
                 prompt_cached: result.usage?.cacheReadInputTokens ?? undefined,
                 prompt_cache_write: result.usage?.cacheWriteInputTokens ?? undefined,
+                prompt_cache_write_1h: oneHourCacheWriteTokens(result.usage),
             },
             service_tier: result.serviceTier?.type,
             finish_reason: converseFinishReason(result.stopReason),
@@ -925,6 +935,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 total: result.metadata.usage?.totalTokens,
                 prompt_cached: result.metadata.usage?.cacheReadInputTokens ?? undefined,
                 prompt_cache_write: result.metadata.usage?.cacheWriteInputTokens ?? undefined,
+                prompt_cache_write_1h: oneHourCacheWriteTokens(result.metadata.usage),
             };
         }
 

@@ -41,7 +41,7 @@ import { executeOpenAIAudioRequest, openAIAudioTask, openAIInputAudioPart } from
 import { getOpenAIExtraBody, mergeOpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAISchema, limitedSchemaFormat } from './schema.js';
-import { mapOpenAIChatCompletionsUsage } from './usage.js';
+import { type ChatCompletionsUsage, mapOpenAIChatCompletionsUsage } from './usage.js';
 
 type OpenAIChatServiceTier = OpenAI.Chat.ChatCompletionCreateParams['service_tier'];
 
@@ -96,7 +96,7 @@ export type OpenAIChatCompletionsPayload = Omit<
     extra_body?: Record<string, unknown>;
 };
 
-type OpenAIChatCompletionsUsage = NonNullable<OpenAI.Chat.ChatCompletion['usage']>;
+type OpenAIChatCompletionsUsage = ChatCompletionsUsage;
 type OpenAIChatCompletionsResponseMessage = Omit<
     Partial<OpenAI.Chat.ChatCompletionMessage>,
     'content' | 'tool_calls'

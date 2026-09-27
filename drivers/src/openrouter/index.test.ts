@@ -54,7 +54,14 @@ describe('OpenRouterDriver native SDK transport', () => {
                     },
                 },
             ],
-            usage: { promptTokens: 4, completionTokens: 3, totalTokens: 7 },
+            usage: {
+                promptTokens: 4,
+                completionTokens: 3,
+                totalTokens: 7,
+                promptTokensDetails: { cachedTokens: 1, cacheWriteTokens: 2 },
+                cost: 0.0012,
+                isByok: false,
+            },
         };
         const send = vi.fn(async (_request: unknown, _options?: unknown) => response);
         setService(driver, { chat: { send } });
@@ -139,7 +146,15 @@ describe('OpenRouterDriver native SDK transport', () => {
         expect(requestOptions).toEqual({ timeoutMs: 1_800_000 });
         expect(completion).toMatchObject({
             finish_reason: 'tool_use',
-            token_usage: { prompt: 4, result: 3, total: 7 },
+            token_usage: {
+                prompt: 4,
+                prompt_new: 1,
+                prompt_cached: 1,
+                prompt_cache_write: 2,
+                provider_cost_usd: 0.0012,
+                result: 3,
+                total: 7,
+            },
             tool_use: [{ id: 'call_1', tool_name: 'lookup', tool_input: { city: 'Paris' } }],
             original_response: response,
         });
@@ -187,7 +202,7 @@ describe('OpenRouterDriver native SDK transport', () => {
                         },
                     },
                 ],
-                usage: { promptTokens: 2, completionTokens: 1, totalTokens: 3 },
+                usage: { promptTokens: 2, completionTokens: 1, totalTokens: 3, cost: 0.0004, isByok: true },
             },
         ];
         const nativeStream = {

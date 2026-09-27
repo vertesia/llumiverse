@@ -437,14 +437,24 @@ async function* normalizeOpenRouterStream(
     }
 }
 
-function normalizeOpenRouterChatUsage(usage: ChatUsage | undefined): OpenAIChatCompletionsResponse['usage'] {
-    return usage
-        ? {
-              prompt_tokens: usage.promptTokens,
-              completion_tokens: usage.completionTokens,
-              total_tokens: usage.totalTokens,
-          }
-        : undefined;
+function normalizeOpenRouterChatUsage(usage: ChatUsage | undefined | null): OpenAIChatCompletionsResponse['usage'] {
+    if (!usage) return undefined;
+    const details = usage.promptTokensDetails;
+    return {
+        prompt_tokens: usage.promptTokens,
+        completion_tokens: usage.completionTokens,
+        total_tokens: usage.totalTokens,
+        ...(details
+            ? {
+                  prompt_tokens_details: {
+                      cached_tokens: details.cachedTokens,
+                      cache_write_tokens: details.cacheWriteTokens,
+                  },
+              }
+            : {}),
+        ...(typeof usage.cost === 'number' ? { cost: usage.cost } : {}),
+        ...(usage.isByok !== undefined ? { is_byok: usage.isByok } : {}),
+    };
 }
 
 function fromOpenRouterContent(

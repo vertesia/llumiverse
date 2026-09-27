@@ -469,6 +469,17 @@ describe('formatClaudePrompt', () => {
         });
     });
 
+    it('reports the one-hour share of cache writes', () => {
+        expect(
+            anthropicUsageToTokenUsage({
+                input_tokens: 25,
+                output_tokens: 10,
+                cache_creation_input_tokens: 50,
+                cache_creation: { ephemeral_1h_input_tokens: 30 },
+            }),
+        ).toMatchObject({ prompt_cache_write: 50, prompt_cache_write_1h: 30 });
+    });
+
     it('keeps the serialized cached conversation prefix immutable as tool turns are appended', () => {
         const largeHistoricalResult = `SOURCE:${'x'.repeat(12_000)}`;
         const historicalMessages = Array.from({ length: 14 }, (_, index) => ({

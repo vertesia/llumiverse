@@ -187,6 +187,7 @@ export interface AnthropicUsageLike {
     output_tokens: number;
     cache_read_input_tokens?: number | null;
     cache_creation_input_tokens?: number | null;
+    cache_creation?: { ephemeral_1h_input_tokens?: number | null } | null;
 }
 
 /**
@@ -256,6 +257,7 @@ export function anthropicUsageToTokenUsage(usage: AnthropicUsageLike): Execution
         total: usage.input_tokens + usage.output_tokens + cacheRead + cacheWrite,
         prompt_cached: usage.cache_read_input_tokens ?? undefined,
         prompt_cache_write: usage.cache_creation_input_tokens ?? undefined,
+        prompt_cache_write_1h: usage.cache_creation?.ephemeral_1h_input_tokens || undefined,
     };
 }
 
