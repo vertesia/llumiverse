@@ -21,7 +21,6 @@ import {
     type ToolResultContentBlock,
 } from '@aws-sdk/client-bedrock-runtime';
 import { S3Client } from '@aws-sdk/client-s3';
-import type { AwsCredentialIdentity, Provider } from '@aws-sdk/types';
 import {
     type AIModel,
     type BedrockClaudeOptions,
@@ -32,7 +31,6 @@ import {
     type CompletionResult,
     type DataSource,
     type DriverCompletionStream,
-    type DriverOptions,
     deserializeBinaryFromStorage,
     type EmbeddingsOptions,
     type EmbeddingsResult,
@@ -67,6 +65,7 @@ import { AbstractDriver } from '@llumiverse/core/driver';
 import { formatNovaPrompt, type NovaMessagesPrompt } from '@llumiverse/core/formatters';
 import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
 import { LRUCache } from 'lru-cache';
+import type { BedrockDriverOptions } from '../driver-options.js';
 import { logClaudeTruncation } from '../shared/claude-stop-reason.js';
 import { resolveClaudeThinking } from '../shared/claude-thinking.js';
 import { truncateBinaryForDebug, uint8ArrayToBase64ForDebug } from '../shared/debug-prompt.js';
@@ -85,6 +84,8 @@ import { generateBedrockEmbeddings } from './embeddings.js';
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from './nova-image-payload.js';
 import { forceUploadFile } from './s3.js';
 import { formatTwelvelabsPegasusPrompt, type TwelvelabsPegasusRequest } from './twelvelabs.js';
+
+export type { BedrockDriverOptions } from '../driver-options.js';
 
 const supportStreamingCache = new LRUCache<string, boolean>({ max: 4096 });
 
@@ -299,28 +300,6 @@ function withBedrockRuntimeScope<T>(iterable: AsyncIterable<T>, scope: BedrockRu
 export interface BedrockModelCapabilities {
     name: string;
     canStream: boolean;
-}
-
-export interface BedrockDriverOptions extends DriverOptions {
-    /**
-     * The AWS region
-     */
-    region: string;
-    /**
-     * The bucket name to be used for training.
-     * It will be created if does not already exist.
-     */
-    training_bucket?: string;
-
-    /**
-     * The role ARN to be used for training
-     */
-    training_role_arn?: string;
-
-    /**
-     * The credentials to use to access AWS (IAM access key + secret)
-     */
-    credentials?: AwsCredentialIdentity | Provider<AwsCredentialIdentity>;
 }
 
 //Used to get a max_token value when not specified in the model options. Claude requires it to be set.

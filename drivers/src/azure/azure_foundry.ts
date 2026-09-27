@@ -1,6 +1,6 @@
 import { AIProjectClient, type DeploymentUnion, type ModelDeployment } from '@azure/ai-projects';
 import { createSseStream, type NodeJSReadableStream } from '@azure/core-sse';
-import { DefaultAzureCredential, getBearerTokenProvider, type TokenCredential } from '@azure/identity';
+import { DefaultAzureCredential, getBearerTokenProvider } from '@azure/identity';
 import type {
     ModelClient as AzureInferenceClient,
     ChatCompletionsOutput,
@@ -34,6 +34,7 @@ import {
 } from '@llumiverse/core';
 import { AbstractDriver } from '@llumiverse/core/driver';
 import type OpenAI from 'openai';
+import type { AzureFoundryDriverOptions } from '../driver-options.js';
 import { openAIAudioTask } from '../openai/audio.js';
 import { OpenAIResponsesDriverBase } from '../openai/index.js';
 import {
@@ -53,6 +54,8 @@ import {
     formatOpenAILikeMultimodalPrompt,
 } from '../openai/openai_format.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
+
+export type { AzureFoundryDriverOptions } from '../driver-options.js';
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type SSEMessage = { data?: string };
@@ -159,17 +162,6 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
     async generateEmbeddings(_options: EmbeddingsOptions): Promise<EmbeddingsResult> {
         throw new Error('Azure Foundry embeddings are provided by the parent driver transport.');
     }
-}
-
-export interface AzureFoundryDriverOptions extends DriverOptions {
-    /**
-     * The credentials to use to access Azure AI Foundry
-     */
-    azureADTokenProvider?: TokenCredential;
-
-    endpoint?: string;
-
-    apiVersion?: string;
 }
 
 export interface AzureFoundryInferencePrompt {

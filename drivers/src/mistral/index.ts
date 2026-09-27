@@ -46,18 +46,13 @@ import {
     MistralError,
     RequestAbortedError,
 } from '@mistralai/mistralai/models/errors';
-import type {
-    OpenAIChatCompletionsDriverOptions,
-    OpenAIChatCompletionsPrompt,
-} from '../openai/openai_chat_completions.js';
+import type { MistralAIDriverOptions } from '../driver-options.js';
+import type { OpenAIChatCompletionsPrompt } from '../openai/openai_chat_completions.js';
 import { type CompatibleAPIError, OpenAICompatibleDriverBase } from '../openai/openai_compatible.js';
 
-const ENDPOINT = 'https://api.mistral.ai';
+export type { MistralAIDriverOptions } from '../driver-options.js';
 
-export interface MistralAIDriverOptions extends OpenAIChatCompletionsDriverOptions {
-    apiKey: string;
-    endpoint_url?: string;
-}
+const ENDPOINT = 'https://api.mistral.ai';
 
 export interface MistralPrompt {
     messages: ChatCompletionRequestMessage[];
