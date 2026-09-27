@@ -24,9 +24,9 @@ import type {
     ProviderPreferences,
 } from '@openrouter/sdk/models';
 import type { Input as OpenRouterEmbeddingInput } from '@openrouter/sdk/models/operations';
+import type { OpenRouterDriverOptions } from '../driver-options.js';
 import {
     OpenAIChatCompletionsDriverBase,
-    type OpenAIChatCompletionsDriverOptions,
     type OpenAIChatCompletionsPayload,
     type OpenAIChatCompletionsRequestMessage,
     type OpenAIChatCompletionsResponse,
@@ -36,13 +36,7 @@ import {
 } from '../openai/openai_chat_completions.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 
-export interface OpenRouterDriverOptions extends OpenAIChatCompletionsDriverOptions {
-    apiKey: string;
-    endpoint?: string;
-    httpReferer?: string;
-    appTitle?: string;
-    appCategories?: string;
-}
+export type { OpenRouterDriverOptions } from '../driver-options.js';
 
 /** OpenRouter transport backed by the provider's native TypeScript SDK. */
 export class OpenRouterDriver extends OpenAIChatCompletionsDriverBase<OpenRouterDriverOptions> {

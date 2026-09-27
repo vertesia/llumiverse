@@ -2,7 +2,6 @@ import {
     type AIModel,
     type Completion,
     type DriverCompletionStream,
-    type DriverOptions,
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
@@ -14,6 +13,7 @@ import {
 import { transformSSEStream } from '@llumiverse/core/async';
 import { AbstractDriver } from '@llumiverse/core/driver';
 import { FetchClient, type ServerSentEvent } from '@vertesia/api-fetch-client';
+import type { WatsonxDriverOptions } from '../driver-options.js';
 import type {
     GenerateEmbeddingPayload,
     GenerateEmbeddingResponse,
@@ -24,11 +24,7 @@ import type {
     WatsonxTextGenerationResponse,
 } from './interfaces.js';
 
-interface WatsonxDriverOptions extends DriverOptions {
-    apiKey: string;
-    projectId: string;
-    endpointUrl: string;
-}
+export type { WatsonxDriverOptions } from '../driver-options.js';
 
 const API_VERSION = '2024-03-14';
 

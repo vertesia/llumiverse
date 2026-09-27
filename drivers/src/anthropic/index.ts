@@ -4,7 +4,6 @@ import {
     type AIModel,
     type Completion,
     type DriverCompletionStream,
-    type DriverOptions,
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
@@ -18,6 +17,7 @@ import {
     Providers,
 } from '@llumiverse/core';
 import { AbstractDriver } from '@llumiverse/core/driver';
+import type { AnthropicDriverOptions } from '../driver-options.js';
 import {
     buildClaudeStreamingConversation,
     type ClaudePrompt,
@@ -28,10 +28,7 @@ import {
     streamClaudeCompletion,
 } from '../shared/claude-messages.js';
 
-export interface AnthropicDriverOptions extends DriverOptions {
-    apiKey?: string;
-    baseURL?: string;
-}
+export type { AnthropicDriverOptions } from '../driver-options.js';
 
 export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, ClaudePrompt> {
     provider = Providers.anthropic;

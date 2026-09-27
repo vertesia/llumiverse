@@ -17,6 +17,9 @@ import { EventStream } from '@llumiverse/core/async';
 import { AbstractDriver } from '@llumiverse/core/driver';
 import { EventSource } from 'eventsource';
 import Replicate, { type Model, type Prediction, type Training } from 'replicate';
+import type { ReplicateDriverOptions } from './driver-options.js';
+
+export type { ReplicateDriverOptions } from './driver-options.js';
 
 let cachedTrainableModels: AIModel[] | undefined;
 let cachedTrainableModelsTimestamp: number = 0;
@@ -60,10 +63,6 @@ function waitForPollingInterval(signal?: AbortSignal): Promise<void> {
         }, 500);
         signal?.addEventListener('abort', abort, { once: true });
     });
-}
-
-export interface ReplicateDriverOptions extends DriverOptions {
-    apiKey: string;
 }
 
 export class ReplicateDriver extends AbstractDriver<DriverOptions, string> {

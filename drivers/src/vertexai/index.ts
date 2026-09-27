@@ -6,7 +6,6 @@ import {
     type Completion,
     type CompletionResult,
     type DriverCompletionStream,
-    type DriverOptions,
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
@@ -26,7 +25,7 @@ import {
 import { AbstractDriver } from '@llumiverse/core/driver';
 import { runWithDriverHttpAgent } from '@llumiverse/core/http-agent';
 import { type FETCH_FN, FetchClient } from '@vertesia/api-fetch-client';
-import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from 'google-auth-library';
+import { type AuthClient, GoogleAuth } from 'google-auth-library';
 import {
     buildOpenAIChatCompletionsStreamingConversation,
     type OpenAIChatCompletionsPrompt,
@@ -39,11 +38,7 @@ export * from './embeddings/batch.js';
 
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
 import { formatGeminiDebugPrompt } from './models/gemini.js';
-import {
-    type GeminiContextCacheCoordinationKey,
-    type GeminiContextCacheCoordinator,
-    GeminiContextCacheManager,
-} from './models/gemini-context-cache.js';
+import { type GeminiContextCacheCoordinationKey, GeminiContextCacheManager } from './models/gemini-context-cache.js';
 import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
 import { GEMINI_OMNI_VIDEO_MODELS, isGeminiOmniVideoModel, type OmniVideoPrompt } from './models/omni-video.js';
 import { getModelDefinition, trimModelName } from './models.js';
@@ -55,27 +50,9 @@ export type {
     GeminiContextCacheEntry,
 } from './models/gemini-context-cache.js';
 
-export interface VertexAIDriverOptions extends DriverOptions {
-    project: string;
-    region: string;
-    googleAuthOptions?: GoogleAuthOptions;
-    /**
-     * Kill switch for explicit Gemini context caching (Vertex `cachedContents`). Caching is normally
-     * decided per execution — see `ExecutionOptions.prompt_cache_mode`, which defaults to caching the
-     * static prefix whenever `prompt_cache_key` is set. Setting this to `false` disables the whole
-     * path for every execution this driver runs, whatever the execution options say.
-     */
-    geminiContextCache?: boolean;
-    /**
-     * Default lifetime, in seconds, of the `cachedContents` resources this driver creates.
-     * Defaults to 1800 (30 minutes). `ExecutionOptions.prompt_cache_ttl_seconds` overrides it per call.
-     */
-    geminiContextCacheTtlSeconds?: number;
-    /** Host-supplied fleet coordinator. Llumiverse itself has no Redis dependency. */
-    geminiContextCacheCoordinator?: GeminiContextCacheCoordinator;
-    /** Host isolation scope, normally the Studio environment ID. */
-    geminiContextCacheScope?: string;
-}
+import type { VertexAIDriverOptions } from '../driver-options.js';
+
+export type { VertexAIDriverOptions } from '../driver-options.js';
 
 export interface GenerateContentPrompt {
     contents: Content[];

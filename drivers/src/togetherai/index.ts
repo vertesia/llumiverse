@@ -22,9 +22,9 @@ import type {
     CompletionCreateParamsStreaming,
 } from 'together-ai/resources/chat/completions';
 import type { Embedding, EmbeddingCreateParams } from 'together-ai/resources/embeddings';
+import type { TogetherAIDriverOptions } from '../driver-options.js';
 import {
     OpenAIChatCompletionsDriverBase,
-    type OpenAIChatCompletionsDriverOptions,
     type OpenAIChatCompletionsPayload,
     type OpenAIChatCompletionsResponse,
     type OpenAIChatCompletionsStreamResponse,
@@ -33,10 +33,7 @@ import {
 } from '../openai/openai_chat_completions.js';
 import type { CompatibleAPIError } from '../openai/openai_compatible.js';
 
-export interface TogetherAIDriverOptions extends OpenAIChatCompletionsDriverOptions {
-    apiKey: string;
-    endpoint?: string;
-}
+export type { TogetherAIDriverOptions } from '../driver-options.js';
 
 export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAIDriverOptions> {
     static readonly PROVIDER = Providers.togetherai;

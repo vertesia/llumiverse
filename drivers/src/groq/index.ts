@@ -20,9 +20,9 @@ import type {
     ChatCompletionMessageParam,
     ChatCompletionTool,
 } from 'groq-sdk/resources/chat/completions';
+import type { GroqDriverOptions } from '../driver-options.js';
 import {
     OpenAIChatCompletionsDriverBase,
-    type OpenAIChatCompletionsDriverOptions,
     type OpenAIChatCompletionsPayload,
     type OpenAIChatCompletionsPrompt,
     type OpenAIChatCompletionsResponse,
@@ -33,10 +33,7 @@ import {
 import type { CompatibleAPIError } from '../openai/openai_compatible.js';
 import { truncateDataUrlForDebug } from '../shared/debug-prompt.js';
 
-export interface GroqDriverOptions extends OpenAIChatCompletionsDriverOptions {
-    apiKey: string;
-    endpoint_url?: string;
-}
+export type { GroqDriverOptions } from '../driver-options.js';
 
 export class GroqDriver extends OpenAIChatCompletionsDriverBase<GroqDriverOptions> {
     static readonly PROVIDER = Providers.groq;
