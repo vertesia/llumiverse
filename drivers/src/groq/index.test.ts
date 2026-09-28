@@ -126,6 +126,39 @@ describe('GroqDriver shared Chat Completions transport', () => {
         expect(completion.original_response).toBe(response);
     });
 
+    it('reports the prompt tokens served from the Groq prompt cache', async () => {
+        const driver = new GroqDriver({ apiKey: 'test-key', endpoint_url: 'https://groq.example.test' });
+        const create = vi.fn(async () => ({
+            id: 'groq-2',
+            object: 'chat.completion',
+            created: 1,
+            model: 'moonshotai/kimi-k2-instruct',
+            choices: [
+                { index: 0, finish_reason: 'stop', logprobs: null, message: { role: 'assistant', content: 'ok' } },
+            ],
+            usage: {
+                prompt_tokens: 1000,
+                completion_tokens: 5,
+                total_tokens: 1005,
+                prompt_tokens_details: { cached_tokens: 800 },
+            },
+        }));
+        setGroqCreate(driver, create);
+        const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Hi' }], {
+            model: 'moonshotai/kimi-k2-instruct',
+        });
+
+        const completion = await driver.requestTextCompletion(prompt, { model: 'moonshotai/kimi-k2-instruct' });
+
+        expect(completion.token_usage).toEqual({
+            prompt: 1000,
+            prompt_cached: 800,
+            prompt_new: 200,
+            result: 5,
+            total: 1005,
+        });
+    });
+
     it('emits fragmented tool calls with the provider ID and x_groq usage', async () => {
         const driver = new GroqDriver({ apiKey: 'test-key' });
         async function* chunks() {

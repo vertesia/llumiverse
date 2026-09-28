@@ -290,6 +290,17 @@ export function supportsEffort(modelString: string): boolean {
 }
 
 /**
+ * Check if a model can run in fast mode: Opus 4.8 and later. Opus 4.7 rejects `speed: "fast"` and Opus 4.6 ignores
+ * it. Fast mode is served by the Claude API only, not by cloud platforms.
+ *
+ * @param modelString - The model identifier string
+ * @returns true if the model supports fast mode
+ */
+export function supportsClaudeFastMode(modelString: string): boolean {
+    return isClaudeVariantVersionGTE(modelString, 'opus', 4, 8);
+}
+
+/**
  * Check if a model supports the xhigh effort level.
  *
  * xhigh is available on the sampling-restricted Claude generation and Mythos Preview.

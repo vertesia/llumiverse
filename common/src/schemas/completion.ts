@@ -200,7 +200,31 @@ export const ExecutionTokenUsageSchema = z
             .number()
             .meta({ description: 'Number of input tokens written to prompt cache.' })
             .optional(),
+        prompt_cache_write_1h: z
+            .number()
+            .meta({
+                description:
+                    'Of `prompt_cache_write`, the tokens written with a one-hour cache lifetime, when the ' +
+                    'provider reports it. The remainder used the default (five-minute) lifetime.',
+            })
+            .optional(),
         prompt_new: z.number().optional(),
+        result_image: z
+            .number()
+            .meta({
+                description:
+                    'Of `result`, the tokens of generated images, when the provider reports them. Image ' +
+                    'output is priced separately from text output.',
+            })
+            .optional(),
+        provider_cost_usd: z
+            .number()
+            .meta({
+                description:
+                    'Amount the provider reported charging for this request, in USD, when the provider ' +
+                    'returns it (e.g. OpenRouter). Absent for bring-your-own-key requests.',
+            })
+            .optional(),
     })
     .meta({ id: 'ExecutionTokenUsage' });
 

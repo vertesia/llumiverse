@@ -17,6 +17,7 @@ import {
     type InvokeModelCommandOutput,
     type Message,
     type ServiceTierType,
+    type TokenUsage,
     type Tool,
     type ToolResultContentBlock,
 } from '@aws-sdk/client-bedrock-runtime';
@@ -122,6 +123,31 @@ enum BedrockModelType {
     InferenceProfile = 'inference-profile',
     CustomModel = 'custom-model',
     Unknown = 'unknown',
+}
+
+/** Of the cache-write tokens, those written with a one-hour lifetime (the rest used the five-minute default). */
+function oneHourCacheWriteTokens(usage: TokenUsage | undefined): number | undefined {
+    const tokens = usage?.cacheDetails
+        ?.filter((detail) => detail.ttl === '1h')
+        .reduce((sum, detail) => sum + (detail.inputTokens ?? 0), 0);
+    return tokens || undefined;
+}
+
+/**
+ * Converse usage as token usage. `inputTokens` already excludes cache reads and writes, so it is the new prompt
+ * tokens; `prompt` is the total, cache reads and writes included, consistent with the Vertex Claude driver.
+ */
+function converseTokenUsage(usage: TokenUsage | undefined): ExecutionTokenUsage | undefined {
+    if (!usage) return undefined;
+    return {
+        prompt_new: usage.inputTokens,
+        prompt: (usage.inputTokens ?? 0) + (usage.cacheReadInputTokens ?? 0) + (usage.cacheWriteInputTokens ?? 0),
+        result: usage.outputTokens,
+        total: usage.totalTokens,
+        prompt_cached: usage.cacheReadInputTokens ?? undefined,
+        prompt_cache_write: usage.cacheWriteInputTokens ?? undefined,
+        prompt_cache_write_1h: oneHourCacheWriteTokens(usage),
+    };
 }
 
 function converseFinishReason(reason: string | undefined) {
@@ -773,22 +799,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         const completionResult: CompletionChunkObject = {
             result: reasoning + resultText ? [{ type: 'text', value: reasoning + resultText }] : [],
-            token_usage: {
-                // Bedrock's inputTokens already excludes cache-read tokens,
-                // so prompt_new is inputTokens directly (no subtraction needed).
-                // prompt is the total including cached + cache_write for consistency
-                // with the Vertex Claude driver.
-                prompt_new: result.usage?.inputTokens,
-                prompt: result.usage
-                    ? (result.usage.inputTokens ?? 0) +
-                      (result.usage.cacheReadInputTokens ?? 0) +
-                      (result.usage.cacheWriteInputTokens ?? 0)
-                    : undefined,
-                result: result.usage?.outputTokens,
-                total: result.usage?.totalTokens,
-                prompt_cached: result.usage?.cacheReadInputTokens ?? undefined,
-                prompt_cache_write: result.usage?.cacheWriteInputTokens ?? undefined,
-            },
+            token_usage: converseTokenUsage(result.usage) ?? {},
             service_tier: result.serviceTier?.type,
             finish_reason: converseFinishReason(result.stopReason),
         };
@@ -893,18 +904,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
 
         if (result.metadata) {
-            token_usage = {
-                prompt_new: result.metadata.usage?.inputTokens,
-                prompt: result.metadata.usage
-                    ? (result.metadata.usage.inputTokens ?? 0) +
-                      (result.metadata.usage.cacheReadInputTokens ?? 0) +
-                      (result.metadata.usage.cacheWriteInputTokens ?? 0)
-                    : undefined,
-                result: result.metadata.usage?.outputTokens,
-                total: result.metadata.usage?.totalTokens,
-                prompt_cached: result.metadata.usage?.cacheReadInputTokens ?? undefined,
-                prompt_cache_write: result.metadata.usage?.cacheWriteInputTokens ?? undefined,
-            };
+            token_usage = converseTokenUsage(result.metadata.usage) ?? {};
         }
 
         const completionResult: CompletionChunkObject = {

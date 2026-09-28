@@ -39,7 +39,14 @@ class ThoughtsStreamDriver extends AbstractDriver<DriverOptions, string> {
                 async *[Symbol.asyncIterator]() {
                     yield {
                         result: [],
-                        token_usage: { prompt: 10, prompt_cached: 4, prompt_new: 6, result: 2, total: 12 },
+                        token_usage: {
+                            prompt: 10,
+                            prompt_cached: 4,
+                            prompt_new: 6,
+                            result: 2,
+                            result_image: 2,
+                            total: 12,
+                        },
                     };
                     throw new Error('provider failed after usage');
                 },
@@ -97,6 +104,7 @@ describe('DefaultCompletionStream thoughts', () => {
             prompt_cached: 4,
             prompt_new: 6,
             result: 2,
+            result_image: 2,
             total: 12,
         });
     });

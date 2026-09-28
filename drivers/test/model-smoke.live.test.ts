@@ -2,6 +2,7 @@ import {
     type AbstractDriver,
     type AIModel,
     type ExecutionOptions,
+    type ExecutionResponse,
     getMaxOutputTokens,
     getMaxTokensLimitBedrock,
     getMaxTokensLimitVertexAi,
@@ -24,7 +25,7 @@ import {
     WatsonxDriver,
     xAIDriver,
 } from '../src/index.js';
-import { assertCompletionOk, assertStreamingCompletionOk } from './assertions.js';
+import { assertCompletionOk, assertProviderCostReported, assertStreamingCompletionOk } from './assertions.js';
 import { selectLiveTestDrivers } from './live-model-selection.js';
 import {
     testPrompt_color,
@@ -218,12 +219,14 @@ function getTestOptions(model: string): ExecutionOptions {
     }
 
     const isGemini35FlashLite = model.toLowerCase().includes('gemini-3.5-flash-lite');
+    // Qwen 3.5 always reasons before answering, and its reasoning alone can use up a 512-token budget.
+    const alwaysReasons = model.toLowerCase().startsWith('qwen/qwen3.5');
 
     return {
         model: model,
         model_options: {
             _option_id: 'text-fallback',
-            max_tokens: 512,
+            max_tokens: alwaysReasons ? 4096 : 512,
             temperature: 0.3,
             top_k: 40,
             top_p: 0.7, //Some models do not support top_p = 1.0, set to 0.99 or lower.
@@ -268,6 +271,7 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
         const r = await driver.execute(testPrompt_color, getTestOptions(model));
         console.log(`Result for execute ${model}`, JSON.stringify(r));
         assertCompletionOk(r, model, driver);
+        assertProviderCostReported(r, driver);
     });
 
     test.each(models)(
@@ -283,6 +287,7 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
             });
             const out = await assertStreamingCompletionOk(r, true);
             console.log(`Result for streaming with schema ${model}`, JSON.stringify(out));
+            assertProviderCostReported(r.completion as ExecutionResponse, driver);
         },
     );
 

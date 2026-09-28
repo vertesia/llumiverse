@@ -84,6 +84,7 @@ const KEEP_RECENT_MESSAGES = 12;
 const OLD_MESSAGE_TEXT_MAX_TOKENS = 2000;
 const AGENT_MESSAGE_CACHE_BLOCK_INTERVAL = 12;
 const MAX_CLAUDE_CACHE_BREAKPOINTS = 4;
+const CLAUDE_FAST_MODE_BETA = 'fast-mode-2026-02-01';
 const RESULT_SCHEMA_INSTRUCTION_PREFIXES = [
     TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX,
     JSON_SCHEMA_INSTRUCTION_PREFIX,
@@ -187,6 +188,10 @@ export interface AnthropicUsageLike {
     output_tokens: number;
     cache_read_input_tokens?: number | null;
     cache_creation_input_tokens?: number | null;
+    cache_creation?: { ephemeral_1h_input_tokens?: number | null } | null;
+    service_tier?: string | null;
+    /** `fast` when the request ran in fast mode. */
+    speed?: string | null;
 }
 
 /**
@@ -205,6 +210,8 @@ export interface ClaudeBaseOptions {
     include_thoughts?: boolean;
     cache_enabled?: boolean;
     cache_ttl?: string;
+    /** `fast` runs the request in fast mode (Claude API only). */
+    speed?: 'standard' | 'fast';
     tool_choice?: 'auto' | 'none' | 'any' | 'required';
     /** Internal execution hint supplied after public model-option validation. */
     required_tool_name?: string;
@@ -246,6 +253,15 @@ function streamClaudeMessages(
 // Token usage
 // ============================================================================
 
+/**
+ * The processing tier a response reports: `fast` for fast mode, else its service tier. Fast mode is priced on
+ * its own and cannot run under a Priority Tier commitment, so one value describes both.
+ */
+export function claudeServiceTier(usage: Pick<AnthropicUsageLike, 'service_tier' | 'speed'>): string | undefined {
+    if (usage.speed === 'fast') return 'fast';
+    return usage.service_tier ?? undefined;
+}
+
 export function anthropicUsageToTokenUsage(usage: AnthropicUsageLike): ExecutionTokenUsage {
     const cacheRead = usage.cache_read_input_tokens ?? 0;
     const cacheWrite = usage.cache_creation_input_tokens ?? 0;
@@ -256,6 +272,7 @@ export function anthropicUsageToTokenUsage(usage: AnthropicUsageLike): Execution
         total: usage.input_tokens + usage.output_tokens + cacheRead + cacheWrite,
         prompt_cached: usage.cache_read_input_tokens ?? undefined,
         prompt_cache_write: usage.cache_creation_input_tokens ?? undefined,
+        prompt_cache_write_1h: usage.cache_creation?.ephemeral_1h_input_tokens || undefined,
     };
 }
 
@@ -761,6 +778,14 @@ export function getClaudePayload(
     ) {
         requestOptions = { headers: { 'anthropic-beta': 'output-128k-2025-02-19' } };
     }
+    const fastMode = model_options?.speed === 'fast';
+    if (fastMode) {
+        const betas = [requestOptions?.headers?.['anthropic-beta'], CLAUDE_FAST_MODE_BETA].filter(Boolean);
+        requestOptions = {
+            ...requestOptions,
+            headers: { ...requestOptions?.headers, 'anthropic-beta': betas.join(',') },
+        };
+    }
 
     // Merge first so parallel tool results split across user messages are recombined
     // into the single user turn after their assistant tool_use message; then fix both
@@ -916,6 +941,8 @@ export function getClaudePayload(
         thinking: disableManualThinkingForForcedTool ? { type: 'disabled' } : thinking,
         stream: true,
         ...(!disableManualThinkingForForcedTool && outputConfig && { output_config: outputConfig }),
+        // `speed` is a beta request field the base type doesn't declare yet.
+        ...(fastMode && ({ speed: 'fast' } as Partial<MessageCreateParamsBase>)),
     };
 
     return { payload, requestOptions };
@@ -1116,6 +1143,7 @@ export async function executeClaudeCompletion(
         result: completionResults.length > 0 ? completionResults : [{ type: 'text', value: '' }],
         tool_use,
         token_usage: anthropicUsageToTokenUsage(result.usage),
+        service_tier: claudeServiceTier(result.usage as AnthropicUsageLike),
         finish_reason: tool_use ? 'tool_use' : claudeFinishReason(result?.stop_reason ?? ''),
         conversation: processedConversation,
     };
@@ -1154,6 +1182,7 @@ export async function streamClaudeCompletion(
                 return {
                     result: [{ type: 'text', value: '' }],
                     token_usage: anthropicUsageToTokenUsage(streamEvent.message.usage as AnthropicUsageLike),
+                    service_tier: claudeServiceTier(streamEvent.message.usage as AnthropicUsageLike),
                 } satisfies CompletionChunkObject;
             case 'message_delta':
                 logClaudeTruncation(logger, streamEvent.delta.stop_reason, { provider, model: options.model });

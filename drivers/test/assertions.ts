@@ -3,6 +3,7 @@ import {
     type CompletionStream,
     type ExecutionResponse,
     extractAndParseJSON,
+    Providers,
 } from '@llumiverse/core';
 import { expect } from 'vitest';
 import { completionResultToString, parseCompletionResultsToJson } from './utils.js';
@@ -23,6 +24,15 @@ export function assertCompletionOk(r: ExecutionResponse, model?: string, driver?
     expect(stringResult.length).toBeGreaterThan(2);
 }
 
+/**
+ * OpenRouter reports what it charged for each call in its usage; the driver maps it to `provider_cost_usd`.
+ * Other providers don't report a cost, so there is nothing to check for them.
+ */
+export function assertProviderCostReported(r: ExecutionResponse, driver: AbstractDriver) {
+    if (driver.provider !== Providers.openrouter) return;
+    expect(r.token_usage?.provider_cost_usd).toBeGreaterThan(0);
+}
+
 export async function assertStreamingCompletionOk(stream: CompletionStream, jsonMode: boolean = false) {
     const out: string[] = [];
     for await (const chunk of stream) {
@@ -31,12 +41,16 @@ export async function assertStreamingCompletionOk(stream: CompletionStream, json
     }
     console.log(out.join(''));
     const r = stream.completion as ExecutionResponse;
-    const jsonObject = jsonMode ? extractAndParseJSON(out.join('')) : undefined;
-    const jsonResult = jsonMode ? parseCompletionResultsToJson(r.result) : undefined;
-    console.log(jsonObject);
-    console.log(jsonResult);
     if (jsonMode) {
-        expect(jsonResult).toStrictEqual(jsonObject);
+        // The structured answer comes from the completion, which keeps reasoning separate from the answer.
+        const jsonResult = parseCompletionResultsToJson(r.result);
+        console.log(jsonResult);
+        expect(jsonResult).toBeTypeOf('object');
+        // The streamed preview also carries the model's reasoning text, so it only holds the bare JSON answer
+        // when the model streamed no reasoning.
+        if (!r.result.some((result) => result.type === 'thoughts')) {
+            expect(jsonResult).toStrictEqual(extractAndParseJSON(out.join('')));
+        }
     }
 
     expect(r.error).toBeFalsy();
