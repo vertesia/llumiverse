@@ -2,7 +2,6 @@ import {
     type AIModel,
     type Completion,
     type CompletionResult,
-    type DriverOptions,
     type ExecutionOptions,
     getModelCapabilities,
     isEmbeddingModel,
@@ -16,16 +15,13 @@ import {
 } from '@llumiverse/core';
 import { FetchClient } from '@vertesia/api-fetch-client';
 import OpenAI from 'openai';
+import type { xAiDriverOptions } from '../driver-options.js';
 import { OpenAIResponsesDriverBase } from '../openai/index.js';
 import { formatOpenAILikeMultimodalPrompt, type OpenAIPromptFormatterOptions } from '../openai/openai_format.js';
 
+export type { xAiDriverOptions } from '../driver-options.js';
+
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
-
-export interface xAiDriverOptions extends DriverOptions {
-    apiKey: string;
-
-    endpoint?: string;
-}
 
 export class xAIDriver extends OpenAIResponsesDriverBase {
     service: OpenAI;

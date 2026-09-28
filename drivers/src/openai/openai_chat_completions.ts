@@ -5,7 +5,6 @@ import {
     type CompletionResult,
     type CompletionStream,
     type DriverCompletionStream,
-    type DriverOptions,
     type EmbeddingResultItem,
     type EmbeddingsOptions,
     type EmbeddingsResult,
@@ -35,6 +34,7 @@ import {
 import { transformSSEStream } from '@llumiverse/core/async';
 import { FallbackCompletionStream } from '@llumiverse/core/driver';
 import OpenAI from 'openai';
+import type { OpenAIChatCompletionsDriverOptions, OpenAIChatCompletionsProtocolOptions } from '../driver-options.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
 import { executeOpenAIAudioRequest, openAIAudioTask, openAIInputAudioPart } from './audio.js';
@@ -42,6 +42,8 @@ import { getOpenAIExtraBody, mergeOpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAISchema, limitedSchemaFormat } from './schema.js';
 import { type ChatCompletionsUsage, mapOpenAIChatCompletionsUsage } from './usage.js';
+
+export type { OpenAIChatCompletionsDriverOptions, OpenAIChatCompletionsProtocolOptions } from '../driver-options.js';
 
 type OpenAIChatServiceTier = OpenAI.Chat.ChatCompletionCreateParams['service_tier'];
 
@@ -155,36 +157,6 @@ export interface OpenAIChatCompletionsPrompt {
     messages: OpenAIChatCompletionsMessage[];
     /** Discriminator for drivers that share a `messages` array with other provider prompts. */
     _is_openai_chat_completions?: true;
-}
-
-export interface OpenAIChatCompletionsProtocolOptions {
-    /** The model identifier to send in the request body (for example, "zai-org/glm-5-maas"). */
-    modelName?: string;
-    /** Model API contract default used only when callers do not provide max_tokens. */
-    defaultMaxTokens?: number;
-    /** Extra OpenAI-compatible request body fields for model-family-specific options. */
-    extraBody?: Record<string, unknown>;
-    /**
-     * How result_schema should be requested. Vertex MaaS supports response_format, while
-     * TogetherAI stays prompt-instruction based because its OpenAI-compatible surface is
-     * Chat Completions only and response_format support is not reliable across hosted models.
-     */
-    resultSchemaMode?: 'response_format' | 'prompt';
-    /** Supplement native structured output with prompt alignment for providers with unreliable enforcement. */
-    includeResultSchemaInPrompt?: boolean;
-    /** Model-specific form of the prompt alignment guard for mixed-model providers. */
-    includeResultSchemaInPromptForModel?: (model: string) => boolean;
-    /**
-     * OpenAI supports strict function schemas. Some OpenAI-compatible providers reject
-     * or mis-handle those OpenAI-specific fields, so adapters can request a looser
-     * JSON Schema payload for tools while preserving the shared Chat Completions path.
-     */
-    toolSchemaMode?: 'openai_strict' | 'compatible';
-    /** Resolve SDK options from the same driver/per-execution policy as the HTTP transport. */
-    resolveRequestOptions?: (
-        options: Pick<ExecutionOptions, 'httpTimeout'>,
-        signal?: AbortSignal,
-    ) => { signal?: AbortSignal; timeout?: number } | undefined;
 }
 
 const originalResponseSymbol = Symbol('openai-compatible-original-response');
@@ -1261,15 +1233,6 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<ReadableStream>;
-}
-
-export interface OpenAIChatCompletionsDriverOptions extends DriverOptions {
-    defaultMaxTokens?: number;
-    extraBody?: Record<string, unknown>;
-    resultSchemaMode?: OpenAIChatCompletionsProtocolOptions['resultSchemaMode'];
-    includeResultSchemaInPrompt?: OpenAIChatCompletionsProtocolOptions['includeResultSchemaInPrompt'];
-    includeResultSchemaInPromptForModel?: OpenAIChatCompletionsProtocolOptions['includeResultSchemaInPromptForModel'];
-    toolSchemaMode?: OpenAIChatCompletionsProtocolOptions['toolSchemaMode'];
 }
 
 interface OpenAIChatCompletionsTransportDriver {

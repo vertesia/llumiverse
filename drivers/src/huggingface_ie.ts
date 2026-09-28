@@ -4,7 +4,6 @@ import {
     AIModelStatus,
     type CompletionChunkObject,
     type DriverCompletionStream,
-    type DriverOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
     type TextFallbackOptions,
@@ -12,11 +11,9 @@ import {
 import { transformAsyncIterator } from '@llumiverse/core/async';
 import { AbstractDriver } from '@llumiverse/core/driver';
 import { FetchClient } from '@vertesia/api-fetch-client';
+import type { HuggingFaceIEDriverOptions } from './driver-options.js';
 
-export interface HuggingFaceIEDriverOptions extends DriverOptions {
-    apiKey: string;
-    endpoint_url: string;
-}
+export type { HuggingFaceIEDriverOptions } from './driver-options.js';
 
 export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptions, string> {
     static PROVIDER = 'huggingface_ie';

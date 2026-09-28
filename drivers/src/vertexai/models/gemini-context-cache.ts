@@ -9,7 +9,18 @@ import type {
     ToolConfig,
 } from '@google/genai';
 import type { ExecutionOptions, PromptCacheDiagnostic, PromptCachePath } from '@llumiverse/core';
+import type {
+    GeminiContextCacheCoordinationKey,
+    GeminiContextCacheCoordinator,
+    GeminiContextCacheEntry,
+} from '../../driver-options.js';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
+
+export type {
+    GeminiContextCacheCoordinationKey,
+    GeminiContextCacheCoordinator,
+    GeminiContextCacheEntry,
+} from '../../driver-options.js';
 
 /**
  * Explicit Vertex context caching for Gemini.
@@ -110,54 +121,6 @@ const CREATE_PERMIT_WAIT_MS = 1_500;
 const CREATE_PERMIT_LEASE_MS = 60_000;
 const MAX_CONCURRENT_CREATES_PER_LOCATION = 2;
 const DEFAULT_QUOTA_COOLDOWN_MS = 30_000;
-
-export interface GeminiContextCacheEntry {
-    /** Server-generated resource name, e.g. `projects/p/locations/l/cachedContents/123`. */
-    name: string;
-    expiresAtMs: number;
-}
-
-export interface GeminiContextCacheCoordinationKey {
-    /** Studio environment ID or another caller-defined isolation scope. */
-    scope?: string;
-    project: string;
-    location: string;
-    model: string;
-    contentHash: string;
-}
-
-/**
- * Optional fleet coordinator supplied by the host application.
- *
- * Llumiverse deliberately owns no Redis dependency. Studio injects these functions when it creates
- * a Vertex driver; another host can implement the same semantics with its own coordination store.
- * A rejected operation means coordination is unavailable and causes a safe uncached fallback.
- */
-export interface GeminiContextCacheCoordinator {
-    getEntry(key: GeminiContextCacheCoordinationKey): Promise<GeminiContextCacheEntry | undefined>;
-    acquireLease(key: GeminiContextCacheCoordinationKey, leaseMs: number): Promise<string | undefined>;
-    waitForEntry(
-        key: GeminiContextCacheCoordinationKey,
-        timeoutMs: number,
-    ): Promise<GeminiContextCacheEntry | undefined>;
-    publishEntry(
-        key: GeminiContextCacheCoordinationKey,
-        leaseToken: string,
-        entry: GeminiContextCacheEntry,
-        ttlMs: number,
-    ): Promise<boolean>;
-    releaseLease(key: GeminiContextCacheCoordinationKey, leaseToken: string): Promise<void>;
-    invalidateEntry(key: GeminiContextCacheCoordinationKey, expectedName: string): Promise<void>;
-    getCooldownUntil(key: GeminiContextCacheCoordinationKey): Promise<number | undefined>;
-    setCooldownUntil(key: GeminiContextCacheCoordinationKey, untilMs: number): Promise<void>;
-    acquireCreatePermit(
-        key: GeminiContextCacheCoordinationKey,
-        limit: number,
-        leaseMs: number,
-        waitMs: number,
-    ): Promise<string | undefined>;
-    releaseCreatePermit(key: GeminiContextCacheCoordinationKey, permitToken: string): Promise<void>;
-}
 
 export interface GeminiContextCacheManagerOptions {
     /** TTL used when an execution does not carry `prompt_cache_ttl_seconds`. */
