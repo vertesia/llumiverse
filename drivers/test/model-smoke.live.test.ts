@@ -2,6 +2,7 @@ import {
     type AbstractDriver,
     type AIModel,
     type ExecutionOptions,
+    type ExecutionResponse,
     getMaxOutputTokens,
     getMaxTokensLimitBedrock,
     getMaxTokensLimitVertexAi,
@@ -24,7 +25,7 @@ import {
     WatsonxDriver,
     xAIDriver,
 } from '../src/index.js';
-import { assertCompletionOk, assertStreamingCompletionOk } from './assertions.js';
+import { assertCompletionOk, assertProviderCostReported, assertStreamingCompletionOk } from './assertions.js';
 import { selectLiveTestDrivers } from './live-model-selection.js';
 import {
     testPrompt_color,
@@ -268,6 +269,7 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
         const r = await driver.execute(testPrompt_color, getTestOptions(model));
         console.log(`Result for execute ${model}`, JSON.stringify(r));
         assertCompletionOk(r, model, driver);
+        assertProviderCostReported(r, driver);
     });
 
     test.each(models)(
@@ -283,6 +285,7 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
             });
             const out = await assertStreamingCompletionOk(r, true);
             console.log(`Result for streaming with schema ${model}`, JSON.stringify(out));
+            assertProviderCostReported(r.completion as ExecutionResponse, driver);
         },
     );
 

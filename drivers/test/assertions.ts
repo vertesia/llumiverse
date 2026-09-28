@@ -3,6 +3,7 @@ import {
     type CompletionStream,
     type ExecutionResponse,
     extractAndParseJSON,
+    Providers,
 } from '@llumiverse/core';
 import { expect } from 'vitest';
 import { completionResultToString, parseCompletionResultsToJson } from './utils.js';
@@ -21,6 +22,15 @@ export function assertCompletionOk(r: ExecutionResponse, model?: string, driver?
     //if r.result is string, it should be longer than 2
     const stringResult = r.result.map(completionResultToString).join('');
     expect(stringResult.length).toBeGreaterThan(2);
+}
+
+/**
+ * OpenRouter reports what it charged for each call in its usage; the driver maps it to `provider_cost_usd`.
+ * Other providers don't report a cost, so there is nothing to check for them.
+ */
+export function assertProviderCostReported(r: ExecutionResponse, driver: AbstractDriver) {
+    if (driver.provider !== Providers.openrouter) return;
+    expect(r.token_usage?.provider_cost_usd).toBeGreaterThan(0);
 }
 
 export async function assertStreamingCompletionOk(stream: CompletionStream, jsonMode: boolean = false) {
