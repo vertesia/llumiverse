@@ -20,6 +20,7 @@ import type {
     ChatCompletionMessageParam,
     ChatCompletionTool,
 } from 'groq-sdk/resources/chat/completions';
+import type { CompletionUsage } from 'groq-sdk/resources/completions';
 import type { GroqDriverOptions } from '../driver-options.js';
 import {
     OpenAIChatCompletionsDriverBase,
@@ -256,6 +257,18 @@ function toGroqTool(tool: NonNullable<OpenAIChatCompletionsPayload['tools']>[num
     ];
 }
 
+/** Groq's usage, keeping the prompt tokens served from its prompt cache, which are billed at a discount. */
+function normalizeGroqUsage(usage: CompletionUsage | null | undefined): OpenAIChatCompletionsResponse['usage'] {
+    if (!usage) return undefined;
+    const cachedTokens = usage.prompt_tokens_details?.cached_tokens;
+    return {
+        prompt_tokens: usage.prompt_tokens,
+        completion_tokens: usage.completion_tokens,
+        total_tokens: usage.total_tokens,
+        ...(cachedTokens ? { prompt_tokens_details: { cached_tokens: cachedTokens } } : {}),
+    };
+}
+
 function normalizeGroqResponse(response: ChatCompletion): OpenAIChatCompletionsResponse {
     const usage = response.usage;
     return {
@@ -281,13 +294,7 @@ function normalizeGroqResponse(response: ChatCompletion): OpenAIChatCompletionsR
                 })),
             },
         })),
-        usage: usage
-            ? {
-                  prompt_tokens: usage.prompt_tokens,
-                  completion_tokens: usage.completion_tokens,
-                  total_tokens: usage.total_tokens,
-              }
-            : undefined,
+        usage: normalizeGroqUsage(usage),
     };
 }
 
@@ -317,13 +324,7 @@ async function* normalizeGroqStream(
                     })),
                 },
             })),
-            usage: usage
-                ? {
-                      prompt_tokens: usage.prompt_tokens,
-                      completion_tokens: usage.completion_tokens,
-                      total_tokens: usage.total_tokens,
-                  }
-                : undefined,
+            usage: normalizeGroqUsage(usage),
         };
     }
 }
