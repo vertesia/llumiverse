@@ -8,7 +8,12 @@
 
 import { type ModelOptionInfoItem, OptionType } from '../types.js';
 import { getMaxOutputTokens } from './context-windows.js';
-import { getAvailableEffortLevels, isClaudeVersionGTE, requiresAdaptiveThinkingOnly } from './version-parsing.js';
+import {
+    getAvailableEffortLevels,
+    isClaudeVersionGTE,
+    requiresAdaptiveThinkingOnly,
+    supportsClaudeFastMode,
+} from './version-parsing.js';
 
 // ============================================================================
 // Max tokens
@@ -57,6 +62,20 @@ export function buildClaudeCacheTtlOptions(cacheEnabled?: boolean): ModelOptionI
             enum: { '5 minutes (default)': '5m', '1 hour': '1h' },
             default: '5m',
             description: "TTL for cache breakpoints. '1h' requires extended caching to be enabled on your account.",
+        },
+    ];
+}
+
+/** Fast mode selector, for the Claude API models that support it. */
+export function buildClaudeSpeedOption(model: string): ModelOptionInfoItem[] {
+    if (!supportsClaudeFastMode(model)) return [];
+    return [
+        {
+            name: 'speed',
+            type: OptionType.enum,
+            enum: { Standard: 'standard', Fast: 'fast' },
+            default: 'standard',
+            description: 'Fast mode generates output faster at premium pricing. It requires fast mode access.',
         },
     ];
 }

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
     anthropicUsageToTokenUsage,
     buildClaudeStreamingConversation,
+    claudeServiceTier,
     formatClaudePrompt,
     getClaudePayload,
     updateClaudeConversation,
@@ -467,6 +468,35 @@ describe('formatClaudePrompt', () => {
             result: 10,
             total: 185,
         });
+    });
+
+    it('requests fast mode with its beta header, alongside another beta', () => {
+        const prompt = { system: [{ type: 'text' as const, text: 'system' }], messages: [] };
+        const fast = getClaudePayload({ model: 'claude-opus-5-5', model_options: { speed: 'fast' } as never }, prompt);
+        expect(fast.payload).toMatchObject({ speed: 'fast' });
+        expect(fast.requestOptions?.headers).toEqual({ 'anthropic-beta': 'fast-mode-2026-02-01' });
+
+        const both = getClaudePayload(
+            { model: 'claude-3-7-sonnet-20250219', model_options: { speed: 'fast', max_tokens: 100_000 } as never },
+            prompt,
+        );
+        expect(both.requestOptions?.headers).toEqual({
+            'anthropic-beta': 'output-128k-2025-02-19,fast-mode-2026-02-01',
+        });
+
+        const standard = getClaudePayload(
+            { model: 'claude-opus-5-5', model_options: { speed: 'standard' } as never },
+            prompt,
+        );
+        expect(standard.payload).not.toHaveProperty('speed');
+        expect(standard.requestOptions).toBeUndefined();
+    });
+
+    it('reports fast mode as the fast tier, otherwise the service tier the response reports', () => {
+        expect(claudeServiceTier({ service_tier: 'standard', speed: 'fast' })).toBe('fast');
+        expect(claudeServiceTier({ service_tier: 'priority', speed: 'standard' })).toBe('priority');
+        expect(claudeServiceTier({ service_tier: 'standard' })).toBe('standard');
+        expect(claudeServiceTier({})).toBeUndefined();
     });
 
     it('reports the one-hour share of cache writes', () => {

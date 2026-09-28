@@ -7,6 +7,7 @@ import {
     buildClaudeCacheTtlOptions,
     buildClaudeEffortOptions,
     buildClaudeIncludeThoughtsOption,
+    buildClaudeSpeedOption,
     buildClaudeThinkingBudgetOption,
     getClaudeMaxTokensLimit,
 } from './shared-parsing.js';
@@ -44,6 +45,7 @@ export function getAnthropicOptions(model: string, option?: ModelOptions): Model
             ...buildClaudeIncludeThoughtsOption(model),
             ...buildClaudeCacheOptions(),
             ...buildClaudeCacheTtlOptions((option as unknown as AnthropicClaudeOptions)?.cache_enabled),
+            ...buildClaudeSpeedOption(model),
         ],
     };
 }

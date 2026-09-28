@@ -38,6 +38,20 @@ describe('xAI options', () => {
         expect(getXAIOptions('grok-4.5')._option_id).toBe('openai-text');
     });
 
+    it('offers the default and priority tiers for Grok language models only', () => {
+        expect(getXAIOptions('grok-4.5').options).toContainEqual(
+            expect.objectContaining({
+                name: 'service_tier',
+                default: 'default',
+                enum: { Default: 'default', Priority: 'priority' },
+            }),
+        );
+        expect(getXAIOptions('grok-imagine-image').options.map((option) => option.name)).not.toContain('service_tier');
+        expect(ModelOptionsSchema.safeParse({ _option_id: 'openai-text', service_tier: 'priority' }).success).toBe(
+            true,
+        );
+    });
+
     it('validates the published image options and batch limit', () => {
         expect(
             ModelOptionsSchema.safeParse({

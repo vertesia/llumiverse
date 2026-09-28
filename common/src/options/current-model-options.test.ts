@@ -145,6 +145,29 @@ describe('current reasoning model options', () => {
                 (option) => option.name === 'service_tier',
             ),
         ).toBe(false);
+
+        const xaiTier = getOptions('grok-4.5', Providers.xai).options.find((option) => option.name === 'service_tier');
+        expect(xaiTier).toMatchObject({
+            type: OptionType.enum,
+            default: 'default',
+            enum: { Default: 'default', Priority: 'priority' },
+        });
+    });
+
+    it('offers fast mode on the Claude API for Opus 4.8 and later only', () => {
+        const speed = (model: string, provider: Providers) =>
+            getOptions(model, provider).options.find((option) => option.name === 'speed');
+        for (const model of ['claude-opus-4-8', 'claude-opus-5', 'claude-opus-5-5']) {
+            expect(speed(model, Providers.anthropic)).toMatchObject({
+                type: OptionType.enum,
+                default: 'standard',
+                enum: { Standard: 'standard', Fast: 'fast' },
+            });
+        }
+        expect(speed('claude-opus-4-7', Providers.anthropic)).toBeUndefined();
+        expect(speed('claude-sonnet-5', Providers.anthropic)).toBeUndefined();
+        // Cloud platforms don't serve fast mode.
+        expect(speed('claude-opus-5-5', Providers.vertexai)).toBeUndefined();
     });
 
     it('advertises current Gemini thinking levels without adding a default', () => {
