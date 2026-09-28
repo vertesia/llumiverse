@@ -393,6 +393,20 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
         let promptNewTokens: number | undefined;
         let promptCacheWrite1hTokens: number | undefined;
         let providerCostUsd: number | undefined;
+        // Undefined until the provider reports token data. resultTokens === 0 is valid (e.g. empty output with stop).
+        const accumulatedUsage = (): ExecutionTokenUsage | undefined =>
+            resultTokens === undefined
+                ? undefined
+                : {
+                      prompt: promptTokens,
+                      result: resultTokens,
+                      total: resultTokens + promptTokens,
+                      ...(promptCachedTokens != null && { prompt_cached: promptCachedTokens }),
+                      ...(promptCacheWriteTokens != null && { prompt_cache_write: promptCacheWriteTokens }),
+                      ...(promptNewTokens != null && { prompt_new: promptNewTokens }),
+                      ...(promptCacheWrite1hTokens != null && { prompt_cache_write_1h: promptCacheWrite1hTokens }),
+                      ...(providerCostUsd != null && { provider_cost_usd: providerCostUsd }),
+                  };
         const httpScope = this.driver.createExecutionHttpAgentScope(this.options);
         let sourceIterator: AsyncIterator<CompletionChunkObject> | undefined;
         let stream: DriverCompletionStream | undefined;
@@ -558,16 +572,7 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
                     result: accumulatedResults,
                     prompt: this.driver.formatDebugPrompt(this.prompt),
                     execution_time: Date.now() - start,
-                    token_usage: {
-                        prompt: promptTokens,
-                        result: resultTokens,
-                        total: resultTokens + promptTokens,
-                        ...(promptCachedTokens != null && { prompt_cached: promptCachedTokens }),
-                        ...(promptCacheWriteTokens != null && { prompt_cache_write: promptCacheWriteTokens }),
-                        ...(promptNewTokens != null && { prompt_new: promptNewTokens }),
-                        ...(promptCacheWrite1hTokens != null && { prompt_cache_write_1h: promptCacheWrite1hTokens }),
-                        ...(providerCostUsd != null && { provider_cost_usd: providerCostUsd }),
-                    },
+                    token_usage: accumulatedUsage(),
                     service_tier: serviceTier,
                     finish_reason,
                     chunks: this.chunks,
@@ -594,21 +599,7 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
             await httpScope.close();
         }
 
-        // Return undefined only if we never received any token data from the provider.
-        // Use !== undefined (not truthiness) because resultTokens === 0 is valid (e.g. empty output with stop).
-        const tokens: ExecutionTokenUsage | undefined =
-            resultTokens !== undefined
-                ? {
-                      prompt: promptTokens,
-                      result: resultTokens,
-                      total: resultTokens + promptTokens,
-                      ...(promptCachedTokens != null && { prompt_cached: promptCachedTokens }),
-                      ...(promptCacheWriteTokens != null && { prompt_cache_write: promptCacheWriteTokens }),
-                      ...(promptNewTokens != null && { prompt_new: promptNewTokens }),
-                      ...(promptCacheWrite1hTokens != null && { prompt_cache_write_1h: promptCacheWrite1hTokens }),
-                      ...(providerCostUsd != null && { provider_cost_usd: providerCostUsd }),
-                  }
-                : undefined;
+        const tokens = accumulatedUsage();
 
         const toolUseArray = finalizeStreamingToolUse(
             accumulatedToolUse.size > 0 ? Array.from(accumulatedToolUse.values()) : undefined,

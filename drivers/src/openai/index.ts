@@ -50,6 +50,7 @@ import { mergeOpenAIExtraBody, type OpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAILikeMultimodalPrompt } from './openai_format.js';
 import { formatOpenAISchema } from './schema.js';
+import { openAIPromptUsage } from './usage.js';
 
 // Response API types
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
@@ -983,12 +984,9 @@ function mapUsage(usage?: OpenAIUsageWithProviderDetails | null): ExecutionToken
         usage.prompt_tokens_details?.cache_write_tokens ??
         usage.cache_write_tokens;
     return {
-        prompt: usage.input_tokens,
+        ...openAIPromptUsage(usage.input_tokens, cachedTokens, cacheWriteTokens),
         result: usage.output_tokens,
         total: usage.total_tokens,
-        prompt_cached: cachedTokens ?? undefined,
-        prompt_cache_write: cacheWriteTokens ?? undefined,
-        prompt_new: usage.input_tokens - (cachedTokens ?? 0),
     };
 }
 

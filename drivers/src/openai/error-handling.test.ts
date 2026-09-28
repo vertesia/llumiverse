@@ -71,7 +71,8 @@ describe('OpenAIResponsesDriverBase usage mapping', () => {
             total: 120,
             prompt_cached: 45,
             prompt_cache_write: 30,
-            prompt_new: 55,
+            // Cache reads and writes are both counted in input_tokens.
+            prompt_new: 25,
         });
     });
 });
