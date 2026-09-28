@@ -391,6 +391,8 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
         let promptCachedTokens: number | undefined;
         let promptCacheWriteTokens: number | undefined;
         let promptNewTokens: number | undefined;
+        let promptCacheWrite1hTokens: number | undefined;
+        let providerCostUsd: number | undefined;
         const httpScope = this.driver.createExecutionHttpAgentScope(this.options);
         let sourceIterator: AsyncIterator<CompletionChunkObject> | undefined;
         let stream: DriverCompletionStream | undefined;
@@ -436,6 +438,11 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
                             if (chunk.token_usage.prompt_cache_write != null)
                                 promptCacheWriteTokens = chunk.token_usage.prompt_cache_write;
                             if (chunk.token_usage.prompt_new != null) promptNewTokens = chunk.token_usage.prompt_new;
+                            if (chunk.token_usage.prompt_cache_write_1h != null)
+                                promptCacheWrite1hTokens = chunk.token_usage.prompt_cache_write_1h;
+                            // The provider reports the call's cost once, with the final usage.
+                            if (chunk.token_usage.provider_cost_usd != null)
+                                providerCostUsd = chunk.token_usage.provider_cost_usd;
                         }
                         // Accumulate tool_use from chunks
                         // Note: During streaming, tool_input comes as string chunks that need concatenation
@@ -558,6 +565,8 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
                         ...(promptCachedTokens != null && { prompt_cached: promptCachedTokens }),
                         ...(promptCacheWriteTokens != null && { prompt_cache_write: promptCacheWriteTokens }),
                         ...(promptNewTokens != null && { prompt_new: promptNewTokens }),
+                        ...(promptCacheWrite1hTokens != null && { prompt_cache_write_1h: promptCacheWrite1hTokens }),
+                        ...(providerCostUsd != null && { provider_cost_usd: providerCostUsd }),
                     },
                     service_tier: serviceTier,
                     finish_reason,
@@ -596,6 +605,8 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
                       ...(promptCachedTokens != null && { prompt_cached: promptCachedTokens }),
                       ...(promptCacheWriteTokens != null && { prompt_cache_write: promptCacheWriteTokens }),
                       ...(promptNewTokens != null && { prompt_new: promptNewTokens }),
+                      ...(promptCacheWrite1hTokens != null && { prompt_cache_write_1h: promptCacheWrite1hTokens }),
+                      ...(providerCostUsd != null && { provider_cost_usd: providerCostUsd }),
                   }
                 : undefined;
 

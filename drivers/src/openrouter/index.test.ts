@@ -246,6 +246,57 @@ describe('OpenRouterDriver native SDK transport', () => {
         ]);
     });
 
+    it('keeps the billed cost reported with the final streamed usage', async () => {
+        const driver = new OpenRouterDriver({ apiKey: 'test-key' });
+        const chunks = [
+            {
+                id: 'chunk-1',
+                object: 'chat.completion.chunk' as const,
+                created: 1,
+                model: 'openai/gpt-5.6-sol',
+                choices: [{ index: 0, finishReason: null, delta: { role: 'assistant' as const, content: 'Blue' } }],
+            },
+            {
+                id: 'chunk-2',
+                object: 'chat.completion.chunk' as const,
+                created: 1,
+                model: 'openai/gpt-5.6-sol',
+                choices: [{ index: 0, finishReason: 'stop', delta: {} }],
+                usage: {
+                    promptTokens: 10,
+                    completionTokens: 1,
+                    totalTokens: 11,
+                    promptTokensDetails: { cachedTokens: 4 },
+                    cost: 0.0004,
+                    isByok: false,
+                },
+            },
+        ];
+        const nativeStream = {
+            cancel: vi.fn(async () => undefined),
+            async *[Symbol.asyncIterator]() {
+                yield* chunks;
+            },
+        };
+        setService(driver, { chat: { send: vi.fn(async () => nativeStream) } });
+
+        const stream = await driver.stream([{ role: PromptRole.user, content: 'Sky color?' }], {
+            model: 'openai/gpt-5.6-sol',
+        });
+        for await (const _chunk of stream) {
+            // Consume the stream so the final completion is assembled.
+        }
+
+        expect(stream.completion?.token_usage).toEqual({
+            prompt: 10,
+            prompt_cached: 4,
+            prompt_new: 6,
+            result: 1,
+            total: 11,
+            provider_cost_usd: 0.0004,
+        });
+    });
+
     it('maps the native model catalog and excludes dedicated inference models', async () => {
         const driver = new OpenRouterDriver({ apiKey: 'test-key' });
         const models = [

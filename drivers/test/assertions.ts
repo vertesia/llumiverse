@@ -41,12 +41,16 @@ export async function assertStreamingCompletionOk(stream: CompletionStream, json
     }
     console.log(out.join(''));
     const r = stream.completion as ExecutionResponse;
-    const jsonObject = jsonMode ? extractAndParseJSON(out.join('')) : undefined;
-    const jsonResult = jsonMode ? parseCompletionResultsToJson(r.result) : undefined;
-    console.log(jsonObject);
-    console.log(jsonResult);
     if (jsonMode) {
-        expect(jsonResult).toStrictEqual(jsonObject);
+        // The structured answer comes from the completion, which keeps reasoning separate from the answer.
+        const jsonResult = parseCompletionResultsToJson(r.result);
+        console.log(jsonResult);
+        expect(jsonResult).toBeTypeOf('object');
+        // The streamed preview also carries the model's reasoning text, so it only holds the bare JSON answer
+        // when the model streamed no reasoning.
+        if (!r.result.some((result) => result.type === 'thoughts')) {
+            expect(jsonResult).toStrictEqual(extractAndParseJSON(out.join('')));
+        }
     }
 
     expect(r.error).toBeFalsy();
