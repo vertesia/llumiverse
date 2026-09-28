@@ -219,12 +219,14 @@ function getTestOptions(model: string): ExecutionOptions {
     }
 
     const isGemini35FlashLite = model.toLowerCase().includes('gemini-3.5-flash-lite');
+    // Qwen 3.5 always reasons before answering, and its reasoning alone can use up a 512-token budget.
+    const alwaysReasons = model.toLowerCase().startsWith('qwen/qwen3.5');
 
     return {
         model: model,
         model_options: {
             _option_id: 'text-fallback',
-            max_tokens: 512,
+            max_tokens: alwaysReasons ? 4096 : 512,
             temperature: 0.3,
             top_k: 40,
             top_p: 0.7, //Some models do not support top_p = 1.0, set to 0.99 or lower.
