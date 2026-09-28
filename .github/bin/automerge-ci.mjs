@@ -15,6 +15,12 @@ export function verifyWorkflow(runs, loadJobs, policy, { sha, branch, pr, baseSh
         )
         .sort((a, b) => b.id - a.id);
     for (const run of candidates) {
+        // Approval may require CI for the current base as well as the head.
+        // Validate even no-op runs before considering fallback to older CI.
+        if (baseSha || baseBranch) {
+            const testedPr = run.pull_requests.find((item) => item.number === pr);
+            if (testedPr.base?.sha !== baseSha || testedPr.base?.ref !== baseBranch) return false;
+        }
         const jobs = loadJobs(run.id);
         const noOp = policy.noOp;
         if (
@@ -30,12 +36,6 @@ export function verifyWorkflow(runs, loadJobs, policy, { sha, branch, pr, baseSh
             )
         ) {
             continue;
-        }
-        // Approval may require CI for the current base as well as the head.
-        // Check the latest substantive run; do not fall back to an older matching base.
-        if (baseSha || baseBranch) {
-            const testedPr = run.pull_requests.find((item) => item.number === pr);
-            if (testedPr.base?.sha !== baseSha || testedPr.base?.ref !== baseBranch) return false;
         }
         // Never fall back past a pending, failed, cancelled or malformed real run.
         if (run.status !== 'completed' || run.conclusion !== 'success') return false;

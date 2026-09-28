@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { verifyWorkflow } from './automerge-ci.mjs';
 import {
     APP_LOGIN,
     CONTEXT,
@@ -393,4 +394,59 @@ test('missing base metadata and another PR base cannot authorize approval', () =
 test('a newer substantive run on another base prevents fallback to older CI', () => {
     const later = { ...ciRun, id: 2, pull_requests: [{ number: pr.number, base: { ...pr.base, sha: 'other' } }] };
     assert.equal(verifyPrCi(ciApi([ciRun, later]), pr, [ciWorkflow]), false);
+});
+
+test('lockfile changes require human review after CI passes', async () => {
+    for (const file of [
+        { filename: 'pnpm-lock.yaml' },
+        { filename: 'nested/pnpm-lock.yaml' },
+        { filename: 'archived-lock.yaml', previous_filename: 'pnpm-lock.yaml' },
+    ]) {
+        const api = fixture({ files: [file], reviews: [approval] });
+        const result = await reconcile(api, pr.number, () => true);
+        assert.equal(result.approve, false);
+        assert.equal(result.state, 'success');
+        assert.ok(api.writes.some(([kind, id]) => kind === 'dismiss' && id === approval.id));
+        assert.ok(!api.writes.some(([kind]) => kind === 'approve'));
+    }
+});
+
+test('an initial PR read failure preserves the original error and performs no writes', async () => {
+    const error = new Error('PR API unavailable');
+    const api = fixture({ reviews: [approval] });
+    api.pr = async () => {
+        throw error;
+    };
+    await assert.rejects(
+        reconcile(api, pr.number, () => assert.fail('must not inspect CI')),
+        (caught) => caught === error,
+    );
+    assert.deepEqual(api.writes, []);
+});
+
+test('the required status ruleset blocks merging when the branch is behind its base', () => {
+    const ruleset = JSON.parse(readFileSync(new URL('../rulesets/ci-approval.json', import.meta.url), 'utf8'));
+    assert.equal(ruleset.rules[0].parameters.strict_required_status_checks_policy, true);
+});
+
+test('no-op runs with changed or missing base metadata cannot fall back to older CI', () => {
+    const policy = { noOpJobs: ['Router'], noOp: { gate: 'Gate', skipped: 'Build' }, jobs: [{ name: '^Tests$' }] };
+    const job = (name, conclusion) => ({ name, status: 'completed', conclusion });
+    const context = { sha, branch: pr.head.ref, pr: pr.number, baseSha: pr.base.sha, baseBranch: pr.base.ref };
+    const noOps = [[job('Gate', 'success'), job('Build', 'skipped')]];
+    if (Object.values(ciPolicies).some((configured) => configured.noOpJobs)) noOps.push([job('Router', 'skipped')]);
+    for (const jobs of noOps) {
+        for (const base of [undefined, { ...pr.base, sha: 'older-base' }, { ...pr.base, ref: 'release/1.6' }]) {
+            const latest = { ...ciRun, id: 2, pull_requests: [{ number: pr.number, base }] };
+            assert.equal(
+                verifyWorkflow([ciRun, latest], (id) => (id === 2 ? jobs : [job('Tests', 'success')]), policy, context),
+                false,
+            );
+        }
+        const sameBase = { ...ciRun, id: 2 };
+        assert.equal(
+            verifyWorkflow([ciRun, sameBase], (id) => (id === 2 ? jobs : [job('Tests', 'success')]), policy, context),
+            true,
+        );
+    }
 });

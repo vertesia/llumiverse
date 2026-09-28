@@ -29,7 +29,7 @@ export function requiresHuman(pr, files) {
             (path) =>
                 path &&
                 (/^(\.github\/|\.githooks\/|scripts\/)/.test(path) ||
-                    /(^|\/)(package\.json|pnpm-workspace\.yaml|turbo\.json|biome\.json|tsconfig[^/]*\.json)$/.test(
+                    /(^|\/)(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|turbo\.json|biome\.json|tsconfig[^/]*\.json)$/.test(
                         path,
                     ) ||
                     /(^|\/)(vitest|vite|jest)\.config\.[^/]+$/.test(path)),
@@ -69,6 +69,7 @@ function sameRevision(a, b) {
 }
 
 export async function reconcile(api, number, ci, { pushed = false } = {}) {
+    // Without a current PR head, fail with the original API error before attempting writes.
     let pr = await api.pr(number);
     // Only the marked reviews from this App are ever candidates for dismissal.
     let standing = [];
@@ -131,7 +132,7 @@ export async function reconcile(api, number, ci, { pushed = false } = {}) {
         if (pr.head.repo?.full_name === api.repo) await api.status(pr.head.sha, result.state, result.reason);
         return result;
     } catch (error) {
-        // An API outage must not preserve a prior approval whose eligibility is now unknown.
+        // Best-effort cleanup: status/review writes can also fail during an API outage.
         try {
             if (pr.head.repo?.full_name === api.repo) {
                 await api.status(

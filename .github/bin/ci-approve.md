@@ -27,15 +27,15 @@ Runner queues can delay withdrawal after a push. A delayed push event preserves
 an approval already granted for the current commit. If the target branch advances
 or the PR is retargeted, run CI with the updated base (typically by updating the PR
 branch). Re-running an old workflow may retain its original base metadata. Base
-updates alone do not trigger this gate; reevaluation happens on its next event or
-manual dispatch.
+updates alone do not trigger this gate; the strict required-status ruleset blocks
+merging until the PR branch is brought up to date and checks pass again.
 
 Approval writes explicitly name the tested commit. PR metadata and CI are read
 again before publication and after a new review is submitted. Events are serialized
 per repository, and delayed events always evaluate the latest PR state.
 
 `human-review-required` opts a PR out of automatic review. Changes to `.github/`,
-`.githooks/`, `scripts/`, package manifests and build/test configuration also require
+`.githooks/`, `scripts/`, package manifests, `pnpm-lock.yaml` and build/test configuration also require
 human review. Bot-authored and `deployment` PRs retain their existing review route.
 These PRs still receive the CI status when tests pass. Fork PRs are not approved.
 
@@ -64,7 +64,8 @@ remain repository-local; update the shared approval implementation in all three.
    update, and verify that only this gate's approval disappears until CI passes.
 4. Once the status is being emitted, import `.github/rulesets/ci-approval.json` as
    an additional ruleset. It requires `PR approval gate` from GitHub Actions
-   (integration ID 15368) on `main` and `release/**`. Keep
+   (integration ID 15368) on `main` and `release/**`, with the PR branch required to
+   be up to date. Keep
    `dismiss_stale_reviews_on_push` false in existing rulesets. This template makes
    no changes to review counts, conversation resolution, or Copilot configuration.
 
@@ -78,6 +79,12 @@ new-push/stale-approval gap. During a same-commit rerun, the previous successful
 a CI workflow finishes and triggers reassessment. If reruns must block merges immediately,
 require the native lint/build checks as well. No asynchronous approval workflow can
 make GitHub's push/rerun and review APIs atomic.
+
+If the initial PR read fails, the workflow fails with the original API error and
+cannot safely publish a status for an unknown head. Cleanup after later failures
+is best effort; an API outage can also prevent status writes or review dismissal.
+Use manual dispatch after recovery. The workflow cannot guarantee withdrawal
+while GitHub's APIs are unavailable.
 
 ## Validation
 
