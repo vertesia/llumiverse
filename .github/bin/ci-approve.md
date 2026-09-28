@@ -2,7 +2,9 @@
 
 `ci-approve.yaml` uses the existing `vertesia-automerge` App to approve ready,
 same-repository PRs targeting `main` or `release/X.Y` after the current head passes
-this repository's `automerge-ci-policy.json`. Studio uses its selected-suite
+this repository's `automerge-ci-policy.json` against the current base branch and
+commit. The CI run's recorded PR base must match; missing or older base metadata
+blocks approval. Studio uses its selected-suite
 validator; composableai also requires plugin template tests; llumiverse includes
 curated live provider smoke tests. A green workflow with skipped required jobs
 or steps does not qualify. Copilot and review threads are not prerequisites.
@@ -22,7 +24,11 @@ events or API failures. There is no scheduled reconciliation or rerun-start hand
 
 During a same-commit rerun, an existing approval can remain until CI finishes.
 Runner queues can delay withdrawal after a push. A delayed push event preserves
-an approval already granted for the current commit.
+an approval already granted for the current commit. If the target branch advances
+or the PR is retargeted, run CI with the updated base (typically by updating the PR
+branch). Re-running an old workflow may retain its original base metadata. Base
+updates alone do not trigger this gate; reevaluation happens on its next event or
+manual dispatch.
 
 Approval writes explicitly name the tested commit. PR metadata and CI are read
 again before publication and after a new review is submitted. Events are serialized

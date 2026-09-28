@@ -223,17 +223,27 @@ export async function targets(api, event, eventName) {
         .map((pr) => pr.number);
 }
 
+export function verifyPrCi(api, pr, workflows) {
+    if (!pr.base?.sha || !pr.base?.ref) throw new Error('Missing PR base revision');
+    return verifyCi(
+        {
+            REPO: api.repo,
+            HEAD_BRANCH: pr.head.ref,
+            HEAD_SHA: pr.head.sha,
+            BASE_BRANCH: pr.base.ref,
+            BASE_SHA: pr.base.sha,
+        },
+        pr.number,
+        workflows,
+        api.pages,
+    );
+}
+
 export async function main(env) {
     const api = githubApi(env);
     const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, 'utf8'));
     const policy = JSON.parse(readFileSync(new URL('./automerge-ci-policy.json', import.meta.url), 'utf8'));
-    const ci = (pr) =>
-        verifyCi(
-            { REPO: api.repo, HEAD_BRANCH: pr.head.ref, HEAD_SHA: pr.head.sha },
-            pr.number,
-            Object.keys(policy),
-            api.pages,
-        );
+    const ci = (pr) => verifyPrCi(api, pr, Object.keys(policy));
     const errors = [];
     for (const number of await targets(api, event, env.GITHUB_EVENT_NAME)) {
         try {

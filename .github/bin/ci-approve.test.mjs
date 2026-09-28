@@ -4,13 +4,14 @@ import test from 'node:test';
 import {
     APP_LOGIN,
     CONTEXT,
-    MARKER,
     evaluate,
     githubApi,
+    MARKER,
     ownsReview,
     reconcile,
     requiresHuman,
     targets,
+    verifyPrCi,
 } from './ci-approve.mjs';
 
 const sha = 'a'.repeat(40);
@@ -329,4 +330,67 @@ test('a delayed push preserves an approval already granted for the current head'
     const api = fixture({ reviews: [approval] });
     await reconcile(api, 12, () => assert.fail('push must not read CI'), { pushed: true });
     assert.deepEqual(api.writes, []);
+});
+
+const ciPolicies = JSON.parse(readFileSync(new URL('./automerge-ci-policy.json', import.meta.url), 'utf8'));
+const ciWorkflow = Object.keys(ciPolicies)[0];
+function ciApi(runs) {
+    return {
+        repo: pr.head.repo.full_name,
+        pages: (endpoint) =>
+            endpoint.includes('/jobs?')
+                ? [
+                      {
+                          jobs: ciPolicies[ciWorkflow].jobs.map((required) => ({
+                              name: required.example ?? required.name.slice(1, -1),
+                              status: 'completed',
+                              conclusion: 'success',
+                              steps: (required.steps ?? []).map((name) => ({
+                                  name,
+                                  status: 'completed',
+                                  conclusion: 'success',
+                              })),
+                          })),
+                      },
+                  ]
+                : [{ workflow_runs: runs }],
+    };
+}
+const ciRun = {
+    id: 1,
+    head_sha: sha,
+    head_branch: pr.head.ref,
+    event: 'pull_request',
+    status: 'completed',
+    conclusion: 'success',
+    pull_requests: [{ number: pr.number, base: pr.base }],
+};
+
+test('approval accepts successful CI for the current head and base', () => {
+    assert.equal(verifyPrCi(ciApi([ciRun]), pr, [ciWorkflow]), true);
+});
+
+for (const [name, base] of [
+    ['base advanced', { ...pr.base, sha: 'new-base' }],
+    ['retargeted', { ...pr.base, ref: 'release/1.6' }],
+]) {
+    test(`approval rejects old CI after the PR is ${name}`, async () => {
+        const changed = { ...pr, base };
+        const api = fixture({ pulls: [changed], reviews: [approval] });
+        await reconcile(api, pr.number, (current) => verifyPrCi(ciApi([ciRun]), current, [ciWorkflow]));
+        assert.ok(api.writes.some(([kind, id]) => kind === 'dismiss' && id === approval.id));
+        assert.ok(!api.writes.some(([kind]) => kind === 'approve'));
+        assert.equal(api.writes.at(-1)[2], 'pending');
+    });
+}
+
+test('missing base metadata and another PR base cannot authorize approval', () => {
+    const run = { ...ciRun, pull_requests: [{ number: pr.number }, { number: 99, base: pr.base }] };
+    assert.equal(verifyPrCi(ciApi([run]), pr, [ciWorkflow]), false);
+    assert.throws(() => verifyPrCi(ciApi([ciRun]), { ...pr, base: {} }, [ciWorkflow]), /Missing PR base/);
+});
+
+test('a newer substantive run on another base prevents fallback to older CI', () => {
+    const later = { ...ciRun, id: 2, pull_requests: [{ number: pr.number, base: { ...pr.base, sha: 'other' } }] };
+    assert.equal(verifyPrCi(ciApi([ciRun, later]), pr, [ciWorkflow]), false);
 });
