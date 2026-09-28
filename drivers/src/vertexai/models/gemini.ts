@@ -10,6 +10,7 @@ import {
     type GenerateContentResponseUsageMetadata,
     HarmBlockThreshold,
     HarmCategory,
+    MediaModality,
     Modality,
     type Part,
     ProminentPeople,
@@ -843,6 +844,14 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         if (!tokenUsage.result) {
             tokenUsage.result = undefined; // If no result, mark as undefined
+        }
+
+        // Generated images are part of the candidate tokens, priced at their own rate.
+        const imageTokens = usageMetadata.candidatesTokensDetails?.find(
+            (detail) => detail.modality === MediaModality.IMAGE,
+        )?.tokenCount;
+        if (imageTokens) {
+            tokenUsage.result_image = imageTokens;
         }
 
         return tokenUsage;

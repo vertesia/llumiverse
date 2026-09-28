@@ -928,6 +928,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 
             return {
                 result: results,
+                token_usage: mapImagesUsage(response.usage),
             };
         } catch (error: unknown) {
             this.logger.error({ error }, `[${this.provider}] Image generation failed`);
@@ -986,6 +987,18 @@ function mapUsage(usage?: OpenAIUsageWithProviderDetails | null): ExecutionToken
     return {
         ...openAIPromptUsage(usage.input_tokens, cachedTokens, cacheWriteTokens),
         result: usage.output_tokens,
+        total: usage.total_tokens,
+    };
+}
+
+/** GPT Image models report usage; every output token is an image token. DALL-E reports none. */
+function mapImagesUsage(usage: OpenAI.Images.ImagesResponse.Usage | undefined): ExecutionTokenUsage | undefined {
+    if (!usage) return undefined;
+    return {
+        prompt: usage.input_tokens,
+        prompt_new: usage.input_tokens,
+        result: usage.output_tokens,
+        result_image: usage.output_tokens,
         total: usage.total_tokens,
     };
 }

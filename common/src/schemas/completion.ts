@@ -209,6 +209,14 @@ export const ExecutionTokenUsageSchema = z
             })
             .optional(),
         prompt_new: z.number().optional(),
+        result_image: z
+            .number()
+            .meta({
+                description:
+                    'Of `result`, the tokens of generated images, when the provider reports them. Image ' +
+                    'output is priced separately from text output.',
+            })
+            .optional(),
         provider_cost_usd: z
             .number()
             .meta({

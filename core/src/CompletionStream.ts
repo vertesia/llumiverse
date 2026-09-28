@@ -393,6 +393,7 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
         let promptNewTokens: number | undefined;
         let promptCacheWrite1hTokens: number | undefined;
         let providerCostUsd: number | undefined;
+        let resultImageTokens: number | undefined;
         // Undefined until the provider reports token data. resultTokens === 0 is valid (e.g. empty output with stop).
         const accumulatedUsage = (): ExecutionTokenUsage | undefined =>
             resultTokens === undefined
@@ -406,6 +407,7 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
                       ...(promptNewTokens != null && { prompt_new: promptNewTokens }),
                       ...(promptCacheWrite1hTokens != null && { prompt_cache_write_1h: promptCacheWrite1hTokens }),
                       ...(providerCostUsd != null && { provider_cost_usd: providerCostUsd }),
+                      ...(resultImageTokens != null && { result_image: resultImageTokens }),
                   };
         const httpScope = this.driver.createExecutionHttpAgentScope(this.options);
         let sourceIterator: AsyncIterator<CompletionChunkObject> | undefined;
@@ -454,6 +456,8 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
                             if (chunk.token_usage.prompt_new != null) promptNewTokens = chunk.token_usage.prompt_new;
                             if (chunk.token_usage.prompt_cache_write_1h != null)
                                 promptCacheWrite1hTokens = chunk.token_usage.prompt_cache_write_1h;
+                            if (chunk.token_usage.result_image != null)
+                                resultImageTokens = chunk.token_usage.result_image;
                             // The provider reports the call's cost once, with the final usage.
                             if (chunk.token_usage.provider_cost_usd != null)
                                 providerCostUsd = chunk.token_usage.provider_cost_usd;
