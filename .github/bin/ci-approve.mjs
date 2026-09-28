@@ -1,0 +1,255 @@
+import { execFileSync } from 'node:child_process';
+import { appendFileSync, readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+import { main as verifyCi } from './automerge-ci.mjs';
+
+export const CONTEXT = 'PR approval gate';
+export const MARKER = '<!-- vertesia-ci-approval:v1 -->';
+export const APP_LOGIN = 'vertesia-automerge[bot]';
+
+export function supportedBase(ref) {
+    return ref === 'main' || /^release\/\d+\.\d+$/.test(ref);
+}
+
+export function ownsReview(review) {
+    return (
+        review.user?.type === 'Bot' &&
+        review.user.login === APP_LOGIN &&
+        review.body?.startsWith(`${MARKER}\n`) &&
+        review.state === 'APPROVED'
+    );
+}
+
+export function requiresHuman(pr, files) {
+    if (pr.labels.some(({ name }) => name === 'human-review-required')) return true;
+    // Existing specialized gates retain ownership of deployment and automation PRs.
+    if (pr.labels.some(({ name }) => name === 'deployment') || pr.user.type === 'Bot') return true;
+    return files.some(({ filename, previous_filename }) =>
+        [filename, previous_filename].some(
+            (path) =>
+                path &&
+                (/^(\.github\/|\.githooks\/|scripts\/)/.test(path) ||
+                    /(^|\/)(package\.json|pnpm-workspace\.yaml|turbo\.json|biome\.json|tsconfig[^/]*\.json)$/.test(
+                        path,
+                    ) ||
+                    /(^|\/)(vitest|vite|jest)\.config\.[^/]+$/.test(path)),
+        ),
+    );
+}
+
+export async function evaluate(api, pr, ci) {
+    if (pr.state !== 'open' || pr.draft || !supportedBase(pr.base.ref) || pr.head.repo?.full_name !== api.repo) {
+        return {
+            state: 'pending',
+            approve: false,
+            reason: 'PR must be ready, same-repository, and target main or release/X.Y.',
+        };
+    }
+    if (!(await ci(pr))) {
+        return {
+            state: 'pending',
+            approve: false,
+            reason: 'Waiting for successful lint, build, and selected tests for this commit.',
+        };
+    }
+    const files = await api.files(pr.number);
+    if (files.length !== pr.changed_files) throw new Error('Incomplete PR file list');
+    const human = requiresHuman(pr, files);
+    return {
+        state: 'success',
+        approve: !human,
+        reason: human
+            ? 'CI passed; approval remains with a human or the specialized gate.'
+            : 'Lint, build, and selected tests passed for this commit.',
+    };
+}
+
+function sameRevision(a, b) {
+    return a.head.sha === b.head.sha && a.base.sha === b.base.sha && a.base.ref === b.base.ref;
+}
+
+export async function reconcile(api, number, ci, { pushed = false } = {}) {
+    let pr = await api.pr(number);
+    // Only the marked reviews from this App are ever candidates for dismissal.
+    let standing = [];
+    async function withdraw(reason, all = true) {
+        for (const review of standing) {
+            if (all || review.commit_id !== pr.head.sha) await api.dismiss(number, review.id, reason);
+        }
+        standing = all ? [] : standing.filter((review) => review.commit_id === pr.head.sha);
+    }
+    try {
+        standing = (await api.reviews(number)).filter(ownsReview);
+        // Withdraw old-head approvals before spending time inspecting CI.
+        await withdraw('The PR head changed; waiting for checks on the new commit.', false);
+        if (pushed) {
+            // A delayed push event must preserve a newer approval and its successful status.
+            return { reason: 'Removed old-commit approvals; CI completion handles approval.' };
+        }
+        let result = await evaluate(api, pr, ci);
+        if (!result.approve) await withdraw(result.reason);
+        if (result.approve) {
+            const fresh = await api.pr(number);
+            if (!sameRevision(pr, fresh)) {
+                await withdraw('The PR changed during evaluation.');
+                pr = fresh;
+                result = {
+                    state: 'pending',
+                    approve: false,
+                    reason: 'PR changed during evaluation; waiting for another check.',
+                };
+            } else {
+                // Labels, draft state and rerun results can change without a new SHA.
+                pr = fresh;
+                result = await evaluate(api, pr, ci);
+                if (!result.approve) await withdraw(result.reason);
+            }
+        }
+        if (result.approve && standing.length === 0) {
+            const review = await api.approve(
+                number,
+                pr.head.sha,
+                `${MARKER}\nApproved after lint, build, and selected tests passed for ${pr.head.sha}.`,
+            );
+            if (!ownsReview(review)) throw new Error('Unexpected approval identity or response');
+            standing.push(review);
+            if (review.commit_id !== pr.head.sha) throw new Error('Approval commit does not match the tested head');
+            const after = await api.pr(number);
+            if (!sameRevision(pr, after)) {
+                await withdraw('The PR changed while the approval was being submitted.');
+                pr = after;
+                result = {
+                    state: 'pending',
+                    approve: false,
+                    reason: 'PR changed during approval; waiting for another check.',
+                };
+            } else {
+                result = await evaluate(api, after, ci);
+                if (!result.approve) await withdraw(result.reason);
+            }
+        }
+        if (pr.head.repo?.full_name === api.repo) await api.status(pr.head.sha, result.state, result.reason);
+        return result;
+    } catch (error) {
+        // An API outage must not preserve a prior approval whose eligibility is now unknown.
+        try {
+            if (pr.head.repo?.full_name === api.repo) {
+                await api.status(
+                    pr.head.sha,
+                    'error',
+                    'Could not verify approval eligibility; inspect the workflow log.',
+                );
+            }
+        } finally {
+            await withdraw('Approval eligibility could not be verified.');
+        }
+        throw error;
+    }
+}
+
+export function githubApi(env, call = execFileSync) {
+    const repo = env.GITHUB_REPOSITORY;
+    if (!/^[\w.-]+\/[\w.-]+$/.test(repo ?? '')) throw new Error('Invalid GITHUB_REPOSITORY');
+    const request = (endpoint, { method = 'GET', body, review = false, pages = false } = {}) => {
+        const token = review ? env.GH_REVIEW_TOKEN : env.GH_TOKEN;
+        if (!token) throw new Error('Missing GitHub token');
+        const args = ['api', endpoint, '--method', method];
+        if (pages) args.push('--paginate', '--slurp');
+        if (body) args.push('--input', '-');
+        const output = call('gh', args, {
+            encoding: 'utf8',
+            maxBuffer: 32 * 1024 * 1024,
+            env: { ...env, GH_TOKEN: token },
+            input: body ? JSON.stringify(body) : undefined,
+        });
+        return output.trim() ? JSON.parse(output) : null;
+    };
+    const pages = (endpoint) => request(endpoint, { pages: true });
+    const list = (endpoint) => pages(`${endpoint}${endpoint.includes('?') ? '&' : '?'}per_page=100`).flat();
+    return {
+        repo,
+        pages,
+        pr: (number) => request(`repos/${repo}/pulls/${number}`),
+        open: () => list(`repos/${repo}/pulls?state=open`),
+        files: (number) => list(`repos/${repo}/pulls/${number}/files`),
+        reviews: (number) => list(`repos/${repo}/pulls/${number}/reviews`),
+        dismiss: (number, id, message) =>
+            request(`repos/${repo}/pulls/${number}/reviews/${id}/dismissals`, {
+                method: 'PUT',
+                review: true,
+                body: { message },
+            }),
+        approve: (number, sha, body) =>
+            request(`repos/${repo}/pulls/${number}/reviews`, {
+                method: 'POST',
+                review: true,
+                body: { event: 'APPROVE', commit_id: sha, body },
+            }),
+        async status(sha, state, description) {
+            description = description.slice(0, 140);
+            const old = list(`repos/${repo}/commits/${sha}/statuses`).find((status) => status.context === CONTEXT);
+            if (old?.creator?.login === 'github-actions[bot]' && old.state === state && old.description === description)
+                return;
+            request(`repos/${repo}/statuses/${sha}`, {
+                method: 'POST',
+                body: {
+                    state,
+                    description,
+                    context: CONTEXT,
+                    target_url: `${env.GITHUB_SERVER_URL}/${repo}/actions/runs/${env.GITHUB_RUN_ID}`,
+                },
+            });
+        },
+    };
+}
+
+export async function targets(api, event, eventName) {
+    if (event.pull_request) return [event.pull_request.number];
+    if (eventName === 'workflow_dispatch' && event.inputs?.pr_number) {
+        const number = Number(event.inputs.pr_number);
+        if (!Number.isSafeInteger(number) || number <= 0) throw new Error('Invalid PR number');
+        return [number];
+    }
+    if (event.workflow_run) {
+        const run = event.workflow_run;
+        if (run.head_repository?.full_name !== api.repo) return [];
+        // Query current PRs: event.pull_requests can be empty and events may arrive out of order.
+        return (await api.open())
+            .filter((pr) => pr.head.repo?.full_name === api.repo && pr.head.ref === run.head_branch)
+            .map((pr) => pr.number);
+    }
+    return (await api.open())
+        .filter((pr) => pr.head.repo?.full_name === api.repo && supportedBase(pr.base.ref))
+        .map((pr) => pr.number);
+}
+
+export async function main(env) {
+    const api = githubApi(env);
+    const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, 'utf8'));
+    const policy = JSON.parse(readFileSync(new URL('./automerge-ci-policy.json', import.meta.url), 'utf8'));
+    const ci = (pr) =>
+        verifyCi(
+            { REPO: api.repo, HEAD_BRANCH: pr.head.ref, HEAD_SHA: pr.head.sha },
+            pr.number,
+            Object.keys(policy),
+            api.pages,
+        );
+    const errors = [];
+    for (const number of await targets(api, event, env.GITHUB_EVENT_NAME)) {
+        try {
+            const result = await reconcile(api, number, ci, {
+                pushed: env.GITHUB_EVENT_NAME === 'pull_request_target' && event.action === 'synchronize',
+            });
+            const summary = `PR #${number}: ${result.reason}`;
+            console.log(summary);
+            if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `${summary}\n\n`);
+        } catch (error) {
+            errors.push(new Error(`PR #${number}: ${error.message}`, { cause: error }));
+        }
+    }
+    if (errors.length) throw new AggregateError(errors, 'Approval reconciliation failed');
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+    await main(process.env);
+}

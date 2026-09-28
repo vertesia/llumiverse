@@ -1,1 +1,7 @@
 config-variables: null
+
+paths:
+  # GitHub supports queue:max; actionlint 1.7.12 does not yet recognize the key.
+  .github/workflows/ci-approve.yaml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'

@@ -8,7 +8,7 @@ on:
   workflow_run:
     workflows: ["*"]
     types: [completed]
-    branches: ["backport-*", "sync-composableai-*", "sync-llumiverse-*", "main", "preview", "release/**"]
+    branches: ["backport-*", "sync-composableai-*", "sync-llumiverse-*", "main", "release/**"]
   workflow_call:
     outputs:
       notification_requested:

@@ -1,0 +1,30 @@
+{
+  "name": "CI approval gate",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "include": [
+        "refs/heads/main",
+        "refs/heads/release/**"
+      ],
+      "exclude": []
+    }
+  },
+  "rules": [
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "required_status_checks": [
+          {
+            "context": "PR approval gate",
+            "integration_id": 15368
+          }
+        ],
+        "strict_required_status_checks_policy": false,
+        "do_not_enforce_on_create": true
+      }
+    }
+  ],
+  "bypass_actors": []
+}

@@ -14,7 +14,8 @@
             "!**/lib/**",
             "!**/node_modules/**",
             "!**/build/**",
-            "!**/bin/**"
+            "!**/bin/**",
+            ".github/bin/ci-approve*.mjs"
         ]
     },
     "formatter": {
