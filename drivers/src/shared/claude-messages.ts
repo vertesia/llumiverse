@@ -68,7 +68,7 @@ import {
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
 import { claudeFinishReason, logClaudeTruncation } from './claude-stop-reason.js';
-import { resolveClaudeThinking } from './claude-thinking.js';
+import { type ClaudeThinkingConfig, type ClaudeThinkingInput, resolveClaudeThinking } from './claude-thinking.js';
 import { truncateBinaryForDebug } from './debug-prompt.js';
 
 // ============================================================================
@@ -201,6 +201,7 @@ export interface ClaudeBaseOptions {
     stop_sequence?: string[];
     effort?: string;
     thinking_budget_tokens?: number;
+    thinking_mode?: ClaudeThinkingInput['thinking_mode'];
     include_thoughts?: boolean;
     cache_enabled?: boolean;
     cache_ttl?: string;
@@ -737,10 +738,12 @@ function stripClaudeCacheControlFromTools(
 // Payload builder
 // ============================================================================
 
+type ClaudeMessagePayload = Omit<MessageCreateParamsBase, 'thinking'> & { thinking?: ClaudeThinkingConfig };
+
 export function getClaudePayload(
     options: ExecutionOptions,
     prompt: ClaudePrompt,
-): { payload: MessageCreateParamsBase; requestOptions: RequestOptions | undefined } {
+): { payload: ClaudeMessagePayload; requestOptions: RequestOptions | undefined } {
     const modelName = options.model;
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
 
@@ -860,7 +863,7 @@ export function getClaudePayload(
         model_options as Parameters<typeof resolveClaudeThinking>[1],
     );
 
-    const payload: MessageCreateParamsBase = {
+    const payload: ClaudeMessagePayload = {
         messages: sanitizedMessages,
         system: sanitizedSystem,
         tools: sanitizedTools,
@@ -1098,7 +1101,8 @@ export async function streamClaudeCompletion(
     const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
 
     const { payload, requestOptions } = getClaudePayload(options, conversation);
-    const streamingPayload: MessageStreamParams = { ...payload, stream: true };
+    // The SDK transports between_tools unchanged but does not yet declare its type.
+    const streamingPayload = { ...payload, stream: true } as MessageStreamParams;
 
     const response_stream = await streamClaudeMessages(
         client,

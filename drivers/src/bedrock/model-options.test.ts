@@ -3,6 +3,28 @@ import { describe, expect, it } from 'vitest';
 import { BedrockDriver } from './index.js';
 
 describe('Bedrock provider-specific model options', () => {
+    it('serializes Claude between-tools mode through Converse reasoning_config', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const model = 'anthropic.claude-sonnet-5-5';
+        const request = driver.preparePayload(
+            { modelId: model, messages: [{ role: 'user', content: [{ text: 'hello' }] }] },
+            {
+                model,
+                model_options: {
+                    _option_id: 'bedrock-claude',
+                    thinking_mode: 'between_tools',
+                    effort: 'high',
+                    include_thoughts: true,
+                    thinking_budget_tokens: 8000,
+                },
+            },
+        );
+        expect(request.additionalModelRequestFields).toEqual({
+            reasoning_config: { type: 'between_tools' },
+            output_config: { effort: 'high' },
+        });
+    });
+
     it.each([
         ['amazon.nova-pro-v1:0', { _option_id: 'bedrock-nova', top_k: 12 }, { inferenceConfig: { topK: 12 } }],
         ['mistral.mixtral-8x7b-instruct-v0:1', { _option_id: 'bedrock-mistral', top_k: 12 }, { top_k: 12 }],

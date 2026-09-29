@@ -24,6 +24,7 @@ import {
     buildClaudeEffortOptions,
     buildClaudeIncludeThoughtsOption,
     buildClaudeThinkingBudgetOption,
+    buildClaudeThinkingModeOption,
     getClaudeMaxTokensLimit,
 } from './shared-parsing.js';
 import { hasSamplingParameterRestriction, isGeminiModelVersionGte } from './version-parsing.js';
@@ -698,6 +699,7 @@ function getClaudeOptions(model: string, option?: ModelOptions): ModelOptionsInf
             ...commonOptions,
             ...buildClaudeEffortOptions(model),
             ...buildClaudeThinkingBudgetOption(model),
+            ...buildClaudeThinkingModeOption(model),
             ...buildClaudeIncludeThoughtsOption(model),
             ...buildClaudeCacheOptions(),
             ...buildClaudeCacheTtlOptions((option as VertexAIClaudeOptions)?.cache_enabled),

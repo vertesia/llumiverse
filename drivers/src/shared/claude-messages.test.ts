@@ -393,3 +393,29 @@ describe('formatClaudePrompt', () => {
         expect(JSON.stringify(conversation.messages)).toContain('[Content truncated');
     });
 });
+
+describe('Sonnet between-tools payload', () => {
+    it.each(['anthropic-claude', 'vertexai-claude', 'bedrock-mantle-claude'] as const)(
+        'serializes only the mode for %s',
+        (_option_id) => {
+            const { payload } = getClaudePayload(
+                {
+                    model: 'claude-sonnet-5-5',
+                    model_options: {
+                        _option_id,
+                        thinking_mode: 'between_tools',
+                        effort: 'medium',
+                        include_thoughts: true,
+                        thinking_budget_tokens: 8000,
+                        temperature: 0.5,
+                    },
+                },
+                { messages: [{ role: 'user', content: 'Hello' }] },
+            );
+            expect(payload.thinking).toEqual({ type: 'between_tools' });
+            expect(payload.output_config).toEqual({ effort: 'medium' });
+            expect(payload.temperature).toBeUndefined();
+            expect(payload.tool_choice).toBeUndefined();
+        },
+    );
+});

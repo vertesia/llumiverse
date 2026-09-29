@@ -8,7 +8,12 @@
 
 import { type ModelOptionInfoItem, OptionType } from '../types.js';
 import { getMaxOutputTokens } from './context-windows.js';
-import { getAvailableEffortLevels, isClaudeVersionGTE, requiresAdaptiveThinkingOnly } from './version-parsing.js';
+import {
+    getAvailableEffortLevels,
+    isClaudeVersionGTE,
+    parseClaudeVersion,
+    requiresAdaptiveThinkingOnly,
+} from './version-parsing.js';
 
 // ============================================================================
 // Max tokens
@@ -79,6 +84,21 @@ export function buildClaudeEffortOptions(model: string): ModelOptionInfoItem[] {
             enum: effortLevels,
             description:
                 'Controls how many tokens Claude uses when responding. Lower effort trades thoroughness for speed and cost savings.',
+        },
+    ];
+}
+
+/** Thinking mode selector for Sonnet 5.5 and later Sonnet generations. */
+export function buildClaudeThinkingModeOption(model: string): ModelOptionInfoItem[] {
+    if (parseClaudeVersion(model)?.variant !== 'sonnet' || !isClaudeVersionGTE(model, 5, 5)) return [];
+    return [
+        {
+            name: 'thinking_mode',
+            type: OptionType.enum,
+            enum: { 'Adaptive (default)': 'adaptive', 'Between tools': 'between_tools' },
+            description:
+                'Between tools skips up-front thinking and requires low, medium, or high effort. ' +
+                'Keep effort fixed during the conversation. Include thoughts controls visibility only.',
         },
     ];
 }
