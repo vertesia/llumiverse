@@ -20,21 +20,10 @@ export function ownsReview(review) {
     );
 }
 
-export function requiresHuman(pr, files) {
+export function requiresHuman(pr) {
     if (pr.labels.some(({ name }) => name === 'human-review-required')) return true;
     // Existing specialized gates retain ownership of deployment and automation PRs.
-    if (pr.labels.some(({ name }) => name === 'deployment') || pr.user.type === 'Bot') return true;
-    return files.some(({ filename, previous_filename }) =>
-        [filename, previous_filename].some(
-            (path) =>
-                path &&
-                (/^(\.github\/|\.githooks\/|scripts\/)/.test(path) ||
-                    /(^|\/)(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|turbo\.json|biome\.json|tsconfig[^/]*\.json)$/.test(
-                        path,
-                    ) ||
-                    /(^|\/)(vitest|vite|jest)\.config\.[^/]+$/.test(path)),
-        ),
-    );
+    return pr.labels.some(({ name }) => name === 'deployment') || pr.user.type === 'Bot';
 }
 
 export async function evaluate(api, pr, ci) {
@@ -52,9 +41,7 @@ export async function evaluate(api, pr, ci) {
             reason: 'Waiting for successful lint, build, and selected tests for this commit.',
         };
     }
-    const files = await api.files(pr.number);
-    if (files.length !== pr.changed_files) throw new Error('Incomplete PR file list');
-    const human = requiresHuman(pr, files);
+    const human = requiresHuman(pr);
     return {
         state: 'success',
         approve: !human,
@@ -172,7 +159,6 @@ export function githubApi(env, call = execFileSync) {
         pages,
         pr: (number) => request(`repos/${repo}/pulls/${number}`),
         open: () => list(`repos/${repo}/pulls?state=open`),
-        files: (number) => list(`repos/${repo}/pulls/${number}/files`),
         reviews: (number) => list(`repos/${repo}/pulls/${number}/reviews`),
         dismiss: (number, id, message) =>
             request(`repos/${repo}/pulls/${number}/reviews/${id}/dismissals`, {

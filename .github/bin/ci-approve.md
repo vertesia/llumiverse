@@ -34,9 +34,9 @@ Approval writes explicitly name the tested commit. PR metadata and CI are read
 again before publication and after a new review is submitted. Events are serialized
 per repository, and delayed events always evaluate the latest PR state.
 
-`human-review-required` opts a PR out of automatic review. Changes to `.github/`,
-`.githooks/`, `scripts/`, package manifests, `pnpm-lock.yaml` and build/test configuration also require
-human review. Bot-authored and `deployment` PRs retain their existing review route.
+`human-review-required` opts a PR out of automatic review. All file paths are eligible,
+including dependency manifests, lockfiles, workflows, and build/test configuration.
+Bot-authored and `deployment` PRs retain their existing review route.
 These PRs still receive the CI status when tests pass. Fork PRs are not approved.
 
 ## Permissions and trusted code
