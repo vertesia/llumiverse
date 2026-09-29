@@ -215,7 +215,7 @@ describe('TogetherAIDriver', () => {
         expect(error).toMatchObject({ name: 'APIConnectionTimeoutError', retryable: true });
     });
 
-    it('retains tool text and image references when Together requires string tool content', async () => {
+    it('preserves tool image attachments with Together string tool content', async () => {
         const driver = new TogetherAIDriver({ apiKey: 'test-key' });
         const create = vi.fn(async (_request: unknown) => ({
             id: 'together-1',
@@ -255,10 +255,19 @@ describe('TogetherAIDriver', () => {
         );
 
         const request = create.mock.calls[0][0] as { messages: unknown[] };
-        expect(request.messages[1]).toEqual({
-            role: 'tool',
-            tool_call_id: 'call_1',
-            content: 'result\n[Image: https://example.test/image.png]',
-        });
+        expect(request.messages.slice(1)).toEqual([
+            {
+                role: 'tool',
+                tool_call_id: 'call_1',
+                content: 'result\n[Image 1 attached below]',
+            },
+            {
+                role: 'user',
+                content: [
+                    { type: 'text', text: 'Image 1 from tool result call_1:' },
+                    { type: 'image_url', image_url: { url: 'https://example.test/image.png' } },
+                ],
+            },
+        ]);
     });
 });

@@ -754,6 +754,24 @@ describe('fixOrphanedToolUse - OpenAI', () => {
 });
 
 describe('fixOrphanedToolResults - OpenAI', () => {
+    test.each([undefined, null])('handles a result without call_id (%s)', (call_id) => {
+        const call: ResponseInputItem = {
+            type: 'function_call',
+            call_id: 'call_1',
+            name: 'lookup',
+            arguments: '{}',
+        };
+        const output: ResponseInputItem = { type: 'function_call_output', call_id, output: 'result' };
+        expect(fixOrphanedToolResultsOpenAI([call, output])).toEqual([call]);
+        expect(fixOrphanedToolUseOpenAI([call, output])).toContainEqual(
+            expect.objectContaining({
+                type: 'function_call_output',
+                call_id: 'call_1',
+                output: expect.stringContaining('Tool interrupted'),
+            }),
+        );
+    });
+
     test('returns empty array for empty input', () => {
         expect(fixOrphanedToolResultsOpenAI([])).toEqual([]);
     });

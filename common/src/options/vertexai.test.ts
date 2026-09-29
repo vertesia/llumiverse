@@ -123,4 +123,11 @@ describe('Vertex AI MaaS metadata', () => {
     it('uses model-specific MaaS output token limits where known', () => {
         expect(getMaxTokensLimitVertexAi('qwen3-next-80b-a3b-thinking-maas')).toBe(262144);
     });
+
+    it('uses Claude Sonnet 4.6 128K output limit on Vertex AI', () => {
+        const options = getVertexAiOptions('claude-sonnet-4-6');
+
+        expect(getMaxTokensLimitVertexAi('claude-sonnet-4-6')).toBe(128_000);
+        expect(options.options.find((option) => option.name === 'max_tokens')).toMatchObject({ max: 128_000 });
+    });
 });

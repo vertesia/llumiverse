@@ -83,6 +83,16 @@ describe('Bedrock Converse structured output', () => {
         expect(payload.inferenceConfig?.maxTokens).toBe(127_999);
     });
 
+    it('defaults Claude Sonnet 4.5 max_tokens to the Bedrock 64,000 limit', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const payload = driver.preparePayload(
+            { modelId: undefined, messages: [{ role: 'user', content: [{ text: 'hello' }] }] },
+            { model: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0' },
+        );
+
+        expect(payload.inferenceConfig?.maxTokens).toBe(64_000);
+    });
+
     it('uses outputConfig for non-Claude models', () => {
         const driver = new BedrockDriver({ region: 'us-east-1' });
         const payload = driver.preparePayload(

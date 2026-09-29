@@ -15,6 +15,7 @@ import {
     readStreamAsString,
     readStreamAsUint8Array,
 } from '@llumiverse/core';
+import { boundedAudioStream } from '../shared/audio.js';
 import { isAmazonS3Hostname, parseS3UrlToUri } from './s3.js';
 
 export function supportsConverseOutputConfig(model: string): boolean {
@@ -188,14 +189,14 @@ async function processFile<T extends FileProcessingMode>(
     f: DataSource,
     mode: T,
 ): Promise<T extends 'content' ? ContentBlock : ToolResultContentBlock> {
-    const source = await f.getStream();
+    const source = () => f.getStream();
 
     //Image file - "png" | "jpeg" | "gif" | "webp"
     if (f.mime_type?.startsWith('image')) {
         const imageBlock = {
             image: {
                 format: mimeToImageType(f.mime_type),
-                source: { bytes: await readStreamAsUint8Array(source) },
+                source: { bytes: await readStreamAsUint8Array(await source()) },
             },
         };
 
@@ -207,7 +208,7 @@ async function processFile<T extends FileProcessingMode>(
     else if (f.mime_type && (f.mime_type.startsWith('text') || f.mime_type?.startsWith('application'))) {
         // Handle JSON files specially
         if (f.mime_type === 'application/json' || f.name?.endsWith('.json')) {
-            const jsonContent = await readStreamAsString(source);
+            const jsonContent = await readStreamAsString(await source());
             try {
                 const parsedJson = JSON.parse(jsonContent);
                 if (mode === 'tool') {
@@ -229,7 +230,7 @@ async function processFile<T extends FileProcessingMode>(
                 document: {
                     format: mimeToDocType(f.mime_type),
                     name: cleanBedrockFilename(f.name),
-                    source: { bytes: await readStreamAsUint8Array(source) },
+                    source: { bytes: await readStreamAsUint8Array(await source()) },
                 },
             };
 
@@ -265,7 +266,7 @@ async function processFile<T extends FileProcessingMode>(
                 : {
                       video: {
                           format: mimeToVideoType(f.mime_type),
-                          source: { bytes: await readStreamAsUint8Array(source) },
+                          source: { bytes: await readStreamAsUint8Array(await source()) },
                       },
                   };
 
@@ -278,7 +279,7 @@ async function processFile<T extends FileProcessingMode>(
         if (mode === 'tool') {
             throw new Error('Bedrock Converse does not support audio blocks in tool results');
         }
-        let urlString = await f.getURL();
+        let urlString = await f.getURI();
         let url = new URL(urlString);
         if (isAmazonS3Hostname(url.hostname)) {
             urlString = parseS3UrlToUri(url);
@@ -295,7 +296,9 @@ async function processFile<T extends FileProcessingMode>(
                 : {
                       audio: {
                           format: mimeToAudioType(f.mime_type),
-                          source: { bytes: await readStreamAsUint8Array(source) },
+                          source: {
+                              bytes: await readStreamAsUint8Array(boundedAudioStream(await source(), 25_000_000)),
+                          },
                       },
                   };
         return audioBlock satisfies ContentBlock.AudioMember as T extends 'content'
@@ -304,7 +307,7 @@ async function processFile<T extends FileProcessingMode>(
     }
     //Fallback, send as text
     else {
-        const textBlock = { text: await readStreamAsString(source) };
+        const textBlock = { text: await readStreamAsString(await source()) };
         return mode === 'content'
             ? (textBlock satisfies ContentBlock.TextMember)
             : (textBlock satisfies ToolResultContentBlock.TextMember);
@@ -357,6 +360,37 @@ export function converseConcatMessages(messages: Message[] | undefined): Message
 
     result.push(currentMessage);
     return result;
+}
+
+/** Keep tool images visible on models that only accept them as ordinary user content. */
+export function relocateConverseToolImages(messages: Message[], model: string): Message[] {
+    // AWS only documents nested tool-result images for Nova and Claude.
+    // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolResultContentBlock.html
+    if (model.includes('anthropic.claude') || model.includes('amazon.nova')) return messages;
+
+    return messages.map((message) => {
+        if (message.role !== ConversationRole.USER) return message;
+        const attachments: ContentBlock[] = [];
+        const content = message.content?.map((block) => {
+            const result = block.toolResult;
+            if (!result?.content?.some((part) => part.image)) return block;
+
+            const remaining: ToolResultContentBlock[] = [];
+            for (const part of result.content) {
+                if (part.image) {
+                    attachments.push({ text: `Image from tool result ${result.toolUseId}:` }, { image: part.image });
+                } else {
+                    remaining.push(part);
+                }
+            }
+            // Image-only results still need a nonempty content array for tool pairing.
+            if (remaining.length === 0) remaining.push({ text: 'See the attached tool-result image(s).' });
+            return { toolResult: { ...result, content: remaining } } satisfies ContentBlock;
+        });
+        // Append after all tool results so parallel tool calls stay together. Do not mutate
+        // stored history: the same conversation may subsequently be used with another model.
+        return attachments.length ? { ...message, content: [...(content ?? []), ...attachments] } : message;
+    });
 }
 
 export function converseSystemToMessages(system: SystemContentBlock[]): Message {

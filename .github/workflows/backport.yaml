@@ -42,7 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Mints a token for the release bot App, whose credentials are provisioned in
-    # this repo's `backport` environment (contents:write + pull-requests:write).
+    # this repo's `backport` environment (contents:write + pull-requests:write + workflows:write).
     environment: backport
     permissions:
       contents: read # only checkout uses the default token; all writes go via the App token
@@ -62,6 +62,7 @@ jobs:
           private-key: ${{ secrets.APP_VERTESIA_RELEASE_PEM }}
           permission-contents: write
           permission-pull-requests: write
+          permission-workflows: write
 
       - name: Backport
         env:

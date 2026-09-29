@@ -6,6 +6,7 @@ import { OpenAIResponsesDriverBase } from './index.js';
 import {
     exportLegacyOpenAIResponsesConversation,
     OPENAI_RESPONSES_PROTOCOL,
+    prepareOpenAIResponsesCanonicalState,
 } from './openai-responses-conversation-adapter.js';
 
 class TestOpenAIResponsesDriver extends OpenAIResponsesDriverBase {
@@ -187,6 +188,14 @@ describe('OpenAI Responses canonical lifecycle', () => {
         const first = await driver.execute(segments, firstOptions);
 
         expect(first.result).toEqual([{ type: 'json', value: { answer: 'Tokyo', note: null } }]);
+        expect(first.token_usage).toEqual({
+            prompt: 100,
+            prompt_cached: 25,
+            prompt_cache_write: 5,
+            prompt_new: 70,
+            result: 20,
+            total: 120,
+        });
         expect(latestGeneratedText(first.conversation)).toBe(rawText);
         const document = parseConversationDocument(JSON.parse(JSON.stringify(first.conversation)));
         const generation = Object.values(document.generations).find(
@@ -226,6 +235,26 @@ describe('OpenAI Responses canonical lifecycle', () => {
         expect(retried.service_tier).toBe(first.service_tier);
         expect(retried.conversation).toEqual(document);
         expect(create).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects a function-call result without a call association before provider execution', async () => {
+        const options = runtimeOptions({
+            flow: 'missing-call-id',
+            operation: 'continue',
+            attempt: 'first',
+            recordedAt: '2026-09-12T00:10:00.000Z',
+        });
+
+        await expect(
+            prepareOpenAIResponsesCanonicalState({
+                conversation: [
+                    { type: 'function_call_output', output: 'orphaned result' },
+                ] as unknown as OpenAI.Responses.ResponseInputItem[],
+                prompt: [],
+                options,
+                provider: Providers.openai,
+            }),
+        ).rejects.toThrow('function_call_output at items/0 has no call_id');
     });
 
     it('preserves tool result status internally, projects rich continuation, and recovers its accepted response', async () => {

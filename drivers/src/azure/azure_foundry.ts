@@ -1,6 +1,6 @@
 import { AIProjectClient, type DeploymentUnion, type ModelDeployment } from '@azure/ai-projects';
 import { createSseStream, type NodeJSReadableStream } from '@azure/core-sse';
-import { DefaultAzureCredential, getBearerTokenProvider, type TokenCredential } from '@azure/identity';
+import { DefaultAzureCredential, getBearerTokenProvider } from '@azure/identity';
 import type {
     ModelClient as AzureInferenceClient,
     ChatCompletionsOutput,
@@ -14,6 +14,7 @@ import ModelClient, { isUnexpected } from '@azure-rest/ai-inference';
 import {
     type AIModel,
     type Completion,
+    type CompletionStream,
     type DriverCompletionStream,
     type DriverOptions,
     dataSourceToBase64,
@@ -21,16 +22,20 @@ import {
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
+    type ExecutionResponse,
     type ImageEmbeddingInput,
     LlumiverseError,
     type LlumiverseErrorContext,
     normalizeEmbeddingsOptions,
+    type PromptSegment,
     Providers,
     resolveModelProfile,
     type TextEmbeddingInput,
 } from '@llumiverse/core';
 import { AbstractDriver } from '@llumiverse/core/driver';
 import type OpenAI from 'openai';
+import type { AzureFoundryDriverOptions } from '../driver-options.js';
+import { openAIAudioTask } from '../openai/audio.js';
 import { OpenAIResponsesDriverBase } from '../openai/index.js';
 import {
     type OpenAIChatCompletionsContentPart,
@@ -49,6 +54,8 @@ import {
     formatOpenAILikeMultimodalPrompt,
 } from '../openai/openai_format.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
+
+export type { AzureFoundryDriverOptions } from '../driver-options.js';
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 type SSEMessage = { data?: string };
@@ -157,17 +164,6 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
     }
 }
 
-export interface AzureFoundryDriverOptions extends DriverOptions {
-    /**
-     * The credentials to use to access Azure AI Foundry
-     */
-    azureADTokenProvider?: TokenCredential;
-
-    endpoint?: string;
-
-    apiVersion?: string;
-}
-
 export interface AzureFoundryInferencePrompt {
     messages: ChatRequestMessage[];
 }
@@ -188,6 +184,34 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
     protected supportsCanonicalConversation(_options: ExecutionOptions): boolean {
         return true;
+    }
+
+    override async execute(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<ExecutionResponse<ResponseInputItem[]>> {
+        if (
+            openAIAudioTask(options.model) &&
+            (await this.isOpenAIDeployment(options.model, signal, options.httpTimeout))
+        ) {
+            return this.getOpenAIProtocolDriver().execute(segments, options, signal);
+        }
+        return super.execute(segments, options, signal);
+    }
+
+    override async stream(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CompletionStream<ResponseInputItem[]>> {
+        if (
+            openAIAudioTask(options.model) &&
+            (await this.isOpenAIDeployment(options.model, signal, options.httpTimeout))
+        ) {
+            return this.getOpenAIProtocolDriver().stream(segments, options, signal);
+        }
+        return super.stream(segments, options, signal);
     }
 
     OPENAI_API_VERSION = '2025-01-01-preview';
@@ -218,8 +242,9 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             this.logger.info(`[Azure Foundry] Overriding default API version, using API version: ${opts.apiVersion}`);
         }
 
-        this.service = new AIProjectClient(opts.endpoint, opts.azureADTokenProvider);
-        this.inferenceClient = ModelClient(opts.endpoint, opts.azureADTokenProvider, {
+        const endpoint = opts.endpoint.endsWith('/') ? opts.endpoint.slice(0, -1) : opts.endpoint;
+        this.service = new AIProjectClient(endpoint, opts.azureADTokenProvider);
+        this.inferenceClient = ModelClient(endpoint, opts.azureADTokenProvider, {
             apiVersion: this.INFERENCE_API_VERSION,
         });
         this.inferenceProtocolDriver = new AzureFoundryInferenceProtocolDriver(this.inferenceClient, opts);
@@ -263,7 +288,7 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             this.service.getOpenAIClient({
                 fetch: this.getDriverFetch(),
                 timeout: this.getDriverRequestTimeoutMs(),
-            }),
+            }) as unknown as OpenAI,
             this.options,
         );
         return this.openAIProtocolDriver;
@@ -524,6 +549,9 @@ function toAzureFoundryChatPrompt(items: ResponseInputItem[]): OpenAIChatComplet
     const toolResultStatuses = new Map<string, 'success' | 'error' | 'cancelled' | 'denied'>();
     for (const item of items) {
         if (item.type !== 'function_call_output') continue;
+        if (typeof item.call_id !== 'string' || item.call_id.length === 0) {
+            throw new Error('Cannot convert a function_call_output without call_id to Azure Foundry Chat Completions.');
+        }
         const status = (item as typeof item & { _llumiverse_tool_result_status?: unknown })
             ._llumiverse_tool_result_status;
         if (status === 'success' || status === 'error' || status === 'cancelled' || status === 'denied') {
@@ -660,6 +688,7 @@ function parseCapabilityFlag(value: unknown): boolean | undefined {
 }
 
 function isStandardInferenceDeployment(deployment: ModelDeployment): boolean {
+    if (deployment.modelPublisher?.toLowerCase() === 'openai' && openAIAudioTask(deployment.modelName)) return true;
     const profile = resolveModelProfile(deployment.modelName, Providers.azure_foundry);
     const sourceModel = deployment.modelName.toLowerCase();
     // These source families use dedicated endpoint contracts, not Foundry chat or Responses inference.
@@ -705,9 +734,11 @@ function toAzureInferenceMessage(message: OpenAIChatCompletionsPayload['messages
                     typeof message.content === 'string'
                         ? message.content
                         : (message.content?.map((part) =>
-                              part.type === 'text'
-                                  ? { type: 'text' as const, text: part.text }
-                                  : { type: 'image_url' as const, image_url: part.image_url },
+                              part.type === 'input_audio'
+                                  ? unsupportedAudioPart()
+                                  : part.type === 'text'
+                                    ? { type: 'text' as const, text: part.text }
+                                    : { type: 'image_url' as const, image_url: part.image_url },
                           ) ?? ''),
             };
     }
@@ -800,4 +831,8 @@ export function parseAzureFoundryModelId(compositeId: string): { deploymentName:
 
 export function isCompositeModelId(modelId: string): boolean {
     return modelId.includes('::');
+}
+
+function unsupportedAudioPart(): never {
+    throw new Error('This inference endpoint does not support audio input');
 }

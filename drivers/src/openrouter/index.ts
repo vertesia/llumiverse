@@ -24,9 +24,9 @@ import type {
     ProviderPreferences,
 } from '@openrouter/sdk/models';
 import type { Input as OpenRouterEmbeddingInput } from '@openrouter/sdk/models/operations';
+import type { OpenRouterDriverOptions } from '../driver-options.js';
 import {
     OpenAIChatCompletionsDriverBase,
-    type OpenAIChatCompletionsDriverOptions,
     type OpenAIChatCompletionsPayload,
     type OpenAIChatCompletionsRequestMessage,
     type OpenAIChatCompletionsResponse,
@@ -36,13 +36,7 @@ import {
 } from '../openai/openai_chat_completions.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 
-export interface OpenRouterDriverOptions extends OpenAIChatCompletionsDriverOptions {
-    apiKey: string;
-    endpoint?: string;
-    httpReferer?: string;
-    appTitle?: string;
-    appCategories?: string;
-}
+export type { OpenRouterDriverOptions } from '../driver-options.js';
 
 /** OpenRouter transport backed by the provider's native TypeScript SDK. */
 export class OpenRouterDriver extends OpenAIChatCompletionsDriverBase<OpenRouterDriverOptions> {
@@ -326,11 +320,11 @@ function toOpenRouterContent(
     content: OpenAIChatCompletionsRequestMessage['content'],
 ): string | ChatContentItems[] | null | undefined {
     if (!Array.isArray(content)) return content;
-    return content.map((part) =>
-        part.type === 'text'
-            ? { type: 'text' as const, text: part.text }
-            : { type: 'image_url' as const, imageUrl: { ...part.image_url } },
-    );
+    return content.map((part) => {
+        if (part.type === 'text') return { type: 'text' as const, text: part.text };
+        if (part.type === 'image_url') return { type: 'image_url' as const, imageUrl: { ...part.image_url } };
+        throw new Error('OpenRouter does not support audio input');
+    });
 }
 
 function toOpenRouterTextContent(
@@ -437,14 +431,24 @@ async function* normalizeOpenRouterStream(
     }
 }
 
-function normalizeOpenRouterChatUsage(usage: ChatUsage | undefined): OpenAIChatCompletionsResponse['usage'] {
-    return usage
-        ? {
-              prompt_tokens: usage.promptTokens,
-              completion_tokens: usage.completionTokens,
-              total_tokens: usage.totalTokens,
-          }
-        : undefined;
+function normalizeOpenRouterChatUsage(usage: ChatUsage | undefined | null): OpenAIChatCompletionsResponse['usage'] {
+    if (!usage) return undefined;
+    const details = usage.promptTokensDetails;
+    return {
+        prompt_tokens: usage.promptTokens,
+        completion_tokens: usage.completionTokens,
+        total_tokens: usage.totalTokens,
+        ...(details
+            ? {
+                  prompt_tokens_details: {
+                      cached_tokens: details.cachedTokens,
+                      cache_write_tokens: details.cacheWriteTokens,
+                  },
+              }
+            : {}),
+        ...(typeof usage.cost === 'number' ? { cost: usage.cost } : {}),
+        ...(usage.isByok !== undefined ? { is_byok: usage.isByok } : {}),
+    };
 }
 
 function fromOpenRouterContent(

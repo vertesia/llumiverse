@@ -10,7 +10,7 @@
 
 import { type DataSource, type PromptOptions, PromptRole, type PromptSegment } from '@llumiverse/common';
 import { describe, expect, it, vi } from 'vitest';
-import { formatOpenAILikeMultimodalPrompt } from './openai_format.js';
+import { convertResponseItemsToChatMessages, formatOpenAILikeMultimodalPrompt } from './openai_format.js';
 
 const OPTIONS = { model: 'gpt-5.6' } as unknown as PromptOptions;
 
@@ -149,5 +149,19 @@ describe('formatOpenAILikeMultimodalPrompt - attachment types', () => {
                 { type: 'input_text', text: 'Look' },
             ],
         });
+    });
+});
+
+describe('Responses tool output conversion to Chat Completions', () => {
+    it.each([undefined, null, ''])('rejects a tool output without a usable call_id (%s)', (call_id) => {
+        expect(() =>
+            convertResponseItemsToChatMessages([{ type: 'function_call_output', call_id, output: 'result' }]),
+        ).toThrow('without call_id');
+    });
+
+    it('preserves the call ID and output', () => {
+        expect(
+            convertResponseItemsToChatMessages([{ type: 'function_call_output', call_id: 'call_1', output: 'result' }]),
+        ).toEqual([{ role: 'tool', tool_call_id: 'call_1', content: 'result' }]);
     });
 });

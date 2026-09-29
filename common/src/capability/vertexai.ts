@@ -193,6 +193,20 @@ export function getModelCapabilitiesVertexAI(model: string): {
     tool_support?: boolean;
 } {
     const normalized = normalizeVertexAIModelName(model);
+    if (/(?:^|[-_.])tts(?:[-_.]|$)/.test(normalized)) {
+        return {
+            input: { text: true, image: false, video: false, audio: false, embed: false },
+            output: { text: false, image: false, video: false, audio: true, embed: false },
+            tool_support: false,
+        };
+    }
+    if (normalized.includes('transcribe')) {
+        return {
+            input: { text: false, image: false, video: false, audio: true, embed: false },
+            output: { text: true, image: false, video: false, audio: false, embed: false },
+            tool_support: false,
+        };
+    }
     const record = RECORD_MODEL_CAPABILITIES[normalized];
     if (record) return record;
     if (isModelFamilyVersionGTE(normalized, 'llama-', 4, 0) || isModelFamilyVersionGTE(normalized, 'llama', 4, 0)) {

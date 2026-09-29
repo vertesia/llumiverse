@@ -316,7 +316,6 @@ function getImagenOptions(model: string, option?: ModelOptions): ModelOptionsInf
                       type: OptionType.numeric,
                       min: 0,
                       max: 1,
-                      integer: true,
                       description:
                           'The mask dilation, grows the mask by a percentage of image width to compensate for imprecise masks.',
                   },
@@ -328,7 +327,7 @@ function getImagenOptions(model: string, option?: ModelOptions): ModelOptionsInf
                 ? [
                       {
                           name: 'mask_class',
-                          type: OptionType.string_list,
+                          type: OptionType.numeric_list,
                           default: [],
                           description:
                               'Input Class IDs. Create a mask based on image class, based on https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/imagen-api-customization#segment-ids',
@@ -421,6 +420,32 @@ function getGeminiThinkingOptionItems(model: string): ModelOptionInfoItem[] {
 }
 
 function getGeminiOptions(model: string, option?: ModelOptions): ModelOptionsInfo {
+    if (model.includes('tts')) {
+        return {
+            _option_id: 'vertexai-gemini',
+            options: [
+                {
+                    name: 'speech_voice',
+                    type: OptionType.enum,
+                    enum: { Kore: 'Kore', Puck: 'Puck', Charon: 'Charon', Fenrir: 'Fenrir', Aoede: 'Aoede' },
+                    default: 'Kore',
+                    description: 'Provider voice name; additional voices can be supplied through the API.',
+                },
+            ],
+        };
+    }
+    if (model.includes('transcribe')) {
+        return {
+            _option_id: 'vertexai-gemini',
+            options: [
+                { name: 'transcription_language_codes', type: OptionType.string_list },
+                { name: 'transcription_diarization', type: OptionType.boolean },
+                { name: 'transcription_word_timestamps', type: OptionType.boolean },
+                { name: 'transcription_vocabulary', type: OptionType.string_list },
+            ],
+        };
+    }
+
     // Special handling for gemini image / nano banana models
     if (model.includes('image')) {
         const isGemini25OrLater = isGeminiModelVersionGte(model, '2.5');

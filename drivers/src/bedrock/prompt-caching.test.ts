@@ -1,4 +1,4 @@
-import { type ConverseResponse, StopReason } from '@aws-sdk/client-bedrock-runtime';
+import { type ConverseResponse, type ConverseStreamOutput, StopReason } from '@aws-sdk/client-bedrock-runtime';
 import { Base64DataSource, type DataSource, type ExecutionOptions, PromptRole } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import { formatConversePrompt } from './converse.js';
@@ -128,6 +128,54 @@ describe('Bedrock prompt caching', () => {
             prompt_cache_write: 50,
             result: 10,
             total: 185,
+        });
+    });
+
+    it('reports the one-hour share of cache writes', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const response = {
+            output: { message: { role: 'assistant', content: [{ text: 'done' }] } },
+            stopReason: StopReason.END_TURN,
+            usage: {
+                inputTokens: 25,
+                outputTokens: 10,
+                totalTokens: 85,
+                cacheWriteInputTokens: 50,
+                cacheDetails: [
+                    { ttl: '5m', inputTokens: 20 },
+                    { ttl: '1h', inputTokens: 30 },
+                ],
+            },
+            metrics: { latencyMs: 1 },
+        } satisfies ConverseResponse;
+
+        expect(driver.getExtractedExecution(response).token_usage).toMatchObject({
+            prompt_cache_write: 50,
+            prompt_cache_write_1h: 30,
+        });
+    });
+
+    it('reports the one-hour share of cache writes in streamed usage', () => {
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        const event = {
+            metadata: {
+                usage: {
+                    inputTokens: 25,
+                    outputTokens: 10,
+                    totalTokens: 85,
+                    cacheWriteInputTokens: 50,
+                    cacheDetails: [
+                        { ttl: '5m', inputTokens: 20 },
+                        { ttl: '1h', inputTokens: 30 },
+                    ],
+                },
+                metrics: { latencyMs: 1 },
+            },
+        } satisfies ConverseStreamOutput;
+
+        expect(driver.getExtractedStream(event).token_usage).toMatchObject({
+            prompt_cache_write: 50,
+            prompt_cache_write_1h: 30,
         });
     });
 });

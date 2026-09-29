@@ -22,9 +22,9 @@ import type {
     CompletionCreateParamsStreaming,
 } from 'together-ai/resources/chat/completions';
 import type { Embedding, EmbeddingCreateParams } from 'together-ai/resources/embeddings';
+import type { TogetherAIDriverOptions } from '../driver-options.js';
 import {
     OpenAIChatCompletionsDriverBase,
-    type OpenAIChatCompletionsDriverOptions,
     type OpenAIChatCompletionsPayload,
     type OpenAIChatCompletionsResponse,
     type OpenAIChatCompletionsStreamResponse,
@@ -33,10 +33,7 @@ import {
 } from '../openai/openai_chat_completions.js';
 import type { CompatibleAPIError } from '../openai/openai_compatible.js';
 
-export interface TogetherAIDriverOptions extends OpenAIChatCompletionsDriverOptions {
-    apiKey: string;
-    endpoint?: string;
-}
+export type { TogetherAIDriverOptions } from '../driver-options.js';
 
 export class TogetherAIDriver extends OpenAIChatCompletionsDriverBase<TogetherAIDriverOptions> {
     static readonly PROVIDER = Providers.togetherai;
@@ -213,7 +210,13 @@ function toTogetherMessage(message: OpenAIChatCompletionsPayload['messages'][num
     const textContent = typeof message.content === 'string' || message.content === null ? message.content : undefined;
     const flattenedContent = Array.isArray(message.content)
         ? message.content
-              .map((part) => (part.type === 'text' ? part.text : `[Image: ${part.image_url.url}]`))
+              .map((part) =>
+                  part.type === 'input_audio'
+                      ? unsupportedAudioPart()
+                      : part.type === 'text'
+                        ? part.text
+                        : `[Image: ${part.image_url.url}]`,
+              )
               .join('\n')
         : textContent;
     switch (message.role) {
@@ -243,9 +246,11 @@ function toTogetherMessage(message: OpenAIChatCompletionsPayload['messages'][num
                     typeof message.content === 'string'
                         ? message.content
                         : (message.content?.map((part) =>
-                              part.type === 'text'
-                                  ? { type: 'text' as const, text: part.text }
-                                  : { type: 'image_url' as const, image_url: { ...part.image_url } },
+                              part.type === 'input_audio'
+                                  ? unsupportedAudioPart()
+                                  : part.type === 'text'
+                                    ? { type: 'text' as const, text: part.text }
+                                    : { type: 'image_url' as const, image_url: { ...part.image_url } },
                           ) ?? ''),
             };
     }
@@ -353,4 +358,8 @@ function togetherModelType(type?: string): ModelType {
         default:
             return ModelType.Text;
     }
+}
+
+function unsupportedAudioPart(): never {
+    throw new Error('This inference endpoint does not support audio input');
 }

@@ -46,18 +46,13 @@ import {
     MistralError,
     RequestAbortedError,
 } from '@mistralai/mistralai/models/errors';
-import type {
-    OpenAIChatCompletionsDriverOptions,
-    OpenAIChatCompletionsPrompt,
-} from '../openai/openai_chat_completions.js';
+import type { MistralAIDriverOptions } from '../driver-options.js';
+import type { OpenAIChatCompletionsPrompt } from '../openai/openai_chat_completions.js';
 import { type CompatibleAPIError, OpenAICompatibleDriverBase } from '../openai/openai_compatible.js';
 
-const ENDPOINT = 'https://api.mistral.ai';
+export type { MistralAIDriverOptions } from '../driver-options.js';
 
-export interface MistralAIDriverOptions extends OpenAIChatCompletionsDriverOptions {
-    apiKey: string;
-    endpoint_url?: string;
-}
+const ENDPOINT = 'https://api.mistral.ai';
 
 export interface MistralPrompt {
     messages: ChatCompletionRequestMessage[];
@@ -276,9 +271,11 @@ function legacyOpenAIMessageToMistral(
     const contentParts = Array.isArray(message.content)
         ? message.content.map(
               (part): ContentChunk =>
-                  part.type === 'text'
-                      ? { type: 'text', text: part.text }
-                      : { type: 'image_url', imageUrl: part.image_url.url },
+                  part.type === 'input_audio'
+                      ? unsupportedAudioPart()
+                      : part.type === 'text'
+                        ? { type: 'text', text: part.text }
+                        : { type: 'image_url', imageUrl: part.image_url.url },
           )
         : undefined;
     switch (message.role) {
@@ -562,4 +559,8 @@ function finalizeMistralConversation(
         preserveSubtree,
     }) as MistralPrompt;
     return completed;
+}
+
+function unsupportedAudioPart(): never {
+    throw new Error('This inference endpoint does not support audio input');
 }

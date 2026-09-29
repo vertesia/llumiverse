@@ -99,9 +99,10 @@ function inferFamily(model: string): { family: string; source_provider?: string 
     if (normalized.includes('gpt-image') || normalized.includes('dall-e') || normalized.includes('imagen-')) {
         return { family: 'image', source_provider: normalized.includes('imagen') ? 'google' : 'openai' };
     }
+    if (/(?:realtime|live|native-audio)/.test(normalized))
+        return { family: 'realtime', source_provider: normalized.includes('gemini') ? 'google' : 'openai' };
     if (/(?:whisper|transcribe)/.test(normalized)) return { family: 'transcription', source_provider: 'openai' };
     if (/(?:^|[-_.])tts(?:[-_.]|$)/.test(normalized)) return { family: 'speech', source_provider: 'openai' };
-    if (normalized.includes('realtime')) return { family: 'realtime', source_provider: 'openai' };
     if (/(?:^|[-_.])audio(?:[-_.]|$)/.test(normalized)) return { family: 'audio', source_provider: 'openai' };
     if (normalized.includes('sora')) return { family: 'video', source_provider: 'openai' };
     if (normalized.includes('gemini')) return { family: 'gemini', source_provider: 'google' };
@@ -186,8 +187,8 @@ function getCanonicalCapabilities(model: string, family: string): ModelCapabilit
             return {
                 input: { text: true, audio: true },
                 output: { text: true, audio: true },
-                tool_support: true,
-                tool_support_streaming: true,
+                tool_support: false,
+                tool_support_streaming: false,
             };
         case 'video':
             return {

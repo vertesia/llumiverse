@@ -115,6 +115,46 @@ describe('Bedrock Mantle metadata', () => {
         expect(hasSamplingParameterRestriction('anthropic.claude-mythos-preview')).toBe(true);
     });
 
+    it('applies the Bedrock Runtime-specific 64K cap to Sonnet 4.6', () => {
+        expect(getClaudeMaxTokensLimit('claude-sonnet-4-6')).toBe(128_000);
+        expect(getMaxTokensLimitBedrock('anthropic.claude-sonnet-4-6')).toBe(64_000);
+        expect(
+            getOptions('anthropic.claude-sonnet-4-6', Providers.bedrock).options.find(
+                (option) => option.name === 'max_tokens',
+            ),
+        ).toMatchObject({ max: 64_000 });
+    });
+
+    it('uses the full 64K output limit for Claude 4.5 models on Bedrock', () => {
+        expect(getBedrockModelKnowledge('anthropic.claude-sonnet-4-5')).toMatchObject({
+            max_output_tokens: 64_000,
+        });
+        expect(getMaxTokensLimitBedrock('anthropic.claude-sonnet-4-5-20250929-v1:0')).toBe(64_000);
+        expect(getMaxTokensLimitBedrock('anthropic.claude-haiku-4-5-20251001-v1:0')).toBe(64_000);
+        expect(
+            getOptions('anthropic.claude-sonnet-4-5', Providers.bedrock).options.find(
+                (option) => option.name === 'max_tokens',
+            ),
+        ).toMatchObject({ max: 64_000 });
+        expect(
+            getOptions('anthropic.claude-haiku-4-5', Providers.bedrock_mantle).options.find(
+                (option) => option.name === 'max_tokens',
+            ),
+        ).toMatchObject({ max: 64_000 });
+    });
+
+    it('uses the endpoint-specific Claude Sonnet 5 limit on Bedrock', () => {
+        const runtimeMax = getOptions('anthropic.claude-sonnet-5', Providers.bedrock).options.find(
+            (option) => option.name === 'max_tokens',
+        );
+        const mantleMax = getOptions('anthropic.claude-sonnet-5', Providers.bedrock_mantle).options.find(
+            (option) => option.name === 'max_tokens',
+        );
+
+        expect(runtimeMax).toMatchObject({ max: 127_999 });
+        expect(mantleMax).toMatchObject({ max: 128_000 });
+    });
+
     it('uses Responses options for GPT-5.5 under the Bedrock Mantle provider', () => {
         const options = getOptions('openai.gpt-5.5', Providers.bedrock_mantle);
         const optionNames = options.options.map((option) => option.name);
@@ -288,7 +328,7 @@ describe('Bedrock Mantle metadata', () => {
 
     it.each([
         ['amazon.nova-2-lite-v1:0', 1_000_000, 65_536],
-        ['anthropic.claude-haiku-4-5-20251001-v1:0', 200_000, 63_999],
+        ['anthropic.claude-haiku-4-5-20251001-v1:0', 200_000, 64_000],
         ['google.gemma-3-12b-it', 128_000, 8_192],
         ['meta.llama4-scout-17b-instruct-v1:0', 10_000_000, 8_192],
         ['meta.llama5-scout-17b-instruct-v1:0', 10_000_000, 8_192],
@@ -308,17 +348,23 @@ describe('Bedrock Mantle metadata', () => {
 
     it.each([
         ['anthropic.claude-opus-5-v1:0', 1_000_000, 127_999],
+        ['anthropic.claude-opus-5-5', 1_000_000, 127_999],
         ['anthropic.claude-fable-5-v1:0', 1_000_000, 127_999],
+        ['anthropic.claude-fable-5-1', 1_000_000, 127_999],
         ['anthropic.claude-sonnet-5-20260701-v1:0', 1_000_000, 127_999],
+        ['anthropic.claude-sonnet-5', 1_000_000, 127_999],
+        ['anthropic.claude-mythos-5-1', 1_000_000, 127_999],
         ['anthropic.claude-mythos-preview-v1:0', 1_000_000, 127_999],
         ['anthropic.claude-opus-4-8-v1:0', 1_000_000, 127_999],
         ['anthropic.claude-haiku-4-7-v1:0', 1_000_000, 127_999],
         ['anthropic.claude-opus-4-6-v1:0', 1_000_000, 127_999],
-        ['anthropic.claude-sonnet-4-6-v1:0', 1_000_000, 65_536],
-        ['anthropic.claude-haiku-4-5-20251001-v1:0', 200_000, 63_999],
-        ['anthropic.claude-opus-4-5-v1:0', 200_000, 65_536],
-        ['anthropic.claude-sonnet-4-20250514-v1:0', 200_000, 65_536],
+        ['anthropic.claude-sonnet-4-6-v1:0', 1_000_000, 64_000],
+        ['anthropic.claude-haiku-4-5-20251001-v1:0', 200_000, 64_000],
+        ['anthropic.claude-sonnet-4-5-20250929-v1:0', 200_000, 64_000],
+        ['anthropic.claude-opus-4-5-v1:0', 200_000, 64_000],
+        ['anthropic.claude-sonnet-4-20250514-v1:0', 200_000, 64_000],
         ['anthropic.claude-opus-4-1-20250805-v1:0', 200_000, 32_000],
+        ['anthropic.claude-sonnet-4-6-v1:0', 1_000_000, 64_000],
     ] as const)('derives Claude limits from the model version for %s', (model, contextWindow, maxOutputTokens) => {
         expect(getBedrockModelKnowledge(model)).toMatchObject({
             context_window: contextWindow,

@@ -1,0 +1,26 @@
+{
+    "build-and-test.yml": {
+        "jobs": [
+            {
+                "name": "^Build and test \\(.*\\)$",
+                "example": "Build and test (24.x)",
+                "steps": [
+                    "Build workspace",
+                    "Typecheck and functional tests",
+                    "Curated live provider smoke tests"
+                ]
+            }
+        ]
+    },
+    "lint.yml": {
+        "jobs": [
+            {
+                "name": "^Check codebase$",
+                "steps": [
+                    "Test automerge CI policy",
+                    "Check codebase"
+                ]
+            }
+        ]
+    }
+}

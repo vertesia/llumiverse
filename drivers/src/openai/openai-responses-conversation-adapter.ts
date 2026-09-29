@@ -54,10 +54,25 @@ export type OpenAIResponsesPayload =
 type SourceKind = 'imported' | 'received';
 type CanonicalToolResultStatus = 'success' | 'error' | 'cancelled' | 'denied';
 
-export type CanonicalOpenAIResponsesFunctionCallOutput = OpenAI.Responses.ResponseInputItem.FunctionCallOutput & {
+export type CanonicalOpenAIResponsesFunctionCallOutput = Omit<
+    OpenAI.Responses.ResponseInputItem.FunctionCallOutput,
+    'call_id'
+> & {
+    call_id: string;
     /** Internal ingestion evidence. Removed before provider transport. */
     _llumiverse_tool_result_status?: CanonicalToolResultStatus;
 };
+
+function requireFunctionCallOutput(
+    item: Record<string, unknown>,
+    itemIndex: number,
+): CanonicalOpenAIResponsesFunctionCallOutput {
+    const callId = ownValue(item, 'call_id');
+    if (typeof callId !== 'string' || callId.length === 0) {
+        throw new Error(`OpenAI Responses function_call_output at items/${itemIndex} has no call_id`);
+    }
+    return item as unknown as CanonicalOpenAIResponsesFunctionCallOutput;
+}
 
 interface ReplayTextEntry extends JsonObject {
     kind: 'text' | 'reasoning';
@@ -694,7 +709,7 @@ async function itemsToRecords(input: {
             await flushAssistant();
             append(
                 await toolResultRecords({
-                    item: item as unknown as CanonicalOpenAIResponsesFunctionCallOutput,
+                    item: requireFunctionCallOutput(item, index),
                     item_index: index,
                     scope: input.scope,
                     source: input.source,

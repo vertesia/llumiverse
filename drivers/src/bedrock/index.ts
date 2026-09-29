@@ -17,11 +17,11 @@ import {
     type InvokeModelCommandOutput,
     type Message,
     type ServiceTierType,
+    type TokenUsage,
     type Tool,
     type ToolResultContentBlock,
 } from '@aws-sdk/client-bedrock-runtime';
 import { S3Client } from '@aws-sdk/client-s3';
-import type { AwsCredentialIdentity, Provider } from '@aws-sdk/types';
 import {
     type AIModel,
     type BedrockClaudeOptions,
@@ -32,7 +32,6 @@ import {
     type CompletionResult,
     type DataSource,
     type DriverCompletionStream,
-    type DriverOptions,
     deserializeBinaryFromStorage,
     type EmbeddingsOptions,
     type EmbeddingsResult,
@@ -66,7 +65,8 @@ import { transformAsyncIterator } from '@llumiverse/core/async';
 import { AbstractDriver } from '@llumiverse/core/driver';
 import { formatNovaPrompt, type NovaMessagesPrompt } from '@llumiverse/core/formatters';
 import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
-import { LRUCache } from 'mnemonist';
+import { LRUCache } from 'lru-cache';
+import type { BedrockDriverOptions } from '../driver-options.js';
 import { logClaudeTruncation } from '../shared/claude-stop-reason.js';
 import { resolveClaudeThinking } from '../shared/claude-thinking.js';
 import { truncateBinaryForDebug, uint8ArrayToBase64ForDebug } from '../shared/debug-prompt.js';
@@ -77,6 +77,7 @@ import {
     converseJSONprefill,
     converseSystemToMessages,
     formatConversePrompt,
+    relocateConverseToolImages,
     shouldIncludeSchemaInConversePrompt,
     supportsConverseOutputConfig,
 } from './converse.js';
@@ -85,7 +86,9 @@ import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from '.
 import { forceUploadFile } from './s3.js';
 import { formatTwelvelabsPegasusPrompt, type TwelvelabsPegasusRequest } from './twelvelabs.js';
 
-const supportStreamingCache = new LRUCache<string, boolean>(4096);
+export type { BedrockDriverOptions } from '../driver-options.js';
+
+const supportStreamingCache = new LRUCache<string, boolean>({ max: 4096 });
 
 type AwsSdkError = {
     name?: string;
@@ -120,6 +123,31 @@ enum BedrockModelType {
     InferenceProfile = 'inference-profile',
     CustomModel = 'custom-model',
     Unknown = 'unknown',
+}
+
+/** Of the cache-write tokens, those written with a one-hour lifetime (the rest used the five-minute default). */
+function oneHourCacheWriteTokens(usage: TokenUsage | undefined): number | undefined {
+    const tokens = usage?.cacheDetails
+        ?.filter((detail) => detail.ttl === '1h')
+        .reduce((sum, detail) => sum + (detail.inputTokens ?? 0), 0);
+    return tokens || undefined;
+}
+
+/**
+ * Converse usage as token usage. `inputTokens` already excludes cache reads and writes, so it is the new prompt
+ * tokens; `prompt` is the total, cache reads and writes included, consistent with the Vertex Claude driver.
+ */
+function converseTokenUsage(usage: TokenUsage | undefined): ExecutionTokenUsage | undefined {
+    if (!usage) return undefined;
+    return {
+        prompt_new: usage.inputTokens,
+        prompt: (usage.inputTokens ?? 0) + (usage.cacheReadInputTokens ?? 0) + (usage.cacheWriteInputTokens ?? 0),
+        result: usage.outputTokens,
+        total: usage.totalTokens,
+        prompt_cached: usage.cacheReadInputTokens ?? undefined,
+        prompt_cache_write: usage.cacheWriteInputTokens ?? undefined,
+        prompt_cache_write_1h: oneHourCacheWriteTokens(usage),
+    };
 }
 
 function converseFinishReason(reason: string | undefined) {
@@ -298,28 +326,6 @@ function withBedrockRuntimeScope<T>(iterable: AsyncIterable<T>, scope: BedrockRu
 export interface BedrockModelCapabilities {
     name: string;
     canStream: boolean;
-}
-
-export interface BedrockDriverOptions extends DriverOptions {
-    /**
-     * The AWS region
-     */
-    region: string;
-    /**
-     * The bucket name to be used for training.
-     * It will be created if does not already exist.
-     */
-    training_bucket?: string;
-
-    /**
-     * The role ARN to be used for training
-     */
-    training_role_arn?: string;
-
-    /**
-     * The credentials to use to access AWS (IAM access key + secret)
-     */
-    credentials?: AwsCredentialIdentity | Provider<AwsCredentialIdentity>;
 }
 
 //Used to get a max_token value when not specified in the model options. Claude requires it to be set.
@@ -793,22 +799,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         const completionResult: CompletionChunkObject = {
             result: reasoning + resultText ? [{ type: 'text', value: reasoning + resultText }] : [],
-            token_usage: {
-                // Bedrock's inputTokens already excludes cache-read tokens,
-                // so prompt_new is inputTokens directly (no subtraction needed).
-                // prompt is the total including cached + cache_write for consistency
-                // with the Vertex Claude driver.
-                prompt_new: result.usage?.inputTokens,
-                prompt: result.usage
-                    ? (result.usage.inputTokens ?? 0) +
-                      (result.usage.cacheReadInputTokens ?? 0) +
-                      (result.usage.cacheWriteInputTokens ?? 0)
-                    : undefined,
-                result: result.usage?.outputTokens,
-                total: result.usage?.totalTokens,
-                prompt_cached: result.usage?.cacheReadInputTokens ?? undefined,
-                prompt_cache_write: result.usage?.cacheWriteInputTokens ?? undefined,
-            },
+            token_usage: converseTokenUsage(result.usage) ?? {},
             service_tier: result.serviceTier?.type,
             finish_reason: converseFinishReason(result.stopReason),
         };
@@ -913,18 +904,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
 
         if (result.metadata) {
-            token_usage = {
-                prompt_new: result.metadata.usage?.inputTokens,
-                prompt: result.metadata.usage
-                    ? (result.metadata.usage.inputTokens ?? 0) +
-                      (result.metadata.usage.cacheReadInputTokens ?? 0) +
-                      (result.metadata.usage.cacheWriteInputTokens ?? 0)
-                    : undefined,
-                result: result.metadata.usage?.outputTokens,
-                total: result.metadata.usage?.totalTokens,
-                prompt_cached: result.metadata.usage?.cacheReadInputTokens ?? undefined,
-                prompt_cache_write: result.metadata.usage?.cacheWriteInputTokens ?? undefined,
-            };
+            token_usage = converseTokenUsage(result.metadata.usage) ?? {};
         }
 
         const completionResult: CompletionChunkObject = {
@@ -1068,6 +1048,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     case 'image':
                         // Skip images in conversation - they're in the result
                         return '';
+                    case 'audio':
                     case 'video':
                         return '';
                     default: {
@@ -1483,8 +1464,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 //Support no additional fields.
             }
         } else if (options.model.includes('ai21')) {
-            //Jamba models support no additional options
-            //Jurassic 2 models do.
+            // Jurassic uses nested penalty scales; Jamba accepts the numeric fields directly.
             if (options.model.includes('j2')) {
                 additionalField = {
                     presencePenalty: { scale: model_options.presence_penalty },
@@ -1496,6 +1476,11 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     prompt.system = undefined;
                     prompt.messages = converseConcatMessages(prompt.messages);
                 }
+            } else if (options.model.includes('jamba')) {
+                additionalField = {
+                    presence_penalty: model_options.presence_penalty,
+                    frequency_penalty: model_options.frequency_penalty,
+                };
             }
         } else if (options.model.includes('cohere.command')) {
             // If last message is "```json", remove it.
@@ -1585,7 +1570,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         }
 
         if (prompt.messages) {
-            request.messages = prompt.messages;
+            request.messages = relocateConverseToolImages(prompt.messages, options.model);
         }
 
         if (prompt.system) {
@@ -1907,7 +1892,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             'zai',
         ];
         const unsupportedModelsByPublisher = {
-            amazon: ['nova-reel', 'nova-sonic', 'titan-image-generator', 'rerank'],
+            amazon: ['nova-reel', 'nova-sonic', 'nova-2-sonic', 'titan-image-generator', 'rerank'],
             anthropic: [],
             cohere: ['rerank', 'embed'],
             ai21: [],

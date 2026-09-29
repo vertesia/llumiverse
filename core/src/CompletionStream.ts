@@ -10,6 +10,7 @@ import {
     LlumiverseError,
     type ToolUse,
 } from '@llumiverse/common';
+import { stripAudioFromCompletion, stripAudioPayloads } from './conversation-utils.js';
 import type { AbstractDriver } from './Driver.js';
 import { DEFAULT_DRIVER_REQUEST_TIMEOUT_MS } from './http-agent.js';
 
@@ -390,6 +391,24 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
         let promptCachedTokens: number | undefined;
         let promptCacheWriteTokens: number | undefined;
         let promptNewTokens: number | undefined;
+        let promptCacheWrite1hTokens: number | undefined;
+        let providerCostUsd: number | undefined;
+        let resultImageTokens: number | undefined;
+        // Undefined until the provider reports token data. resultTokens === 0 is valid (e.g. empty output with stop).
+        const accumulatedUsage = (): ExecutionTokenUsage | undefined =>
+            resultTokens === undefined
+                ? undefined
+                : {
+                      prompt: promptTokens,
+                      result: resultTokens,
+                      total: resultTokens + promptTokens,
+                      ...(promptCachedTokens != null && { prompt_cached: promptCachedTokens }),
+                      ...(promptCacheWriteTokens != null && { prompt_cache_write: promptCacheWriteTokens }),
+                      ...(promptNewTokens != null && { prompt_new: promptNewTokens }),
+                      ...(promptCacheWrite1hTokens != null && { prompt_cache_write_1h: promptCacheWrite1hTokens }),
+                      ...(providerCostUsd != null && { provider_cost_usd: providerCostUsd }),
+                      ...(resultImageTokens != null && { result_image: resultImageTokens }),
+                  };
         const httpScope = this.driver.createExecutionHttpAgentScope(this.options);
         let sourceIterator: AsyncIterator<CompletionChunkObject> | undefined;
         let stream: DriverCompletionStream | undefined;
@@ -435,6 +454,13 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
                             if (chunk.token_usage.prompt_cache_write != null)
                                 promptCacheWriteTokens = chunk.token_usage.prompt_cache_write;
                             if (chunk.token_usage.prompt_new != null) promptNewTokens = chunk.token_usage.prompt_new;
+                            if (chunk.token_usage.prompt_cache_write_1h != null)
+                                promptCacheWrite1hTokens = chunk.token_usage.prompt_cache_write_1h;
+                            if (chunk.token_usage.result_image != null)
+                                resultImageTokens = chunk.token_usage.result_image;
+                            // The provider reports the call's cost once, with the final usage.
+                            if (chunk.token_usage.provider_cost_usd != null)
+                                providerCostUsd = chunk.token_usage.provider_cost_usd;
                         }
                         // Accumulate tool_use from chunks
                         // Note: During streaming, tool_input comes as string chunks that need concatenation
@@ -486,6 +512,7 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
                                             }
                                             break;
                                         case 'image':
+                                        case 'audio':
                                         case 'video':
                                             // Media outputs are discrete results and must retain their original boundaries.
                                             accumulatedResults.push(result);
@@ -520,8 +547,9 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
                                                     : String(r.value).slice(0, 10);
                                             return `\n[Image: ${truncatedValue}...]\n`;
                                         }
+                                        case 'audio':
                                         case 'video':
-                                            return `\n[Video: ${r.value}]\n`;
+                                            return `\n[${r.type === 'audio' ? 'Audio' : 'Video'}: ${r.value}]\n`;
                                         default: {
                                             const _exhaustive: never = r;
                                             return String(_exhaustive);
@@ -548,14 +576,7 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
                     result: accumulatedResults,
                     prompt: this.driver.formatDebugPrompt(this.prompt),
                     execution_time: Date.now() - start,
-                    token_usage: {
-                        prompt: promptTokens,
-                        result: resultTokens,
-                        total: resultTokens + promptTokens,
-                        ...(promptCachedTokens != null && { prompt_cached: promptCachedTokens }),
-                        ...(promptCacheWriteTokens != null && { prompt_cache_write: promptCacheWriteTokens }),
-                        ...(promptNewTokens != null && { prompt_new: promptNewTokens }),
-                    },
+                    token_usage: accumulatedUsage(),
                     service_tier: serviceTier,
                     finish_reason,
                     chunks: this.chunks,
@@ -582,19 +603,7 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
             await httpScope.close();
         }
 
-        // Return undefined only if we never received any token data from the provider.
-        // Use !== undefined (not truthiness) because resultTokens === 0 is valid (e.g. empty output with stop).
-        const tokens: ExecutionTokenUsage | undefined =
-            resultTokens !== undefined
-                ? {
-                      prompt: promptTokens,
-                      result: resultTokens,
-                      total: resultTokens + promptTokens,
-                      ...(promptCachedTokens != null && { prompt_cached: promptCachedTokens }),
-                      ...(promptCacheWriteTokens != null && { prompt_cache_write: promptCacheWriteTokens }),
-                      ...(promptNewTokens != null && { prompt_new: promptNewTokens }),
-                  }
-                : undefined;
+        const tokens = accumulatedUsage();
 
         const toolUseArray = finalizeStreamingToolUse(
             accumulatedToolUse.size > 0 ? Array.from(accumulatedToolUse.values()) : undefined,
@@ -602,7 +611,7 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
             { provider: this.driver.provider, model: this.options.model },
         );
 
-        this.completion = {
+        this.completion = stripAudioFromCompletion({
             result: accumulatedResults, // Return the accumulated CompletionResult[] instead of text
             prompt: this.driver.formatDebugPrompt(this.prompt),
             execution_time: Date.now() - start,
@@ -612,14 +621,14 @@ export class DefaultCompletionStream<PromptT = unknown> extends ManagedCompletio
             chunks: this.chunks,
             tool_use: toolUseArray,
             prompt_cache_diagnostic: stream?.finalizePromptCacheDiagnostic?.(),
-        };
+        });
 
         // Build conversation context for multi-turn support
         const conversation = stream?.finalizeConversation
             ? await stream.finalizeConversation()
             : this.driver.buildStreamingConversation(this.prompt, accumulatedResults, toolUseArray, this.options);
         if (conversation !== undefined) {
-            this.completion.conversation = conversation;
+            this.completion.conversation = stripAudioPayloads(conversation);
         }
 
         try {
@@ -645,6 +654,7 @@ export class FallbackCompletionStream<PromptT = unknown> extends ManagedCompleti
         protected readonly driver: AbstractDriver<DriverOptions, PromptT>,
         protected readonly prompt: PromptT,
         protected readonly options: ExecutionOptions,
+        private readonly execute?: (signal: AbortSignal) => Promise<ExecutionResponse<PromptT>>,
     ) {
         super();
     }
@@ -656,7 +666,9 @@ export class FallbackCompletionStream<PromptT = unknown> extends ManagedCompleti
             `[${this.driver.provider}] Streaming is not supported, falling back to blocking execution`,
         );
         try {
-            const completion = await this.driver._execute(this.prompt, this.options, this.abortSignal);
+            const completion = this.execute
+                ? await this.execute(this.abortSignal)
+                : await this.driver._execute(this.prompt, this.options, this.abortSignal);
             // For fallback streaming, yield the text content but keep the original completion
             let previousResultType: CompletionResult['type'] | undefined;
             const content = completion.result
@@ -675,8 +687,9 @@ export class FallbackCompletionStream<PromptT = unknown> extends ManagedCompleti
                                 typeof r.value === 'string' ? r.value.slice(0, 10) : String(r.value).slice(0, 10);
                             return `[Image: ${truncatedValue}...]`;
                         }
+                        case 'audio':
                         case 'video':
-                            return `[Video: ${r.value}]`;
+                            return `[${r.type === 'audio' ? 'Audio' : 'Video'}: ${r.value}]`;
                         default: {
                             const _exhaustive: never = r;
                             return String(_exhaustive);
@@ -685,7 +698,7 @@ export class FallbackCompletionStream<PromptT = unknown> extends ManagedCompleti
                 })
                 .join('');
             yield content;
-            this.completion = completion; // Return the original completion with untouched CompletionResult[]
+            this.completion = stripAudioFromCompletion(completion); // Return the original completion with untouched CompletionResult[]
         } catch (error: unknown) {
             if (this.abortSignal.aborted) return;
             // Don't wrap if already a LlumiverseError

@@ -12,9 +12,8 @@ function isDeepSeekV32OrLater(model: string): boolean {
 }
 
 /**
- * Returns the max output tokens for a given model (provider-agnostic).
- * When a model's limits vary by provider, returns a conservative value
- * that works across all providers.
+ * Returns the canonical max output tokens for a model.
+ * Provider-specific limits must be applied by the provider option/capability layer.
  */
 export function getMaxOutputTokens(model: string): number {
     model = model.toLowerCase();
@@ -22,6 +21,8 @@ export function getMaxOutputTokens(model: string): number {
     if (model.includes('claude')) {
         if (isClaudeVersionGTE(model, 4, 7)) return 128_000;
         if (model.includes('opus-4-6')) return 128_000;
+        // Sonnet 4.6 supports 128K on Anthropic and Vertex; Bedrock Runtime overrides it to 64K.
+        if (model.includes('sonnet') && isClaudeVersionGTE(model, 4, 6)) return 128_000;
         if (model.includes('opus-4-5')) return 64_000;
         if (model.includes('opus-')) return 32_000; // Opus 4.0, 4.1
         if (model.includes('-4-')) return 64_000; // Sonnet 4.x, Haiku 4.5
@@ -96,6 +97,9 @@ export function getContextWindowSize(model: string): number | undefined {
     // Claude models
     if (model.includes('claude')) {
         if (isClaudeVersionGTE(model, 4, 7)) return 1_000_000;
+        if (model.includes('opus-4-6') || (model.includes('sonnet') && isClaudeVersionGTE(model, 4, 6))) {
+            return 1_000_000;
+        }
         return 200_000;
     }
     // Gemini models

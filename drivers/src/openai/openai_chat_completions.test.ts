@@ -1511,6 +1511,14 @@ describe('OpenAIChatCompletionsProtocol', () => {
                     logprobs: null,
                 },
             ],
+            usage: {
+                prompt_tokens: 100,
+                completion_tokens: 20,
+                total_tokens: 120,
+                prompt_tokens_details: { cached_tokens: 25, cache_write_tokens: 5 },
+                cost: 0.0012,
+                is_byok: false,
+            },
         });
         const resultSchema: NonNullable<ExecutionOptions['result_schema']> = {
             type: 'object',
@@ -1525,6 +1533,15 @@ describe('OpenAIChatCompletionsProtocol', () => {
         });
 
         expect(first.result).toEqual([{ type: 'json', value: { answer: 'Tokyo' } }]);
+        expect(first.token_usage).toEqual({
+            prompt: 100,
+            prompt_cached: 25,
+            prompt_cache_write: 5,
+            prompt_new: 70,
+            provider_cost_usd: 0.0012,
+            result: 20,
+            total: 120,
+        });
         expect(latestGeneratedText(first.conversation)).toBe(rawText);
 
         const retried = await driver.execute(segments, {
@@ -1532,7 +1549,47 @@ describe('OpenAIChatCompletionsProtocol', () => {
             result_schema: resultSchema,
         });
         expect(retried.result).toEqual(first.result);
+        expect(retried.token_usage).toEqual(first.token_usage);
         expect(retried.conversation).toEqual(first.conversation);
+        expect(driver.payloads).toHaveLength(1);
+    });
+
+    it.each([
+        ['omitted cache details', undefined],
+        ['reported zero cache counts', { cached_tokens: 0, cache_write_tokens: 0 }],
+    ] as const)('preserves %s across accepted-response recovery', async (_label, promptTokensDetails) => {
+        const driver = new TestOpenAIChatCompletionsDriver({
+            id: 'chatcmpl-usage-parity',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test/model',
+            choices: [
+                {
+                    index: 0,
+                    message: { role: 'assistant', content: 'done' },
+                    finish_reason: 'stop',
+                    logprobs: null,
+                },
+            ],
+            usage: {
+                prompt_tokens: 10,
+                completion_tokens: 2,
+                total_tokens: 12,
+                ...(promptTokensDetails === undefined ? {} : { prompt_tokens_details: promptTokensDetails }),
+            },
+        });
+        const segments = [{ role: PromptRole.user, content: 'Answer.' }];
+        const first = await driver.execute(
+            segments,
+            canonicalOptions('attempt:usage:first', '2026-09-11T01:00:00.000Z'),
+        );
+        const retried = await driver.execute(
+            segments,
+            canonicalOptions('attempt:usage:retry', '2026-09-11T01:01:00.000Z', first.conversation),
+        );
+
+        expect(first.token_usage).toMatchObject({ prompt: 10, prompt_new: 10, result: 2, total: 12 });
+        expect(retried.token_usage).toEqual(first.token_usage);
         expect(driver.payloads).toHaveLength(1);
     });
 

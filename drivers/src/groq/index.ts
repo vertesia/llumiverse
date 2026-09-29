@@ -20,9 +20,10 @@ import type {
     ChatCompletionMessageParam,
     ChatCompletionTool,
 } from 'groq-sdk/resources/chat/completions';
+import type { CompletionUsage } from 'groq-sdk/resources/completions';
+import type { GroqDriverOptions } from '../driver-options.js';
 import {
     OpenAIChatCompletionsDriverBase,
-    type OpenAIChatCompletionsDriverOptions,
     type OpenAIChatCompletionsPayload,
     type OpenAIChatCompletionsPrompt,
     type OpenAIChatCompletionsResponse,
@@ -33,10 +34,7 @@ import {
 import type { CompatibleAPIError } from '../openai/openai_compatible.js';
 import { truncateDataUrlForDebug } from '../shared/debug-prompt.js';
 
-export interface GroqDriverOptions extends OpenAIChatCompletionsDriverOptions {
-    apiKey: string;
-    endpoint_url?: string;
-}
+export type { GroqDriverOptions } from '../driver-options.js';
 
 export class GroqDriver extends OpenAIChatCompletionsDriverBase<GroqDriverOptions> {
     static readonly PROVIDER = Providers.groq;
@@ -205,9 +203,11 @@ function toGroqMessage(message: OpenAIChatCompletionsPayload['messages'][number]
     const textContent = typeof message.content === 'string' || message.content === null ? message.content : undefined;
     const contentParts = Array.isArray(message.content)
         ? message.content.map((part) =>
-              part.type === 'text'
-                  ? { type: 'text' as const, text: part.text }
-                  : { type: 'image_url' as const, image_url: part.image_url },
+              part.type === 'input_audio'
+                  ? unsupportedAudioPart()
+                  : part.type === 'text'
+                    ? { type: 'text' as const, text: part.text }
+                    : { type: 'image_url' as const, image_url: part.image_url },
           )
         : undefined;
     switch (message.role) {
@@ -257,6 +257,18 @@ function toGroqTool(tool: NonNullable<OpenAIChatCompletionsPayload['tools']>[num
     ];
 }
 
+/** Groq's usage, keeping the prompt tokens served from its prompt cache, which are billed at a discount. */
+function normalizeGroqUsage(usage: CompletionUsage | null | undefined): OpenAIChatCompletionsResponse['usage'] {
+    if (!usage) return undefined;
+    const cachedTokens = usage.prompt_tokens_details?.cached_tokens;
+    return {
+        prompt_tokens: usage.prompt_tokens,
+        completion_tokens: usage.completion_tokens,
+        total_tokens: usage.total_tokens,
+        ...(cachedTokens ? { prompt_tokens_details: { cached_tokens: cachedTokens } } : {}),
+    };
+}
+
 function normalizeGroqResponse(response: ChatCompletion): OpenAIChatCompletionsResponse {
     const usage = response.usage;
     return {
@@ -282,13 +294,7 @@ function normalizeGroqResponse(response: ChatCompletion): OpenAIChatCompletionsR
                 })),
             },
         })),
-        usage: usage
-            ? {
-                  prompt_tokens: usage.prompt_tokens,
-                  completion_tokens: usage.completion_tokens,
-                  total_tokens: usage.total_tokens,
-              }
-            : undefined,
+        usage: normalizeGroqUsage(usage),
     };
 }
 
@@ -318,13 +324,11 @@ async function* normalizeGroqStream(
                     })),
                 },
             })),
-            usage: usage
-                ? {
-                      prompt_tokens: usage.prompt_tokens,
-                      completion_tokens: usage.completion_tokens,
-                      total_tokens: usage.total_tokens,
-                  }
-                : undefined,
+            usage: normalizeGroqUsage(usage),
         };
     }
+}
+
+function unsupportedAudioPart(): never {
+    throw new Error('This inference endpoint does not support audio input');
 }

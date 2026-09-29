@@ -162,6 +162,20 @@ export const ImageResultSchema = z
     .strictObject({ type: z.literal('image'), value: z.string() })
     .meta({ id: 'ImageResult' });
 
+export const AudioResultSchema = z
+    .strictObject({
+        type: z.literal('audio'),
+        value: z.string().regex(/^(?:gs|s3):\/\/[^/]+\/.+|^artifact:.+/),
+        mime_type: z.string().startsWith('audio/'),
+        container: z.string().optional(),
+        codec: z.string().optional(),
+        sample_rate: z.number().int().positive().optional(),
+        channels: z.number().int().positive().optional(),
+        sample_encoding: z.string().optional(),
+        byte_order: z.enum(['little', 'big']).optional(),
+    })
+    .meta({ id: 'AudioResult' });
+
 export const VideoResultSchema = z
     .strictObject({ type: z.literal('video'), value: z.string() })
     .meta({ id: 'VideoResult' });
@@ -173,6 +187,7 @@ export const CompletionResultSchema = z
         JsonResultSchema,
         ImageResultSchema,
         VideoResultSchema,
+        AudioResultSchema,
     ])
     .meta({ id: 'CompletionResult' });
 
@@ -189,7 +204,31 @@ export const ExecutionTokenUsageSchema = z
             .number()
             .meta({ description: 'Number of input tokens written to prompt cache.' })
             .optional(),
+        prompt_cache_write_1h: z
+            .number()
+            .meta({
+                description:
+                    'Of `prompt_cache_write`, the tokens written with a one-hour cache lifetime, when the ' +
+                    'provider reports it. The remainder used the default (five-minute) lifetime.',
+            })
+            .optional(),
         prompt_new: z.number().optional(),
+        result_image: z
+            .number()
+            .meta({
+                description:
+                    'Of `result`, the tokens of generated images, when the provider reports them. Image ' +
+                    'output is priced separately from text output.',
+            })
+            .optional(),
+        provider_cost_usd: z
+            .number()
+            .meta({
+                description:
+                    'Amount the provider reported charging for this request, in USD, when the provider ' +
+                    'returns it (e.g. OpenRouter). Absent for bring-your-own-key requests.',
+            })
+            .optional(),
     })
     .meta({ id: 'ExecutionTokenUsage' });
 

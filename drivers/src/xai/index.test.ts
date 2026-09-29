@@ -130,6 +130,22 @@ describe('xAI image generation', () => {
         });
     });
 
+    it('reports the cost xAI charged for the images', async () => {
+        const driver = new xAIDriver({ apiKey: 'test-key' });
+        const post = vi.fn(async () => ({
+            data: [{ url: 'https://example.com/image.jpeg' }],
+            usage: { cost_in_usd_ticks: 400_000_000 },
+        }));
+        driver.xai_service = { post } as unknown as FetchClient;
+        const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'A lighthouse' }], {
+            model: 'grok-imagine-image',
+        });
+
+        const completion = await driver.requestImageGeneration(prompt, { model: 'grok-imagine-image' });
+
+        expect(completion.token_usage).toEqual({ provider_cost_usd: 0.04 });
+    });
+
     it('falls back from streaming to the image generation endpoint for Image 2.0', async () => {
         const driver = new xAIDriver({ apiKey: 'test-key' });
         const post = vi.fn(async () => ({ data: [{ url: 'https://example.com/image.jpeg' }] }));

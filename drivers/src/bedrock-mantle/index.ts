@@ -1,11 +1,9 @@
 import { AnthropicBedrockMantle, type BedrockMantleClientOptions } from '@anthropic-ai/bedrock-sdk';
 import { getTokenProvider } from '@aws/bedrock-token-generator';
-import type { AwsCredentialIdentity, Provider } from '@aws-sdk/types';
 import {
     type AIModel,
     type Completion,
     type DriverCompletionStream,
-    type DriverOptions,
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
@@ -21,6 +19,7 @@ import {
 import { AbstractDriver } from '@llumiverse/core/driver';
 import type OpenAI from 'openai';
 import { BedrockOpenAI } from 'openai';
+import type { BedrockMantleDriverOptions } from '../driver-options.js';
 import { OpenAIResponsesDriverBase } from '../openai/index.js';
 import {
     buildOpenAIChatCompletionsStreamingConversation,
@@ -39,13 +38,10 @@ import {
 } from '../shared/claude-messages.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 
+export type { BedrockMantleDriverOptions } from '../driver-options.js';
+
 type BedrockMantleResponsesPrompt = OpenAI.Responses.ResponseInputItem[];
 export type BedrockMantlePrompt = BedrockMantleResponsesPrompt | OpenAIChatCompletionsPrompt | ClaudePrompt;
-
-export interface BedrockMantleDriverOptions extends DriverOptions {
-    region: string;
-    credentials?: AwsCredentialIdentity | Provider<AwsCredentialIdentity>;
-}
 
 class BedrockMantleResponsesDelegate extends OpenAIResponsesDriverBase {
     readonly provider = Providers.bedrock_mantle;

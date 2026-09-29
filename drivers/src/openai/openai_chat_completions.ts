@@ -3,12 +3,13 @@ import {
     type Completion,
     type CompletionChunkObject,
     type CompletionResult,
+    type CompletionStream,
     type DriverCompletionStream,
-    type DriverOptions,
     type EmbeddingResultItem,
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
+    type ExecutionResponse,
     type ExecutionTokenUsage,
     getConversationMeta,
     incrementConversationTurn,
@@ -32,10 +33,13 @@ import {
     truncateLargeTextInConversation,
 } from '@llumiverse/core';
 import { transformSSEStream } from '@llumiverse/core/async';
+import { FallbackCompletionStream } from '@llumiverse/core/driver';
 import OpenAI from 'openai';
 import { canonicalConversationTurnNumber } from '../conversation/canonical-runtime.js';
+import type { OpenAIChatCompletionsDriverOptions, OpenAIChatCompletionsProtocolOptions } from '../driver-options.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
+import { executeOpenAIAudioRequest, openAIAudioTask, openAIInputAudioPart } from './audio.js';
 import { getOpenAIExtraBody, mergeOpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import {
@@ -43,10 +47,14 @@ import {
     compileOpenAIChatCompletionsConversation,
     decodeOpenAIChatCanonicalResponse,
     finalizeOpenAIChatPreparedRequest,
+    OPENAI_CHAT_COMPLETIONS_PROTOCOL,
     type PreparedOpenAIChatConversation,
     prepareOpenAIChatCanonicalState,
 } from './openai-chat-conversation-adapter.js';
 import { formatOpenAISchema, limitedSchemaFormat } from './schema.js';
+import { type ChatCompletionsUsage, mapOpenAIChatCompletionsUsage } from './usage.js';
+
+export type { OpenAIChatCompletionsDriverOptions, OpenAIChatCompletionsProtocolOptions } from '../driver-options.js';
 
 type OpenAIChatServiceTier = OpenAI.Chat.ChatCompletionCreateParams['service_tier'];
 
@@ -57,7 +65,10 @@ function asOpenAIChatServiceTier(serviceTier?: string): OpenAIChatServiceTier {
 
 export type OpenAIChatCompletionsTextPart = OpenAI.Chat.ChatCompletionContentPartText;
 export type OpenAIChatCompletionsImageUrlPart = OpenAI.Chat.ChatCompletionContentPartImage;
-export type OpenAIChatCompletionsContentPart = OpenAIChatCompletionsTextPart | OpenAIChatCompletionsImageUrlPart;
+export type OpenAIChatCompletionsContentPart =
+    | OpenAIChatCompletionsTextPart
+    | OpenAIChatCompletionsImageUrlPart
+    | OpenAI.Chat.ChatCompletionContentPartInputAudio;
 export type OpenAIChatCompletionsToolCall = OpenAI.Chat.ChatCompletionMessageFunctionToolCall;
 export type OpenAIChatCompletionsToolDefinition = OpenAI.Chat.ChatCompletionTool;
 
@@ -100,7 +111,7 @@ export type OpenAIChatCompletionsPayload = Omit<
     extra_body?: Record<string, unknown>;
 };
 
-type OpenAIChatCompletionsUsage = NonNullable<OpenAI.Chat.ChatCompletion['usage']>;
+type OpenAIChatCompletionsUsage = ChatCompletionsUsage;
 type OpenAIChatCompletionsResponseMessage = Omit<
     Partial<OpenAI.Chat.ChatCompletionMessage>,
     'content' | 'tool_calls'
@@ -159,36 +170,6 @@ export interface OpenAIChatCompletionsPrompt {
     messages: OpenAIChatCompletionsMessage[];
     /** Discriminator for drivers that share a `messages` array with other provider prompts. */
     _is_openai_chat_completions?: true;
-}
-
-export interface OpenAIChatCompletionsProtocolOptions {
-    /** The model identifier to send in the request body (for example, "zai-org/glm-5-maas"). */
-    modelName?: string;
-    /** Model API contract default used only when callers do not provide max_tokens. */
-    defaultMaxTokens?: number;
-    /** Extra OpenAI-compatible request body fields for model-family-specific options. */
-    extraBody?: Record<string, unknown>;
-    /**
-     * How result_schema should be requested. Vertex MaaS supports response_format, while
-     * TogetherAI stays prompt-instruction based because its OpenAI-compatible surface is
-     * Chat Completions only and response_format support is not reliable across hosted models.
-     */
-    resultSchemaMode?: 'response_format' | 'prompt';
-    /** Supplement native structured output with prompt alignment for providers with unreliable enforcement. */
-    includeResultSchemaInPrompt?: boolean;
-    /** Model-specific form of the prompt alignment guard for mixed-model providers. */
-    includeResultSchemaInPromptForModel?: (model: string) => boolean;
-    /**
-     * OpenAI supports strict function schemas. Some OpenAI-compatible providers reject
-     * or mis-handle those OpenAI-specific fields, so adapters can request a looser
-     * JSON Schema payload for tools while preserving the shared Chat Completions path.
-     */
-    toolSchemaMode?: 'openai_strict' | 'compatible';
-    /** Resolve SDK options from the same driver/per-execution policy as the HTTP transport. */
-    resolveRequestOptions?: (
-        options: Pick<ExecutionOptions, 'httpTimeout'>,
-        signal?: AbortSignal,
-    ) => { signal?: AbortSignal; timeout?: number } | undefined;
 }
 
 const originalResponseSymbol = Symbol('openai-compatible-original-response');
@@ -377,20 +358,6 @@ function safeJsonParse(value: string | undefined): JSONObject {
     }
 }
 
-function mapOpenAIChatCompletionsUsage(usage?: OpenAIChatCompletionsUsage | null): ExecutionTokenUsage | undefined {
-    if (!usage) {
-        return undefined;
-    }
-    const cachedTokens = usage.prompt_tokens_details?.cached_tokens;
-    return {
-        prompt: usage.prompt_tokens,
-        result: usage.completion_tokens,
-        total: usage.total_tokens,
-        prompt_cached: cachedTokens ?? undefined,
-        prompt_new: Math.max(0, usage.prompt_tokens - (cachedTokens ?? 0)),
-    };
-}
-
 function normalizeOpenAIChatCompletionsFinishReason(
     reason: string | null | undefined,
     hasToolUse: boolean = false,
@@ -511,6 +478,12 @@ export function convertOpenAIChatCompletionsToolMessagesToText(
         }
 
         if (message.role === 'tool') {
+            if (Array.isArray(message.content) && message.content.some((part) => part.type === 'image_url')) {
+                return {
+                    role: 'user',
+                    content: [{ type: 'text', text: `Tool result ${message.tool_call_id}:` }, ...message.content],
+                };
+            }
             const output = extractOpenAIChatCompletionsContentText(message.content) || 'No output';
             return { role: 'user', content: `[Tool result: ${truncateToolText(output)}]` };
         }
@@ -707,7 +680,15 @@ export function convertToOpenAIChatCompletionsMessages(
     messages: OpenAIChatCompletionsMessage[],
 ): OpenAIChatCompletionsRequestMessage[] {
     const converted: OpenAIChatCompletionsRequestMessage[] = [];
+    let attachments: OpenAIChatCompletionsContentPart[] = [];
+    const flushAttachments = () => {
+        if (attachments.length === 0) return;
+        converted.push({ role: 'user', content: attachments });
+        attachments = [];
+    };
     for (const msg of messages) {
+        // Complete all parallel tool results before adding ordinary user content.
+        if (msg.role !== 'tool') flushAttachments();
         const result: OpenAIChatCompletionsRequestMessage = {
             role: msg.role,
         };
@@ -732,27 +713,20 @@ export function convertToOpenAIChatCompletionsMessages(
         }
 
         if (Array.isArray(msg.content)) {
-            const textParts: string[] = [];
-            const imageUrls: OpenAIChatCompletionsImageUrlPart['image_url'][] = [];
+            // Preserve interleaved captions and images, including on replay. Tool messages
+            // only support text in the SDK/API, so retain an indexed reference at each image's
+            // original position and carry its bytes in a following user message.
+            let imageIndex = 0;
+            const content = msg.content.map((part): OpenAIChatCompletionsContentPart => {
+                if (msg.role !== 'tool' || part.type !== 'image_url') return part;
+                imageIndex++;
+                const label = `Image ${imageIndex} from tool result ${msg.tool_call_id}:`;
+                attachments.push({ type: 'text', text: label }, part);
+                return { type: 'text', text: `[Image ${imageIndex} attached below]` };
+            });
 
-            for (const part of msg.content) {
-                if (part.type === 'text') {
-                    textParts.push(part.text);
-                } else if (part.type === 'image_url') {
-                    imageUrls.push(part.image_url);
-                }
-            }
-
-            const content: OpenAIChatCompletionsContentPart[] = [];
-            if (textParts.length > 0) {
-                content.push({ type: 'text', text: textParts.join('\n') });
-            }
-            for (const img of imageUrls) {
-                content.push({ type: 'image_url', image_url: img });
-            }
-
-            if (content.length === 1 && content[0].type === 'text') {
-                result.content = content[0].text;
+            if (content.length > 0 && content.every((part) => part.type === 'text')) {
+                result.content = content.map((part) => part.text).join('\n');
             } else if (content.length > 0) {
                 result.content = content;
             }
@@ -764,6 +738,7 @@ export function convertToOpenAIChatCompletionsMessages(
 
         converted.push(result);
     }
+    flushAttachments();
     return converted;
 }
 
@@ -916,6 +891,11 @@ function canonicalOpenAIUsage(
 ): ExecutionTokenUsage | undefined {
     const usage = prepared.accepted_response?.generation.usage;
     if (usage === undefined) return undefined;
+    const reported = usage.reported_usage?.find(
+        (candidate) => candidate.source === 'provider' && candidate.protocol === OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+    );
+    const reportedProjection = mapOpenAIChatCompletionsUsage(reportedChatCompletionsUsage(reported?.payload));
+    if (reportedProjection !== undefined) return reportedProjection;
     return {
         ...(usage.input_tokens === undefined ? {} : { prompt: usage.input_tokens }),
         ...(usage.output_tokens === undefined ? {} : { result: usage.output_tokens }),
@@ -923,6 +903,56 @@ function canonicalOpenAIUsage(
         ...(usage.cache_read_tokens === undefined ? {} : { prompt_cached: usage.cache_read_tokens }),
         ...(usage.cache_write_tokens === undefined ? {} : { prompt_cache_write: usage.cache_write_tokens }),
         ...(usage.input_new_tokens === undefined ? {} : { prompt_new: usage.input_new_tokens }),
+    };
+}
+
+function reportedChatCompletionsUsage(value: unknown): ChatCompletionsUsage | undefined {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const payload = value as Record<string, unknown>;
+    const promptTokens = payload.prompt_tokens;
+    const completionTokens = payload.completion_tokens;
+    const totalTokens = payload.total_tokens;
+    if (typeof promptTokens !== 'number' || typeof completionTokens !== 'number' || typeof totalTokens !== 'number') {
+        return undefined;
+    }
+    const details = payload.prompt_tokens_details;
+    if (details !== undefined && details !== null && (typeof details !== 'object' || Array.isArray(details))) {
+        return undefined;
+    }
+    const detailRecord = details as Record<string, unknown> | null | undefined;
+    const cachedTokens = detailRecord?.cached_tokens;
+    const cacheWriteTokens = detailRecord?.cache_write_tokens;
+    if (
+        (cachedTokens !== undefined && cachedTokens !== null && typeof cachedTokens !== 'number') ||
+        (cacheWriteTokens !== undefined && cacheWriteTokens !== null && typeof cacheWriteTokens !== 'number')
+    ) {
+        return undefined;
+    }
+    const cost = payload.cost;
+    const isByok = payload.is_byok;
+    if (
+        (cost !== undefined && cost !== null && typeof cost !== 'number') ||
+        (isByok !== undefined && isByok !== null && typeof isByok !== 'boolean')
+    ) {
+        return undefined;
+    }
+    return {
+        prompt_tokens: promptTokens,
+        completion_tokens: completionTokens,
+        total_tokens: totalTokens,
+        ...(details === undefined
+            ? {}
+            : {
+                  prompt_tokens_details:
+                      details === null
+                          ? null
+                          : {
+                                ...(cachedTokens == null ? {} : { cached_tokens: cachedTokens }),
+                                ...(cacheWriteTokens == null ? {} : { cache_write_tokens: cacheWriteTokens }),
+                            },
+              }),
+        ...(cost === undefined ? {} : { cost }),
+        ...(isByok === undefined ? {} : { is_byok: isByok }),
     };
 }
 
@@ -1076,6 +1106,8 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                                     detail: 'auto',
                                 },
                             });
+                        } else if (file.mime_type?.startsWith('audio/')) {
+                            parts.push(await openAIInputAudioPart(file));
                         } else if (file.mime_type?.startsWith('text/')) {
                             const fileStream = await file.getStream();
                             const fileContent = await streamToString(fileStream);
@@ -1412,15 +1444,6 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
     ): Promise<ReadableStream>;
 }
 
-export interface OpenAIChatCompletionsDriverOptions extends DriverOptions {
-    defaultMaxTokens?: number;
-    extraBody?: Record<string, unknown>;
-    resultSchemaMode?: OpenAIChatCompletionsProtocolOptions['resultSchemaMode'];
-    includeResultSchemaInPrompt?: OpenAIChatCompletionsProtocolOptions['includeResultSchemaInPrompt'];
-    includeResultSchemaInPromptForModel?: OpenAIChatCompletionsProtocolOptions['includeResultSchemaInPromptForModel'];
-    toolSchemaMode?: OpenAIChatCompletionsProtocolOptions['toolSchemaMode'];
-}
-
 interface OpenAIChatCompletionsTransportDriver {
     _postChatCompletion(
         payload: OpenAIChatCompletionsPayload,
@@ -1674,6 +1697,39 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
     readonly provider = Providers.openai_compatible;
     service: OpenAI;
 
+    override async execute(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<ExecutionResponse<OpenAIChatCompletionsPrompt>> {
+        if (!openAIAudioTask(options.model)) return super.execute(segments, options, signal);
+        return executeOpenAIAudioRequest(
+            this,
+            this.service,
+            segments,
+            options,
+            { _is_openai_chat_completions: true, messages: [] },
+            signal,
+            options.model,
+            this.getDriverRequestOptions(options, signal),
+        );
+    }
+
+    override async stream(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CompletionStream<OpenAIChatCompletionsPrompt>> {
+        if (!openAIAudioTask(options.model)) return super.stream(segments, options, signal);
+        return new FallbackCompletionStream(
+            this,
+            { _is_openai_chat_completions: true, messages: [] },
+            options,
+            (streamSignal) =>
+                this.execute(segments, options, signal ? AbortSignal.any([signal, streamSignal]) : streamSignal),
+        );
+    }
+
     constructor(options: OpenAIChatCompletionsDriverConfig) {
         super(options);
         this.service = new OpenAI({
@@ -1722,7 +1778,7 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
             .filter(
                 (model) =>
                     !isEmbeddingModel({ id: model.id }, this.provider) &&
-                    !isDedicatedInferenceModel(model.id, this.provider),
+                    (!isDedicatedInferenceModel(model.id, this.provider) || !!openAIAudioTask(model.id)),
             )
             .map((model) => {
                 const modelMetadata = resolveModelListingMetadata(model.id, this.provider);
@@ -1731,7 +1787,7 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
                     name: model.id,
                     owner: model.owned_by,
                     provider: this.provider,
-                    type: ModelType.Text,
+                    type: openAIAudioTask(model.id) ? ModelType.Audio : ModelType.Text,
                     ...modelMetadata,
                 } satisfies AIModel;
             });

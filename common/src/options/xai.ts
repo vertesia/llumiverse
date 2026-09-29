@@ -11,13 +11,26 @@ export function isXAIGrokImageModel(model: string): boolean {
     return modelId.includes('grok') && modelId.includes('image');
 }
 
+const XAI_TIERED_OPTION_IDS = new Set(['openai-text', 'openai-thinking']);
+
+const XAI_SERVICE_TIER_OPTION: ModelOptionInfoItem = {
+    name: 'service_tier',
+    type: OptionType.enum,
+    enum: { Default: 'default', Priority: 'priority' },
+    default: 'default',
+    description: 'Select the xAI processing tier for this request. Priority is billed at a premium rate.',
+};
+
 export function getXAIOptions(
     model: string,
     options?: ModelOptions,
     profile: ModelProfile = resolveModelProfile(model, Providers.xai),
 ): ModelOptionsInfo {
     if (!isXAIGrokImageModel(model)) {
-        return getOpenAiCompatibleOptions(model, options, profile);
+        const textOptions = getOpenAiCompatibleOptions(model, options, profile);
+        if (!XAI_TIERED_OPTION_IDS.has(textOptions._option_id)) return textOptions;
+        // xAI serves text requests at a priority tier, confirmed by the response's `service_tier`.
+        return { ...textOptions, options: [...textOptions.options, XAI_SERVICE_TIER_OPTION] };
     }
 
     const imageOptions: ModelOptionInfoItem[] = [

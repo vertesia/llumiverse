@@ -1,10 +1,13 @@
 import type { z } from 'zod';
 import { type ModelProfile, resolveModelProfile } from '../model-directory.js';
 import type {
+    OpenAiAudioOptionsSchema,
     OpenAiDalleOptionsSchema,
     OpenAiGptImageOptionsSchema,
+    OpenAiSpeechOptionsSchema,
     OpenAiTextOptionsSchema,
     OpenAiThinkingOptionsSchema,
+    OpenAiTranscriptionOptionsSchema,
 } from '../schemas/model-options.js';
 import {
     type ModelOptionInfoItem,
@@ -30,11 +33,22 @@ export type OpenAiTextOptions = z.infer<typeof OpenAiTextOptionsSchema>;
 export type OpenAiDalleOptions = z.infer<typeof OpenAiDalleOptionsSchema>;
 export type OpenAiGptImageOptions = z.infer<typeof OpenAiGptImageOptionsSchema>;
 
+export type OpenAiTranscriptionOptions = z.infer<typeof OpenAiTranscriptionOptionsSchema>;
+export type OpenAiSpeechOptions = z.infer<typeof OpenAiSpeechOptionsSchema>;
+export type OpenAiAudioOptions = z.infer<typeof OpenAiAudioOptionsSchema>;
+
 // Union type of all OpenAI options
 /**
  * @discriminator _option_id
  */
-export type OpenAiOptions = OpenAiThinkingOptions | OpenAiTextOptions | OpenAiDalleOptions | OpenAiGptImageOptions;
+export type OpenAiOptions =
+    | OpenAiThinkingOptions
+    | OpenAiTextOptions
+    | OpenAiDalleOptions
+    | OpenAiGptImageOptions
+    | OpenAiTranscriptionOptions
+    | OpenAiSpeechOptions
+    | OpenAiAudioOptions;
 
 /** OpenAI model families with published Flex processing support. */
 export function isFlexSupportedOpenAIModel(model: string): boolean {
@@ -53,10 +67,62 @@ export function getOpenAiOptions(
     model: string,
     _option?: ModelOptions,
     profile: ModelProfile = resolveModelProfile(model, Providers.openai),
+    provider: Providers = Providers.openai,
 ): ModelOptionsInfo {
     // Option matching follows the resolved source ID so provider/path-qualified and uppercase IDs expose the same
     // controls as their canonical model.
     model = profile.canonical_id;
+    if (profile.family === 'transcription') {
+        return { _option_id: 'openai-transcription', options: [] };
+    }
+    if (profile.family === 'speech') {
+        return {
+            _option_id: 'openai-speech',
+            options: [
+                {
+                    name: 'voice',
+                    type: OptionType.enum,
+                    enum: { Alloy: 'alloy', Coral: 'coral', Nova: 'nova', Onyx: 'onyx', Shimmer: 'shimmer' },
+                    default: 'alloy',
+                    description: 'Provider voice name; additional voices can be supplied through the API.',
+                },
+                {
+                    name: 'response_format',
+                    type: OptionType.enum,
+                    enum: { MP3: 'mp3', WAV: 'wav', Opus: 'opus', AAC: 'aac', FLAC: 'flac', PCM: 'pcm' },
+                    default: 'mp3',
+                },
+                { name: 'speed', type: OptionType.numeric, min: 0.25, max: 4, default: 1 },
+            ],
+        };
+    }
+    if (profile.family === 'audio') {
+        return {
+            _option_id: 'openai-audio',
+            options: [
+                {
+                    name: 'voice',
+                    type: OptionType.enum,
+                    enum: {
+                        Alloy: 'alloy',
+                        Ash: 'ash',
+                        Coral: 'coral',
+                        Marin: 'marin',
+                        Sage: 'sage',
+                        Shimmer: 'shimmer',
+                    },
+                    default: 'alloy',
+                    description: 'Provider voice name; additional voices can be supplied through the API.',
+                },
+                {
+                    name: 'response_format',
+                    type: OptionType.enum,
+                    enum: { WAV: 'wav', MP3: 'mp3', FLAC: 'flac', Opus: 'opus', PCM16: 'pcm16' },
+                    default: 'wav',
+                },
+            ],
+        };
+    }
     const visionOptions: ModelOptionInfoItem[] =
         profile.capabilities.input.image === true
             ? [
@@ -240,9 +306,28 @@ export function getOpenAiOptions(
                   ]
                 : [];
 
+        const reasoningContextOptions: ModelOptionInfoItem[] =
+            provider === Providers.openai && isOpenAIGptVersionGTE(model, 5, 6)
+                ? [
+                      {
+                          name: SharedOptions.reasoning_context,
+                          type: OptionType.enum,
+                          enum: { Auto: 'auto', 'Current turn': 'current_turn', 'All turns': 'all_turns' },
+                          description:
+                              'Controls whether compatible reasoning from earlier turns is rendered into the next request. Leave unset to use the model default.',
+                      },
+                  ]
+                : [];
+
         return {
             _option_id: 'openai-thinking',
-            options: [...commonOptions, ...reasoningOptions, ...visionOptions, ...serviceTierOptions],
+            options: [
+                ...commonOptions,
+                ...reasoningOptions,
+                ...reasoningContextOptions,
+                ...visionOptions,
+                ...serviceTierOptions,
+            ],
         };
     } else {
         let max_tokens_limit = 4096;
@@ -279,7 +364,6 @@ export function getOpenAiOptions(
                 type: OptionType.numeric,
                 min: 0.0,
                 max: 2.0,
-                default: 0.7,
                 integer: false,
                 step: 0.1,
                 description: 'A higher temperature biases toward less likely tokens, making the model more creative',
@@ -332,7 +416,7 @@ export function getAzureOpenAiOptions(
     option?: ModelOptions,
     profile: ModelProfile = resolveModelProfile(model, Providers.azure_openai),
 ): ModelOptionsInfo {
-    const options = getOpenAiOptions(model, option, profile);
+    const options = getOpenAiOptions(model, option, profile, Providers.azure_openai);
     return {
         ...options,
         options: options.options.map((item) =>
@@ -353,7 +437,8 @@ export function getOpenAiCompatibleOptions(
     option?: ModelOptions,
     profile: ModelProfile = resolveModelProfile(model, Providers.openai_compatible),
 ): ModelOptionsInfo {
-    const options = getOpenAiOptions(model, option, profile);
+    const options = getOpenAiOptions(model, option, profile, Providers.openai_compatible);
+    if (profile.family === 'speech' || profile.family === 'transcription') return options;
     const compatibleOptions = options.options.filter((item) => item.name !== 'service_tier');
     const maxOutputTokens = profile.max_output_tokens;
     const profileEffortLevels = profile.reasoning_effort_levels?.length

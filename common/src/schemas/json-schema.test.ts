@@ -33,15 +33,17 @@ const EXPECTED_JSON_SCHEMA = {
     },
 };
 
+type EmittedSchema = Record<string, unknown> & { $defs?: Record<string, Record<string, unknown>>; $ref?: string };
+
+function emittedRoot(emitted: EmittedSchema): Record<string, unknown> {
+    return emitted.$ref ? (emitted.$defs?.[emitted.$ref.replace('#/$defs/', '')] ?? emitted) : emitted;
+}
+
 describe('JSONSchemaSchema', () => {
     it('emits the published component shape, property order included', () => {
-        const emitted = z.toJSONSchema(JSONSchemaSchema, { target: 'draft-2020-12', io: 'input' }) as Record<
-            string,
-            unknown
-        >;
-        expect(emitted.$ref).toBe('#/$defs/JSONSchema');
-        const definitions = emitted.$defs as Record<string, Record<string, unknown>>;
-        const { additionalProperties, ...rest } = definitions.JSONSchema;
+        const emitted = z.toJSONSchema(JSONSchemaSchema, { target: 'draft-2020-12', io: 'input' }) as EmittedSchema;
+        const root = emittedRoot(emitted);
+        const { $schema: _schema, $defs: _defs, additionalProperties, ...rest } = root;
         // Compared as text, so a reordered property fails here too. Deliberately stricter than the
         // agreement the generator enforces: this is the place a change to the emission should be
         // read and approved, not discovered downstream.
@@ -89,10 +91,9 @@ describe('JSONSchemaSchema', () => {
         // `typecheck` run enforces. This is its runtime mirror, so the coverage property survives
         // even if someone loosens the mapped type: the emitted `properties` map IS the known-field
         // list, and a field added to the interface without a schema (or the reverse) moves it.
-        const emitted = z.toJSONSchema(JSONSchemaSchema, { target: 'draft-2020-12', io: 'input' }) as {
-            $defs: Record<string, { properties: Record<string, unknown> }>;
-        };
-        expect(Object.keys(emitted.$defs.JSONSchema.properties)).toEqual([
+        const emitted = z.toJSONSchema(JSONSchemaSchema, { target: 'draft-2020-12', io: 'input' }) as EmittedSchema;
+        const root = emittedRoot(emitted) as { properties: Record<string, unknown> };
+        expect(Object.keys(root.properties)).toEqual([
             'type',
             'description',
             'properties',

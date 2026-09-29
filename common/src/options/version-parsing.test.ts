@@ -15,6 +15,7 @@ import {
 describe('Claude model version parsing', () => {
     it.each([
         ['claude-sonnet-5', { major: 5, minor: 0, variant: 'sonnet' }],
+        ['claude-opus-5-5', { major: 5, minor: 5, variant: 'opus' }],
         ['claude-fable-5-20260701', { major: 5, minor: 0, variant: 'fable' }],
         ['publishers/anthropic/models/claude-mythos-5@20260701', { major: 5, minor: 0, variant: 'mythos' }],
         ['claude-mythos-preview', { major: 5, minor: 0, variant: 'mythos' }],
@@ -48,6 +49,16 @@ describe('Claude model version parsing', () => {
             });
         },
     );
+
+    it('marks medium as the default effort for Opus 5.5', () => {
+        expect(getAvailableEffortLevels('claude-opus-5-5')).toEqual({
+            Low: 'low',
+            'Medium (default)': 'medium',
+            High: 'high',
+            'Extra High': 'xhigh',
+            Max: 'max',
+        });
+    });
 });
 
 describe('OpenAI GPT model version parsing', () => {
@@ -59,6 +70,7 @@ describe('OpenAI GPT model version parsing', () => {
         ['us.openai.gpt-5.6-sol-v1:0', { major: 5, minor: 6 }],
         ['gpt-deployment::gpt-5', { major: 5, minor: 0 }],
         ['gpt-6', { major: 6, minor: 0 }],
+        ['gpt-6-astra', { major: 6, minor: 0 }],
     ] as const)('parses %s', (model, expected) => {
         expect(parseOpenAIGptVersion(model)).toEqual(expected);
     });
@@ -78,7 +90,7 @@ describe('OpenAI GPT model version parsing', () => {
             {
                 None: 'none',
                 Low: 'low',
-                Medium: 'medium',
+                'Medium (default)': 'medium',
                 High: 'high',
                 'Extra High': 'xhigh',
                 Max: 'max',
@@ -86,6 +98,29 @@ describe('OpenAI GPT model version parsing', () => {
         ],
         ['gpt-5-pro', { 'High (only)': 'high' }],
         ['gpt-5.4-pro', { Medium: 'medium', 'High (default)': 'high', 'Extra High': 'xhigh' }],
+        ['gpt-6-astra', { Low: 'low', 'Medium (default)': 'medium', High: 'high', 'Extra High': 'xhigh', Max: 'max' }],
+        [
+            'gpt-6-sol',
+            {
+                None: 'none',
+                Low: 'low',
+                'Medium (default)': 'medium',
+                High: 'high',
+                'Extra High': 'xhigh',
+                Max: 'max',
+            },
+        ],
+        [
+            'gpt-6-luna',
+            {
+                None: 'none',
+                Low: 'low',
+                'Medium (default)': 'medium',
+                High: 'high',
+                'Extra High': 'xhigh',
+                Max: 'max',
+            },
+        ],
     ] as const)('advertises documented effort levels for %s', (model, expected) => {
         expect(getOpenAIReasoningEffortLevels(model)).toEqual(expected);
     });

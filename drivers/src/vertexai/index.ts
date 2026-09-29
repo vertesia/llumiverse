@@ -6,7 +6,6 @@ import {
     type Completion,
     type CompletionResult,
     type DriverCompletionStream,
-    type DriverOptions,
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
@@ -26,7 +25,7 @@ import {
 import { AbstractDriver } from '@llumiverse/core/driver';
 import { runWithDriverHttpAgent } from '@llumiverse/core/http-agent';
 import { type FETCH_FN, FetchClient } from '@vertesia/api-fetch-client';
-import { type AuthClient, GoogleAuth, type GoogleAuthOptions } from 'google-auth-library';
+import { type AuthClient, GoogleAuth } from 'google-auth-library';
 import {
     buildOpenAIChatCompletionsStreamingConversation,
     type OpenAIChatCompletionsPrompt,
@@ -34,13 +33,12 @@ import {
 import { type ClaudePrompt, formatClaudeDebugPrompt, isClaudePromptCacheEnabled } from '../shared/claude-messages.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { generateVertexAiEmbeddings } from './embeddings/embed.js';
+
+export * from './embeddings/batch.js';
+
 import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
 import { formatGeminiDebugPrompt } from './models/gemini.js';
-import {
-    type GeminiContextCacheCoordinationKey,
-    type GeminiContextCacheCoordinator,
-    GeminiContextCacheManager,
-} from './models/gemini-context-cache.js';
+import { type GeminiContextCacheCoordinationKey, GeminiContextCacheManager } from './models/gemini-context-cache.js';
 import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
 import { GEMINI_OMNI_VIDEO_MODELS, isGeminiOmniVideoModel, type OmniVideoPrompt } from './models/omni-video.js';
 import { getModelDefinition, trimModelName } from './models.js';
@@ -52,27 +50,9 @@ export type {
     GeminiContextCacheEntry,
 } from './models/gemini-context-cache.js';
 
-export interface VertexAIDriverOptions extends DriverOptions {
-    project: string;
-    region: string;
-    googleAuthOptions?: GoogleAuthOptions;
-    /**
-     * Kill switch for explicit Gemini context caching (Vertex `cachedContents`). Caching is normally
-     * decided per execution — see `ExecutionOptions.prompt_cache_mode`, which defaults to caching the
-     * static prefix whenever `prompt_cache_key` is set. Setting this to `false` disables the whole
-     * path for every execution this driver runs, whatever the execution options say.
-     */
-    geminiContextCache?: boolean;
-    /**
-     * Default lifetime, in seconds, of the `cachedContents` resources this driver creates.
-     * Defaults to 1800 (30 minutes). `ExecutionOptions.prompt_cache_ttl_seconds` overrides it per call.
-     */
-    geminiContextCacheTtlSeconds?: number;
-    /** Host-supplied fleet coordinator. Llumiverse itself has no Redis dependency. */
-    geminiContextCacheCoordinator?: GeminiContextCacheCoordinator;
-    /** Host isolation scope, normally the Studio environment ID. */
-    geminiContextCacheScope?: string;
-}
+import type { VertexAIDriverOptions } from '../driver-options.js';
+
+export type { VertexAIDriverOptions } from '../driver-options.js';
 
 export interface GenerateContentPrompt {
     contents: Content[];
@@ -510,6 +490,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                     case 'image':
                         // Skip images in conversation - they're in the result
                         return '';
+                    case 'audio':
                     case 'video':
                         return '';
                     default: {
@@ -614,6 +595,7 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                         return typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
                     case 'image':
                         return '';
+                    case 'audio':
                     case 'video':
                         return '';
                     default: {
@@ -737,8 +719,10 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
                     'embedding',
                     'embed',
                     'gemini-live',
+                    'live-',
+                    'transcribe-live',
                     'native-audio',
-                    '-tts',
+                    'robotics',
                     'computer-use-preview',
                 ],
                 /** Additional models not in the listings, but we want to include.
@@ -998,17 +982,18 @@ function isGlobalOnlyPublisherModel(publisher: string, modelId: string): boolean
 function isExecutableGoogleModel(model: Model): boolean {
     const modelName = (model.name ?? '').toLowerCase();
     if (isGeminiOmniVideoModel(modelName.split('/').pop() ?? modelName)) return true;
-    // Intentional execution-path allow-list: Vertex uses separate methods for embeddings, Live/TTS, music and video.
+    // Intentional execution-path allow-list: Vertex uses separate methods for embeddings, Live, music and video.
     // This driver currently implements generateContent and generateImages. Unknown actions are excluded only when
     // Google supplies them; absent action metadata falls back to the known-family/name policy above.
     if (!modelName.includes('gemini') && !modelName.includes('imagen')) return false;
 
+    if (/(?:embedding|embed|live|native-audio|veo|lyria)/.test(modelName)) return false;
     if (model.supportedActions?.length) {
         const actions = model.supportedActions.map((action) => action.toLowerCase().replace(/[^a-z]/g, ''));
         return actions.some((action) => action === 'generatecontent' || action === 'generateimages');
     }
 
-    return !/(?:embedding|embed|tts|live|native-audio|veo|lyria)/.test(modelName);
+    return !/(?:embedding|embed|live|native-audio|veo|lyria)/.test(modelName);
 }
 
 //'us-central1-aiplatform.googleapis.com',

@@ -2,6 +2,7 @@ import {
     type AbstractDriver,
     type AIModel,
     type ExecutionOptions,
+    type ExecutionResponse,
     getMaxOutputTokens,
     getMaxTokensLimitBedrock,
     getMaxTokensLimitVertexAi,
@@ -24,7 +25,7 @@ import {
     WatsonxDriver,
     xAIDriver,
 } from '../src/index.js';
-import { assertCompletionOk, assertStreamingCompletionOk } from './assertions.js';
+import { assertCompletionOk, assertProviderCostReported, assertStreamingCompletionOk } from './assertions.js';
 import { selectLiveTestDrivers } from './live-model-selection.js';
 import {
     testPrompt_color,
@@ -34,6 +35,7 @@ import {
 } from './samples.js';
 
 const TIMEOUT = 90 * 1000;
+const QWEN_SMOKE_MODEL = 'qwen/qwen3.8-flash';
 
 interface TestDriver {
     driver: AbstractDriver;
@@ -52,7 +54,7 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
             region: process.env.GOOGLE_REGION as string,
         }),
         models: [
-            'publishers/google/models/gemini-2.5-flash-lite',
+            'locations/global/publishers/google/models/gemini-3.5-flash-lite',
             'locations/global/publishers/anthropic/models/claude-sonnet-5',
         ],
     });
@@ -177,12 +179,7 @@ if (process.env.OPENROUTER_API_KEY) {
         driver: new OpenRouterDriver({
             apiKey: process.env.OPENROUTER_API_KEY,
         }),
-        models: [
-            'moonshotai/kimi-k2.5',
-            'qwen/qwen3.5-35b-a3b',
-            'minimax/minimax-m2.5',
-            'google/gemini-3.1-flash-lite',
-        ],
+        models: ['moonshotai/kimi-k2.5', QWEN_SMOKE_MODEL, 'minimax/minimax-m2.5', 'google/gemini-3.1-flash-lite'],
     });
 } else {
     console.warn('OpenRouter tests are skipped: OPENROUTER_API_KEY environment variable is not set');
@@ -205,6 +202,13 @@ const selectedDrivers = selectLiveTestDrivers(drivers, {
     models: process.env.LLUMIVERSE_LIVE_MODELS,
 });
 
+function getSmokeModelOptions(model: string) {
+    // Keep the Qwen smoke focused on final output rather than spending its budget on reasoning.
+    return model === QWEN_SMOKE_MODEL
+        ? { _option_id: 'openrouter-text' as const, effort: 'none' as const }
+        : { _option_id: 'text-fallback' as const };
+}
+
 function getTestOptions(model: string): ExecutionOptions {
     if (model === 'o1-mini' || model === 'o3-mini') {
         return {
@@ -217,17 +221,23 @@ function getTestOptions(model: string): ExecutionOptions {
         };
     }
 
+    const isGemini35FlashLite = model.toLowerCase().includes('gemini-3.5-flash-lite');
+
     return {
         model: model,
         model_options: {
-            _option_id: 'text-fallback',
+            ...getSmokeModelOptions(model),
             max_tokens: 512,
             temperature: 0.3,
-            top_k: 40,
+            ...(model === QWEN_SMOKE_MODEL ? {} : { top_k: 40 }),
             top_p: 0.7, //Some models do not support top_p = 1.0, set to 0.99 or lower.
             //   top_logprobs: 5,        //Currently not supported, option will be ignored
-            presence_penalty: 0.1, //Cohere Command R does not support using presence & frequency penalty at the same time
-            frequency_penalty: -0.1,
+            ...(isGemini35FlashLite
+                ? {}
+                : {
+                      presence_penalty: 0.1, //Cohere Command R does not support using presence & frequency penalty at the same time
+                      frequency_penalty: -0.1,
+                  }),
             stop_sequence: ['haemoglobin'],
         },
     };
@@ -262,6 +272,7 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
         const r = await driver.execute(testPrompt_color, getTestOptions(model));
         console.log(`Result for execute ${model}`, JSON.stringify(r));
         assertCompletionOk(r, model, driver);
+        assertProviderCostReported(r, driver);
     });
 
     test.each(models)(
@@ -277,6 +288,7 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
             });
             const out = await assertStreamingCompletionOk(r, true);
             console.log(`Result for streaming with schema ${model}`, JSON.stringify(out));
+            assertProviderCostReported(r.completion as ExecutionResponse, driver);
         },
     );
 
@@ -303,7 +315,7 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
             const r = await driver.execute(shortPrompt, {
                 model,
                 model_options: {
-                    _option_id: 'text-fallback',
+                    ...getSmokeModelOptions(model),
                     max_tokens: limit,
                     temperature: 0,
                 },
@@ -333,7 +345,7 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
             const r = await driver.execute(testPrompt_describeImage, {
                 model: model,
                 model_options: {
-                    _option_id: 'text-fallback',
+                    ...getSmokeModelOptions(model),
                     temperature: 0.5,
                     max_tokens: 1024,
                 },

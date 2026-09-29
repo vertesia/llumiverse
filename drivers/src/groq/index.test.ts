@@ -126,6 +126,39 @@ describe('GroqDriver shared Chat Completions transport', () => {
         expect(completion.original_response).toBe(response);
     });
 
+    it('reports the prompt tokens served from the Groq prompt cache', async () => {
+        const driver = new GroqDriver({ apiKey: 'test-key', endpoint_url: 'https://groq.example.test' });
+        const create = vi.fn(async () => ({
+            id: 'groq-2',
+            object: 'chat.completion',
+            created: 1,
+            model: 'moonshotai/kimi-k2-instruct',
+            choices: [
+                { index: 0, finish_reason: 'stop', logprobs: null, message: { role: 'assistant', content: 'ok' } },
+            ],
+            usage: {
+                prompt_tokens: 1000,
+                completion_tokens: 5,
+                total_tokens: 1005,
+                prompt_tokens_details: { cached_tokens: 800 },
+            },
+        }));
+        setGroqCreate(driver, create);
+        const prompt = await driver.createPrompt([{ role: PromptRole.user, content: 'Hi' }], {
+            model: 'moonshotai/kimi-k2-instruct',
+        });
+
+        const completion = await driver.requestTextCompletion(prompt, { model: 'moonshotai/kimi-k2-instruct' });
+
+        expect(completion.token_usage).toEqual({
+            prompt: 1000,
+            prompt_cached: 800,
+            prompt_new: 200,
+            result: 5,
+            total: 1005,
+        });
+    });
+
     it('emits fragmented tool calls with the provider ID and x_groq usage', async () => {
         const driver = new GroqDriver({ apiKey: 'test-key' });
         async function* chunks() {
@@ -238,7 +271,7 @@ describe('GroqDriver shared Chat Completions transport', () => {
         });
     });
 
-    it('preserves array-shaped tool results at the Groq SDK boundary', async () => {
+    it('preserves tool image attachments at the Groq SDK boundary', async () => {
         const driver = new GroqDriver({ apiKey: 'test-key' });
         const create = vi.fn(async (_request: unknown) => ({
             id: 'groq-1',
@@ -278,13 +311,19 @@ describe('GroqDriver shared Chat Completions transport', () => {
         );
 
         const request = create.mock.calls[0][0] as { messages: unknown[] };
-        expect(request.messages[1]).toEqual({
-            role: 'tool',
-            tool_call_id: 'call_1',
-            content: [
-                { type: 'text', text: 'result' },
-                { type: 'image_url', image_url: { url: 'https://example.test/image.png' } },
-            ],
-        });
+        expect(request.messages.slice(1)).toEqual([
+            {
+                role: 'tool',
+                tool_call_id: 'call_1',
+                content: 'result\n[Image 1 attached below]',
+            },
+            {
+                role: 'user',
+                content: [
+                    { type: 'text', text: 'Image 1 from tool result call_1:' },
+                    { type: 'image_url', image_url: { url: 'https://example.test/image.png' } },
+                ],
+            },
+        ]);
     });
 });

@@ -37,7 +37,6 @@ export function getGroqOptions(model: string, _option?: ModelOptions): ModelOpti
                 name: SharedOptions.temperature,
                 type: OptionType.numeric,
                 min: 0.0,
-                default: 0.7,
                 max: 2.0,
                 integer: false,
                 step: 0.1,

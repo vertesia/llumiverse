@@ -4,6 +4,7 @@ import {
     type Completion,
     type CompletionChunkObject,
     type CompletionResult,
+    type CompletionStream,
     type DataSource,
     type DriverCompletionStream,
     type DriverOptions,
@@ -11,6 +12,7 @@ import {
     type EmbeddingsOptions,
     type EmbeddingsResult,
     type ExecutionOptions,
+    type ExecutionResponse,
     type ExecutionTokenUsage,
     getConversationMeta,
     incrementConversationTurn,
@@ -39,11 +41,13 @@ import {
     truncateLargeTextInConversation,
     unwrapConversationArray,
 } from '@llumiverse/core';
+import { FallbackCompletionStream } from '@llumiverse/core/driver';
 import type OpenAI from 'openai';
 import type { AzureOpenAI } from 'openai';
 import { canonicalConversationTurnNumber } from '../conversation/canonical-runtime.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
+import { executeOpenAIAudioRequest, openAIAudioTask } from './audio.js';
 import { mergeOpenAIExtraBody, type OpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
 import { formatOpenAILikeMultimodalPrompt } from './openai_format.js';
@@ -56,6 +60,7 @@ import {
     prepareOpenAIResponsesCanonicalState,
 } from './openai-responses-conversation-adapter.js';
 import { formatOpenAISchema } from './schema.js';
+import { openAIPromptUsage } from './usage.js';
 
 // Response API types
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
@@ -65,6 +70,7 @@ type OpenAIRequestOptions = Partial<TextFallbackOptions> & {
     image_detail?: 'low' | 'high' | 'auto';
     effort?: string;
     reasoning_effort?: string;
+    reasoning_context?: 'auto' | 'current_turn' | 'all_turns';
     verbosity?: 'low' | 'medium' | 'high';
     prompt_cache_key?: string;
     prompt_cache_retention?: 'in_memory' | '24h';
@@ -153,20 +159,32 @@ function isOpenAIReasoningModel(model: string): boolean {
 function openAIReasoning(
     effort: string | undefined,
     isReasoningModel: boolean,
-    preserveCurrentTurn: boolean,
+    context: OpenAIRequestOptions['reasoning_context'],
 ): OpenAI.Responses.ResponseCreateParams['reasoning'] {
     if (!effort && !isReasoningModel) return undefined;
     return {
         effort,
         summary: 'auto',
-        ...(preserveCurrentTurn && { context: 'current_turn' }),
+        ...(context && { context }),
     } as OpenAI.Responses.ResponseCreateParams['reasoning'];
 }
 
-function supportsOpenAICurrentTurnReasoning(provider: Providers, model: string): boolean {
+function supportsOpenAIReasoningContext(provider: Providers, model: string): boolean {
     if (provider !== Providers.openai) return false;
     const modelId = model.toLowerCase().split('/').pop() ?? '';
-    return isOpenAIGptVersionGTE(modelId, 5, 4);
+    return isOpenAIGptVersionGTE(modelId, 5, 6);
+}
+
+function openAIReasoningContext(
+    provider: Providers,
+    model: string,
+    requestedContext: OpenAIRequestOptions['reasoning_context'],
+): OpenAIRequestOptions['reasoning_context'] {
+    if (requestedContext === undefined) return undefined;
+    if (!supportsOpenAIReasoningContext(provider, model)) {
+        throw new Error(`reasoning_context is not supported for model ${model} through provider ${provider}`);
+    }
+    return requestedContext;
 }
 
 function hasExplicitPromptCacheBreakpoint(item: ResponseInputItem): boolean {
@@ -224,6 +242,30 @@ function configureOpenAIPromptCaching(
     return { input: markedInput, options: { mode: 'explicit' } };
 }
 
+function getPromptCacheRequestOptions(
+    model: string,
+    retention: OpenAIRequestOptions['prompt_cache_retention'],
+    options: OpenAIPromptCacheConfig['options'],
+): Pick<OpenAI.Responses.ResponseCreateParams, 'prompt_cache_retention' | 'prompt_cache_options'> {
+    if (isOpenAIGptVersionGTE(model, 5, 6)) {
+        if (retention === 'in_memory') {
+            throw new Error(
+                'GPT-5.6 and later do not support in_memory prompt cache retention; configure 24h or remove the override.',
+            );
+        }
+        return {
+            prompt_cache_retention: retention,
+            prompt_cache_options: retention === '24h' ? { ...options, ttl: '30m' } : options,
+        };
+    }
+    if (isOpenAIGptVersionGTE(model, 5, 5) && retention === 'in_memory') {
+        throw new Error(
+            'GPT-5.5 does not support in_memory prompt cache retention; configure 24h or remove the override.',
+        );
+    }
+    return { prompt_cache_retention: retention, prompt_cache_options: options };
+}
+
 //TODO: Do we need a list?, replace with if statements and modernize?
 const supportFineTunning = new Set([
     'gpt-3.5-turbo-1106',
@@ -277,18 +319,18 @@ function canonicalResponsesUsage(
 ): ExecutionTokenUsage | undefined {
     const usage = prepared.accepted_response?.generation.usage;
     if (usage === undefined) return undefined;
-    // The long-standing Responses Completion projection defines prompt_new as all non-cache-read
-    // input. Canonical accounting additionally separates cache writes, so its input_new_tokens can
-    // be smaller. Keep the existing outward convention stable when replaying an accepted response.
-    const legacyPromptNew =
-        usage.input_tokens === undefined ? usage.input_new_tokens : usage.input_tokens - (usage.cache_read_tokens ?? 0);
+    const promptNew =
+        usage.input_new_tokens ??
+        (usage.input_tokens === undefined
+            ? undefined
+            : Math.max(0, usage.input_tokens - (usage.cache_read_tokens ?? 0) - (usage.cache_write_tokens ?? 0)));
     return {
         ...(usage.input_tokens === undefined ? {} : { prompt: usage.input_tokens }),
         ...(usage.output_tokens === undefined ? {} : { result: usage.output_tokens }),
         ...(usage.total_tokens === undefined ? {} : { total: usage.total_tokens }),
         ...(usage.cache_read_tokens === undefined ? {} : { prompt_cached: usage.cache_read_tokens }),
         ...(usage.cache_write_tokens === undefined ? {} : { prompt_cache_write: usage.cache_write_tokens }),
-        ...(legacyPromptNew === undefined ? {} : { prompt_new: legacyPromptNew }),
+        ...(promptNew === undefined ? {} : { prompt_new: promptNew }),
     };
 }
 
@@ -433,11 +475,12 @@ export class OpenAIResponsesProtocol {
 
         const requestedEffort = model_options?.effort ?? model_options?.reasoning_effort;
         const isReasoningModel = isOpenAIReasoningModel(options.model);
-        const reasoning = openAIReasoning(
-            requestedEffort,
-            isReasoningModel,
-            supportsOpenAICurrentTurnReasoning(driver.provider, options.model),
+        const reasoningContext = openAIReasoningContext(
+            driver.provider,
+            options.model,
+            model_options?.reasoning_context,
         );
+        const reasoning = openAIReasoning(requestedEffort, isReasoningModel, reasoningContext);
         const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
         const promptCacheRetention = model_options?.prompt_cache_retention;
 
@@ -447,13 +490,17 @@ export class OpenAIResponsesProtocol {
             promptCacheKey,
         );
         const toolChoice = getOpenAIResponseToolChoice(model_options);
+        const promptCacheRequestOptions = getPromptCacheRequestOptions(
+            options.model,
+            promptCacheRetention,
+            promptCache.options,
+        );
         const request = mergeOpenAIExtraBody<OpenAI.Responses.ResponseCreateParamsStreaming>(
             {
                 stream: true,
                 model: driver.getResponsesRequestModel(options.model),
                 prompt_cache_key: promptCacheKey,
-                prompt_cache_retention: promptCacheRetention,
-                prompt_cache_options: promptCache.options,
+                ...promptCacheRequestOptions,
                 input: promptCache.input,
                 reasoning,
                 include: reasoning ? ['reasoning.encrypted_content'] : undefined,
@@ -545,11 +592,12 @@ export class OpenAIResponsesProtocol {
 
         const requestedEffort = model_options?.effort ?? model_options?.reasoning_effort;
         const isReasoningModel = isOpenAIReasoningModel(options.model);
-        const reasoning = openAIReasoning(
-            requestedEffort,
-            isReasoningModel,
-            supportsOpenAICurrentTurnReasoning(driver.provider, options.model),
+        const reasoningContext = openAIReasoningContext(
+            driver.provider,
+            options.model,
+            model_options?.reasoning_context,
         );
+        const reasoning = openAIReasoning(requestedEffort, isReasoningModel, reasoningContext);
         const promptCacheKey = model_options?.prompt_cache_key ?? options.prompt_cache_key;
         const promptCacheRetention = model_options?.prompt_cache_retention;
 
@@ -559,13 +607,17 @@ export class OpenAIResponsesProtocol {
             promptCacheKey,
         );
         const toolChoice = getOpenAIResponseToolChoice(model_options);
+        const promptCacheRequestOptions = getPromptCacheRequestOptions(
+            options.model,
+            promptCacheRetention,
+            promptCache.options,
+        );
         const request = mergeOpenAIExtraBody<OpenAI.Responses.ResponseCreateParamsNonStreaming>(
             {
                 stream: false,
                 model: driver.getResponsesRequestModel(options.model),
                 prompt_cache_key: promptCacheKey,
-                prompt_cache_retention: promptCacheRetention,
-                prompt_cache_options: promptCache.options,
+                ...promptCacheRequestOptions,
                 input: promptCache.input,
                 reasoning,
                 include: reasoning ? ['reasoning.encrypted_content'] : undefined,
@@ -625,6 +677,51 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
         | Providers.openai_compatible;
     abstract service: OpenAI | AzureOpenAI;
     private readonly responsesProtocol: OpenAIResponsesProtocol;
+
+    protected isFileAudioModel(model: string): boolean {
+        return (
+            [Providers.openai, Providers.azure_foundry, Providers.openai_compatible].includes(this.provider) &&
+            !!openAIAudioTask(model)
+        );
+    }
+
+    override async execute(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<ExecutionResponse<OpenAI.Responses.ResponseInputItem[]>> {
+        if (!this.isFileAudioModel(options.model)) return super.execute(segments, options, signal);
+        return this.executeFileAudio(segments, options, signal);
+    }
+
+    protected async executeFileAudio(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<ExecutionResponse<OpenAI.Responses.ResponseInputItem[]>> {
+        return executeOpenAIAudioRequest(
+            this,
+            this.service,
+            segments,
+            options,
+            [],
+            signal,
+            this.getResponsesRequestModel(options.model),
+            this.getDriverRequestOptions(options, signal),
+        );
+    }
+
+    override async stream(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CompletionStream<OpenAI.Responses.ResponseInputItem[]>> {
+        if (!this.isFileAudioModel(options.model)) return super.stream(segments, options, signal);
+        signal?.throwIfAborted();
+        return new FallbackCompletionStream(this, [], options, (streamSignal) =>
+            this.executeFileAudio(segments, options, signal ? AbortSignal.any([signal, streamSignal]) : streamSignal),
+        );
+    }
 
     constructor(opts: OpenAIResponsesDriverBaseOptions) {
         super(opts);
@@ -833,6 +930,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 
         //OpenAI has very little information, filtering based on name.
         result = result.filter((m) => {
+            if (this.isFileAudioModel(m.id)) return true;
             return (
                 !unsupportedEndpointPattern.test(m.id.toLowerCase()) && !isDedicatedInferenceModel(m.id, this.provider)
             );
@@ -848,7 +946,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
                 }
 
                 // Determine model type based on capabilities
-                let modelType = ModelType.Text;
+                let modelType = this.isFileAudioModel(m.id) ? ModelType.Audio : ModelType.Text;
                 if (m.id.includes('dall-e') || m.id.includes('gpt-image')) {
                     modelType = ModelType.Image;
                 }
@@ -1008,6 +1106,7 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
 
             return {
                 result: results,
+                token_usage: mapImagesUsage(response.usage),
             };
         } catch (error: unknown) {
             this.logger.error({ error }, `[${this.provider}] Image generation failed`);
@@ -1064,12 +1163,21 @@ function mapUsage(usage?: OpenAIUsageWithProviderDetails | null): ExecutionToken
         usage.prompt_tokens_details?.cache_write_tokens ??
         usage.cache_write_tokens;
     return {
-        prompt: usage.input_tokens,
+        ...openAIPromptUsage(usage.input_tokens, cachedTokens, cacheWriteTokens),
         result: usage.output_tokens,
         total: usage.total_tokens,
-        prompt_cached: cachedTokens ?? undefined,
-        prompt_cache_write: cacheWriteTokens ?? undefined,
-        prompt_new: usage.input_tokens - (cachedTokens ?? 0),
+    };
+}
+
+/** GPT Image models report usage; every output token is an image token. DALL-E reports none. */
+function mapImagesUsage(usage: OpenAI.Images.ImagesResponse.Usage | undefined): ExecutionTokenUsage | undefined {
+    if (!usage) return undefined;
+    return {
+        prompt: usage.input_tokens,
+        prompt_new: usage.input_tokens,
+        result: usage.output_tokens,
+        result_image: usage.output_tokens,
+        total: usage.total_tokens,
     };
 }
 
@@ -1089,6 +1197,7 @@ function completionResultsToText(completionResults: CompletionResult[] | undefin
                 case 'image':
                     // Skip images in conversation - they're in the result
                     return '';
+                case 'audio':
                 case 'video':
                     return '';
                 default: {
@@ -1203,18 +1312,6 @@ export function mapResponseStream(
                         result: [],
                         tool_use: [toolUse],
                     } satisfies CompletionChunkObject;
-                }
-                // Note: We don't emit response.function_call_arguments.done because the arguments were already
-                // streamed via delta events. Emitting it again would duplicate the tool_input content.
-                // We only update the metadata to ensure the tool name is captured.
-                else if (event.type === 'response.function_call_arguments.done') {
-                    // Just update metadata, don't yield (arguments already accumulated from delta events)
-                    const metadata = toolCallMetadata.get(event.item_id);
-                    const syntheticId = metadata?.syntheticId ?? `tool_${event.output_index}`;
-                    const tool_name = metadata?.name ?? event.name ?? '';
-                    if (event.item_id) {
-                        toolCallMetadata.set(event.item_id, { syntheticId, callId: metadata?.callId, name: tool_name });
-                    }
                 } else if (event.type === 'response.output_text.delta') {
                     hasTextDeltas = true;
                     yield {
@@ -1552,8 +1649,8 @@ export function fixOrphanedToolUse(items: ResponseInputItem[]): ResponseInputIte
     // First pass: collect all function_call_output call_ids
     const outputCallIds = new Set<string>();
     for (const item of items) {
-        if ('type' in item && item.type === 'function_call_output') {
-            outputCallIds.add((item as OpenAI.Responses.ResponseInputItem.FunctionCallOutput).call_id);
+        if ('type' in item && item.type === 'function_call_output' && item.call_id != null) {
+            outputCallIds.add(item.call_id);
         }
     }
 
@@ -1619,7 +1716,7 @@ export function fixOrphanedToolResults(items: ResponseInputItem[]): ResponseInpu
     }
     return items.filter((item) => {
         if ('type' in item && item.type === 'function_call_output') {
-            return callIds.has(item.call_id);
+            return item.call_id != null && callIds.has(item.call_id);
         }
         return true;
     });

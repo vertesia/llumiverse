@@ -77,6 +77,12 @@ function isOpenAIContentPart(value: unknown): value is OpenAIChatCompletionsCont
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
     const type = ownValue(value, 'type');
     if (type === 'text') return typeof ownValue(value, 'text') === 'string';
+    if (type === 'input_audio') {
+        const inputAudio = ownValue(value, 'input_audio');
+        if (typeof inputAudio !== 'object' || inputAudio === null || Array.isArray(inputAudio)) return false;
+        const format = ownValue(inputAudio, 'format');
+        return typeof ownValue(inputAudio, 'data') === 'string' && (format === 'mp3' || format === 'wav');
+    }
     if (type !== 'image_url') return false;
     const imageUrl = ownValue(value, 'image_url');
     if (typeof imageUrl !== 'object' || imageUrl === null || Array.isArray(imageUrl)) return false;
@@ -333,6 +339,14 @@ async function messageRecords(input: {
             assets.push(converted.asset);
             mappings.push({
                 canonical_id: converted.block.id,
+                native_id: `messages/${messageIndex}/content/${blockIndex}`,
+                kind: 'block',
+            });
+        } else if (part.type === 'input_audio') {
+            const blockId = await entityId('block', scope, messageIndex, blockIndex);
+            blocks.push({ id: blockId, type: 'text', text: '[Audio file omitted from history]', format: 'plain' });
+            mappings.push({
+                canonical_id: blockId,
                 native_id: `messages/${messageIndex}/content/${blockIndex}`,
                 kind: 'block',
             });
@@ -728,6 +742,55 @@ export function compileOpenAIChatCompletionsConversation(
     return { conversation: { _is_openai_chat_completions: true, messages }, mappings };
 }
 
+function withCurrentInputAudio(
+    compiled: ReturnType<typeof compileOpenAIChatCompletionsConversation>,
+    prompt: OpenAIChatCompletionsPrompt,
+    promptMappings: readonly NativeItemMapping[],
+): OpenAIChatCompletionsPrompt {
+    const compiledTurns = new Map(
+        compiled.mappings.flatMap((mapping) => {
+            const match = mapping.kind === 'turn' ? /^messages\/(\d+)$/.exec(mapping.native_id) : null;
+            return match === null ? [] : [[mapping.canonical_id, Number(match[1])] as const];
+        }),
+    );
+    const messages = [...compiled.conversation.messages];
+    let changed = false;
+    for (const mapping of promptMappings) {
+        const sourceMatch = mapping.kind === 'turn' ? /^messages\/(\d+)$/.exec(mapping.native_id) : null;
+        if (sourceMatch === null) continue;
+        const sourceMessage = prompt.messages[Number(sourceMatch[1])];
+        const sourceContent = sourceMessage?.content;
+        if (
+            sourceMessage === undefined ||
+            !Array.isArray(sourceContent) ||
+            !sourceContent.some((part) => part.type === 'input_audio')
+        ) {
+            continue;
+        }
+        const targetIndex = compiledTurns.get(mapping.canonical_id);
+        const targetMessage = targetIndex === undefined ? undefined : messages[targetIndex];
+        if (targetIndex === undefined || targetMessage === undefined || targetMessage.role !== sourceMessage.role) {
+            throw new Error(`OpenAI Chat cannot map transient audio for canonical turn ${mapping.canonical_id}`);
+        }
+        const targetParts: OpenAIChatCompletionsContentPart[] = Array.isArray(targetMessage.content)
+            ? targetMessage.content
+            : typeof targetMessage.content === 'string'
+              ? [{ type: 'text', text: targetMessage.content }]
+              : [];
+        if (targetParts.length !== sourceContent.length) {
+            throw new Error(`OpenAI Chat transient audio shape changed for canonical turn ${mapping.canonical_id}`);
+        }
+        messages[targetIndex] = {
+            ...targetMessage,
+            content: targetParts.map((part, index) =>
+                sourceContent[index]?.type === 'input_audio' ? sourceContent[index] : part,
+            ),
+        };
+        changed = true;
+    }
+    return changed ? { ...compiled.conversation, messages } : compiled.conversation;
+}
+
 export async function prepareOpenAIChatCanonicalState(input: {
     conversation: unknown;
     prompt: OpenAIChatCompletionsPrompt;
@@ -788,8 +851,8 @@ export async function prepareOpenAIChatCanonicalState(input: {
     }
 
     const target = { provider: input.provider, model: input.options.model };
-    const priorNativeMessageCount = compileOpenAIChatCompletionsConversation(document, target).conversation.messages
-        .length;
+    const priorCompiled = compileOpenAIChatCompletionsConversation(document, target).conversation;
+    const priorNativeMessageCount = priorCompiled.messages.length;
     const promptRecords = await messagesToRecords({
         messages: input.prompt.messages,
         scope: runtime.input_operation_id,
@@ -820,7 +883,7 @@ export async function prepareOpenAIChatCanonicalState(input: {
             : { generation_id: acceptedResponse.generation.id, response_turn_id: acceptedResponse.turn.id };
     return {
         document: appended.document,
-        native_conversation: compiled.conversation,
+        native_conversation: withCurrentInputAudio(compiled, input.prompt, promptRecords.mappings),
         runtime: { ...runtime, conversation_id: document.id },
         generation_id: identities.generation_id,
         response_turn_id: identities.response_turn_id,
@@ -872,18 +935,32 @@ function openAIUsage(response: OpenAIChatCompletionsResponse): GenerationUsage |
     const cachedCandidate = safeUsageNumber(native.prompt_tokens_details?.cached_tokens);
     const cached =
         input !== undefined && cachedCandidate !== undefined && cachedCandidate <= input ? cachedCandidate : undefined;
+    const cacheWriteCandidate = safeUsageNumber(native.prompt_tokens_details?.cache_write_tokens);
+    const cacheWrite =
+        input !== undefined && cacheWriteCandidate !== undefined && cacheWriteCandidate <= input
+            ? cacheWriteCandidate
+            : undefined;
     const basis = 'openai_chat_tokens';
     const total =
         input !== undefined && output !== undefined && Number.isSafeInteger(input + output)
             ? input + output
             : undefined;
-    const newInput = input !== undefined && cached !== undefined ? input - cached : undefined;
+    const cacheTotal = cached === undefined ? undefined : cached + (cacheWrite ?? 0);
+    const newInput =
+        input !== undefined &&
+        cacheTotal !== undefined &&
+        Number.isSafeInteger(cacheTotal) &&
+        cacheTotal <= input &&
+        (cacheWriteCandidate === undefined || cacheWrite !== undefined)
+            ? input - cacheTotal
+            : undefined;
     return {
         ...(input === undefined ? {} : { input_tokens: input }),
         ...(output === undefined ? {} : { output_tokens: output }),
         ...(reasoning === undefined ? {} : { reasoning_tokens: reasoning }),
         ...(total === undefined ? {} : { total_tokens: total }),
         ...(cached === undefined ? {} : { cache_read_tokens: cached }),
+        ...(cacheWrite === undefined ? {} : { cache_write_tokens: cacheWrite }),
         ...(newInput === undefined || newInput < 0 ? {} : { input_new_tokens: newInput }),
         accounting_provenance: {
             ...(input === undefined ? {} : { input_tokens: { method: 'reported', accounting_basis: basis } }),
@@ -891,13 +968,21 @@ function openAIUsage(response: OpenAIChatCompletionsResponse): GenerationUsage |
             ...(reasoning === undefined ? {} : { reasoning_tokens: { method: 'reported', accounting_basis: basis } }),
             ...(total === undefined ? {} : { total_tokens: { method: 'derived', accounting_basis: basis } }),
             ...(cached === undefined ? {} : { cache_read_tokens: { method: 'reported', accounting_basis: basis } }),
+            ...(cacheWrite === undefined
+                ? {}
+                : { cache_write_tokens: { method: 'reported', accounting_basis: basis } }),
             ...(newInput === undefined || newInput < 0
                 ? {}
                 : { input_new_tokens: { method: 'derived', accounting_basis: basis } }),
         },
         ...(newInput === undefined || newInput < 0
             ? {}
-            : { input_partition: { type: 'complete_disjoint', cache_write_bucket: 'inapplicable' } }),
+            : {
+                  input_partition: {
+                      type: 'complete_disjoint',
+                      cache_write_bucket: cacheWriteCandidate === undefined ? 'inapplicable' : 'included',
+                  },
+              }),
         reported_usage: [
             {
                 source: 'provider',

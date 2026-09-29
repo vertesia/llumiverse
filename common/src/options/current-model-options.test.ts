@@ -22,7 +22,7 @@ describe('current reasoning model options', () => {
         expect(effortValues('claude-sonnet-5', Providers.anthropic)).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
     });
 
-    it('advertises version-specific GPT-5 effort without adding a default', () => {
+    it('advertises GPT effort levels and labels documented defaults', () => {
         const options = getOptions('gpt-5.6-sol', Providers.openai);
         expect(effortValues('gpt-5.6-sol', Providers.openai)).toEqual([
             'none',
@@ -33,7 +33,31 @@ describe('current reasoning model options', () => {
             'max',
         ]);
         expect(options.options.find((option) => option.name === SharedOptions.effort)).not.toHaveProperty('default');
+        expect(effortValues('gpt-5.5', Providers.openai)).toEqual(['none', 'low', 'medium', 'high', 'xhigh']);
+        expect(
+            getOptions('gpt-5.5', Providers.openai).options.find((option) => option.name === SharedOptions.effort),
+        ).toMatchObject({ enum: { 'Medium (default)': 'medium' } });
+        expect(
+            getOptions('gpt-5.6-sol', Providers.openai).options.find((option) => option.name === SharedOptions.effort),
+        ).toMatchObject({ enum: { 'Medium (default)': 'medium' } });
         expect(effortValues('gpt-6', Providers.openai)).toEqual(['none', 'low', 'medium', 'high', 'xhigh', 'max']);
+        expect(effortValues('gpt-6-astra', Providers.openai)).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+        expect(effortValues('gpt-6-sol', Providers.openai)).toEqual(['none', 'low', 'medium', 'high', 'xhigh', 'max']);
+        expect(effortValues('gpt-6-luna', Providers.openai)).toEqual(['none', 'low', 'medium', 'high', 'xhigh', 'max']);
+    });
+
+    it('advertises reasoning context only for supported OpenAI Responses models', () => {
+        const reasoningContext = (model: string, provider: Providers) =>
+            getOptions(model, provider).options.find((option) => option.name === SharedOptions.reasoning_context);
+
+        expect(reasoningContext('gpt-5.6-sol', Providers.openai)).toMatchObject({
+            type: OptionType.enum,
+            enum: { Auto: 'auto', 'Current turn': 'current_turn', 'All turns': 'all_turns' },
+        });
+        expect(reasoningContext('gpt-6-astra', Providers.openai)).toBeDefined();
+        expect(reasoningContext('gpt-5.5', Providers.openai)).toBeUndefined();
+        expect(reasoningContext('gpt-5.6-sol', Providers.azure_openai)).toBeUndefined();
+        expect(reasoningContext('gpt-5.6-sol', Providers.openai_compatible)).toBeUndefined();
     });
 
     it('does not advertise unverified effort for unknown OpenAI-compatible models', () => {
@@ -121,6 +145,29 @@ describe('current reasoning model options', () => {
                 (option) => option.name === 'service_tier',
             ),
         ).toBe(false);
+
+        const xaiTier = getOptions('grok-4.5', Providers.xai).options.find((option) => option.name === 'service_tier');
+        expect(xaiTier).toMatchObject({
+            type: OptionType.enum,
+            default: 'default',
+            enum: { Default: 'default', Priority: 'priority' },
+        });
+    });
+
+    it('offers fast mode on the Claude API for Opus 4.8 and later only', () => {
+        const speed = (model: string, provider: Providers) =>
+            getOptions(model, provider).options.find((option) => option.name === 'speed');
+        for (const model of ['claude-opus-4-8', 'claude-opus-5', 'claude-opus-5-5']) {
+            expect(speed(model, Providers.anthropic)).toMatchObject({
+                type: OptionType.enum,
+                default: 'standard',
+                enum: { Standard: 'standard', Fast: 'fast' },
+            });
+        }
+        expect(speed('claude-opus-4-7', Providers.anthropic)).toBeUndefined();
+        expect(speed('claude-sonnet-5', Providers.anthropic)).toBeUndefined();
+        // Cloud platforms don't serve fast mode.
+        expect(speed('claude-opus-5-5', Providers.vertexai)).toBeUndefined();
     });
 
     it('advertises current Gemini thinking levels without adding a default', () => {

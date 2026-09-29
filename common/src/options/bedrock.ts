@@ -70,7 +70,9 @@ export type BedrockOptions =
 
 export function getMaxTokensLimitBedrock(model: string): number | undefined {
     const documentedLimit = getBedrockModelKnowledge(model).max_output_tokens;
-    if (documentedLimit) return documentedLimit;
+    if (documentedLimit) {
+        return documentedLimit;
+    }
 
     // Claude models — delegate to shared limit logic (128K for 3.7 and Opus 4.7+)
     if (model.includes('claude')) {
@@ -274,7 +276,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                     name: 'outPaintingMode',
                     type: OptionType.enum,
                     enum: { DEFAULT: 'DEFAULT', PRECISE: 'PRECISE' },
-                    default: 'default',
+                    default: 'DEFAULT',
                     description: 'The outpainting mode of the generated image',
                 });
                 break;
@@ -319,7 +321,6 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                 name: 'temperature',
                 type: OptionType.numeric,
                 min: 0.0,
-                default: 0.7,
                 step: 0.1,
                 description: 'A higher temperature biases toward less likely tokens, making the model more creative',
             });
@@ -467,6 +468,10 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                     options: [...baseConverseOptions, ...cohereCommandOptions, ...cohereCommandROptions],
                 };
             }
+            return {
+                _option_id: 'bedrock-cohere-command',
+                options: [...baseConverseOptions, ...cohereCommandOptions],
+            };
         } else if (model.includes('writer')) {
             const palmyraConverseOptions: ModelOptionInfoItem[] = [
                 {

@@ -1,5 +1,10 @@
 import type { OutputConfig, ThinkingConfigParam } from '@anthropic-ai/sdk/resources/messages.js';
-import { hasSamplingParameterRestriction, isClaudeVersionGTE, supportsAdaptiveThinking } from '@llumiverse/core';
+import {
+    hasSamplingParameterRestriction,
+    isClaudeVersionGTE,
+    parseClaudeVersion,
+    supportsAdaptiveThinking,
+} from '@llumiverse/core';
 
 /**
  * Common Claude model options relevant to thinking/effort configuration.
@@ -41,10 +46,12 @@ export function resolveClaudeThinking(model: string, options?: ClaudeThinkingInp
     const samplingRestriction = hasSamplingParameterRestriction(model);
     const supportsThinking = isClaudeVersionGTE(model, 3, 7);
     const budgetTokens = options?.thinking_budget_tokens;
+    const version = parseClaudeVersion(model);
+    const alwaysOnThinking = version?.major === 5 && ['opus', 'sonnet', 'fable', 'mythos'].includes(version.variant);
     // Adaptive thinking is active when the caller supplies an effort level on a
     // model that supports it. Extended thinking is active when a budget is set.
     const adaptiveEnabled = supportsAdaptive && options?.effort != null;
-    const extendedEnabled = budgetTokens != null;
+    const extendedEnabled = budgetTokens != null && !samplingRestriction;
 
     let thinking: ThinkingConfigParam | undefined;
 
@@ -62,6 +69,9 @@ export function resolveClaudeThinking(model: string, options?: ClaudeThinkingInp
             type: 'enabled' as const,
             budget_tokens: budgetTokens,
         };
+    } else if (alwaysOnThinking) {
+        // These model families always think. Set display explicitly so include_thoughts can request summaries.
+        thinking = { type: 'adaptive' as const, display: options?.include_thoughts ? 'summarized' : 'omitted' };
     } else if (supportsAdaptive) {
         // Adaptive models: enable when effort is set, omit otherwise (thinking is OFF by default).
         // display controls whether thinking blocks are returned; defaults to omitted.

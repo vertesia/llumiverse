@@ -26,6 +26,12 @@
     "typecheck:test": {
       "dependsOn": ["^build", "build"],
       "outputs": []
+    },
+    "test:unit": {
+      "dependsOn": ["build"],
+      "outputs": [],
+      "env": ["CI", "RUNNER_OS", "RUNNER_ARCH", "ImageOS", "ImageVersion"],
+      "cache": true
     }
   }
 }

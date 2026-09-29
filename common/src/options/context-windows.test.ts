@@ -17,9 +17,14 @@ describe('Claude context window limits', () => {
         expect(getContextWindowSize(model)).toBe(1_000_000);
     });
 
+    it('uses the 1M context and 128K output limits for Claude 4.6 outside Bedrock', () => {
+        for (const model of ['claude-sonnet-4-6', 'claude-opus-4-6']) {
+            expect(getMaxOutputTokens(model)).toBe(128_000);
+            expect(getContextWindowSize(model)).toBe(1_000_000);
+        }
+    });
+
     it('preserves release limits for older Claude models', () => {
-        expect(getMaxOutputTokens('claude-sonnet-4-6')).toBe(64_000);
-        expect(getContextWindowSize('claude-sonnet-4-6')).toBe(200_000);
         expect(getMaxOutputTokens('claude-3-5-sonnet-20241022')).toBe(8192);
         expect(getContextWindowSize('claude-3-5-sonnet-20241022')).toBe(200_000);
     });

@@ -1,33 +1,10 @@
-import {
-    type AIModel,
-    type DriverOptions,
-    isDedicatedInferenceModel,
-    isEmbeddingModel,
-    ModelType,
-    Providers,
-} from '@llumiverse/core';
+import { type AIModel, isDedicatedInferenceModel, isEmbeddingModel, ModelType, Providers } from '@llumiverse/core';
 import OpenAI from 'openai';
+import type { OpenAIResponsesDriverOptions } from '../driver-options.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { OpenAIResponsesDriverBase } from './index.js';
 
-export interface OpenAIResponsesDriverOptions extends DriverOptions {
-    /**
-     * The API key for the OpenAI-compatible service
-     */
-    apiKey: string;
-
-    /**
-     * The base URL of the OpenAI-compatible API endpoint
-     * Example: https://api.example.com/v1
-     */
-    endpoint: string;
-
-    /**
-     * Custom headers to include in every request.
-     * Useful for Apigee proxies or custom auth schemes.
-     */
-    default_headers?: Record<string, string>;
-}
+export type { OpenAIResponsesDriverOptions } from '../driver-options.js';
 
 /**
  * A generic driver for OpenAI-compatible APIs.
@@ -67,7 +44,7 @@ export class OpenAIResponsesDriver extends OpenAIResponsesDriverBase {
                 .filter(
                     (m) =>
                         !isEmbeddingModel({ id: m.id }, this.provider) &&
-                        !isDedicatedInferenceModel(m.id, this.provider),
+                        (!isDedicatedInferenceModel(m.id, this.provider) || this.isFileAudioModel(m.id)),
                 )
                 .map((m) => {
                     const modelMetadata = resolveModelListingMetadata(m.id, this.provider);
@@ -80,7 +57,7 @@ export class OpenAIResponsesDriver extends OpenAIResponsesDriverBase {
                         name: m.id,
                         provider: this.provider,
                         owner: owner,
-                        type: ModelType.Text,
+                        type: this.isFileAudioModel(m.id) ? ModelType.Audio : ModelType.Text,
                         can_stream: true,
                         is_multimodal: modelMetadata.input_modalities.includes('image'),
                         ...modelMetadata,
