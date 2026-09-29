@@ -33,6 +33,7 @@ import {
     testSchema_animalDescription,
     testSchema_color,
 } from './samples.js';
+import { withRateLimitBackoff } from './utils.js';
 
 const TIMEOUT = 90 * 1000;
 const QWEN_SMOKE_MODEL = 'qwen/qwen3.8-flash';
@@ -269,7 +270,7 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
     });
 
     test.each(models)(`${name}: execute prompt on %s`, { timeout: TIMEOUT, retry: 2 }, async (model) => {
-        const r = await driver.execute(testPrompt_color, getTestOptions(model));
+        const r = await withRateLimitBackoff(() => driver.execute(testPrompt_color, getTestOptions(model)));
         console.log(`Result for execute ${model}`, JSON.stringify(r));
         assertCompletionOk(r, model, driver);
         assertProviderCostReported(r, driver);
@@ -282,11 +283,13 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
             retry: 2,
         },
         async (model) => {
-            const r = await driver.stream(testPrompt_color, {
-                ...getTestOptions(model),
-                result_schema: testSchema_color,
+            const { r, out } = await withRateLimitBackoff(async () => {
+                const stream = await driver.stream(testPrompt_color, {
+                    ...getTestOptions(model),
+                    result_schema: testSchema_color,
+                });
+                return { r: stream, out: await assertStreamingCompletionOk(stream, true) };
             });
-            const out = await assertStreamingCompletionOk(r, true);
             console.log(`Result for streaming with schema ${model}`, JSON.stringify(out));
             assertProviderCostReported(r.completion as ExecutionResponse, driver);
         },
@@ -312,14 +315,16 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
             }
 
             const shortPrompt: PromptSegment[] = [{ role: PromptRole.user, content: 'Say "ok".' }];
-            const r = await driver.execute(shortPrompt, {
-                model,
-                model_options: {
-                    ...getSmokeModelOptions(model),
-                    max_tokens: limit,
-                    temperature: 0,
-                },
-            });
+            const r = await withRateLimitBackoff(() =>
+                driver.execute(shortPrompt, {
+                    model,
+                    model_options: {
+                        ...getSmokeModelOptions(model),
+                        max_tokens: limit,
+                        temperature: 0,
+                    },
+                }),
+            );
             // If the provider rejects our limit value, r.error will be set
             expect(r.error).toBeFalsy();
             expect(r.finish_reason).toBeTruthy();
@@ -342,15 +347,17 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
             console.log(`${model} is multimodal: ${isMultiModal}`);
             if (!isMultiModal) return;
 
-            const r = await driver.execute(testPrompt_describeImage, {
-                model: model,
-                model_options: {
-                    ...getSmokeModelOptions(model),
-                    temperature: 0.5,
-                    max_tokens: 1024,
-                },
-                result_schema: testSchema_animalDescription,
-            });
+            const r = await withRateLimitBackoff(() =>
+                driver.execute(testPrompt_describeImage, {
+                    model: model,
+                    model_options: {
+                        ...getSmokeModelOptions(model),
+                        temperature: 0.5,
+                        max_tokens: 1024,
+                    },
+                    result_schema: testSchema_animalDescription,
+                }),
+            );
             console.log('Result', r);
             assertCompletionOk(r);
         },

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import type { CompletionResult } from '@llumiverse/common';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { type CompletionResult, LlumiverseError } from '@llumiverse/common';
 
 const dataDir = join(dirname(new URL(import.meta.url).pathname), 'data');
 const dataFile = (file: string) => join(dataDir, file);
@@ -66,4 +67,25 @@ export function parseCompletionResults(result: CompletionResult[], separator: st
     } catch {
         return result.map(completionResultToString).join(separator);
     }
+}
+
+const RATE_LIMIT_BACKOFF_MS = [5_000, 10_000, 20_000];
+
+/**
+ * Run a live provider call, waiting and trying again each time the provider answers 429.
+ * Vitest's `retry` re-runs a test immediately, and a throttled upstream answers that with another 429.
+ */
+export async function withRateLimitBackoff<T>(call: () => Promise<T>): Promise<T> {
+    for (const delayMs of RATE_LIMIT_BACKOFF_MS) {
+        try {
+            return await call();
+        } catch (error: unknown) {
+            if (!LlumiverseError.isLlumiverseError(error) || error.code !== 429) {
+                throw error;
+            }
+            console.warn(`${error.message}; retrying in ${delayMs}ms`);
+            await sleep(delayMs);
+        }
+    }
+    return await call();
 }
