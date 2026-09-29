@@ -19,6 +19,7 @@ import {
     buildClaudeEffortOptions,
     buildClaudeIncludeThoughtsOption,
     buildClaudeThinkingBudgetOption,
+    buildClaudeThinkingModeOption,
     getClaudeMaxTokensLimit,
 } from './shared-parsing.js';
 import { hasSamplingParameterRestriction } from './version-parsing.js';
@@ -362,6 +363,7 @@ export function getBedrockOptions(model: string, option?: ModelOptions): ModelOp
                     ...claudeConverseOptions,
                     ...buildClaudeEffortOptions(model),
                     ...buildClaudeThinkingBudgetOption(model),
+                    ...buildClaudeThinkingModeOption(model),
                     ...buildClaudeIncludeThoughtsOption(model),
                     ...buildClaudeCacheOptions(),
                     ...buildClaudeCacheTtlOptions((option as BedrockClaudeOptions)?.cache_enabled),

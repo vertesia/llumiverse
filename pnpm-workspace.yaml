@@ -18,6 +18,10 @@ minimumReleaseAgeExclude:
   - '@vertesia/*'
   - '@llumiverse/*'
   - '@google/genai@2.21.0'
+  # Sonnet 5.5 native thinking types and aligned platform wrappers.
+  - '@anthropic-ai/sdk@0.129.0'
+  - '@anthropic-ai/vertex-sdk@0.20.0'
+  - '@anthropic-ai/bedrock-sdk@0.34.0'
 
 catalog:
   # Keep this synchronized with Studio and ComposableAI: each repository generates schemas from

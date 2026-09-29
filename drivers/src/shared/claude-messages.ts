@@ -78,7 +78,7 @@ import {
     prepareClaudeCanonicalState,
 } from './claude-messages-conversation-adapter.js';
 import { claudeFinishReason, logClaudeTruncation } from './claude-stop-reason.js';
-import { resolveClaudeThinking } from './claude-thinking.js';
+import { type ClaudeThinkingInput, resolveClaudeThinking } from './claude-thinking.js';
 import { truncateBinaryForDebug } from './debug-prompt.js';
 import { createToolChoiceConfigurationError } from './tool-choice-error.js';
 
@@ -217,6 +217,7 @@ export interface ClaudeBaseOptions {
     stop_sequence?: string[];
     effort?: string;
     thinking_budget_tokens?: number;
+    thinking_mode?: ClaudeThinkingInput['thinking_mode'];
     include_thoughts?: boolean;
     cache_enabled?: boolean;
     cache_ttl?: string;
@@ -240,12 +241,6 @@ type ClaudeMessageStream = AsyncIterable<RawMessageStreamEvent> & {
     abort(): void;
     finalMessage(): Promise<Message>;
 };
-type ClaudeMessagesStreamClient = {
-    messages: {
-        stream(body: MessageStreamParams, options?: RequestOptions): ClaudeMessageStream;
-    };
-};
-
 type ClaudeMessagesClient = Anthropic | AnthropicVertex | AnthropicBedrockMantle;
 
 function streamClaudeMessages(
@@ -253,10 +248,7 @@ function streamClaudeMessages(
     payload: MessageStreamParams,
     requestOptions: RequestOptions | undefined,
 ): Promise<ClaudeMessageStream> {
-    // AnthropicVertex intentionally wraps the Anthropic Messages API, but it depends on its
-    // own @anthropic-ai/sdk copy. Cast at the boundary so the implementation can call the
-    // shared runtime-compatible stream API without TS trying to call a union of SDK versions.
-    return Promise.resolve((client as unknown as ClaudeMessagesStreamClient).messages.stream(payload, requestOptions));
+    return Promise.resolve(client.messages.stream(payload, requestOptions));
 }
 
 // ============================================================================

@@ -37,6 +37,29 @@ const union = emitted.$defs.ModelOptions;
 const MEMBERS = (union.oneOf ?? union.anyOf ?? []).map((member) => member.$ref.replace('#/$defs/', ''));
 
 describe('ModelOptionsSchema', () => {
+    it.each(['anthropic-claude', 'bedrock-claude', 'bedrock-mantle-claude', 'vertexai-claude'])(
+        'accepts and publishes optional thinking mode for %s',
+        (_option_id) => {
+            for (const thinking_mode of ['adaptive', 'between_tools']) {
+                const options = { _option_id, thinking_mode, effort: 'medium' };
+                expect(ModelOptionsSchema.parse(options)).toEqual(options);
+            }
+            expect(ModelOptionsSchema.safeParse({ _option_id, thinking_mode: 'disabled' }).success).toBe(false);
+            expect(ModelOptionsSchema.safeParse({ _option_id }).success).toBe(true);
+        },
+    );
+
+    it.each(['AnthropicClaudeOptions', 'BedrockClaudeOptions', 'BedrockMantleClaudeOptions', 'VertexAIClaudeOptions'])(
+        'emits thinking mode in the %s JSON Schema',
+        (name) => {
+            expect(emitted.$defs[name].properties?.thinking_mode).toMatchObject({
+                type: 'string',
+                enum: ['adaptive', 'between_tools'],
+            });
+            expect(emitted.$defs[name].required ?? []).not.toContain('thinking_mode');
+        },
+    );
+
     it('validates strict Gemini Omni video option boundaries', () => {
         expect(
             ModelOptionsSchema.safeParse({
