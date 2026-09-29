@@ -1,3 +1,4 @@
+import { canonicalJsonContentString, hashCanonicalJsonContent } from './content-integrity.js';
 import { ConversationValidationError } from './diagnostics.js';
 import { preflightJsonInput } from './json-preflight.js';
 import {
@@ -47,6 +48,8 @@ export interface NativeConversationAdapter<
         options: DecodeOptions,
     ): Promise<DecodedConversationResponse>;
 }
+
+const stableJson = canonicalJsonContentString;
 
 function checkedNextRevision(revision: number): number {
     const next = revision + 1;
@@ -358,29 +361,16 @@ export function appendDecodedConversationResponse<NativePayload>(
     return appendConversationRecords(prepared.document, batch, options);
 }
 
-function stableJson(value: unknown): string {
-    if (value === null || typeof value !== 'object') {
-        return JSON.stringify(value);
-    }
-    if (Array.isArray(value)) {
-        return `[${value.map(stableJson).join(',')}]`;
-    }
-    return `{${Object.keys(value as object)
-        .sort()
-        .map((key) => `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`)
-        .join(',')}}`;
-}
-
 /** Produce a browser-safe SHA-256 fingerprint for JSON-safe canonical or native data. */
 export async function fingerprintJson(value: unknown): Promise<string> {
-    const preflight = preflightJsonInput(value);
-    if (!preflight.success) {
-        throw new ConversationValidationError('Fingerprint input failed JSON preflight', preflight.diagnostics);
+    try {
+        return (await hashCanonicalJsonContent(value)).content_hash;
+    } catch (error: unknown) {
+        if (error instanceof ConversationValidationError) {
+            throw new ConversationValidationError('Fingerprint input failed JSON preflight', error.diagnostics);
+        }
+        throw error;
     }
-    const bytes = new TextEncoder().encode(stableJson(value));
-    const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
-    const hex = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
-    return `sha256:${hex}`;
 }
 
 /** Derive a compact deterministic entity ID from a stable request/import identity. */

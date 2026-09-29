@@ -1,4 +1,5 @@
 export * from './builders.js';
+export * from './content-integrity.js';
 export { ConversationValidationError } from './diagnostics.js';
 export * from './guards.js';
 export * from './inspection.js';

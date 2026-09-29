@@ -13,6 +13,7 @@ import {
     fingerprintJson,
     type GenerationUsage,
     type ImportedTurnProvenance,
+    inlineAssetContentIntegrity,
     type JsonObject,
     type JsonValue,
     type NativeItemMapping,
@@ -268,6 +269,7 @@ async function imageRecord(input: {
                   ...(input.part.image_url.detail === undefined ? {} : { detail: input.part.image_url.detail }),
               },
           };
+    const integrity = await inlineAssetContentIntegrity(storage);
     const asset: Asset = {
         id: assetId,
         kind: 'image',
@@ -277,7 +279,7 @@ async function imageRecord(input: {
             input.source === 'imported'
                 ? { type: 'imported', source: OPENAI_CHAT_COMPLETIONS_PROTOCOL }
                 : { type: 'received', source_turn_id: input.turn_id },
-        content_hash: await fingerprintJson({ mime_type: parsed?.mime_type ?? null, storage }),
+        ...(integrity ?? {}),
         created_at: input.recorded_at,
         ...(input.part.image_url.detail === undefined
             ? {}
@@ -303,6 +305,7 @@ async function audioRecord(input: {
     const assetId = await entityId('asset', input.scope, input.message_index, input.block_index);
     const mimeType = input.part.input_audio.format === 'wav' ? 'audio/wav' : 'audio/mpeg';
     const storage = { type: 'inline_base64' as const, data: input.part.input_audio.data };
+    const integrity = await inlineAssetContentIntegrity(storage);
     const asset: Asset = {
         id: assetId,
         kind: 'audio',
@@ -312,7 +315,7 @@ async function audioRecord(input: {
             input.source === 'imported'
                 ? { type: 'imported', source: OPENAI_CHAT_COMPLETIONS_PROTOCOL }
                 : { type: 'received', source_turn_id: input.turn_id },
-        content_hash: await fingerprintJson({ mime_type: mimeType, storage }),
+        ...(integrity ?? {}),
         created_at: input.recorded_at,
         metadata: { openai_chat_completions: { audio_format: input.part.input_audio.format } },
     };

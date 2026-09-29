@@ -20,6 +20,7 @@ import { VertexAIDriver } from '../vertexai/index.js';
 vi.mock('@aws/bedrock-token-generator', () => ({ getTokenProvider: vi.fn(() => async () => 'test') }));
 const bytes = new Uint8Array([1, 2, 3, 4]);
 const base64 = Buffer.from(bytes).toString('base64');
+const contentHash = 'sha256:9f64a747e1b97f131fabb6b447296c9b6f0201e79fb3c5356e6c77e89b6a806a';
 function file(uri = 'gs://bucket/recording.wav'): DataSource {
     return {
         name: 'recording.wav',
@@ -213,6 +214,8 @@ describe('primary provider file audio', () => {
                     expect.objectContaining({
                         kind: 'audio',
                         storage: { type: 'inline_base64', data: base64 },
+                        byte_length: bytes.byteLength,
+                        content_hash: contentHash,
                         provenance: expect.objectContaining({ type: 'received' }),
                     }),
                     expect.objectContaining({
@@ -223,7 +226,7 @@ describe('primary provider file audio', () => {
                             locator: { url: 'gs://bucket/speech.pcm' },
                         },
                         byte_length: bytes.byteLength,
-                        content_hash: expect.stringMatching(/^sha256:/),
+                        content_hash: contentHash,
                         media: { container: 'wav' },
                         provenance: expect.objectContaining({ type: 'generated' }),
                     }),
@@ -343,7 +346,7 @@ describe('primary provider file audio', () => {
                 locator: { url: 'gs://bucket/speech.pcm' },
             },
             byte_length: bytes.byteLength,
-            content_hash: expect.stringMatching(/^sha256:/),
+            content_hash: contentHash,
             media: { container: 'mp3', codec: 'mp3' },
         });
         expect(JSON.stringify(result.conversation)).not.toContain(base64);
@@ -548,6 +551,7 @@ describe('primary provider file audio', () => {
                     locator: { url: 'gs://bucket/speech.pcm' },
                 },
                 byte_length: bytes.byteLength,
+                content_hash: contentHash,
                 media: {
                     container: 'raw',
                     codec: 'pcm',

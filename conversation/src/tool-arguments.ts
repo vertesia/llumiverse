@@ -1,3 +1,4 @@
+import { hashContentBytes, hashUtf8Content } from './content-integrity.js';
 import { ConversationValidationError } from './diagnostics.js';
 import { preflightJsonInput } from './json-preflight.js';
 import { fingerprintJson } from './runtime.js';
@@ -223,17 +224,8 @@ function assertDistinctHydrationPaths(argumentsValue: ExternalizedToolArguments)
     }
 }
 
-async function sha256Bytes(bytes: Uint8Array): Promise<string> {
-    const owned = new Uint8Array(bytes.byteLength);
-    owned.set(bytes);
-    const digest = await globalThis.crypto.subtle.digest('SHA-256', owned.buffer);
-    const hex = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
-    return `sha256:${hex}`;
-}
-
 export async function hashUtf8Text(content: string): Promise<{ content_hash: string; byte_length: number }> {
-    const bytes = new TextEncoder().encode(content);
-    return { content_hash: await sha256Bytes(bytes), byte_length: bytes.byteLength };
+    return hashUtf8Content(content);
 }
 
 function assertModelValue(value: JsonObject): void {
@@ -697,7 +689,7 @@ export async function hydrateToolCallArguments(
         if (asset.byte_length !== undefined && asset.byte_length !== bytes.byteLength) {
             throw new Error(`Tool argument asset ${asset.id} byte length does not match`);
         }
-        if ((await sha256Bytes(bytes)) !== reference.content_hash) {
+        if ((await hashContentBytes(bytes)).content_hash !== reference.content_hash) {
             throw new Error(`Tool argument asset ${asset.id} content hash does not match resolved bytes`);
         }
         let content: string;

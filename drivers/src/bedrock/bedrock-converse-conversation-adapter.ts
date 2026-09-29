@@ -29,6 +29,7 @@ import {
     fingerprintJson,
     type GenerationUsage,
     type ImportedTurnProvenance,
+    inlineAssetContentIntegrity,
     type JsonValue,
     type NativeItemMapping,
     type NativeReplayBlock,
@@ -607,6 +608,7 @@ async function mediaAssetBlock(input: {
             ? { citations: bedrockConverseJsonValue(native.citations) }
             : {}),
     };
+    const integrity = await inlineAssetContentIntegrity(storage);
     const asset: Asset = {
         id: assetId,
         kind: input.type,
@@ -616,7 +618,7 @@ async function mediaAssetBlock(input: {
             input.source === 'imported'
                 ? { type: 'imported', source: BEDROCK_CONVERSE_PROTOCOL }
                 : { type: 'received', source_turn_id: input.turn_id },
-        content_hash: await fingerprintJson({ mime_type: mimeType, storage }),
+        ...(integrity ?? {}),
         created_at: input.recorded_at,
         metadata: { bedrock_converse: nativeMetadata },
     };

@@ -21,6 +21,7 @@ import {
     fingerprintJson,
     type GenerationUsage,
     type ImportedTurnProvenance,
+    inlineAssetContentIntegrity,
     type JsonObject,
     type NativeItemMapping,
     type NativeReplayBlock,
@@ -242,6 +243,7 @@ async function mediaRecord(input: {
     const assetId = await entityId('asset', input.scope, input.native_path);
     const blockId = await entityId('block', input.scope, input.native_path);
     const rawPart = providerJsonValue(input.part) as JsonObject;
+    const integrity = await inlineAssetContentIntegrity(storage);
     const asset: Asset = {
         id: assetId,
         kind,
@@ -251,7 +253,7 @@ async function mediaRecord(input: {
             input.source === 'imported'
                 ? { type: 'imported', source: GEMINI_GENERATE_CONTENT_PROTOCOL }
                 : { type: 'received', source_turn_id: input.turn_id },
-        content_hash: await fingerprintJson({ mime_type: mimeType, storage }),
+        ...(integrity ?? {}),
         created_at: input.recorded_at,
         metadata: { gemini_generate_content: { provider: input.provider, raw_part: rawPart } },
     };

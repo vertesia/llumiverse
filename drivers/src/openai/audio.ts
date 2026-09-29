@@ -14,6 +14,7 @@ import {
     appendDecodedConversationResponse,
     deriveConversationId,
     fingerprintJson,
+    hashContentBytes,
     isConversationDocumentFormat,
     type JsonValue,
     parseConversationDocument,
@@ -221,10 +222,7 @@ export async function executeOpenAIAudioNative(
                 {
                     value: audio.value,
                     byte_length: audioBytes.byteLength,
-                    content_hash: await fingerprintJson({
-                        mime_type: audio.mime_type,
-                        data: message.audio.data,
-                    }),
+                    content_hash: (await hashContentBytes(audioBytes)).content_hash,
                 },
             ],
         };
@@ -332,10 +330,7 @@ export async function executeOpenAIAudioNative(
             {
                 value: audio.value,
                 byte_length: audioBytes.byteLength,
-                content_hash: await fingerprintJson({
-                    mime_type: audio.mime_type,
-                    data: Buffer.from(audioBytes).toString('base64'),
-                }),
+                content_hash: (await hashContentBytes(audioBytes)).content_hash,
             },
         ],
     };
@@ -488,7 +483,7 @@ export async function executeOpenAIAudioCanonical(input: {
                 storage,
                 provenance: { type: 'received', source_turn_id: turnId },
                 byte_length: loaded.bytes.byteLength,
-                content_hash: await fingerprintJson({ mime_type: loaded.source.mime_type, storage }),
+                content_hash: (await hashContentBytes(loaded.bytes)).content_hash,
                 created_at: runtime.recorded_at,
             });
             blocks.push({

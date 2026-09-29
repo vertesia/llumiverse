@@ -76,9 +76,19 @@ describe('canonical request receipt binding', () => {
         expect((await receipt(after)).context_fingerprint).not.toBe((await receipt(before)).context_fingerprint);
     });
 
-    it('binds selected asset versions but ignores changes to unselected history', async () => {
+    it('binds selected verified asset versions, omits unverified locators, and ignores unselected history', async () => {
         const before = document();
         const after = structuredClone(before);
+        expect((await receipt(before)).asset_versions).toEqual([]);
+        const verified = structuredClone(before);
+        verified.assets.asset.content_hash = 'sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad';
+        verified.assets.asset.byte_length = 3;
+        expect((await receipt(verified)).asset_versions).toEqual([
+            {
+                asset_id: 'asset',
+                content_hash: 'sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+            },
+        ]);
         const hidden = after.turns[1]?.blocks[0];
         if (hidden?.type !== 'text') throw new Error('Expected hidden fixture');
         hidden.text = 'history was edited';

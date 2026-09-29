@@ -466,4 +466,26 @@ describe('canonical tool argument hydration', () => {
         const decomposed = await hashUtf8Text('e\u0301');
         expect(composed.content_hash).not.toBe(decomposed.content_hash);
     });
+
+    it('rejects lossy UTF-8 externalization before changing the document', async () => {
+        const source = toolDocument({ content: '\ud800' });
+        const before = structuredClone(source);
+
+        await expect(prepareToolArgumentExternalization(source, CALL_ID, ['content'])).rejects.toThrow(
+            /unpaired surrogate/,
+        );
+        await expect(
+            externalizeToolCallArguments(source, {
+                operation_id: 'externalize-invalid-utf8',
+                expected_revision: source.revision,
+                recorded_at: RECORDED_AT,
+                call_id: CALL_ID,
+                input_path: ['content'],
+                model_value: { content: '[stored]' },
+                exact_arguments_hash: await fingerprintJson({ content: '\ud800' }),
+                asset: externalAsset(`sha256:${'0'.repeat(64)}`, 3),
+            }),
+        ).rejects.toThrow(/unpaired surrogate/);
+        expect(source).toEqual(before);
+    });
 });

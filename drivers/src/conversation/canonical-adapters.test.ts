@@ -9,7 +9,10 @@ import {
     prepareToolArgumentExternalization,
 } from '@llumiverse/conversation';
 import { describe, expect, it } from 'vitest';
-import { compileBedrockConverseConversation } from '../bedrock/bedrock-converse-conversation-adapter.js';
+import {
+    compileBedrockConverseConversation,
+    importBedrockConverseConversation,
+} from '../bedrock/bedrock-converse-conversation-adapter.js';
 import type { OpenAIChatCompletionsPrompt } from '../openai/openai_chat_completions.js';
 import {
     compileOpenAIChatCompletionsConversation,
@@ -264,6 +267,182 @@ describe('canonical native adapter conformance', () => {
                 { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'YWJj' } },
             ],
         });
+    });
+
+    it('uses the same byte digest for inline media across all native adapters', async () => {
+        const responses = await prepareOpenAIResponsesCanonicalState({
+            conversation: [
+                {
+                    role: 'user',
+                    content: [{ type: 'input_image', image_url: 'data:image/png;base64,YWJj', detail: 'auto' }],
+                },
+            ],
+            prompt: [],
+            options: executionOptions('gpt-test', 'responses-inline-integrity'),
+            provider: 'openai',
+        });
+        const responsesGeneratedImage = await prepareOpenAIResponsesCanonicalState({
+            conversation: [
+                {
+                    type: 'image_generation_call',
+                    id: 'generated-image',
+                    status: 'completed',
+                    result: 'YWJj',
+                },
+            ],
+            prompt: [],
+            options: executionOptions('gpt-test', 'responses-generated-image-integrity'),
+            provider: 'openai',
+        });
+        const gemini = await prepareGeminiCanonicalState({
+            conversation: [{ role: 'user', parts: [{ inlineData: { data: 'YWJj', mimeType: 'image/png' } }] }],
+            prompt: { contents: [] },
+            options: executionOptions('gemini-test', 'gemini-inline-integrity'),
+            provider: 'google',
+        });
+        const bedrock = await importBedrockConverseConversation(
+            {
+                messages: [
+                    {
+                        role: 'user',
+                        content: [{ image: { format: 'png', source: { bytes: new Uint8Array([97, 98, 99]) } } }],
+                    },
+                ],
+            },
+            { conversation_id: 'bedrock-inline-integrity', recorded_at: recordedAt, provider: 'bedrock' },
+        );
+        const documents = [
+            (
+                await importClaude(
+                    {
+                        messages: [
+                            {
+                                role: 'user',
+                                content: [
+                                    {
+                                        type: 'image',
+                                        source: { type: 'base64', media_type: 'image/png', data: 'YWJj' },
+                                    },
+                                ],
+                            },
+                        ],
+                    },
+                    'claude-inline-integrity',
+                )
+            ).document,
+            (
+                await importOpenAI(
+                    {
+                        _is_openai_chat_completions: true,
+                        messages: [
+                            {
+                                role: 'user',
+                                content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,YWJj' } }],
+                            },
+                        ],
+                    },
+                    'chat-inline-integrity',
+                )
+            ).document,
+            responses.document,
+            responsesGeneratedImage.document,
+            gemini.document,
+            bedrock,
+        ];
+
+        for (const document of documents) {
+            expect(Object.values(document.assets)).toEqual([
+                expect.objectContaining({
+                    content_hash: 'sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+                    byte_length: 3,
+                }),
+            ]);
+        }
+    });
+
+    it('does not claim byte integrity for unverified external media locators', async () => {
+        const responses = await prepareOpenAIResponsesCanonicalState({
+            conversation: [
+                {
+                    role: 'user',
+                    content: [{ type: 'input_image', image_url: 'https://example.com/image.png', detail: 'auto' }],
+                },
+            ],
+            prompt: [],
+            options: executionOptions('gpt-test', 'responses-external-integrity'),
+            provider: 'openai',
+        });
+        const gemini = await prepareGeminiCanonicalState({
+            conversation: [
+                {
+                    role: 'user',
+                    parts: [{ fileData: { fileUri: 'gs://bucket/image.png', mimeType: 'image/png' } }],
+                },
+            ],
+            prompt: { contents: [] },
+            options: executionOptions('gemini-test', 'gemini-external-integrity'),
+            provider: 'google',
+        });
+        const bedrock = await importBedrockConverseConversation(
+            {
+                messages: [
+                    {
+                        role: 'user',
+                        content: [
+                            {
+                                image: {
+                                    format: 'png',
+                                    source: { s3Location: { uri: 's3://bucket/image.png' } },
+                                },
+                            },
+                        ],
+                    },
+                ],
+            },
+            { conversation_id: 'bedrock-external-integrity', recorded_at: recordedAt, provider: 'bedrock' },
+        );
+        const documents = [
+            (
+                await importClaude(
+                    {
+                        messages: [
+                            {
+                                role: 'user',
+                                content: [
+                                    { type: 'image', source: { type: 'url', url: 'https://example.com/image.png' } },
+                                ],
+                            },
+                        ],
+                    },
+                    'claude-external-integrity',
+                )
+            ).document,
+            (
+                await importOpenAI(
+                    {
+                        _is_openai_chat_completions: true,
+                        messages: [
+                            {
+                                role: 'user',
+                                content: [{ type: 'image_url', image_url: { url: 'https://example.com/image.png' } }],
+                            },
+                        ],
+                    },
+                    'chat-external-integrity',
+                )
+            ).document,
+            responses.document,
+            gemini.document,
+            bedrock,
+        ];
+
+        for (const document of documents) {
+            const assets = Object.values(document.assets);
+            expect(assets).toHaveLength(1);
+            expect(assets[0]?.storage.type).toBe('external');
+            expect(assets[0]).not.toHaveProperty('content_hash');
+            expect(assets[0]).not.toHaveProperty('byte_length');
+        }
     });
 
     it('preserves matching raw Chat arguments but discards stale lexical replay', async () => {

@@ -24,6 +24,7 @@ import {
     fingerprintJson,
     type GenerationUsage,
     type ImportedTurnProvenance,
+    inlineAssetContentIntegrity,
     type JsonObject,
     type NativeItemMapping,
     type NestedToolResultContentBlock,
@@ -246,6 +247,7 @@ async function assetBlock(input: {
             `Claude ${block.type} source type ${source.type} is not supported by the canonical adapter`,
         );
     }
+    const integrity = await inlineAssetContentIntegrity(storage);
     const asset: Asset = {
         id: assetId,
         kind: block.type,
@@ -255,7 +257,7 @@ async function assetBlock(input: {
             input.source === 'imported'
                 ? { type: 'imported', source: CLAUDE_MESSAGES_PROTOCOL }
                 : { type: 'received', source_turn_id: input.turn_id },
-        content_hash: await fingerprintJson({ mime_type: mimeType, storage }),
+        ...(integrity ?? {}),
         created_at: input.recorded_at,
         ...(assetMetadata(block) === undefined ? {} : { metadata: assetMetadata(block) }),
     };

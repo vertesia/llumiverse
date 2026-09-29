@@ -19,6 +19,16 @@ It is an output-only value, not resumable conversation history. Persisted or wir
 `parseAcceptedOutputFragment()` so cross-record, accounting, media, tool-call, and hydration references
 are checked in addition to their Zod shape.
 
+`Asset.content_hash`, when present, is the SHA-256 digest of the asset content bytes. Inline base64 hashes
+the decoded bytes, inline text hashes well-formed UTF-8, and inline JSON hashes the UTF-8 bytes of the
+sorted-key canonical JSON representation. External locators omit `content_hash` and `byte_length` unless
+some other boundary has independently read and verified the bytes. Native replay hashes bind replay
+payloads and are a separate contract. Experimental records created before this convention may contain
+metadata or locator fingerprints in `content_hash`; the field's presence alone does not prove that those
+older asset bytes were verified. Hydration boundaries must still verify resolved bytes against the hash.
+Existing retained documents and receipts are not rewritten, while newly imported records and request
+fingerprints can differ because their corrected integrity metadata is part of canonical request evidence.
+
 `ConversationPreparedRequest` is the runtime durability barrier between finalized native request
 preparation and provider transport. Hosts validate its complete working document with
 `parseConversationPreparedRequest()`, then retain `ConversationPreparedRequestRecord` as the

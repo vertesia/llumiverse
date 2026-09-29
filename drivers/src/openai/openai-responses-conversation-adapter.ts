@@ -14,6 +14,7 @@ import {
     fingerprintJson,
     type GenerationUsage,
     type ImportedTurnProvenance,
+    inlineAssetContentIntegrity,
     type JsonObject,
     type JsonValue,
     type NativeItemMapping,
@@ -302,6 +303,7 @@ async function mediaBlock(input: {
         ...(typeof part.detail === 'string' ? { detail: part.detail } : {}),
         ...(typeof part.filename === 'string' ? { filename: part.filename } : {}),
     };
+    const integrity = await inlineAssetContentIntegrity(storage);
     const asset: Asset = {
         id: assetId,
         kind,
@@ -311,7 +313,7 @@ async function mediaBlock(input: {
             input.source === 'imported'
                 ? { type: 'imported', source: OPENAI_RESPONSES_PROTOCOL }
                 : { type: 'received', source_turn_id: input.turn_id },
-        content_hash: await fingerprintJson({ mime_type: mimeType, storage }),
+        ...(integrity ?? {}),
         created_at: input.recorded_at,
         metadata: { openai_responses: metadata },
     };
@@ -548,6 +550,7 @@ async function assistantItemsRecords(input: {
                 type: 'inline_base64',
                 data: parsed?.data ?? item.result,
             };
+            const integrity = await inlineAssetContentIntegrity(storage);
             const asset: Asset = {
                 id: assetId,
                 kind: 'image',
@@ -557,7 +560,7 @@ async function assistantItemsRecords(input: {
                     input.source === 'imported'
                         ? { type: 'imported', source: OPENAI_RESPONSES_PROTOCOL }
                         : { type: 'received', source_turn_id: turnId },
-                content_hash: await fingerprintJson({ mime_type: parsed?.mime_type ?? 'image/png', storage }),
+                ...(integrity ?? {}),
                 created_at: input.runtime.recorded_at,
             };
             blocks.push({ id: blockId, type: 'image', asset_id: assetId });
