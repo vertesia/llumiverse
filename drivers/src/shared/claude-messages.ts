@@ -68,7 +68,7 @@ import {
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
 import { claudeFinishReason, logClaudeTruncation } from './claude-stop-reason.js';
-import { type ClaudeThinkingConfig, type ClaudeThinkingInput, resolveClaudeThinking } from './claude-thinking.js';
+import { type ClaudeThinkingInput, resolveClaudeThinking } from './claude-thinking.js';
 import { truncateBinaryForDebug } from './debug-prompt.js';
 
 // ============================================================================
@@ -218,12 +218,6 @@ type ClaudeMessageStream = AsyncIterable<RawMessageStreamEvent> & {
     abort(): void;
     finalMessage(): Promise<Message>;
 };
-type ClaudeMessagesStreamClient = {
-    messages: {
-        stream(body: MessageStreamParams, options?: RequestOptions): ClaudeMessageStream;
-    };
-};
-
 type ClaudeMessagesClient = Anthropic | AnthropicVertex | AnthropicBedrockMantle;
 
 function streamClaudeMessages(
@@ -231,10 +225,7 @@ function streamClaudeMessages(
     payload: MessageStreamParams,
     requestOptions: RequestOptions | undefined,
 ): Promise<ClaudeMessageStream> {
-    // AnthropicVertex intentionally wraps the Anthropic Messages API, but it depends on its
-    // own @anthropic-ai/sdk copy. Cast at the boundary so the implementation can call the
-    // shared runtime-compatible stream API without TS trying to call a union of SDK versions.
-    return Promise.resolve((client as unknown as ClaudeMessagesStreamClient).messages.stream(payload, requestOptions));
+    return Promise.resolve(client.messages.stream(payload, requestOptions));
 }
 
 // ============================================================================
@@ -738,12 +729,10 @@ function stripClaudeCacheControlFromTools(
 // Payload builder
 // ============================================================================
 
-type ClaudeMessagePayload = Omit<MessageCreateParamsBase, 'thinking'> & { thinking?: ClaudeThinkingConfig };
-
 export function getClaudePayload(
     options: ExecutionOptions,
     prompt: ClaudePrompt,
-): { payload: ClaudeMessagePayload; requestOptions: RequestOptions | undefined } {
+): { payload: MessageCreateParamsBase; requestOptions: RequestOptions | undefined } {
     const modelName = options.model;
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
 
@@ -863,7 +852,7 @@ export function getClaudePayload(
         model_options as Parameters<typeof resolveClaudeThinking>[1],
     );
 
-    const payload: ClaudeMessagePayload = {
+    const payload: MessageCreateParamsBase = {
         messages: sanitizedMessages,
         system: sanitizedSystem,
         tools: sanitizedTools,
@@ -1101,8 +1090,7 @@ export async function streamClaudeCompletion(
     const conversation = updateClaudeConversation(options.conversation as ClaudePrompt | undefined, prompt);
 
     const { payload, requestOptions } = getClaudePayload(options, conversation);
-    // The SDK transports between_tools unchanged but does not yet declare its type.
-    const streamingPayload = { ...payload, stream: true } as MessageStreamParams;
+    const streamingPayload: MessageStreamParams = { ...payload, stream: true };
 
     const response_stream = await streamClaudeMessages(
         client,

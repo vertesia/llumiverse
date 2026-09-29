@@ -19,15 +19,12 @@ export interface ClaudeThinkingInput {
     include_thoughts?: boolean;
 }
 
-// The installed SDK predates Sonnet 5.5's between_tools mode. Keep the extension at the transport boundary.
-export type ClaudeThinkingConfig = ThinkingConfigParam | { type: 'between_tools' };
-
 /**
  * Result of resolving Claude thinking and effort configuration.
  */
 export interface ClaudeThinkingResult {
     /** Thinking/reasoning config to include in the API payload. */
-    thinking: ClaudeThinkingConfig | undefined;
+    thinking: ThinkingConfigParam | undefined;
     /** Output config (effort) to include in the API payload, if applicable. */
     outputConfig: OutputConfig | undefined;
     /** Whether sampling parameters (temperature, top_p, top_k) should be stripped. */
@@ -59,7 +56,7 @@ export function resolveClaudeThinking(model: string, options?: ClaudeThinkingInp
     const adaptiveEnabled = supportsAdaptive && options?.effort != null;
     const extendedEnabled = budgetTokens != null && !samplingRestriction;
 
-    let thinking: ClaudeThinkingConfig | undefined;
+    let thinking: ThinkingConfigParam | undefined;
 
     if (options?.thinking_mode === 'between_tools') {
         // This mode accepts only type: no display or budget, even if stale settings are present.
