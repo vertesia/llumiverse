@@ -123,20 +123,26 @@ for (const [name, change] of [
     });
 }
 
-test('CI policy edits and renames need a human, with a passing CI status', async () => {
+test('dependency, CI, and configuration changes receive approval after CI passes', async () => {
     for (const file of [
         { filename: '.github/workflows/lint.yaml' },
         { filename: 'package.json' },
         { filename: 'src/innocent.js', previous_filename: '.github/bin/automerge-ci.mjs' },
         { filename: 'packages/example/vitest.config.ts' },
+        { filename: '.githooks/pre-commit' },
+        { filename: 'scripts/build.mjs' },
+        { filename: 'pnpm-workspace.yaml' },
+        { filename: 'turbo.json' },
+        { filename: 'biome.json' },
+        { filename: 'packages/example/tsconfig.json' },
     ]) {
-        const api = fixture({ files: [file], reviews: [approval] });
+        const api = fixture({ files: [file] });
         const result = await reconcile(api, 12, () => true);
-        assert.equal(result.approve, false);
+        assert.equal(result.approve, true);
         assert.equal(result.state, 'success');
-        assert.ok(api.writes.some(([kind]) => kind === 'dismiss'));
+        assert.ok(api.writes.some(([kind]) => kind === 'approve'));
     }
-    assert.equal(requiresHuman(pr, [{ filename: 'apps/server/src/handler.ts' }]), false);
+    assert.equal(requiresHuman(pr), false);
 });
 
 for (const [name, update] of [
@@ -281,14 +287,12 @@ test('additive ruleset requires CI without changing human review or thread rules
     assert.deepEqual(ruleset.conditions.ref_name.include, ['refs/heads/main', 'refs/heads/release/**']);
 });
 
-test('truncated changed-file listings cannot authorize an approval', async () => {
+test('approval does not depend on listing changed files', async () => {
     const api = fixture();
     api.pr = async () => ({ ...pr, changed_files: 3001 });
-    await assert.rejects(
-        reconcile(api, 12, () => true),
-        /Incomplete PR file list/,
-    );
-    assert.ok(!api.writes.some(([kind]) => kind === 'approve'));
+    api.files = async () => assert.fail('must not request changed files');
+    assert.equal((await reconcile(api, 12, () => true)).approve, true);
+    assert.ok(api.writes.some(([kind]) => kind === 'approve'));
 });
 
 test('failed dismissal still publishes a blocking error status', async () => {
@@ -396,7 +400,7 @@ test('a newer substantive run on another base prevents fallback to older CI', ()
     assert.equal(verifyPrCi(ciApi([ciRun, later]), pr, [ciWorkflow]), false);
 });
 
-test('lockfile changes require human review after CI passes', async () => {
+test('lockfile changes retain approval after CI passes', async () => {
     for (const file of [
         { filename: 'pnpm-lock.yaml' },
         { filename: 'nested/pnpm-lock.yaml' },
@@ -404,9 +408,9 @@ test('lockfile changes require human review after CI passes', async () => {
     ]) {
         const api = fixture({ files: [file], reviews: [approval] });
         const result = await reconcile(api, pr.number, () => true);
-        assert.equal(result.approve, false);
+        assert.equal(result.approve, true);
         assert.equal(result.state, 'success');
-        assert.ok(api.writes.some(([kind, id]) => kind === 'dismiss' && id === approval.id));
+        assert.ok(!api.writes.some(([kind]) => kind === 'dismiss'));
         assert.ok(!api.writes.some(([kind]) => kind === 'approve'));
     }
 });
