@@ -100,3 +100,30 @@ describe('VertexAIDriver listModels', () => {
         expect(modelIds).toContain('publishers/google/models/gemini-4-tts');
     });
 });
+
+describe('VertexAIDriver storage permission errors', () => {
+    it.each(['gemini-2.5-flash', 'gemini-omni-flash-preview'])(
+        'keeps %s storage denials non-retryable and explains who can repair access',
+        (model) => {
+            const cause = Object.assign(new Error('Permission denied: storage.objects.get on gs://test-bucket/input'), {
+                status: 403,
+            });
+            const error = new VertexAIDriver({ project: 'test-project', region: 'us-central1' }).formatLlumiverseError(
+                cause,
+                { provider: 'vertexai', model, operation: 'execute' },
+            );
+            expect(error.code).toBe(403);
+            expect(error.retryable).toBe(false);
+            expect(error.message).toContain('Ask your project administrator');
+            expect(error.message).toContain('configured storage principal');
+        },
+    );
+
+    it('does not suggest changing bucket IAM for unrelated Vertex authorization failures', () => {
+        const error = new VertexAIDriver({ project: 'test-project', region: 'us-central1' }).formatLlumiverseError(
+            { status: 403, message: 'Permission denied: aiplatform.endpoints.predict' },
+            { provider: 'vertexai', model: 'gemini-2.5-flash', operation: 'execute' },
+        );
+        expect(error.message).not.toContain('bucket permissions');
+    });
+});
