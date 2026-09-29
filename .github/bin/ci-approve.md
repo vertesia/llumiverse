@@ -88,7 +88,7 @@ while GitHub's APIs are unavailable.
 
 ## Validation
 
-The lint workflow runs `node --test .github/bin/ci-approve.test.mjs` in its existing
+The lint workflow runs `node --test .github/bin/ci-approve.node-test.mjs` in its existing
 CI-policy test step. Tests cover human-review preservation, stale heads, reruns,
 publication races, opt-out, file-list completeness, and API failures. Run
 `pnpm lint:actions` to validate workflows. The narrowly scoped actionlint exception
