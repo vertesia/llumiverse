@@ -135,6 +135,35 @@ describe('Gemini canonical adapter', () => {
         );
     });
 
+    it('round trips empty signed model parts without inventing semantic text or reasoning', async () => {
+        const native: Content = {
+            role: 'model',
+            parts: [
+                { text: 'answer' },
+                { text: '', thoughtSignature: 'signed-empty-answer' },
+                { text: '', thought: true, thoughtSignature: 'signed-empty-reasoning' },
+            ],
+        };
+        const conversation = legacyConversation([native]);
+        const prepared = await prepareGeminiCanonicalState({
+            conversation,
+            prompt: { contents: [] },
+            options: options({ flow: 'empty-signed-parts', conversation }),
+            provider: 'vertexai',
+        });
+        const document = parseConversationDocument(prepared.document);
+        const agent = document.turns.find((turn) => turn.kind === 'agent');
+        expect(agent?.kind).toBe('agent');
+        if (agent?.kind !== 'agent') throw new Error('missing agent turn');
+        expect(agent.blocks.filter((block) => block.type !== 'native_replay')).toEqual([
+            expect.objectContaining({ text: 'answer' }),
+        ]);
+        expect(
+            compileGeminiConversation(document, { provider: 'vertexai', model: 'gemini-2.5-pro' }).conversation
+                .contents[0],
+        ).toEqual(native);
+    });
+
     it('round trips ordered user media and keeps protected media fields out of portable projection', async () => {
         const parts: Part[] = [
             { inlineData: { data: 'aW1hZ2U=', mimeType: 'image/png', displayName: 'chart.png' } },

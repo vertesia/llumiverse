@@ -418,6 +418,8 @@ describe('Gemini canonical lifecycle', () => {
             { text: firstFragment },
             { text: 'Check the requested shape.', thought: true, thoughtSignature: 'signed-structured-reasoning' },
             { text: secondFragment },
+            { text: '', thoughtSignature: 'signed-empty-answer-terminal' },
+            { text: '', thought: true, thoughtSignature: 'signed-empty-reasoning-terminal' },
         ];
         const generateStream = vi.fn<GenerateStream>(async () =>
             (async function* () {
@@ -427,9 +429,12 @@ describe('Gemini canonical lifecycle', () => {
                 yield {
                     candidates: [{ content: { role: 'model', parts: [nativeParts[1]] } }],
                 } as GenerateContentResponse;
+                yield {
+                    candidates: [{ content: { role: 'model', parts: [nativeParts[2]] } }],
+                } as GenerateContentResponse;
                 yield response({
                     id: 'response-structured-stream',
-                    content: { role: 'model', parts: [nativeParts[2]] },
+                    content: { role: 'model', parts: nativeParts.slice(3) },
                 });
             })(),
         );

@@ -640,6 +640,11 @@ async function contentRecords(input: {
         const part = cleanPart(rawPart);
         const blockId = await entityId('block', input.scope, nativePath, partIndex);
         let mappedBlockId = blockId;
+        if (typeof part.text === 'string' && part.text.length === 0 && input.content.role === 'model') {
+            // Gemini can terminate a stream with an empty, signed text Part. The signature is
+            // protected native replay state, while the empty string carries no semantic text.
+            continue;
+        }
         if (typeof part.text === 'string') {
             const block: AgentContentBlock = part.thought
                 ? { id: blockId, type: 'reasoning', text: part.text, representation: 'text' }
