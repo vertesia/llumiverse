@@ -25,7 +25,7 @@ catalog:
   vitest: "5.0.1"
   typescript: "7.0.2"
   "@types/node": "^24.13.5"
-  google-auth-library: "^11.0.2"
+  google-auth-library: "^11.1.0"
 overrides:
   # ============================
   # Special Overrides
