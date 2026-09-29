@@ -11,13 +11,9 @@ import { getMaxOutputTokens } from './context-windows.js';
 import {
     getAvailableEffortLevels,
     isClaudeVersionGTE,
-<<<<<<< HEAD
-    requiresAdaptiveThinkingOnly,
-    supportsClaudeFastMode,
-=======
     parseClaudeVersion,
     requiresAdaptiveThinkingOnly,
->>>>>>> 67d2fb4 (feat: support Sonnet 5.5 between-tools thinking (#712))
+    supportsClaudeFastMode,
 } from './version-parsing.js';
 
 // ============================================================================

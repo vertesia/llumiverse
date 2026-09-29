@@ -133,27 +133,15 @@
         "vitest": "catalog:"
     },
     "dependencies": {
-<<<<<<< HEAD
-        "@anthropic-ai/bedrock-sdk": "^0.33.6",
-        "@anthropic-ai/sdk": "^0.126.0",
-        "@anthropic-ai/vertex-sdk": "^0.19.9",
+        "@anthropic-ai/bedrock-sdk": "^0.34.0",
+        "@anthropic-ai/sdk": "^0.129.0",
+        "@anthropic-ai/vertex-sdk": "^0.20.0",
         "@aws-sdk/client-bedrock": "^3.1134.0",
         "@aws-sdk/client-bedrock-runtime": "^3.1134.0",
         "@aws-sdk/client-s3": "^3.1134.0",
         "@aws-sdk/credential-providers": "^3.1134.0",
         "@aws-sdk/lib-storage": "^3.1134.0",
         "@aws-sdk/types": "^3.974.5",
-=======
-        "@anthropic-ai/bedrock-sdk": "^0.34.0",
-        "@anthropic-ai/sdk": "^0.129.0",
-        "@anthropic-ai/vertex-sdk": "^0.20.0",
-        "@aws-sdk/client-bedrock": "^3.1109.0",
-        "@aws-sdk/client-bedrock-runtime": "^3.1109.0",
-        "@aws-sdk/client-s3": "^3.1109.0",
-        "@aws-sdk/credential-providers": "^3.1109.0",
-        "@aws-sdk/lib-storage": "^3.1109.0",
-        "@aws-sdk/types": "^3.974.3",
->>>>>>> 67d2fb4 (feat: support Sonnet 5.5 between-tools thinking (#712))
         "@aws/bedrock-token-generator": "^1.1.0",
         "@azure-rest/ai-inference": "1.0.0-beta.6",
         "@azure/ai-projects": "^2.6.0",
