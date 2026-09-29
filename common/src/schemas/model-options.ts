@@ -28,6 +28,14 @@ export const ReasoningEffortSchema = z
     .enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
     .meta({ id: 'ReasoningEffort' });
 
+const ClaudeThinkingModeSchema = z
+    .enum(['adaptive', 'between_tools'])
+    .describe(
+        'Thinking mode override. Sonnet 5.5 supports between_tools at low, medium, or high effort. ' +
+            'It omits display and budget fields; keep effort fixed during the conversation. ' +
+            'When unset, existing model-specific thinking behavior is preserved.',
+    );
+
 const ServiceTierSchema = z
     .string()
     .min(1)
@@ -64,6 +72,7 @@ export const AnthropicClaudeOptionsSchema = z
         top_k: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
         effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
+        thinking_mode: ClaudeThinkingModeSchema.optional(),
         thinking_budget_tokens: z.number().optional(),
         include_thoughts: z.boolean().optional(),
         cache_enabled: z.boolean().optional(),
@@ -201,6 +210,7 @@ export const BedrockClaudeOptionsSchema = z
         top_p: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
         top_k: z.number().optional(),
+        thinking_mode: ClaudeThinkingModeSchema.optional(),
         thinking_budget_tokens: z.number().optional(),
         include_thoughts: z.boolean().optional(),
         effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
@@ -312,6 +322,7 @@ export const BedrockMantleClaudeOptionsSchema = z
         top_k: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
         effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
+        thinking_mode: ClaudeThinkingModeSchema.optional(),
         thinking_budget_tokens: z.number().optional(),
         include_thoughts: z.boolean().optional(),
         cache_enabled: z.boolean().optional(),
@@ -445,6 +456,7 @@ export const VertexAIClaudeOptionsSchema = z
         top_k: z.number().optional(),
         stop_sequence: z.array(z.string()).optional(),
         effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
+        thinking_mode: ClaudeThinkingModeSchema.optional(),
         thinking_budget_tokens: z.number().optional(),
         include_thoughts: z.boolean().optional(),
         cache_enabled: z.boolean().optional(),

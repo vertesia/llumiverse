@@ -16,6 +16,32 @@ describe('current reasoning model options', () => {
         },
     );
 
+    it.each([
+        [Providers.anthropic, 'claude-sonnet-5-5'],
+        [Providers.bedrock, 'us.anthropic.claude-sonnet-5-5'],
+        [Providers.bedrock_mantle, 'anthropic.claude-sonnet-5-5'],
+        [Providers.vertexai, 'claude-sonnet-5-5'],
+        [Providers.anthropic, 'claude-sonnet-5-6'],
+        [Providers.anthropic, 'claude-sonnet-6'],
+    ])('offers Sonnet thinking mode through %s for %s', (provider, model) => {
+        const options = getOptions(model, provider).options;
+        expect(options.find((option) => option.name === 'thinking_mode')).toMatchObject({
+            type: OptionType.enum,
+            enum: { 'Adaptive (default)': 'adaptive', 'Between tools': 'between_tools' },
+        });
+        expect(effortValues(model, provider)).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+        expect(options.map((option) => option.name)).not.toContain('thinking_budget_tokens');
+    });
+
+    it.each(['claude-sonnet-5', 'claude-sonnet-5-4', 'claude-sonnet-4-6', 'claude-opus-5-5', 'claude-haiku-5-5'])(
+        'does not advertise between-tools thinking for %s',
+        (model) => {
+            expect(getOptions(model, Providers.anthropic).options.map((option) => option.name)).not.toContain(
+                'thinking_mode',
+            );
+        },
+    );
+
     it('advertises forward-compatible Claude effort for all current families', () => {
         expect(effortValues('claude-fable-5', Providers.anthropic)).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
         expect(effortValues('claude-mythos-5', Providers.anthropic)).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);

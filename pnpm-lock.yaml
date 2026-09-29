@@ -97,14 +97,14 @@ importers:
   drivers:
     dependencies:
       '@anthropic-ai/bedrock-sdk':
-        specifier: ^0.32.1
-        version: 0.32.4(zod@4.6.5)
+        specifier: ^0.34.0
+        version: 0.34.0(zod@4.6.5)
       '@anthropic-ai/sdk':
-        specifier: ^0.116.0
-        version: 0.116.0(zod@4.6.5)
+        specifier: ^0.129.0
+        version: 0.129.0(zod@4.6.5)
       '@anthropic-ai/vertex-sdk':
-        specifier: ^0.19.1
-        version: 0.19.4(zod@4.6.5)
+        specifier: ^0.20.0
+        version: 0.20.0(zod@4.6.5)
       '@aws-sdk/client-bedrock':
         specifier: ^3.1109.0
         version: 3.1111.0
@@ -224,11 +224,11 @@ importers:
 
 packages:
 
-  '@anthropic-ai/bedrock-sdk@0.32.4':
-    resolution: {integrity: sha512-E9NbAyrqJrTuXllTNojR9RWZyPTH6pDzw9bdKPYqtSfPGoyyDL029LJqueu8fiWatUo494IG2zcGjgbqvmM7IQ==}
+  '@anthropic-ai/bedrock-sdk@0.34.0':
+    resolution: {integrity: sha512-B7eWuX75B/CLpJnuP+qT/BD3J2Qw/ui7dRhWGuhDT8YAzw5Se48gRjiCEjWbuUvVw7D/4SPlfeN/Wh8GFfz6ew==}
 
-  '@anthropic-ai/sdk@0.116.0':
-    resolution: {integrity: sha512-4UEapYQ+epLEMsAuLZDvW8ExVSOtHD8a7zTyLzhw0H9RXJ1eilPgmqhjwgcdg22diwx13spw6fJ4rONZ+bS7Ww==}
+  '@anthropic-ai/sdk@0.129.0':
+    resolution: {integrity: sha512-MH7LB20kNpGLUpPTe2OG5XvL/KhX8HUO9XyBaFjgFk6TLS4Xjt0VPIuMKywe7POKKPslX+QxSlVok9e+8kG5Nw==}
     hasBin: true
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
@@ -236,8 +236,8 @@ packages:
       zod:
         optional: true
 
-  '@anthropic-ai/vertex-sdk@0.19.4':
-    resolution: {integrity: sha512-du5/eNdCTT7OgloGTCrrfUJ076qLtsuChr9ps1RsfXElvAAJ5in0dAH39ovMoO5CnA9QjiABbsAZ814HjBbx+A==}
+  '@anthropic-ai/vertex-sdk@0.20.0':
+    resolution: {integrity: sha512-iLeaXJo3O4dC0yy6go9ow6RtrKaNmV7DO4r+N9tByME+iXFe0+skcbt3xjBp0cvKMwzMSR4pKWBFnHQZeM5kig==}
 
   '@aws-crypto/crc32@3.0.0':
     resolution: {integrity: sha512-IzSgsrxUcsrejQbPVilIKy16kAT52EwB6zSaI+M3xxIhKh5+aldEyvI+z6erM7TCLB2BJsFrtHjp6/4/sr+3dA==}
@@ -1895,9 +1895,9 @@ packages:
 
 snapshots:
 
-  '@anthropic-ai/bedrock-sdk@0.32.4(zod@4.6.5)':
+  '@anthropic-ai/bedrock-sdk@0.34.0(zod@4.6.5)':
     dependencies:
-      '@anthropic-ai/sdk': 0.116.0(zod@4.6.5)
+      '@anthropic-ai/sdk': 0.129.0(zod@4.6.5)
       '@aws-crypto/sha256-js': 4.0.0
       '@aws-sdk/client-bedrock-runtime': 3.1111.0
       '@aws-sdk/credential-providers': 3.1111.0
@@ -1911,16 +1911,16 @@ snapshots:
     transitivePeerDependencies:
       - zod
 
-  '@anthropic-ai/sdk@0.116.0(zod@4.6.5)':
+  '@anthropic-ai/sdk@0.129.0(zod@4.6.5)':
     dependencies:
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.0.0
     optionalDependencies:
       zod: 4.6.5
 
-  '@anthropic-ai/vertex-sdk@0.19.4(zod@4.6.5)':
+  '@anthropic-ai/vertex-sdk@0.20.0(zod@4.6.5)':
     dependencies:
-      '@anthropic-ai/sdk': 0.116.0(zod@4.6.5)
+      '@anthropic-ai/sdk': 0.129.0(zod@4.6.5)
       google-auth-library: 11.0.2
     transitivePeerDependencies:
       - supports-color

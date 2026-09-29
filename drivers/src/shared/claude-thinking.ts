@@ -1,5 +1,6 @@
 import type { OutputConfig, ThinkingConfigParam } from '@anthropic-ai/sdk/resources/messages.js';
 import {
+    type AnthropicClaudeOptions,
     hasSamplingParameterRestriction,
     isClaudeVersionGTE,
     parseClaudeVersion,
@@ -12,6 +13,7 @@ import {
  */
 export interface ClaudeThinkingInput {
     thinking_budget_tokens?: number;
+    thinking_mode?: AnthropicClaudeOptions['thinking_mode'];
     effort?: NonNullable<OutputConfig['effort']>;
     /** Controls whether thinking content is included in the response. Does not enable thinking. */
     include_thoughts?: boolean;
@@ -34,6 +36,7 @@ export interface ClaudeThinkingResult {
 /**
  * Resolve thinking and effort configuration for a Claude model.
  *
+ * - Explicit thinking_mode overrides inferred mode; between_tools omits display and budget.
  * - Extended thinking: enabled by setting `thinking_budget_tokens`.
  * - Adaptive thinking: enabled by setting `effort` on models that support it (Opus 4.6+, Sonnet 4.6+).
  * - `include_thoughts`: display-only; does not enable thinking.
@@ -55,7 +58,12 @@ export function resolveClaudeThinking(model: string, options?: ClaudeThinkingInp
 
     let thinking: ThinkingConfigParam | undefined;
 
-    if (!supportsThinking) {
+    if (options?.thinking_mode === 'between_tools') {
+        // This mode accepts only type: no display or budget, even if stale settings are present.
+        thinking = { type: 'between_tools' };
+    } else if (options?.thinking_mode === 'adaptive') {
+        thinking = { type: 'adaptive', display: options.include_thoughts ? 'summarized' : 'omitted' };
+    } else if (!supportsThinking) {
         // Pre-3.7 models: no thinking support
         thinking = undefined;
     } else if (adaptiveEnabled) {
