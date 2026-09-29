@@ -3,7 +3,7 @@ import {
     DIAGNOSTIC_PATH_MAX_LENGTH,
     DIAGNOSTIC_RECORD_ID_MAX_LENGTH,
     DIAGNOSTIC_RELATED_PATHS_MAX_LENGTH,
-} from './schemas/diagnostics.js';
+} from './runtime-constants.js';
 import type { ConversationDiagnostic, JsonPreflightDiagnostic, SemanticConversationDiagnostic } from './types.js';
 
 const TRUNCATED_SUFFIX = '…';

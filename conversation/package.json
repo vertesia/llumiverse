@@ -25,6 +25,10 @@
             "types": "./lib/json-schema.d.ts",
             "default": "./lib/json-schema.js"
         },
+        "./output-runtime": {
+            "types": "./lib/output-runtime.d.ts",
+            "default": "./lib/output-runtime.js"
+        },
         "./package.json": "./package.json"
     },
     "scripts": {

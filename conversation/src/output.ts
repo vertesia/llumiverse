@@ -2,6 +2,8 @@ import type { z } from 'zod';
 import { ConversationValidationError } from './diagnostics.js';
 import { isGeneratedAgentTurn } from './guards.js';
 import { preflightJsonInput } from './json-preflight.js';
+import { assertAcceptedOutputFragmentSemantics, ConversationOutputProjectionError } from './output-runtime.js';
+import { CONVERSATION_EXPERIMENTAL_REVISION, CONVERSATION_SCHEMA_VERSION } from './runtime-constants.js';
 import {
     CONVERSATION_ACCEPTED_OUTPUT_FORMAT,
     ConversationAcceptedOutputFragmentSchema,
@@ -13,13 +15,7 @@ import {
     ConversationOutputToolCallBlockSchema,
     ConversationOutputTurnSchema,
 } from './schemas/output.js';
-import {
-    CONVERSATION_EXPERIMENTAL_REVISION,
-    CONVERSATION_FORMAT,
-    CONVERSATION_SCHEMA_VERSION,
-    IdentifierSchema,
-} from './schemas/primitives.js';
-import { validateConversationSemantics } from './semantic-validation.js';
+import { IdentifierSchema } from './schemas/primitives.js';
 import type { Asset, ConversationDocument, GeneratedAgentTurn } from './types.js';
 import { diagnosticsFromZodError, parseConversationDocument } from './validation.js';
 
@@ -30,24 +26,12 @@ export type ConversationOutputCompleteness = z.infer<typeof ConversationOutputCo
 export type ConversationOutputGeneration = z.infer<typeof ConversationOutputGenerationSchema>;
 export type ConversationOutputReceipt = z.infer<typeof ConversationOutputReceiptSchema>;
 export type ConversationOutputTurn = z.infer<typeof ConversationOutputTurnSchema>;
-
-export type ConversationOutputProjectionErrorCode =
-    | 'asset_mismatch'
-    | 'generation_mismatch'
-    | 'invalid_fragment'
-    | 'invalid_operation_id'
-    | 'receipt_mismatch'
-    | 'turn_mismatch';
-
-export class ConversationOutputProjectionError extends Error {
-    constructor(
-        readonly code: ConversationOutputProjectionErrorCode,
-        message: string,
-    ) {
-        super(message);
-        this.name = 'ConversationOutputProjectionError';
-    }
-}
+export {
+    assertAcceptedOutputFragmentSemantics,
+    ConversationOutputProjectionError,
+    type ConversationOutputProjectionErrorCode,
+    cloneSemanticallyValidAcceptedOutputFragment,
+} from './output-runtime.js';
 
 export type AcceptedOutputFragmentValidationResult =
     | { success: true; data: ConversationAcceptedOutputFragment }
@@ -99,165 +83,6 @@ function resolveAcceptedRecords(document: ConversationDocument, operationId: str
     return { receipt, turn, generation };
 }
 
-function assertUnique(values: readonly string[]): boolean {
-    return new Set(values).size === values.length;
-}
-
-function invalidFragment(): never {
-    throw new ConversationOutputProjectionError(
-        'invalid_fragment',
-        'The accepted output fragment has inconsistent canonical references',
-    );
-}
-
-function assertAcceptedOutputSemantics(fragment: ConversationAcceptedOutputFragment): void {
-    const { source, receipt, turn, generation, assets, completeness } = fragment;
-    if (
-        source.conversation_id !== receipt.conversation_id ||
-        source.revision !== receipt.result_revision ||
-        receipt.result_revision !== receipt.base_revision + 1 ||
-        !Number.isSafeInteger(receipt.result_revision) ||
-        receipt.accepted_turn_ids.length !== 1 ||
-        receipt.accepted_turn_ids[0] !== turn.id ||
-        receipt.accepted_generation_ids.length !== 1 ||
-        receipt.accepted_generation_ids[0] !== generation.id ||
-        turn.generation_id !== generation.id ||
-        generation.source.conversation_id !== receipt.conversation_id ||
-        generation.source.revision !== receipt.base_revision
-    ) {
-        invalidFragment();
-    }
-
-    const includedBlockIds = turn.blocks.map((block) => block.id);
-    const omittedBlockIds = completeness.omitted_block_ids;
-    const includedBlockIdSet = new Set(includedBlockIds);
-    if (
-        includedBlockIdSet.size !== includedBlockIds.length ||
-        !assertUnique(omittedBlockIds) ||
-        omittedBlockIds.some((id) => includedBlockIdSet.has(id))
-    ) {
-        invalidFragment();
-    }
-
-    const acceptedAssetIds = receipt.accepted_asset_ids ?? [];
-    const includedAssetIds = Object.keys(assets);
-    const omittedAssetIds = completeness.omitted_asset_ids;
-    const acceptedAssetIdSet = new Set(acceptedAssetIds);
-    const includedAssetIdSet = new Set(includedAssetIds);
-    const omittedAssetIdSet = new Set(omittedAssetIds);
-    if (
-        acceptedAssetIdSet.size !== acceptedAssetIds.length ||
-        includedAssetIdSet.size !== includedAssetIds.length ||
-        omittedAssetIdSet.size !== omittedAssetIds.length ||
-        omittedAssetIds.some((id) => includedAssetIdSet.has(id)) ||
-        acceptedAssetIds.length !== includedAssetIds.length + omittedAssetIds.length ||
-        acceptedAssetIds.some((id) => !includedAssetIdSet.has(id) && !omittedAssetIdSet.has(id)) ||
-        includedAssetIds.some((id) => !acceptedAssetIdSet.has(id)) ||
-        omittedAssetIds.some((id) => !acceptedAssetIdSet.has(id))
-    ) {
-        invalidFragment();
-    }
-
-    const referencedAssets = new Set<string>();
-    for (const block of turn.blocks) {
-        const assetId = referencedAssetId(block);
-        if (assetId !== undefined) {
-            const asset = ownRecordValue(assets, assetId);
-            if (asset?.kind !== block.type) invalidFragment();
-            referencedAssets.add(assetId);
-        }
-        if (block.type === 'tool_call' && block.arguments.type === 'externalized_json') {
-            for (const hydration of block.arguments.hydration) {
-                const asset = ownRecordValue(assets, hydration.asset_id);
-                if (
-                    asset?.kind !== 'text' ||
-                    asset.mime_type !== 'text/plain' ||
-                    asset.content_hash !== hydration.content_hash
-                ) {
-                    invalidFragment();
-                }
-                referencedAssets.add(hydration.asset_id);
-            }
-        }
-    }
-
-    for (const [key, asset] of Object.entries(assets)) {
-        if (
-            key !== asset.id ||
-            asset.provenance.generation_id !== generation.id ||
-            (asset.provenance.source_turn_id !== undefined && asset.provenance.source_turn_id !== turn.id) ||
-            !referencedAssets.has(key)
-        ) {
-            invalidFragment();
-        }
-    }
-
-    // Reuse the document semantic validator for the retained records. Synthetic request-only fields
-    // let the projected executed generation participate without putting those private fields on wire.
-    const usedIds = new Set<string>([
-        receipt.id,
-        turn.id,
-        generation.id,
-        ...turn.blocks.flatMap((block) => (block.type === 'tool_call' ? [block.id, block.call_id] : [block.id])),
-        ...Object.keys(assets),
-    ]);
-    let requestReceiptId = 'accepted-output-validation:request-receipt';
-    while (usedIds.has(requestReceiptId)) requestReceiptId += ':';
-    const validationDocument: ConversationDocument = {
-        format: CONVERSATION_FORMAT,
-        schema_version: CONVERSATION_SCHEMA_VERSION,
-        experimental_revision: CONVERSATION_EXPERIMENTAL_REVISION,
-        id: source.conversation_id,
-        revision: source.revision,
-        created_at: turn.timestamps.recorded_at,
-        updated_at: receipt.recorded_at,
-        turns: [turn],
-        generations: Object.fromEntries([
-            [
-                generation.id,
-                {
-                    ...generation,
-                    request_receipt: {
-                        id: requestReceiptId,
-                        request_id: generation.request_id,
-                        attempt_id: generation.attempt_id,
-                        source: generation.source,
-                        context_fingerprint: 'accepted-output-validation:context',
-                        tool_set_fingerprint: 'accepted-output-validation:tools',
-                        request_fingerprint: 'accepted-output-validation:request',
-                        target: {
-                            provider: generation.provider,
-                            protocol: generation.protocol,
-                            model: generation.requested_model,
-                            adapter_version: generation.adapter_version,
-                        },
-                        tool_definition_ids: [],
-                        asset_versions: [],
-                        item_mappings: [],
-                        recorded_at: generation.timestamps.recorded_at,
-                    },
-                },
-            ],
-        ]),
-        operation_receipts: Object.fromEntries([
-            [receipt.id, { ...receipt, payload_fingerprint: 'accepted-output-validation:operation' }],
-        ]),
-        execution_receipts: {},
-        assets,
-        tool_definitions: {},
-        context: {
-            revision: source.revision,
-            entries: [],
-            active_tool_definition_ids: [],
-            protected_entry_ids: [],
-            retrieval_requirements: [],
-        },
-        compactions: {},
-        processing: { enabled: false, policy_revision: 0, processors: [] },
-    };
-    if (validateConversationSemantics(validationDocument).length > 0) invalidFragment();
-}
-
 /** Validates a standalone persisted or wire output fragment, including all cross-record references. */
 export function parseAcceptedOutputFragment(input: unknown): ConversationAcceptedOutputFragment {
     const preflight = preflightJsonInput(input);
@@ -272,7 +97,7 @@ export function parseAcceptedOutputFragment(input: unknown): ConversationAccepte
         );
     }
     const fragment = structuredClone(input) as ConversationAcceptedOutputFragment;
-    assertAcceptedOutputSemantics(fragment);
+    assertAcceptedOutputFragmentSemantics(fragment);
     return fragment;
 }
 
@@ -288,6 +113,17 @@ export function validateAcceptedOutputFragment(input: unknown): AcceptedOutputFr
     }
 }
 
+function toolArgumentAssets(
+    block: Extract<GeneratedAgentTurn['blocks'][number], { type: 'tool_call' }>,
+): { asset_id: string; content_hash: string }[] {
+    return block.arguments.type === 'externalized_json'
+        ? block.arguments.hydration.map((hydration) => ({
+              asset_id: hydration.asset_id,
+              content_hash: hydration.content_hash,
+          }))
+        : [];
+}
+
 function referencedAssetId(block: GeneratedAgentTurn['blocks'][number]): string | undefined {
     switch (block.type) {
         case 'image':
@@ -298,17 +134,6 @@ function referencedAssetId(block: GeneratedAgentTurn['blocks'][number]): string 
         default:
             return undefined;
     }
-}
-
-function toolArgumentAssets(
-    block: Extract<GeneratedAgentTurn['blocks'][number], { type: 'tool_call' }>,
-): { asset_id: string; content_hash: string }[] {
-    return block.arguments.type === 'externalized_json'
-        ? block.arguments.hydration.map((hydration) => ({
-              asset_id: hydration.asset_id,
-              content_hash: hydration.content_hash,
-          }))
-        : [];
 }
 
 function safeGeneratedAsset(asset: Asset | undefined, generationId: string): ConversationOutputAsset | undefined {

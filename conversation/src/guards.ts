@@ -1,4 +1,4 @@
-import { CONVERSATION_FORMAT } from './schemas/primitives.js';
+import { CONVERSATION_FORMAT } from './runtime-constants.js';
 import type { AgentTurn, ConversationTurn, GeneratedAgentTurn, ProgramTurn, ToolTurn, UserTurn } from './types.js';
 
 export function isUserTurn(turn: ConversationTurn): turn is UserTurn {

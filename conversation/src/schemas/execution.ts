@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CONVERSATION_USAGE_METRICS } from '../runtime-constants.js';
 import {
     ContentHashSchema,
     ConversationRefSchema,
@@ -33,17 +34,7 @@ export const ConversationRuntimeContextSchema = z
     })
     .meta({ id: 'ConversationRuntimeContext' });
 
-export const UsageMetricSchema = z
-    .enum([
-        'input_tokens',
-        'output_tokens',
-        'total_tokens',
-        'reasoning_tokens',
-        'cache_read_tokens',
-        'cache_write_tokens',
-        'input_new_tokens',
-    ])
-    .meta({ id: 'ConversationUsageMetric' });
+export const UsageMetricSchema = z.enum(CONVERSATION_USAGE_METRICS).meta({ id: 'ConversationUsageMetric' });
 
 export const AccountingProvenanceSchema = z
     .strictObject({

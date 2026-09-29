@@ -5,11 +5,13 @@ import { readFile, rm } from 'node:fs/promises';
 const root = await import('@llumiverse/conversation');
 const schemas = await import('@llumiverse/conversation/schemas');
 const jsonSchemas = await import('@llumiverse/conversation/json-schema');
+const outputRuntime = await import('@llumiverse/conversation/output-runtime');
 
 assert.equal(typeof root.validateConversationDocument, 'function');
 assert.equal(typeof root.createConversationDocument, 'function');
 assert.equal(typeof schemas.ConversationDocumentSchema?.safeParse, 'function');
 assert.equal(jsonSchemas.ConversationDocumentJsonSchema.$schema, 'https://json-schema.org/draft/2020-12/schema');
+assert.equal(typeof outputRuntime.cloneSemanticallyValidAcceptedOutputFragment, 'function');
 
 const compiler = spawnSync('pnpm', ['exec', 'tsc', '-p', 'test-fixtures/tsconfig.json'], {
     cwd: new URL('..', import.meta.url),

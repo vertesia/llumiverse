@@ -6,6 +6,7 @@ import {
     parseAcceptedOutputFragment,
     validateAcceptedOutputFragment,
 } from '../src/output.js';
+import { cloneSemanticallyValidAcceptedOutputFragment } from '../src/output-runtime.js';
 import { appendConversationRecords } from '../src/runtime.js';
 import { externalizeToolCallArguments, prepareToolArgumentExternalization } from '../src/tool-arguments.js';
 import type { AgentContentBlock, Asset } from '../src/types.js';
@@ -261,6 +262,23 @@ describe('accepted conversation output projection', () => {
         expect(parsed).not.toBe(fragment);
         expect(Object.hasOwn(parsed.assets, 'constructor')).toBe(true);
         expect(validateAcceptedOutputFragment(parsed)).toMatchObject({ success: true });
+    });
+
+    it('clones and semantically validates a structurally checked fragment without schema parsing', () => {
+        const source = createAcceptedOutputFragment(acceptedDocument({ assetId: 'constructor' }), 'response:1');
+        const clone = cloneSemanticallyValidAcceptedOutputFragment(source);
+
+        expect(clone).toEqual(source);
+        expect(clone).not.toBe(source);
+        expect(Object.hasOwn(clone.assets, 'constructor')).toBe(true);
+        source.turn.blocks[0] = { id: 'changed', type: 'text', text: 'changed', format: 'plain' };
+        expect(clone.turn.blocks[0]).toMatchObject({ id: 'block:text', text: 'answer' });
+
+        const inconsistent = createAcceptedOutputFragment(acceptedDocument(), 'response:1');
+        inconsistent.generation.status = 'failed';
+        expect(() => cloneSemanticallyValidAcceptedOutputFragment(inconsistent)).toThrow(
+            ConversationOutputProjectionError,
+        );
     });
 
     it.each([

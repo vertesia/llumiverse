@@ -1,5 +1,5 @@
 import { boundConversationDiagnostic, diagnosticPointer, diagnosticValue } from './diagnostics.js';
-import { UsageMetricSchema } from './schemas/execution.js';
+import { CONVERSATION_USAGE_METRICS } from './runtime-constants.js';
 import type {
     Asset,
     CompactionRecord,
@@ -20,7 +20,7 @@ import type {
 } from './types.js';
 
 const MAX_SEMANTIC_DIAGNOSTICS = 256;
-const USAGE_METRICS = UsageMetricSchema.options;
+const USAGE_METRICS = CONVERSATION_USAGE_METRICS;
 
 type AnyBlock = ContentBlock | NestedToolResultContentBlock;
 

@@ -1,10 +1,19 @@
 import { z } from 'zod';
-import { NonnegativeSafeIntegerSchema } from './primitives.js';
+import {
+    DIAGNOSTIC_MESSAGE_MAX_LENGTH,
+    DIAGNOSTIC_PATH_MAX_LENGTH,
+    DIAGNOSTIC_RECORD_ID_MAX_LENGTH,
+    DIAGNOSTIC_RELATED_PATHS_MAX_LENGTH,
+} from '../runtime-constants.js';
 
-export const DIAGNOSTIC_PATH_MAX_LENGTH = 512 as const;
-export const DIAGNOSTIC_MESSAGE_MAX_LENGTH = 1_024 as const;
-export const DIAGNOSTIC_RECORD_ID_MAX_LENGTH = 512 as const;
-export const DIAGNOSTIC_RELATED_PATHS_MAX_LENGTH = 8 as const;
+export {
+    DIAGNOSTIC_MESSAGE_MAX_LENGTH,
+    DIAGNOSTIC_PATH_MAX_LENGTH,
+    DIAGNOSTIC_RECORD_ID_MAX_LENGTH,
+    DIAGNOSTIC_RELATED_PATHS_MAX_LENGTH,
+} from '../runtime-constants.js';
+
+import { NonnegativeSafeIntegerSchema } from './primitives.js';
 
 export const JsonPreflightDiagnosticCodeSchema = z
     .enum([

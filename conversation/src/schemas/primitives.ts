@@ -1,8 +1,10 @@
 import { z } from 'zod';
 
-export const CONVERSATION_FORMAT = 'llumiverse.conversation' as const;
-export const CONVERSATION_SCHEMA_VERSION = 0 as const;
-export const CONVERSATION_EXPERIMENTAL_REVISION = '2026-09-30.adoption.1' as const;
+export {
+    CONVERSATION_EXPERIMENTAL_REVISION,
+    CONVERSATION_FORMAT,
+    CONVERSATION_SCHEMA_VERSION,
+} from '../runtime-constants.js';
 
 export const IdentifierSchema = z.string().min(1).meta({ id: 'ConversationIdentifier' });
 
