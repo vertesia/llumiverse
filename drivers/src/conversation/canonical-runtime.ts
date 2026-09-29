@@ -115,9 +115,18 @@ export function selectedCanonicalTurns(
     const turnsById = new Map(document.turns.map((turn) => [turn.id, turn]));
     const selected: ConversationTurn[] = [];
     for (const entry of document.context.entries) {
-        const turn = turnsById.get(entry.turn_id);
+        const turn =
+            entry.type === 'source_turn'
+                ? turnsById.get(entry.turn_id)
+                : document.compactions[entry.compaction_id]?.replacement_turns.find(
+                      (candidate) => candidate.id === entry.turn_id,
+                  );
         if (turn === undefined) {
-            throw new Error(`Conversation context entry ${entry.id} references missing turn ${entry.turn_id}`);
+            throw new Error(
+                entry.type === 'replacement_turn'
+                    ? `Conversation context entry ${entry.id} references missing replacement turn ${entry.turn_id} in compaction ${entry.compaction_id}`
+                    : `Conversation context entry ${entry.id} references missing turn ${entry.turn_id}`,
+            );
         }
         if (turn.model_visibility === 'exclude') continue;
         const selectedBlockIds = entry.block_ids === undefined ? undefined : new Set(entry.block_ids);
@@ -241,7 +250,39 @@ export async function createRequestReceipt(
     itemMappings: readonly NativeItemMapping[],
     toolDefinitions: readonly ToolDefinition[],
 ): Promise<RequestReceipt> {
-    const contextFingerprint = await fingerprintJson(document.context);
+    const selected = selectedCanonicalTurns(document, { allow_interrupted_with_replay_protocol: target.protocol });
+    const turnIds = new Set(selected.map((turn) => turn.id));
+    const blockIds = new Set<string>();
+    const callIds = new Set<string>();
+    const assetIds = new Set<string>();
+    for (const turn of selected) {
+        for (const block of turn.blocks) {
+            blockIds.add(block.id);
+            if (block.type === 'tool_call') callIds.add(block.call_id);
+            if ('asset_id' in block) assetIds.add(block.asset_id);
+            if (block.type === 'tool_result') {
+                for (const nested of block.content) {
+                    blockIds.add(nested.id);
+                    if ('asset_id' in nested) assetIds.add(nested.asset_id);
+                }
+            }
+        }
+    }
+    // Historical receipts may outlive deleted records. A freshly prepared request must still
+    // resolve every mapping against the selected canonical content it actually projects.
+    for (const mapping of itemMappings) {
+        const ids = mapping.kind === 'turn' ? turnIds : mapping.kind === 'block' ? blockIds : callIds;
+        if (!ids.has(mapping.canonical_id)) {
+            throw new Error(`Request mapping references unselected ${mapping.kind} ${mapping.canonical_id}`);
+        }
+    }
+    const assets = [...assetIds].sort().map((id) => {
+        const asset = Object.hasOwn(document.assets, id) ? document.assets[id] : undefined;
+        if (asset === undefined) throw new Error(`Selected context references missing asset ${id}`);
+        return asset;
+    });
+    // IDs and context revision alone do not capture a content edit or a changed asset locator.
+    const contextFingerprint = await fingerprintJson({ context: document.context, turns: selected, assets });
     const toolSetFingerprint = await fingerprintJson(toolDefinitions);
     const requestFingerprint = await fingerprintJson(nativePayload);
     return {
@@ -261,7 +302,7 @@ export async function createRequestReceipt(
             ...(target.options === undefined ? {} : { options: target.options }),
         },
         tool_definition_ids: toolDefinitions.map((tool) => tool.id),
-        asset_versions: Object.values(document.assets).flatMap((asset) =>
+        asset_versions: assets.flatMap((asset) =>
             asset.content_hash === undefined ? [] : [{ asset_id: asset.id, content_hash: asset.content_hash }],
         ),
         item_mappings: [...itemMappings],

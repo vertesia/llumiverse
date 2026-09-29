@@ -56,6 +56,7 @@ import {
     LlumiverseError,
     type LlumiverseErrorContext,
     type Logger,
+    normalizeCompletionResult,
     PromptRole,
     type PromptSegment,
     readStreamAsBase64,
@@ -1236,7 +1237,15 @@ export async function executeClaudeCompletion(
 
     const completionResults = collectClaudeResults(result.content, includeThoughts);
     const tool_use = collectClaudeTools(result.content);
-    const decoded = await decodeClaudeCanonicalResponse(result, prepared);
+    const normalized =
+        !tool_use?.length && options.result_schema
+            ? normalizeCompletionResult(completionResults, options.result_schema)
+            : undefined;
+    const decoded = await decodeClaudeCanonicalResponse(
+        result,
+        prepared,
+        normalized?.status === 'valid' ? normalized.structured_output : undefined,
+    );
     const processedConversation = appendClaudeCanonicalResponse(prepared, decoded);
 
     return {
@@ -1376,7 +1385,17 @@ export async function streamClaudeCompletion(
         [Symbol.asyncIterator]: () => stream[Symbol.asyncIterator](),
         finalizeConversation: async () => {
             const finalMessage = await response_stream.finalMessage();
-            const decoded = await decodeClaudeCanonicalResponse(finalMessage, prepared);
+            const finalResults = collectClaudeResults(finalMessage.content, includeThoughts);
+            const finalTools = collectClaudeTools(finalMessage.content);
+            const normalized =
+                !finalTools?.length && options.result_schema
+                    ? normalizeCompletionResult(finalResults, options.result_schema)
+                    : undefined;
+            const decoded = await decodeClaudeCanonicalResponse(
+                finalMessage,
+                prepared,
+                normalized?.status === 'valid' ? normalized.structured_output : undefined,
+            );
             return appendClaudeCanonicalResponse(prepared, decoded);
         },
     };

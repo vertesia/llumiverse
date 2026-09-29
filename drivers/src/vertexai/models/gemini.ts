@@ -7,6 +7,7 @@ import {
     type FunctionResponsePart,
     type GenerateContentConfig,
     type GenerateContentParameters,
+    type GenerateContentResponse,
     type GenerateContentResponseUsageMetadata,
     HarmBlockThreshold,
     HarmCategory,
@@ -23,18 +24,18 @@ import {
 import {
     type AIModel,
     type Completion,
+    type CompletionChunkObject,
     type CompletionResult,
     type DataSource,
     type DriverCompletionStream,
     type ExecutionOptions,
     type ExecutionTokenUsage,
-    getConversationMeta,
-    incrementConversationTurn,
     isGeminiModelVersionGte,
     type JSONObject,
     LlumiverseError,
     type LlumiverseErrorContext,
     ModelType,
+    normalizeCompletionResult,
     type PromptOptions,
     PromptRole,
     type PromptSegment,
@@ -45,16 +46,26 @@ import {
     type ToolDefinition,
     type ToolUse,
     truncateLargeTextInConversation,
-    unwrapConversationArray,
     type VertexAIGeminiOptions,
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
+import { canonicalConversationTurnNumber } from '../../conversation/canonical-runtime.js';
 import { boundedAudioStream, storeAudioResult } from '../../shared/audio.js';
 import { truncateBinaryForDebug } from '../../shared/debug-prompt.js';
 import { createToolChoiceConfigurationError } from '../../shared/tool-choice-error.js';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
 import type { ModelDefinition } from '../models.js';
 import { generateWithGeminiContextCache } from './gemini-context-cache.js';
+import {
+    appendGeminiCanonicalResponse,
+    compileGeminiConversation,
+    decodeGeminiCanonicalResponse,
+    finalizeGeminiPreparedRequest,
+    GEMINI_GENERATE_CONTENT_PROTOCOL,
+    geminiToolUsesFromContent,
+    type PreparedGeminiConversation,
+    prepareGeminiCanonicalState,
+} from './gemini-conversation-adapter.js';
 
 type GoogleApiErrorLike = Pick<ApiError, 'status' | 'message'>;
 type GeminiFinishReasonHandling = { message: string; retryable: boolean };
@@ -367,34 +378,150 @@ function extractCompletionResults(content: Content, includeThoughts = true): Com
     return results;
 }
 
-function finalizeGeminiConversation(
-    conversation: Content[],
-    assistantContent: Content | undefined,
-    system: Content | undefined,
-    options: ExecutionOptions,
-): GenerateContentPrompt['contents'] {
-    let completed = assistantContent ? updateConversation(conversation, [assistantContent]) : conversation;
-    completed = incrementConversationTurn(completed) as Content[];
-    const currentTurn = getConversationMeta(completed).turnNumber;
-    const preserveSubtree = (value: unknown): boolean => {
-        if (!value || typeof value !== 'object') return false;
-        const thoughtSignature = (value as { thoughtSignature?: unknown }).thoughtSignature;
-        return typeof thoughtSignature === 'string' && thoughtSignature.length > 0;
-    };
+function preserveGeminiSignedSubtree(value: unknown): boolean {
+    if (!value || typeof value !== 'object') return false;
+    const thoughtSignature = (value as { thoughtSignature?: unknown }).thoughtSignature;
+    return typeof thoughtSignature === 'string' && thoughtSignature.length > 0;
+}
+
+function projectGeminiHistoryContent(content: Content, options: ExecutionOptions, currentTurn: number): Content {
     const stripOptions = {
         keepForTurns: options.stripImagesAfterTurns ?? Infinity,
         currentTurn,
         textMaxTokens: options.stripTextMaxTokens,
-        preserveSubtree,
+        preserveSubtree: preserveGeminiSignedSubtree,
     };
-    let processed = stripBase64ImagesFromConversation(completed, stripOptions);
-    processed = truncateLargeTextInConversation(processed, stripOptions);
-    processed = stripHeartbeatsFromConversation(processed, {
+    let projected = stripBase64ImagesFromConversation(content, stripOptions);
+    projected = truncateLargeTextInConversation(projected, stripOptions);
+    projected = stripHeartbeatsFromConversation(projected, {
         keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
         currentTurn,
-        preserveSubtree,
+        preserveSubtree: preserveGeminiSignedSubtree,
     });
-    return storeSystemInConversation(processed, system) as Content[];
+    return projected as Content;
+}
+
+function prepareCanonicalGeminiProjection(
+    prepared: Omit<PreparedGeminiConversation, 'payload' | 'receipt' | 'diagnostics'>,
+    options: ExecutionOptions,
+): GenerateContentPrompt {
+    const currentIndexes = new Set(prepared.current_native_content_indexes);
+    const currentTurn = canonicalConversationTurnNumber(prepared.document);
+    return {
+        contents: prepared.native_conversation.contents.map((content, index) =>
+            currentIndexes.has(index) ? content : projectGeminiHistoryContent(content, options, currentTurn),
+        ),
+        ...(prepared.native_conversation.system === undefined ? {} : { system: prepared.native_conversation.system }),
+    };
+}
+
+function reportedGeminiUsage(value: unknown): GenerateContentResponseUsageMetadata | undefined {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+    const record = value as Record<string, unknown>;
+    for (const key of [
+        'cachedContentTokenCount',
+        'candidatesTokenCount',
+        'promptTokenCount',
+        'thoughtsTokenCount',
+        'toolUsePromptTokenCount',
+        'totalTokenCount',
+    ]) {
+        const candidate = record[key];
+        if (candidate !== undefined && (typeof candidate !== 'number' || !Number.isSafeInteger(candidate))) {
+            return undefined;
+        }
+    }
+    if (record.trafficType !== undefined && typeof record.trafficType !== 'string') return undefined;
+    return record as GenerateContentResponseUsageMetadata;
+}
+
+function canonicalGeminiUsage(
+    prepared: Omit<PreparedGeminiConversation, 'payload' | 'receipt' | 'diagnostics'>,
+    definition: GeminiModelDefinition,
+    driver: VertexAIDriver,
+): ExecutionTokenUsage | undefined {
+    const usage = prepared.accepted_response?.generation.usage;
+    if (usage === undefined) return undefined;
+    const reported = usage.reported_usage?.find(
+        (candidate) => candidate.source === 'provider' && candidate.protocol === GEMINI_GENERATE_CONTENT_PROTOCOL,
+    );
+    const native = reportedGeminiUsage(reported?.payload);
+    if (native !== undefined) return definition.usageMetadataToTokenUsage(driver, native);
+    return {
+        ...(usage.input_tokens === undefined ? {} : { prompt: usage.input_tokens }),
+        ...(usage.output_tokens === undefined ? {} : { result: usage.output_tokens }),
+        ...(usage.total_tokens === undefined ? {} : { total: usage.total_tokens }),
+        ...(usage.cache_read_tokens === undefined ? {} : { prompt_cached: usage.cache_read_tokens }),
+        ...(usage.input_new_tokens === undefined ? {} : { prompt_new: usage.input_new_tokens }),
+    };
+}
+
+function canonicalGeminiServiceTier(
+    prepared: Omit<PreparedGeminiConversation, 'payload' | 'receipt' | 'diagnostics'>,
+): string | undefined {
+    const usage = prepared.accepted_response?.generation.usage;
+    const reported = usage?.reported_usage?.find(
+        (candidate) => candidate.source === 'provider' && candidate.protocol === GEMINI_GENERATE_CONTENT_PROTOCOL,
+    );
+    return normalizeVertexAIResolvedServiceTier(reportedGeminiUsage(reported?.payload)?.trafficType);
+}
+
+function acceptedGeminiContent(
+    prepared: Omit<PreparedGeminiConversation, 'payload' | 'receipt' | 'diagnostics'>,
+): Content {
+    const accepted = prepared.accepted_response;
+    if (accepted === undefined) throw new Error('No accepted Gemini response is available');
+    const compiled = compileGeminiConversation(prepared.document, {
+        provider: prepared.provider,
+        model: prepared.requested_model,
+    });
+    const mapping = compiled.mappings.find(
+        (candidate) => candidate.kind === 'turn' && candidate.canonical_id === accepted.turn.id,
+    );
+    const match = mapping === undefined ? undefined : /^contents\/(\d+)$/.exec(mapping.native_id);
+    const content =
+        match === undefined || match === null ? undefined : compiled.conversation.contents[Number(match[1])];
+    if (content?.role !== 'model') {
+        throw new Error(`Accepted Gemini turn ${accepted.turn.id} has no native model projection`);
+    }
+    return content;
+}
+
+async function recoverGeminiCompletion(
+    prepared: Omit<PreparedGeminiConversation, 'payload' | 'receipt' | 'diagnostics'>,
+    definition: GeminiModelDefinition,
+    driver: VertexAIDriver,
+    options: ExecutionOptions,
+    includeThoughts: boolean,
+): Promise<Completion> {
+    const accepted = prepared.accepted_response;
+    if (accepted === undefined) throw new Error('No accepted Gemini response is available');
+    if (options.include_original_response) {
+        throw new Error('An idempotently recovered Gemini response cannot reconstruct original_response');
+    }
+    const content = acceptedGeminiContent(prepared);
+    const toolUse = await geminiToolUsesFromContent(content, prepared.runtime.response_operation_id);
+    return {
+        result: extractCompletionResults(content, includeThoughts),
+        ...(toolUse === undefined ? {} : { tool_use: toolUse }),
+        token_usage: canonicalGeminiUsage(prepared, definition, driver),
+        service_tier: canonicalGeminiServiceTier(prepared),
+        finish_reason: toolUse === undefined ? accepted.generation.finish_reason : 'tool_use',
+        conversation: prepared.document,
+    };
+}
+
+function recoveredGeminiStream(completion: Completion): DriverCompletionStream {
+    const stream = (async function* (): AsyncIterable<CompletionChunkObject> {
+        yield {
+            result: completion.result,
+            tool_use: completion.tool_use,
+            token_usage: completion.token_usage,
+            service_tier: completion.service_tier,
+            finish_reason: completion.finish_reason,
+        };
+    })();
+    return Object.assign(stream, { finalizeConversation: () => completion.conversation });
 }
 
 function appendGeminiStreamParts(target: Part[], incoming: Part[]): void {
@@ -413,48 +540,6 @@ function appendGeminiStreamParts(target: Part[], incoming: Part[]): void {
             target.push(structuredClone(part));
         }
     }
-}
-
-function collectToolUseParts(content: Content): ToolUse[] | undefined {
-    const out: ToolUse[] = [];
-    const parts = content.parts ?? [];
-    for (const part of parts) {
-        if (part.functionCall) {
-            const toolUse: ToolUse = {
-                id: part.functionCall.name ?? '',
-                tool_name: part.functionCall.name ?? '',
-                tool_input: part.functionCall.args as JSONObject,
-            };
-            // Capture thought_signature for Gemini thinking models (2.5+/3.0+)
-            // This must be passed back with the function response
-            if (part.thoughtSignature) {
-                toolUse.thought_signature = part.thoughtSignature;
-            }
-            out.push(toolUse);
-        }
-    }
-    return out.length > 0 ? out : undefined;
-}
-
-type StreamingToolUse = ToolUse & { _actual_id?: string };
-
-/**
- * Collect streamed function calls under accumulator keys that are unique per call.
- *
- * Gemini identifies a function call by name only, so `collectToolUseParts` uses the name as the
- * tool-use id and parallel calls to one tool share it. The core completion stream merges streamed
- * fragments by id, which folded such a batch into a single call: the model turn kept every
- * functionCall part but only one tool ran, and the next request was rejected by Vertex with 400
- * "number of function response parts is equal to the number of function call parts". A Gemini
- * functionCall part always arrives complete, so each one gets its own key; `_actual_id` restores
- * the name-based id once the stream is finalized.
- */
-function collectStreamingToolUseParts(content: Content, nextCallIndex: () => number): StreamingToolUse[] | undefined {
-    return collectToolUseParts(content)?.map((tool) => ({
-        ...tool,
-        id: `${tool.id}#${nextCallIndex()}`,
-        _actual_id: tool.id,
-    }));
 }
 
 /** True when `content` is a user turn holding nothing but functionResponse parts. */
@@ -650,7 +735,12 @@ function normalizeGeminiFinishReason(finishReason: FinishReason | undefined): st
     }
 }
 
+function geminiProvider(driver: VertexAIDriver): string {
+    return typeof driver.provider === 'string' && driver.provider.length > 0 ? driver.provider : 'vertexai';
+}
+
 export class GeminiModelDefinition implements ModelDefinition<GenerateContentPrompt> {
+    readonly canonical_conversation_supported = true;
     model: AIModel;
 
     constructor(modelId: string) {
@@ -730,14 +820,19 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                     responseParts.push(await fileToMediaPart(f));
                 }
                 // Build functionResponse part with optional thought_signature for Gemini thinking models
-                const functionResponsePart: Part = {
+                const functionResponsePart: Part & {
+                    _llumiverse_tool_result_status?: NonNullable<PromptSegment['tool_result_status']>;
+                } = {
                     functionResponse: {
-                        name: msg.tool_use_id,
+                        id: msg.tool_use_id,
                         response: formatFunctionResponse(msg.content || ''),
                         ...(responseParts.length > 0 && { parts: responseParts }),
                     },
                     // Include thought_signature if provided (required for Gemini 2.5+/3.0+ thinking models)
                     thoughtSignature: msg.thought_signature,
+                    ...(msg.tool_result_status === undefined
+                        ? {}
+                        : { _llumiverse_tool_result_status: msg.tool_result_status }),
                 };
                 contents.push({
                     role: 'user',
@@ -863,20 +958,21 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
+        const requestedOptions = options;
         const splits = options.model.split('/');
         let region: string | undefined;
         if (splits[0] === 'locations' && splits.length >= 2) {
             region = splits[1];
         }
         const modelName = splits[splits.length - 1];
-        options = { ...options, model: modelName };
+        const transportOptions = { ...options, model: modelName };
 
         if (isFileAudioModel(modelName)) {
-            const modelOptions = options.model_options as VertexAIGeminiOptions | undefined;
+            const modelOptions = transportOptions.model_options as VertexAIGeminiOptions | undefined;
             const client = driver.getGoogleGenAIClient(
                 region,
                 resolveVertexAIServiceTier(modelOptions),
-                options.httpTimeout,
+                transportOptions.httpTimeout,
             );
             const speech = modelName.includes('tts');
             const config: GenerateContentConfig = speech
@@ -954,7 +1050,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                                 sample_encoding: 'int16',
                                 byte_order: 'little',
                             },
-                            options,
+                            transportOptions,
                             signal,
                         ),
                     );
@@ -967,44 +1063,47 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 result: results,
                 finish_reason: normalizeGeminiFinishReason(response.candidates?.[0]?.finishReason),
                 token_usage: this.usageMetadataToTokenUsage(driver, response.usageMetadata),
-                original_response: options.include_original_response ? response : undefined,
+                original_response: transportOptions.include_original_response ? response : undefined,
             };
         }
 
-        // Restore system instruction from stored conversation on resume.
-        // The stored _llumiverse_system contains the complete system (interaction prompt + schema)
-        // from the initial call. Always prefer it over the prompt's system, which on resume only
-        // contains the schema instruction (no interaction system segments are present on resume).
-        const existingSystem = extractSystemFromConversation(options.conversation);
-        if (existingSystem) {
-            prompt.system = existingSystem;
-        }
-
-        const conversation = updateConversation(options.conversation, prompt.contents);
-        prompt.contents = conversation;
+        const canonicalState = await prepareGeminiCanonicalState({
+            conversation: requestedOptions.conversation,
+            prompt,
+            options: requestedOptions,
+            provider: geminiProvider(driver),
+        });
 
         // TODO: Remove hack, use global endpoint manually if needed.
-        if (options.model.includes('gemini-2.5-flash-image')) {
+        if (transportOptions.model.includes('gemini-2.5-flash-image')) {
             region = 'global'; // Gemini Flash Image only available in global region, this is for nano-banana model
         }
 
-        const model_options = options.model_options as VertexAIGeminiOptions | undefined;
+        const model_options = transportOptions.model_options as VertexAIGeminiOptions | undefined;
         const includeThoughts = model_options?.include_thoughts !== false;
+        if (canonicalState.accepted_response !== undefined) {
+            return recoverGeminiCompletion(canonicalState, this, driver, requestedOptions, includeThoughts);
+        }
+        const canonicalPrompt = prepareCanonicalGeminiProjection(canonicalState, requestedOptions);
         const client = driver.getGoogleGenAIClient(
             region,
             resolveVertexAIServiceTier(model_options),
-            options.httpTimeout,
+            transportOptions.httpTimeout,
         );
 
-        const payload = getGeminiPayload(options, prompt, 'execute');
+        const payload = getGeminiPayload(transportOptions, canonicalPrompt, 'execute');
+        const prepared = await finalizeGeminiPreparedRequest(
+            { ...canonicalState, native_conversation: canonicalPrompt },
+            payload,
+        );
         if (signal) payload.config = { ...payload.config, abortSignal: signal };
         // Routes through an explicit Vertex context cache when this execution carries a
         // prompt_cache_key; sends `payload` untouched otherwise, and on any cache failure.
         const cacheExecution = await generateWithGeminiContextCache(
             driver,
             client,
-            options,
-            prompt,
+            transportOptions,
+            canonicalPrompt,
             payload,
             (request) => client.models.generateContent(request),
             region ?? driver.getVertexRegion?.() ?? 'global',
@@ -1014,10 +1113,19 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(driver, response.usageMetadata);
 
         let tool_use: ToolUse[] | undefined;
-        let finalContent: Content | undefined;
+        let finalContent: Content = { role: 'model', parts: [] };
         let finish_reason: string | undefined, result: CompletionResult[] | undefined;
-        const candidate = response.candidates?.[0];
+        const candidates = response.candidates ?? [];
+        if (candidates.length > 1) {
+            throw new Error(
+                `Gemini returned ${candidates.length} candidates; canonical ingestion requires one candidate`,
+            );
+        }
+        const candidate = candidates[0];
         if (candidate) {
+            if (candidate.finishReason === undefined) {
+                throw new Error('Gemini response candidate has no terminal finish reason');
+            }
             finish_reason = normalizeGeminiFinishReason(candidate.finishReason);
             const content = candidate.content;
 
@@ -1026,7 +1134,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             const isRecoverableToolCall = assertSupportedGeminiFinishReason(candidate);
 
             if (content) {
-                tool_use = collectToolUseParts(content);
+                tool_use = await geminiToolUsesFromContent(content, prepared.runtime.response_operation_id);
 
                 // For recoverable tool call issues, log warning but continue processing
                 // The workflow will handle the invalid tool call gracefully.
@@ -1043,20 +1151,39 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 result = extractCompletionResults(content, includeThoughts);
                 finalContent = content;
             }
+        } else if (response.promptFeedback?.blockReason !== undefined) {
+            finish_reason = response.promptFeedback.blockReason;
+            const blockMessage = response.promptFeedback.blockReasonMessage ?? '';
+            finalContent = { role: 'model', parts: [{ text: blockMessage }] };
+            result = blockMessage.length === 0 ? [] : [{ type: 'text', value: blockMessage }];
+        } else {
+            throw new Error('Gemini response has no candidate or prompt block reason');
         }
 
         if (tool_use) {
             finish_reason = 'tool_use';
         }
 
-        const finalConversation = finalizeGeminiConversation(conversation, finalContent, prompt.system, options);
+        const completionResults = result && result.length > 0 ? result : [{ type: 'text' as const, value: '' }];
+        const normalized =
+            !tool_use?.length && requestedOptions.result_schema
+                ? normalizeCompletionResult(completionResults, requestedOptions.result_schema)
+                : undefined;
+        const decoded = await decodeGeminiCanonicalResponse({
+            response,
+            content: finalContent,
+            prepared,
+            finish_reason,
+            ...(normalized?.status === 'valid' ? { structured_output: normalized.structured_output } : {}),
+        });
+        const finalConversation = appendGeminiCanonicalResponse(prepared, decoded);
 
         return {
-            result: result && result.length > 0 ? result : [{ type: 'text' as const, value: '' }],
+            result: completionResults,
             token_usage: token_usage,
             service_tier: normalizeVertexAIResolvedServiceTier(response.usageMetadata?.trafficType),
             finish_reason: finish_reason,
-            original_response: options.include_original_response ? response : undefined,
+            original_response: requestedOptions.include_original_response ? response : undefined,
             conversation: finalConversation,
             tool_use,
             prompt_cache_diagnostic: cacheExecution.diagnostic,
@@ -1069,46 +1196,50 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
+        const requestedOptions = options;
         const splits = options.model.split('/');
         let region: string | undefined;
         if (splits[0] === 'locations' && splits.length >= 2) {
             region = splits[1];
         }
         const modelName = splits[splits.length - 1];
-        options = { ...options, model: modelName };
+        const transportOptions = { ...options, model: modelName };
+        const canonicalState = await prepareGeminiCanonicalState({
+            conversation: requestedOptions.conversation,
+            prompt,
+            options: requestedOptions,
+            provider: geminiProvider(driver),
+        });
 
-        // Restore system instruction from stored conversation on resume.
-        // The stored _llumiverse_system contains the complete system (interaction prompt + schema)
-        // from the initial call. Always prefer it over the prompt's system, which on resume only
-        // contains the schema instruction (no interaction system segments are present on resume).
-        const existingSystem = extractSystemFromConversation(options.conversation);
-        if (existingSystem) {
-            prompt.system = existingSystem;
-        }
-
-        // Include conversation history in prompt contents (same as non-streaming)
-        const conversation = updateConversation(options.conversation, prompt.contents);
-        prompt.contents = conversation;
-
-        if (options.model.includes('gemini-2.5-flash-image')) {
+        if (transportOptions.model.includes('gemini-2.5-flash-image')) {
             region = 'global'; // Gemini Flash Image only available in global region, this is for nano-banana model
         }
 
-        const model_options = options.model_options as VertexAIGeminiOptions | undefined;
+        const model_options = transportOptions.model_options as VertexAIGeminiOptions | undefined;
         const includeThoughts = model_options?.include_thoughts !== false;
+        if (canonicalState.accepted_response !== undefined) {
+            return recoveredGeminiStream(
+                await recoverGeminiCompletion(canonicalState, this, driver, requestedOptions, includeThoughts),
+            );
+        }
+        const canonicalPrompt = prepareCanonicalGeminiProjection(canonicalState, requestedOptions);
         const client = driver.getGoogleGenAIClient(
             region,
             resolveVertexAIServiceTier(model_options),
-            options.httpTimeout,
+            transportOptions.httpTimeout,
         );
 
-        const payload = getGeminiPayload(options, prompt, 'stream');
+        const payload = getGeminiPayload(transportOptions, canonicalPrompt, 'stream');
+        const prepared = await finalizeGeminiPreparedRequest(
+            { ...canonicalState, native_conversation: canonicalPrompt },
+            payload,
+        );
         payload.config = { ...payload.config, abortSignal: signal };
         const cacheExecution = await generateWithGeminiContextCache(
             driver,
             client,
-            options,
-            prompt,
+            transportOptions,
+            canonicalPrompt,
             payload,
             (request) => client.models.generateContentStream(request),
             region ?? driver.getVertexRegion?.() ?? 'global',
@@ -1117,40 +1248,60 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         const nativeParts: Part[] = [];
         let streamedToolCallCount = 0;
+        let streamedToolUseFound = false;
+        let terminalResponse: GenerateContentResponse | undefined;
+        let terminalCandidate: NonNullable<GenerateContentResponse['candidates']>[number] | undefined;
+        let terminalFinishReason: string | undefined;
+        let finalUsageMetadata: GenerateContentResponseUsageMetadata | undefined;
         const stream = asyncMap(response, async (item) => {
+            if (item.usageMetadata !== undefined) finalUsageMetadata = item.usageMetadata;
             const token_usage: ExecutionTokenUsage = this.usageMetadataToTokenUsage(driver, item.usageMetadata);
             if (item.candidates && item.candidates.length > 0) {
-                for (const candidate of item.candidates) {
-                    let tool_use: StreamingToolUse[] | undefined;
-                    let finish_reason: string | undefined;
-                    finish_reason = normalizeGeminiFinishReason(candidate.finishReason);
-                    const isRecoverableToolCall = assertSupportedGeminiFinishReason(candidate);
-                    if (candidate.content?.role === 'model') {
-                        appendGeminiStreamParts(nativeParts, candidate.content.parts ?? []);
-                        // Collect all parts in order (text and images)
-                        const combinedResults = extractCompletionResults(candidate.content, includeThoughts);
-                        tool_use = collectStreamingToolUseParts(candidate.content, () => ++streamedToolCallCount);
-                        if (tool_use) {
-                            finish_reason = 'tool_use';
-                            // Log warning for recoverable tool call issues — see the
-                            // matching site in `requestTextCompletion` above for why
-                            // we route through the driver's logger instead of
-                            // `console.warn`.
-                            if (isRecoverableToolCall) {
-                                driver.logger.warn(
-                                    `[Gemini] Recoverable tool call issue (${candidate.finishReason}): ` +
-                                        `Model tried to call undeclared tool(s): ${tool_use.map((t) => t.tool_name).join(', ')}`,
-                                );
-                            }
+                if (item.candidates.length > 1) {
+                    throw new Error(
+                        `Gemini stream returned ${item.candidates.length} candidates; canonical ingestion requires one candidate`,
+                    );
+                }
+                const candidate = item.candidates[0];
+                let tool_use: ToolUse[] | undefined;
+                let finish_reason = normalizeGeminiFinishReason(candidate.finishReason);
+                const isRecoverableToolCall = assertSupportedGeminiFinishReason(candidate);
+                if (candidate.finishReason !== undefined) {
+                    terminalResponse = item;
+                    terminalCandidate = candidate;
+                    terminalFinishReason = finish_reason;
+                }
+                if (candidate.content?.role === 'model') {
+                    appendGeminiStreamParts(nativeParts, candidate.content.parts ?? []);
+                    // Collect all parts in order (text and images)
+                    const combinedResults = extractCompletionResults(candidate.content, includeThoughts);
+                    tool_use = await geminiToolUsesFromContent(
+                        candidate.content,
+                        prepared.runtime.response_operation_id,
+                        streamedToolCallCount,
+                    );
+                    streamedToolCallCount += tool_use?.length ?? 0;
+                    if (tool_use) {
+                        finish_reason = 'tool_use';
+                        streamedToolUseFound = true;
+                        // Log warning for recoverable tool call issues — see the
+                        // matching site in `requestTextCompletion` above for why
+                        // we route through the driver's logger instead of
+                        // `console.warn`.
+                        if (isRecoverableToolCall) {
+                            driver.logger.warn(
+                                `[Gemini] Recoverable tool call issue (${candidate.finishReason}): ` +
+                                    `Model tried to call undeclared tool(s): ${tool_use.map((t) => t.tool_name).join(', ')}`,
+                            );
                         }
-                        return {
-                            result: combinedResults.length > 0 ? combinedResults : [],
-                            token_usage: token_usage,
-                            service_tier: normalizeVertexAIResolvedServiceTier(item.usageMetadata?.trafficType),
-                            finish_reason: finish_reason,
-                            tool_use,
-                        };
                     }
+                    return {
+                        result: combinedResults.length > 0 ? combinedResults : [],
+                        token_usage: token_usage,
+                        service_tier: normalizeVertexAIResolvedServiceTier(item.usageMetadata?.trafficType),
+                        finish_reason: finish_reason,
+                        tool_use,
+                    };
                 }
             }
             //No normal output, returning block reason if it exists.
@@ -1166,13 +1317,35 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         return Object.assign(stream, {
             finalizePromptCacheDiagnostic: () => cacheExecution.diagnostic,
-            finalizeConversation: () =>
-                finalizeGeminiConversation(
-                    conversation,
-                    nativeParts.length > 0 ? { role: 'model', parts: nativeParts } : undefined,
-                    prompt.system,
-                    options,
-                ),
+            finalizeConversation: async () => {
+                if (terminalResponse === undefined || terminalCandidate === undefined) {
+                    throw new Error('Gemini stream ended without a terminal finish reason');
+                }
+                const content: Content = { role: 'model', parts: nativeParts };
+                const finalResponse = {
+                    ...terminalResponse,
+                    ...(finalUsageMetadata === undefined ? {} : { usageMetadata: finalUsageMetadata }),
+                    candidates: [
+                        {
+                            ...terminalCandidate,
+                            content,
+                        },
+                    ],
+                } as GenerateContentResponse;
+                const finalResults = extractCompletionResults(content, includeThoughts);
+                const normalized =
+                    !streamedToolUseFound && requestedOptions.result_schema
+                        ? normalizeCompletionResult(finalResults, requestedOptions.result_schema)
+                        : undefined;
+                const decoded = await decodeGeminiCanonicalResponse({
+                    response: finalResponse,
+                    content,
+                    prepared,
+                    finish_reason: streamedToolUseFound ? 'tool_use' : terminalFinishReason,
+                    ...(normalized?.status === 'valid' ? { structured_output: normalized.structured_output } : {}),
+                });
+                return appendGeminiCanonicalResponse(prepared, decoded);
+            },
         });
     }
 
@@ -1419,49 +1592,6 @@ function getToolFunction(tool: ToolDefinition): FunctionDeclaration {
         // with the legacy parameters field (which required a proprietary Gemini Schema type).
         parametersJsonSchema: tool.input_schema,
     };
-}
-
-/**
- * Update the conversation messages
- * @param prompt
- * @param response
- * @returns
- */
-function updateConversation(conversation: unknown, prompt: Content[]): Content[] {
-    // Unwrap array if wrapped, otherwise treat as array
-    const unwrapped = unwrapConversationArray<Content>(conversation);
-    const convArray = unwrapped ?? ((conversation as Content[]) || []);
-    return convArray.concat(prompt);
-}
-
-const SYSTEM_KEY = '_llumiverse_system';
-
-/**
- * Extract the stored system instruction from a Gemini conversation object.
- * Returns undefined if no system was stored.
- */
-function extractSystemFromConversation(conversation: unknown): Content | undefined {
-    if (typeof conversation === 'object' && conversation !== null) {
-        const c = conversation as Record<string, unknown>;
-        if (c[SYSTEM_KEY] && typeof c[SYSTEM_KEY] === 'object') {
-            return c[SYSTEM_KEY] as Content;
-        }
-    }
-    return undefined;
-}
-
-/**
- * Store the system instruction in the Gemini conversation wrapper object.
- * The conversation is already wrapped by incrementConversationTurn into
- * { _arrayConversation: Content[], _llumiverse_meta: {...} }.
- * We add _llumiverse_system alongside these fields.
- */
-function storeSystemInConversation(conversation: unknown, system: Content | undefined): unknown {
-    if (!system) return conversation;
-    if (typeof conversation === 'object' && conversation !== null) {
-        return { ...(conversation as object), [SYSTEM_KEY]: system };
-    }
-    return conversation;
 }
 
 /**

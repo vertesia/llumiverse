@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { type CompactionRecord, type UserTurn, validateConversationDocument } from '../src/index.js';
+import {
+    type CompactionRecord,
+    type ExecutedGeneration,
+    getConversationTurn,
+    type UserTurn,
+    validateConversationDocument,
+} from '../src/index.js';
 import { emptyDocument, RECORDED_AT, textBlock, userTurn } from './fixtures.js';
 
 function replacementTurn(id: string, derivationId: string, sourceBlockId = 'source-a'): UserTurn {
@@ -45,7 +51,86 @@ function partialCompactionDocument() {
     return document;
 }
 
+function derivationGeneration(): ExecutedGeneration {
+    const source = { conversation_id: 'checkpoint-summary-fork', revision: 2 };
+    return {
+        id: 'summary-generation',
+        record_source: 'executed',
+        request_id: 'summary-request',
+        attempt_id: 'summary-attempt',
+        purpose: 'checkpoint_summary',
+        requested_model: 'summary-model',
+        provider: 'provider',
+        protocol: 'protocol',
+        adapter_version: 'adapter-v1',
+        status: 'completed',
+        timestamps: { recorded_at: RECORDED_AT, completed_at: RECORDED_AT },
+        source,
+        usage: {
+            input_tokens: 4,
+            output_tokens: 2,
+            total_tokens: 6,
+            accounting_provenance: {
+                input_tokens: { method: 'reported', accounting_basis: 'provider' },
+                output_tokens: { method: 'reported', accounting_basis: 'provider' },
+                total_tokens: { method: 'derived', accounting_basis: 'provider' },
+            },
+        },
+        request_receipt: {
+            id: 'summary-request-receipt',
+            request_id: 'summary-request',
+            attempt_id: 'summary-attempt',
+            source,
+            context_fingerprint: 'sha256:context',
+            tool_set_fingerprint: 'sha256:tools',
+            request_fingerprint: 'sha256:request',
+            target: {
+                provider: 'provider',
+                protocol: 'protocol',
+                model: 'summary-model',
+                adapter_version: 'adapter-v1',
+            },
+            tool_definition_ids: [],
+            asset_versions: [],
+            item_mappings: [],
+            recorded_at: RECORDED_AT,
+        },
+    };
+}
+
 describe('partial compaction semantics', () => {
+    it('round-trips a valid isolated derivation generation without adding it to conversation generations', () => {
+        const document = partialCompactionDocument();
+        document.compactions.compaction.derivation_generation = derivationGeneration();
+        const roundTrip = JSON.parse(JSON.stringify(document)) as unknown;
+        const result = validateConversationDocument(roundTrip);
+        expect(result.success).toBe(true);
+        if (!result.success) throw new Error('Expected valid derivation generation');
+        expect(result.data.compactions.compaction.derivation_generation).toEqual(derivationGeneration());
+        expect(result.data.generations).toEqual({});
+        expect(getConversationTurn(result.data, 'replacement')?.generation).toEqual(derivationGeneration());
+    });
+
+    it('rejects a derivation generation whose request identity differs from its receipt', () => {
+        const document = partialCompactionDocument();
+        const generation = derivationGeneration();
+        generation.request_receipt.request_id = 'different-request';
+        document.compactions.compaction.derivation_generation = generation;
+        const result = validateConversationDocument(document);
+        expect(result.success).toBe(false);
+        expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'GENERATION_REQUEST_MISMATCH')).toBe(true);
+    });
+
+    it('rejects a derivation generation whose source differs from its receipt', () => {
+        const document = partialCompactionDocument();
+        const generation = derivationGeneration();
+        generation.request_receipt.source = { conversation_id: 'different-fork', revision: 2 };
+        document.compactions.compaction.derivation_generation = generation;
+        const result = validateConversationDocument(document);
+        expect(result.success).toBe(false);
+        expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'GENERATION_SOURCE_INVALID')).toBe(true);
+    });
+
     it('allows a replaced block and a disjoint direct block from the same turn', () => {
         expect(validateConversationDocument(partialCompactionDocument())).toMatchObject({ success: true });
     });

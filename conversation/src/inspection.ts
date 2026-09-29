@@ -44,7 +44,7 @@ function indexConversationTurns(document: ConversationDocument): Map<string, Res
                     turn,
                     source: 'compaction',
                     compaction_id: compaction.id,
-                    generation: findGeneration(document, turn),
+                    generation: compaction.derivation_generation ?? findGeneration(document, turn),
                 });
             }
         }
@@ -72,7 +72,7 @@ export function getConversationTurn(
                     turn,
                     source: 'compaction',
                     compaction_id: compaction.id,
-                    generation: findGeneration(document, turn),
+                    generation: compaction.derivation_generation ?? findGeneration(document, turn),
                 };
             }
         }

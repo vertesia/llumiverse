@@ -585,6 +585,62 @@ function validateCompaction(
             );
         }
     }
+    const derivationGeneration = compaction.derivation_generation;
+    if (derivationGeneration !== undefined) {
+        const generationPath = `${path}/derivation_generation`;
+        if (derivationGeneration.status !== 'completed') {
+            add(
+                'GENERATION_SOURCE_INVALID',
+                `${generationPath}/status`,
+                'A compaction derivation generation must be completed before the replacement is accepted',
+                derivationGeneration.id,
+            );
+        }
+        const receipt = derivationGeneration.request_receipt;
+        if (receipt !== undefined) {
+            if (
+                receipt.source.conversation_id !== derivationGeneration.source.conversation_id ||
+                receipt.source.revision !== derivationGeneration.source.revision
+            ) {
+                add(
+                    'GENERATION_SOURCE_INVALID',
+                    `${generationPath}/request_receipt/source`,
+                    'Derivation request receipt source must match its isolated generation source',
+                    derivationGeneration.id,
+                );
+            }
+            if (
+                derivationGeneration.record_source === 'executed' &&
+                (receipt.request_id !== derivationGeneration.request_id ||
+                    receipt.attempt_id !== derivationGeneration.attempt_id)
+            ) {
+                add(
+                    'GENERATION_REQUEST_MISMATCH',
+                    `${generationPath}/request_receipt`,
+                    'Derivation request receipt identity must match its executed generation',
+                    derivationGeneration.id,
+                );
+            }
+        }
+        if (derivationGeneration.usage !== undefined) {
+            validateUsage(derivationGeneration.usage, `${generationPath}/usage`, add, derivationGeneration.id);
+        }
+        if (
+            derivationGeneration.timestamps.started_at !== undefined &&
+            derivationGeneration.timestamps.completed_at !== undefined &&
+            compareTimestamps(
+                derivationGeneration.timestamps.started_at,
+                derivationGeneration.timestamps.completed_at,
+            ) > 0
+        ) {
+            add(
+                'TIMESTAMP_ORDER_INVALID',
+                `${generationPath}/timestamps/completed_at`,
+                'Derivation generation completed_at cannot be earlier than started_at',
+                derivationGeneration.id,
+            );
+        }
+    }
 }
 
 export function validateConversationSemantics(document: ConversationDocument): ConversationDiagnostic[] {

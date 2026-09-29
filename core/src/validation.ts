@@ -1,7 +1,7 @@
 import type { CompletionResult, JSONValue, ResultValidationError } from '@llumiverse/common';
 import { Ajv, type ValidateFunction } from 'ajv';
 import addFormats from 'ajv-formats';
-import { extractAndParseJSON } from './json.js';
+import { extractAndParseJSON, parseJSON } from './json.js';
 import { resolveField } from './resolver.js';
 
 const ajv = new Ajv({
@@ -60,42 +60,124 @@ export class ValidationError extends Error implements ResultValidationError {
     }
 }
 
-function parseCompletionAsJson(data: CompletionResult[]) {
-    let lastError: ValidationError | undefined;
-    for (const part of data) {
-        if (part.type === 'text') {
-            const text = part.value.trim();
-            try {
-                return extractAndParseJSON(text);
-            } catch (error: unknown) {
-                lastError = new ValidationError('json_error', errorMessage(error));
-            }
-        }
+export interface CanonicalStructuredOutput {
+    value: JSONValue;
+    /** Exact answer-text partitions which produced `value`, in provider order. */
+    source_texts: string[];
+}
+
+export type CompletionResultNormalization =
+    | {
+          status: 'valid';
+          result: CompletionResult[];
+          structured_output: CanonicalStructuredOutput;
+      }
+    | {
+          status: 'invalid';
+          result: CompletionResult[];
+          error: ValidationError;
+      };
+
+function parseCompletionAsJson(data: CompletionResult[]): CanonicalStructuredOutput {
+    const sourceTexts = data.flatMap((part) => (part.type === 'text' ? [part.value] : []));
+    if (sourceTexts.length === 0) {
+        throw new ValidationError('json_error', 'No JSON compatible response found in completion result');
     }
-    if (!lastError) {
-        lastError = new ValidationError('json_error', 'No JSON compatible response found in completion result');
+    const source = sourceTexts.join('').trim();
+    let lastError: ValidationError | undefined;
+    try {
+        return { value: parseStructuredOutputText(source), source_texts: sourceTexts };
+    } catch (error: unknown) {
+        lastError = new ValidationError('json_error', errorMessage(error));
+    }
+
+    // Preserve the historical fallback for providers which return multiple independent
+    // alternatives as text results. Streaming and multipart responses are handled by the
+    // joined parse above, while this still accepts the first independently valid value.
+    for (const text of sourceTexts) {
+        try {
+            return { value: parseStructuredOutputText(text.trim()), source_texts: sourceTexts };
+        } catch (error: unknown) {
+            lastError = new ValidationError('json_error', errorMessage(error));
+        }
     }
     throw lastError;
 }
 
-export function validateResult(data: CompletionResult[], schema: object): CompletionResult[] {
+function parseStructuredOutputText(text: string): JSONValue {
+    try {
+        return JSON.parse(text) as JSONValue;
+    } catch (exactError: unknown) {
+        const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(text);
+        if (fenced !== null) return parseJSON(fenced[1]);
+        try {
+            return extractAndParseJSON(text);
+        } catch {
+            try {
+                return parseJSON(text);
+            } catch {
+                throw exactError;
+            }
+        }
+    }
+}
+
+function normalizeValidatedResult(data: CompletionResult[], json: JSONValue): CompletionResult[] {
+    const validatedResult: CompletionResult = { type: 'json', value: json };
+    const firstContentIndex = data.findIndex((part) => part.type === 'text' || part.type === 'json');
+    if (firstContentIndex === -1) return [...data, validatedResult];
+
+    return data.reduce<CompletionResult[]>((results, part, index) => {
+        if (part.type !== 'text' && part.type !== 'json') {
+            results.push(part);
+        } else if (index === firstContentIndex) {
+            results.push(validatedResult);
+        }
+        return results;
+    }, []);
+}
+
+export function normalizeCompletionResult(data: CompletionResult[], schema: object): CompletionResultNormalization {
     let json: JSONValue;
+    let sourceTexts: string[] = [];
     if (Array.isArray(data)) {
         const jsonResults = data.filter((r) => r.type === 'json');
         if (jsonResults.length > 0) {
-            json = jsonResults[0].value;
+            json = structuredClone(jsonResults[0].value);
         } else {
             try {
-                json = parseCompletionAsJson(data);
+                const parsed = parseCompletionAsJson(data);
+                json = parsed.value;
+                sourceTexts = parsed.source_texts;
             } catch (error: unknown) {
-                throw new ValidationError('json_error', errorMessage(error));
+                return {
+                    status: 'invalid',
+                    result: data,
+                    error:
+                        error instanceof ValidationError
+                            ? error
+                            : new ValidationError('json_error', errorMessage(error)),
+                };
             }
         }
     } else {
-        throw new Error('Data to validate must be an array');
+        return {
+            status: 'invalid',
+            result: data,
+            error: new ValidationError('validation_error', 'Data to validate must be an array'),
+        };
     }
 
-    const validate = compileSchema(schema);
+    let validate: ValidateFunction;
+    try {
+        validate = compileSchema(schema);
+    } catch (error: unknown) {
+        return {
+            status: 'invalid',
+            result: data,
+            error: new ValidationError('validation_error', errorMessage(error)),
+        };
+    }
     const valid = validate(json);
 
     if (!valid && validate.errors) {
@@ -125,24 +207,23 @@ export function validateResult(data: CompletionResult[], schema: object): Comple
             const errorsMessage = errors
                 .map((e) => `${e.instancePath}: ${e.message}\n${JSON.stringify(e.params)}`)
                 .join(',\n\n');
-            throw new ValidationError('validation_error', errorsMessage);
+            return {
+                status: 'invalid',
+                result: data,
+                error: new ValidationError('validation_error', errorsMessage),
+            };
         }
     }
 
-    // Structured-output validation applies only to response content. Thoughts are
-    // separate first-class results and must remain available to callers.
-    const validatedResult: CompletionResult = { type: 'json', value: json };
-    const firstContentIndex = data.findIndex((part) => part.type !== 'thoughts');
-    if (firstContentIndex === -1) {
-        return [validatedResult];
-    }
+    return {
+        status: 'valid',
+        result: normalizeValidatedResult(data, json),
+        structured_output: { value: json, source_texts: sourceTexts },
+    };
+}
 
-    return data.reduce<CompletionResult[]>((results, part, index) => {
-        if (part.type === 'thoughts') {
-            results.push(part);
-        } else if (index === firstContentIndex) {
-            results.push(validatedResult);
-        }
-        return results;
-    }, []);
+export function validateResult(data: CompletionResult[], schema: object): CompletionResult[] {
+    const normalized = normalizeCompletionResult(data, schema);
+    if (normalized.status === 'invalid') throw normalized.error;
+    return normalized.result;
 }

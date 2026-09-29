@@ -21,6 +21,7 @@ import {
     type JSONSchema,
     LlumiverseError,
     ModelType,
+    normalizeCompletionResult,
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
     type OpenAiDalleOptions,
@@ -530,7 +531,16 @@ export class OpenAIResponsesProtocol {
             : await driver.service.responses.create(request);
 
         return mapResponseStream(stream, includeThoughts, async (response) => {
-            const decoded = await decodeOpenAIResponsesCanonicalResponse({ response, prepared });
+            const finalCompletion = driver.extractDataFromResponse(options, response);
+            const normalized =
+                !finalCompletion.tool_use?.length && options.result_schema
+                    ? normalizeCompletionResult(finalCompletion.result, options.result_schema)
+                    : undefined;
+            const decoded = await decodeOpenAIResponsesCanonicalResponse({
+                response,
+                prepared,
+                ...(normalized?.status === 'valid' ? { structured_output: normalized.structured_output } : {}),
+            });
             return appendOpenAIResponsesCanonicalResponse(prepared, decoded);
         });
     }
@@ -652,10 +662,15 @@ export class OpenAIResponsesProtocol {
         }
 
         const fallbackItems = res.output.length === 0 ? createAssistantMessageFromCompletion(completion) : undefined;
+        const normalized =
+            !completion.tool_use?.length && options.result_schema
+                ? normalizeCompletionResult(completion.result, options.result_schema)
+                : undefined;
         const decoded = await decodeOpenAIResponsesCanonicalResponse({
             response: res,
             prepared,
             fallback_items: fallbackItems,
+            ...(normalized?.status === 'valid' ? { structured_output: normalized.structured_output } : {}),
         });
         completion.conversation = appendOpenAIResponsesCanonicalResponse(prepared, decoded);
 

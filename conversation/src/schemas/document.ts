@@ -92,6 +92,7 @@ export const CompactionRecordSchema = z
         fidelity: z.enum(['value_preserving', 'reversible_representation', 'heuristic', 'semantic', 'retrievable']),
         retained_asset_ids: z.array(IdentifierSchema),
         generation_ids: z.array(IdentifierSchema),
+        derivation_generation: GenerationSchema.optional(),
         supersedes_compaction_id: IdentifierSchema.optional(),
         created_at: TimestampSchema,
         metadata: MetadataSchema.optional(),

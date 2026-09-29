@@ -26,6 +26,7 @@ import {
     type ToolResultBlock,
     type UserContentBlock,
 } from '@llumiverse/conversation';
+import type { CanonicalStructuredOutput } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import {
     acceptedCanonicalResponse,
@@ -42,6 +43,13 @@ import {
     resolveConversationRuntime,
     selectedCanonicalTurns,
 } from '../conversation/canonical-runtime.js';
+import {
+    assertStructuredOutputEvidence,
+    normalizeDecodedStructuredOutput,
+    parseStructuredOutputEvidence,
+    remapStructuredOutputReplayDependencies,
+    structuredOutputEvidence,
+} from '../conversation/structured-output.js';
 
 export const OPENAI_RESPONSES_PROTOCOL = 'openai.responses' as const;
 export const OPENAI_RESPONSES_ADAPTER_VERSION = '2026-09-12.canonical.1' as const;
@@ -75,7 +83,7 @@ function requireFunctionCallOutput(
 }
 
 interface ReplayTextEntry extends JsonObject {
-    kind: 'text' | 'reasoning';
+    kind: 'text' | 'reasoning' | 'structured_json';
     block_id: string;
     item_index: number;
     content_index: number;
@@ -97,11 +105,12 @@ interface ReplayAssetEntry extends JsonObject {
 
 type ReplaySemanticEntry = ReplayTextEntry | ReplayToolCallEntry | ReplayAssetEntry;
 
-interface OpenAIResponsesReplayPayload extends JsonObject {
+type OpenAIResponsesReplayPayload = JsonObject & {
     type: 'openai_responses_items';
     items: JsonValue[];
     semantic_entries: ReplaySemanticEntry[];
-}
+    structured_output?: JsonObject;
+};
 
 interface ConvertedRecords {
     turns: ConversationTurn[];
@@ -873,6 +882,26 @@ function rawAt(payload: OpenAIResponsesReplayPayload, entry: ReplaySemanticEntry
     return item as Record<string, unknown>;
 }
 
+function replayText(raw: Record<string, unknown>, entry: ReplayTextEntry, semantic?: ContentBlock): unknown {
+    if (raw.type === 'function_call_output') {
+        const part = Array.isArray(raw.output) ? raw.output[entry.content_index] : undefined;
+        return typeof part === 'object' && part !== null && !Array.isArray(part)
+            ? ownValue(part, 'text')
+            : entry.content_index === 0 && typeof raw.output === 'string'
+              ? raw.output
+              : undefined;
+    }
+    if (entry.kind === 'reasoning') {
+        const collection =
+            semantic?.type === 'reasoning' && semantic.representation === 'summary' ? raw.summary : raw.content;
+        const part = Array.isArray(collection) ? collection[entry.content_index] : undefined;
+        return typeof part === 'object' && part !== null && !Array.isArray(part) ? ownValue(part, 'text') : undefined;
+    }
+    if (typeof raw.content === 'string' && entry.content_index === 0) return raw.content;
+    const part = Array.isArray(raw.content) ? raw.content[entry.content_index] : undefined;
+    return typeof part === 'object' && part !== null && !Array.isArray(part) ? ownValue(part, 'text') : undefined;
+}
+
 function stableJson(value: unknown): string {
     if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
     if (typeof value === 'object' && value !== null) {
@@ -913,6 +942,15 @@ function assertReplaySemantics(
     const expectedIds = [...block.dependencies.block_ids].sort();
     if (JSON.stringify(actualIds) !== JSON.stringify(expectedIds)) {
         throw new TypeError(`OpenAI Responses replay block ${block.id} no longer matches its semantic blocks`);
+    }
+    if (payload.structured_output !== undefined) {
+        const evidence = parseStructuredOutputEvidence(payload.structured_output);
+        const sourceTexts = payload.semantic_entries.flatMap((entry) => {
+            if (entry.kind !== 'structured_json') return [];
+            const text = replayText(rawAt(payload, entry), entry);
+            return typeof text === 'string' ? [text] : [];
+        });
+        assertStructuredOutputEvidence(turn, evidence, sourceTexts, block.id);
     }
     for (const entry of payload.semantic_entries) {
         const semantic = blocks.get(entry.block_id);
@@ -968,6 +1006,12 @@ function assertReplaySemantics(
                     );
                 }
             }
+        } else if (entry.kind === 'structured_json') {
+            if (semantic.type !== 'json' || typeof replayText(raw, entry) !== 'string') {
+                throw new TypeError(
+                    `OpenAI Responses structured replay ${entry.block_id} has incompatible canonical data`,
+                );
+            }
         } else {
             let semanticText: string;
             if (entry.kind === 'reasoning') {
@@ -985,32 +1029,7 @@ function assertReplaySemantics(
                 }
                 semanticText = semantic.text;
             }
-            let text: unknown;
-            if (raw.type === 'function_call_output') {
-                const part = Array.isArray(raw.output) ? raw.output[entry.content_index] : undefined;
-                text =
-                    typeof part === 'object' && part !== null && !Array.isArray(part)
-                        ? ownValue(part, 'text')
-                        : entry.content_index === 0 && typeof raw.output === 'string'
-                          ? raw.output
-                          : undefined;
-            } else if (entry.kind === 'reasoning') {
-                const collection =
-                    semantic.type === 'reasoning' && semantic.representation === 'summary' ? raw.summary : raw.content;
-                const part = Array.isArray(collection) ? collection[entry.content_index] : undefined;
-                text =
-                    typeof part === 'object' && part !== null && !Array.isArray(part)
-                        ? ownValue(part, 'text')
-                        : undefined;
-            } else if (typeof raw.content === 'string' && entry.content_index === 0) {
-                text = raw.content;
-            } else {
-                const part = Array.isArray(raw.content) ? raw.content[entry.content_index] : undefined;
-                text =
-                    typeof part === 'object' && part !== null && !Array.isArray(part)
-                        ? ownValue(part, 'text')
-                        : undefined;
-            }
+            const text = replayText(raw, entry, semantic);
             if (text !== semanticText) {
                 throw new TypeError(`OpenAI Responses replay text ${entry.block_id} no longer matches canonical data`);
             }
@@ -1342,6 +1361,7 @@ export async function decodeOpenAIResponsesCanonicalResponse(input: {
     response: OpenAI.Responses.Response;
     prepared: PreparedOpenAIResponsesConversation;
     fallback_items?: OpenAIResponsesInputItem[];
+    structured_output?: CanonicalStructuredOutput;
 }): Promise<DecodedConversationResponse> {
     const { response, prepared } = input;
     if (response.status !== 'completed' && response.status !== 'incomplete') {
@@ -1412,7 +1432,7 @@ export async function decodeOpenAIResponsesCanonicalResponse(input: {
             ? { metadata: { openai_responses: { service_tier: response.service_tier } } }
             : {}),
     };
-    return {
+    const decoded: DecodedConversationResponse = {
         turns: [turn],
         generation,
         assets: records.assets.map((asset) => ({
@@ -1422,6 +1442,34 @@ export async function decodeOpenAIResponsesCanonicalResponse(input: {
         diagnostics: [],
         payload_fingerprint: await fingerprintJson(providerJsonValue(response)),
     };
+    if (input.structured_output === undefined) return decoded;
+    return normalizeDecodedStructuredOutput(decoded, input.structured_output, ({ replay_blocks, binding }) => {
+        if (replay_blocks.length !== 1) {
+            throw new TypeError(`OpenAI Responses structured output turn ${turn.id} requires one replay block`);
+        }
+        const replay = remapStructuredOutputReplayDependencies(replay_blocks[0], binding);
+        const payload = rawReplayPayload(replay);
+        const sources = new Set(binding.source_block_ids);
+        let sourceCount = 0;
+        const semanticEntries = payload.semantic_entries.map((entry): ReplaySemanticEntry => {
+            if (entry.kind !== 'text' || !sources.has(entry.block_id)) return entry;
+            sourceCount += 1;
+            return { ...entry, kind: 'structured_json', block_id: binding.block_id };
+        });
+        if (sourceCount !== binding.source_texts.length) {
+            throw new TypeError('OpenAI Responses structured output replay is missing source text partitions');
+        }
+        return [
+            {
+                ...replay,
+                payload: {
+                    ...payload,
+                    semantic_entries: semanticEntries,
+                    structured_output: structuredOutputEvidence(binding),
+                },
+            },
+        ];
+    });
 }
 
 export function appendOpenAIResponsesCanonicalResponse(

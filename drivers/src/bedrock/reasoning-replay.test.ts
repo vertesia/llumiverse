@@ -1,5 +1,7 @@
 import type { ConverseRequest, ConverseResponse, ConverseStreamOutput } from '@aws-sdk/client-bedrock-runtime';
+import { parseConversationDocument } from '@llumiverse/conversation';
 import { describe, expect, it, vi } from 'vitest';
+import { exportLegacyBedrockConverseConversation } from './bedrock-converse-conversation-adapter.js';
 import { BedrockDriver, excludesBedrockReasoningReplay } from './index.js';
 
 const MODEL = 'anthropic.claude-sonnet-4-6-v1:0';
@@ -101,22 +103,22 @@ describe('Bedrock native reasoning replay', () => {
         const results = [];
         for await (const chunk of stream) results.push(...chunk.result);
         const conversation = await stream.finalizeConversation?.();
+        const projected = exportLegacyBedrockConverseConversation(parseConversationDocument(conversation), {
+            provider: 'bedrock',
+            model: MODEL,
+        });
 
         expect(results).toEqual([{ type: 'text', value: 'answer' }]);
-        expect(conversation).toMatchObject({
-            messages: expect.arrayContaining([
-                {
-                    role: 'assistant',
-                    content: [
-                        { reasoningContent: { reasoningText: { text: 'plan more', signature: 'stream-signature' } } },
-                        { text: 'answer' },
-                        { toolUse: { toolUseId: 'call-1', name: 'lookup', input: { city: 'Paris' } } },
-                        { reasoningContent: { redactedContent: { _base64: 'CQg=' } } },
-                    ],
-                },
-            ]),
+        expect(projected.messages?.at(-1)).toEqual({
+            role: 'assistant',
+            content: [
+                { reasoningContent: { reasoningText: { text: 'plan more', signature: 'stream-signature' } } },
+                { text: 'answer' },
+                { toolUse: { toolUseId: 'call-1', name: 'lookup', input: { city: 'Paris' } } },
+                { reasoningContent: { redactedContent: new Uint8Array([9, 8]) } },
+            ],
         });
-        const persistedContent = (conversation as ConverseRequest).messages?.at(-1)?.content;
+        const persistedContent = projected.messages?.at(-1)?.content;
         expect(persistedContent).not.toContainEqual(
             expect.objectContaining({
                 toolUse: expect.objectContaining({ toolUseId: 'call-truncated' }),
@@ -124,7 +126,7 @@ describe('Bedrock native reasoning replay', () => {
         );
     });
 
-    it('applies caller stripping to unsigned reasoning without modifying the reasoning block', async () => {
+    it('retains unsigned reasoning canonically while excluding it from continuation history', async () => {
         const reasoningContent = { reasoningText: { text: 'unsigned reasoning text' } };
         const response: ConverseResponse = {
             output: {
@@ -149,10 +151,19 @@ describe('Bedrock native reasoning replay', () => {
             },
             { model: MODEL, stripTextMaxTokens: 1 },
         );
-        const conversation = result.conversation as ConverseRequest;
+        const document = parseConversationDocument(result.conversation);
+        const conversation = exportLegacyBedrockConverseConversation(document, {
+            provider: 'bedrock',
+            model: MODEL,
+        });
 
-        expect(conversation.messages?.[0]?.content?.[0]?.text).toContain('[Content truncated');
-        expect(conversation.messages?.at(-1)?.content?.[0]).toEqual({ reasoningContent });
+        expect(conversation.messages?.[0]?.content?.[0]?.text).toBe('a deliberately long prior message');
+        expect(conversation.messages?.at(-1)?.content).toEqual([{ text: 'answer' }]);
+        expect(
+            document.turns.some((turn) =>
+                turn.blocks.some((block) => block.type === 'reasoning' && block.text === 'unsigned reasoning text'),
+            ),
+        ).toBe(true);
     });
 
     it('keeps the DeepSeek replay exclusion narrow', () => {

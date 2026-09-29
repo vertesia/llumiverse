@@ -63,7 +63,7 @@ describe('Gemini tool result attachments', () => {
         const contents = await createPrompt([toolSegment([source('https://signed.example/plot.png')])]);
 
         expect(contents[0].parts?.[0].functionResponse).toEqual({
-            name: 'view_image',
+            id: 'view_image',
             response: { artifact_path: 'out/plot.png' },
             parts: [{ inlineData: { data: 'AQID', mimeType: 'image/jpeg' } }],
         });
@@ -83,7 +83,7 @@ describe('Gemini tool result attachments', () => {
         const contents = await createPrompt([toolSegment()]);
 
         expect(contents[0].parts?.[0].functionResponse).toEqual({
-            name: 'view_image',
+            id: 'view_image',
             response: { artifact_path: 'out/plot.png' },
         });
         expect(contents[0].parts?.[0].functionResponse).not.toHaveProperty('parts');

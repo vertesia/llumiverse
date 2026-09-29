@@ -122,6 +122,57 @@ describe('OpenAI Responses independent canonical conformance', () => {
         expect(document.turns).toHaveLength(2);
     });
 
+    it('resolves a selected compaction replacement turn without adding it to source history', async () => {
+        const { document: imported } = await importHistory(
+            [{ role: 'user', content: 'Older detail.' }],
+            'responses-compacted',
+        );
+        const document = structuredClone(imported);
+        const sourceTurn = document.turns[0];
+        const replacement = {
+            id: 'summary-turn',
+            kind: 'agent' as const,
+            authority: 'ordinary' as const,
+            status: 'completed' as const,
+            timestamps: { recorded_at: recordedAt, completed_at: recordedAt },
+            model_visibility: 'include' as const,
+            provenance: {
+                type: 'derived' as const,
+                derivation_id: 'compaction-1',
+                source_turn_ids: [sourceTurn.id],
+                source_hash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            },
+            blocks: [
+                { id: 'summary-block', type: 'text' as const, text: 'Compact summary.', format: 'plain' as const },
+            ],
+        };
+        document.compactions['compaction-1'] = {
+            id: 'compaction-1',
+            operation_id: 'checkpoint-1',
+            strategy: {
+                id: 'workflow_checkpoint_summary',
+                version: '1',
+                configuration_fingerprint: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            },
+            source: {
+                turn_ids: [sourceTurn.id],
+                source_fingerprint: 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+            },
+            replacement_turns: [replacement],
+            fidelity: 'semantic',
+            retained_asset_ids: [],
+            generation_ids: [],
+            created_at: recordedAt,
+        };
+        document.context.entries = [
+            { id: 'summary-context', type: 'replacement_turn', compaction_id: 'compaction-1', turn_id: replacement.id },
+        ];
+
+        expect(selectedCanonicalTurns(document)).toEqual([replacement]);
+        expect(document.turns).toEqual(imported.turns);
+        expect(JSON.stringify(compileOpenAIResponsesConversation(document).conversation)).toContain('Compact summary.');
+    });
+
     it('rejects protected replay outside its provider or model scope and on a different protocol', async () => {
         const { document } = await importHistory(protectedHistory, 'responses-protected');
 

@@ -22,6 +22,7 @@ import {
     type ToolResultContentBlock,
 } from '@aws-sdk/client-bedrock-runtime';
 import { S3Client } from '@aws-sdk/client-s3';
+import { isConversationDocumentFormat } from '@llumiverse/conversation';
 import {
     type AIModel,
     type BedrockClaudeOptions,
@@ -73,6 +74,14 @@ import { truncateBinaryForDebug, uint8ArrayToBase64ForDebug } from '../shared/de
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
 import {
+    appendBedrockConverseCanonicalResponse,
+    compileBedrockConverseConversation,
+    decodeBedrockConverseCanonicalResponse,
+    finalizeBedrockConversePreparedRequest,
+    type PreparedBedrockConverseConversation,
+    prepareBedrockConverseCanonicalState,
+} from './bedrock-converse-conversation-adapter.js';
+import {
     converseConcatMessages,
     converseJSONprefill,
     converseSystemToMessages,
@@ -87,6 +96,25 @@ import { forceUploadFile } from './s3.js';
 import { formatTwelvelabsPegasusPrompt, type TwelvelabsPegasusRequest } from './twelvelabs.js';
 
 export type { BedrockDriverOptions } from '../driver-options.js';
+export type {
+    BedrockConverseConversation,
+    BedrockConverseFamilyCapabilities,
+    CompiledBedrockConversation,
+    ImportBedrockConverseConversationOptions,
+    PreparedBedrockConverseConversation,
+} from './bedrock-converse-conversation-adapter.js';
+export {
+    appendBedrockConverseCanonicalResponse,
+    bedrockConverseFamilyCapabilities,
+    bedrockConverseGenerationUsage,
+    compileBedrockConverseConversation,
+    decodeBedrockConverseCanonicalResponse,
+    exportLegacyBedrockConverseConversation,
+    finalizeBedrockConversePreparedRequest,
+    importBedrockConverseConversation,
+    isBedrockConverseHistory,
+    prepareBedrockConverseCanonicalState,
+} from './bedrock-converse-conversation-adapter.js';
 
 const supportStreamingCache = new LRUCache<string, boolean>({ max: 4096 });
 
@@ -165,65 +193,98 @@ function converseFinishReason(reason: string | undefined) {
     }
 }
 
+function canonicalBedrockTokenUsage(
+    prepared: Omit<PreparedBedrockConverseConversation, 'payload' | 'receipt' | 'diagnostics'>,
+): ExecutionTokenUsage | undefined {
+    const usage = prepared.accepted_response?.generation.usage;
+    if (usage === undefined) return undefined;
+    return {
+        prompt: usage.input_tokens,
+        prompt_new: usage.input_new_tokens,
+        result: usage.output_tokens,
+        total: usage.total_tokens,
+        prompt_cached: usage.cache_read_tokens,
+        prompt_cache_write: usage.cache_write_tokens,
+    };
+}
+
+function acceptedBedrockMessage(
+    prepared: Omit<PreparedBedrockConverseConversation, 'payload' | 'receipt' | 'diagnostics'>,
+): Message {
+    const accepted = prepared.accepted_response;
+    if (accepted === undefined) throw new Error('No accepted Bedrock Converse response is available');
+    const compiled = compileBedrockConverseConversation(prepared.document, {
+        provider: prepared.provider,
+        model: prepared.requested_model,
+    });
+    const mapping = compiled.mappings.find(
+        (candidate) => candidate.kind === 'turn' && candidate.canonical_id === accepted.turn.id,
+    );
+    const match = mapping === undefined ? undefined : /^messages\/(\d+)$/.exec(mapping.native_id);
+    const message = match == null ? undefined : compiled.conversation.messages?.[Number(match[1])];
+    if (message?.role !== 'assistant') {
+        throw new Error(`Accepted Bedrock Converse turn ${accepted.turn.id} has no native assistant projection`);
+    }
+    return message;
+}
+
+function completionFromBedrockMessage(message: Message): {
+    result: CompletionResult[];
+    tool_use?: ToolUse<unknown>[];
+} {
+    const result: CompletionResult[] = [];
+    const toolUse: ToolUse<unknown>[] = [];
+    for (const block of message.content ?? []) {
+        if (block.text !== undefined) result.push({ type: 'text', value: block.text });
+        if (block.reasoningContent?.reasoningText?.text !== undefined) {
+            result.push({ type: 'thoughts', value: block.reasoningContent.reasoningText.text });
+        }
+        if (block.toolUse !== undefined) {
+            toolUse.push({
+                id: block.toolUse.toolUseId ?? '',
+                tool_name: block.toolUse.name ?? '',
+                tool_input: block.toolUse.input,
+            });
+        }
+    }
+    return { result, ...(toolUse.length === 0 ? {} : { tool_use: toolUse }) };
+}
+
+function recoverBedrockCompletion(
+    prepared: Omit<PreparedBedrockConverseConversation, 'payload' | 'receipt' | 'diagnostics'>,
+    options: ExecutionOptions,
+): Completion {
+    const accepted = prepared.accepted_response;
+    if (accepted === undefined) throw new Error('No accepted Bedrock Converse response is available');
+    if (options.include_original_response) {
+        throw new Error('An idempotently recovered Bedrock Converse response cannot reconstruct original_response');
+    }
+    const projected = completionFromBedrockMessage(acceptedBedrockMessage(prepared));
+    return {
+        ...projected,
+        token_usage: canonicalBedrockTokenUsage(prepared),
+        finish_reason:
+            projected.tool_use === undefined ? converseFinishReason(accepted.generation.finish_reason) : 'tool_use',
+        conversation: prepared.document,
+    };
+}
+
+function recoveredBedrockStream(completion: Completion): DriverCompletionStream {
+    const stream = (async function* (): AsyncIterable<CompletionChunkObject> {
+        yield {
+            result: completion.result,
+            tool_use: completion.tool_use,
+            token_usage: completion.token_usage,
+            finish_reason: completion.finish_reason,
+            service_tier: completion.service_tier,
+        };
+    })();
+    return Object.assign(stream, { finalizeConversation: () => completion.conversation });
+}
+
 export function excludesBedrockReasoningReplay(model: string): boolean {
     const modelId = model.toLowerCase().split('/').pop() ?? '';
     return /^(?:(?:us|eu|apac)\.)?deepseek\.r1-v1(?::\d+)?$/.test(modelId);
-}
-
-function isBedrockReasoningBlock(value: unknown): boolean {
-    return typeof value === 'object' && value !== null && 'reasoningContent' in value;
-}
-
-function hasBedrockReasoningSignature(conversation: ConverseRequest): boolean {
-    return !!conversation.messages?.some((message) =>
-        message.content?.some(
-            (block) =>
-                block.reasoningContent?.reasoningText?.signature !== undefined &&
-                block.reasoningContent.reasoningText.signature.length > 0,
-        ),
-    );
-}
-
-function finalizeBedrockConversation(
-    conversation: ConverseRequest,
-    assistantMessage: Message,
-    options: ExecutionOptions,
-): ConverseRequest {
-    const replayMessage = excludesBedrockReasoningReplay(options.model)
-        ? {
-              ...assistantMessage,
-              content: assistantMessage.content?.filter((block) => !('reasoningContent' in block)),
-          }
-        : assistantMessage;
-    let completed = updateConversation(conversation, {
-        messages: [replayMessage],
-        modelId: conversation.modelId,
-    });
-    completed = incrementConversationTurn(completed) as ConverseRequest;
-    const currentTurn = getConversationMeta(completed).turnNumber;
-
-    // Bedrock signatures hash every prior message. Applying any caller cleanup to a signed
-    // chain makes the next Converse request fail, so only storage-safe serialization is valid.
-    if (hasBedrockReasoningSignature(completed)) {
-        return stripBinaryFromConversation(completed, {
-            keepForTurns: Infinity,
-            currentTurn,
-        }) as ConverseRequest;
-    }
-
-    const stripOptions = {
-        keepForTurns: options.stripImagesAfterTurns ?? Infinity,
-        currentTurn,
-        textMaxTokens: options.stripTextMaxTokens,
-        preserveSubtree: isBedrockReasoningBlock,
-    };
-    let processed = stripBinaryFromConversation(completed, stripOptions);
-    processed = truncateLargeTextInConversation(processed, stripOptions);
-    processed = stripHeartbeatsFromConversation(processed, {
-        keepForTurns: options.stripHeartbeatsAfterTurns ?? 1,
-        currentTurn,
-    });
-    return processed as ConverseRequest;
 }
 
 function appendBytes(left: Uint8Array | undefined, right: Uint8Array): Uint8Array {
@@ -1127,12 +1188,26 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         // Handle other Bedrock models that use Converse API
         const conversePrompt = prompt as ConverseRequest;
-
-        // Deserialize any base64-encoded binary data back to Uint8Array before API call
-        const incomingConversation = deserializeBinaryFromStorage(options.conversation) as ConverseRequest;
-        const conversation = updateConversation(incomingConversation, conversePrompt);
-
+        const canonicalState = await prepareBedrockConverseCanonicalState({
+            conversation: isConversationDocumentFormat(options.conversation)
+                ? options.conversation
+                : deserializeBinaryFromStorage(options.conversation),
+            prompt: conversePrompt,
+            options,
+            provider: this.provider,
+        });
+        if (canonicalState.accepted_response !== undefined) {
+            return recoverBedrockCompletion(canonicalState, options);
+        }
+        const conversation: ConverseRequest = {
+            ...canonicalState.native_conversation,
+            modelId: options.model,
+        };
         const payload = this.preparePayload(conversation, options);
+        const prepared = await finalizeBedrockConversePreparedRequest(
+            { ...canonicalState, native_conversation: conversation },
+            payload,
+        );
         const executorScope = this.getScopedExecutor(options);
 
         let res: ConverseResponse;
@@ -1144,8 +1219,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             executorScope.close();
         }
 
-        const assistantMsg = res.output?.message ?? { content: [{ text: '' }], role: 'assistant' };
-        const processedConversation = finalizeBedrockConversation(conversation, assistantMsg, options);
+        const decoded = await decodeBedrockConverseCanonicalResponse(res, prepared);
+        const processedConversation = appendBedrockConverseCanonicalResponse(prepared, decoded);
 
         let tool_use: ToolUse<unknown>[] | undefined;
         //Get tool requests, we check tool use regardless of finish reason, as you can hit length and still get a valid response.
@@ -1310,13 +1385,26 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
         // Handle other Bedrock models that use Converse API
         const conversePrompt = prompt as ConverseRequest;
-
-        // Include conversation history (same as non-streaming)
-        // Deserialize any base64-encoded binary data back to Uint8Array before API call
-        const incomingConversation = deserializeBinaryFromStorage(options.conversation) as ConverseRequest;
-        const conversation = updateConversation(incomingConversation, conversePrompt);
-
+        const canonicalState = await prepareBedrockConverseCanonicalState({
+            conversation: isConversationDocumentFormat(options.conversation)
+                ? options.conversation
+                : deserializeBinaryFromStorage(options.conversation),
+            prompt: conversePrompt,
+            options,
+            provider: this.provider,
+        });
+        if (canonicalState.accepted_response !== undefined) {
+            return recoveredBedrockStream(recoverBedrockCompletion(canonicalState, options));
+        }
+        const conversation: ConverseRequest = {
+            ...canonicalState.native_conversation,
+            modelId: options.model,
+        };
         const payload = this.preparePayload(conversation, options);
+        const prepared = await finalizeBedrockConversePreparedRequest(
+            { ...canonicalState, native_conversation: conversation },
+            payload,
+        );
         const executorScope = this.getScopedExecutor(options);
         const response = signal
             ? executorScope.executor.converseStream({ ...payload }, { abortSignal: signal })
@@ -1331,18 +1419,51 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
                 const streamingToolBlocks = new Map<number, { id: string; name: string }>();
                 const nativeBlocks = new Map<number, ContentBlock>();
+                let stopReason: ConverseResponse['stopReason'];
+                let usage: ConverseResponse['usage'];
+                let metrics: ConverseResponse['metrics'];
+                let additionalModelResponseFields: ConverseResponse['additionalModelResponseFields'];
+                let trace: ConverseResponse['trace'];
+                let performanceConfig: ConverseResponse['performanceConfig'];
                 const transformedStream = transformAsyncIterator(stream, (streamSegment: ConverseStreamOutput) => {
                     collectBedrockNativeStreamBlock(nativeBlocks, streamSegment);
+                    if (streamSegment.messageStop !== undefined) {
+                        stopReason = streamSegment.messageStop.stopReason;
+                        additionalModelResponseFields = streamSegment.messageStop.additionalModelResponseFields;
+                    }
+                    if (streamSegment.metadata !== undefined) {
+                        usage = streamSegment.metadata.usage;
+                        metrics = streamSegment.metadata.metrics;
+                        trace = streamSegment.metadata.trace;
+                        performanceConfig = streamSegment.metadata.performanceConfig;
+                    }
                     return this.getExtractedStream(streamSegment, conversePrompt, options, streamingToolBlocks);
                 });
                 const scoped = withBedrockRuntimeScope(transformedStream, executorScope);
                 return Object.assign(scoped, {
-                    finalizeConversation: () =>
-                        finalizeBedrockConversation(
-                            conversation,
-                            { role: 'assistant', content: finalizeBedrockNativeBlocks(nativeBlocks) },
-                            options,
-                        ),
+                    finalizeConversation: async () => {
+                        if (stopReason === undefined) {
+                            throw new Error('Bedrock Converse stream ended without a terminal stop reason');
+                        }
+                        const blocks = finalizeBedrockNativeBlocks(nativeBlocks);
+                        const terminalResponse = {
+                            output: {
+                                message: {
+                                    role: 'assistant' as const,
+                                    content: blocks.length === 0 ? [{ text: '' }] : blocks,
+                                },
+                            },
+                            stopReason,
+                            ...(usage === undefined ? {} : { usage }),
+                            ...(metrics === undefined ? {} : { metrics }),
+                            ...(additionalModelResponseFields === undefined ? {} : { additionalModelResponseFields }),
+                            ...(trace === undefined ? {} : { trace }),
+                            ...(performanceConfig === undefined ? {} : { performanceConfig }),
+                            $metadata: res.$metadata,
+                        } as unknown as ConverseResponse;
+                        const decoded = await decodeBedrockConverseCanonicalResponse(terminalResponse, prepared);
+                        return appendBedrockConverseCanonicalResponse(prepared, decoded);
+                    },
                 });
             })
             .catch((err) => {

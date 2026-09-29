@@ -49,6 +49,23 @@ export type {
     GeminiContextCacheCoordinator,
     GeminiContextCacheEntry,
 } from './models/gemini-context-cache.js';
+export type {
+    LegacyGeminiConversation,
+    PreparedGeminiConversation,
+} from './models/gemini-conversation-adapter.js';
+export {
+    appendGeminiCanonicalResponse,
+    compileGeminiConversation,
+    decodeGeminiCanonicalResponse,
+    exportLegacyGeminiConversation,
+    finalizeGeminiPreparedRequest,
+    GEMINI_GENERATE_CONTENT_ADAPTER_VERSION,
+    GEMINI_GENERATE_CONTENT_PROTOCOL,
+    geminiGenerationUsage,
+    geminiToolUsesFromContent,
+    isGeminiGenerateContentHistory,
+    prepareGeminiCanonicalState,
+} from './models/gemini-conversation-adapter.js';
 
 import type { VertexAIDriverOptions } from '../driver-options.js';
 

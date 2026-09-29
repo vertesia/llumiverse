@@ -1,6 +1,6 @@
 import type { CompletionResult } from '@llumiverse/common';
 import { describe, expect, it } from 'vitest';
-import { validateResult } from './validation.js';
+import { normalizeCompletionResult, validateResult } from './validation.js';
 
 describe('validateResult', () => {
     it('preserves thoughts while replacing the response content with validated JSON', () => {
@@ -46,5 +46,65 @@ describe('validateResult', () => {
         expect(() => validateResult(result, { $id: id, type: 'object', required: ['missing'] })).toThrow(
             /must have required property/,
         );
+    });
+
+    it('combines split answer text while preserving interleaved reasoning and media', () => {
+        const result: CompletionResult[] = [
+            { type: 'thoughts', value: 'before' },
+            { type: 'text', value: '```json\n{"answer":' },
+            { type: 'thoughts', value: 'between' },
+            { type: 'image', value: 'data:image/png;base64,AAAA' },
+            { type: 'text', value: '"ok"}\n```' },
+        ];
+
+        expect(validateResult(result, { type: 'object' })).toEqual([
+            { type: 'thoughts', value: 'before' },
+            { type: 'json', value: { answer: 'ok' } },
+            { type: 'thoughts', value: 'between' },
+            { type: 'image', value: 'data:image/png;base64,AAAA' },
+        ]);
+    });
+
+    it.each([
+        ['array', '[1,null,true]', { type: 'array' }, [1, null, true]],
+        ['null', 'null', { type: 'null' }, null],
+        ['string', '"value"', { type: 'string' }, 'value'],
+        ['number', '42', { type: 'number' }, 42],
+        ['boolean', 'true', { type: 'boolean' }, true],
+    ] as const)('normalizes a top-level JSON %s', (_label, text, schema, expected) => {
+        expect(validateResult([{ type: 'text', value: text }], schema)).toEqual([{ type: 'json', value: expected }]);
+    });
+
+    it('retains every raw partition when the historical independent-part fallback succeeds', () => {
+        const normalized = normalizeCompletionResult(
+            [
+                { type: 'text', value: '{"answer":"ok"}' },
+                { type: 'text', value: 'provider trailer' },
+            ],
+            { type: 'object' },
+        );
+
+        expect(normalized).toMatchObject({
+            status: 'valid',
+            result: [{ type: 'json', value: { answer: 'ok' } }],
+            structured_output: {
+                source_texts: ['{"answer":"ok"}', 'provider trailer'],
+            },
+        });
+    });
+
+    it('does not mutate raw JSON evidence when schema validation fails', () => {
+        const value = { discard: 'raw' };
+        const result: CompletionResult[] = [{ type: 'json', value }];
+        const normalized = normalizeCompletionResult(result, {
+            type: 'object',
+            properties: { required: { type: 'string', default: 'inserted' } },
+            required: ['missing'],
+            additionalProperties: false,
+        });
+
+        expect(normalized.status).toBe('invalid');
+        expect(value).toEqual({ discard: 'raw' });
+        expect(result).toEqual([{ type: 'json', value: { discard: 'raw' } }]);
     });
 });

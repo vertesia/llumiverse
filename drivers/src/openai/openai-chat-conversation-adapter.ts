@@ -16,6 +16,7 @@ import {
     type JsonObject,
     type JsonValue,
     type NativeItemMapping,
+    type NativeReplayBlock,
     type NestedToolResultContentBlock,
     type PreparedConversationRequest,
     type ProgramContentBlock,
@@ -25,6 +26,7 @@ import {
     type ToolResultBlock,
     type UserContentBlock,
 } from '@llumiverse/conversation';
+import type { CanonicalStructuredOutput } from '@llumiverse/core';
 import {
     acceptedCanonicalResponse,
     appendCanonicalPrompt,
@@ -40,6 +42,13 @@ import {
     resolveConversationRuntime,
     selectedCanonicalTurns,
 } from '../conversation/canonical-runtime.js';
+import {
+    assertStructuredOutputEvidence,
+    normalizeDecodedStructuredOutput,
+    parseStructuredOutputEvidence,
+    remapStructuredOutputReplayDependencies,
+    structuredOutputEvidence,
+} from '../conversation/structured-output.js';
 import type {
     OpenAIChatCompletionsContentPart,
     OpenAIChatCompletionsImageUrlPart,
@@ -59,6 +68,10 @@ type OpenAIReplayPayload = JsonObject & {
     reasoning_content?: string | null;
     reasoning?: string | null;
     tool_arguments?: Array<{ call_id: string; raw: string }>;
+    structured_output?: JsonObject & {
+        evidence: JsonObject;
+        content: JsonValue;
+    };
 };
 
 export interface PreparedOpenAIChatConversation
@@ -645,6 +658,26 @@ function messageContent(parts: OpenAIChatCompletionsContentPart[]): string | Ope
     return parts;
 }
 
+function chatContentTexts(content: JsonValue): string[] {
+    if (typeof content === 'string') return [content];
+    if (!Array.isArray(content)) return [];
+    return content.flatMap((part) => {
+        if (typeof part !== 'object' || part === null || Array.isArray(part)) return [];
+        return part.type === 'text' && typeof part.text === 'string' ? [part.text] : [];
+    });
+}
+
+function structuredChatContent(
+    turn: ConversationTurn,
+    replay: OpenAIReplayPayload | undefined,
+): OpenAIChatCompletionsMessage['content'] | undefined {
+    const structured = replay?.structured_output;
+    if (structured === undefined) return undefined;
+    const evidence = parseStructuredOutputEvidence(structured.evidence);
+    assertStructuredOutputEvidence(turn, evidence, chatContentTexts(structured.content), `turn:${turn.id}`);
+    return structuredClone(structured.content) as OpenAIChatCompletionsMessage['content'];
+}
+
 function compileTurn(
     turn: ConversationTurn,
     document: ConversationDocument,
@@ -681,6 +714,8 @@ function compileTurn(
         content: messageContent(parts),
     };
     if (turn.kind === 'agent') {
+        const structuredContent = structuredChatContent(turn, replay);
+        if (structuredContent !== undefined) message.content = structuredContent;
         const rawArguments = new Map(replay?.tool_arguments?.map((value) => [value.call_id, value.raw]) ?? []);
         const calls = turn.blocks.flatMap((block) =>
             block.type === 'tool_call'
@@ -998,6 +1033,7 @@ export async function decodeOpenAIChatCanonicalResponse(
     response: OpenAIChatCompletionsResponse,
     prepared: PreparedOpenAIChatConversation,
     finishReason: string | undefined,
+    structuredOutput?: CanonicalStructuredOutput,
 ): Promise<DecodedConversationResponse> {
     const choice = response.choices[0];
     if (choice?.message === undefined) throw new Error('OpenAI Chat response has no first message');
@@ -1056,7 +1092,7 @@ export async function decodeOpenAIChatCanonicalResponse(
         finish_reason: finishReason,
         usage: openAIUsage(response),
     });
-    return {
+    const decoded: DecodedConversationResponse = {
         turns: [finalTurn],
         generation,
         assets: records.assets.map((asset) => ({
@@ -1066,6 +1102,48 @@ export async function decodeOpenAIChatCanonicalResponse(
         diagnostics: [],
         payload_fingerprint: await fingerprintJson(providerJsonValue(response)),
     };
+    if (structuredOutput === undefined) return decoded;
+    const rawContent = providerJsonValue(choice.message.content ?? null);
+    return normalizeDecodedStructuredOutput(decoded, structuredOutput, async ({ replay_blocks, binding }) => {
+        if (replay_blocks.length > 1) {
+            throw new TypeError(`OpenAI Chat turn ${finalTurn.id} has multiple replay blocks`);
+        }
+        const current = replay_blocks[0];
+        const base: NativeReplayBlock =
+            current ??
+            ({
+                id: await entityId('replay', prepared.runtime.response_operation_id, 0),
+                type: 'native_replay',
+                adapter: OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
+                protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+                compatibility_scope: {
+                    provider: prepared.provider,
+                    protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+                    adapter_version: OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
+                },
+                payload: { type: 'openai_chat_assistant_fields' },
+                dependencies: {
+                    turn_ids: [finalTurn.id],
+                    block_ids: binding.source_block_ids,
+                    call_ids: [],
+                    request_ids: [prepared.receipt.request_id],
+                },
+            } satisfies NativeReplayBlock);
+        const replay = remapStructuredOutputReplayDependencies(base, binding);
+        const payload = replay.payload as OpenAIReplayPayload;
+        return [
+            {
+                ...replay,
+                payload: {
+                    ...payload,
+                    structured_output: {
+                        evidence: structuredOutputEvidence(binding),
+                        content: rawContent,
+                    },
+                },
+            },
+        ];
+    });
 }
 
 export function appendOpenAIChatCanonicalResponse(

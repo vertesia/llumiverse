@@ -35,6 +35,7 @@ import {
     type ToolResultBlock,
     type UserContentBlock,
 } from '@llumiverse/conversation';
+import type { CanonicalStructuredOutput } from '@llumiverse/core';
 import {
     acceptedCanonicalResponse,
     appendCanonicalPrompt,
@@ -50,6 +51,13 @@ import {
     resolveConversationRuntime,
     selectedCanonicalTurns,
 } from '../conversation/canonical-runtime.js';
+import {
+    assertStructuredOutputEvidence,
+    normalizeDecodedStructuredOutput,
+    parseStructuredOutputEvidence,
+    remapStructuredOutputReplayDependencies,
+    structuredOutputEvidence,
+} from '../conversation/structured-output.js';
 import type { AnthropicUsageLike, ClaudePrompt } from './claude-messages.js';
 
 export const CLAUDE_MESSAGES_PROTOCOL = 'anthropic.messages' as const;
@@ -74,10 +82,20 @@ interface ClaudeReplayRedactedEntry extends JsonObject {
     kind: 'redacted_thinking';
     data: string;
 }
-type ClaudeReplayEntry = ClaudeReplayCanonicalEntry | ClaudeReplayThinkingEntry | ClaudeReplayRedactedEntry;
+interface ClaudeReplayStructuredJsonEntry extends JsonObject {
+    kind: 'structured_json_fragment';
+    block_id: string;
+    block: JsonObject;
+}
+type ClaudeReplayEntry =
+    | ClaudeReplayCanonicalEntry
+    | ClaudeReplayThinkingEntry
+    | ClaudeReplayRedactedEntry
+    | ClaudeReplayStructuredJsonEntry;
 type ClaudeReplayPayload = JsonObject & {
     type: 'claude_messages_content_order';
     entries: ClaudeReplayEntry[];
+    structured_output?: JsonObject;
 };
 type SourceKind = 'imported' | 'received';
 
@@ -452,6 +470,7 @@ async function assistantMessageRecords(input: {
     tool_definitions: readonly ToolDefinition[];
     provider: string;
     source_history_turn_number?: number;
+    preserve_content_order?: boolean;
 }): Promise<MessageRecords> {
     const nativePath = `messages/${input.message_index}`;
     const turnId = await entityId('turn', input.scope, nativePath);
@@ -493,7 +512,7 @@ async function assistantMessageRecords(input: {
         if (converted.asset !== undefined) assets.push(converted.asset);
         if (converted.replay_entry !== undefined) entries.push(converted.replay_entry);
     }
-    if (entries.some((entry) => entry.kind !== 'canonical')) {
+    if (input.preserve_content_order || entries.some((entry) => entry.kind !== 'canonical')) {
         const replayId = await entityId('replay', input.scope, nativePath);
         blocks.push({
             id: replayId,
@@ -661,6 +680,7 @@ async function messageRecords(input: {
     tool_definitions: readonly ToolDefinition[];
     provider: string;
     source_history_turn_number?: number;
+    preserve_content_order?: boolean;
 }): Promise<MessageRecords> {
     return input.message.role === 'assistant' ? assistantMessageRecords(input) : nonAssistantMessageRecords(input);
 }
@@ -855,10 +875,25 @@ function agentContent(
     const replay = claudeReplay(turn, target);
     const blocks = new Map(turn.blocks.map((block) => [block.id, block]));
     if (replay !== undefined) {
+        if (replay.structured_output !== undefined) {
+            const evidence = parseStructuredOutputEvidence(replay.structured_output);
+            const sourceTexts = replay.entries.flatMap((entry) => {
+                if (entry.kind !== 'structured_json_fragment') return [];
+                const text = entry.block.text;
+                return typeof text === 'string' ? [text] : [];
+            });
+            assertStructuredOutputEvidence(turn, evidence, sourceTexts, `turn:${turn.id}`);
+        }
         return replay.entries.map((entry): ContentBlockParam => {
             if (entry.kind === 'redacted_thinking') return { type: 'redacted_thinking', data: entry.data };
             const block = blocks.get(entry.block_id);
             if (block === undefined) throw new Error(`Claude replay references missing block ${entry.block_id}`);
+            if (entry.kind === 'structured_json_fragment') {
+                if (block.type !== 'json' || entry.block.type !== 'text' || typeof entry.block.text !== 'string') {
+                    throw new Error(`Claude structured replay ${entry.block_id} has incompatible data`);
+                }
+                return structuredClone(entry.block) as unknown as ContentBlockParam;
+            }
             if (entry.kind === 'thinking') {
                 if (block.type !== 'reasoning') {
                     throw new Error(`Claude thinking replay ${entry.block_id} does not reference reasoning`);
@@ -1148,6 +1183,7 @@ function claudeUsage(native: AnthropicUsageLike | undefined): GenerationUsage | 
 export async function decodeClaudeCanonicalResponse(
     response: Message,
     prepared: PreparedClaudeConversation,
+    structuredOutput?: CanonicalStructuredOutput,
 ): Promise<DecodedConversationResponse> {
     if (response.stop_reason === null) {
         throw new Error('Claude Messages response ended without a terminal stop reason');
@@ -1162,6 +1198,7 @@ export async function decodeClaudeCanonicalResponse(
         runtime,
         tool_definitions: prepared.tool_definitions,
         provider: prepared.provider,
+        preserve_content_order: structuredOutput !== undefined,
     });
     const received = records.turns[0];
     if (received?.kind !== 'agent') throw new Error('Claude Messages response did not decode to an agent turn');
@@ -1206,7 +1243,7 @@ export async function decodeClaudeCanonicalResponse(
         finish_reason: response.stop_reason,
         usage: claudeUsage(response.usage),
     });
-    return {
+    const decoded: DecodedConversationResponse = {
         turns: [turn],
         generation,
         assets: records.assets.map((asset) => ({
@@ -1216,6 +1253,43 @@ export async function decodeClaudeCanonicalResponse(
         diagnostics: [],
         payload_fingerprint: await fingerprintJson(providerJsonValue(response)),
     };
+    if (structuredOutput === undefined) return decoded;
+    return normalizeDecodedStructuredOutput(decoded, structuredOutput, ({ replay_blocks, binding }) => {
+        if (replay_blocks.length !== 1) {
+            throw new TypeError(`Claude structured output turn ${turn.id} requires one replay block`);
+        }
+        const replay = remapStructuredOutputReplayDependencies(replay_blocks[0], binding);
+        const payload = replay.payload as ClaudeReplayPayload;
+        const sources = new Set(binding.source_block_ids);
+        let sourceIndex = 0;
+        const entries = payload.entries.map((entry, index): ClaudeReplayEntry => {
+            if (entry.kind !== 'canonical' || !sources.has(entry.block_id)) return entry;
+            const native = response.content[index];
+            const expected = binding.source_texts[sourceIndex];
+            sourceIndex += 1;
+            if (native?.type !== 'text' || native.text !== expected) {
+                throw new TypeError('Claude structured output replay does not match its source text partition');
+            }
+            return {
+                kind: 'structured_json_fragment',
+                block_id: binding.block_id,
+                block: providerJsonValue(native) as JsonObject,
+            };
+        });
+        if (sourceIndex !== binding.source_texts.length) {
+            throw new TypeError('Claude structured output replay is missing source text partitions');
+        }
+        return [
+            {
+                ...replay,
+                payload: {
+                    ...payload,
+                    entries,
+                    structured_output: structuredOutputEvidence(binding),
+                },
+            },
+        ];
+    });
 }
 
 export function appendClaudeCanonicalResponse(

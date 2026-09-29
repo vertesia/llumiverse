@@ -18,6 +18,7 @@ import {
     type JSONObject,
     type JSONSchema,
     ModelType,
+    normalizeCompletionResult,
     normalizeEmbeddingsOptions,
     OPENAI_DEFAULT_EMBEDDING_MODEL,
     type PromptOptions,
@@ -1175,6 +1176,12 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             result,
             prepared,
             typeof choice?.finish_reason === 'string' ? choice.finish_reason : undefined,
+            !tool_use?.length && options.result_schema
+                ? (() => {
+                      const normalized = normalizeCompletionResult(completionResults, options.result_schema);
+                      return normalized.status === 'valid' ? normalized.structured_output : undefined;
+                  })()
+                : undefined,
         );
         const canonicalConversation = appendOpenAIChatCanonicalResponse(prepared, decoded);
 
@@ -1347,7 +1354,17 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                         : { system_fingerprint: responseSystemFingerprint }),
                     ...(responseUsage === undefined ? {} : { usage: responseUsage }),
                 };
-                const decoded = await decodeOpenAIChatCanonicalResponse(response, prepared, responseFinishReason);
+                const finalResults = extractOpenAIChatCompletionsResults(assistantMessage, includeThoughts);
+                const normalized =
+                    nativeToolCalls.size === 0 && options.result_schema
+                        ? normalizeCompletionResult(finalResults, options.result_schema)
+                        : undefined;
+                const decoded = await decodeOpenAIChatCanonicalResponse(
+                    response,
+                    prepared,
+                    responseFinishReason,
+                    normalized?.status === 'valid' ? normalized.structured_output : undefined,
+                );
                 return appendOpenAIChatCanonicalResponse(prepared, decoded);
             },
         });

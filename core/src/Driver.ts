@@ -45,7 +45,7 @@ import {
     resolveDriverRequestTimeoutMs,
 } from './http-agent.js';
 import { createLogger } from './logger.js';
-import { validateResult } from './validation.js';
+import { normalizeCompletionResult } from './validation.js';
 
 export { createLogger } from './logger.js';
 
@@ -322,14 +322,15 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
 
     validateResult(result: Completion, options: ExecutionOptions) {
         if (!result.tool_use && !result.error && options.result_schema) {
-            try {
-                result.result = validateResult(result.result, options.result_schema);
-            } catch (error: unknown) {
-                const validationError = error instanceof Error ? error : new Error(String(error));
-                const rawCode = getObjectProperty(error, 'code');
+            const normalized = normalizeCompletionResult(result.result, options.result_schema);
+            if (normalized.status === 'valid') {
+                result.result = normalized.result;
+            } else {
+                const validationError = normalized.error;
+                const rawCode = getObjectProperty(validationError, 'code');
                 const code = rawCode === 'json_error' || rawCode === 'validation_error' ? rawCode : undefined;
                 const errorMessage = `[${this.provider}] [${options.model}] ${code ? `[${code}] ` : ''}Result validation error: ${validationError.message}`;
-                this.logger.error({ err: error, data: result.result }, errorMessage);
+                this.logger.error({ err: validationError, data: result.result }, errorMessage);
                 result.error = {
                     code: code || 'validation_error',
                     message: validationError.message,
