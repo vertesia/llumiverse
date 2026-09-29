@@ -314,6 +314,7 @@ describe('Bedrock Mantle model routing', () => {
             model,
             content: [{ type: 'text', text: 'ok', citations: null }],
             container: null,
+            diagnostics: null,
             stop_details: null,
             stop_reason: 'end_turn',
             stop_sequence: null,
