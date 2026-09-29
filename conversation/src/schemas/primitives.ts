@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export const CONVERSATION_FORMAT = 'llumiverse.conversation' as const;
 export const CONVERSATION_SCHEMA_VERSION = 0 as const;
-export const CONVERSATION_EXPERIMENTAL_REVISION = '2026-09-11.ingestion.1' as const;
+export const CONVERSATION_EXPERIMENTAL_REVISION = '2026-09-30.adoption.1' as const;
 
 export const IdentifierSchema = z.string().min(1).meta({ id: 'ConversationIdentifier' });
 
@@ -26,7 +26,9 @@ export const ContentHashSchema = z.string().min(1).meta({ id: 'ConversationConte
 
 export const Base64Schema = z
     .string()
-    .regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/)
+    // Spell out each quartet character. V8 overflows on a quantified `{4}` group for multi-megabyte
+    // media, while this equivalent flat quartet remains stack-safe and exports faithfully to JSON Schema.
+    .regex(/^(?:[A-Za-z0-9+/][A-Za-z0-9+/][A-Za-z0-9+/][A-Za-z0-9+/])*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/)
     .meta({ id: 'ConversationBase64' });
 
 // Zod 4's built-in recursive JSON schema provides both a real recursive runtime validator and a

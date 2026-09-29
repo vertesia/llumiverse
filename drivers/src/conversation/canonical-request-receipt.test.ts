@@ -1,7 +1,9 @@
 import {
     type ConversationDocument,
     createConversationDocument,
+    externalizeToolCallArguments,
     type NativeItemMapping,
+    prepareToolArgumentExternalization,
 } from '@llumiverse/conversation';
 import { describe, expect, it } from 'vitest';
 import { createRequestReceipt, type ResolvedConversationRuntimeContext } from './canonical-runtime.js';
@@ -154,5 +156,61 @@ describe('canonical request receipt binding', () => {
                 { canonical_id: 'nested', kind: 'block', native_id: 'messages/2/content/0' },
             ]),
         ).resolves.toMatchObject({ item_mappings: [{ canonical_id: 'call' }, { canonical_id: 'nested' }] });
+    });
+
+    it('binds selected tool argument hydration assets and ignores excluded calls', async () => {
+        const doc = document();
+        doc.turns.push({
+            id: 'agent-write',
+            kind: 'agent',
+            authority: 'ordinary',
+            model_visibility: 'include',
+            status: 'completed',
+            timestamps: { recorded_at: now },
+            provenance: { type: 'inserted' },
+            blocks: [
+                {
+                    id: 'write-block',
+                    type: 'tool_call',
+                    call_id: 'write-call',
+                    tool_name: 'write_artifact',
+                    executor: 'application',
+                    arguments: { type: 'json', value: { name: 'large.txt', content: 'exact content' } },
+                },
+            ],
+        });
+        doc.context.entries.push({ id: 'agent-write-entry', type: 'source_turn', turn_id: 'agent-write' });
+        const prepared = await prepareToolArgumentExternalization(doc, 'write-call', ['content']);
+        const externalized = await externalizeToolCallArguments(doc, {
+            operation_id: 'externalize-write',
+            expected_revision: doc.revision,
+            recorded_at: now,
+            call_id: 'write-call',
+            input_path: ['content'],
+            model_value: { name: 'large.txt', content: '[stored]' },
+            exact_arguments_hash: prepared.exact_arguments_hash,
+            asset: {
+                id: 'write-asset',
+                kind: 'text',
+                mime_type: 'text/plain',
+                storage: { type: 'external', resolver: 'test.artifact', locator: { path: 'write.txt' } },
+                provenance: { type: 'imported', source: 'test' },
+                byte_length: prepared.byte_length,
+                content_hash: prepared.content_hash,
+                created_at: now,
+            },
+        });
+
+        await expect(receipt(externalized.document)).resolves.toMatchObject({
+            asset_versions: [{ asset_id: 'write-asset', content_hash: prepared.content_hash }],
+        });
+
+        const excluded = structuredClone(externalized.document);
+        excluded.context.entries = excluded.context.entries.filter((entry) => entry.turn_id !== 'agent-write');
+        expect((await receipt(excluded)).asset_versions).toEqual([]);
+
+        const missing = structuredClone(externalized.document);
+        delete missing.assets['write-asset'];
+        await expect(receipt(missing)).rejects.toThrow('Selected context references missing asset write-asset');
     });
 });

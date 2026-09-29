@@ -87,6 +87,43 @@ const protectedHistory: OpenAI.Responses.ResponseInputItem[] = [
 ];
 
 describe('OpenAI Responses independent canonical conformance', () => {
+    it('compiles a checkpoint summary before a protected pending-call exchange', async () => {
+        const state = await importHistory(
+            [
+                {
+                    type: 'function_call',
+                    id: 'pending-item',
+                    call_id: 'pending-call',
+                    name: 'lookup',
+                    arguments: '{"city":"Tokyo"}',
+                    status: 'completed',
+                },
+                { type: 'function_call_output', call_id: 'pending-call', output: 'sunny' },
+            ],
+            'responses-checkpoint-sequence',
+        );
+        const document = structuredClone(state.document);
+        document.turns.push({
+            id: 'checkpoint-summary',
+            kind: 'agent',
+            authority: 'ordinary',
+            status: 'completed',
+            timestamps: { recorded_at: recordedAt },
+            provenance: { type: 'received' },
+            model_visibility: 'include',
+            blocks: [{ id: 'checkpoint-text', type: 'text', text: 'Compacted context.', format: 'plain' }],
+        });
+        document.context.entries = [
+            { id: 'checkpoint-entry', type: 'source_turn', turn_id: 'checkpoint-summary' },
+            ...document.context.entries,
+        ];
+        const parsed = parseConversationDocument(document);
+
+        expect(() =>
+            compileOpenAIResponsesConversation(parsed, { provider: 'openai', model: 'gpt-test' }),
+        ).not.toThrow();
+    });
+
     it('round trips native identities, raw arguments, rich tool output, and protected replay through JSON', async () => {
         const original = structuredClone(protectedHistory);
         const state = await importHistory(protectedHistory, 'responses-fidelity');

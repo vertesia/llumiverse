@@ -1,3 +1,4 @@
+import type { ConversationPreparedRequest } from '@llumiverse/conversation';
 import {
     type DataSource,
     type ExecutionOptions,
@@ -305,6 +306,74 @@ describe('OpenAI file audio', () => {
                 model_options: { _option_id: 'openai-speech', instructions: 'Whisper' },
             }),
         ).rejects.toThrow('do not support speech instructions');
+        expect(create).not.toHaveBeenCalled();
+    });
+
+    it('validates file count, role, and MIME before reading canonical audio sources', async () => {
+        const driver = new OpenAIDriver({ apiKey: 'test' });
+        const chatCreate = vi.spyOn(driver.service.chat.completions, 'create');
+        const transcriptionCreate = vi.spyOn(driver.service.audio.transcriptions, 'create');
+        const speechCreate = vi.spyOn(driver.service.audio.speech, 'create');
+        const first = source();
+        const second = source();
+        await expect(
+            driver.executeCanonical([{ role: PromptRole.user, content: 'Describe', files: [first, second] }], {
+                model: 'gpt-audio',
+                store_audio: async () => 'gs://bucket/output.wav',
+            }),
+        ).rejects.toThrow('at most one');
+        expect(first.getStream).not.toHaveBeenCalled();
+        expect(second.getStream).not.toHaveBeenCalled();
+
+        const assistantFile = source();
+        await expect(
+            driver.executeCanonical([{ role: PromptRole.assistant, content: '', files: [assistantFile] }], {
+                model: 'gpt-transcribe',
+            }),
+        ).rejects.toThrow('only user and system');
+        expect(assistantFile.getStream).not.toHaveBeenCalled();
+
+        const unsupported = source();
+        unsupported.mime_type = 'application/pdf';
+        await expect(
+            driver.executeCanonical([{ role: PromptRole.user, content: '', files: [unsupported] }], {
+                model: 'gpt-transcribe',
+            }),
+        ).rejects.toThrow('does not support application/pdf');
+        expect(unsupported.getStream).not.toHaveBeenCalled();
+
+        const speechFile = source();
+        await expect(
+            driver.executeCanonical([{ role: PromptRole.user, content: 'Speak', files: [speechFile] }], {
+                model: 'gpt-4o-mini-tts',
+                store_audio: async () => 'gs://bucket/output.mp3',
+            }),
+        ).rejects.toThrow('text only');
+        expect(speechFile.getStream).not.toHaveBeenCalled();
+        expect(chatCreate).not.toHaveBeenCalled();
+        expect(transcriptionCreate).not.toHaveBeenCalled();
+        expect(speechCreate).not.toHaveBeenCalled();
+    });
+
+    it('awaits canonical request publication and does not call the provider when publication fails', async () => {
+        const driver = new OpenAIDriver({ apiKey: 'test' });
+        const create = vi.spyOn(driver.service.audio.speech, 'create');
+        const publish = vi.fn(async (prepared: ConversationPreparedRequest) => {
+            expect(prepared.record.request_receipt.target).toMatchObject({
+                provider: Providers.openai,
+                protocol: 'openai.audio.speech',
+                model: 'gpt-4o-mini-tts',
+            });
+            throw new Error('durable publication failed');
+        });
+
+        await expect(
+            driver.executeCanonical(prompt, {
+                ...speechOptions(async () => 'gs://bucket/output.mp3'),
+                on_canonical_request_prepared: publish,
+            }),
+        ).rejects.toThrow('durable publication failed');
+        expect(publish).toHaveBeenCalledOnce();
         expect(create).not.toHaveBeenCalled();
     });
 

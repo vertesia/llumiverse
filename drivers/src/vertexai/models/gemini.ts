@@ -21,15 +21,20 @@ import {
     ThinkingLevel,
     type Tool,
 } from '@google/genai';
+import { fingerprintJson, isConversationDocumentFormat, parseConversationDocument } from '@llumiverse/conversation';
 import {
     type AIModel,
+    type CanonicalExecutionResponse,
+    type CanonicalExecutionStream,
     type Completion,
     type CompletionChunkObject,
     type CompletionResult,
+    createCanonicalExecutionResponse,
     type DataSource,
     type DriverCompletionStream,
     type ExecutionOptions,
     type ExecutionTokenUsage,
+    FallbackCanonicalExecutionStream,
     isGeminiModelVersionGte,
     type JSONObject,
     LlumiverseError,
@@ -49,8 +54,21 @@ import {
     type VertexAIGeminiOptions,
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
-import { canonicalConversationTurnNumber } from '../../conversation/canonical-runtime.js';
-import { boundedAudioStream, storeAudioResult } from '../../shared/audio.js';
+import {
+    type CanonicalFinalizingDriverStream,
+    canonicalExecutionStreamFromDriver,
+} from '../../conversation/canonical-execution-stream.js';
+import {
+    acceptedCanonicalResponse,
+    assertAcceptedCanonicalRequest,
+    canonicalConversationTurnNumber,
+    providerJsonValue,
+    publishCanonicalPreparedRequest,
+    recoverCanonicalExecutionResponse,
+    resolveConversationRuntime,
+} from '../../conversation/canonical-runtime.js';
+import { rejectDecodedStructuredOutput } from '../../conversation/structured-output.js';
+import { boundedAudioStream, canonicalAudioAssetStorage, storeAudioResult } from '../../shared/audio.js';
 import { truncateBinaryForDebug } from '../../shared/debug-prompt.js';
 import { createToolChoiceConfigurationError } from '../../shared/tool-choice-error.js';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
@@ -524,6 +542,16 @@ function recoveredGeminiStream(completion: Completion): DriverCompletionStream {
     return Object.assign(stream, { finalizeConversation: () => completion.conversation });
 }
 
+function recoveredCanonicalGeminiStream(response: CanonicalExecutionResponse): CanonicalExecutionStream {
+    const stream = (async function* (): AsyncIterable<string> {
+        // The accepted response is already durable, so recovery performs no provider streaming.
+    })();
+    return Object.assign(stream, {
+        completion: response,
+        cancel: async () => {},
+    });
+}
+
 function appendGeminiStreamParts(target: Part[], incoming: Part[]): void {
     for (const part of incoming) {
         const previous = target.at(-1);
@@ -739,6 +767,50 @@ function geminiProvider(driver: VertexAIDriver): string {
     return typeof driver.provider === 'string' && driver.provider.length > 0 ? driver.provider : 'vertexai';
 }
 
+function geminiFileAudioRequest(
+    prompt: GenerateContentPrompt,
+    options: ExecutionOptions,
+    modelName: string,
+    signal?: AbortSignal,
+): {
+    model_options: VertexAIGeminiOptions | undefined;
+    payload: GenerateContentParameters;
+    speech: boolean;
+} {
+    const modelOptions = options.model_options as VertexAIGeminiOptions | undefined;
+    const speech = modelName.includes('tts');
+    const config: GenerateContentConfig = speech
+        ? {
+              responseModalities: [Modality.AUDIO],
+              speechConfig: {
+                  languageCode: modelOptions?.speech_language,
+                  voiceConfig: { prebuiltVoiceConfig: { voiceName: modelOptions?.speech_voice ?? 'Kore' } },
+              },
+          }
+        : {
+              systemInstruction: prompt.system,
+              audioTranscriptionConfig: {
+                  languageCodes: modelOptions?.transcription_language_codes,
+                  diarization: modelOptions?.transcription_diarization,
+                  wordTimestamp: modelOptions?.transcription_word_timestamps,
+                  customVocabulary: modelOptions?.transcription_vocabulary,
+              },
+          };
+    if (signal) config.abortSignal = signal;
+    const contents = speech
+        ? [
+              {
+                  role: 'user',
+                  parts: [
+                      ...(prompt.system?.parts ?? []),
+                      ...prompt.contents.flatMap((content) => content.parts ?? []),
+                  ],
+              },
+          ]
+        : prompt.contents;
+    return { model_options: modelOptions, payload: { model: modelName, contents, config }, speech };
+}
+
 export class GeminiModelDefinition implements ModelDefinition<GenerateContentPrompt> {
     readonly canonical_conversation_supported = true;
     model: AIModel;
@@ -763,7 +835,12 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         options = { ...options, model: modelName };
 
         if (isFileAudioModel(modelName)) {
-            if (options.conversation || options.tools?.length || options.result_schema || options.format) {
+            if (
+                (options.conversation !== undefined && !isConversationDocumentFormat(options.conversation)) ||
+                options.tools?.length ||
+                options.result_schema ||
+                options.format
+            ) {
                 throw new Error(
                     'File audio operations do not accept conversation, tools, result schemas, or custom formatting',
                 );
@@ -952,6 +1029,297 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         return tokenUsage;
     }
 
+    async requestCanonicalTextCompletion(
+        driver: VertexAIDriver,
+        prompt: GenerateContentPrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        const requestedOptions = options;
+        const splits = options.model.split('/');
+        let region: string | undefined;
+        if (splits[0] === 'locations' && splits.length >= 2) region = splits[1];
+        const modelName = splits[splits.length - 1];
+        const fileAudioRequest = isFileAudioModel(modelName)
+            ? geminiFileAudioRequest(prompt, requestedOptions, modelName, signal)
+            : undefined;
+        if (isFileAudioModel(modelName) && isConversationDocumentFormat(requestedOptions.conversation)) {
+            const document = parseConversationDocument(requestedOptions.conversation);
+            const runtime = resolveConversationRuntime(requestedOptions);
+            if (
+                requestedOptions.conversation_runtime?.conversation_id !== undefined &&
+                runtime.conversation_id !== document.id
+            ) {
+                throw new Error('conversation_runtime.conversation_id does not match the canonical document');
+            }
+            const accepted = acceptedCanonicalResponse(document, runtime.response_operation_id);
+            if (accepted === undefined) throw new Error('Gemini file audio does not support conversation continuation');
+            if (
+                accepted.generation.request_id !== runtime.request_id ||
+                accepted.generation.provider !== geminiProvider(driver) ||
+                accepted.generation.protocol !== GEMINI_GENERATE_CONTENT_PROTOCOL ||
+                accepted.generation.requested_model !== requestedOptions.model ||
+                fileAudioRequest === undefined ||
+                accepted.generation.request_receipt.request_fingerprint !==
+                    (await fingerprintJson(providerJsonValue(fileAudioRequest.payload)))
+            ) {
+                throw new Error(
+                    `Accepted response operation ${runtime.response_operation_id} has incompatible request identity`,
+                );
+            }
+            if (requestedOptions.include_original_response) {
+                throw new Error('An idempotently recovered Gemini response cannot reconstruct original_response');
+            }
+            return createCanonicalExecutionResponse(
+                document,
+                runtime.response_operation_id,
+                {},
+                await requestedOptions.load_recovered_canonical_output?.({
+                    conversation_id: document.id,
+                    response_operation_id: runtime.response_operation_id,
+                }),
+            );
+        }
+        const canonicalState = await prepareGeminiCanonicalState({
+            conversation: requestedOptions.conversation,
+            prompt,
+            options: requestedOptions,
+            provider: geminiProvider(driver),
+        });
+        if (isFileAudioModel(modelName)) {
+            if (canonicalState.accepted_response !== undefined) {
+                if (requestedOptions.include_original_response) {
+                    throw new Error('An idempotently recovered Gemini response cannot reconstruct original_response');
+                }
+                return recoverCanonicalExecutionResponse(canonicalState, requestedOptions, {
+                    service_tier: canonicalGeminiServiceTier(canonicalState),
+                });
+            }
+            const transportOptions = { ...options, model: modelName };
+            if (fileAudioRequest === undefined) throw new Error(`Model ${modelName} is not a Gemini file audio model`);
+            const modelOptions = fileAudioRequest.model_options;
+            const client = driver.getGoogleGenAIClient(
+                region,
+                resolveVertexAIServiceTier(modelOptions),
+                transportOptions.httpTimeout,
+            );
+            const canonicalPrompt = prepareCanonicalGeminiProjection(canonicalState, requestedOptions);
+            const { payload, speech } = geminiFileAudioRequest(canonicalPrompt, requestedOptions, modelName, signal);
+            const prepared = await finalizeGeminiPreparedRequest(
+                { ...canonicalState, native_conversation: canonicalPrompt },
+                payload,
+            );
+            await publishCanonicalPreparedRequest(prepared, requestedOptions);
+            const response = await client.models.generateContent(payload);
+            const candidate = response.candidates?.[0];
+            if (candidate?.content === undefined) throw new Error('Audio model returned no candidate content');
+            const persistedAudio: Array<{
+                data: string;
+                result: Extract<CompletionResult, { type: 'audio' }>;
+                byte_length: number;
+            }> = [];
+            for (const part of candidate.content.parts ?? []) {
+                if (!part.inlineData?.mimeType?.startsWith('audio/')) continue;
+                if (!speech) throw new Error('Unexpected audio output from transcription model');
+                const data = part.inlineData.data ?? '';
+                if (data.length > Math.ceil(50_000_000 / 3) * 4)
+                    throw new Error('Audio exceeds the 50000000 byte limit');
+                const bytes = Buffer.from(data, 'base64');
+                const result = await storeAudioResult(
+                    new Blob([bytes]).stream(),
+                    {
+                        mime_type: part.inlineData.mimeType,
+                        container: 'raw',
+                        codec: 'pcm',
+                        sample_rate: 24000,
+                        channels: 1,
+                        sample_encoding: 'int16',
+                        byte_order: 'little',
+                    },
+                    transportOptions,
+                    signal,
+                );
+                persistedAudio.push({ data, result, byte_length: bytes.byteLength });
+            }
+            if (speech && persistedAudio.length === 0) throw new Error('Audio model returned no usable audio result');
+            const finishReason = normalizeGeminiFinishReason(candidate.finishReason);
+            let decoded = await decodeGeminiCanonicalResponse({
+                response,
+                content: candidate.content,
+                prepared,
+                finish_reason: finishReason,
+            });
+            const remainingAudio = [...persistedAudio];
+            decoded = {
+                ...decoded,
+                ...(speech
+                    ? {
+                          turns: decoded.turns.map((turn) =>
+                              turn.kind === 'agent' && 'generation_id' in turn
+                                  ? {
+                                        ...turn,
+                                        blocks: turn.blocks.filter((block) => block.type !== 'native_replay'),
+                                    }
+                                  : turn,
+                          ),
+                      }
+                    : {}),
+                assets: (decoded.assets ?? []).map((asset) => {
+                    if (asset.kind !== 'audio' || asset.storage.type !== 'inline_base64') return asset;
+                    const inlineData = asset.storage.data;
+                    const matchIndex = remainingAudio.findIndex((entry) => entry.data === inlineData);
+                    if (matchIndex < 0) return asset;
+                    const [match] = remainingAudio.splice(matchIndex, 1);
+                    if (match === undefined) return asset;
+                    return {
+                        ...asset,
+                        storage: canonicalAudioAssetStorage(match.result.value),
+                        byte_length: match.byte_length,
+                        media: {
+                            ...(match.result.container === undefined ? {} : { container: match.result.container }),
+                            ...(match.result.codec === undefined ? {} : { codec: match.result.codec }),
+                            ...(match.result.sample_rate === undefined
+                                ? {}
+                                : { sample_rate: match.result.sample_rate }),
+                            ...(match.result.channels === undefined ? {} : { channels: match.result.channels }),
+                            ...(match.result.sample_encoding === undefined
+                                ? {}
+                                : { sample_encoding: match.result.sample_encoding }),
+                            ...(match.result.byte_order === undefined ? {} : { byte_order: match.result.byte_order }),
+                        },
+                        metadata: {
+                            audio_result: {
+                                value: match.result.value,
+                                mime_type: match.result.mime_type,
+                                ...(match.result.container === undefined ? {} : { container: match.result.container }),
+                                ...(match.result.codec === undefined ? {} : { codec: match.result.codec }),
+                                ...(match.result.sample_rate === undefined
+                                    ? {}
+                                    : { sample_rate: match.result.sample_rate }),
+                                ...(match.result.channels === undefined ? {} : { channels: match.result.channels }),
+                                ...(match.result.sample_encoding === undefined
+                                    ? {}
+                                    : { sample_encoding: match.result.sample_encoding }),
+                                ...(match.result.byte_order === undefined
+                                    ? {}
+                                    : { byte_order: match.result.byte_order }),
+                            },
+                        },
+                    };
+                }),
+            };
+            const document = appendGeminiCanonicalResponse(prepared, decoded);
+            return createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
+                service_tier: normalizeVertexAIResolvedServiceTier(response.usageMetadata?.trafficType),
+                ...(requestedOptions.include_original_response ? { original_response: response } : {}),
+            });
+        }
+        const transportOptions = { ...options, model: modelName };
+        if (transportOptions.model.includes('gemini-2.5-flash-image')) region = 'global';
+        const modelOptions = transportOptions.model_options as VertexAIGeminiOptions | undefined;
+        const includeThoughts = modelOptions?.include_thoughts !== false;
+        const canonicalPrompt = prepareCanonicalGeminiProjection(canonicalState, requestedOptions);
+        const client = driver.getGoogleGenAIClient(
+            region,
+            resolveVertexAIServiceTier(modelOptions),
+            transportOptions.httpTimeout,
+        );
+        const payload = getGeminiPayload(transportOptions, canonicalPrompt, 'execute');
+        await assertAcceptedCanonicalRequest(
+            canonicalState,
+            {
+                provider: geminiProvider(driver),
+                protocol: GEMINI_GENERATE_CONTENT_PROTOCOL,
+                model: requestedOptions.model,
+            },
+            providerJsonValue(payload),
+        );
+        if (canonicalState.accepted_response !== undefined) {
+            if (requestedOptions.include_original_response) {
+                throw new Error('An idempotently recovered Gemini response cannot reconstruct original_response');
+            }
+            return recoverCanonicalExecutionResponse(canonicalState, requestedOptions, {
+                service_tier: canonicalGeminiServiceTier(canonicalState),
+            });
+        }
+        const prepared = await finalizeGeminiPreparedRequest(
+            { ...canonicalState, native_conversation: canonicalPrompt },
+            payload,
+        );
+        await publishCanonicalPreparedRequest(prepared, requestedOptions);
+        if (signal) payload.config = { ...payload.config, abortSignal: signal };
+        const cacheExecution = await generateWithGeminiContextCache(
+            driver,
+            client,
+            transportOptions,
+            canonicalPrompt,
+            payload,
+            (request) => client.models.generateContent(request),
+            region ?? driver.getVertexRegion?.() ?? 'global',
+        );
+        const response = cacheExecution.value;
+
+        let finalContent: Content = { role: 'model', parts: [] };
+        let finishReason: string | undefined;
+        let completionResults: CompletionResult[] = [];
+        let toolUse: ToolUse[] | undefined;
+        const candidates = response.candidates ?? [];
+        if (candidates.length > 1) {
+            throw new Error(
+                `Gemini returned ${candidates.length} candidates; canonical ingestion requires one candidate`,
+            );
+        }
+        const candidate = candidates[0];
+        if (candidate !== undefined) {
+            if (candidate.finishReason === undefined) {
+                throw new Error('Gemini response candidate has no terminal finish reason');
+            }
+            finishReason = normalizeGeminiFinishReason(candidate.finishReason);
+            const isRecoverableToolCall = assertSupportedGeminiFinishReason(candidate);
+            if (candidate.content !== undefined) {
+                toolUse = await geminiToolUsesFromContent(candidate.content, prepared.runtime.response_operation_id);
+                if (isRecoverableToolCall && toolUse && toolUse.length > 0) {
+                    driver.logger.warn(
+                        `[Gemini] Recoverable tool call issue (${candidate.finishReason}): ` +
+                            `Model tried to call undeclared tool(s): ${toolUse.map((tool) => tool.tool_name).join(', ')}`,
+                    );
+                }
+                completionResults = extractCompletionResults(candidate.content, includeThoughts);
+                finalContent = candidate.content;
+            }
+        } else if (response.promptFeedback?.blockReason !== undefined) {
+            finishReason = response.promptFeedback.blockReason;
+            const blockMessage = response.promptFeedback.blockReasonMessage ?? '';
+            finalContent = { role: 'model', parts: [{ text: blockMessage }] };
+            completionResults = blockMessage.length === 0 ? [] : [{ type: 'text', value: blockMessage }];
+        } else {
+            throw new Error('Gemini response has no candidate or prompt block reason');
+        }
+        if (toolUse?.length) finishReason = 'tool_use';
+
+        const normalized =
+            !toolUse?.length && requestedOptions.result_schema
+                ? normalizeCompletionResult(
+                      completionResults.length > 0 ? completionResults : [{ type: 'text', value: '' }],
+                      requestedOptions.result_schema,
+                  )
+                : undefined;
+        let decoded = await decodeGeminiCanonicalResponse({
+            response,
+            content: finalContent,
+            prepared,
+            finish_reason: finishReason,
+            ...(normalized?.status === 'valid' ? { structured_output: normalized.structured_output } : {}),
+        });
+        if (normalized?.status === 'invalid') decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
+        const document = appendGeminiCanonicalResponse(prepared, decoded);
+        return createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
+            service_tier: normalizeVertexAIResolvedServiceTier(response.usageMetadata?.trafficType),
+            prompt_cache_diagnostic: cacheExecution.diagnostic,
+            ...(requestedOptions.include_original_response ? { original_response: response } : {}),
+        });
+    }
+
     async requestTextCompletion(
         driver: VertexAIDriver,
         prompt: GenerateContentPrompt,
@@ -1081,9 +1449,6 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         const model_options = transportOptions.model_options as VertexAIGeminiOptions | undefined;
         const includeThoughts = model_options?.include_thoughts !== false;
-        if (canonicalState.accepted_response !== undefined) {
-            return recoverGeminiCompletion(canonicalState, this, driver, requestedOptions, includeThoughts);
-        }
         const canonicalPrompt = prepareCanonicalGeminiProjection(canonicalState, requestedOptions);
         const client = driver.getGoogleGenAIClient(
             region,
@@ -1092,10 +1457,23 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         );
 
         const payload = getGeminiPayload(transportOptions, canonicalPrompt, 'execute');
+        await assertAcceptedCanonicalRequest(
+            canonicalState,
+            {
+                provider: geminiProvider(driver),
+                protocol: GEMINI_GENERATE_CONTENT_PROTOCOL,
+                model: requestedOptions.model,
+            },
+            providerJsonValue(payload),
+        );
+        if (canonicalState.accepted_response !== undefined) {
+            return recoverGeminiCompletion(canonicalState, this, driver, requestedOptions, includeThoughts);
+        }
         const prepared = await finalizeGeminiPreparedRequest(
             { ...canonicalState, native_conversation: canonicalPrompt },
             payload,
         );
+        await publishCanonicalPreparedRequest(prepared, requestedOptions);
         if (signal) payload.config = { ...payload.config, abortSignal: signal };
         // Routes through an explicit Vertex context cache when this execution carries a
         // prompt_cache_key; sends `payload` untouched otherwise, and on any cache failure.
@@ -1217,11 +1595,6 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
 
         const model_options = transportOptions.model_options as VertexAIGeminiOptions | undefined;
         const includeThoughts = model_options?.include_thoughts !== false;
-        if (canonicalState.accepted_response !== undefined) {
-            return recoveredGeminiStream(
-                await recoverGeminiCompletion(canonicalState, this, driver, requestedOptions, includeThoughts),
-            );
-        }
         const canonicalPrompt = prepareCanonicalGeminiProjection(canonicalState, requestedOptions);
         const client = driver.getGoogleGenAIClient(
             region,
@@ -1230,10 +1603,25 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         );
 
         const payload = getGeminiPayload(transportOptions, canonicalPrompt, 'stream');
+        await assertAcceptedCanonicalRequest(
+            canonicalState,
+            {
+                provider: geminiProvider(driver),
+                protocol: GEMINI_GENERATE_CONTENT_PROTOCOL,
+                model: requestedOptions.model,
+            },
+            providerJsonValue(payload),
+        );
+        if (canonicalState.accepted_response !== undefined) {
+            return recoveredGeminiStream(
+                await recoverGeminiCompletion(canonicalState, this, driver, requestedOptions, includeThoughts),
+            );
+        }
         const prepared = await finalizeGeminiPreparedRequest(
             { ...canonicalState, native_conversation: canonicalPrompt },
             payload,
         );
+        await publishCanonicalPreparedRequest(prepared, requestedOptions);
         payload.config = { ...payload.config, abortSignal: signal };
         const cacheExecution = await generateWithGeminiContextCache(
             driver,
@@ -1315,37 +1703,129 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             };
         });
 
+        async function computeDecodedFinalResponse() {
+            if (terminalResponse === undefined || terminalCandidate === undefined) {
+                throw new Error('Gemini stream ended without a terminal finish reason');
+            }
+            const content: Content = { role: 'model', parts: nativeParts };
+            const finalResponse = {
+                ...terminalResponse,
+                ...(finalUsageMetadata === undefined ? {} : { usageMetadata: finalUsageMetadata }),
+                candidates: [{ ...terminalCandidate, content }],
+            } as GenerateContentResponse;
+            const finalResults = extractCompletionResults(content, includeThoughts);
+            const normalized =
+                !streamedToolUseFound && requestedOptions.result_schema
+                    ? normalizeCompletionResult(finalResults, requestedOptions.result_schema)
+                    : undefined;
+            const decoded = await decodeGeminiCanonicalResponse({
+                response: finalResponse,
+                content,
+                prepared,
+                finish_reason: streamedToolUseFound ? 'tool_use' : terminalFinishReason,
+                ...(normalized?.status === 'valid' ? { structured_output: normalized.structured_output } : {}),
+            });
+            return { decoded, finalResponse, normalized };
+        }
+        let decodedFinalResponse: ReturnType<typeof computeDecodedFinalResponse> | undefined;
+        const decodeFinalResponse = () => {
+            decodedFinalResponse ??= computeDecodedFinalResponse();
+            return decodedFinalResponse;
+        };
+        let canonicalCompletion: Promise<CanonicalExecutionResponse> | undefined;
+        const finalizeCanonicalExecution = () => {
+            canonicalCompletion ??= (async () => {
+                const { decoded: rawDecoded, finalResponse, normalized } = await decodeFinalResponse();
+                const decoded =
+                    normalized?.status === 'invalid'
+                        ? rejectDecodedStructuredOutput(rawDecoded, normalized.error)
+                        : rawDecoded;
+                const document = appendGeminiCanonicalResponse(prepared, decoded);
+                return createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
+                    service_tier: normalizeVertexAIResolvedServiceTier(finalUsageMetadata?.trafficType),
+                    prompt_cache_diagnostic: cacheExecution.diagnostic,
+                    ...(requestedOptions.include_original_response ? { original_response: finalResponse } : {}),
+                });
+            })();
+            return canonicalCompletion;
+        };
         return Object.assign(stream, {
             finalizePromptCacheDiagnostic: () => cacheExecution.diagnostic,
             finalizeConversation: async () => {
-                if (terminalResponse === undefined || terminalCandidate === undefined) {
-                    throw new Error('Gemini stream ended without a terminal finish reason');
-                }
-                const content: Content = { role: 'model', parts: nativeParts };
-                const finalResponse = {
-                    ...terminalResponse,
-                    ...(finalUsageMetadata === undefined ? {} : { usageMetadata: finalUsageMetadata }),
-                    candidates: [
-                        {
-                            ...terminalCandidate,
-                            content,
-                        },
-                    ],
-                } as GenerateContentResponse;
-                const finalResults = extractCompletionResults(content, includeThoughts);
-                const normalized =
-                    !streamedToolUseFound && requestedOptions.result_schema
-                        ? normalizeCompletionResult(finalResults, requestedOptions.result_schema)
-                        : undefined;
-                const decoded = await decodeGeminiCanonicalResponse({
-                    response: finalResponse,
-                    content,
-                    prepared,
-                    finish_reason: streamedToolUseFound ? 'tool_use' : terminalFinishReason,
-                    ...(normalized?.status === 'valid' ? { structured_output: normalized.structured_output } : {}),
-                });
+                const { decoded } = await decodeFinalResponse();
                 return appendGeminiCanonicalResponse(prepared, decoded);
             },
+            finalizeCanonicalExecution,
+        });
+    }
+
+    async requestCanonicalTextCompletionStream(
+        driver: VertexAIDriver,
+        prompt: GenerateContentPrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionStream> {
+        const modelName = options.model.split('/').at(-1) ?? options.model;
+        if (isFileAudioModel(modelName)) {
+            return new FallbackCanonicalExecutionStream((fallbackSignal: AbortSignal) =>
+                this.requestCanonicalTextCompletion(
+                    driver,
+                    prompt,
+                    options,
+                    signal ? AbortSignal.any([signal, fallbackSignal]) : fallbackSignal,
+                ),
+            );
+        }
+        const canonicalState = await prepareGeminiCanonicalState({
+            conversation: options.conversation,
+            prompt,
+            options,
+            provider: geminiProvider(driver),
+        });
+        if (canonicalState.accepted_response !== undefined) {
+            const modelName = options.model.split('/').at(-1) ?? options.model;
+            const transportOptions = { ...options, model: modelName };
+            const canonicalPrompt = prepareCanonicalGeminiProjection(canonicalState, options);
+            const payload = getGeminiPayload(transportOptions, canonicalPrompt, 'stream');
+            await assertAcceptedCanonicalRequest(
+                canonicalState,
+                { provider: geminiProvider(driver), protocol: GEMINI_GENERATE_CONTENT_PROTOCOL, model: options.model },
+                providerJsonValue(payload),
+            );
+            if (options.include_original_response) {
+                throw new Error('An idempotently recovered Gemini response cannot reconstruct original_response');
+            }
+            return recoveredCanonicalGeminiStream(
+                await recoverCanonicalExecutionResponse(canonicalState, options, {
+                    service_tier: canonicalGeminiServiceTier(canonicalState),
+                }),
+            );
+        }
+
+        const abortController = new AbortController();
+        const forwardAbort = () => abortController.abort(signal?.reason);
+        if (signal?.aborted) forwardAbort();
+        else signal?.addEventListener('abort', forwardAbort, { once: true });
+        let source: CanonicalFinalizingDriverStream;
+        try {
+            source = (await this.requestTextCompletionStream(
+                driver,
+                prompt,
+                options,
+                abortController.signal,
+            )) as CanonicalFinalizingDriverStream;
+        } catch (error: unknown) {
+            signal?.removeEventListener('abort', forwardAbort);
+            throw error;
+        }
+        if (typeof source.finalizeCanonicalExecution !== 'function') {
+            abortController.abort();
+            signal?.removeEventListener('abort', forwardAbort);
+            throw new Error(`Gemini model ${options.model} did not provide canonical stream finalization`);
+        }
+        return canonicalExecutionStreamFromDriver(source, {
+            abort: () => abortController.abort(),
+            close: () => signal?.removeEventListener('abort', forwardAbort),
         });
     }
 

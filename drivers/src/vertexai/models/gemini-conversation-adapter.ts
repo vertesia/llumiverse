@@ -31,10 +31,12 @@ import {
     preflightJsonInput,
     type ToolDefinition,
     type ToolResultBlock,
+    toolArgumentsForModel,
     type UserContentBlock,
 } from '@llumiverse/conversation';
 import type { CanonicalStructuredOutput, ExecutionOptions, JSONObject, ToolUse } from '@llumiverse/core';
 import {
+    acceptedCanonicalRequestDocument,
     acceptedCanonicalResponse,
     appendCanonicalPrompt,
     type CanonicalPreparedState,
@@ -71,7 +73,16 @@ type GeminiPromptPart = Part & {
 interface GeminiReplaySemanticEntry {
     block_id: string;
     part_index: number;
-    kind: 'text' | 'reasoning' | 'structured_json' | 'asset' | 'tool_call' | 'tool_result_json' | 'extension';
+    kind:
+        | 'text'
+        | 'reasoning'
+        | 'structured_json'
+        | 'audio_transcription_text'
+        | 'audio_transcription_json'
+        | 'asset'
+        | 'tool_call'
+        | 'tool_result_json'
+        | 'extension';
     asset_id?: string;
     response_part_index?: number;
 }
@@ -355,6 +366,7 @@ async function replayBlock(input: {
     provider: string;
     model: string;
 }): Promise<NativeReplayBlock> {
+    const protectedReplay = contentHasProtectedReplay(input.content);
     const payload: GeminiReplayPayload = {
         type: 'gemini_content',
         content: providerJsonValue(input.content) as JsonObject,
@@ -368,7 +380,7 @@ async function replayBlock(input: {
         compatibility_scope: {
             provider: input.provider,
             protocol: GEMINI_GENERATE_CONTENT_PROTOCOL,
-            ...(contentHasProtectedReplay(input.content) ? { model: input.model } : {}),
+            ...(protectedReplay ? { model: input.model } : {}),
             adapter_version: GEMINI_GENERATE_CONTENT_ADAPTER_VERSION,
         },
         payload: providerJsonValue(payload),
@@ -379,6 +391,7 @@ async function replayBlock(input: {
             request_ids: [],
         },
         content_hash: await fingerprintJson(providerJsonValue(payload)),
+        ...(protectedReplay ? {} : { dependency_policy: 'discard_on_dependency_change' as const }),
     };
 }
 
@@ -620,6 +633,7 @@ async function contentRecords(input: {
     const mappings: NativeItemMapping[] = [{ canonical_id: turnId, native_id: nativePath, kind: 'turn' }];
     const semanticEntries: GeminiReplaySemanticEntry[] = [];
     const callIds: string[] = [];
+    const contentHasText = input.content.parts?.some((part) => typeof part.text === 'string' && part.text.length > 0);
     for (let partIndex = 0; partIndex < (input.content.parts?.length ?? 0); partIndex += 1) {
         const rawPart = input.content.parts?.[partIndex] as GeminiPromptPart | undefined;
         if (rawPart === undefined) continue;
@@ -636,6 +650,49 @@ async function contentRecords(input: {
                 part_index: partIndex,
                 kind: part.thought ? 'reasoning' : 'text',
             });
+        } else if (part.audioTranscription !== undefined) {
+            const transcription = part.audioTranscription;
+            if (!contentHasText && typeof transcription.text === 'string' && transcription.text.length > 0) {
+                const textBlockId = await entityId('block', input.scope, nativePath, partIndex, 'transcription-text');
+                blocks.push({ id: textBlockId, type: 'text', text: transcription.text, format: 'plain' });
+                semanticEntries.push({
+                    block_id: textBlockId,
+                    part_index: partIndex,
+                    kind: 'audio_transcription_text',
+                });
+                mappings.push({
+                    canonical_id: textBlockId,
+                    native_id: `${nativePath}/parts/${partIndex}/audioTranscription/text`,
+                    kind: 'block',
+                });
+            }
+            const jsonBlockId = await entityId('block', input.scope, nativePath, partIndex, 'transcription-json');
+            blocks.push({
+                id: jsonBlockId,
+                type: 'json',
+                value: {
+                    text: transcription.text ?? '',
+                    language_code: transcription.languageCode ?? null,
+                    speaker_label: transcription.speakerLabel ?? null,
+                    words:
+                        transcription.words?.map((word) => ({
+                            word: word.word ?? '',
+                            start_offset: word.startOffset ?? null,
+                            end_offset: word.endOffset ?? null,
+                        })) ?? [],
+                },
+            });
+            semanticEntries.push({
+                block_id: jsonBlockId,
+                part_index: partIndex,
+                kind: 'audio_transcription_json',
+            });
+            mappings.push({
+                canonical_id: jsonBlockId,
+                native_id: `${nativePath}/parts/${partIndex}/audioTranscription`,
+                kind: 'block',
+            });
+            continue;
         } else if (isMediaPart(part)) {
             if (input.authority === undefined && input.content.role !== 'model') {
                 assertPortableInputMediaPart(part, `${nativePath}/parts/${partIndex}`);
@@ -964,6 +1021,29 @@ function assertReplaySemantics(
             if (block.type !== 'json' || typeof part.text !== 'string' || part.thought) {
                 throw new TypeError(`Gemini structured replay ${entry.block_id} no longer matches canonical data`);
             }
+        } else if (entry.kind === 'audio_transcription_text') {
+            if (block.type !== 'text' || part.audioTranscription?.text !== block.text) {
+                throw new TypeError(`Gemini transcription replay ${entry.block_id} no longer matches canonical text`);
+            }
+        } else if (entry.kind === 'audio_transcription_json') {
+            const transcription = part.audioTranscription;
+            const expected =
+                transcription === undefined
+                    ? undefined
+                    : {
+                          text: transcription.text ?? '',
+                          language_code: transcription.languageCode ?? null,
+                          speaker_label: transcription.speakerLabel ?? null,
+                          words:
+                              transcription.words?.map((word) => ({
+                                  word: word.word ?? '',
+                                  start_offset: word.startOffset ?? null,
+                                  end_offset: word.endOffset ?? null,
+                              })) ?? [],
+                      };
+            if (block.type !== 'json' || stableJson(expected) !== stableJson(block.value)) {
+                throw new TypeError(`Gemini transcription replay ${entry.block_id} no longer matches canonical JSON`);
+            }
         } else if (entry.kind === 'text' || entry.kind === 'reasoning') {
             const expectedType = entry.kind === 'text' ? 'text' : 'reasoning';
             if (
@@ -979,7 +1059,9 @@ function assertReplaySemantics(
                 part.functionCall === undefined ||
                 part.functionCall.name !== block.tool_name ||
                 stableJson(part.functionCall.args ?? {}) !==
-                    stableJson(block.arguments.type === 'json' ? block.arguments.value : undefined) ||
+                    stableJson(
+                        block.arguments.type === 'invalid' ? undefined : toolArgumentsForModel(block.arguments),
+                    ) ||
                 (typeof part.functionCall.id === 'string' && part.functionCall.id !== block.call_id)
             ) {
                 throw new TypeError(`Gemini replay tool call ${entry.block_id} no longer matches canonical data`);
@@ -1043,7 +1125,11 @@ function replayContent(
             for (const nested of block.content) if (nested.type === 'native_replay') replayBlocks.push(nested);
         }
     }
-    const foreign = replayBlocks.find((block) => block.protocol !== GEMINI_GENERATE_CONTENT_PROTOCOL);
+    const foreign = replayBlocks.find(
+        (block) =>
+            block.protocol !== GEMINI_GENERATE_CONTENT_PROTOCOL &&
+            block.dependency_policy !== 'discard_on_dependency_change',
+    );
     if (foreign !== undefined) {
         throw new TypeError(`Gemini cannot discard protected ${foreign.protocol} replay block ${foreign.id}`);
     }
@@ -1070,21 +1156,18 @@ function ordinaryBlockToPart(
         return assetToPart(asset, target) as Part;
     }
     if (block.type === 'tool_call') {
-        if (block.arguments.type !== 'json') {
+        if (block.arguments.type === 'invalid') {
             throw new TypeError(`Gemini cannot project unresolved tool arguments for call ${block.call_id}`);
         }
-        if (
-            typeof block.arguments.value !== 'object' ||
-            block.arguments.value === null ||
-            Array.isArray(block.arguments.value)
-        ) {
+        const modelArguments = toolArgumentsForModel(block.arguments);
+        if (typeof modelArguments !== 'object' || modelArguments === null || Array.isArray(modelArguments)) {
             throw new TypeError(`Gemini tool call ${block.call_id} requires JSON object arguments`);
         }
         return {
             functionCall: {
                 id: block.native_id?.protocol === GEMINI_GENERATE_CONTENT_PROTOCOL ? block.native_id.value : undefined,
                 name: block.tool_name,
-                args: block.arguments.value as Record<string, unknown>,
+                args: modelArguments as Record<string, unknown>,
             },
         };
     }
@@ -1272,7 +1355,7 @@ export function compileGeminiConversation(
     const contents: Content[] = [];
     const systemParts: Part[] = [];
     const mappings: NativeItemMapping[] = [];
-    for (const turn of selectedCanonicalTurns(document)) {
+    for (const turn of selectedCanonicalTurns(document, { allow_interrupted_with_complete_tool_calls: true })) {
         if (turn.kind === 'program' && turn.authority === 'developer') {
             throw new TypeError('Gemini cannot project developer program authority');
         }
@@ -1421,7 +1504,12 @@ export async function prepareGeminiCanonicalState(input: {
         input.options.tools,
         providerJsonValue(cleanPrompt),
     );
-    const compiled = compileGeminiConversation(appended.document, target);
+    const acceptedResponse = acceptedCanonicalResponse(appended.document, runtime.response_operation_id);
+    const requestDocument =
+        acceptedResponse === undefined
+            ? appended.document
+            : await acceptedCanonicalRequestDocument(appended.document, acceptedResponse);
+    const compiled = compileGeminiConversation(requestDocument, target);
     const acceptedInputTurnIds = new Set(
         appended.document.operation_receipts[runtime.input_operation_id]?.accepted_turn_ids ?? [],
     );
@@ -1430,7 +1518,6 @@ export async function prepareGeminiCanonicalState(input: {
         const match = /^contents\/(\d+)$/.exec(mapping.native_id);
         return match === null ? [] : [Number(match[1])];
     });
-    const acceptedResponse = acceptedCanonicalResponse(appended.document, runtime.response_operation_id);
     if (
         acceptedResponse !== undefined &&
         (acceptedResponse.generation.request_id !== runtime.request_id ||
@@ -1638,19 +1725,22 @@ export async function decodeGeminiCanonicalResponse(input: {
                   },
         ),
     } as ConversationTurn;
-    const generation: ExecutedGeneration = await createExecutedGeneration({
-        id: input.prepared.generation_id,
-        runtime: input.prepared.runtime,
-        receipt: input.prepared.receipt,
-        provider: input.prepared.provider,
-        protocol: GEMINI_GENERATE_CONTENT_PROTOCOL,
-        adapter_version: GEMINI_GENERATE_CONTENT_ADAPTER_VERSION,
-        requested_model: input.prepared.requested_model,
-        resolved_model: input.response.modelVersion ?? input.prepared.payload.model,
-        provider_response_id: input.response.responseId,
-        finish_reason: input.finish_reason,
-        usage: geminiGenerationUsage(input.response.usageMetadata),
-    });
+    const generation: ExecutedGeneration = {
+        ...(await createExecutedGeneration({
+            id: input.prepared.generation_id,
+            runtime: input.prepared.runtime,
+            receipt: input.prepared.receipt,
+            provider: input.prepared.provider,
+            protocol: GEMINI_GENERATE_CONTENT_PROTOCOL,
+            adapter_version: GEMINI_GENERATE_CONTENT_ADAPTER_VERSION,
+            requested_model: input.prepared.requested_model,
+            resolved_model: input.response.modelVersion ?? input.prepared.payload.model,
+            provider_response_id: input.response.responseId,
+            finish_reason: input.finish_reason,
+            usage: geminiGenerationUsage(input.response.usageMetadata),
+        })),
+        status: input.finish_reason === 'length' ? 'cancelled' : 'completed',
+    };
     const decoded: DecodedConversationResponse = {
         turns: [finalTurn],
         generation,

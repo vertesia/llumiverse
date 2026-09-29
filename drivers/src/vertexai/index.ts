@@ -3,6 +3,8 @@ import { type Content, GoogleGenAI, type Model } from '@google/genai';
 import { PredictionServiceClient, v1beta1 } from '@google-cloud/aiplatform';
 import {
     type AIModel,
+    type CanonicalExecutionResponse,
+    type CanonicalExecutionStream,
     type Completion,
     type CompletionResult,
     type DriverCompletionStream,
@@ -458,6 +460,30 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream> {
         return getModelDefinition(options.model).requestTextCompletionStream(this, prompt, options, signal);
+    }
+
+    async requestCanonicalTextCompletion(
+        prompt: VertexAIPrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        const definition = getModelDefinition(options.model);
+        if (definition.requestCanonicalTextCompletion === undefined) {
+            throw new Error(`Vertex AI model ${options.model} does not support direct canonical execution`);
+        }
+        return definition.requestCanonicalTextCompletion(this, prompt, options, signal);
+    }
+
+    async requestCanonicalTextCompletionStream(
+        prompt: VertexAIPrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionStream> {
+        const definition = getModelDefinition(options.model);
+        if (definition.requestCanonicalTextCompletionStream === undefined) {
+            throw new Error(`Vertex AI model ${options.model} does not support direct canonical streaming`);
+        }
+        return definition.requestCanonicalTextCompletionStream(this, prompt, options, signal);
     }
 
     /**

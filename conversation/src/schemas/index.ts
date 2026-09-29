@@ -4,4 +4,7 @@ export * from './document.js';
 export * from './execution.js';
 export * from './ingestion.js';
 export * from './inspection.js';
+export * from './output.js';
+export * from './prepared-request.js';
 export * from './primitives.js';
+export * from './tool-execution.js';

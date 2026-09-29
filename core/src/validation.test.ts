@@ -75,10 +75,25 @@ describe('validateResult', () => {
         expect(validateResult([{ type: 'text', value: text }], schema)).toEqual([{ type: 'json', value: expected }]);
     });
 
+    it.each([
+        ['number', '"42"', { type: 'number' }],
+        ['array', '1', { type: 'array', items: { type: 'number' } }],
+    ] as const)(
+        'rejects root %s coercion when the stored value would retain the wrong type',
+        (_label, text, schema) => {
+            const original: CompletionResult[] = [{ type: 'text', value: text }];
+            const normalized = normalizeCompletionResult(original, schema);
+
+            expect(normalized).toMatchObject({ status: 'invalid', error: { code: 'validation_error' } });
+            expect(original).toEqual([{ type: 'text', value: text }]);
+        },
+    );
+
     it('retains every raw partition when the historical independent-part fallback succeeds', () => {
         const normalized = normalizeCompletionResult(
             [
                 { type: 'text', value: '{"answer":"ok"}' },
+                { type: 'thoughts', value: 'provider reasoning between answer partitions' },
                 { type: 'text', value: 'provider trailer' },
             ],
             { type: 'object' },
@@ -86,7 +101,10 @@ describe('validateResult', () => {
 
         expect(normalized).toMatchObject({
             status: 'valid',
-            result: [{ type: 'json', value: { answer: 'ok' } }],
+            result: [
+                { type: 'json', value: { answer: 'ok' } },
+                { type: 'thoughts', value: 'provider reasoning between answer partitions' },
+            ],
             structured_output: {
                 source_texts: ['{"answer":"ok"}', 'provider trailer'],
             },
@@ -106,5 +124,47 @@ describe('validateResult', () => {
         expect(normalized.status).toBe('invalid');
         expect(value).toEqual({ discard: 'raw' });
         expect(result).toEqual([{ type: 'json', value: { discard: 'raw' } }]);
+    });
+
+    it.each([[''], [null]] as const)(
+        'removes an empty optional date before declaring canonical JSON valid (%s)',
+        (emptyDate) => {
+            const value = { answer: 'ok', optional_date: emptyDate };
+            const schema = {
+                type: 'object',
+                properties: {
+                    answer: { type: 'string' },
+                    optional_date: { type: 'string', format: 'date-time' },
+                },
+                required: ['answer'],
+                additionalProperties: false,
+            };
+
+            expect(validateResult([{ type: 'json', value }], schema)).toEqual([
+                { type: 'json', value: { answer: 'ok' } },
+            ]);
+            expect(value).toEqual({ answer: 'ok', optional_date: emptyDate });
+        },
+    );
+
+    it('rejects an empty date when the field is required', () => {
+        const normalized = normalizeCompletionResult([{ type: 'json', value: { required_date: null } }], {
+            type: 'object',
+            properties: { required_date: { type: 'string', format: 'date-time' } },
+            required: ['required_date'],
+            additionalProperties: false,
+        });
+
+        expect(normalized).toMatchObject({ status: 'invalid', error: { code: 'validation_error' } });
+    });
+
+    it('rejects an optional invalid date default instead of repeatedly deleting and recreating it', () => {
+        const normalized = normalizeCompletionResult([{ type: 'json', value: {} }], {
+            type: 'object',
+            properties: { optional_date: { type: 'string', format: 'date', default: '' } },
+            additionalProperties: false,
+        });
+
+        expect(normalized).toMatchObject({ status: 'invalid', error: { code: 'validation_error' } });
     });
 });

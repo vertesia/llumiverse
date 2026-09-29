@@ -31,15 +31,19 @@ import {
     type ImportedTurnProvenance,
     type JsonValue,
     type NativeItemMapping,
+    type NativeReplayBlock,
     type NestedToolResultContentBlock,
     type PreparedConversationRequest,
     parseConversationDocument,
     preflightJsonInput,
     type ToolDefinition,
     type ToolResultBlock,
+    toolArgumentsForModel,
     type UserContentBlock,
 } from '@llumiverse/conversation';
+import type { CanonicalStructuredOutput } from '@llumiverse/core';
 import {
+    acceptedCanonicalRequestDocument,
     acceptedCanonicalResponse,
     appendCanonicalPrompt,
     type CanonicalPreparedState,
@@ -52,9 +56,17 @@ import {
     resolveConversationRuntime,
     selectedCanonicalTurns,
 } from '../conversation/canonical-runtime.js';
+import {
+    assertStructuredOutputEvidence,
+    type CanonicalStructuredOutputEvidence,
+    normalizeDecodedStructuredOutput,
+    parseStructuredOutputEvidence,
+    remapStructuredOutputReplayDependencies,
+    structuredOutputEvidence,
+} from '../conversation/structured-output.js';
 
 export const BEDROCK_CONVERSE_PROTOCOL = 'aws.bedrock.converse' as const;
-export const BEDROCK_CONVERSE_ADAPTER_VERSION = '2026-09-30.canonical.1' as const;
+export const BEDROCK_CONVERSE_ADAPTER_VERSION = '2026-09-30.adoption.1' as const;
 
 export type BedrockConverseConversation = Pick<ConverseRequest, 'messages' | 'system'>;
 
@@ -112,12 +124,54 @@ interface BedrockReplayRedactedEntry {
     native: JsonValue;
 }
 
-type BedrockReplayEntry = BedrockReplayCanonicalEntry | BedrockReplayReasoningEntry | BedrockReplayRedactedEntry;
+interface BedrockReplayStructuredJsonEntry {
+    kind: 'structured_json_fragment';
+    block_id: string;
+    native: JsonValue;
+}
+
+type BedrockReplayEntry =
+    | BedrockReplayCanonicalEntry
+    | BedrockReplayReasoningEntry
+    | BedrockReplayRedactedEntry
+    | BedrockReplayStructuredJsonEntry;
 type BedrockReplayPayload = {
     type: 'bedrock_converse_content_order';
-    prefix: JsonValue;
+    prefix?: JsonValue;
     entries: BedrockReplayEntry[];
+    structured_output?: CanonicalStructuredOutputEvidence;
 };
+
+interface BedrockReplayDependencies {
+    turn_ids: string[];
+    block_ids: string[];
+    call_ids: string[];
+}
+
+function replayDependenciesForTurns(turns: readonly ConversationTurn[]): BedrockReplayDependencies {
+    const blockIds: string[] = [];
+    const callIds: string[] = [];
+    for (const turn of turns) {
+        for (const block of turn.blocks) {
+            blockIds.push(block.id);
+            if (block.type === 'tool_call') callIds.push(block.call_id);
+            if (block.type === 'tool_result') blockIds.push(...block.content.map((nested) => nested.id));
+        }
+    }
+    return { turn_ids: turns.map((turn) => turn.id), block_ids: blockIds, call_ids: callIds };
+}
+
+function replayDependenciesForMappings(mappings: readonly NativeItemMapping[]): BedrockReplayDependencies {
+    return {
+        turn_ids: mappings.filter((mapping) => mapping.kind === 'turn').map((mapping) => mapping.canonical_id),
+        block_ids: mappings.filter((mapping) => mapping.kind === 'block').map((mapping) => mapping.canonical_id),
+        call_ids: mappings.filter((mapping) => mapping.kind === 'call').map((mapping) => mapping.canonical_id),
+    };
+}
+
+function uniqueIds(...groups: readonly (readonly string[])[]): string[] {
+    return [...new Set(groups.flat())];
+}
 
 function stableJson(value: unknown): string {
     if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
@@ -162,12 +216,12 @@ export function bedrockConverseJsonValue(value: unknown): JsonValue {
     if (value instanceof Uint8Array) return { _llumiverse_bedrock_bytes: Buffer.from(value).toString('base64') };
     if (Array.isArray(value)) return value.map(bedrockConverseJsonValue);
     if (typeof value === 'object' && value !== null) {
-        const converted: Record<string, JsonValue> = {};
-        for (const key of Object.keys(value)) {
-            const child = ownValue(value, key);
-            if (child === undefined) continue;
-            converted[key] = bedrockConverseJsonValue(child);
-        }
+        const converted = Object.fromEntries(
+            Object.keys(value).flatMap((key): Array<[string, JsonValue]> => {
+                const child = ownValue(value, key);
+                return child === undefined ? [] : [[key, bedrockConverseJsonValue(child)]];
+            }),
+        );
         if (!preflightJsonInput(converted).success)
             throw new TypeError('Bedrock document value must be exact JSON data');
         return converted;
@@ -765,6 +819,7 @@ async function messageRecords(input: {
     options: ImportBedrockConverseConversationOptions;
     source: SourceKind;
     prefix: BedrockConverseConversation;
+    prefix_dependencies: BedrockReplayDependencies;
 }): Promise<{
     turns: ConversationTurn[];
     assets: Asset[];
@@ -871,10 +926,14 @@ async function messageRecords(input: {
                     entries: replayEntries,
                 } as unknown as JsonValue,
                 dependencies: {
-                    turn_ids: [turnId],
-                    block_ids: blocks.map((candidate) => candidate.id),
-                    call_ids: blocks.flatMap((candidate) =>
-                        candidate.type === 'tool_call' ? [candidate.call_id] : [],
+                    turn_ids: uniqueIds(input.prefix_dependencies.turn_ids, [turnId]),
+                    block_ids: uniqueIds(
+                        input.prefix_dependencies.block_ids,
+                        blocks.map((candidate) => candidate.id),
+                    ),
+                    call_ids: uniqueIds(
+                        input.prefix_dependencies.call_ids,
+                        blocks.flatMap((candidate) => (candidate.type === 'tool_call' ? [candidate.call_id] : [])),
                     ),
                     request_ids: [],
                 },
@@ -1052,6 +1111,7 @@ async function importRecords(
                 ...(history.system === undefined ? {} : { system: history.system }),
                 messages: history.messages?.slice(0, index) ?? [],
             },
+            prefix_dependencies: replayDependenciesForTurns(turns),
         });
         turns.push(...converted.turns);
         assets.push(...converted.assets);
@@ -1111,13 +1171,17 @@ function bedrockReplay(
     target?: { provider?: string; model?: string },
 ): { id: string; payload: BedrockReplayPayload } | undefined {
     const replays = turn.blocks.filter((block) => block.type === 'native_replay');
-    if (replays.length > 1) throw new TypeError(`Bedrock turn ${turn.id} has multiple protected replay blocks`);
-    for (const replay of replays) {
-        if (replay.protocol !== BEDROCK_CONVERSE_PROTOCOL) {
-            throw new TypeError(
-                `Bedrock Converse cannot discard protected ${replay.protocol} replay block ${replay.id}`,
-            );
-        }
+    const foreign = replays.find(
+        (replay) =>
+            replay.protocol !== BEDROCK_CONVERSE_PROTOCOL &&
+            replay.dependency_policy !== 'discard_on_dependency_change',
+    );
+    if (foreign !== undefined) {
+        throw new TypeError(`Bedrock Converse cannot discard protected ${foreign.protocol} replay block ${foreign.id}`);
+    }
+    const matching = replays.filter((replay) => replay.protocol === BEDROCK_CONVERSE_PROTOCOL);
+    if (matching.length > 1) throw new TypeError(`Bedrock turn ${turn.id} has multiple protected replay blocks`);
+    for (const replay of matching) {
         if (
             replay.adapter !== BEDROCK_CONVERSE_ADAPTER_VERSION ||
             replay.compatibility_scope.provider !== (target?.provider ?? 'bedrock') ||
@@ -1135,7 +1199,7 @@ function bedrockReplay(
         }
         const entries = ownValue(replay.payload, 'entries');
         const prefix = ownValue(replay.payload, 'prefix');
-        if (!preflightJsonInput(prefix).success) {
+        if (prefix !== undefined && !preflightJsonInput(prefix).success) {
             throw new TypeError(`Bedrock replay block ${replay.id} has invalid prefix evidence`);
         }
         if (!Array.isArray(entries) || entries.length === 0) {
@@ -1144,7 +1208,7 @@ function bedrockReplay(
         for (const [index, entry] of entries.entries()) {
             assertRecord(entry, `Bedrock replay entry ${replay.id}/${index}`);
             const kind = ownValue(entry, 'kind');
-            if (kind === 'canonical' || kind === 'reasoning') {
+            if (kind === 'canonical' || kind === 'reasoning' || kind === 'structured_json_fragment') {
                 assertNonemptyString(ownValue(entry, 'block_id'), `Bedrock replay block ID ${replay.id}/${index}`);
                 if (!preflightJsonInput(ownValue(entry, 'native')).success) {
                     throw new TypeError(`Bedrock replay native evidence ${replay.id}/${index} is invalid`);
@@ -1164,7 +1228,23 @@ function bedrockReplay(
                 throw new TypeError(`Bedrock replay entry ${replay.id}/${index} has unsupported kind ${String(kind)}`);
             }
         }
-        if (target?.model !== undefined && !bedrockConverseFamilyCapabilities(target.model).signed_reasoning_replay) {
+        const structuredOutput = ownValue(replay.payload, 'structured_output');
+        if (structuredOutput !== undefined) parseStructuredOutputEvidence(structuredOutput);
+        const requiresSignedReasoning = entries.some((entry) => {
+            if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return false;
+            return (
+                ownValue(entry, 'kind') === 'redacted_reasoning' ||
+                (ownValue(entry, 'kind') === 'reasoning' && ownValue(entry, 'signature') !== undefined)
+            );
+        });
+        if (requiresSignedReasoning && prefix === undefined) {
+            throw new TypeError(`Bedrock replay block ${replay.id} is missing signed prefix evidence`);
+        }
+        if (
+            requiresSignedReasoning &&
+            target?.model !== undefined &&
+            !bedrockConverseFamilyCapabilities(target.model).signed_reasoning_replay
+        ) {
             const family = bedrockConverseFamilyCapabilities(target.model).family;
             throw new TypeError(
                 `Bedrock Converse ${family} model ${target.model} cannot replay signed or redacted reasoning`,
@@ -1233,14 +1313,14 @@ function compileBlock(
 ): ContentBlock | undefined {
     if (block.type === 'text') return { text: block.text };
     if (block.type === 'tool_call') {
-        if (block.arguments.type !== 'json') {
+        if (block.arguments.type === 'invalid') {
             throw new TypeError(`Bedrock Converse cannot project invalid arguments for call ${block.call_id}`);
         }
         return {
             toolUse: {
                 toolUseId: block.call_id,
                 name: block.tool_name,
-                input: structuredClone(block.arguments.value),
+                input: toolArgumentsForModel(block.arguments),
             },
         };
     }
@@ -1251,6 +1331,16 @@ function compileBlock(
     if (block.type === 'reasoning') return undefined;
     if (block.type === 'extension' && block.model_projection === 'excluded') return undefined;
     throw new TypeError(`Bedrock Converse cannot project canonical ${block.type} block ${block.id}`);
+}
+
+function structuredReplayText(entry: BedrockReplayStructuredJsonEntry, replayId: string): string {
+    assertRecord(entry.native, `Bedrock structured replay native block ${replayId}`);
+    assertAllowedKeys(entry.native, ['text'], `Bedrock structured replay native block ${replayId}`);
+    const text = ownValue(entry.native, 'text');
+    if (typeof text !== 'string') {
+        throw new TypeError(`Bedrock structured replay block ${replayId} must preserve native text`);
+    }
+    return text;
 }
 
 function compileAgentContent(
@@ -1270,7 +1360,31 @@ function compileAgentContent(
             return native === undefined ? [] : [{ native, block }];
         });
     }
-    assertExactReplayEvidence(prefix, replay.payload.prefix, replay.id, 'preceding conversation');
+    const hasProtectedReasoning = replay.payload.entries.some(
+        (entry) => entry.kind === 'redacted_reasoning' || (entry.kind === 'reasoning' && entry.signature !== undefined),
+    );
+    if (hasProtectedReasoning) {
+        if (replay.payload.prefix === undefined) {
+            throw new TypeError(`Bedrock replay block ${replay.id} is missing signed prefix evidence`);
+        }
+        assertExactReplayEvidence(prefix, replay.payload.prefix, replay.id, 'preceding conversation');
+    }
+    const structuredEntries = replay.payload.entries.filter(
+        (entry): entry is BedrockReplayStructuredJsonEntry => entry.kind === 'structured_json_fragment',
+    );
+    if (structuredEntries.length > 0) {
+        if (replay.payload.structured_output === undefined) {
+            throw new TypeError(`Bedrock replay block ${replay.id} has structured fragments without evidence`);
+        }
+        assertStructuredOutputEvidence(
+            turn,
+            replay.payload.structured_output,
+            structuredEntries.map((entry) => structuredReplayText(entry, replay.id)),
+            replay.id,
+        );
+    } else if (replay.payload.structured_output !== undefined) {
+        throw new TypeError(`Bedrock replay block ${replay.id} has structured evidence without fragments`);
+    }
     const seen = new Set<string>();
     const projected = replay.payload.entries.map((entry): { native: ContentBlock; block?: AgentContentBlock } => {
         if (entry.kind === 'redacted_reasoning') {
@@ -1282,8 +1396,18 @@ function compileAgentContent(
         if (block === undefined) {
             throw new TypeError(`Bedrock replay block ${replay.id} references missing block ${entry.block_id}`);
         }
-        if (seen.has(block.id)) throw new TypeError(`Bedrock replay block ${replay.id} repeats block ${block.id}`);
+        if (seen.has(block.id) && entry.kind !== 'structured_json_fragment') {
+            throw new TypeError(`Bedrock replay block ${replay.id} repeats block ${block.id}`);
+        }
         seen.add(block.id);
+        if (entry.kind === 'structured_json_fragment') {
+            if (block.type !== 'json') {
+                throw new TypeError(
+                    `Bedrock replay block ${replay.id} references incompatible structured block ${block.id}`,
+                );
+            }
+            return { native: { text: structuredReplayText(entry, replay.id) }, block };
+        }
         if (entry.kind === 'reasoning') {
             if (block.type !== 'reasoning' || block.representation !== 'text') {
                 throw new TypeError(
@@ -1311,7 +1435,10 @@ function compileAgentContent(
         return { native, block };
     });
     const unreferenced = [...semantic.values()].find(
-        (block) => !seen.has(block.id) && !(block.type === 'extension' && block.model_projection === 'excluded'),
+        (block) =>
+            !seen.has(block.id) &&
+            !(block.type === 'reasoning' && !hasProtectedReasoning) &&
+            !(block.type === 'extension' && block.model_projection === 'excluded'),
     );
     if (unreferenced !== undefined) {
         throw new TypeError(`Bedrock replay block ${replay.id} does not order canonical block ${unreferenced.id}`);
@@ -1332,6 +1459,7 @@ export function compileBedrockConverseConversation(
 
     for (const turn of selectedCanonicalTurns(document, {
         allow_interrupted_with_replay_protocol: BEDROCK_CONVERSE_PROTOCOL,
+        allow_interrupted_with_complete_tool_calls: true,
     })) {
         const replay = bedrockReplay(turn, target);
         if (turn.kind === 'program') {
@@ -1584,7 +1712,6 @@ export async function prepareBedrockConverseCanonicalState(input: {
         input.options.tools,
         bedrockConverseJsonValue(prompt),
     );
-    const compiled = compileBedrockConverseConversation(appended.document, target);
     const acceptedResponse = acceptedCanonicalResponse(appended.document, runtime.response_operation_id);
     if (
         acceptedResponse !== undefined &&
@@ -1597,6 +1724,11 @@ export async function prepareBedrockConverseCanonicalState(input: {
             `Accepted response operation ${runtime.response_operation_id} has incompatible request identity`,
         );
     }
+    const requestDocument =
+        acceptedResponse === undefined
+            ? appended.document
+            : await acceptedCanonicalRequestDocument(appended.document, acceptedResponse);
+    const compiled = compileBedrockConverseConversation(requestDocument, target);
     const identities =
         acceptedResponse === undefined
             ? await canonicalResponseIdentities(runtime)
@@ -1622,7 +1754,7 @@ export async function finalizeBedrockConversePreparedRequest(
     assertNonemptyString(payload.modelId, 'Bedrock Converse payload modelId');
     const compiled = compileBedrockConverseConversation(state.document, {
         provider: state.provider,
-        model: payload.modelId,
+        model: state.requested_model,
     });
     const receipt = await createRequestReceipt(
         state.document,
@@ -1630,7 +1762,7 @@ export async function finalizeBedrockConversePreparedRequest(
         {
             provider: state.provider,
             protocol: BEDROCK_CONVERSE_PROTOCOL,
-            model: payload.modelId,
+            model: state.requested_model,
             adapter_version: BEDROCK_CONVERSE_ADAPTER_VERSION,
         },
         bedrockConverseJsonValue(payload),
@@ -1711,6 +1843,7 @@ export function bedrockConverseGenerationUsage(usage: TokenUsage | undefined): G
 export async function decodeBedrockConverseCanonicalResponse(
     response: ConverseResponse,
     prepared: PreparedBedrockConverseConversation,
+    structuredOutput?: CanonicalStructuredOutput,
 ): Promise<DecodedConversationResponse> {
     assertNonemptyString(response.stopReason, 'Bedrock Converse response stopReason');
     const message = response.output?.message;
@@ -1719,7 +1852,8 @@ export async function decodeBedrockConverseCanonicalResponse(
     if (!Array.isArray(message.content) || message.content.length === 0) {
         throw new Error('Bedrock Converse response output must contain content');
     }
-    message.content.forEach((block, index) => {
+    const messageContent = message.content;
+    messageContent.forEach((block, index) => {
         assertContentBlock(block, message.role, `output/content/${index}`);
     });
     const completedAt = prepared.runtime.completed_at ?? new Date().toISOString();
@@ -1736,6 +1870,7 @@ export async function decodeBedrockConverseCanonicalResponse(
         },
         source: 'received',
         prefix: nativeConversation(prepared.native_conversation),
+        prefix_dependencies: replayDependenciesForMappings(prepared.receipt.item_mappings),
     });
     const received = records.turns[0];
     if (received?.kind !== 'agent') throw new Error('Bedrock Converse response did not decode to an agent turn');
@@ -1762,27 +1897,39 @@ export async function decodeBedrockConverseCanonicalResponse(
                       ...block,
                       dependencies: {
                           ...block.dependencies,
-                          turn_ids: [prepared.response_turn_id],
+                          turn_ids: uniqueIds(
+                              block.dependencies.turn_ids.map((id) =>
+                                  id === received.id ? prepared.response_turn_id : id,
+                              ),
+                          ),
                           request_ids: [prepared.receipt.request_id],
                       },
                   },
         ),
     } as ConversationTurn;
-    const generation: ExecutedGeneration = await createExecutedGeneration({
-        id: prepared.generation_id,
-        runtime: prepared.runtime,
-        receipt: prepared.receipt,
-        provider: prepared.provider,
-        protocol: BEDROCK_CONVERSE_PROTOCOL,
-        adapter_version: BEDROCK_CONVERSE_ADAPTER_VERSION,
-        requested_model: prepared.requested_model,
-        resolved_model: prepared.payload.modelId ?? prepared.requested_model,
-        provider_response_id: (response as ConverseResponse & { $metadata?: { requestId?: string } }).$metadata
-            ?.requestId,
-        finish_reason: response.stopReason,
-        usage: bedrockConverseGenerationUsage(response.usage),
-    });
-    return {
+    const generation: ExecutedGeneration = {
+        ...(await createExecutedGeneration({
+            id: prepared.generation_id,
+            runtime: prepared.runtime,
+            receipt: prepared.receipt,
+            provider: prepared.provider,
+            protocol: BEDROCK_CONVERSE_PROTOCOL,
+            adapter_version: BEDROCK_CONVERSE_ADAPTER_VERSION,
+            requested_model: prepared.requested_model,
+            resolved_model: prepared.payload.modelId ?? prepared.requested_model,
+            provider_response_id: (response as ConverseResponse & { $metadata?: { requestId?: string } }).$metadata
+                ?.requestId,
+            finish_reason: response.stopReason,
+            usage: bedrockConverseGenerationUsage(response.usage),
+        })),
+        status:
+            response.stopReason === 'max_tokens' || response.stopReason === 'model_context_window_exceeded'
+                ? 'cancelled'
+                : response.stopReason === 'guardrail_intervened' || response.stopReason === 'content_filtered'
+                  ? 'failed'
+                  : 'completed',
+    };
+    const decoded: DecodedConversationResponse = {
         turns: [turn],
         generation,
         assets: records.assets.map((asset) => ({
@@ -1792,6 +1939,87 @@ export async function decodeBedrockConverseCanonicalResponse(
         diagnostics: [],
         payload_fingerprint: await fingerprintJson(bedrockConverseJsonValue(response)),
     };
+    if (structuredOutput === undefined) return decoded;
+    return normalizeDecodedStructuredOutput(decoded, structuredOutput, async ({ replay_blocks, binding }) => {
+        if (replay_blocks.length > 1) {
+            throw new TypeError(`Bedrock structured output turn ${turn.id} has multiple replay blocks`);
+        }
+        const current = replay_blocks[0];
+        const base: NativeReplayBlock =
+            current ??
+            ({
+                id: await entityId('replay', prepared.runtime.response_operation_id, 'structured-output'),
+                type: 'native_replay',
+                adapter: BEDROCK_CONVERSE_ADAPTER_VERSION,
+                protocol: BEDROCK_CONVERSE_PROTOCOL,
+                compatibility_scope: {
+                    provider: prepared.provider,
+                    protocol: BEDROCK_CONVERSE_PROTOCOL,
+                    model: prepared.requested_model,
+                    adapter_version: BEDROCK_CONVERSE_ADAPTER_VERSION,
+                },
+                payload: {
+                    type: 'bedrock_converse_content_order',
+                    entries: [],
+                },
+                dependencies: {
+                    turn_ids: [turn.id],
+                    block_ids: binding.source_block_ids,
+                    call_ids: [],
+                    request_ids: [prepared.receipt.request_id],
+                },
+            } satisfies NativeReplayBlock);
+        const replay = remapStructuredOutputReplayDependencies(base, binding);
+        const payload = replay.payload as unknown as BedrockReplayPayload;
+        const sources = new Set(binding.source_block_ids);
+        let sourceIndex = 0;
+        const entries =
+            current === undefined
+                ? messageContent.flatMap((native): BedrockReplayEntry[] => {
+                      if (native.text === undefined) return [];
+                      const sourceId = binding.source_block_ids[sourceIndex];
+                      const expected = binding.source_texts[sourceIndex];
+                      sourceIndex += 1;
+                      if (sourceId === undefined || native.text !== expected) {
+                          throw new TypeError(
+                              'Bedrock structured output replay does not match its source text partition',
+                          );
+                      }
+                      return [
+                          {
+                              kind: 'structured_json_fragment',
+                              block_id: binding.block_id,
+                              native: bedrockConverseJsonValue(native),
+                          },
+                      ];
+                  })
+                : payload.entries.map((entry): BedrockReplayEntry => {
+                      if (entry.kind !== 'canonical' || !sources.has(entry.block_id)) return entry;
+                      const expected = binding.source_texts[sourceIndex];
+                      sourceIndex += 1;
+                      if (
+                          structuredReplayText({ ...entry, kind: 'structured_json_fragment' }, replay.id) !== expected
+                      ) {
+                          throw new TypeError(
+                              'Bedrock structured output replay does not match its source text partition',
+                          );
+                      }
+                      return { ...entry, kind: 'structured_json_fragment', block_id: binding.block_id };
+                  });
+        if (sourceIndex !== binding.source_texts.length) {
+            throw new TypeError('Bedrock structured output replay is missing source text partitions');
+        }
+        return [
+            {
+                ...replay,
+                payload: {
+                    ...payload,
+                    entries,
+                    structured_output: structuredOutputEvidence(binding),
+                } as unknown as JsonValue,
+            },
+        ];
+    });
 }
 
 export function appendBedrockConverseCanonicalResponse(

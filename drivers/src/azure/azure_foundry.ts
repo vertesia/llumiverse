@@ -13,6 +13,8 @@ import type {
 import ModelClient, { isUnexpected } from '@azure-rest/ai-inference';
 import {
     type AIModel,
+    type CanonicalExecutionResponse,
+    type CanonicalExecutionStream,
     type Completion,
     type CompletionStream,
     type DriverCompletionStream,
@@ -97,6 +99,10 @@ class AzureFoundryInferenceProtocolDriver extends OpenAIChatCompletionsDriverBas
     constructor(service: AzureInferenceClient, options: DriverOptions) {
         super({ ...options, resultSchemaMode: 'response_format', toolSchemaMode: 'compatible' });
         this.service = service;
+    }
+
+    protected override resolveChatCompletionsRequestModel(options: ExecutionOptions): string {
+        return parseAzureFoundryModelId(options.model).deploymentName;
     }
 
     async _postChatCompletion(
@@ -214,6 +220,34 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         return super.stream(segments, options, signal);
     }
 
+    override async executeCanonical(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        if (
+            openAIAudioTask(options.model) &&
+            (await this.isOpenAIDeployment(options.model, signal, options.httpTimeout))
+        ) {
+            return this.getOpenAIProtocolDriver().executeCanonical(segments, options, signal);
+        }
+        return super.executeCanonical(segments, options, signal);
+    }
+
+    override async streamCanonical(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionStream> {
+        if (
+            openAIAudioTask(options.model) &&
+            (await this.isOpenAIDeployment(options.model, signal, options.httpTimeout))
+        ) {
+            return this.getOpenAIProtocolDriver().streamCanonical(segments, options, signal);
+        }
+        return super.streamCanonical(segments, options, signal);
+    }
+
     OPENAI_API_VERSION = '2025-01-01-preview';
     INFERENCE_API_VERSION = '2024-05-01-preview';
 
@@ -296,6 +330,36 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
 
     public formatDebugPrompt(prompt: ResponseInputItem[]): ResponseInputItem[] {
         return formatOpenAIDebugPrompt(prompt);
+    }
+
+    override async requestCanonicalTextCompletion(
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        if (await this.isOpenAIDeployment(options.model, signal, options.httpTimeout)) {
+            return this.getOpenAIProtocolDriver().requestCanonicalTextCompletion(prompt, options, signal);
+        }
+        return this.inferenceProtocolDriver.requestCanonicalTextCompletion(
+            toAzureFoundryChatPrompt(prompt),
+            toAzureFoundryChatOptions(options),
+            signal,
+        );
+    }
+
+    override async requestCanonicalTextCompletionStream(
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionStream> {
+        if (await this.isOpenAIDeployment(options.model, signal, options.httpTimeout)) {
+            return this.getOpenAIProtocolDriver().requestCanonicalTextCompletionStream(prompt, options, signal);
+        }
+        return this.inferenceProtocolDriver.requestCanonicalTextCompletionStream(
+            toAzureFoundryChatPrompt(prompt),
+            toAzureFoundryChatOptions(options),
+            signal,
+        );
     }
 
     async requestTextCompletion(
@@ -607,7 +671,7 @@ function toAzureFoundryChatPrompt(items: ResponseInputItem[]): OpenAIChatComplet
     return { _is_openai_chat_completions: true, messages };
 }
 
-function toAzureFoundryChatOptions(options: ExecutionOptions, deploymentName: string): ExecutionOptions {
+function toAzureFoundryChatOptions(options: ExecutionOptions, deploymentName = options.model): ExecutionOptions {
     return {
         ...options,
         model: deploymentName,

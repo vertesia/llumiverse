@@ -131,6 +131,24 @@ describe('partial compaction semantics', () => {
         expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'GENERATION_SOURCE_INVALID')).toBe(true);
     });
 
+    it('rejects an ordinary generation whose otherwise-valid request receipt names another source revision', () => {
+        const document = emptyDocument();
+        document.revision = 3;
+        const generation = derivationGeneration();
+        generation.source = { conversation_id: document.id, revision: 1 };
+        generation.request_receipt.source = { conversation_id: document.id, revision: 2 };
+        document.generations[generation.id] = generation;
+
+        const result = validateConversationDocument(document);
+        expect(result.success).toBe(false);
+        expect(
+            result.diagnostics.some(
+                (diagnostic) =>
+                    diagnostic.code === 'GENERATION_REQUEST_MISMATCH' && diagnostic.path.endsWith('/source'),
+            ),
+        ).toBe(true);
+    });
+
     it('allows a replaced block and a disjoint direct block from the same turn', () => {
         expect(validateConversationDocument(partialCompactionDocument())).toMatchObject({ success: true });
     });

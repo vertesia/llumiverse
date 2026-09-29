@@ -3,10 +3,13 @@ import {
     AppendConversationRecordsOptionsSchema,
     AppendConversationRecordsResultSchema,
     ContentBlockSchema,
+    ConversationAcceptedOutputFragmentSchema,
     ConversationDiagnosticSchema,
     ConversationDocumentSchema,
     ConversationInspectionSchema,
     ConversationRecordBatchSchema,
+    ConversationToolExecutionRequestSchema,
+    ConversationToolExecutionResultSchema,
     ConversationTurnSchema,
     DecodedConversationResponseSchema,
     GenerationSchema,
@@ -65,6 +68,18 @@ export const ConversationGenerationJsonSchema = emitJsonSchema(GenerationSchema,
 export const ConversationDiagnosticJsonSchema = emitJsonSchema(ConversationDiagnosticSchema, 'diagnostic');
 export const ConversationInspectionJsonSchema = emitJsonSchema(ConversationInspectionSchema, 'inspection');
 export const ConversationRecordBatchJsonSchema = emitJsonSchema(ConversationRecordBatchSchema, 'record-batch');
+export const ConversationAcceptedOutputFragmentJsonSchema = emitJsonSchema(
+    ConversationAcceptedOutputFragmentSchema,
+    'accepted-output-fragment',
+);
+export const ConversationToolExecutionRequestJsonSchema = emitJsonSchema(
+    ConversationToolExecutionRequestSchema,
+    'tool-execution-request',
+);
+export const ConversationToolExecutionResultJsonSchema = emitJsonSchema(
+    ConversationToolExecutionResultSchema,
+    'tool-execution-result',
+);
 export const AppendConversationRecordsOptionsJsonSchema = emitJsonSchema(
     AppendConversationRecordsOptionsSchema,
     'append-options',
@@ -79,6 +94,7 @@ export const DecodedConversationResponseJsonSchema = emitJsonSchema(
 );
 
 export const CONVERSATION_JSON_SCHEMAS = Object.freeze({
+    accepted_output_fragment: ConversationAcceptedOutputFragmentJsonSchema,
     append_options: AppendConversationRecordsOptionsJsonSchema,
     append_result: AppendConversationRecordsResultJsonSchema,
     content_block: ConversationContentBlockJsonSchema,
@@ -88,5 +104,7 @@ export const CONVERSATION_JSON_SCHEMAS = Object.freeze({
     generation: ConversationGenerationJsonSchema,
     inspection: ConversationInspectionJsonSchema,
     record_batch: ConversationRecordBatchJsonSchema,
+    tool_execution_request: ConversationToolExecutionRequestJsonSchema,
+    tool_execution_result: ConversationToolExecutionResultJsonSchema,
     turn: ConversationTurnJsonSchema,
 });

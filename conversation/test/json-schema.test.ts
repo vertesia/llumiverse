@@ -8,6 +8,8 @@ import {
     ConversationDocumentJsonSchema,
     ConversationGenerationJsonSchema,
     ConversationInspectionJsonSchema,
+    ConversationToolExecutionRequestJsonSchema,
+    ConversationToolExecutionResultJsonSchema,
     ConversationTurnJsonSchema,
 } from '../src/json-schema.js';
 import { emptyDocument, generatedAgentTurn, importedGeneration, toolResultTurn } from './fixtures.js';
@@ -52,9 +54,11 @@ describe('generated JSON Schema', () => {
             ConversationGenerationJsonSchema,
             ConversationDiagnosticJsonSchema,
             ConversationInspectionJsonSchema,
+            ConversationToolExecutionRequestJsonSchema,
+            ConversationToolExecutionResultJsonSchema,
         ]) {
             expect(schema.$schema).toBe('https://json-schema.org/draft/2020-12/schema');
-            expect(String(schema.$id)).toContain('2026-09-11.ingestion.1');
+            expect(String(schema.$id)).toContain('2026-09-30.adoption.1');
             expectSortedAndFrozen(schema);
         }
     });

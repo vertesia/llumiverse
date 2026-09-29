@@ -10,31 +10,15 @@ import {
     LlumiverseError,
     type ToolUse,
 } from '@llumiverse/common';
+import type { CanonicalExecutionResponse, CanonicalExecutionStream } from './CanonicalExecution.js';
 import { stripAudioFromCompletion, stripAudioPayloads } from './conversation-utils.js';
 import type { AbstractDriver } from './Driver.js';
 import { DEFAULT_DRIVER_REQUEST_TIMEOUT_MS } from './http-agent.js';
+import { MalformedStreamingToolArgumentsError } from './stream-errors.js';
+
+export { MalformedStreamingToolArgumentsError } from './stream-errors.js';
 
 type StreamingToolUse = ToolUse<unknown> & { _actual_id?: string };
-
-export class MalformedStreamingToolArgumentsError extends LlumiverseError {
-    constructor(
-        tool: StreamingToolUse,
-        finishReason: string | undefined,
-        context: { provider: string; model: string },
-        originalError: unknown,
-    ) {
-        const argumentChars = typeof tool.tool_input === 'string' ? tool.tool_input.length : 0;
-        super(
-            `[${context.provider}] Received malformed JSON arguments for streamed tool "${tool.tool_name || 'unknown'}" ` +
-                `(finish_reason=${finishReason ?? 'unknown'}, argument_chars=${argumentChars})`,
-            false,
-            { ...context, operation: 'stream' },
-            originalError,
-            undefined,
-            'MalformedStreamingToolArgumentsError',
-        );
-    }
-}
 
 export const DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS = DEFAULT_DRIVER_REQUEST_TIMEOUT_MS;
 
@@ -126,7 +110,12 @@ abstract class ManagedCompletionStream<PromptT> implements CompletionStream<Prom
     }
 }
 
-class LeasedCompletionStream<PromptT> implements CompletionStream<PromptT> {
+interface LeasableExecutionStream<CompletionT> extends AsyncIterable<string> {
+    completion: CompletionT | undefined;
+    cancel(): Promise<void>;
+}
+
+class LeasedExecutionStream<CompletionT> implements LeasableExecutionStream<CompletionT> {
     private activeIterator?: AsyncIterator<string>;
     private iteratorCreated = false;
     private readonly lease: CompletionStreamLease;
@@ -134,7 +123,7 @@ class LeasedCompletionStream<PromptT> implements CompletionStream<PromptT> {
     private cancellation?: Promise<void>;
 
     constructor(
-        private readonly stream: CompletionStream<PromptT>,
+        private readonly stream: LeasableExecutionStream<CompletionT>,
         releaseOperation: () => void,
         streamStartTimeoutMs: number,
         private readonly signal?: AbortSignal,
@@ -157,7 +146,7 @@ class LeasedCompletionStream<PromptT> implements CompletionStream<PromptT> {
         }
     }
 
-    get completion(): ExecutionResponse<PromptT> | undefined {
+    get completion(): CompletionT | undefined {
         return this.stream.completion;
     }
 
@@ -238,7 +227,21 @@ export function leaseCompletionStream<PromptT>(
     streamStartTimeoutMs = DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS,
     signal?: AbortSignal,
 ): CompletionStream<PromptT> {
-    return new LeasedCompletionStream(stream, releaseOperation, streamStartTimeoutMs, signal);
+    return new LeasedExecutionStream(stream, releaseOperation, streamStartTimeoutMs, signal);
+}
+
+export function leaseCanonicalExecutionStream(
+    stream: CanonicalExecutionStream,
+    releaseOperation: () => void,
+    streamStartTimeoutMs = DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS,
+    signal?: AbortSignal,
+): CanonicalExecutionStream {
+    return new LeasedExecutionStream<CanonicalExecutionResponse>(
+        stream,
+        releaseOperation,
+        streamStartTimeoutMs,
+        signal,
+    );
 }
 
 export function finalizeStreamingToolUse(

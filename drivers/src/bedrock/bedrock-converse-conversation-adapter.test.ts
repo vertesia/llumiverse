@@ -1,10 +1,15 @@
 import type { ContentBlock, ConverseRequest, TokenUsage } from '@aws-sdk/client-bedrock-runtime';
-import { parseConversationDocument } from '@llumiverse/conversation';
+import {
+    externalizeToolCallArguments,
+    parseConversationDocument,
+    prepareToolArgumentExternalization,
+} from '@llumiverse/conversation';
 import { describe, expect, it } from 'vitest';
 import {
     BEDROCK_CONVERSE_ADAPTER_VERSION,
     BEDROCK_CONVERSE_PROTOCOL,
     bedrockConverseGenerationUsage,
+    bedrockConverseJsonValue,
     compileBedrockConverseConversation,
     exportLegacyBedrockConverseConversation,
     importBedrockConverseConversation,
@@ -96,6 +101,63 @@ describe('Bedrock Converse canonical adapter', () => {
         expect(results[1]?.blocks[0].content.map((block) => block.type)).toEqual(['text', 'json']);
     });
 
+    it('projects the compact model view of canonical externalized tool arguments', async () => {
+        const document = await importHistory(
+            history([
+                {
+                    role: 'assistant',
+                    content: [
+                        {
+                            toolUse: {
+                                toolUseId: 'write-call',
+                                name: 'write_artifact',
+                                input: { name: 'large.txt', content: 'exact executable content' },
+                            },
+                        },
+                    ],
+                },
+            ]),
+            'bedrock-externalized-tool-input',
+        );
+        const prepared = await prepareToolArgumentExternalization(document, 'write-call', ['content']);
+        const externalized = await externalizeToolCallArguments(document, {
+            operation_id: 'externalize-write-call',
+            expected_revision: document.revision,
+            recorded_at: recordedAt,
+            call_id: 'write-call',
+            input_path: ['content'],
+            model_value: { name: 'large.txt', content: '[stored compact view]' },
+            exact_arguments_hash: prepared.exact_arguments_hash,
+            asset: {
+                id: 'asset-write-call',
+                kind: 'text',
+                mime_type: 'text/plain',
+                storage: {
+                    type: 'external',
+                    resolver: 'test.artifact',
+                    locator: { path: 'tool-inputs/write-call.txt' },
+                },
+                provenance: { type: 'imported', source: 'test' },
+                byte_length: prepared.byte_length,
+                content_hash: prepared.content_hash,
+                created_at: recordedAt,
+            },
+        });
+
+        expect(compileBedrockConverseConversation(externalized.document).conversation.messages?.at(-1)).toEqual({
+            role: 'assistant',
+            content: [
+                {
+                    toolUse: {
+                        toolUseId: 'write-call',
+                        name: 'write_artifact',
+                        input: { name: 'large.txt', content: '[stored compact view]' },
+                    },
+                },
+            ],
+        });
+    });
+
     it('preserves interleaved tool results and user text in their original native message', async () => {
         const native = history([
             {
@@ -155,6 +217,26 @@ describe('Bedrock Converse canonical adapter', () => {
         const document = await importHistory(native, 'bedrock-media-reasoning', 'anthropic.claude-sonnet-4-6');
         const persisted = parseConversationDocument(JSON.parse(JSON.stringify(document)));
 
+        const signedTurnIndex = persisted.turns.findIndex((turn) =>
+            turn.blocks.some((block) => block.type === 'native_replay'),
+        );
+        const signedTurn = persisted.turns[signedTurnIndex];
+        const signedReplay = signedTurn?.blocks.find((block) => block.type === 'native_replay');
+        if (signedReplay?.type !== 'native_replay') throw new Error('Expected signed replay block');
+        const signedPrefixTurns = persisted.turns.slice(0, signedTurnIndex + 1);
+        const expectedBlockIds = signedPrefixTurns.flatMap((turn) =>
+            turn.blocks.flatMap((block) => [
+                ...(block.type === 'native_replay' ? [] : [block.id]),
+                ...(block.type === 'tool_result' ? block.content.map((nested) => nested.id) : []),
+            ]),
+        );
+        const expectedCallIds = signedPrefixTurns.flatMap((turn) =>
+            turn.blocks.flatMap((block) => (block.type === 'tool_call' ? [block.call_id] : [])),
+        );
+        expect(new Set(signedReplay.dependencies.turn_ids)).toEqual(new Set(signedPrefixTurns.map((turn) => turn.id)));
+        expect(new Set(signedReplay.dependencies.block_ids)).toEqual(new Set(expectedBlockIds));
+        expect(new Set(signedReplay.dependencies.call_ids)).toEqual(new Set(expectedCallIds));
+
         expect(
             exportLegacyBedrockConverseConversation(persisted, {
                 provider: 'bedrock',
@@ -171,7 +253,13 @@ describe('Bedrock Converse canonical adapter', () => {
 
     it('rejects edits to signed reasoning evidence and its preceding native chain', async () => {
         const native = history([
-            { role: 'user', content: [{ text: 'Bound prefix.' }] },
+            {
+                role: 'user',
+                content: [
+                    { image: { format: 'png', source: { bytes: new Uint8Array([1, 2, 3]) } } },
+                    { text: 'Bound prefix.' },
+                ],
+            },
             {
                 role: 'assistant',
                 content: [
@@ -194,13 +282,43 @@ describe('Bedrock Converse canonical adapter', () => {
         ).toThrow(/no longer matches protected reasoning block/);
 
         const prefixEdited = await importHistory(native, 'bedrock-prefix-edit', 'anthropic.claude-sonnet-4-6');
-        const prefixText = prefixEdited.turns
-            .find((turn) => turn.kind === 'user')
-            ?.blocks.find((block) => block.type === 'text' && block.text === 'Bound prefix.');
+        const prefixTurn = prefixEdited.turns.find(
+            (turn) =>
+                turn.kind === 'user' &&
+                turn.blocks.some((block) => block.type === 'text' && block.text === 'Bound prefix.'),
+        );
+        const prefixText =
+            prefixTurn?.kind === 'user'
+                ? prefixTurn.blocks.find((block) => block.type === 'text' && block.text === 'Bound prefix.')
+                : undefined;
         if (prefixText?.type !== 'text') throw new Error('Expected prefix text block');
         prefixText.text = 'Changed prefix.';
         expect(() =>
             compileBedrockConverseConversation(prefixEdited, {
+                provider: 'bedrock',
+                model: 'anthropic.claude-sonnet-4-6',
+            }),
+        ).toThrow(/no longer matches protected preceding conversation/);
+
+        const toolEdited = await importHistory(native, 'bedrock-tool-edit', 'anthropic.claude-sonnet-4-6');
+        const call = toolEdited.turns
+            .find((turn) => turn.kind === 'agent')
+            ?.blocks.find((block) => block.type === 'tool_call');
+        if (call?.type !== 'tool_call' || call.arguments.type !== 'json') throw new Error('Expected tool call block');
+        call.arguments.value = { exact: false };
+        expect(() =>
+            compileBedrockConverseConversation(toolEdited, {
+                provider: 'bedrock',
+                model: 'anthropic.claude-sonnet-4-6',
+            }),
+        ).toThrow(/no longer matches protected content block/);
+
+        const mediaEdited = await importHistory(native, 'bedrock-media-edit', 'anthropic.claude-sonnet-4-6');
+        const image = Object.values(mediaEdited.assets).find((asset) => asset.kind === 'image');
+        if (image?.storage.type !== 'inline_base64') throw new Error('Expected inline image asset');
+        image.storage.data = Buffer.from([9, 9, 9]).toString('base64');
+        expect(() =>
+            compileBedrockConverseConversation(mediaEdited, {
                 provider: 'bedrock',
                 model: 'anthropic.claude-sonnet-4-6',
             }),
@@ -285,6 +403,17 @@ describe('Bedrock Converse canonical adapter', () => {
         expect(
             exportLegacyBedrockConverseConversation(await importHistory(native, 'bedrock-literal-sentinel')),
         ).toEqual(native);
+    });
+
+    it('rejects reserved __proto__ keys without dropping them during transport cloning', () => {
+        const primitive = JSON.parse('{"__proto__":"customer-value"}') as unknown;
+        const object = JSON.parse('{"__proto__":{"customer":true}}') as unknown;
+
+        expect(() => bedrockConverseJsonValue(primitive)).toThrow(/exact JSON data/);
+        expect(() => bedrockConverseJsonValue(object)).toThrow(/exact JSON data/);
+        expect(
+            bedrockConverseJsonValue(JSON.parse('{"constructor":"customer-constructor","toString":{"customer":true}}')),
+        ).toEqual({ constructor: 'customer-constructor', toString: { customer: true } });
     });
 
     it('compiles selected context without deleting excluded source history', async () => {

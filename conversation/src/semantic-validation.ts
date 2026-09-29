@@ -88,6 +88,14 @@ function selectionsOverlap(first: ActiveSelection, second: ActiveSelection): boo
     return false;
 }
 
+function jsonPathsOverlap(first: readonly (string | number)[], second: readonly (string | number)[]): boolean {
+    const shared = Math.min(first.length, second.length);
+    for (let index = 0; index < shared; index += 1) {
+        if (first[index] !== second[index]) return false;
+    }
+    return true;
+}
+
 function validateDirectedCycles(
     nodeIds: Iterable<string>,
     edgesFor: (id: string) => readonly string[],
@@ -126,6 +134,13 @@ function compareTimestamps(first: string, second: string): number {
 
 function getTurnGenerationId(turn: ConversationTurn): string | undefined {
     return turn.kind === 'agent' && 'generation_id' in turn ? turn.generation_id : undefined;
+}
+
+function generatedTurnStatusMatchesGeneration(turn: ConversationTurn, generation: Generation): boolean {
+    if (turn.kind !== 'agent' || !('generation_id' in turn)) return true;
+    if (generation.status === 'failed') return turn.status === 'failed';
+    if (generation.status === 'cancelled') return turn.status === 'interrupted';
+    return turn.status !== 'failed';
 }
 
 function allTurnBlocks(turn: ConversationTurn, turnPath: string): LocatedBlock[] {
@@ -328,6 +343,17 @@ function validateRequestReceipt(
             'GENERATION_SOURCE_INVALID',
             `${path}/source`,
             'Request receipt source is not a valid revision of this document',
+        );
+    }
+    if (
+        receipt.source.conversation_id !== generation.source.conversation_id ||
+        receipt.source.revision !== generation.source.revision
+    ) {
+        add(
+            'GENERATION_REQUEST_MISMATCH',
+            `${path}/source`,
+            'Request receipt source must exactly match its generation source',
+            generation.id,
         );
     }
     if (
@@ -836,6 +862,16 @@ export function validateConversationSemantics(document: ConversationDocument): C
                 `Generation ${diagnosticValue(generationId)} does not exist`,
                 turn.id,
             );
+        } else if (generationId !== undefined) {
+            const generation = document.generations[generationId];
+            if (!generatedTurnStatusMatchesGeneration(turn, generation)) {
+                add(
+                    'GENERATION_STATUS_MISMATCH',
+                    `${path}/status`,
+                    'Generated turn status does not match its generation status',
+                    turn.id,
+                );
+            }
         }
         if (turn.parent_turn_id !== undefined && !turnsById.has(turn.parent_turn_id)) {
             add(
@@ -959,6 +995,32 @@ export function validateConversationSemantics(document: ConversationDocument): C
     for (const [receiptId, receipt] of Object.entries(document.execution_receipts)) {
         const path = recordPath('execution_receipts', receiptId);
         const call = callsById.get(receipt.call_id);
+        const callSource = receipt.call_source;
+        if (
+            callSource !== undefined &&
+            (callSource.call_id !== receipt.call_id ||
+                callSource.conversation.conversation_id !== document.id ||
+                callSource.conversation.revision > document.revision)
+        ) {
+            add(
+                'TOOL_RECEIPT_MISMATCH',
+                `${path}/call_source`,
+                'Execution receipt call source is not a valid revision of its conversation call',
+                receipt.id,
+            );
+        }
+        if (
+            callSource !== undefined &&
+            call !== undefined &&
+            (call.turn_id !== callSource.turn_id || call.block.id !== callSource.block_id)
+        ) {
+            add(
+                'TOOL_RECEIPT_MISMATCH',
+                `${path}/call_source`,
+                'Execution receipt call source does not match its retained tool call',
+                receipt.id,
+            );
+        }
         // Receipts outlive logically deleted call/result content. Absence is therefore valid; when
         // the content remains present, its executor and result identity are checked.
         if (call !== undefined && call.block.executor !== receipt.executor) {
@@ -1023,13 +1085,128 @@ export function validateConversationSemantics(document: ConversationDocument): C
                 );
             }
         }
-        if (block.type === 'tool_result' && !callsById.has(block.call_id) && !terminalReceiptCalls.has(block.call_id)) {
-            add(
-                'TOOL_RESULT_UNRESOLVED',
-                `${path}/call_id`,
-                `Tool result call ${diagnosticValue(block.call_id)} has no retained call or terminal receipt`,
-                block.id,
-            );
+        if (block.type === 'tool_call' && block.arguments.type === 'externalized_json') {
+            const replayArchives = block.arguments.invalidated_replay_archives ?? [];
+            for (let replayIndex = 0; replayIndex < replayArchives.length; replayIndex += 1) {
+                const archive = replayArchives[replayIndex];
+                const replayId = archive.replay_block_id;
+                if (replayArchives.findIndex((candidate) => candidate.replay_block_id === replayId) !== replayIndex) {
+                    add(
+                        'TOOL_ARGUMENT_HYDRATION_INVALID',
+                        `${path}/arguments/invalidated_replay_archives/${replayIndex}/replay_block_id`,
+                        `Invalidated replay block ${diagnosticValue(replayId)} is duplicated`,
+                        block.id,
+                    );
+                }
+                if (blocksById.has(replayId)) {
+                    add(
+                        'TOOL_ARGUMENT_HYDRATION_INVALID',
+                        `${path}/arguments/invalidated_replay_archives/${replayIndex}/replay_block_id`,
+                        `Invalidated replay block ${diagnosticValue(replayId)} is still retained`,
+                        block.id,
+                    );
+                }
+                const archiveAsset = hasOwn(document.assets, archive.asset_id)
+                    ? document.assets[archive.asset_id]
+                    : undefined;
+                if (archiveAsset === undefined) {
+                    add(
+                        'REFERENCE_NOT_FOUND',
+                        `${path}/arguments/invalidated_replay_archives/${replayIndex}/asset_id`,
+                        `Replay archive asset ${diagnosticValue(archive.asset_id)} does not exist`,
+                        block.id,
+                    );
+                } else if (
+                    archiveAsset.kind !== 'document' ||
+                    archiveAsset.mime_type !== 'application/json' ||
+                    archiveAsset.storage.type !== 'external' ||
+                    archiveAsset.content_hash !== archive.content_hash
+                ) {
+                    add(
+                        'TOOL_ARGUMENT_HYDRATION_INVALID',
+                        `${path}/arguments/invalidated_replay_archives/${replayIndex}/asset_id`,
+                        `Replay archive asset ${diagnosticValue(archive.asset_id)} is incompatible`,
+                        block.id,
+                    );
+                }
+            }
+            for (let hydrationIndex = 0; hydrationIndex < block.arguments.hydration.length; hydrationIndex += 1) {
+                const hydration = block.arguments.hydration[hydrationIndex];
+                const hydrationPath = `${path}/arguments/hydration/${hydrationIndex}`;
+                for (let priorIndex = 0; priorIndex < hydrationIndex; priorIndex += 1) {
+                    const prior = block.arguments.hydration[priorIndex];
+                    if (jsonPathsOverlap(prior.input_path, hydration.input_path)) {
+                        add(
+                            'TOOL_ARGUMENT_HYDRATION_INVALID',
+                            `${hydrationPath}/input_path`,
+                            `Tool argument hydration path overlaps hydration ${priorIndex}`,
+                            block.id,
+                        );
+                    }
+                }
+                const asset = hasOwn(document.assets, hydration.asset_id)
+                    ? document.assets[hydration.asset_id]
+                    : undefined;
+                if (asset === undefined) {
+                    add(
+                        'REFERENCE_NOT_FOUND',
+                        `${hydrationPath}/asset_id`,
+                        `Tool argument asset ${diagnosticValue(hydration.asset_id)} does not exist`,
+                        block.id,
+                    );
+                } else {
+                    if (asset.kind !== 'text' || asset.mime_type !== 'text/plain') {
+                        add(
+                            'ASSET_KIND_MISMATCH',
+                            `${hydrationPath}/asset_id`,
+                            `Text hydration references incompatible asset ${diagnosticValue(asset.id)}`,
+                            block.id,
+                        );
+                    }
+                    if (asset.storage.type !== 'external') {
+                        add(
+                            'TOOL_ARGUMENT_HYDRATION_INVALID',
+                            `${hydrationPath}/asset_id`,
+                            'Externalized tool arguments require durable external asset storage',
+                            block.id,
+                        );
+                    }
+                    if (asset.content_hash === undefined || asset.content_hash !== hydration.content_hash) {
+                        add(
+                            'TOOL_ARGUMENT_HYDRATION_INVALID',
+                            `${hydrationPath}/content_hash`,
+                            `Tool argument asset ${diagnosticValue(asset.id)} content hash does not match`,
+                            block.id,
+                        );
+                    }
+                    if (asset.byte_length === undefined) {
+                        add(
+                            'TOOL_ARGUMENT_HYDRATION_INVALID',
+                            `${hydrationPath}/asset_id`,
+                            `Tool argument asset ${diagnosticValue(asset.id)} has no byte length`,
+                            block.id,
+                        );
+                    }
+                }
+            }
+        }
+        if (block.type === 'tool_result') {
+            const call = callsById.get(block.call_id);
+            if (call === undefined && !terminalReceiptCalls.has(block.call_id)) {
+                add(
+                    'TOOL_RESULT_UNRESOLVED',
+                    `${path}/call_id`,
+                    `Tool result call ${diagnosticValue(block.call_id)} has no retained call or terminal receipt`,
+                    block.id,
+                );
+            } else if (call?.block.arguments.type === 'invalid') {
+                add(
+                    'TOOL_RESULT_UNRESOLVED',
+                    `${path}/call_id`,
+                    `Tool result call ${diagnosticValue(block.call_id)} references non-executable invalid arguments`,
+                    block.id,
+                );
+            }
         }
         if (
             block.type === 'image' ||

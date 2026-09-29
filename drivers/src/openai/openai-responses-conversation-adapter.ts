@@ -24,11 +24,13 @@ import {
     preflightJsonInput,
     type ToolDefinition,
     type ToolResultBlock,
+    toolArgumentsForModel,
     type UserContentBlock,
 } from '@llumiverse/conversation';
 import type { CanonicalStructuredOutput } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import {
+    acceptedCanonicalRequestDocument,
     acceptedCanonicalResponse,
     appendCanonicalPrompt,
     type CanonicalPreparedState,
@@ -109,6 +111,8 @@ type OpenAIResponsesReplayPayload = JsonObject & {
     type: 'openai_responses_items';
     items: JsonValue[];
     semantic_entries: ReplaySemanticEntry[];
+    block_offset?: number;
+    item_order?: number;
     structured_output?: JsonObject;
 };
 
@@ -117,6 +121,54 @@ interface ConvertedRecords {
     assets: Asset[];
     mappings: NativeItemMapping[];
     execution_receipts: ExecutionReceipt[];
+}
+
+function semanticDependencyIds(turns: readonly ConversationTurn[]): {
+    turn_ids: string[];
+    block_ids: string[];
+    call_ids: string[];
+} {
+    return {
+        turn_ids: [...new Set(turns.map((turn) => turn.id))],
+        block_ids: [
+            ...new Set(
+                turns.flatMap((turn) => {
+                    const blocks = turn.kind === 'tool' ? turn.blocks[0].content : turn.blocks;
+                    return blocks.filter((block) => block.type !== 'native_replay').map((block) => block.id);
+                }),
+            ),
+        ],
+        call_ids: [
+            ...new Set(
+                turns.flatMap((turn) => {
+                    if (turn.kind === 'tool') return [turn.blocks[0].call_id];
+                    return turn.blocks.flatMap((block) => (block.type === 'tool_call' ? [block.call_id] : []));
+                }),
+            ),
+        ],
+    };
+}
+
+function bindProtectedResponsesExchange(turns: readonly ConversationTurn[]): ConversationTurn[] {
+    const bound: ConversationTurn[] = [];
+    let activeExchange: ConversationTurn[] = [];
+    for (const sourceTurn of turns) {
+        if (sourceTurn.kind === 'user') activeExchange = [];
+        const dependencies = semanticDependencyIds([...activeExchange, sourceTurn]);
+        const rewrite = (block: ContentBlock): ContentBlock =>
+            block.type === 'native_replay' &&
+            block.protocol === OPENAI_RESPONSES_PROTOCOL &&
+            block.dependency_policy !== 'discard_on_dependency_change'
+                ? { ...block, dependencies: { ...block.dependencies, ...dependencies } }
+                : block;
+        const turn: ConversationTurn =
+            sourceTurn.kind === 'agent'
+                ? { ...sourceTurn, blocks: sourceTurn.blocks.map(rewrite) as AgentContentBlock[] }
+                : sourceTurn;
+        bound.push(turn);
+        activeExchange.push(turn);
+    }
+    return bound;
 }
 
 export interface PreparedOpenAIResponsesConversation
@@ -389,10 +441,12 @@ async function assistantItemsRecords(input: {
     const blocks: AgentContentBlock[] = [];
     const assets: Asset[] = [];
     const semanticEntries: ReplaySemanticEntry[] = [];
+    const itemBlockOffsets: number[] = [];
     const mappings: NativeItemMapping[] = [{ canonical_id: turnId, native_id: nativePath, kind: 'turn' }];
     for (let localIndex = 0; localIndex < input.items.length; localIndex += 1) {
         const item = input.items[localIndex];
         const itemIndex = input.first_item_index + localIndex;
+        itemBlockOffsets.push(blocks.length);
         const type = item.type;
         if (type === 'message' || item.role === 'assistant') {
             const content = Array.isArray(item.content)
@@ -518,38 +572,58 @@ async function assistantItemsRecords(input: {
             mappings.push({ canonical_id: blockId, native_id: `items/${itemIndex}`, kind: 'block' });
         }
     }
-    const replayId = await entityId('replay', input.scope, input.first_item_index);
-    const requiresModelScope = input.items.some((item) => {
+    const semanticBlocks = [...blocks];
+    const protectedBatch = input.items.some((item) => {
         const type = item.type;
         return (
             type === 'reasoning' || (type !== 'message' && type !== 'function_call' && type !== 'image_generation_call')
         );
     });
-    const replay: AgentContentBlock = {
-        id: replayId,
-        type: 'native_replay',
-        adapter: OPENAI_RESPONSES_ADAPTER_VERSION,
-        protocol: OPENAI_RESPONSES_PROTOCOL,
-        compatibility_scope: {
-            provider: input.provider,
+    const batchCallIds = semanticBlocks.flatMap((block) => (block.type === 'tool_call' ? [block.call_id] : []));
+    for (let localIndex = 0; localIndex < input.items.length; localIndex += 1) {
+        const item = input.items[localIndex];
+        const itemIndex = input.first_item_index + localIndex;
+        const itemEntries = semanticEntries
+            .filter((entry) => entry.item_index === localIndex)
+            .map((entry) => ({ ...entry, item_index: 0 }));
+        const itemBlockIds = itemEntries.map((entry) => entry.block_id);
+        const itemBlocks = semanticBlocks.filter((block) => itemBlockIds.includes(block.id));
+        const protectedReplay =
+            item.type === 'reasoning' ||
+            (item.type !== 'message' && item.type !== 'function_call' && item.type !== 'image_generation_call');
+        const replayId = await entityId('replay', input.scope, itemIndex);
+        const replay: AgentContentBlock = {
+            id: replayId,
+            type: 'native_replay',
+            adapter: OPENAI_RESPONSES_ADAPTER_VERSION,
             protocol: OPENAI_RESPONSES_PROTOCOL,
-            ...(requiresModelScope ? { model: input.model } : {}),
-            adapter_version: OPENAI_RESPONSES_ADAPTER_VERSION,
-        },
-        payload: {
-            type: 'openai_responses_items',
-            items: providerJsonValue(input.items) as JsonValue[],
-            semantic_entries: semanticEntries,
-        },
-        dependencies: {
-            turn_ids: [turnId],
-            block_ids: blocks.map((block) => block.id),
-            call_ids: blocks.flatMap((block) => (block.type === 'tool_call' ? [block.call_id] : [])),
-            request_ids: [],
-        },
-    };
-    blocks.push(replay);
-    mappings.push({ canonical_id: replayId, native_id: `${nativePath}/replay`, kind: 'block' });
+            compatibility_scope: {
+                provider: input.provider,
+                protocol: OPENAI_RESPONSES_PROTOCOL,
+                ...(protectedReplay ? { model: input.model } : {}),
+                adapter_version: OPENAI_RESPONSES_ADAPTER_VERSION,
+            },
+            payload: {
+                type: 'openai_responses_items',
+                items: [providerJsonValue(item)],
+                semantic_entries: itemEntries,
+                block_offset: itemBlockOffsets[localIndex],
+                item_order: localIndex,
+            },
+            dependencies: {
+                turn_ids: protectedReplay && protectedBatch ? [turnId] : [],
+                block_ids: protectedReplay && protectedBatch ? semanticBlocks.map((block) => block.id) : itemBlockIds,
+                call_ids:
+                    protectedReplay && protectedBatch
+                        ? batchCallIds
+                        : itemBlocks.flatMap((block) => (block.type === 'tool_call' ? [block.call_id] : [])),
+                request_ids: [],
+            },
+            ...(protectedReplay ? {} : { dependency_policy: 'discard_on_dependency_change' as const }),
+        };
+        blocks.push(replay);
+        mappings.push({ canonical_id: replayId, native_id: `${nativePath}/replay/${localIndex}`, kind: 'block' });
+    }
     const common = {
         id: turnId,
         kind: 'agent' as const,
@@ -622,6 +696,7 @@ async function toolResultRecords(input: {
             call_ids: [input.item.call_id],
             request_ids: [],
         },
+        dependency_policy: 'discard_on_dependency_change',
     };
     const status = input.item._llumiverse_tool_result_status ?? 'unknown';
     const resultBlock: ToolResultBlock = {
@@ -750,6 +825,7 @@ async function itemsToRecords(input: {
         }
     }
     await flushAssistant();
+    result.turns = bindProtectedResponsesExchange(result.turns);
     return result;
 }
 
@@ -938,19 +1014,23 @@ function assertReplaySemantics(
             for (const nested of candidate.content) if (nested.type !== 'native_replay') blocks.set(nested.id, nested);
         }
     }
-    const actualIds = [...blocks.keys()].sort();
-    const expectedIds = [...block.dependencies.block_ids].sort();
-    if (JSON.stringify(actualIds) !== JSON.stringify(expectedIds)) {
+    const dependencyIds = [...block.dependencies.block_ids].sort();
+    const semanticIds = [...new Set(payload.semantic_entries.map((entry) => entry.block_id))].sort();
+    const documentBlockIds = new Set(
+        document.turns.flatMap((candidateTurn) => {
+            const candidateBlocks =
+                candidateTurn.kind === 'tool' ? candidateTurn.blocks[0].content : candidateTurn.blocks;
+            return candidateBlocks.map((candidate) => candidate.id);
+        }),
+    );
+    if (
+        semanticIds.some((blockId) => !block.dependencies.block_ids.includes(blockId)) ||
+        (block.dependency_policy === 'discard_on_dependency_change' &&
+            JSON.stringify(dependencyIds) !== JSON.stringify(semanticIds)) ||
+        semanticIds.some((blockId) => !blocks.has(blockId)) ||
+        dependencyIds.some((blockId) => !documentBlockIds.has(blockId))
+    ) {
         throw new TypeError(`OpenAI Responses replay block ${block.id} no longer matches its semantic blocks`);
-    }
-    if (payload.structured_output !== undefined) {
-        const evidence = parseStructuredOutputEvidence(payload.structured_output);
-        const sourceTexts = payload.semantic_entries.flatMap((entry) => {
-            if (entry.kind !== 'structured_json') return [];
-            const text = replayText(rawAt(payload, entry), entry);
-            return typeof text === 'string' ? [text] : [];
-        });
-        assertStructuredOutputEvidence(turn, evidence, sourceTexts, block.id);
     }
     for (const entry of payload.semantic_entries) {
         const semantic = blocks.get(entry.block_id);
@@ -977,7 +1057,7 @@ function assertReplaySemantics(
             const argumentsMatch =
                 semantic.arguments.type === 'invalid'
                     ? semantic.arguments.raw === raw.arguments
-                    : stableJson(semantic.arguments.value) === stableJson(parsedArguments);
+                    : stableJson(toolArgumentsForModel(semantic.arguments)) === stableJson(parsedArguments);
             if (!argumentsMatch) {
                 throw new TypeError(`OpenAI Responses replay tool call ${entry.block_id} has changed arguments`);
             }
@@ -1037,6 +1117,23 @@ function assertReplaySemantics(
     }
 }
 
+function canonicalToolCallItem(block: Extract<ContentBlock, { type: 'tool_call' }>): OpenAIResponsesInputItem {
+    if (block.executor !== 'application') {
+        throw new TypeError(`OpenAI Responses requires protected replay for provider tool call ${block.call_id}`);
+    }
+    if (block.arguments.type === 'invalid') {
+        throw new TypeError(`OpenAI Responses cannot project invalid tool arguments for call ${block.call_id}`);
+    }
+    return {
+        type: 'function_call',
+        id: block.native_id?.protocol === OPENAI_RESPONSES_PROTOCOL ? block.native_id.value : block.id,
+        call_id: block.call_id,
+        name: block.tool_name,
+        arguments: JSON.stringify(toolArgumentsForModel(block.arguments)),
+        status: 'completed',
+    };
+}
+
 function replayItems(
     turn: ConversationTurn,
     document: ConversationDocument,
@@ -1049,18 +1146,102 @@ function replayItems(
             for (const nested of block.content) if (nested.type === 'native_replay') replayBlocks.push(nested);
         }
     }
-    const foreign = replayBlocks.find((block) => block.protocol !== OPENAI_RESPONSES_PROTOCOL);
+    const foreign = replayBlocks.find(
+        (block) =>
+            block.protocol !== OPENAI_RESPONSES_PROTOCOL && block.dependency_policy !== 'discard_on_dependency_change',
+    );
     if (foreign !== undefined) {
         throw new TypeError(`OpenAI Responses cannot discard protected ${foreign.protocol} replay block ${foreign.id}`);
     }
     const matching = replayBlocks.filter((block) => block.protocol === OPENAI_RESPONSES_PROTOCOL);
-    if (matching.length > 1) throw new TypeError(`OpenAI Responses turn ${turn.id} has multiple replay blocks`);
-    const replay = matching[0];
-    if (replay === undefined) return undefined;
-    assertReplayScope(replay, target);
-    const payload = rawReplayPayload(replay);
-    assertReplaySemantics(turn, document, replay, payload, target);
-    return providerJsonValue(payload.items) as unknown as OpenAIResponsesInputItem[];
+    if (matching.length === 0) return undefined;
+    const payloads = matching.map((replay) => {
+        assertReplayScope(replay, target);
+        const payload = rawReplayPayload(replay);
+        assertReplaySemantics(turn, document, replay, payload, target);
+        return { replay, payload };
+    });
+    const structuredPayloads = payloads
+        .filter(({ payload }) => payload.structured_output !== undefined)
+        .sort((left, right) => (left.payload.item_order ?? 0) - (right.payload.item_order ?? 0));
+    if (structuredPayloads.length > 0) {
+        const evidence = parseStructuredOutputEvidence(structuredPayloads[0].payload.structured_output);
+        const evidenceFingerprint = stableJson(evidence);
+        const sourceTexts = structuredPayloads.flatMap(({ replay, payload }) => {
+            if (stableJson(parseStructuredOutputEvidence(payload.structured_output)) !== evidenceFingerprint) {
+                throw new TypeError(`OpenAI Responses structured replay ${replay.id} has inconsistent evidence`);
+            }
+            return payload.semantic_entries.flatMap((entry) => {
+                if (entry.kind !== 'structured_json') return [];
+                const text = replayText(rawAt(payload, entry), entry);
+                return typeof text === 'string' ? [text] : [];
+            });
+        });
+        assertStructuredOutputEvidence(
+            turn,
+            evidence,
+            sourceTexts,
+            structuredPayloads.map(({ replay }) => replay.id).join(','),
+        );
+    }
+    if (payloads.length === 1 && payloads[0].payload.block_offset === undefined) {
+        return providerJsonValue(payloads[0].payload.items) as unknown as OpenAIResponsesInputItem[];
+    }
+    const units: Array<{ block_offset: number; item_order: number; raw: boolean; items: OpenAIResponsesInputItem[] }> =
+        [];
+    const coveredBlockIds = new Set<string>();
+    for (const { replay, payload } of payloads) {
+        if (
+            typeof payload.block_offset !== 'number' ||
+            !Number.isSafeInteger(payload.block_offset) ||
+            payload.block_offset < 0 ||
+            typeof payload.item_order !== 'number' ||
+            !Number.isSafeInteger(payload.item_order) ||
+            payload.item_order < 0
+        ) {
+            throw new TypeError(`OpenAI Responses replay block ${replay.id} has invalid item ordering`);
+        }
+        for (const blockId of replay.dependencies.block_ids) coveredBlockIds.add(blockId);
+        units.push({
+            block_offset: payload.block_offset,
+            item_order: payload.item_order,
+            raw: true,
+            items: providerJsonValue(payload.items) as unknown as OpenAIResponsesInputItem[],
+        });
+    }
+    const semanticBlocks = turn.kind === 'tool' ? turn.blocks[0].content : turn.blocks;
+    for (let blockIndex = 0; blockIndex < semanticBlocks.length; blockIndex += 1) {
+        const block = semanticBlocks[blockIndex];
+        if (block.type === 'native_replay' || coveredBlockIds.has(block.id)) continue;
+        if (block.type === 'extension' && block.model_projection === 'excluded') continue;
+        if (turn.kind === 'tool') return undefined;
+        if (block.type === 'tool_call') {
+            units.push({
+                block_offset: blockIndex,
+                item_order: Number.MAX_SAFE_INTEGER,
+                raw: false,
+                items: [canonicalToolCallItem(block)],
+            });
+            continue;
+        }
+        if (block.type === 'reasoning') {
+            throw new TypeError(`OpenAI Responses requires protected replay for reasoning block ${block.id}`);
+        }
+        const part = ordinaryBlockToPart(block, document, target);
+        units.push({
+            block_offset: blockIndex,
+            item_order: Number.MAX_SAFE_INTEGER,
+            raw: false,
+            items: [{ role: 'assistant', content: [part] } as OpenAIResponsesInputItem],
+        });
+    }
+    units.sort(
+        (left, right) =>
+            left.block_offset - right.block_offset ||
+            Number(right.raw) - Number(left.raw) ||
+            left.item_order - right.item_order,
+    );
+    return units.flatMap((unit) => unit.items);
 }
 
 function compileOrdinaryTurn(
@@ -1082,7 +1263,8 @@ function compileOrdinaryTurn(
     const parts = turn.blocks.flatMap((block): OpenAI.Responses.ResponseInputContent[] => {
         if (block.type === 'extension' && block.model_projection === 'excluded') return [];
         if (block.type === 'native_replay') return [];
-        if (block.type === 'tool_call' || block.type === 'reasoning') {
+        if (block.type === 'tool_call') return [];
+        if (block.type === 'reasoning') {
             throw new TypeError(
                 `OpenAI Responses requires protected replay for canonical ${block.type} block ${block.id}`,
             );
@@ -1099,7 +1281,13 @@ function compileOrdinaryTurn(
               : turn.kind === 'agent'
                 ? 'assistant'
                 : 'user';
-    return [{ role, content } as OpenAIResponsesInputItem];
+    const messages: OpenAIResponsesInputItem[] =
+        parts.length === 0 && turn.kind === 'agent' ? [] : [{ role, content } as OpenAIResponsesInputItem];
+    if (turn.kind !== 'agent') return messages;
+    const calls = turn.blocks.flatMap((block): OpenAIResponsesInputItem[] =>
+        block.type === 'tool_call' ? [canonicalToolCallItem(block)] : [],
+    );
+    return [...messages, ...calls];
 }
 
 export function compileOpenAIResponsesConversation(
@@ -1110,6 +1298,7 @@ export function compileOpenAIResponsesConversation(
     const mappings: NativeItemMapping[] = [];
     for (const turn of selectedCanonicalTurns(document, {
         allow_interrupted_with_replay_protocol: OPENAI_RESPONSES_PROTOCOL,
+        allow_interrupted_with_complete_tool_calls: true,
     })) {
         const items = replayItems(turn, document, target) ?? compileOrdinaryTurn(turn, document, target);
         const itemIndex = conversation.length;
@@ -1213,7 +1402,6 @@ export async function prepareOpenAIResponsesCanonicalState(input: {
         input.options.tools,
         providerJsonValue(input.prompt),
     );
-    const compiled = compileOpenAIResponsesConversation(appended.document, target);
     const acceptedResponse = acceptedCanonicalResponse(appended.document, runtime.response_operation_id);
     if (
         acceptedResponse !== undefined &&
@@ -1226,6 +1414,11 @@ export async function prepareOpenAIResponsesCanonicalState(input: {
             `Accepted response operation ${runtime.response_operation_id} has incompatible request identity`,
         );
     }
+    const requestDocument =
+        acceptedResponse === undefined
+            ? appended.document
+            : await acceptedCanonicalRequestDocument(appended.document, acceptedResponse);
+    const compiled = compileOpenAIResponsesConversation(requestDocument, target);
     const identities =
         acceptedResponse === undefined
             ? await canonicalResponseIdentities(runtime)
@@ -1381,14 +1574,23 @@ export async function decodeOpenAIResponsesCanonicalResponse(input: {
     });
     const received = records.turns[0];
     if (received?.kind !== 'agent') throw new Error('OpenAI Responses response did not decode to an agent turn');
-    const hasTools = received.blocks.some((block) => block.type === 'tool_call');
-    const finishReason = hasTools
-        ? 'tool_use'
-        : response.status === 'incomplete'
-          ? response.incomplete_details?.reason === 'max_output_tokens'
-              ? 'length'
-              : (response.incomplete_details?.reason ?? 'incomplete')
-          : 'stop';
+    const boundReceived = bindProtectedResponsesExchange([
+        ...selectedCanonicalTurns(prepared.document, {
+            allow_interrupted_with_replay_protocol: OPENAI_RESPONSES_PROTOCOL,
+            allow_interrupted_with_complete_tool_calls: true,
+        }),
+        received,
+    ]).at(-1);
+    if (boundReceived?.kind !== 'agent') throw new Error('OpenAI Responses response dependency binding failed');
+    const hasTools = boundReceived.blocks.some((block) => block.type === 'tool_call');
+    const finishReason =
+        response.status === 'incomplete'
+            ? response.incomplete_details?.reason === 'max_output_tokens'
+                ? 'length'
+                : (response.incomplete_details?.reason ?? 'incomplete')
+            : hasTools
+              ? 'tool_use'
+              : 'stop';
     const turn: ConversationTurn = {
         ...received,
         id: prepared.response_turn_id,
@@ -1400,14 +1602,16 @@ export async function decodeOpenAIResponsesCanonicalResponse(input: {
         },
         provenance: { type: 'generated' },
         generation_id: prepared.generation_id,
-        blocks: received.blocks.map((block) =>
+        blocks: boundReceived.blocks.map((block) =>
             block.type !== 'native_replay'
                 ? block
                 : {
                       ...block,
                       dependencies: {
                           ...block.dependencies,
-                          turn_ids: [prepared.response_turn_id],
+                          turn_ids: block.dependencies.turn_ids.map((turnId) =>
+                              turnId === boundReceived.id ? prepared.response_turn_id : turnId,
+                          ),
                           request_ids: [prepared.receipt.request_id],
                       },
                   },
@@ -1428,6 +1632,7 @@ export async function decodeOpenAIResponsesCanonicalResponse(input: {
     });
     const generation: ExecutedGeneration = {
         ...baseGeneration,
+        status: response.status === 'incomplete' ? 'cancelled' : 'completed',
         ...(typeof response.service_tier === 'string'
             ? { metadata: { openai_responses: { service_tier: response.service_tier } } }
             : {}),
@@ -1444,31 +1649,34 @@ export async function decodeOpenAIResponsesCanonicalResponse(input: {
     };
     if (input.structured_output === undefined) return decoded;
     return normalizeDecodedStructuredOutput(decoded, input.structured_output, ({ replay_blocks, binding }) => {
-        if (replay_blocks.length !== 1) {
-            throw new TypeError(`OpenAI Responses structured output turn ${turn.id} requires one replay block`);
-        }
-        const replay = remapStructuredOutputReplayDependencies(replay_blocks[0], binding);
-        const payload = rawReplayPayload(replay);
         const sources = new Set(binding.source_block_ids);
         let sourceCount = 0;
-        const semanticEntries = payload.semantic_entries.map((entry): ReplaySemanticEntry => {
-            if (entry.kind !== 'text' || !sources.has(entry.block_id)) return entry;
-            sourceCount += 1;
-            return { ...entry, kind: 'structured_json', block_id: binding.block_id };
-        });
-        if (sourceCount !== binding.source_texts.length) {
-            throw new TypeError('OpenAI Responses structured output replay is missing source text partitions');
-        }
-        return [
-            {
+        const rewritten = replay_blocks.map((candidate) => {
+            const payload = rawReplayPayload(candidate);
+            let replaySourceCount = 0;
+            const semanticEntries = payload.semantic_entries.map((entry): ReplaySemanticEntry => {
+                if (entry.kind !== 'text' || !sources.has(entry.block_id)) return entry;
+                sourceCount += 1;
+                replaySourceCount += 1;
+                return { ...entry, kind: 'structured_json', block_id: binding.block_id };
+            });
+            const dependsOnSource = candidate.dependencies.block_ids.some((blockId) => sources.has(blockId));
+            if (replaySourceCount === 0 && !dependsOnSource) return candidate;
+            const replay = remapStructuredOutputReplayDependencies(candidate, binding);
+            if (replaySourceCount === 0) return replay;
+            return {
                 ...replay,
                 payload: {
                     ...payload,
                     semantic_entries: semanticEntries,
                     structured_output: structuredOutputEvidence(binding),
                 },
-            },
-        ];
+            };
+        });
+        if (sourceCount !== binding.source_texts.length) {
+            throw new TypeError('OpenAI Responses structured output replay is missing source text partitions');
+        }
+        return rewritten;
     });
 }
 

@@ -46,3 +46,11 @@ export async function storeAudioResult(
         if (!stream.locked) await stream.cancel().catch(() => undefined);
     }
 }
+
+/** Project a stored object URI onto the portable canonical locator understood by Studio. */
+export function canonicalAudioAssetStorage(value: string) {
+    if (/^(?:gs|s3):\/\/[^/]+\/.+/.test(value)) {
+        return { type: 'external' as const, resolver: 'url', locator: { url: value } };
+    }
+    throw new Error(`Canonical audio output cannot resolve durable URI ${value}`);
+}

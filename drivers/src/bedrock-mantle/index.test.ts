@@ -1,4 +1,5 @@
 import type Anthropic from '@anthropic-ai/sdk';
+import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources/messages.js';
 import { getTokenProvider } from '@aws/bedrock-token-generator';
 import type { AwsCredentialIdentity } from '@aws-sdk/types';
 import { parseConversationDocument } from '@llumiverse/conversation';
@@ -121,6 +122,250 @@ describe('Bedrock Mantle model routing', () => {
         expect(isBedrockMantleModel('openai.gpt-6.1')).toBe(true);
         expect(isBedrockMantleModel('qwen.qwen4-coder')).toBe(true);
         expect(isBedrockMantleModel('openai.o7')).toBe(false);
+    });
+
+    it('executes Responses models directly into canonical records', async () => {
+        const driver = new BedrockMantleDriver({ region: 'us-west-2' });
+        const create = vi.fn<ResponsesCreate>(async () => createResponse());
+        const delegate = Reflect.get(driver, 'responsesDelegate') as object;
+        Reflect.set(delegate, 'service', { responses: { create } });
+
+        const result = await driver.executeCanonical(
+            promptSegments,
+            canonicalOptions('xai.grok-4.3', 'mantle-responses'),
+        );
+
+        expect(result.accepted_output.generation).toMatchObject({
+            provider: Providers.bedrock_mantle,
+            protocol: 'openai.responses',
+            requested_model: 'xai.grok-4.3',
+        });
+        expect(result.accepted_output.turn.blocks).toContainEqual(
+            expect.objectContaining({ type: 'text', text: 'ok' }),
+        );
+        expect(create).toHaveBeenCalledOnce();
+    });
+
+    it('executes Chat Completions models directly into canonical records', async () => {
+        const driver = new BedrockMantleDriver({ region: 'us-west-2' });
+        const create = vi
+            .spyOn(driver.service.chat.completions, 'create')
+            .mockResolvedValue(createChatCompletion('openai.gpt-oss-120b'));
+
+        const result = await driver.executeCanonical(
+            promptSegments,
+            canonicalOptions('openai.gpt-oss-120b', 'mantle-chat'),
+        );
+
+        expect(result.accepted_output.generation).toMatchObject({
+            provider: Providers.bedrock_mantle,
+            protocol: 'openai.chat.completions',
+            requested_model: 'openai.gpt-oss-120b',
+        });
+        expect(result.accepted_output.turn.blocks).toContainEqual(
+            expect.objectContaining({ type: 'text', text: 'ok' }),
+        );
+        expect(create).toHaveBeenCalledOnce();
+    });
+
+    it('executes Messages models directly into canonical records', async () => {
+        const driver = new BedrockMantleDriver({ region: 'us-west-2' });
+        const message = {
+            id: 'msg-canonical',
+            type: 'message',
+            role: 'assistant',
+            model: 'anthropic.claude-haiku-4-5',
+            content: [{ type: 'text', text: 'ok', citations: null }],
+            container: null,
+            diagnostics: null,
+            stop_details: null,
+            stop_reason: 'end_turn',
+            stop_sequence: null,
+            usage: {
+                cache_creation: null,
+                cache_creation_input_tokens: null,
+                cache_read_input_tokens: null,
+                inference_geo: null,
+                input_tokens: 4,
+                output_tokens: 1,
+                output_tokens_details: null,
+                server_tool_use: null,
+                service_tier: null,
+            },
+        } satisfies Anthropic.Message;
+        const finalMessage = vi.fn(async () => message);
+        const stream = vi.fn(() => ({ finalMessage }));
+        Reflect.set(driver, 'anthropicService', { messages: { stream } });
+
+        const result = await driver.executeCanonical(
+            promptSegments,
+            canonicalOptions('anthropic.claude-haiku-4-5', 'mantle-messages'),
+        );
+
+        expect(result.accepted_output.generation).toMatchObject({
+            provider: Providers.bedrock_mantle,
+            protocol: 'anthropic.messages',
+            requested_model: 'anthropic.claude-haiku-4-5',
+        });
+        expect(result.accepted_output.turn.blocks).toContainEqual(
+            expect.objectContaining({ type: 'text', text: 'ok' }),
+        );
+        expect(stream).toHaveBeenCalledOnce();
+    });
+
+    it('streams Responses models directly into canonical records', async () => {
+        const driver = new BedrockMantleDriver({ region: 'us-west-2' });
+        const finalResponse = createResponse();
+        const create = vi.fn(() =>
+            Promise.resolve({
+                async *[Symbol.asyncIterator]() {
+                    yield { type: 'response.completed', sequence_number: 1, response: finalResponse };
+                },
+            }),
+        );
+        const delegate = Reflect.get(driver, 'responsesDelegate') as object;
+        Reflect.set(delegate, 'service', { responses: { create } });
+
+        const stream = await driver.streamCanonical(
+            promptSegments,
+            canonicalOptions('xai.grok-4.3', 'mantle-responses-stream'),
+        );
+        for await (const _chunk of stream) {
+            // Drain the provider stream so canonical finalization runs.
+        }
+
+        expect(stream.completion?.accepted_output.generation).toMatchObject({
+            provider: Providers.bedrock_mantle,
+            protocol: 'openai.responses',
+            requested_model: 'xai.grok-4.3',
+            status: 'completed',
+        });
+        const generation = stream.completion?.conversation.generations[stream.completion.accepted_output.generation.id];
+        if (generation?.record_source !== 'executed') throw new Error('Expected executed Mantle generation');
+        expect(generation?.request_receipt.target).toMatchObject({
+            provider: Providers.bedrock_mantle,
+            protocol: 'openai.responses',
+            model: 'xai.grok-4.3',
+        });
+        expect(create).toHaveBeenCalledOnce();
+    });
+
+    it('streams Chat Completions models directly into canonical records', async () => {
+        const model = 'openai.gpt-oss-120b';
+        const driver = new BedrockMantleDriver({ region: 'us-west-2' });
+        const create = vi.fn(() =>
+            Promise.resolve({
+                async *[Symbol.asyncIterator]() {
+                    yield {
+                        id: 'chatcmpl-stream',
+                        object: 'chat.completion.chunk',
+                        created: 1,
+                        model,
+                        choices: [
+                            {
+                                index: 0,
+                                delta: { role: 'assistant', content: 'ok' },
+                                finish_reason: null,
+                                logprobs: null,
+                            },
+                        ],
+                    };
+                    yield {
+                        id: 'chatcmpl-stream',
+                        object: 'chat.completion.chunk',
+                        created: 1,
+                        model,
+                        choices: [{ index: 0, delta: {}, finish_reason: 'stop', logprobs: null }],
+                        usage: { prompt_tokens: 4, completion_tokens: 1, total_tokens: 5 },
+                    };
+                },
+            }),
+        );
+        Reflect.set(driver, 'service', { chat: { completions: { create } } });
+
+        const stream = await driver.streamCanonical(promptSegments, canonicalOptions(model, 'mantle-chat-stream'));
+        for await (const _chunk of stream) {
+            // Drain the provider stream so canonical finalization runs.
+        }
+
+        expect(stream.completion?.accepted_output.generation).toMatchObject({
+            provider: Providers.bedrock_mantle,
+            protocol: 'openai.chat.completions',
+            requested_model: model,
+            status: 'completed',
+        });
+        const generation = stream.completion?.conversation.generations[stream.completion.accepted_output.generation.id];
+        if (generation?.record_source !== 'executed') throw new Error('Expected executed Mantle generation');
+        expect(generation?.request_receipt.target).toMatchObject({
+            provider: Providers.bedrock_mantle,
+            protocol: 'openai.chat.completions',
+            model,
+        });
+        expect(create).toHaveBeenCalledOnce();
+    });
+
+    it('streams Messages models directly into canonical records', async () => {
+        const model = 'anthropic.claude-haiku-4-5';
+        const driver = new BedrockMantleDriver({ region: 'us-west-2' });
+        const message = {
+            id: 'msg-canonical-stream',
+            type: 'message',
+            role: 'assistant',
+            model,
+            content: [{ type: 'text', text: 'ok', citations: null }],
+            container: null,
+            stop_details: null,
+            stop_reason: 'end_turn',
+            stop_sequence: null,
+            usage: {
+                cache_creation: null,
+                cache_creation_input_tokens: null,
+                cache_read_input_tokens: null,
+                inference_geo: null,
+                input_tokens: 4,
+                output_tokens: 1,
+                output_tokens_details: null,
+                server_tool_use: null,
+                service_tier: null,
+            },
+        } satisfies Anthropic.Message;
+        const events = [
+            { type: 'message_start', message: { ...message, content: [], stop_reason: null } },
+            { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'ok' } },
+            {
+                type: 'message_delta',
+                delta: { stop_reason: 'end_turn', stop_sequence: null },
+                usage: { output_tokens: 1 },
+            },
+        ] as RawMessageStreamEvent[];
+        const messagesStream = vi.fn(() => ({
+            async *[Symbol.asyncIterator]() {
+                for (const event of events) yield event;
+            },
+            finalMessage: async () => message,
+            abort() {},
+        }));
+        Reflect.set(driver, 'anthropicService', { messages: { stream: messagesStream } });
+
+        const stream = await driver.streamCanonical(promptSegments, canonicalOptions(model, 'mantle-messages-stream'));
+        for await (const _chunk of stream) {
+            // Drain the provider stream so canonical finalization runs.
+        }
+
+        expect(stream.completion?.accepted_output.generation).toMatchObject({
+            provider: Providers.bedrock_mantle,
+            protocol: 'anthropic.messages',
+            requested_model: model,
+            status: 'completed',
+        });
+        const generation = stream.completion?.conversation.generations[stream.completion.accepted_output.generation.id];
+        if (generation?.record_source !== 'executed') throw new Error('Expected executed Mantle generation');
+        expect(generation?.request_receipt.target).toMatchObject({
+            provider: Providers.bedrock_mantle,
+            protocol: 'anthropic.messages',
+            model,
+        });
+        expect(messagesStream).toHaveBeenCalledOnce();
     });
 
     it('formats Mantle prompts as OpenAI Responses input items', async () => {

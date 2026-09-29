@@ -24,10 +24,12 @@ import {
     preflightJsonInput,
     type ToolDefinition,
     type ToolResultBlock,
+    toolArgumentsForModel,
     type UserContentBlock,
 } from '@llumiverse/conversation';
 import type { CanonicalStructuredOutput } from '@llumiverse/core';
 import {
+    acceptedCanonicalRequestDocument,
     acceptedCanonicalResponse,
     appendCanonicalPrompt,
     type CanonicalPreparedState,
@@ -78,6 +80,7 @@ export interface PreparedOpenAIChatConversation
     extends CanonicalPreparedState<OpenAIChatCompletionsPrompt>,
         PreparedConversationRequest<OpenAIChatCompletionsPayload> {
     provider: string;
+    requested_model: string;
     prior_native_message_count: number;
 }
 
@@ -219,20 +222,12 @@ function isNestedToolResultContentBlock(block: AgentContentBlock): block is Nest
     return block.type !== 'tool_call';
 }
 
-function replayPayload(message: OpenAIChatCompletionsMessage): OpenAIReplayPayload | undefined {
-    const toolArguments = message.tool_calls?.map((call) => ({ call_id: call.id, raw: call.function.arguments }));
-    if (
-        message.reasoning_content === undefined &&
-        message.reasoning === undefined &&
-        (toolArguments === undefined || toolArguments.length === 0)
-    ) {
-        return undefined;
-    }
+function reasoningReplayPayload(message: OpenAIChatCompletionsMessage): OpenAIReplayPayload | undefined {
+    if (message.reasoning_content === undefined && message.reasoning === undefined) return undefined;
     return {
         type: 'openai_chat_assistant_fields',
         ...(message.reasoning_content === undefined ? {} : { reasoning_content: message.reasoning_content }),
         ...(message.reasoning === undefined ? {} : { reasoning: message.reasoning }),
-        ...(toolArguments === undefined || toolArguments.length === 0 ? {} : { tool_arguments: toolArguments }),
     };
 }
 
@@ -293,6 +288,35 @@ async function imageRecord(input: {
               }),
     };
     return { block: { id: blockId, type: 'image', asset_id: assetId }, asset };
+}
+
+async function audioRecord(input: {
+    part: Extract<OpenAIChatCompletionsContentPart, { type: 'input_audio' }>;
+    turn_id: string;
+    scope: string;
+    message_index: number;
+    block_index: number;
+    source: SourceKind;
+    recorded_at: string;
+}): Promise<{ block: UserContentBlock; asset: Asset }> {
+    const blockId = await entityId('block', input.scope, input.message_index, input.block_index);
+    const assetId = await entityId('asset', input.scope, input.message_index, input.block_index);
+    const mimeType = input.part.input_audio.format === 'wav' ? 'audio/wav' : 'audio/mpeg';
+    const storage = { type: 'inline_base64' as const, data: input.part.input_audio.data };
+    const asset: Asset = {
+        id: assetId,
+        kind: 'audio',
+        mime_type: mimeType,
+        storage,
+        provenance:
+            input.source === 'imported'
+                ? { type: 'imported', source: OPENAI_CHAT_COMPLETIONS_PROTOCOL }
+                : { type: 'received', source_turn_id: input.turn_id },
+        content_hash: await fingerprintJson({ mime_type: mimeType, storage }),
+        created_at: input.recorded_at,
+        metadata: { openai_chat_completions: { audio_format: input.part.input_audio.format } },
+    };
+    return { block: { id: blockId, type: 'audio', asset_id: assetId }, asset };
 }
 
 async function messageRecords(input: {
@@ -356,10 +380,19 @@ async function messageRecords(input: {
                 kind: 'block',
             });
         } else if (part.type === 'input_audio') {
-            const blockId = await entityId('block', scope, messageIndex, blockIndex);
-            blocks.push({ id: blockId, type: 'text', text: '[Audio file omitted from history]', format: 'plain' });
+            const converted = await audioRecord({
+                part,
+                turn_id: turnId,
+                scope,
+                message_index: messageIndex,
+                block_index: blockIndex,
+                source,
+                recorded_at: runtime.recorded_at,
+            });
+            blocks.push(converted.block);
+            assets.push(converted.asset);
             mappings.push({
-                canonical_id: blockId,
+                canonical_id: converted.block.id,
                 native_id: `messages/${messageIndex}/content/${blockIndex}`,
                 kind: 'block',
             });
@@ -408,11 +441,10 @@ async function messageRecords(input: {
                 { canonical_id: call.id, native_id: call.id, kind: 'call' },
             );
         }
-        const replay = replayPayload(message);
+        const replay = reasoningReplayPayload(message);
         if (replay !== undefined) {
-            const blockId = await entityId('replay', scope, messageIndex);
-            const dependencyBlocks = blocks.map((block) => block.id);
-            const callIds = blocks.flatMap((block) => (block.type === 'tool_call' ? [block.call_id] : []));
+            const blockId = await entityId('replay', scope, messageIndex, 'reasoning');
+            const dependencyBlocks = blocks.filter((block) => block.type === 'reasoning').map((block) => block.id);
             blocks.push({
                 id: blockId,
                 type: 'native_replay',
@@ -427,13 +459,47 @@ async function messageRecords(input: {
                 dependencies: {
                     turn_ids: [turnId],
                     block_ids: dependencyBlocks,
-                    call_ids: callIds,
+                    call_ids: [],
                     request_ids: [],
                 },
             });
             mappings.push({
                 canonical_id: blockId,
                 native_id: `messages/${messageIndex}/assistant_fields`,
+                kind: 'block',
+            });
+        }
+        for (let callIndex = 0; callIndex < (message.tool_calls?.length ?? 0); callIndex += 1) {
+            const call = message.tool_calls?.[callIndex];
+            if (call === undefined) continue;
+            const callBlock = blocks.find((block) => block.type === 'tool_call' && block.call_id === call.id);
+            if (callBlock === undefined) throw new TypeError(`OpenAI Chat tool call ${call.id} has no canonical block`);
+            const blockId = await entityId('replay', scope, messageIndex, 'tool_arguments', callIndex);
+            blocks.push({
+                id: blockId,
+                type: 'native_replay',
+                adapter: OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
+                protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+                compatibility_scope: {
+                    provider: input.provider,
+                    protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+                    adapter_version: OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
+                },
+                payload: {
+                    type: 'openai_chat_assistant_fields',
+                    tool_arguments: [{ call_id: call.id, raw: call.function.arguments }],
+                },
+                dependencies: {
+                    turn_ids: [],
+                    block_ids: [callBlock.id],
+                    call_ids: [call.id],
+                    request_ids: [],
+                },
+                dependency_policy: 'discard_on_dependency_change',
+            });
+            mappings.push({
+                canonical_id: blockId,
+                native_id: `messages/${messageIndex}/tool_calls/${callIndex}/arguments`,
                 kind: 'block',
             });
         }
@@ -572,30 +638,87 @@ function blockReplay(
     target?: { provider?: string; model?: string },
 ): OpenAIReplayPayload | undefined {
     const replayBlocks = turn.blocks.filter((block) => block.type === 'native_replay');
-    const replay = replayBlocks.find((block) => block.protocol === OPENAI_CHAT_COMPLETIONS_PROTOCOL);
-    const foreign = replayBlocks.find((block) => block.protocol !== OPENAI_CHAT_COMPLETIONS_PROTOCOL);
+    const matching = replayBlocks.filter((block) => block.protocol === OPENAI_CHAT_COMPLETIONS_PROTOCOL);
+    const foreign = replayBlocks.find(
+        (block) =>
+            block.protocol !== OPENAI_CHAT_COMPLETIONS_PROTOCOL &&
+            block.dependency_policy !== 'discard_on_dependency_change',
+    );
     if (foreign !== undefined) {
         throw new TypeError(`OpenAI Chat cannot discard protected ${foreign.protocol} replay block ${foreign.id}`);
     }
-    if (replay === undefined) return undefined;
-    if (typeof replay.payload !== 'object' || replay.payload === null || Array.isArray(replay.payload)) {
-        throw new TypeError(`OpenAI Chat replay block ${replay.id} has an unsupported payload`);
+    if (matching.length === 0) return undefined;
+    let reasoningContent: OpenAIReplayPayload['reasoning_content'];
+    let reasoning: OpenAIReplayPayload['reasoning'];
+    let structuredOutput: OpenAIReplayPayload['structured_output'];
+    const toolArguments = new Map<string, string>();
+    for (const replay of matching) {
+        if (typeof replay.payload !== 'object' || replay.payload === null || Array.isArray(replay.payload)) {
+            throw new TypeError(`OpenAI Chat replay block ${replay.id} has an unsupported payload`);
+        }
+        if (
+            replay.adapter !== OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION ||
+            replay.compatibility_scope.protocol !== OPENAI_CHAT_COMPLETIONS_PROTOCOL ||
+            replay.compatibility_scope.adapter_version !== OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION ||
+            (target?.provider !== undefined && replay.compatibility_scope.provider !== target.provider) ||
+            (target?.model !== undefined &&
+                replay.compatibility_scope.model !== undefined &&
+                replay.compatibility_scope.model !== target.model)
+        ) {
+            throw new TypeError(`OpenAI Chat replay block ${replay.id} is outside its compatibility scope`);
+        }
+        if (replay.payload.type !== 'openai_chat_assistant_fields') {
+            throw new TypeError(`OpenAI Chat replay block ${replay.id} has an unsupported payload`);
+        }
+        const payload = replay.payload as OpenAIReplayPayload;
+        if (payload.reasoning_content !== undefined) {
+            if (reasoningContent !== undefined) throw new TypeError(`OpenAI Chat reasoning replay is duplicated`);
+            reasoningContent = payload.reasoning_content;
+        }
+        if (payload.reasoning !== undefined) {
+            if (reasoning !== undefined) throw new TypeError(`OpenAI Chat reasoning replay is duplicated`);
+            reasoning = payload.reasoning;
+        }
+        if (payload.structured_output !== undefined) {
+            if (structuredOutput !== undefined) throw new TypeError(`OpenAI Chat structured replay is duplicated`);
+            structuredOutput = payload.structured_output;
+        }
+        for (const value of payload.tool_arguments ?? []) {
+            if (toolArguments.has(value.call_id)) {
+                throw new TypeError(`OpenAI Chat raw arguments for call ${value.call_id} are duplicated`);
+            }
+            const call = turn.blocks.find((block) => block.type === 'tool_call' && block.call_id === value.call_id);
+            let matchesCanonicalArguments = false;
+            if (call?.type === 'tool_call') {
+                if (call.arguments.type === 'invalid') {
+                    matchesCanonicalArguments = call.arguments.raw === value.raw;
+                } else if (call.arguments.type === 'json') {
+                    try {
+                        matchesCanonicalArguments =
+                            JSON.stringify(JSON.parse(value.raw)) === JSON.stringify(call.arguments.value);
+                    } catch {
+                        matchesCanonicalArguments = false;
+                    }
+                }
+            }
+            if (!matchesCanonicalArguments) {
+                if (replay.dependency_policy === 'discard_on_dependency_change') continue;
+                throw new TypeError(
+                    `OpenAI Chat raw arguments replay ${replay.id} no longer matches canonical call ${value.call_id}`,
+                );
+            }
+            toolArguments.set(value.call_id, value.raw);
+        }
     }
-    if (
-        replay.adapter !== OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION ||
-        replay.compatibility_scope.protocol !== OPENAI_CHAT_COMPLETIONS_PROTOCOL ||
-        replay.compatibility_scope.adapter_version !== OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION ||
-        (target?.provider !== undefined && replay.compatibility_scope.provider !== target.provider) ||
-        (target?.model !== undefined &&
-            replay.compatibility_scope.model !== undefined &&
-            replay.compatibility_scope.model !== target.model)
-    ) {
-        throw new TypeError(`OpenAI Chat replay block ${replay.id} is outside its compatibility scope`);
-    }
-    if (replay.payload.type !== 'openai_chat_assistant_fields') {
-        throw new TypeError(`OpenAI Chat replay block ${replay.id} has an unsupported payload`);
-    }
-    return replay.payload as OpenAIReplayPayload;
+    return {
+        type: 'openai_chat_assistant_fields',
+        ...(reasoningContent === undefined ? {} : { reasoning_content: reasoningContent }),
+        ...(reasoning === undefined ? {} : { reasoning }),
+        ...(structuredOutput === undefined ? {} : { structured_output: structuredOutput }),
+        ...(toolArguments.size === 0
+            ? {}
+            : { tool_arguments: [...toolArguments].map(([call_id, raw]) => ({ call_id, raw })) }),
+    };
 }
 
 function assetPart(asset: Asset): OpenAIChatCompletionsImageUrlPart {
@@ -631,6 +754,17 @@ function assetPart(asset: Asset): OpenAIChatCompletionsImageUrlPart {
     throw new Error(`OpenAI Chat cannot resolve image asset ${asset.id}`);
 }
 
+function audioAssetPart(asset: Asset): Extract<OpenAIChatCompletionsContentPart, { type: 'input_audio' }> {
+    if (asset.kind !== 'audio' || asset.storage.type !== 'inline_base64') {
+        throw new Error(`OpenAI Chat cannot resolve audio asset ${asset.id}`);
+    }
+    const format = asset.mime_type === 'audio/wav' || asset.mime_type === 'audio/x-wav' ? 'wav' : 'mp3';
+    if (format === 'mp3' && asset.mime_type !== 'audio/mpeg' && asset.mime_type !== 'audio/mp3') {
+        throw new Error(`OpenAI Chat cannot project audio MIME type ${asset.mime_type}`);
+    }
+    return { type: 'input_audio', input_audio: { data: asset.storage.data, format } };
+}
+
 function contentParts(turn: ConversationTurn, document: ConversationDocument): OpenAIChatCompletionsContentPart[] {
     const parts: OpenAIChatCompletionsContentPart[] = [];
     for (const block of turn.blocks) {
@@ -640,6 +774,10 @@ function contentParts(turn: ConversationTurn, document: ConversationDocument): O
             const asset = document.assets[block.asset_id];
             if (asset === undefined) throw new Error(`OpenAI Chat content references missing asset ${block.asset_id}`);
             parts.push(assetPart(asset));
+        } else if (block.type === 'audio') {
+            const asset = document.assets[block.asset_id];
+            if (asset === undefined) throw new Error(`OpenAI Chat content references missing asset ${block.asset_id}`);
+            parts.push(audioAssetPart(asset));
         } else if (
             block.type !== 'tool_call' &&
             block.type !== 'reasoning' &&
@@ -729,7 +867,7 @@ function compileTurn(
                                   rawArguments.get(block.call_id) ??
                                   (block.arguments.type === 'invalid'
                                       ? block.arguments.raw
-                                      : JSON.stringify(block.arguments.value)),
+                                      : JSON.stringify(toolArgumentsForModel(block.arguments))),
                           },
                       },
                   ]
@@ -758,7 +896,7 @@ export function compileOpenAIChatCompletionsConversation(
 } {
     const messages: OpenAIChatCompletionsMessage[] = [];
     const mappings: NativeItemMapping[] = [];
-    for (const turn of selectedCanonicalTurns(document)) {
+    for (const turn of selectedCanonicalTurns(document, { allow_interrupted_with_complete_tool_calls: true })) {
         const compiled = compileTurn(turn, document, target);
         const messageIndex = messages.length;
         messages.push(...compiled);
@@ -775,55 +913,6 @@ export function compileOpenAIChatCompletionsConversation(
         }
     }
     return { conversation: { _is_openai_chat_completions: true, messages }, mappings };
-}
-
-function withCurrentInputAudio(
-    compiled: ReturnType<typeof compileOpenAIChatCompletionsConversation>,
-    prompt: OpenAIChatCompletionsPrompt,
-    promptMappings: readonly NativeItemMapping[],
-): OpenAIChatCompletionsPrompt {
-    const compiledTurns = new Map(
-        compiled.mappings.flatMap((mapping) => {
-            const match = mapping.kind === 'turn' ? /^messages\/(\d+)$/.exec(mapping.native_id) : null;
-            return match === null ? [] : [[mapping.canonical_id, Number(match[1])] as const];
-        }),
-    );
-    const messages = [...compiled.conversation.messages];
-    let changed = false;
-    for (const mapping of promptMappings) {
-        const sourceMatch = mapping.kind === 'turn' ? /^messages\/(\d+)$/.exec(mapping.native_id) : null;
-        if (sourceMatch === null) continue;
-        const sourceMessage = prompt.messages[Number(sourceMatch[1])];
-        const sourceContent = sourceMessage?.content;
-        if (
-            sourceMessage === undefined ||
-            !Array.isArray(sourceContent) ||
-            !sourceContent.some((part) => part.type === 'input_audio')
-        ) {
-            continue;
-        }
-        const targetIndex = compiledTurns.get(mapping.canonical_id);
-        const targetMessage = targetIndex === undefined ? undefined : messages[targetIndex];
-        if (targetIndex === undefined || targetMessage === undefined || targetMessage.role !== sourceMessage.role) {
-            throw new Error(`OpenAI Chat cannot map transient audio for canonical turn ${mapping.canonical_id}`);
-        }
-        const targetParts: OpenAIChatCompletionsContentPart[] = Array.isArray(targetMessage.content)
-            ? targetMessage.content
-            : typeof targetMessage.content === 'string'
-              ? [{ type: 'text', text: targetMessage.content }]
-              : [];
-        if (targetParts.length !== sourceContent.length) {
-            throw new Error(`OpenAI Chat transient audio shape changed for canonical turn ${mapping.canonical_id}`);
-        }
-        messages[targetIndex] = {
-            ...targetMessage,
-            content: targetParts.map((part, index) =>
-                sourceContent[index]?.type === 'input_audio' ? sourceContent[index] : part,
-            ),
-        };
-        changed = true;
-    }
-    return changed ? { ...compiled.conversation, messages } : compiled.conversation;
 }
 
 export async function prepareOpenAIChatCanonicalState(input: {
@@ -910,20 +999,25 @@ export async function prepareOpenAIChatCanonicalState(input: {
         input.options.tools,
         providerJsonValue(input.prompt),
     );
-    const compiled = compileOpenAIChatCompletionsConversation(appended.document, target);
     const acceptedResponse = acceptedCanonicalResponse(appended.document, runtime.response_operation_id);
+    const requestDocument =
+        acceptedResponse === undefined
+            ? appended.document
+            : await acceptedCanonicalRequestDocument(appended.document, acceptedResponse);
+    const compiled = compileOpenAIChatCompletionsConversation(requestDocument, target);
     const identities =
         acceptedResponse === undefined
             ? await canonicalResponseIdentities(runtime)
             : { generation_id: acceptedResponse.generation.id, response_turn_id: acceptedResponse.turn.id };
     return {
         document: appended.document,
-        native_conversation: withCurrentInputAudio(compiled, input.prompt, promptRecords.mappings),
+        native_conversation: compiled.conversation,
         runtime: { ...runtime, conversation_id: document.id },
         generation_id: identities.generation_id,
         response_turn_id: identities.response_turn_id,
         tool_definitions: appended.tool_definitions,
         provider: input.provider,
+        requested_model: input.options.model,
         prior_native_message_count: priorNativeMessageCount,
         ...(acceptedResponse === undefined ? {} : { accepted_response: acceptedResponse }),
     };
@@ -935,7 +1029,7 @@ export async function finalizeOpenAIChatPreparedRequest(
 ): Promise<PreparedOpenAIChatConversation> {
     const compiled = compileOpenAIChatCompletionsConversation(state.document, {
         provider: state.provider,
-        model: payload.model,
+        model: state.requested_model,
     });
     const receipt = await createRequestReceipt(
         state.document,
@@ -943,7 +1037,7 @@ export async function finalizeOpenAIChatPreparedRequest(
         {
             provider: state.provider,
             protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL,
-            model: payload.model,
+            model: state.requested_model,
             adapter_version: OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
         },
         providerJsonValue(payload),
@@ -1079,19 +1173,22 @@ export async function decodeOpenAIChatCanonicalResponse(
         };
     });
     const finalTurn = { ...turn, blocks: remappedBlocks } as ConversationTurn;
-    const generation: ExecutedGeneration = await createExecutedGeneration({
-        id: prepared.generation_id,
-        runtime: prepared.runtime,
-        receipt: prepared.receipt,
-        provider: prepared.provider,
-        protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL,
-        adapter_version: OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
-        requested_model: prepared.payload.model,
-        resolved_model: response.model,
-        provider_response_id: response.id,
-        finish_reason: finishReason,
-        usage: openAIUsage(response),
-    });
+    const generation: ExecutedGeneration = {
+        ...(await createExecutedGeneration({
+            id: prepared.generation_id,
+            runtime: prepared.runtime,
+            receipt: prepared.receipt,
+            provider: prepared.provider,
+            protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL,
+            adapter_version: OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
+            requested_model: prepared.receipt.target.model,
+            resolved_model: response.model,
+            provider_response_id: response.id,
+            finish_reason: finishReason,
+            usage: openAIUsage(response),
+        })),
+        status: finishReason === 'length' ? 'cancelled' : 'completed',
+    };
     const decoded: DecodedConversationResponse = {
         turns: [finalTurn],
         generation,

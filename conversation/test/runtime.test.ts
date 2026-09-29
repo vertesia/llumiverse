@@ -108,6 +108,61 @@ describe('canonical ingestion runtime', () => {
         ).toThrow('retry changes accepted turn turn:user:1');
     });
 
+    it.each(['timestamps', 'created_at', 'recorded_at'])(
+        'rejects changed JSON content under the %s property on retry',
+        (property) => {
+            const initial = createConversationDocument({ id: 'conversation:1', created_at: firstRecordedAt });
+            const jsonTurn = (value: string) =>
+                createUserTurn({
+                    ...userTurn(''),
+                    blocks: [{ id: 'block:user:1', type: 'json', value: { records: [{ [property]: value }] } }],
+                });
+            const options = {
+                expected_revision: 0,
+                operation_id: 'operation:input:1',
+                payload_fingerprint: 'sha256:claimed',
+                recorded_at: firstRecordedAt,
+            };
+            const accepted = appendConversationRecords(initial, { turns: [jsonTurn('original')] }, options);
+
+            expect(() =>
+                appendConversationRecords(
+                    accepted.document,
+                    { turns: [jsonTurn('changed')] },
+                    { ...options, recorded_at: retryRecordedAt },
+                ),
+            ).toThrow('retry changes accepted turn turn:user:1');
+        },
+    );
+
+    it.each(['timestamps', 'created_at', 'recorded_at'])(
+        'rejects changed tool schema properties named %s on retry',
+        (property) => {
+            const initial = createConversationDocument({ id: 'conversation:1', created_at: firstRecordedAt });
+            const definition = (type: string) => ({
+                id: 'tool:lookup:v1',
+                name: 'lookup',
+                version: 'sha256:lookup-v1',
+                input_schema: { type: 'object', properties: { [property]: { type } } },
+            });
+            const options = {
+                expected_revision: 0,
+                operation_id: 'operation:input:1',
+                payload_fingerprint: 'sha256:claimed',
+                recorded_at: firstRecordedAt,
+            };
+            const accepted = appendConversationRecords(initial, { tool_definitions: [definition('string')] }, options);
+
+            expect(() =>
+                appendConversationRecords(
+                    accepted.document,
+                    { tool_definitions: [definition('number')] },
+                    { ...options, recorded_at: retryRecordedAt },
+                ),
+            ).toThrow('retry changes accepted tool definition tool:lookup:v1');
+        },
+    );
+
     it('preflights accessors before reading them and schema-validates strict options on retries', () => {
         const initial = createConversationDocument({ id: 'conversation:1', created_at: firstRecordedAt });
         let getterReads = 0;

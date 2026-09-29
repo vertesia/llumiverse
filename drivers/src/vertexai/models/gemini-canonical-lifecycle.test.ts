@@ -103,6 +103,16 @@ async function drain(stream: AsyncIterable<unknown>): Promise<void> {
     }
 }
 
+function latestGeneratedJson(value: unknown): unknown {
+    const document = parseConversationDocument(value);
+    for (let index = document.turns.length - 1; index >= 0; index -= 1) {
+        const turn = document.turns[index];
+        if (turn.kind !== 'agent' || turn.provenance.type !== 'generated') continue;
+        return turn.blocks.find((block) => block.type === 'json')?.value;
+    }
+    return undefined;
+}
+
 describe('Gemini canonical lifecycle', () => {
     it('validates structured sync output, preserves usage, and durably recovers an accepted response', async () => {
         const raw = '{ "answer" : "Tokyo", "note" : null }';
@@ -138,6 +148,7 @@ describe('Gemini canonical lifecycle', () => {
             result: 20,
         });
         expect(first.service_tier).toBe('priority');
+        expect(latestGeneratedJson(first.conversation)).toEqual({ answer: 'Tokyo', note: null });
         const document = parseConversationDocument(JSON.parse(JSON.stringify(first.conversation)));
         const generation = Object.values(document.generations).find(
             (candidate) => candidate.record_source === 'executed',
@@ -176,6 +187,295 @@ describe('Gemini canonical lifecycle', () => {
         expect(retried.service_tier).toBe(first.service_tier);
         expect(retried.conversation).toEqual(document);
         expect(generate).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns direct canonical structured output and retries without another provider request', async () => {
+        const nativeResponse = response({
+            id: 'response-direct-structured',
+            content: { role: 'model', parts: [{ text: '{"answer":"Tokyo"}' }] },
+        });
+        const generate = vi.fn<Generate>(async () => nativeResponse);
+        const driver = new TestGeminiDriver(generate);
+        const segments = [{ role: PromptRole.user, content: 'Return JSON.' }];
+        const result_schema: NonNullable<ExecutionOptions['result_schema']> = {
+            type: 'object',
+            properties: { answer: { type: 'string' } },
+            required: ['answer'],
+            additionalProperties: false,
+        };
+        const first = await driver.executeCanonical(segments, {
+            ...runtimeOptions({
+                flow: 'direct-structured',
+                operation: 'generate',
+                attempt: 'first',
+                recorded_at: '2026-09-30T01:06:00.000Z',
+            }),
+            result_schema,
+        });
+        expect(first.accepted_output.turn.blocks).toContainEqual(
+            expect.objectContaining({ type: 'json', value: { answer: 'Tokyo' } }),
+        );
+        expect(first.accepted_output.generation).toMatchObject({
+            status: 'completed',
+            usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 },
+        });
+        expect(first.service_tier).toBe('priority');
+        expect(exportLegacyGeminiConversation(first.conversation)._arrayConversation.at(-1)).toEqual(
+            nativeResponse.candidates?.[0]?.content,
+        );
+
+        const retried = await driver.executeCanonical(segments, {
+            ...runtimeOptions({
+                flow: 'direct-structured',
+                operation: 'generate',
+                attempt: 'retry',
+                recorded_at: '2026-09-30T01:07:00.000Z',
+                conversation: first.conversation,
+            }),
+            result_schema,
+        });
+        expect(retried.conversation).toEqual(first.conversation);
+        expect(retried.service_tier).toBe(first.service_tier);
+        await expect(
+            driver.executeCanonical(segments, {
+                ...runtimeOptions({
+                    flow: 'direct-structured',
+                    operation: 'generate',
+                    attempt: 'changed-options',
+                    recorded_at: '2026-09-30T01:08:00.000Z',
+                    conversation: first.conversation,
+                }),
+                result_schema,
+                model_options: { _option_id: 'vertexai-gemini', temperature: 0.2 },
+            }),
+        ).rejects.toThrow('incompatible request identity');
+        expect(generate).toHaveBeenCalledOnce();
+    });
+
+    it('marks invalid required structured output failed in direct sync and stream results', async () => {
+        const invalid = response({
+            id: 'response-direct-invalid',
+            content: { role: 'model', parts: [{ text: '{"wrong":42}' }] },
+        });
+        const result_schema: NonNullable<ExecutionOptions['result_schema']> = {
+            type: 'object',
+            properties: { answer: { type: 'string' } },
+            required: ['answer'],
+            additionalProperties: false,
+        };
+        const syncDriver = new TestGeminiDriver(async () => invalid);
+        const sync = await syncDriver.executeCanonical([{ role: PromptRole.user, content: 'Return JSON.' }], {
+            ...runtimeOptions({
+                flow: 'direct-invalid-sync',
+                operation: 'generate',
+                attempt: 'first',
+                recorded_at: '2026-09-30T01:08:00.000Z',
+            }),
+            result_schema,
+        });
+        expect(sync.accepted_output.generation.status).toBe('failed');
+        expect(sync.accepted_output.turn.status).toBe('failed');
+        expect(sync.accepted_output.turn.blocks).toContainEqual(
+            expect.objectContaining({ type: 'text', text: '{"wrong":42}' }),
+        );
+
+        const generateStream = vi.fn<GenerateStream>(async () =>
+            (async function* () {
+                yield {
+                    candidates: [{ content: { role: 'model', parts: [{ text: '{"wrong":42}' }] } }],
+                } as GenerateContentResponse;
+                yield invalid;
+                yield {
+                    usageMetadata: {
+                        promptTokenCount: 9,
+                        cachedContentTokenCount: 3,
+                        candidatesTokenCount: 4,
+                        totalTokenCount: 13,
+                        trafficType: 'ON_DEMAND_FLEX',
+                    },
+                } as GenerateContentResponse;
+            })(),
+        );
+        const streamDriver = new TestGeminiDriver(async () => {
+            throw new Error('blocking transport not expected');
+        }, generateStream);
+        const stream = await streamDriver.streamCanonical([{ role: PromptRole.user, content: 'Return JSON.' }], {
+            ...runtimeOptions({
+                flow: 'direct-invalid-stream',
+                operation: 'generate',
+                attempt: 'first',
+                recorded_at: '2026-09-30T01:09:00.000Z',
+            }),
+            result_schema,
+        });
+        for await (const _chunk of stream) {
+            // Drain the provider preview so canonical finalization runs.
+        }
+        expect(stream.completion?.accepted_output.generation).toMatchObject({
+            status: 'failed',
+            usage: { input_tokens: 9, output_tokens: 4, total_tokens: 13 },
+        });
+        expect(stream.completion?.accepted_output.turn.status).toBe('failed');
+        expect(stream.completion?.service_tier).toBe('flex');
+    });
+
+    it('records a Gemini max-token terminal as interrupted and cancelled', async () => {
+        const driver = new TestGeminiDriver(async () =>
+            response({
+                id: 'response-cutoff',
+                content: { role: 'model', parts: [{ text: 'partial' }] },
+                finish_reason: FinishReason.MAX_TOKENS,
+            }),
+        );
+        const result = await driver.executeCanonical([{ role: PromptRole.user, content: 'Continue.' }], {
+            ...runtimeOptions({
+                flow: 'direct-cutoff',
+                operation: 'generate',
+                attempt: 'first',
+                recorded_at: '2026-09-30T01:10:00.000Z',
+            }),
+        });
+
+        expect(result.accepted_output.turn.status).toBe('interrupted');
+        expect(result.accepted_output.generation).toMatchObject({ status: 'cancelled', finish_reason: 'length' });
+    });
+
+    it('aborts a pending direct canonical Gemini read before iterator cleanup', async () => {
+        let providerSignal: AbortSignal | undefined;
+        const generateStream = vi.fn<GenerateStream>(async (request) => {
+            providerSignal = request.config?.abortSignal;
+            return {
+                [Symbol.asyncIterator]() {
+                    return {
+                        next: () =>
+                            new Promise<IteratorResult<GenerateContentResponse>>((resolve) => {
+                                providerSignal?.addEventListener(
+                                    'abort',
+                                    () => resolve({ done: true, value: undefined }),
+                                    { once: true },
+                                );
+                            }),
+                        return: async () => ({ done: true, value: undefined }),
+                    };
+                },
+            };
+        });
+        const driver = new TestGeminiDriver(async () => {
+            throw new Error('blocking transport not expected');
+        }, generateStream);
+        const stream = await driver.streamCanonical(
+            [{ role: PromptRole.user, content: 'Wait.' }],
+            runtimeOptions({
+                flow: 'direct-cancel',
+                operation: 'generate',
+                attempt: 'first',
+                recorded_at: '2026-09-30T01:11:00.000Z',
+            }),
+        );
+        const iterator = stream[Symbol.asyncIterator]();
+        const pending = iterator.next();
+        await stream.cancel();
+        await expect(pending).resolves.toMatchObject({ done: true });
+        expect(providerSignal?.aborted).toBe(true);
+        expect(stream.completion).toBeUndefined();
+    });
+
+    it.each([
+        ['array', '[1,null]', { type: 'array' }, [1, null]],
+        ['null', 'null', { type: 'null' }, null],
+        ['string', '"Tokyo"', { type: 'string' }, 'Tokyo'],
+        ['number', '42', { type: 'number' }, 42],
+        ['boolean', 'true', { type: 'boolean' }, true],
+    ] as const)('persists a top-level JSON %s as canonical structured output', async (label, raw, schema, expected) => {
+        const nativeResponse = response({
+            id: `response-${label}`,
+            content: { role: 'model', parts: [{ text: raw }] },
+        });
+        const driver = new TestGeminiDriver(async () => nativeResponse);
+        const completion = await driver.execute([{ role: PromptRole.user, content: `Return a JSON ${label}.` }], {
+            ...runtimeOptions({
+                flow: `structured-${label}`,
+                operation: 'generate',
+                attempt: 'first',
+                recorded_at: '2026-09-30T01:10:00.000Z',
+            }),
+            result_schema: schema,
+        });
+
+        expect(completion.result).toEqual([{ type: 'json', value: expected }]);
+        expect(latestGeneratedJson(completion.conversation)).toEqual(expected);
+        expect(
+            exportLegacyGeminiConversation(parseConversationDocument(completion.conversation))._arrayConversation.at(
+                -1,
+            ),
+        ).toEqual(nativeResponse.candidates?.[0]?.content);
+    });
+
+    it('normalizes split streamed JSON around signed reasoning and recovers exact native parts', async () => {
+        const firstFragment = '```json\n{"answer":';
+        const secondFragment = '"Tokyo"}\n```';
+        const nativeParts = [
+            { text: firstFragment },
+            { text: 'Check the requested shape.', thought: true, thoughtSignature: 'signed-structured-reasoning' },
+            { text: secondFragment },
+        ];
+        const generateStream = vi.fn<GenerateStream>(async () =>
+            (async function* () {
+                yield {
+                    candidates: [{ content: { role: 'model', parts: [nativeParts[0]] } }],
+                } as GenerateContentResponse;
+                yield {
+                    candidates: [{ content: { role: 'model', parts: [nativeParts[1]] } }],
+                } as GenerateContentResponse;
+                yield response({
+                    id: 'response-structured-stream',
+                    content: { role: 'model', parts: [nativeParts[2]] },
+                });
+            })(),
+        );
+        const driver = new TestGeminiDriver(async () => {
+            throw new Error('blocking transport not expected');
+        }, generateStream);
+        const segments = [{ role: PromptRole.user, content: 'Return the city as JSON.' }];
+        const result_schema: NonNullable<ExecutionOptions['result_schema']> = {
+            type: 'object',
+            properties: { answer: { type: 'string' } },
+            required: ['answer'],
+            additionalProperties: false,
+        };
+        const first = await driver.stream(segments, {
+            ...runtimeOptions({
+                flow: 'structured-stream',
+                operation: 'generate',
+                attempt: 'first',
+                recorded_at: '2026-09-30T01:20:00.000Z',
+            }),
+            result_schema,
+        });
+        await drain(first);
+
+        expect(first.completion?.result).toEqual([
+            { type: 'json', value: { answer: 'Tokyo' } },
+            { type: 'thoughts', value: 'Check the requested shape.' },
+        ]);
+        expect(latestGeneratedJson(first.completion?.conversation)).toEqual({ answer: 'Tokyo' });
+        const persisted = parseConversationDocument(JSON.parse(JSON.stringify(first.completion?.conversation)));
+        expect(exportLegacyGeminiConversation(persisted)._arrayConversation.at(-1)?.parts).toEqual(nativeParts);
+
+        const retried = await driver.stream(segments, {
+            ...runtimeOptions({
+                flow: 'structured-stream',
+                operation: 'generate',
+                attempt: 'retry',
+                recorded_at: '2026-09-30T01:25:00.000Z',
+                conversation: persisted,
+            }),
+            result_schema,
+        });
+        await drain(retried);
+        expect(retried.completion?.result).toEqual(first.completion?.result);
+        expect(retried.completion?.conversation).toEqual(persisted);
+        expect(generateStream).toHaveBeenCalledTimes(1);
     });
 
     it('preserves native call identity and internal error status through a tool continuation', async () => {

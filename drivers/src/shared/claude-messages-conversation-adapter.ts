@@ -33,10 +33,12 @@ import {
     preflightJsonInput,
     type ToolDefinition,
     type ToolResultBlock,
+    toolArgumentsForModel,
     type UserContentBlock,
 } from '@llumiverse/conversation';
 import type { CanonicalStructuredOutput } from '@llumiverse/core';
 import {
+    acceptedCanonicalRequestDocument,
     acceptedCanonicalResponse,
     appendCanonicalPrompt,
     type CanonicalPreparedState,
@@ -103,6 +105,7 @@ export interface PreparedClaudeConversation
     extends CanonicalPreparedState<ClaudePrompt>,
         PreparedConversationRequest<MessageCreateParamsBase> {
     provider: string;
+    requested_model: string;
     prior_native_message_count: number;
 }
 
@@ -514,6 +517,9 @@ async function assistantMessageRecords(input: {
     }
     if (input.preserve_content_order || entries.some((entry) => entry.kind !== 'canonical')) {
         const replayId = await entityId('replay', input.scope, nativePath);
+        const protectedReplay = entries.some(
+            (entry) => entry.kind === 'thinking' || entry.kind === 'redacted_thinking',
+        );
         blocks.push({
             id: replayId,
             type: 'native_replay',
@@ -531,6 +537,7 @@ async function assistantMessageRecords(input: {
                 call_ids: blocks.flatMap((block) => (block.type === 'tool_call' ? [block.call_id] : [])),
                 request_ids: [],
             },
+            ...(protectedReplay ? {} : { dependency_policy: 'discard_on_dependency_change' as const }),
         });
         mappings.push({ canonical_id: replayId, native_id: `${nativePath}/content_order`, kind: 'block' });
     }
@@ -816,7 +823,12 @@ function canonicalBlockToClaude(block: ContentBlock, document: ConversationDocum
         if (block.arguments.type === 'invalid') {
             throw new TypeError(`Claude cannot replay invalid JSON arguments for call ${block.call_id}`);
         }
-        return { type: 'tool_use', id: block.call_id, name: block.tool_name, input: block.arguments.value };
+        return {
+            type: 'tool_use',
+            id: block.call_id,
+            name: block.tool_name,
+            input: toolArgumentsForModel(block.arguments),
+        };
     }
     throw new TypeError(`Claude cannot project canonical ${block.type} block`);
 }
@@ -839,7 +851,10 @@ function claudeReplay(
 ): ClaudeReplayPayload | undefined {
     const replayBlocks = turn.blocks.filter((block) => block.type === 'native_replay');
     const replay = replayBlocks.find((block) => block.protocol === CLAUDE_MESSAGES_PROTOCOL);
-    const foreign = replayBlocks.find((block) => block.protocol !== CLAUDE_MESSAGES_PROTOCOL);
+    const foreign = replayBlocks.find(
+        (block) =>
+            block.protocol !== CLAUDE_MESSAGES_PROTOCOL && block.dependency_policy !== 'discard_on_dependency_change',
+    );
     if (foreign !== undefined) {
         throw new TypeError(`Claude cannot discard protected ${foreign.protocol} replay block ${foreign.id}`);
     }
@@ -960,7 +975,7 @@ export function compileClaudeMessagesConversation(
     const system: TextBlockParam[] = [];
     const messages: MessageParam[] = [];
     const mappings: NativeItemMapping[] = [];
-    for (const turn of selectedCanonicalTurns(document)) {
+    for (const turn of selectedCanonicalTurns(document, { allow_interrupted_with_complete_tool_calls: true })) {
         if (turn.kind === 'program' && (turn.authority === 'system' || turn.authority === 'developer')) {
             const nativeBlocks = ordinaryContent(turn, document);
             for (const block of nativeBlocks) {
@@ -1079,8 +1094,12 @@ export async function prepareClaudeCanonicalState(input: {
         input.options.tools,
         providerJsonValue(input.prompt),
     );
-    const compiled = compileClaudeMessagesConversation(appended.document, target);
     const acceptedResponse = acceptedCanonicalResponse(appended.document, runtime.response_operation_id);
+    const requestDocument =
+        acceptedResponse === undefined
+            ? appended.document
+            : await acceptedCanonicalRequestDocument(appended.document, acceptedResponse);
+    const compiled = compileClaudeMessagesConversation(requestDocument, target);
     const identities =
         acceptedResponse === undefined
             ? await canonicalResponseIdentities(runtime)
@@ -1093,6 +1112,7 @@ export async function prepareClaudeCanonicalState(input: {
         response_turn_id: identities.response_turn_id,
         tool_definitions: appended.tool_definitions,
         provider: input.provider,
+        requested_model: input.options.model,
         prior_native_message_count: priorNativeMessageCount,
         ...(acceptedResponse === undefined ? {} : { accepted_response: acceptedResponse }),
     };
@@ -1104,7 +1124,7 @@ export async function finalizeClaudePreparedRequest(
 ): Promise<PreparedClaudeConversation> {
     const compiled = compileClaudeMessagesConversation(state.document, {
         provider: state.provider,
-        model: payload.model,
+        model: state.requested_model,
     });
     const receipt = await createRequestReceipt(
         state.document,
@@ -1112,7 +1132,7 @@ export async function finalizeClaudePreparedRequest(
         {
             provider: state.provider,
             protocol: CLAUDE_MESSAGES_PROTOCOL,
-            model: payload.model,
+            model: state.requested_model,
             adapter_version: CLAUDE_MESSAGES_ADAPTER_VERSION,
         },
         providerJsonValue(payload),
@@ -1230,19 +1250,22 @@ export async function decodeClaudeCanonicalResponse(
                   },
         ),
     };
-    const generation: ExecutedGeneration = await createExecutedGeneration({
-        id: prepared.generation_id,
-        runtime: prepared.runtime,
-        receipt: prepared.receipt,
-        provider: prepared.provider,
-        protocol: CLAUDE_MESSAGES_PROTOCOL,
-        adapter_version: CLAUDE_MESSAGES_ADAPTER_VERSION,
-        requested_model: prepared.payload.model,
-        resolved_model: response.model,
-        provider_response_id: response.id,
-        finish_reason: response.stop_reason,
-        usage: claudeUsage(response.usage),
-    });
+    const generation: ExecutedGeneration = {
+        ...(await createExecutedGeneration({
+            id: prepared.generation_id,
+            runtime: prepared.runtime,
+            receipt: prepared.receipt,
+            provider: prepared.provider,
+            protocol: CLAUDE_MESSAGES_PROTOCOL,
+            adapter_version: CLAUDE_MESSAGES_ADAPTER_VERSION,
+            requested_model: prepared.payload.model,
+            resolved_model: response.model,
+            provider_response_id: response.id,
+            finish_reason: response.stop_reason,
+            usage: claudeUsage(response.usage),
+        })),
+        status: status === 'interrupted' ? 'cancelled' : 'completed',
+    };
     const decoded: DecodedConversationResponse = {
         turns: [turn],
         generation,

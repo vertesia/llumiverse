@@ -87,22 +87,28 @@ function assertAcceptedIds(
     return authoritative;
 }
 
-function retryComparableRecord(value: unknown): unknown {
-    if (value === null || typeof value !== 'object') return value;
-    if (Array.isArray(value)) return value.map(retryComparableRecord);
-    const comparable: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value)) {
-        // Retrying an accepted input operation may allocate a fresh host attempt and timestamps.
-        // Those observations are not semantic prompt content. All other persisted fields remain
-        // byte-for-byte accountable to the accepted records.
-        if (key === 'timestamps' || key === 'created_at' || key === 'recorded_at') continue;
-        comparable[key] = retryComparableRecord(child);
+type RetryRecordKind = 'turn' | 'generation' | 'asset' | 'tool definition' | 'execution receipt' | 'context entry';
+
+function retryComparableRecord(kind: RetryRecordKind, value: object): Record<string, unknown> {
+    const comparable: Record<string, unknown> = { ...value };
+    // Only schema-owned observation fields may change on retry. Keys with the same names in JSON
+    // content, arguments, metadata, tool schemas, or asset locators are part of the accepted value.
+    if (kind === 'turn' || kind === 'generation') delete comparable.timestamps;
+    if (kind === 'asset') delete comparable.created_at;
+    if (kind === 'execution receipt') delete comparable.recorded_at;
+    if (kind === 'generation') {
+        const receipt = comparable.request_receipt;
+        if (receipt !== null && typeof receipt === 'object' && !Array.isArray(receipt)) {
+            const requestReceipt: Record<string, unknown> = { ...receipt };
+            delete requestReceipt.recorded_at;
+            comparable.request_receipt = requestReceipt;
+        }
     }
     return comparable;
 }
 
 function assertAcceptedRecords<T extends { id: string }>(
-    kind: string,
+    kind: RetryRecordKind,
     incoming: readonly T[] | undefined,
     retained: (id: string) => T | undefined,
 ): void {
@@ -110,7 +116,7 @@ function assertAcceptedRecords<T extends { id: string }>(
         const accepted = retained(record.id);
         if (
             accepted === undefined ||
-            stableJson(retryComparableRecord(record)) !== stableJson(retryComparableRecord(accepted))
+            stableJson(retryComparableRecord(kind, record)) !== stableJson(retryComparableRecord(kind, accepted))
         ) {
             throw new Error(`Conversation operation retry changes accepted ${kind} ${record.id}`);
         }

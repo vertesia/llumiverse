@@ -11,10 +11,18 @@ const ajv = new Ajv({
     useDefaults: true,
     removeAdditional: 'failing',
 });
+const exactAjv = new Ajv({
+    coerceTypes: false,
+    allowDate: true,
+    strict: false,
+});
 
 // biome-ignore lint/suspicious/noTsIgnore: ajv-formats' runtime module.exports is the callable plugin, but its shipped .d.ts declares an ESM default that resolves to a non-callable namespace under module:nodenext; no cast-free import form works
 // @ts-ignore - ajv-formats default export is not callable under module:nodenext ESM resolution
 addFormats(ajv);
+// biome-ignore lint/suspicious/noTsIgnore: see the matching import-interop explanation above
+// @ts-ignore - ajv-formats default export is not callable under module:nodenext ESM resolution
+addFormats(exactAjv);
 
 function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
@@ -34,12 +42,18 @@ function errorMessage(error: unknown): string {
  * its `$id`. `removeSchema` is a no-op when nothing is registered, and it also bounds the registry
  * at one entry per id instead of leaking one per execution.
  */
-function compileSchema(schema: object): ValidateFunction {
+function compileSchema(schema: object, compiler = ajv): ValidateFunction {
     const id = (schema as { $id?: unknown }).$id;
     if (typeof id === 'string' && id) {
-        ajv.removeSchema(id);
+        compiler.removeSchema(id);
     }
-    return ajv.compile(schema);
+    return compiler.compile(schema);
+}
+
+function validationErrorsMessage(validate: ValidateFunction): string {
+    return (validate.errors ?? [])
+        .map((error) => `${error.instancePath}: ${error.message}\n${JSON.stringify(error.params)}`)
+        .join(',\n\n');
 }
 
 function getRequiredFields(schemaField: unknown): string[] {
@@ -48,6 +62,36 @@ function getRequiredFields(schemaField: unknown): string[] {
     }
     const required = (schemaField as Record<string, unknown>).required;
     return Array.isArray(required) ? required.filter((field): field is string => typeof field === 'string') : [];
+}
+
+function decodeJsonPointer(path: string): string[] {
+    return path
+        .split('/')
+        .slice(1)
+        .map((part) => part.replaceAll('~1', '/').replaceAll('~0', '~'));
+}
+
+function deleteField(object: JSONValue, path: string[]): boolean {
+    if (path.length === 0) return false;
+
+    let parent: unknown = object;
+    for (const part of path.slice(0, -1)) {
+        if (Array.isArray(parent)) {
+            const index = Number(part);
+            if (!Number.isSafeInteger(index) || index < 0 || index >= parent.length) return false;
+            parent = parent[index];
+        } else if (parent !== null && typeof parent === 'object' && Object.hasOwn(parent, part)) {
+            parent = (parent as Record<string, unknown>)[part];
+        } else {
+            return false;
+        }
+    }
+
+    const field = path[path.length - 1];
+    if (parent === null || Array.isArray(parent) || typeof parent !== 'object' || !Object.hasOwn(parent, field)) {
+        return false;
+    }
+    return delete (parent as Record<string, unknown>)[field];
 }
 
 export class ValidationError extends Error implements ResultValidationError {
@@ -178,25 +222,36 @@ export function normalizeCompletionResult(data: CompletionResult[], schema: obje
             error: new ValidationError('validation_error', errorMessage(error)),
         };
     }
-    const valid = validate(json);
+    let valid = validate(json);
+    const removedEmptyDatePointers = new Set<string>();
 
-    if (!valid && validate.errors) {
+    while (!valid && validate.errors) {
         const errors = [];
+        let removedEmptyOptionalDate = false;
 
         for (const e of validate.errors) {
-            const path = e.instancePath.split('/').slice(1);
+            const path = decodeJsonPointer(e.instancePath);
             const value = resolveField(json, path);
             const schemaPath = e.schemaPath.split('/').slice(1);
             const schemaFieldFormat = resolveField(schema, schemaPath);
             const schemaField = resolveField(schema, schemaPath.slice(0, -3));
 
-            //ignore date if empty or null
+            // Preserve the historical acceptance of an omitted optional date represented as an
+            // empty value, but remove that value from the normalized clone. A result declared
+            // valid must itself satisfy the schema; retaining the invalid date would violate that
+            // invariant even though the legacy validator ignored the diagnostic.
             if (
-                !value &&
+                (value === '' || value === null) &&
                 typeof schemaFieldFormat === 'string' &&
                 ['date', 'date-time'].includes(schemaFieldFormat) &&
                 !getRequiredFields(schemaField).includes(path[path.length - 1])
             ) {
+                if (removedEmptyDatePointers.has(e.instancePath) || !deleteField(json, path)) {
+                    errors.push(e);
+                } else {
+                    removedEmptyDatePointers.add(e.instancePath);
+                    removedEmptyOptionalDate = true;
+                }
             } else {
                 errors.push(e);
             }
@@ -213,6 +268,31 @@ export function normalizeCompletionResult(data: CompletionResult[], schema: obje
                 error: new ValidationError('validation_error', errorsMessage),
             };
         }
+
+        if (!removedEmptyOptionalDate) break;
+        valid = validate(json);
+    }
+
+    // Ajv cannot replace a caller's root primitive when coercion is enabled. It can therefore
+    // return true for (for example) the string "42" against a number schema while `json` remains a
+    // string. Revalidate the post-normalization value without coercion so the canonical value we
+    // persist always satisfies the declared result schema. Nested coercions/defaults already
+    // applied by the first pass remain visible on the cloned value and continue to validate here.
+    try {
+        const exactValidate = compileSchema(schema, exactAjv);
+        if (!exactValidate(json)) {
+            return {
+                status: 'invalid',
+                result: data,
+                error: new ValidationError('validation_error', validationErrorsMessage(exactValidate)),
+            };
+        }
+    } catch (error: unknown) {
+        return {
+            status: 'invalid',
+            result: data,
+            error: new ValidationError('validation_error', errorMessage(error)),
+        };
     }
 
     return {

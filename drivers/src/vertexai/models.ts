@@ -1,5 +1,7 @@
 import type {
     AIModel,
+    CanonicalExecutionResponse,
+    CanonicalExecutionStream,
     Completion,
     DriverCompletionStream,
     ExecutionOptions,
@@ -36,6 +38,18 @@ export interface ModelDefinition<PromptT = VertexAIPrompt> {
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<DriverCompletionStream>;
+    requestCanonicalTextCompletion?(
+        driver: VertexAIDriver,
+        prompt: PromptT,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse>;
+    requestCanonicalTextCompletionStream?(
+        driver: VertexAIDriver,
+        prompt: PromptT,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionStream>;
     preValidationProcessing?(
         result: Completion,
         options: ExecutionOptions,

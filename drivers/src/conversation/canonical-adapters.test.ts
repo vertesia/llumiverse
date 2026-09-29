@@ -1,19 +1,35 @@
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages.js';
 import type { ExecutionOptions } from '@llumiverse/common';
-import { parseConversationDocument } from '@llumiverse/conversation';
+import {
+    type Asset,
+    createConversationDocument,
+    createToolTurn,
+    externalizeToolCallArguments,
+    parseConversationDocument,
+    prepareToolArgumentExternalization,
+} from '@llumiverse/conversation';
 import { describe, expect, it } from 'vitest';
+import { compileBedrockConverseConversation } from '../bedrock/bedrock-converse-conversation-adapter.js';
 import type { OpenAIChatCompletionsPrompt } from '../openai/openai_chat_completions.js';
 import {
     compileOpenAIChatCompletionsConversation,
     exportLegacyOpenAIChatCompletionsConversation,
     prepareOpenAIChatCanonicalState,
 } from '../openai/openai-chat-conversation-adapter.js';
+import {
+    compileOpenAIResponsesConversation,
+    prepareOpenAIResponsesCanonicalState,
+} from '../openai/openai-responses-conversation-adapter.js';
 import type { ClaudePrompt } from '../shared/claude-messages.js';
 import {
     compileClaudeMessagesConversation,
     exportLegacyClaudeMessagesConversation,
     prepareClaudeCanonicalState,
 } from '../shared/claude-messages-conversation-adapter.js';
+import {
+    compileGeminiConversation,
+    prepareGeminiCanonicalState,
+} from '../vertexai/models/gemini-conversation-adapter.js';
 import { exportLegacyConversation } from './index.js';
 
 const recordedAt = '2026-09-11T00:00:00.000Z';
@@ -50,7 +66,89 @@ async function importClaude(history: ClaudePrompt, conversationId: string) {
     });
 }
 
+function durableAsset(input: {
+    id: string;
+    kind: 'text' | 'document';
+    mime_type: 'text/plain' | 'application/json';
+    content_hash: string;
+    byte_length: number;
+}): Asset {
+    return {
+        ...input,
+        storage: {
+            type: 'external',
+            resolver: 'test.artifact',
+            locator: { artifact_path: `tool-inputs/${input.id}` },
+        },
+        provenance: { type: 'imported', source: 'test' },
+        created_at: recordedAt,
+    };
+}
+
 describe('canonical native adapter conformance', () => {
+    it('compiles a checkpoint summary followed by a preserved tool exchange across supported protocols', () => {
+        const document = createConversationDocument({ id: 'checkpoint-sequence', created_at: recordedAt });
+        document.turns.push(
+            {
+                id: 'summary',
+                kind: 'agent',
+                authority: 'ordinary',
+                status: 'completed',
+                timestamps: { recorded_at: recordedAt },
+                provenance: { type: 'received' },
+                model_visibility: 'include',
+                blocks: [{ id: 'summary-text', type: 'text', text: 'Compacted context.', format: 'plain' }],
+            },
+            {
+                id: 'pending-agent',
+                kind: 'agent',
+                authority: 'ordinary',
+                status: 'completed',
+                timestamps: { recorded_at: recordedAt },
+                provenance: { type: 'received' },
+                model_visibility: 'include',
+                blocks: [
+                    {
+                        id: 'pending-call',
+                        type: 'tool_call',
+                        call_id: 'call-1',
+                        tool_name: 'lookup',
+                        executor: 'application',
+                        arguments: { type: 'json', value: { city: 'Tokyo' } },
+                    },
+                ],
+            },
+            createToolTurn({
+                id: 'tool-result',
+                authority: 'ordinary',
+                status: 'completed',
+                timestamps: { recorded_at: recordedAt },
+                provenance: { type: 'received' },
+                model_visibility: 'include',
+                blocks: [
+                    {
+                        id: 'result-block',
+                        type: 'tool_result',
+                        call_id: 'call-1',
+                        status: 'success',
+                        content: [{ id: 'result-text', type: 'text', text: 'sunny', format: 'plain' }],
+                    },
+                ],
+            }),
+        );
+        document.context.entries = document.turns.map((turn) => ({
+            id: `context-${turn.id}`,
+            type: 'source_turn' as const,
+            turn_id: turn.id,
+        }));
+        const parsed = parseConversationDocument(document);
+
+        expect(() => compileClaudeMessagesConversation(parsed)).not.toThrow();
+        expect(() => compileOpenAIChatCompletionsConversation(parsed)).not.toThrow();
+        expect(() => compileGeminiConversation(parsed)).not.toThrow();
+        expect(() => compileBedrockConverseConversation(parsed)).not.toThrow();
+    });
+
     it('preserves OpenAI reasoning, raw tool arguments, image detail, and native call identities', async () => {
         const history: OpenAIChatCompletionsPrompt = {
             _is_openai_chat_completions: true,
@@ -166,6 +264,221 @@ describe('canonical native adapter conformance', () => {
                 { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'YWJj' } },
             ],
         });
+    });
+
+    it('preserves matching raw Chat arguments but discards stale lexical replay', async () => {
+        const raw = '{ "city" : "Paris" }';
+        const imported = await importOpenAI(
+            {
+                _is_openai_chat_completions: true,
+                messages: [
+                    {
+                        role: 'assistant',
+                        content: null,
+                        tool_calls: [
+                            {
+                                id: 'call-weather',
+                                type: 'function',
+                                function: { name: 'weather', arguments: raw },
+                            },
+                        ],
+                    },
+                ],
+            },
+            'chat-raw-arguments',
+        );
+        const initial = compileOpenAIChatCompletionsConversation(imported.document).conversation.messages[0];
+        expect(initial?.tool_calls?.[0]?.function.arguments).toBe(raw);
+
+        const changed = structuredClone(imported.document);
+        const call = changed.turns[0]?.blocks.find((block) => block.type === 'tool_call');
+        if (call?.type !== 'tool_call' || call.arguments.type !== 'json') throw new Error('Expected JSON tool call');
+        call.arguments.value = { city: 'Tokyo' };
+        const compiled = compileOpenAIChatCompletionsConversation(parseConversationDocument(changed)).conversation
+            .messages[0];
+        expect(compiled?.tool_calls?.[0]?.function.arguments).toBe('{"city":"Tokyo"}');
+
+        const protectedDocument = structuredClone(changed);
+        const replay = protectedDocument.turns[0]?.blocks.find((block) => block.type === 'native_replay');
+        if (replay?.type !== 'native_replay') throw new Error('Expected raw argument replay');
+        delete replay.dependency_policy;
+        expect(() => compileOpenAIChatCompletionsConversation(parseConversationDocument(protectedDocument))).toThrow(
+            'no longer matches canonical call call-weather',
+        );
+    });
+
+    it('omits foreign discardable lexical replay while projecting the portable tool call', async () => {
+        const imported = await importOpenAI(
+            {
+                _is_openai_chat_completions: true,
+                messages: [
+                    {
+                        role: 'assistant',
+                        content: null,
+                        tool_calls: [
+                            {
+                                id: 'call-weather',
+                                type: 'function',
+                                function: { name: 'weather', arguments: '{ "city" : "Paris" }' },
+                            },
+                        ],
+                    },
+                ],
+            },
+            'portable-chat-tool-call',
+        );
+
+        const projections = [
+            compileClaudeMessagesConversation(imported.document).conversation.messages,
+            compileGeminiConversation(imported.document).conversation.contents,
+            compileBedrockConverseConversation(imported.document).conversation.messages,
+            compileOpenAIResponsesConversation(imported.document).conversation,
+        ];
+        for (const projection of projections) {
+            expect(JSON.stringify(projection)).toContain('weather');
+            expect(JSON.stringify(projection)).not.toContain('openai_chat_assistant_fields');
+        }
+    });
+
+    it('externalizes a real Responses function call while archiving raw lexical replay', async () => {
+        const state = await prepareOpenAIResponsesCanonicalState({
+            conversation: [
+                {
+                    type: 'function_call',
+                    id: 'fc-write',
+                    call_id: 'call-write',
+                    name: 'write_artifact',
+                    arguments: '{ "path" : "notes.txt", "content" : "exact retained content" }',
+                    status: 'completed',
+                },
+            ],
+            prompt: [],
+            options: executionOptions('gpt-test', 'responses-externalization'),
+            provider: 'openai',
+        });
+        const prepared = await prepareToolArgumentExternalization(state.document, 'call-write', ['content']);
+        expect(prepared.replay_archives).toHaveLength(1);
+        const replayArchives = prepared.replay_archives.map((archive, index) => ({
+            replay_block_id: archive.replay_block_id,
+            asset: durableAsset({
+                id: `responses-replay-${index}`,
+                kind: 'document',
+                mime_type: 'application/json',
+                content_hash: archive.content_hash,
+                byte_length: archive.byte_length,
+            }),
+        }));
+        const externalized = await externalizeToolCallArguments(state.document, {
+            operation_id: 'externalize-responses-call',
+            expected_revision: state.document.revision,
+            recorded_at: recordedAt,
+            call_id: 'call-write',
+            input_path: ['content'],
+            model_value: { path: 'notes.txt', content: '[stored externally]' },
+            exact_arguments_hash: prepared.exact_arguments_hash,
+            asset: durableAsset({
+                id: 'responses-content',
+                kind: 'text',
+                mime_type: 'text/plain',
+                content_hash: prepared.content_hash,
+                byte_length: prepared.byte_length,
+            }),
+            replay_archives: replayArchives,
+        });
+
+        const responses = compileOpenAIResponsesConversation(externalized.document).conversation;
+        expect(responses).toContainEqual(
+            expect.objectContaining({
+                type: 'function_call',
+                call_id: 'call-write',
+                name: 'write_artifact',
+                arguments: '{"path":"notes.txt","content":"[stored externally]"}',
+            }),
+        );
+        expect(JSON.stringify(responses)).not.toContain('exact retained content');
+        expect(compileClaudeMessagesConversation(externalized.document).conversation.messages).toEqual([
+            {
+                role: 'assistant',
+                content: [
+                    {
+                        type: 'tool_use',
+                        id: 'call-write',
+                        name: 'write_artifact',
+                        input: { path: 'notes.txt', content: '[stored externally]' },
+                    },
+                ],
+            },
+        ]);
+    });
+
+    it('protects every Responses item in the active exchange when encrypted reasoning is retained', async () => {
+        const state = await prepareOpenAIResponsesCanonicalState({
+            conversation: [
+                { role: 'user', content: 'Write the artifact.' },
+                {
+                    type: 'function_call',
+                    id: 'fc-protected-write',
+                    call_id: 'call-protected-write',
+                    name: 'write_artifact',
+                    arguments: '{"path":"notes.txt","content":"exact retained content"}',
+                    status: 'completed',
+                },
+                {
+                    type: 'function_call_output',
+                    call_id: 'call-protected-write',
+                    output: 'written',
+                    _llumiverse_tool_result_status: 'success',
+                },
+                {
+                    id: 'reasoning-write',
+                    type: 'reasoning',
+                    summary: [{ type: 'summary_text', text: 'Verify the write.' }],
+                    encrypted_content: 'encrypted-replay-state',
+                    status: 'completed',
+                },
+            ],
+            prompt: [],
+            options: executionOptions('gpt-test', 'responses-protected-adjacent'),
+            provider: 'openai',
+        });
+        await expect(
+            prepareToolArgumentExternalization(state.document, 'call-protected-write', ['content']),
+        ).rejects.toThrow(/Tool call call-protected-write is protected by native replay .* and cannot be externalized/);
+        expect(compileOpenAIResponsesConversation(state.document).conversation).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({ type: 'reasoning', encrypted_content: 'encrypted-replay-state' }),
+            ]),
+        );
+    });
+
+    it('projects a real unsigned Gemini function call across protocols', async () => {
+        const state = await prepareGeminiCanonicalState({
+            conversation: [
+                {
+                    role: 'model',
+                    parts: [
+                        {
+                            functionCall: {
+                                id: 'gemini-call',
+                                name: 'weather',
+                                args: { city: 'Tokyo' },
+                            },
+                        },
+                    ],
+                },
+            ],
+            prompt: { contents: [] },
+            options: executionOptions('gemini-test', 'gemini-portable-call'),
+            provider: 'google',
+        });
+        const replay = state.document.turns[0]?.blocks.find((block) => block.type === 'native_replay');
+        expect(replay).toMatchObject({ dependency_policy: 'discard_on_dependency_change' });
+        expect(
+            JSON.stringify(compileOpenAIChatCompletionsConversation(state.document).conversation.messages),
+        ).toContain('gemini-call');
+        expect(JSON.stringify(compileOpenAIResponsesConversation(state.document).conversation)).toContain(
+            'gemini-call',
+        );
     });
 
     it('fails closed for protected foreign replay and visible unsupported media', async () => {

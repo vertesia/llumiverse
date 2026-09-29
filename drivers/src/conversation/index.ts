@@ -70,12 +70,14 @@ export {
 export type {
     CanonicalStructuredOutputBinding,
     CanonicalStructuredOutputEvidence,
+    InvalidStructuredOutputEvidence,
     StructuredOutputReplayRewriter,
 } from './structured-output.js';
 export {
     assertStructuredOutputEvidence,
     normalizeDecodedStructuredOutput,
     parseStructuredOutputEvidence,
+    rejectDecodedStructuredOutput,
     remapStructuredOutputReplayDependencies,
     structuredOutputEvidence,
 } from './structured-output.js';

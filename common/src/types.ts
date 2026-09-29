@@ -1,4 +1,11 @@
-import type { ConversationRuntimeContext } from '@llumiverse/conversation';
+import type {
+    AssetKind,
+    AssetMediaMetadata,
+    AssetStorage,
+    ConversationAcceptedOutputFragment,
+    ConversationPreparedRequest,
+    ConversationRuntimeContext,
+} from '@llumiverse/conversation';
 import type { z } from 'zod';
 
 export type { ConversationRuntimeContext } from '@llumiverse/conversation';
@@ -704,6 +711,16 @@ export interface ExecutionOptions extends ExecutionOptionsBase {
         signal?: AbortSignal,
     ) => Promise<string>;
     /**
+     * Runtime-only durable sink for generated canonical assets. The sink must consume the complete stream and return
+     * storage metadata for those exact bytes before resolving. Drivers verify the returned hash and length before
+     * accepting the provider response.
+     */
+    store_generated_asset?: (
+        stream: ReadableStream<Uint8Array>,
+        metadata: { kind: AssetKind; mime_type: string; media?: AssetMediaMetadata },
+        signal?: AbortSignal,
+    ) => Promise<{ storage: AssetStorage; byte_length: number; content_hash: string }>;
+    /**
      * Available tools for the request
      */
     tools?: ToolDefinition[];
@@ -718,6 +735,21 @@ export interface ExecutionOptions extends ExecutionOptionsBase {
      * Remaining legacy-native drivers ignore this field until their adapter migration.
      */
     conversation_runtime?: ConversationRuntimeContext;
+    /**
+     * Runtime-only trusted host boundary for an idempotent response retry. The host must return only an exact
+     * output fragment read from verified durable storage. The driver binds it to the retained response receipt
+     * before use. This callback is intentionally absent from wire option schemas.
+     */
+    load_recovered_canonical_output?: (identity: {
+        conversation_id: string;
+        response_operation_id: string;
+    }) => Promise<ConversationAcceptedOutputFragment | undefined>;
+    /**
+     * Runtime-only durability barrier invoked after an adopted adapter has finalized its exact native
+     * request and before provider transport begins. The callback must not resolve until the prepared
+     * canonical request is durably recorded. It is intentionally absent from wire option schemas.
+     */
+    on_canonical_request_prepared?: (prepared: ConversationPreparedRequest) => Promise<void>;
     /**
      * Labels for billing attribution and cost tracking.
      * Passed through to provider APIs that support request-level labels (e.g. Vertex AI).

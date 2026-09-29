@@ -1,4 +1,10 @@
-import { parseConversationDocument } from '@llumiverse/conversation';
+import {
+    appendConversationRecords,
+    createConversationDocument,
+    createTextBlock,
+    createUserTurn,
+    parseConversationDocument,
+} from '@llumiverse/conversation';
 import { type ExecutionOptions, PromptRole, Providers } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
@@ -101,6 +107,7 @@ function runtimeOptions(input: {
     recordedAt: string;
     conversation?: unknown;
     model?: string;
+    materializedInput?: { operation_id: string; result_revision: number };
 }): ExecutionOptions {
     return {
         model: input.model ?? 'gpt-5',
@@ -113,16 +120,48 @@ function runtimeOptions(input: {
             response_operation_id: `response:${input.flow}:${input.operation}`,
             recorded_at: input.recordedAt,
             started_at: input.recordedAt,
+            ...(input.materializedInput === undefined ? {} : { materialized_input: input.materializedInput }),
         },
     };
 }
 
-function latestGeneratedText(value: unknown): string | undefined {
+function materializedInputDocument() {
+    const recordedAt = '2026-09-12T00:00:00.000Z';
+    const document = createConversationDocument({
+        id: 'conversation:materialized-driver-retry',
+        created_at: recordedAt,
+    });
+    const turn = createUserTurn({
+        id: 'turn:materialized-driver-input',
+        authority: 'ordinary',
+        status: 'completed',
+        timestamps: { recorded_at: recordedAt },
+        model_visibility: 'include',
+        provenance: { type: 'received' },
+        blocks: [createTextBlock({ id: 'block:materialized-driver-input', text: 'Answer once.', format: 'plain' })],
+    });
+    return appendConversationRecords(
+        document,
+        {
+            turns: [turn],
+            context_entries: [{ id: 'context:materialized-driver-input', type: 'source_turn', turn_id: turn.id }],
+            active_tool_definition_ids: [],
+        },
+        {
+            expected_revision: document.revision,
+            operation_id: 'operation:materialized-driver-input',
+            payload_fingerprint: 'sha256:materialized-driver-input',
+            recorded_at: recordedAt,
+        },
+    ).document;
+}
+
+function latestGeneratedJson(value: unknown): unknown {
     const document = parseConversationDocument(value);
     for (let index = document.turns.length - 1; index >= 0; index -= 1) {
         const turn = document.turns[index];
         if (turn.kind !== 'agent' || turn.provenance.type !== 'generated') continue;
-        return turn.blocks.find((block) => block.type === 'text')?.text;
+        return turn.blocks.find((block) => block.type === 'json')?.value;
     }
     return undefined;
 }
@@ -134,6 +173,250 @@ async function consume(stream: AsyncIterable<string>): Promise<string> {
 }
 
 describe('OpenAI Responses canonical lifecycle', () => {
+    it('recovers a saved response against its older materialized-input proof without another transport call', async () => {
+        const create = vi.fn(async () =>
+            response({
+                id: 'response:materialized-driver-retry',
+                output: [messageItem('message:materialized-driver-retry', 'Accepted once.')],
+            }),
+        );
+        const driver = new TestOpenAIResponsesDriver(create);
+        const materialized = materializedInputDocument();
+        const proof = {
+            operation_id: 'operation:materialized-driver-input',
+            result_revision: materialized.revision,
+        };
+        const first = await driver.executeCanonical([], {
+            ...runtimeOptions({
+                flow: 'materialized-driver-retry',
+                operation: 'generate',
+                attempt: 'first',
+                recordedAt: '2026-09-12T00:01:00.000Z',
+                conversation: materialized,
+                materializedInput: proof,
+            }),
+        });
+        expect(first.conversation.revision).toBe(materialized.revision + 1);
+
+        const retry = await driver.executeCanonical([], {
+            ...runtimeOptions({
+                flow: 'materialized-driver-retry',
+                operation: 'generate',
+                attempt: 'retry',
+                recordedAt: '2026-09-12T00:02:00.000Z',
+                conversation: JSON.parse(JSON.stringify(first.conversation)),
+                materializedInput: proof,
+            }),
+        });
+        expect(retry.accepted_output).toEqual(first.accepted_output);
+        expect(retry.conversation).toEqual(first.conversation);
+        expect(create).toHaveBeenCalledOnce();
+    });
+
+    it('executes directly into canonical output and recovers an accepted retry without transport', async () => {
+        const native = response({
+            id: 'response:canonical-direct',
+            output: [messageItem('message:canonical-direct', '{"answer":"Direct answer."}')],
+        });
+        const create = vi.fn(async () => native);
+        const publishPreparedRequest = vi.fn(async () => undefined);
+        const driver = new TestOpenAIResponsesDriver(create);
+        const segments = [{ role: PromptRole.user, content: 'Answer directly.' }];
+        const options = {
+            ...runtimeOptions({
+                flow: 'canonical-direct',
+                operation: 'generate',
+                attempt: 'first',
+                recordedAt: '2026-09-12T01:00:00.000Z',
+            }),
+            result_schema: {
+                type: 'object' as const,
+                properties: { answer: { type: 'string' as const } },
+                required: ['answer'],
+                additionalProperties: false,
+            },
+            on_canonical_request_prepared: publishPreparedRequest,
+        };
+
+        const first = await driver.executeCanonical(segments, options);
+        expect(first.accepted_output.turn.blocks).toEqual(
+            expect.arrayContaining([expect.objectContaining({ type: 'json', value: { answer: 'Direct answer.' } })]),
+        );
+        expect(first.accepted_output.generation.usage).toMatchObject({ input_tokens: 11, output_tokens: 7 });
+        expect(first.service_tier).toBe('default');
+        expect(first).not.toHaveProperty('prompt');
+
+        const retry = await driver.executeCanonical(segments, {
+            ...runtimeOptions({
+                flow: 'canonical-direct',
+                operation: 'generate',
+                attempt: 'retry',
+                recordedAt: '2026-09-12T01:00:01.000Z',
+                conversation: JSON.parse(JSON.stringify(first.conversation)),
+            }),
+            result_schema: options.result_schema,
+            on_canonical_request_prepared: publishPreparedRequest,
+        });
+        expect(retry.accepted_output).toEqual(first.accepted_output);
+        await expect(
+            driver.executeCanonical(segments, {
+                ...runtimeOptions({
+                    flow: 'canonical-direct',
+                    operation: 'generate',
+                    attempt: 'changed-options',
+                    recordedAt: '2026-09-12T01:00:02.000Z',
+                    conversation: first.conversation,
+                }),
+                result_schema: options.result_schema,
+                model_options: { _option_id: 'openai-thinking', max_tokens: 123 },
+            }),
+        ).rejects.toThrow('incompatible request identity');
+        expect(create).toHaveBeenCalledOnce();
+        expect(publishPreparedRequest).toHaveBeenCalledOnce();
+    });
+
+    it.each(['sync', 'stream'] as const)(
+        'prevents %s transport when prepared-request publication fails',
+        async (mode) => {
+            const create = vi.fn(async () =>
+                response({
+                    id: `response:publication-${mode}`,
+                    output: [messageItem(`message:publication-${mode}`, 'Must not be returned.')],
+                }),
+            );
+            const driver = new TestOpenAIResponsesDriver(create);
+            const options: ExecutionOptions = {
+                ...runtimeOptions({
+                    flow: `publication-${mode}`,
+                    operation: 'generate',
+                    attempt: 'first',
+                    recordedAt: '2026-09-12T01:00:30.000Z',
+                }),
+                on_canonical_request_prepared: async () => {
+                    throw new Error('durability barrier failed');
+                },
+            };
+            const execution =
+                mode === 'sync'
+                    ? driver.executeCanonical([{ role: PromptRole.user, content: 'Answer.' }], options)
+                    : driver.streamCanonical([{ role: PromptRole.user, content: 'Answer.' }], options);
+
+            await expect(execution).rejects.toThrow('durability barrier failed');
+            expect(create).not.toHaveBeenCalled();
+        },
+    );
+
+    it('streams directly into a failed canonical outcome for invalid required structured output', async () => {
+        const final = response({
+            id: 'response:canonical-invalid-stream',
+            output: [messageItem('message:canonical-invalid-stream', '{"wrong":true}')],
+        });
+        const create = vi.fn(async () =>
+            (async function* () {
+                yield {
+                    type: 'response.output_text.delta' as const,
+                    item_id: 'message:canonical-invalid-stream',
+                    output_index: 0,
+                    content_index: 0,
+                    sequence_number: 1,
+                    delta: '{"wrong":true}',
+                    logprobs: [],
+                };
+                yield { type: 'response.completed' as const, sequence_number: 2, response: final };
+            })(),
+        );
+        const driver = new TestOpenAIResponsesDriver(create);
+        const stream = await driver.streamCanonical([{ role: PromptRole.user, content: 'Return JSON.' }], {
+            ...runtimeOptions({
+                flow: 'canonical-invalid-stream',
+                operation: 'generate',
+                attempt: 'first',
+                recordedAt: '2026-09-12T01:01:00.000Z',
+            }),
+            result_schema: {
+                type: 'object',
+                properties: { answer: { type: 'string' } },
+                required: ['answer'],
+                additionalProperties: false,
+            },
+        });
+
+        expect(await consume(stream)).toBe('{"wrong":true}');
+        expect(stream.completion?.accepted_output.generation.status).toBe('failed');
+        expect(stream.completion?.accepted_output.turn.status).toBe('failed');
+        expect(stream.completion?.service_tier).toBe('default');
+        expect(stream.completion?.accepted_output.generation.usage).toMatchObject({
+            input_tokens: 11,
+            output_tokens: 7,
+        });
+    });
+
+    it.each(['sync', 'stream'] as const)(
+        'preserves an incomplete cutoff over a complete function call for direct canonical %s execution',
+        async (mode) => {
+            const callItem = {
+                type: 'function_call' as const,
+                id: 'item:cutoff-call',
+                call_id: 'call:cutoff-call',
+                name: 'lookup_weather',
+                arguments: '{"city":"Tokyo"}',
+                status: 'completed' as const,
+            };
+            const incomplete = response({
+                id: `response:cutoff-${mode}`,
+                output: [callItem],
+                status: 'incomplete',
+            });
+            const create = vi.fn(async (request: unknown) => {
+                if (!(request as { stream?: boolean }).stream) return incomplete;
+                return (async function* () {
+                    yield {
+                        type: 'response.output_item.added' as const,
+                        output_index: 0,
+                        sequence_number: 1,
+                        item: callItem,
+                    };
+                    yield { type: 'response.incomplete' as const, sequence_number: 2, response: incomplete };
+                })();
+            });
+            const driver = new TestOpenAIResponsesDriver(create);
+            const options = {
+                ...runtimeOptions({
+                    flow: `direct-cutoff-${mode}`,
+                    operation: 'generate',
+                    attempt: 'first',
+                    recordedAt: '2026-09-12T01:02:00.000Z',
+                }),
+                tools: [toolDefinition],
+            };
+            const result =
+                mode === 'sync'
+                    ? await driver.executeCanonical([{ role: PromptRole.user, content: 'Call the tool.' }], options)
+                    : await (async () => {
+                          const stream = await driver.streamCanonical(
+                              [{ role: PromptRole.user, content: 'Call the tool.' }],
+                              options,
+                          );
+                          await consume(stream);
+                          if (stream.completion === undefined) throw new Error('Expected canonical stream completion');
+                          return stream.completion;
+                      })();
+
+            expect(result.accepted_output.turn.status).toBe('interrupted');
+            expect(result.accepted_output.generation).toMatchObject({
+                status: 'cancelled',
+                finish_reason: 'length',
+            });
+            expect(result.accepted_output.turn.blocks).toContainEqual(
+                expect.objectContaining({
+                    type: 'tool_call',
+                    call_id: 'call:cutoff-call',
+                    tool_name: 'lookup_weather',
+                }),
+            );
+        },
+    );
+
     it('validates structured sync output, retains exact native data, and recovers a persisted retry', async () => {
         const rawText = '{ "answer" : "Tokyo", "note" : null }';
         const output = [
@@ -196,7 +479,7 @@ describe('OpenAI Responses canonical lifecycle', () => {
             result: 20,
             total: 120,
         });
-        expect(latestGeneratedText(first.conversation)).toBe(rawText);
+        expect(latestGeneratedJson(first.conversation)).toEqual({ answer: 'Tokyo', note: null });
         const document = parseConversationDocument(JSON.parse(JSON.stringify(first.conversation)));
         const generation = Object.values(document.generations).find(
             (candidate) => candidate.record_source === 'executed',
@@ -234,6 +517,99 @@ describe('OpenAI Responses canonical lifecycle', () => {
         expect(retried.token_usage).toEqual(first.token_usage);
         expect(retried.service_tier).toBe(first.service_tier);
         expect(retried.conversation).toEqual(document);
+        expect(create).toHaveBeenCalledTimes(1);
+    });
+
+    it('normalizes split streamed JSON around reasoning and recovers its exact native output', async () => {
+        const firstFragment = '```json\n{"answer":';
+        const secondFragment = '"Tokyo"}\n```';
+        const firstMessage = messageItem('message:structured-stream:first', firstFragment);
+        const reasoningItem = {
+            type: 'reasoning' as const,
+            id: 'reasoning:structured-stream',
+            summary: [{ type: 'summary_text' as const, text: 'Check the requested shape.' }],
+            encrypted_content: 'opaque-structured-stream-reasoning',
+            status: 'completed' as const,
+        };
+        const secondMessage = messageItem('message:structured-stream:second', secondFragment);
+        const final = response({
+            id: 'response:structured-stream',
+            output: [firstMessage, reasoningItem, secondMessage],
+            reasoningTokens: 3,
+        });
+        const create = vi.fn(async (_request: unknown, _options?: unknown) =>
+            (async function* () {
+                yield {
+                    type: 'response.output_text.delta' as const,
+                    item_id: firstMessage.id,
+                    output_index: 0,
+                    content_index: 0,
+                    sequence_number: 1,
+                    delta: firstFragment,
+                    logprobs: [],
+                };
+                yield {
+                    type: 'response.reasoning_summary_text.delta' as const,
+                    item_id: reasoningItem.id,
+                    output_index: 1,
+                    summary_index: 0,
+                    sequence_number: 2,
+                    delta: 'Check the requested shape.',
+                };
+                yield {
+                    type: 'response.output_text.delta' as const,
+                    item_id: secondMessage.id,
+                    output_index: 2,
+                    content_index: 0,
+                    sequence_number: 3,
+                    delta: secondFragment,
+                    logprobs: [],
+                };
+                yield { type: 'response.completed' as const, sequence_number: 4, response: final };
+            })(),
+        );
+        const driver = new TestOpenAIResponsesDriver(create);
+        const segments = [{ role: PromptRole.user, content: 'Return the city as JSON.' }];
+        const result_schema: NonNullable<ExecutionOptions['result_schema']> = {
+            type: 'object',
+            properties: { answer: { type: 'string' } },
+            required: ['answer'],
+            additionalProperties: false,
+        };
+        const first = await driver.stream(segments, {
+            ...runtimeOptions({
+                flow: 'structured-stream',
+                operation: 'generate',
+                attempt: 'first',
+                recordedAt: '2026-09-12T00:10:00.000Z',
+            }),
+            model_options: { _option_id: 'openai-thinking' },
+            result_schema,
+        });
+
+        await consume(first);
+        expect(first.completion?.result).toEqual([
+            { type: 'json', value: { answer: 'Tokyo' } },
+            { type: 'thoughts', value: 'Check the requested shape.' },
+        ]);
+        expect(latestGeneratedJson(first.completion?.conversation)).toEqual({ answer: 'Tokyo' });
+        const persisted = parseConversationDocument(JSON.parse(JSON.stringify(first.completion?.conversation)));
+        expect(exportLegacyOpenAIResponsesConversation(persisted).slice(-3)).toEqual(final.output);
+
+        const retried = await driver.stream(segments, {
+            ...runtimeOptions({
+                flow: 'structured-stream',
+                operation: 'generate',
+                attempt: 'retry',
+                recordedAt: '2026-09-12T00:15:00.000Z',
+                conversation: persisted,
+            }),
+            model_options: { _option_id: 'openai-thinking' },
+            result_schema,
+        });
+        await consume(retried);
+        expect(retried.completion?.result).toEqual(first.completion?.result);
+        expect(retried.completion?.conversation).toEqual(persisted);
         expect(create).toHaveBeenCalledTimes(1);
     });
 

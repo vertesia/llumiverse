@@ -34,6 +34,37 @@ export type StructuredOutputReplayRewriter = (
     input: StructuredOutputReplayInput,
 ) => NativeReplayBlock[] | Promise<NativeReplayBlock[]>;
 
+export interface InvalidStructuredOutputEvidence {
+    code: 'validation_error' | 'json_error';
+    message: string;
+}
+
+/** Retain raw decoded evidence while marking an invalid required structured result as failed. */
+export function rejectDecodedStructuredOutput(
+    decoded: DecodedConversationResponse,
+    error: InvalidStructuredOutputEvidence,
+): DecodedConversationResponse {
+    if (decoded.turns.length !== 1 || decoded.turns[0]?.kind !== 'agent') {
+        throw new TypeError('Structured output rejection requires one decoded agent turn');
+    }
+    return {
+        ...decoded,
+        turns: [{ ...decoded.turns[0], status: 'failed' }],
+        generation: {
+            ...decoded.generation,
+            status: 'failed',
+            metadata: {
+                ...decoded.generation.metadata,
+                structured_output: {
+                    status: 'invalid',
+                    code: error.code,
+                    message: error.message,
+                },
+            },
+        },
+    };
+}
+
 function stableJson(value: unknown): string {
     if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
     if (typeof value === 'object' && value !== null) {

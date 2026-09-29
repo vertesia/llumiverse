@@ -1,5 +1,7 @@
 import {
     type AIModel,
+    type CanonicalExecutionResponse,
+    type CanonicalExecutionStream,
     type Completion,
     type DriverCompletionStream,
     type ExecutionOptions,
@@ -11,10 +13,12 @@ import {
 } from '@llumiverse/core';
 import type { ClaudePrompt } from '../../shared/claude-messages.js';
 import {
+    executeCanonicalClaudeCompletion,
     executeClaudeCompletion,
     formatAnthropicLlumiverseError,
     formatClaudePrompt,
     isClaudeErrorRetryable,
+    streamCanonicalClaudeCompletion,
     streamClaudeCompletion,
 } from '../../shared/claude-messages.js';
 
@@ -95,6 +99,24 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
         );
     }
 
+    async requestCanonicalTextCompletion(
+        driver: VertexAIDriver,
+        prompt: ClaudePrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        const { region, options: resolvedOptions } = resolveVertexAIModelPath(options);
+        const client = await driver.getAnthropicClient(region, resolvedOptions.httpTimeout);
+        return executeCanonicalClaudeCompletion(
+            client,
+            prompt,
+            resolvedOptions,
+            driver.logger,
+            driver.provider,
+            signal ? { signal } : undefined,
+        );
+    }
+
     async requestTextCompletionStream(
         driver: VertexAIDriver,
         prompt: ClaudePrompt,
@@ -112,6 +134,24 @@ export class ClaudeModelDefinition implements ModelDefinition<ClaudePrompt> {
             driver.logger.debug({ options: resolvedOptions.model_options }, 'Unexpected option id');
         }
         return streamClaudeCompletion(
+            client,
+            prompt,
+            resolvedOptions,
+            driver.logger,
+            driver.provider,
+            signal ? { signal } : undefined,
+        );
+    }
+
+    async requestCanonicalTextCompletionStream(
+        driver: VertexAIDriver,
+        prompt: ClaudePrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionStream> {
+        const { region, options: resolvedOptions } = resolveVertexAIModelPath(options);
+        const client = await driver.getAnthropicClient(region, resolvedOptions.httpTimeout);
+        return streamCanonicalClaudeCompletion(
             client,
             prompt,
             resolvedOptions,

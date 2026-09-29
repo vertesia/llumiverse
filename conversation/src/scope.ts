@@ -11,6 +11,8 @@ export const CONVERSATION_FOUNDATION_SCOPE = Object.freeze({
         'basic_builders_and_inspection',
         'deterministic_json_schema',
         'idempotent_materialized_record_ingestion',
+        'accepted_output_fragments',
+        'prepared_request_records',
     ]),
 });
 
@@ -23,8 +25,9 @@ export const CONVERSATION_FOUNDATION_LIMITATIONS = Object.freeze([
     },
     {
         code: 'UNIMPLEMENTED_SCOPE',
-        feature: 'fragments',
-        message: 'Fragment validation and completeness descriptors are not implemented in this revision.',
+        feature: 'general_fragments_and_working_sets',
+        message:
+            'Accepted-output fragments are supported, but general loadable history fragments and bounded working-set validation are not implemented.',
     },
     {
         code: 'UNIMPLEMENTED_SCOPE',
@@ -40,7 +43,7 @@ export const CONVERSATION_FOUNDATION_LIMITATIONS = Object.freeze([
         code: 'UNIMPLEMENTED_SCOPE',
         feature: 'remaining_delivery_adapters_and_migrations',
         message:
-            'OpenAI Chat Completions and Claude Messages have native adapters; other provider adapters, delivery contracts, and migrations are not implemented.',
+            'Chat Completions, Responses, Claude Messages, Gemini GenerateContent, and Bedrock Converse have adapters; remaining modalities, delivery contracts, and migrations are not implemented.',
     },
     {
         code: 'UNIMPLEMENTED_SCOPE',

@@ -6,6 +6,8 @@ import type {
     AgentTurnSchema,
     AppendConversationRecordsOptionsSchema,
     AppendConversationRecordsResultSchema,
+    ApplicationToolCallBlockSchema,
+    ApplicationToolExecutionReceiptSchema,
     AssetKindSchema,
     AssetMediaMetadataSchema,
     AssetProvenanceSchema,
@@ -30,9 +32,14 @@ import type {
     ConversationInspectionSchema,
     ConversationLineageParentSchema,
     ConversationLineageSchema,
+    ConversationMaterializedInputSchema,
+    ConversationPreparedRequestRecordSchema,
+    ConversationPreparedRequestSchema,
     ConversationRecordBatchSchema,
     ConversationRefSchema,
     ConversationRuntimeContextSchema,
+    ConversationToolExecutionRequestSchema,
+    ConversationToolExecutionResultSchema,
     ConversationTurnSchema,
     DecodedConversationResponseSchema,
     DerivedAgentTurnSchema,
@@ -40,9 +47,11 @@ import type {
     DerivedTurnProvenanceSchema,
     DocumentBlockSchema,
     ExecutedGenerationSchema,
+    ExecutedToolTurnSchema,
     ExecutionReceiptSchema,
     ExtensionBlockSchema,
     ExternalAssetStorageSchema,
+    ExternalizedToolArgumentsSchema,
     ExternalReferenceBlockSchema,
     GeneratedAgentTurnSchema,
     GeneratedAssetProvenanceSchema,
@@ -61,9 +70,12 @@ import type {
     InlineJsonAssetStorageSchema,
     InlineTextAssetStorageSchema,
     InsertedTurnProvenanceSchema,
+    InvalidatedReplayArchiveSchema,
     InvalidToolArgumentsSchema,
     JsonBlockSchema,
     JsonObjectSchema,
+    JsonPathSchema,
+    JsonPathSegmentSchema,
     JsonPreflightDiagnosticCodeSchema,
     JsonPreflightDiagnosticSchema,
     JsonValueSchema,
@@ -77,6 +89,7 @@ import type {
     NongeneratedAgentTurnSchema,
     OperationReceiptSchema,
     PageRangeSchema,
+    PendingApplicationToolCallSchema,
     ProcessingStateSchema,
     ProcessorConfigurationSchema,
     ProgramContentBlockSchema,
@@ -89,15 +102,19 @@ import type {
     ReplayDependenciesSchema,
     ReportedUsageSchema,
     RequestReceiptSchema,
+    ResolvedConversationRuntimeContextSchema,
     RetrievalCapabilitySchema,
     SemanticConversationDiagnosticCodeSchema,
     SemanticConversationDiagnosticSchema,
     SourceTurnContextEntrySchema,
     StructuredToolArgumentsSchema,
+    TextAssetToolArgumentHydrationSchema,
     TextBlockSchema,
     TimeRangeSchema,
+    ToolArgumentHydrationSchema,
     ToolArgumentsSchema,
     ToolCallBlockSchema,
+    ToolCallSourceRefSchema,
     ToolDefinitionSchema,
     ToolInputSchemaSchema,
     ToolResultBlockSchema,
@@ -159,8 +176,21 @@ export type AudioBlock = z.infer<typeof AudioBlockSchema>;
 export type VideoBlock = z.infer<typeof VideoBlockSchema>;
 export type StructuredToolArguments = z.infer<typeof StructuredToolArgumentsSchema>;
 export type InvalidToolArguments = z.infer<typeof InvalidToolArgumentsSchema>;
+export type JsonPathSegment = z.infer<typeof JsonPathSegmentSchema>;
+export type JsonPath = z.infer<typeof JsonPathSchema>;
+export type TextAssetToolArgumentHydration = z.infer<typeof TextAssetToolArgumentHydrationSchema>;
+export type ToolArgumentHydration = z.infer<typeof ToolArgumentHydrationSchema>;
+export type InvalidatedReplayArchive = z.infer<typeof InvalidatedReplayArchiveSchema>;
+export type ExternalizedToolArguments = z.infer<typeof ExternalizedToolArgumentsSchema>;
 export type ToolArguments = z.infer<typeof ToolArgumentsSchema>;
 export type ToolCallBlock = z.infer<typeof ToolCallBlockSchema>;
+export type ToolCallSourceRef = z.infer<typeof ToolCallSourceRefSchema>;
+export type ApplicationToolCallBlock = z.infer<typeof ApplicationToolCallBlockSchema>;
+export type PendingApplicationToolCall = z.infer<typeof PendingApplicationToolCallSchema>;
+export type ApplicationToolExecutionReceipt = z.infer<typeof ApplicationToolExecutionReceiptSchema>;
+export type ExecutedToolTurn = z.infer<typeof ExecutedToolTurnSchema>;
+export type ConversationToolExecutionRequest = z.infer<typeof ConversationToolExecutionRequestSchema>;
+export type ConversationToolExecutionResult = z.infer<typeof ConversationToolExecutionResultSchema>;
 export type RetrievalCapability = z.infer<typeof RetrievalCapabilitySchema>;
 export type ExternalReferenceBlock = z.infer<typeof ExternalReferenceBlockSchema>;
 export type ReasoningBlock = z.infer<typeof ReasoningBlockSchema>;
@@ -197,7 +227,11 @@ export type AccountingProvenance = z.infer<typeof AccountingProvenanceSchema>;
 export type UsageAccountingProvenance = z.infer<typeof UsageAccountingProvenanceSchema>;
 export type ReportedUsage = z.infer<typeof ReportedUsageSchema>;
 export type CompleteInputPartition = z.infer<typeof CompleteInputPartitionSchema>;
+export type ConversationMaterializedInput = z.infer<typeof ConversationMaterializedInputSchema>;
 export type ConversationRuntimeContext = z.infer<typeof ConversationRuntimeContextSchema>;
+export type ResolvedConversationRuntimeContext = z.infer<typeof ResolvedConversationRuntimeContextSchema>;
+export type ConversationPreparedRequestRecord = z.infer<typeof ConversationPreparedRequestRecordSchema>;
+export type ConversationPreparedRequest = z.infer<typeof ConversationPreparedRequestSchema>;
 export type GenerationCost = z.infer<typeof GenerationCostSchema>;
 export type GenerationUsage = z.infer<typeof GenerationUsageSchema>;
 export type ContextMeasurement = z.infer<typeof ContextMeasurementSchema>;

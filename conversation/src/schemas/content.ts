@@ -140,6 +140,12 @@ export const AssetMediaMetadataSchema = z
         height: PositiveSafeIntegerSchema.optional(),
         duration_seconds: z.number().positive().optional(),
         page_count: PositiveSafeIntegerSchema.optional(),
+        container: z.string().min(1).optional(),
+        codec: z.string().min(1).optional(),
+        sample_rate: PositiveSafeIntegerSchema.optional(),
+        channels: PositiveSafeIntegerSchema.optional(),
+        sample_encoding: z.string().min(1).optional(),
+        byte_order: z.enum(['little', 'big']).optional(),
     })
     .meta({ id: 'ConversationAssetMediaMetadata' });
 
@@ -251,8 +257,58 @@ export const InvalidToolArgumentsSchema = z
     })
     .meta({ id: 'ConversationInvalidToolArguments' });
 
+export const JsonPathSegmentSchema = z
+    .union([
+        z
+            .string()
+            .min(1)
+            .refine((value) => value !== '__proto__' && value !== 'prototype' && value !== 'constructor', {
+                message: 'JSON path property is unsafe',
+            }),
+        NonnegativeSafeIntegerSchema,
+    ])
+    .meta({ id: 'ConversationJsonPathSegment' });
+
+export const JsonPathSchema = z.array(JsonPathSegmentSchema).min(1).meta({ id: 'ConversationJsonPath' });
+
+export const TextAssetToolArgumentHydrationSchema = z
+    .strictObject({
+        type: z.literal('text_asset'),
+        input_path: JsonPathSchema,
+        asset_id: IdentifierSchema,
+        content_hash: ContentHashSchema,
+    })
+    .meta({ id: 'ConversationTextAssetToolArgumentHydration' });
+
+export const ToolArgumentHydrationSchema = z
+    .discriminatedUnion('type', [TextAssetToolArgumentHydrationSchema])
+    .meta({ id: 'ConversationToolArgumentHydration' });
+
+export const InvalidatedReplayArchiveSchema = z
+    .strictObject({
+        replay_block_id: IdentifierSchema,
+        asset_id: IdentifierSchema,
+        content_hash: ContentHashSchema,
+    })
+    .meta({ id: 'ConversationInvalidatedReplayArchive' });
+
+export const ExternalizedToolArgumentsSchema = z
+    .strictObject({
+        type: z.literal('externalized_json'),
+        value: JsonObjectSchema,
+        model_value: JsonObjectSchema,
+        exact_arguments_hash: ContentHashSchema,
+        hydration: z.array(ToolArgumentHydrationSchema).min(1),
+        invalidated_replay_archives: z.array(InvalidatedReplayArchiveSchema).min(1).optional(),
+    })
+    .meta({ id: 'ConversationExternalizedToolArguments' });
+
 export const ToolArgumentsSchema = z
-    .discriminatedUnion('type', [StructuredToolArgumentsSchema, InvalidToolArgumentsSchema])
+    .discriminatedUnion('type', [
+        StructuredToolArgumentsSchema,
+        InvalidToolArgumentsSchema,
+        ExternalizedToolArgumentsSchema,
+    ])
     .meta({ id: 'ConversationToolArguments' });
 
 export const ToolCallBlockSchema = z
@@ -338,6 +394,7 @@ export const NativeReplayBlockSchema = z
         compatibility_scope: ReplayCompatibilityScopeSchema,
         payload: JsonValueSchema,
         dependencies: ReplayDependenciesSchema,
+        dependency_policy: z.literal('discard_on_dependency_change').optional(),
         content_hash: ContentHashSchema.optional(),
     })
     .meta({ id: 'ConversationNativeReplayBlock' });

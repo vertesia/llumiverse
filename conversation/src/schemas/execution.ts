@@ -10,6 +10,14 @@ import {
     TimestampSchema,
 } from './primitives.js';
 
+/** Proof that the current canonical head already contains this request's complete model-visible input. */
+export const ConversationMaterializedInputSchema = z
+    .strictObject({
+        operation_id: IdentifierSchema,
+        result_revision: NonnegativeSafeIntegerSchema,
+    })
+    .meta({ id: 'ConversationMaterializedInput' });
+
 export const ConversationRuntimeContextSchema = z
     .strictObject({
         conversation_id: IdentifierSchema.optional(),
@@ -21,6 +29,7 @@ export const ConversationRuntimeContextSchema = z
         started_at: TimestampSchema.optional(),
         completed_at: TimestampSchema.optional(),
         purpose: IdentifierSchema.optional(),
+        materialized_input: ConversationMaterializedInputSchema.optional(),
     })
     .meta({ id: 'ConversationRuntimeContext' });
 
@@ -263,6 +272,17 @@ export const OperationReceiptSchema = z
     })
     .meta({ id: 'ConversationOperationReceipt' });
 
+/** Immutable canonical identity of the application tool call authorized for execution. */
+export const ToolCallSourceRefSchema = z
+    .strictObject({
+        conversation: ConversationRefSchema,
+        turn_id: IdentifierSchema,
+        block_id: IdentifierSchema,
+        call_id: IdentifierSchema,
+        call_fingerprint: ContentHashSchema,
+    })
+    .meta({ id: 'ConversationToolCallSourceRef' });
+
 export const ExecutionReceiptSchema = z
     .strictObject({
         id: IdentifierSchema,
@@ -274,5 +294,6 @@ export const ExecutionReceiptSchema = z
         result_turn_id: IdentifierSchema.optional(),
         result_fingerprint: ContentHashSchema,
         recorded_at: TimestampSchema,
+        call_source: ToolCallSourceRefSchema.optional(),
     })
     .meta({ id: 'ConversationExecutionReceipt' });

@@ -9,6 +9,7 @@ import {
     type EmbeddingsResult,
     type ExecutionOptions,
     type ModelSearchPayload,
+    type PromptOptions,
     PromptRole,
     type PromptSegment,
 } from '@llumiverse/common';
@@ -35,6 +36,7 @@ class LifecycleTestDriver extends AbstractDriver<DriverOptions, string> {
     };
     requestTextCompletionCalls = 0;
     requestTextCompletionStreamCalls = 0;
+    createPromptCalls = 0;
 
     constructor(
         private readonly cleanup: () => void,
@@ -70,6 +72,11 @@ class LifecycleTestDriver extends AbstractDriver<DriverOptions, string> {
         return this.completionStream;
     }
 
+    override async createPrompt(segments: PromptSegment[], opts: PromptOptions): Promise<string> {
+        this.createPromptCalls += 1;
+        return await super.createPrompt(segments, opts);
+    }
+
     async requestImageGeneration(_prompt: string, _options: ExecutionOptions): Promise<Completion> {
         return this.imageCompletion;
     }
@@ -96,6 +103,12 @@ class LifecycleTestDriver extends AbstractDriver<DriverOptions, string> {
 
     protected override canStream(_options?: ExecutionOptions, _signal?: AbortSignal): Promise<boolean> {
         return Promise.resolve(this.streaming);
+    }
+}
+
+class CanonicalLifecycleTestDriver extends LifecycleTestDriver {
+    protected override supportsCanonicalConversation(_options: ExecutionOptions): boolean {
+        return true;
     }
 }
 
@@ -168,6 +181,40 @@ describe('AbstractDriver lifecycle', () => {
         await expect(driver.stream(segments, canonicalOptions)).rejects.toThrow(
             'Provider lifecycle-test model test-model does not support canonical conversation input',
         );
+        expect(driver.requestTextCompletionCalls).toBe(0);
+        expect(driver.requestTextCompletionStreamCalls).toBe(0);
+        await expect(driver.supportsCanonicalExecution(canonicalOptions)).resolves.toBe(false);
+    });
+
+    it('rejects new segments with a materialized canonical input before preparing a provider request', async () => {
+        const driver = new CanonicalLifecycleTestDriver(vi.fn());
+        const conversation = createConversationDocument({
+            id: 'conversation:materialized',
+            created_at: '2026-09-30T00:00:00.000Z',
+        });
+        const canonicalOptions: ExecutionOptions = {
+            ...options,
+            conversation,
+            conversation_runtime: {
+                conversation_id: conversation.id,
+                request_id: 'request:materialized',
+                attempt_id: 'attempt:materialized',
+                input_operation_id: 'operation:unused-input',
+                response_operation_id: 'operation:response',
+                recorded_at: '2026-09-30T00:00:00.000Z',
+                materialized_input: { operation_id: 'operation:materialized-input', result_revision: 1 },
+            },
+        };
+
+        await expect(driver.supportsCanonicalExecution(canonicalOptions)).resolves.toBe(true);
+
+        await expect(driver.executeCanonical(segments, canonicalOptions)).rejects.toThrow(
+            'A materialized canonical input requires an empty new prompt',
+        );
+        await expect(driver.streamCanonical(segments, canonicalOptions)).rejects.toThrow(
+            'A materialized canonical input requires an empty new prompt',
+        );
+        expect(driver.createPromptCalls).toBe(0);
         expect(driver.requestTextCompletionCalls).toBe(0);
         expect(driver.requestTextCompletionStreamCalls).toBe(0);
     });

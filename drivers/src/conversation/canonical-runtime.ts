@@ -1,13 +1,10 @@
-import type {
-    ConversationRuntimeContext,
-    ExecutionOptions,
-    ToolDefinition as LegacyToolDefinition,
-} from '@llumiverse/common';
+import type { ExecutionOptions, ToolDefinition as LegacyToolDefinition } from '@llumiverse/common';
 import {
     type Asset,
     appendConversationRecords,
     type ContextEntry,
     type ConversationDocument,
+    type ConversationPreparedRequest,
     ConversationRuntimeContextSchema,
     type ConversationTurn,
     createConversationDocument,
@@ -23,14 +20,14 @@ import {
     type JsonValue,
     type NativeItemMapping,
     parseConversationDocument,
+    parseConversationPreparedRequest,
     type RequestReceipt,
+    type ResolvedConversationRuntimeContext,
     type ToolDefinition,
 } from '@llumiverse/conversation';
+import { type CanonicalExecutionResponse, createCanonicalExecutionResponse } from '@llumiverse/core';
 
-export interface ResolvedConversationRuntimeContext extends ConversationRuntimeContext {
-    conversation_id: string;
-    purpose: string;
-}
+export type { ResolvedConversationRuntimeContext } from '@llumiverse/conversation';
 
 export interface CanonicalPromptRecords {
     turns: ConversationTurn[];
@@ -52,6 +49,140 @@ export interface CanonicalPreparedState<NativeConversation> {
         turn: GeneratedAgentTurn;
         generation: ExecutedGeneration;
     };
+}
+
+type AcceptedCanonicalResponse = NonNullable<CanonicalPreparedState<unknown>['accepted_response']>;
+
+function selectedAssetIds(turns: readonly ConversationTurn[]): Set<string> {
+    const assetIds = new Set<string>();
+    for (const turn of turns) {
+        for (const block of turn.blocks) {
+            if (block.type === 'tool_call' && block.arguments.type === 'externalized_json') {
+                for (const hydration of block.arguments.hydration) assetIds.add(hydration.asset_id);
+            }
+            if ('asset_id' in block) assetIds.add(block.asset_id);
+            if (block.type === 'tool_result') {
+                for (const nested of block.content) {
+                    if ('asset_id' in nested) assetIds.add(nested.asset_id);
+                }
+            }
+        }
+    }
+    return assetIds;
+}
+
+async function requestContextFingerprint(
+    document: ConversationDocument,
+    protocol: string,
+): Promise<{ fingerprint: string; assets: Asset[] }> {
+    const selected = selectedCanonicalTurns(document, { allow_interrupted_with_replay_protocol: protocol });
+    const assets = [...selectedAssetIds(selected)].sort().map((id) => {
+        const asset = Object.hasOwn(document.assets, id) ? document.assets[id] : undefined;
+        if (asset === undefined) throw new Error(`Selected context references missing asset ${id}`);
+        return asset;
+    });
+    return {
+        fingerprint: await fingerprintJson({ turns: selected, assets }),
+        assets,
+    };
+}
+
+/** Reconstruct and verify the exact canonical context used by an already accepted provider request. */
+export async function acceptedCanonicalRequestDocument(
+    document: ConversationDocument,
+    accepted: AcceptedCanonicalResponse,
+): Promise<ConversationDocument> {
+    const receipt = accepted.generation.request_receipt;
+    const requestedTurnIds = new Set(
+        receipt.item_mappings.flatMap((mapping) => (mapping.kind === 'turn' ? [mapping.canonical_id] : [])),
+    );
+    const entries = document.context.entries.filter((entry) => requestedTurnIds.has(entry.turn_id));
+    const retainedTurnIds = new Set(entries.map((entry) => entry.turn_id));
+    const missingTurnId = [...requestedTurnIds].find((id) => !retainedTurnIds.has(id));
+    if (missingTurnId !== undefined) {
+        throw new Error(`Accepted request context cannot resolve retained turn ${missingTurnId}`);
+    }
+    const entryIds = new Set(entries.map((entry) => entry.id));
+    const candidate: ConversationDocument = {
+        ...document,
+        context: {
+            ...document.context,
+            revision: receipt.source.revision,
+            entries,
+            active_tool_definition_ids: [...receipt.tool_definition_ids],
+            protected_entry_ids: document.context.protected_entry_ids.filter((id) => entryIds.has(id)),
+        },
+    };
+    const { fingerprint } = await requestContextFingerprint(candidate, receipt.target.protocol);
+    if (fingerprint !== receipt.context_fingerprint) {
+        throw new Error(`Accepted response operation context does not match its retained request receipt`);
+    }
+    return candidate;
+}
+
+/** Verify a rebuilt native request before returning an accepted response without provider transport. */
+export async function assertAcceptedCanonicalRequest(
+    state: Pick<CanonicalPreparedState<unknown>, 'accepted_response' | 'runtime'>,
+    target: { provider: string; protocol: string; model: string },
+    nativePayload: JsonValue,
+): Promise<void> {
+    const accepted = state.accepted_response;
+    if (accepted === undefined) return;
+    const generation = accepted.generation;
+    const receipt = generation.request_receipt;
+    if (
+        generation.request_id !== state.runtime.request_id ||
+        generation.provider !== target.provider ||
+        generation.protocol !== target.protocol ||
+        generation.requested_model !== target.model ||
+        receipt.target.provider !== target.provider ||
+        receipt.target.protocol !== target.protocol ||
+        receipt.target.model !== target.model ||
+        receipt.request_fingerprint !== (await fingerprintJson(nativePayload))
+    ) {
+        throw new Error(
+            `Accepted response operation ${state.runtime.response_operation_id} has incompatible request identity`,
+        );
+    }
+}
+
+/** Await the host durability barrier for an exact finalized provider request. */
+export async function publishCanonicalPreparedRequest(
+    state: CanonicalPreparedState<unknown>,
+    options: ExecutionOptions,
+): Promise<ConversationPreparedRequest | undefined> {
+    if (options.on_canonical_request_prepared === undefined) return undefined;
+    const prepared = await parseConversationPreparedRequest({
+        document: state.document,
+        record: {
+            source: state.receipt.source,
+            runtime: state.runtime,
+            request_receipt: state.receipt,
+            generation_id: state.generation_id,
+            response_turn_id: state.response_turn_id,
+        },
+    });
+    await options.on_canonical_request_prepared(prepared);
+    return prepared;
+}
+
+/** Recover one already accepted response, optionally using a verified host-retained output fragment. */
+export async function recoverCanonicalExecutionResponse(
+    state: Pick<CanonicalPreparedState<unknown>, 'document' | 'runtime' | 'accepted_response'>,
+    options: ExecutionOptions,
+    metadata: Parameters<typeof createCanonicalExecutionResponse>[2] = {},
+): Promise<CanonicalExecutionResponse> {
+    if (state.accepted_response === undefined) throw new Error('No accepted canonical response is available');
+    const recoveredOutput = await options.load_recovered_canonical_output?.({
+        conversation_id: state.document.id,
+        response_operation_id: state.runtime.response_operation_id,
+    });
+    return createCanonicalExecutionResponse(
+        state.document,
+        state.runtime.response_operation_id,
+        metadata,
+        recoveredOutput,
+    );
 }
 
 function randomIdentity(prefix: string): string {
@@ -110,7 +241,10 @@ export function canonicalConversationTurnNumber(document: ConversationDocument):
 
 export function selectedCanonicalTurns(
     document: ConversationDocument,
-    options?: { allow_interrupted_with_replay_protocol?: string },
+    options?: {
+        allow_interrupted_with_replay_protocol?: string;
+        allow_interrupted_with_complete_tool_calls?: boolean;
+    },
 ): ConversationTurn[] {
     const turnsById = new Map(document.turns.map((turn) => [turn.id, turn]));
     const selected: ConversationTurn[] = [];
@@ -138,7 +272,18 @@ export function selectedCanonicalTurns(
                     block.protocol === options?.allow_interrupted_with_replay_protocol &&
                     (selectedBlockIds === undefined || selectedBlockIds.has(block.id)),
             );
-        if (turn.status !== 'completed' && !hasSelectedInterruptedReplay) {
+        const hasSelectedCompleteToolCall =
+            turn.status === 'interrupted' &&
+            options?.allow_interrupted_with_complete_tool_calls === true &&
+            turn.kind === 'agent' &&
+            turn.blocks.some(
+                (block) =>
+                    block.type === 'tool_call' &&
+                    block.executor === 'application' &&
+                    block.arguments.type !== 'invalid' &&
+                    (selectedBlockIds === undefined || selectedBlockIds.has(block.id)),
+            );
+        if (turn.status !== 'completed' && !hasSelectedInterruptedReplay && !hasSelectedCompleteToolCall) {
             throw new Error(
                 `Conversation context turn ${turn.id} has status ${turn.status}, which ${'cannot be represented by a completed native history message'}`,
             );
@@ -210,6 +355,150 @@ export async function canonicalToolDefinitions(
     return definitions;
 }
 
+async function retainedToolDefinitionsMatch(
+    document: ConversationDocument,
+    toolDefinitions: readonly ToolDefinition[],
+    activeIds: readonly string[],
+): Promise<boolean> {
+    const expectedIds = toolDefinitions.map((definition) => definition.id);
+    if (activeIds.length !== expectedIds.length || activeIds.some((id, index) => id !== expectedIds[index])) {
+        return false;
+    }
+    for (const definition of toolDefinitions) {
+        const retained = Object.hasOwn(document.tool_definitions, definition.id)
+            ? document.tool_definitions[definition.id]
+            : undefined;
+        if (
+            retained === undefined ||
+            (await fingerprintJson(retained as JsonValue)) !== (await fingerprintJson(definition as JsonValue))
+        ) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function assertMaterializedInputRecords(
+    document: ConversationDocument,
+    proof: NonNullable<ResolvedConversationRuntimeContext['materialized_input']>,
+): void {
+    const receipt = Object.hasOwn(document.operation_receipts, proof.operation_id)
+        ? document.operation_receipts[proof.operation_id]
+        : undefined;
+    if (
+        receipt === undefined ||
+        receipt.id !== proof.operation_id ||
+        receipt.conversation_id !== document.id ||
+        receipt.result_revision !== proof.result_revision ||
+        receipt.accepted_turn_ids === undefined ||
+        receipt.accepted_turn_ids.length === 0 ||
+        (receipt.accepted_generation_ids?.length ?? 0) > 0
+    ) {
+        throw new Error('Materialized canonical input does not identify an accepted input-only operation receipt');
+    }
+    const acceptedTurnIds = new Set(receipt.accepted_turn_ids);
+    if (acceptedTurnIds.size !== receipt.accepted_turn_ids.length) {
+        throw new Error('Materialized canonical input receipt contains duplicate accepted turns');
+    }
+    const acceptedContextEntryIds = new Set(receipt.accepted_context_entry_ids ?? []);
+    if (acceptedContextEntryIds.size !== (receipt.accepted_context_entry_ids?.length ?? 0)) {
+        throw new Error('Materialized canonical input receipt contains duplicate accepted context entries');
+    }
+    for (const turnId of acceptedTurnIds) {
+        const turn = document.turns.find((candidate) => candidate.id === turnId);
+        if (turn === undefined || isGeneratedAgentTurn(turn) || turn.status !== 'completed') {
+            throw new Error(`Materialized canonical input turn ${turnId} is not a completed input turn`);
+        }
+        const entries = document.context.entries.filter(
+            (entry) => entry.type === 'source_turn' && entry.turn_id === turnId,
+        );
+        if (entries.length !== 1) {
+            throw new Error(`Materialized canonical input turn ${turnId} is not selected by exactly one context entry`);
+        }
+        const [entry] = entries;
+        if (entry === undefined || !acceptedContextEntryIds.has(entry.id)) {
+            throw new Error(`Materialized canonical input turn ${turnId} is not selected by an accepted context entry`);
+        }
+        const selectedBlockIds = entry.block_ids;
+        if (
+            selectedBlockIds !== undefined &&
+            (selectedBlockIds.length !== turn.blocks.length ||
+                turn.blocks.some((block) => !selectedBlockIds.includes(block.id)))
+        ) {
+            throw new Error(`Materialized canonical input turn ${turnId} is only partially selected`);
+        }
+    }
+    for (const entryId of acceptedContextEntryIds) {
+        const entry = document.context.entries.find((candidate) => candidate.id === entryId);
+        if (entry === undefined || entry.type !== 'source_turn' || !acceptedTurnIds.has(entry.turn_id)) {
+            throw new Error(
+                `Materialized canonical input context entry ${entryId} does not select an accepted input turn`,
+            );
+        }
+    }
+}
+
+async function materializedToolSetFingerprint(
+    proof: NonNullable<ResolvedConversationRuntimeContext['materialized_input']>,
+    toolDefinitions: readonly ToolDefinition[],
+): Promise<string> {
+    return fingerprintJson({ materialized_input: proof, tools: toolDefinitions });
+}
+
+async function assertAcceptedMaterializedResponse(
+    document: ConversationDocument,
+    runtime: ResolvedConversationRuntimeContext,
+    toolDefinitions: readonly ToolDefinition[],
+): Promise<boolean> {
+    const proof = runtime.materialized_input;
+    if (proof === undefined) return false;
+    const accepted = acceptedCanonicalResponse(document, runtime.response_operation_id);
+    if (accepted === undefined) return false;
+    const responseReceipt = document.operation_receipts[runtime.response_operation_id];
+    const requestReceipt = accepted.generation.request_receipt;
+    if (
+        accepted.generation.request_id !== runtime.request_id ||
+        requestReceipt.request_id !== runtime.request_id ||
+        requestReceipt.source.conversation_id !== document.id ||
+        accepted.generation.source.conversation_id !== document.id ||
+        accepted.generation.source.revision !== requestReceipt.source.revision ||
+        responseReceipt?.base_revision !== requestReceipt.source.revision ||
+        responseReceipt.result_revision > document.revision
+    ) {
+        throw new Error('Accepted canonical response does not originate from the materialized request');
+    }
+    if (
+        requestReceipt.tool_definition_ids.length !== toolDefinitions.length ||
+        requestReceipt.tool_definition_ids.some((id, index) => id !== toolDefinitions[index]?.id) ||
+        !(await retainedToolDefinitionsMatch(document, toolDefinitions, requestReceipt.tool_definition_ids))
+    ) {
+        throw new Error('Accepted canonical response tool definitions do not match the materialized request');
+    }
+    if (requestReceipt.source.revision === proof.result_revision) return true;
+
+    const toolSetReceipt = Object.hasOwn(document.operation_receipts, runtime.input_operation_id)
+        ? document.operation_receipts[runtime.input_operation_id]
+        : undefined;
+    const expectedFingerprint = await materializedToolSetFingerprint(proof, toolDefinitions);
+    if (
+        toolSetReceipt === undefined ||
+        toolSetReceipt.conversation_id !== document.id ||
+        toolSetReceipt.base_revision !== proof.result_revision ||
+        toolSetReceipt.result_revision !== requestReceipt.source.revision ||
+        toolSetReceipt.payload_fingerprint !== expectedFingerprint ||
+        (toolSetReceipt.accepted_turn_ids?.length ?? 0) > 0 ||
+        (toolSetReceipt.accepted_generation_ids?.length ?? 0) > 0 ||
+        (toolSetReceipt.accepted_asset_ids?.length ?? 0) > 0 ||
+        (toolSetReceipt.accepted_execution_receipt_ids?.length ?? 0) > 0 ||
+        (toolSetReceipt.accepted_context_entry_ids?.length ?? 0) > 0 ||
+        (toolSetReceipt.accepted_tool_definition_ids?.length ?? 0) !== toolDefinitions.length ||
+        toolSetReceipt.accepted_tool_definition_ids?.some((id, index) => id !== toolDefinitions[index]?.id)
+    ) {
+        throw new Error('Accepted canonical response does not originate from the materialized tool-set operation');
+    }
+    return true;
+}
+
 export async function appendCanonicalPrompt(
     document: ConversationDocument,
     records: CanonicalPromptRecords,
@@ -218,6 +507,68 @@ export async function appendCanonicalPrompt(
     semanticPayload: JsonValue,
 ): Promise<{ document: ConversationDocument; tool_definitions: ToolDefinition[] }> {
     const toolDefinitions = await canonicalToolDefinitions(tools);
+    if (runtime.materialized_input !== undefined) {
+        const suppliedRecords = [
+            ...records.turns,
+            ...records.assets,
+            ...records.context_entries,
+            ...records.item_mappings,
+            ...(records.execution_receipts ?? []),
+        ];
+        if (suppliedRecords.length > 0) {
+            throw new Error('A materialized canonical input cannot include new prompt records');
+        }
+        const proof = runtime.materialized_input;
+        assertMaterializedInputRecords(document, proof);
+        if (await assertAcceptedMaterializedResponse(document, runtime, toolDefinitions)) {
+            return { document, tool_definitions: toolDefinitions };
+        }
+
+        const toolDefinitionsMatch = await retainedToolDefinitionsMatch(
+            document,
+            toolDefinitions,
+            document.context.active_tool_definition_ids,
+        );
+        if (proof.result_revision === document.revision && toolDefinitionsMatch) {
+            return { document, tool_definitions: toolDefinitions };
+        }
+
+        const payloadFingerprint = await materializedToolSetFingerprint(proof, toolDefinitions);
+        const toolSetReceipt = Object.hasOwn(document.operation_receipts, runtime.input_operation_id)
+            ? document.operation_receipts[runtime.input_operation_id]
+            : undefined;
+        if (proof.result_revision !== document.revision && toolSetReceipt === undefined) {
+            throw new Error(
+                `Materialized canonical input revision ${proof.result_revision} does not match current revision ${document.revision}`,
+            );
+        }
+        const appended = appendConversationRecords(
+            document,
+            {
+                tool_definitions: toolDefinitions,
+                active_tool_definition_ids: toolDefinitions.map((definition) => definition.id),
+            },
+            {
+                expected_revision: proof.result_revision,
+                operation_id: runtime.input_operation_id,
+                payload_fingerprint: payloadFingerprint,
+                recorded_at: runtime.recorded_at,
+            },
+        );
+        if (
+            !(await retainedToolDefinitionsMatch(
+                appended.document,
+                toolDefinitions,
+                appended.document.context.active_tool_definition_ids,
+            ))
+        ) {
+            throw new Error('Materialized canonical input tool-set operation did not activate the requested tools');
+        }
+        if (toolSetReceipt !== undefined && toolSetReceipt.result_revision !== document.revision) {
+            throw new Error('Materialized canonical input has unrelated operations after its tool-set operation');
+        }
+        return { document: appended.document, tool_definitions: toolDefinitions };
+    }
     const payloadFingerprint = await fingerprintJson({
         prompt: semanticPayload,
         tools: toolDefinitions,
@@ -254,16 +605,15 @@ export async function createRequestReceipt(
     const turnIds = new Set(selected.map((turn) => turn.id));
     const blockIds = new Set<string>();
     const callIds = new Set<string>();
-    const assetIds = new Set<string>();
     for (const turn of selected) {
         for (const block of turn.blocks) {
             blockIds.add(block.id);
-            if (block.type === 'tool_call') callIds.add(block.call_id);
-            if ('asset_id' in block) assetIds.add(block.asset_id);
+            if (block.type === 'tool_call') {
+                callIds.add(block.call_id);
+            }
             if (block.type === 'tool_result') {
                 for (const nested of block.content) {
                     blockIds.add(nested.id);
-                    if ('asset_id' in nested) assetIds.add(nested.asset_id);
                 }
             }
         }
@@ -276,13 +626,7 @@ export async function createRequestReceipt(
             throw new Error(`Request mapping references unselected ${mapping.kind} ${mapping.canonical_id}`);
         }
     }
-    const assets = [...assetIds].sort().map((id) => {
-        const asset = Object.hasOwn(document.assets, id) ? document.assets[id] : undefined;
-        if (asset === undefined) throw new Error(`Selected context references missing asset ${id}`);
-        return asset;
-    });
-    // IDs and context revision alone do not capture a content edit or a changed asset locator.
-    const contextFingerprint = await fingerprintJson({ context: document.context, turns: selected, assets });
+    const { fingerprint: contextFingerprint, assets } = await requestContextFingerprint(document, target.protocol);
     const toolSetFingerprint = await fingerprintJson(toolDefinitions);
     const requestFingerprint = await fingerprintJson(nativePayload);
     return {

@@ -2,6 +2,8 @@ import { AnthropicBedrockMantle, type BedrockMantleClientOptions } from '@anthro
 import { getTokenProvider } from '@aws/bedrock-token-generator';
 import {
     type AIModel,
+    type CanonicalExecutionResponse,
+    type CanonicalExecutionStream,
     type Completion,
     type DriverCompletionStream,
     type EmbeddingsOptions,
@@ -30,10 +32,12 @@ import { formatOpenAIDebugPrompt } from '../openai/openai_format.js';
 import {
     buildClaudeStreamingConversation,
     type ClaudePrompt,
+    executeCanonicalClaudeCompletion,
     executeClaudeCompletion,
     formatAnthropicLlumiverseError,
     formatClaudeDebugPrompt,
     formatClaudePrompt,
+    streamCanonicalClaudeCompletion,
     streamClaudeCompletion,
 } from '../shared/claude-messages.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
@@ -218,6 +222,39 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
         }
     }
 
+    requestCanonicalTextCompletion(
+        prompt: BedrockMantlePrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        switch (getBedrockMantleProtocol(options.model)) {
+            case 'responses':
+                return this.responsesDelegate.requestCanonicalTextCompletion(
+                    requireResponsesPrompt(prompt),
+                    options,
+                    signal,
+                );
+            case 'chat_completions':
+                return this.getChatCompletionsProtocol(options.model).requestCanonicalTextCompletion(
+                    this,
+                    requireChatCompletionsPrompt(prompt),
+                    options,
+                    signal,
+                );
+            case 'messages':
+                return executeCanonicalClaudeCompletion(
+                    this.anthropicService,
+                    requireClaudePrompt(prompt),
+                    options,
+                    undefined,
+                    this.provider,
+                    this.getDriverRequestOptions(options, signal),
+                );
+            default:
+                throw new Error(`Unsupported Bedrock Mantle model: ${options.model}`);
+        }
+    }
+
     requestTextCompletionStream(
         prompt: BedrockMantlePrompt,
         options: ExecutionOptions,
@@ -244,6 +281,39 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
                     options,
                     undefined,
                     'bedrock-mantle',
+                    this.getDriverRequestOptions(options, signal),
+                );
+            default:
+                throw new Error(`Unsupported Bedrock Mantle model: ${options.model}`);
+        }
+    }
+
+    requestCanonicalTextCompletionStream(
+        prompt: BedrockMantlePrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionStream> {
+        switch (getBedrockMantleProtocol(options.model)) {
+            case 'responses':
+                return this.responsesDelegate.requestCanonicalTextCompletionStream(
+                    requireResponsesPrompt(prompt),
+                    options,
+                    signal,
+                );
+            case 'chat_completions':
+                return this.getChatCompletionsProtocol(options.model).requestCanonicalTextCompletionStream(
+                    this,
+                    requireChatCompletionsPrompt(prompt),
+                    options,
+                    signal,
+                );
+            case 'messages':
+                return streamCanonicalClaudeCompletion(
+                    this.anthropicService,
+                    requireClaudePrompt(prompt),
+                    options,
+                    undefined,
+                    this.provider,
                     this.getDriverRequestOptions(options, signal),
                 );
             default:

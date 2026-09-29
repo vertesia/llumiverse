@@ -30,6 +30,7 @@
     "scripts": {
         "lint": "biome lint src",
         "test": "vitest run",
+        "test:unit": "vitest run && pnpm verify:exports",
         "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
         "build": "pnpm exec rimraf ./lib ./tsconfig.tsbuildinfo && tsc",
         "clean": "rimraf ./lib ./tsconfig.tsbuildinfo ./.verify",

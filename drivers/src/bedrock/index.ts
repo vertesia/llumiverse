@@ -28,9 +28,12 @@ import {
     type BedrockClaudeOptions,
     type BedrockGptOssOptions,
     type BedrockPalmyraOptions,
+    type CanonicalExecutionResponse,
+    type CanonicalExecutionStream,
     type Completion,
     type CompletionChunkObject,
     type CompletionResult,
+    createCanonicalExecutionResponse,
     type DataSource,
     type DriverCompletionStream,
     deserializeBinaryFromStorage,
@@ -46,8 +49,10 @@ import {
     type JSONObject,
     LlumiverseError,
     type LlumiverseErrorContext,
+    legacyCompletionFromCanonicalExecution,
     type ModelOptions,
     type NovaCanvasOptions,
+    normalizeCompletionResult,
     type PromptSegment,
     Providers,
     parseClaudeVersion,
@@ -67,6 +72,12 @@ import { AbstractDriver } from '@llumiverse/core/driver';
 import { formatNovaPrompt, type NovaMessagesPrompt } from '@llumiverse/core/formatters';
 import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
 import { LRUCache } from 'lru-cache';
+import {
+    assertAcceptedCanonicalRequest,
+    publishCanonicalPreparedRequest,
+    recoverCanonicalExecutionResponse,
+} from '../conversation/canonical-runtime.js';
+import { rejectDecodedStructuredOutput } from '../conversation/structured-output.js';
 import type { BedrockDriverOptions } from '../driver-options.js';
 import { logClaudeTruncation } from '../shared/claude-stop-reason.js';
 import { resolveClaudeThinking } from '../shared/claude-thinking.js';
@@ -75,10 +86,9 @@ import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
 import {
     appendBedrockConverseCanonicalResponse,
-    compileBedrockConverseConversation,
+    bedrockConverseJsonValue,
     decodeBedrockConverseCanonicalResponse,
     finalizeBedrockConversePreparedRequest,
-    type PreparedBedrockConverseConversation,
     prepareBedrockConverseCanonicalState,
 } from './bedrock-converse-conversation-adapter.js';
 import {
@@ -167,14 +177,28 @@ function oneHourCacheWriteTokens(usage: TokenUsage | undefined): number | undefi
  */
 function converseTokenUsage(usage: TokenUsage | undefined): ExecutionTokenUsage | undefined {
     if (!usage) return undefined;
+    const rawInputTokens = usage.inputTokens;
+    const inputNew = Number.isSafeInteger(rawInputTokens) && (rawInputTokens ?? -1) >= 0 ? rawInputTokens : undefined;
+    const reportedCacheRead =
+        Number.isSafeInteger(usage.cacheReadInputTokens) && (usage.cacheReadInputTokens ?? -1) >= 0
+            ? usage.cacheReadInputTokens
+            : undefined;
+    const reportedCacheWrite =
+        Number.isSafeInteger(usage.cacheWriteInputTokens) && (usage.cacheWriteInputTokens ?? -1) >= 0
+            ? usage.cacheWriteInputTokens
+            : undefined;
+    const cacheRead = inputNew === undefined ? reportedCacheRead : (reportedCacheRead ?? 0);
+    const cacheWrite = inputNew === undefined ? reportedCacheWrite : (reportedCacheWrite ?? 0);
+    const input = inputNew === undefined ? undefined : inputNew + (cacheRead ?? 0) + (cacheWrite ?? 0);
+    const oneHourWrite = oneHourCacheWriteTokens(usage);
     return {
-        prompt_new: usage.inputTokens,
-        prompt: (usage.inputTokens ?? 0) + (usage.cacheReadInputTokens ?? 0) + (usage.cacheWriteInputTokens ?? 0),
-        result: usage.outputTokens,
-        total: usage.totalTokens,
-        prompt_cached: usage.cacheReadInputTokens ?? undefined,
-        prompt_cache_write: usage.cacheWriteInputTokens ?? undefined,
-        prompt_cache_write_1h: oneHourCacheWriteTokens(usage),
+        ...(inputNew === undefined ? {} : { prompt_new: inputNew }),
+        ...(input === undefined ? {} : { prompt: input }),
+        ...(usage.outputTokens === undefined ? {} : { result: usage.outputTokens }),
+        ...(usage.totalTokens === undefined ? {} : { total: usage.totalTokens }),
+        ...(cacheRead === undefined ? {} : { prompt_cached: cacheRead }),
+        ...(cacheWrite === undefined ? {} : { prompt_cache_write: cacheWrite }),
+        ...(oneHourWrite === undefined ? {} : { prompt_cache_write_1h: oneHourWrite }),
     };
 }
 
@@ -193,83 +217,16 @@ function converseFinishReason(reason: string | undefined) {
     }
 }
 
-function canonicalBedrockTokenUsage(
-    prepared: Omit<PreparedBedrockConverseConversation, 'payload' | 'receipt' | 'diagnostics'>,
-): ExecutionTokenUsage | undefined {
-    const usage = prepared.accepted_response?.generation.usage;
-    if (usage === undefined) return undefined;
-    return {
-        prompt: usage.input_tokens,
-        prompt_new: usage.input_new_tokens,
-        result: usage.output_tokens,
-        total: usage.total_tokens,
-        prompt_cached: usage.cache_read_tokens,
-        prompt_cache_write: usage.cache_write_tokens,
-    };
-}
-
-function acceptedBedrockMessage(
-    prepared: Omit<PreparedBedrockConverseConversation, 'payload' | 'receipt' | 'diagnostics'>,
-): Message {
-    const accepted = prepared.accepted_response;
-    if (accepted === undefined) throw new Error('No accepted Bedrock Converse response is available');
-    const compiled = compileBedrockConverseConversation(prepared.document, {
-        provider: prepared.provider,
-        model: prepared.requested_model,
-    });
-    const mapping = compiled.mappings.find(
-        (candidate) => candidate.kind === 'turn' && candidate.canonical_id === accepted.turn.id,
+function bedrockAnswerResults(message: Message | undefined): CompletionResult[] {
+    return (message?.content ?? []).flatMap((block) =>
+        block.text === undefined ? [] : [{ type: 'text' as const, value: block.text }],
     );
-    const match = mapping === undefined ? undefined : /^messages\/(\d+)$/.exec(mapping.native_id);
-    const message = match == null ? undefined : compiled.conversation.messages?.[Number(match[1])];
-    if (message?.role !== 'assistant') {
-        throw new Error(`Accepted Bedrock Converse turn ${accepted.turn.id} has no native assistant projection`);
-    }
-    return message;
 }
 
-function completionFromBedrockMessage(message: Message): {
-    result: CompletionResult[];
-    tool_use?: ToolUse<unknown>[];
-} {
-    const result: CompletionResult[] = [];
-    const toolUse: ToolUse<unknown>[] = [];
-    for (const block of message.content ?? []) {
-        if (block.text !== undefined) result.push({ type: 'text', value: block.text });
-        if (block.reasoningContent?.reasoningText?.text !== undefined) {
-            result.push({ type: 'thoughts', value: block.reasoningContent.reasoningText.text });
-        }
-        if (block.toolUse !== undefined) {
-            toolUse.push({
-                id: block.toolUse.toolUseId ?? '',
-                tool_name: block.toolUse.name ?? '',
-                tool_input: block.toolUse.input,
-            });
-        }
-    }
-    return { result, ...(toolUse.length === 0 ? {} : { tool_use: toolUse }) };
-}
-
-function recoverBedrockCompletion(
-    prepared: Omit<PreparedBedrockConverseConversation, 'payload' | 'receipt' | 'diagnostics'>,
-    options: ExecutionOptions,
-): Completion {
-    const accepted = prepared.accepted_response;
-    if (accepted === undefined) throw new Error('No accepted Bedrock Converse response is available');
-    if (options.include_original_response) {
-        throw new Error('An idempotently recovered Bedrock Converse response cannot reconstruct original_response');
-    }
-    const projected = completionFromBedrockMessage(acceptedBedrockMessage(prepared));
-    return {
-        ...projected,
-        token_usage: canonicalBedrockTokenUsage(prepared),
-        finish_reason:
-            projected.tool_use === undefined ? converseFinishReason(accepted.generation.finish_reason) : 'tool_use',
-        conversation: prepared.document,
-    };
-}
-
-function recoveredBedrockStream(completion: Completion): DriverCompletionStream {
+function recoveredBedrockStream(
+    completion: Completion,
+    canonical: CanonicalExecutionResponse,
+): BedrockCanonicalDriverStream {
     const stream = (async function* (): AsyncIterable<CompletionChunkObject> {
         yield {
             result: completion.result,
@@ -279,7 +236,110 @@ function recoveredBedrockStream(completion: Completion): DriverCompletionStream 
             service_tier: completion.service_tier,
         };
     })();
-    return Object.assign(stream, { finalizeConversation: () => completion.conversation });
+    return Object.assign(stream, {
+        finalizeConversation: () => completion.conversation,
+        finalizeCanonicalExecution: async () => canonical,
+        cancelCanonicalExecution: async () => {},
+    });
+}
+
+type BedrockCanonicalDriverStream = DriverCompletionStream & {
+    finalizeCanonicalExecution(): Promise<CanonicalExecutionResponse>;
+    cancelCanonicalExecution(): Promise<void>;
+};
+
+function completionChunkPreview(chunk: CompletionChunkObject): string {
+    return chunk.result
+        .map((result) => {
+            switch (result.type) {
+                case 'text':
+                case 'thoughts':
+                    return result.value;
+                case 'json':
+                    return JSON.stringify(result.value);
+                case 'image':
+                    return '[Image]';
+                case 'audio':
+                    return '[Audio]';
+                case 'video':
+                    return '[Video]';
+                default: {
+                    const _exhaustive: never = result;
+                    return String(_exhaustive);
+                }
+            }
+        })
+        .join('');
+}
+
+function canonicalBedrockStream(
+    source: BedrockCanonicalDriverStream,
+    abortProvider: () => void,
+    detachCallerSignal: () => void,
+): CanonicalExecutionStream {
+    const sourceIterator = source[Symbol.asyncIterator]();
+    let completion: CanonicalExecutionResponse | undefined;
+    let iteratorCreated = false;
+    let chunks = 0;
+    let cancelled = false;
+    const startedAt = Date.now();
+    const stream: CanonicalExecutionStream = {
+        get completion() {
+            return completion;
+        },
+        async cancel() {
+            if (cancelled) return;
+            cancelled = true;
+            abortProvider();
+            try {
+                await sourceIterator.return?.();
+            } finally {
+                try {
+                    await source.cancelCanonicalExecution();
+                } finally {
+                    detachCallerSignal();
+                }
+            }
+        },
+        [Symbol.asyncIterator]() {
+            if (iteratorCreated) throw new Error('Canonical execution stream can only be consumed once');
+            iteratorCreated = true;
+            return (async function* () {
+                try {
+                    while (true) {
+                        const next = await sourceIterator.next();
+                        if (next.done) break;
+                        const preview = completionChunkPreview(next.value);
+                        if (preview.length > 0) {
+                            chunks += 1;
+                            yield preview;
+                        }
+                    }
+                    const accepted = await source.finalizeCanonicalExecution();
+                    completion = {
+                        ...accepted,
+                        execution_time: accepted.execution_time ?? Date.now() - startedAt,
+                        chunks,
+                    };
+                    detachCallerSignal();
+                } finally {
+                    if (completion === undefined) {
+                        abortProvider();
+                        try {
+                            await sourceIterator.return?.();
+                        } finally {
+                            try {
+                                await source.cancelCanonicalExecution();
+                            } finally {
+                                detachCallerSignal();
+                            }
+                        }
+                    }
+                }
+            })();
+        },
+    };
+    return stream;
 }
 
 export function excludesBedrockReasoningReplay(model: string): boolean {
@@ -591,6 +651,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         if (!options.region) {
             throw new Error("No region found. Set the region in the environment's endpoint URL.");
         }
+    }
+
+    protected override supportsCanonicalConversation(options: ExecutionOptions): boolean {
+        return !options.model.includes('canvas') && !options.model.includes('twelvelabs.pegasus');
     }
 
     /**
@@ -1181,12 +1245,27 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         options: ExecutionOptions,
         signal?: AbortSignal,
     ): Promise<Completion> {
-        // Handle Twelvelabs Pegasus models
         if (options.model.includes('twelvelabs.pegasus')) {
             return this.requestTwelvelabsPegasusCompletion(prompt as TwelvelabsPegasusRequest, options, signal);
         }
+        const response = await this.requestCanonicalTextCompletion(prompt, options, signal);
+        const isReasoningModel = options.model.includes('deepseek') && options.model.includes('r1');
+        return legacyCompletionFromCanonicalExecution(response, {
+            include_reasoning:
+                isReasoningModel ||
+                (options.model_options as BedrockClaudeOptions | undefined)?.include_thoughts === true,
+        });
+    }
 
-        // Handle other Bedrock models that use Converse API
+    async requestCanonicalTextCompletion(
+        prompt: BedrockPrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        if (options.model.includes('twelvelabs.pegasus')) {
+            throw new Error(`Bedrock model ${options.model} does not support canonical execution`);
+        }
+
         const conversePrompt = prompt as ConverseRequest;
         const canonicalState = await prepareBedrockConverseCanonicalState({
             conversation: isConversationDocumentFormat(options.conversation)
@@ -1196,18 +1275,29 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             options,
             provider: this.provider,
         });
-        if (canonicalState.accepted_response !== undefined) {
-            return recoverBedrockCompletion(canonicalState, options);
-        }
         const conversation: ConverseRequest = {
             ...canonicalState.native_conversation,
             modelId: options.model,
         };
         const payload = this.preparePayload(conversation, options);
+        await assertAcceptedCanonicalRequest(
+            canonicalState,
+            { provider: this.provider, protocol: 'aws.bedrock.converse', model: options.model },
+            bedrockConverseJsonValue(payload),
+        );
+        if (canonicalState.accepted_response !== undefined) {
+            if (options.include_original_response) {
+                throw new Error(
+                    'An idempotently recovered Bedrock Converse response cannot reconstruct original_response',
+                );
+            }
+            return recoverCanonicalExecutionResponse(canonicalState, options);
+        }
         const prepared = await finalizeBedrockConversePreparedRequest(
             { ...canonicalState, native_conversation: conversation },
             payload,
         );
+        await publishCanonicalPreparedRequest(prepared, options);
         const executorScope = this.getScopedExecutor(options);
 
         let res: ConverseResponse;
@@ -1218,9 +1308,6 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         } finally {
             executorScope.close();
         }
-
-        const decoded = await decodeBedrockConverseCanonicalResponse(res, prepared);
-        const processedConversation = appendBedrockConverseCanonicalResponse(prepared, decoded);
 
         let tool_use: ToolUse<unknown>[] | undefined;
         //Get tool requests, we check tool use regardless of finish reason, as you can hit length and still get a valid response.
@@ -1239,14 +1326,22 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             tool_use = undefined;
         }
 
-        const completion = {
-            ...this.getExtractedExecution(res, conversePrompt, options),
-            original_response: options.include_original_response ? res : undefined,
-            conversation: processedConversation,
-            tool_use: tool_use,
-        };
+        const normalized =
+            tool_use === undefined && options.result_schema
+                ? normalizeCompletionResult(bedrockAnswerResults(res.output?.message), options.result_schema)
+                : undefined;
+        let decoded = await decodeBedrockConverseCanonicalResponse(
+            res,
+            prepared,
+            normalized?.status === 'valid' ? normalized.structured_output : undefined,
+        );
+        if (normalized?.status === 'invalid') decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
+        const processedConversation = appendBedrockConverseCanonicalResponse(prepared, decoded);
 
-        return completion;
+        return createCanonicalExecutionResponse(processedConversation, prepared.runtime.response_operation_id, {
+            ...(res.serviceTier?.type === undefined ? {} : { service_tier: res.serviceTier.type }),
+            ...(options.include_original_response ? { original_response: res } : {}),
+        });
     }
 
     private async requestTwelvelabsPegasusCompletion(
@@ -1393,18 +1488,32 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             options,
             provider: this.provider,
         });
-        if (canonicalState.accepted_response !== undefined) {
-            return recoveredBedrockStream(recoverBedrockCompletion(canonicalState, options));
-        }
         const conversation: ConverseRequest = {
             ...canonicalState.native_conversation,
             modelId: options.model,
         };
         const payload = this.preparePayload(conversation, options);
+        await assertAcceptedCanonicalRequest(
+            canonicalState,
+            { provider: this.provider, protocol: 'aws.bedrock.converse', model: options.model },
+            bedrockConverseJsonValue(payload),
+        );
+        if (canonicalState.accepted_response !== undefined) {
+            const canonical = await recoverCanonicalExecutionResponse(canonicalState, options);
+            return recoveredBedrockStream(
+                legacyCompletionFromCanonicalExecution(canonical, {
+                    include_reasoning:
+                        (options.model.includes('deepseek') && options.model.includes('r1')) ||
+                        (options.model_options as BedrockClaudeOptions | undefined)?.include_thoughts === true,
+                }),
+                canonical,
+            );
+        }
         const prepared = await finalizeBedrockConversePreparedRequest(
             { ...canonicalState, native_conversation: conversation },
             payload,
         );
+        await publishCanonicalPreparedRequest(prepared, options);
         const executorScope = this.getScopedExecutor(options);
         const response = signal
             ? executorScope.executor.converseStream({ ...payload }, { abortSignal: signal })
@@ -1425,6 +1534,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 let additionalModelResponseFields: ConverseResponse['additionalModelResponseFields'];
                 let trace: ConverseResponse['trace'];
                 let performanceConfig: ConverseResponse['performanceConfig'];
+                let serviceTier: ConverseResponse['serviceTier'];
                 const transformedStream = transformAsyncIterator(stream, (streamSegment: ConverseStreamOutput) => {
                     collectBedrockNativeStreamBlock(nativeBlocks, streamSegment);
                     if (streamSegment.messageStop !== undefined) {
@@ -1436,16 +1546,25 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                         metrics = streamSegment.metadata.metrics;
                         trace = streamSegment.metadata.trace;
                         performanceConfig = streamSegment.metadata.performanceConfig;
+                        serviceTier = streamSegment.metadata.serviceTier;
                     }
                     return this.getExtractedStream(streamSegment, conversePrompt, options, streamingToolBlocks);
                 });
                 const scoped = withBedrockRuntimeScope(transformedStream, executorScope);
-                return Object.assign(scoped, {
-                    finalizeConversation: async () => {
+                let canonicalCompletion: Promise<CanonicalExecutionResponse> | undefined;
+                const finalizeCanonicalExecution = () => {
+                    canonicalCompletion ??= (async () => {
                         if (stopReason === undefined) {
                             throw new Error('Bedrock Converse stream ended without a terminal stop reason');
                         }
                         const blocks = finalizeBedrockNativeBlocks(nativeBlocks);
+                        const normalized =
+                            !blocks.some((block) => block.toolUse !== undefined) && options.result_schema
+                                ? normalizeCompletionResult(
+                                      bedrockAnswerResults({ role: 'assistant', content: blocks }),
+                                      options.result_schema,
+                                  )
+                                : undefined;
                         const terminalResponse = {
                             output: {
                                 message: {
@@ -1459,11 +1578,28 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                             ...(additionalModelResponseFields === undefined ? {} : { additionalModelResponseFields }),
                             ...(trace === undefined ? {} : { trace }),
                             ...(performanceConfig === undefined ? {} : { performanceConfig }),
+                            ...(serviceTier === undefined ? {} : { serviceTier }),
                             $metadata: res.$metadata,
                         } as unknown as ConverseResponse;
-                        const decoded = await decodeBedrockConverseCanonicalResponse(terminalResponse, prepared);
-                        return appendBedrockConverseCanonicalResponse(prepared, decoded);
-                    },
+                        let decoded = await decodeBedrockConverseCanonicalResponse(
+                            terminalResponse,
+                            prepared,
+                            normalized?.status === 'valid' ? normalized.structured_output : undefined,
+                        );
+                        if (normalized?.status === 'invalid') {
+                            decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
+                        }
+                        const document = appendBedrockConverseCanonicalResponse(prepared, decoded);
+                        return createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
+                            ...(serviceTier?.type === undefined ? {} : { service_tier: serviceTier.type }),
+                        });
+                    })();
+                    return canonicalCompletion;
+                };
+                return Object.assign(scoped, {
+                    finalizeConversation: async () => (await finalizeCanonicalExecution()).conversation,
+                    finalizeCanonicalExecution,
+                    cancelCanonicalExecution: async () => executorScope.close(),
                 });
             })
             .catch((err) => {
@@ -1471,6 +1607,42 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 this.logger.error({ error: err }, '[Bedrock] Failed to stream');
                 throw err;
             });
+    }
+
+    async requestCanonicalTextCompletionStream(
+        prompt: BedrockPrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionStream> {
+        if (options.model.includes('twelvelabs.pegasus')) {
+            throw new Error(`Bedrock model ${options.model} does not support canonical streaming`);
+        }
+        const abortController = new AbortController();
+        const forwardAbort = () => abortController.abort(signal?.reason);
+        if (signal?.aborted) forwardAbort();
+        else signal?.addEventListener('abort', forwardAbort, { once: true });
+        let source: BedrockCanonicalDriverStream;
+        try {
+            source = (await this.requestTextCompletionStream(
+                prompt,
+                options,
+                abortController.signal,
+            )) as BedrockCanonicalDriverStream;
+        } catch (error: unknown) {
+            signal?.removeEventListener('abort', forwardAbort);
+            throw error;
+        }
+        if (typeof source.finalizeCanonicalExecution !== 'function') {
+            abortController.abort();
+            await source[Symbol.asyncIterator]().return?.();
+            signal?.removeEventListener('abort', forwardAbort);
+            throw new Error(`Bedrock model ${options.model} did not provide canonical stream finalization`);
+        }
+        return canonicalBedrockStream(
+            source,
+            () => abortController.abort(),
+            () => signal?.removeEventListener('abort', forwardAbort),
+        );
     }
 
     preparePayload(prompt: ConverseRequest, options: ExecutionOptions) {

@@ -42,10 +42,14 @@ import {
     JSON_SCHEMA_INSTRUCTION_PREFIX,
     TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX,
 } from '@llumiverse/common';
+import { toolArgumentsForModel } from '@llumiverse/conversation';
 import {
+    type CanonicalExecutionResponse,
+    type CanonicalExecutionStream,
     type Completion,
     type CompletionChunkObject,
     type CompletionResult,
+    createCanonicalExecutionResponse,
     type DriverCompletionStream,
     type ExecutionOptions,
     type ExecutionTokenUsage,
@@ -68,10 +72,22 @@ import {
     truncateLargeTextInConversation,
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
-import { canonicalConversationTurnNumber } from '../conversation/canonical-runtime.js';
+import {
+    type CanonicalFinalizingDriverStream,
+    canonicalExecutionStreamFromDriver,
+} from '../conversation/canonical-execution-stream.js';
+import {
+    assertAcceptedCanonicalRequest,
+    canonicalConversationTurnNumber,
+    providerJsonValue,
+    publishCanonicalPreparedRequest,
+    recoverCanonicalExecutionResponse,
+} from '../conversation/canonical-runtime.js';
+import { rejectDecodedStructuredOutput } from '../conversation/structured-output.js';
 import {
     appendClaudeCanonicalResponse,
     type CanonicalClaudeToolResultBlockParam,
+    CLAUDE_MESSAGES_PROTOCOL,
     decodeClaudeCanonicalResponse,
     finalizeClaudePreparedRequest,
     type PreparedClaudeConversation,
@@ -331,7 +347,6 @@ export function claudeMaxTokens(option: StatelessExecutionOptions): number {
 
 async function collectFileBlocks(
     segment: PromptSegment,
-    logger?: WarnLogger,
 ): Promise<Array<TextBlockParam | ImageBlockParam | DocumentBlockParam>> {
     const contentBlocks: Array<TextBlockParam | ImageBlockParam | DocumentBlockParam> = [];
 
@@ -353,13 +368,7 @@ async function collectFileBlocks(
         } else if (file.mime_type?.startsWith('audio/')) {
             throw new Error('Claude does not support audio input; supply a transcript instead');
         } else if (file.mime_type?.startsWith('video/')) {
-            logger?.warn(
-                {
-                    file_name: file.name,
-                    mime_type: file.mime_type,
-                },
-                '[Claude] Skipping unsupported video attachment',
-            );
+            throw new Error(`Claude does not support video input: ${file.name}`);
         } else if (file.mime_type === 'application/pdf') {
             contentBlocks.push({
                 title: file.name,
@@ -393,7 +402,7 @@ async function collectFileBlocks(
 export async function formatClaudePrompt(
     segments: PromptSegment[],
     options: ExecutionOptions,
-    logger?: WarnLogger,
+    _logger?: WarnLogger,
 ): Promise<ClaudePrompt> {
     let system: TextBlockParam[] | undefined = segments
         .filter((s) => s.role === PromptRole.system)
@@ -424,7 +433,7 @@ export async function formatClaudePrompt(
             if (segment.content) {
                 contentBlocks.push({ type: 'text', text: segment.content } satisfies TextBlockParam);
             }
-            contentBlocks.push(...(await collectFileBlocks(segment, logger)));
+            contentBlocks.push(...(await collectFileBlocks(segment)));
             messages.push({
                 role: 'user',
                 content: [
@@ -443,7 +452,7 @@ export async function formatClaudePrompt(
             if (segment.content) {
                 contentBlocks.push({ type: 'text', text: segment.content } satisfies TextBlockParam);
             }
-            contentBlocks.push(...(await collectFileBlocks(segment, logger)));
+            contentBlocks.push(...(await collectFileBlocks(segment)));
             if (contentBlocks.length === 0) continue;
 
             const messageParam: MessageParam = {
@@ -1141,6 +1150,22 @@ function canonicalClaudeUsage(
     };
 }
 
+function canonicalClaudeServiceTier(
+    prepared: Omit<PreparedClaudeConversation, 'payload' | 'receipt' | 'diagnostics'>,
+): string | undefined {
+    const reported = prepared.accepted_response?.generation.usage?.reported_usage?.find(
+        (candidate) => candidate.source === 'provider' && candidate.protocol === CLAUDE_MESSAGES_PROTOCOL,
+    );
+    const payload =
+        reported?.payload !== null && typeof reported?.payload === 'object' && !Array.isArray(reported.payload)
+            ? (reported.payload as Record<string, unknown>)
+            : undefined;
+    return claudeServiceTier({
+        service_tier: typeof payload?.service_tier === 'string' ? payload.service_tier : undefined,
+        speed: typeof payload?.speed === 'string' ? payload.speed : undefined,
+    });
+}
+
 function recoverClaudeCompletion(
     prepared: Omit<PreparedClaudeConversation, 'payload' | 'receipt' | 'diagnostics'>,
     options: ExecutionOptions,
@@ -1163,7 +1188,10 @@ function recoverClaudeCompletion(
                   {
                       id: block.call_id,
                       tool_name: block.tool_name,
-                      tool_input: block.arguments.type === 'json' ? (block.arguments.value as JSONObject) : {},
+                      tool_input:
+                          block.arguments.type === 'invalid'
+                              ? {}
+                              : (toolArgumentsForModel(block.arguments) as JSONObject),
                   },
               ]
             : [],
@@ -1172,6 +1200,7 @@ function recoverClaudeCompletion(
         result: result.length > 0 ? result : [{ type: 'text', value: '' }],
         ...(toolUse.length === 0 ? {} : { tool_use: toolUse }),
         token_usage: canonicalClaudeUsage(prepared),
+        service_tier: canonicalClaudeServiceTier(prepared),
         finish_reason: toolUse.length > 0 ? 'tool_use' : claudeFinishReason(accepted.generation.finish_reason),
         conversation: prepared.document,
     };
@@ -1187,6 +1216,78 @@ function recoveredClaudeStream(completion: Completion): DriverCompletionStream {
         };
     })();
     return Object.assign(stream, { finalizeConversation: () => completion.conversation });
+}
+
+function recoveredCanonicalClaudeStream(response: CanonicalExecutionResponse): CanonicalExecutionStream {
+    const stream = (async function* (): AsyncIterable<string> {
+        // Accepted responses are already durable. Streaming recovery has no provider bytes to replay.
+    })();
+    return Object.assign(stream, {
+        completion: response,
+        cancel: async () => {},
+    });
+}
+
+/** Execute Claude Messages directly into the canonical conversation response contract. */
+export async function executeCanonicalClaudeCompletion(
+    client: ClaudeMessagesClient,
+    prompt: ClaudePrompt,
+    options: ExecutionOptions,
+    logger?: Logger,
+    provider = 'anthropic',
+    transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
+): Promise<CanonicalExecutionResponse> {
+    const canonicalState = await prepareClaudeCanonicalState({
+        conversation: options.conversation,
+        prompt,
+        options,
+        provider,
+    });
+    const conversation = prepareCanonicalClaudeProjection(canonicalState, options);
+    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'execute');
+    await assertAcceptedCanonicalRequest(
+        canonicalState,
+        { provider, protocol: CLAUDE_MESSAGES_PROTOCOL, model: options.model },
+        providerJsonValue(payload),
+    );
+    if (canonicalState.accepted_response !== undefined) {
+        if (options.include_original_response) {
+            throw new Error('An idempotently recovered Claude Messages response cannot reconstruct original_response');
+        }
+        return recoverCanonicalExecutionResponse(canonicalState, options, {
+            service_tier: canonicalClaudeServiceTier(canonicalState),
+        });
+    }
+    const prepared = await finalizeClaudePreparedRequest(
+        { ...canonicalState, native_conversation: conversation },
+        payload,
+    );
+    await publishCanonicalPreparedRequest(prepared, options);
+    const responseStream = await streamClaudeMessages(
+        client,
+        payload as MessageStreamParams,
+        transportOptions ? { ...requestOptions, ...transportOptions } : requestOptions,
+    );
+    const result = await responseStream.finalMessage();
+    logClaudeTruncation(logger, result.stop_reason, { provider, model: options.model });
+
+    const completionResults = collectClaudeResults(result.content, true);
+    const toolUse = collectClaudeTools(result.content);
+    const normalized =
+        !toolUse?.length && options.result_schema
+            ? normalizeCompletionResult(completionResults, options.result_schema)
+            : undefined;
+    let decoded = await decodeClaudeCanonicalResponse(
+        result,
+        prepared,
+        normalized?.status === 'valid' ? normalized.structured_output : undefined,
+    );
+    if (normalized?.status === 'invalid') decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
+    const document = appendClaudeCanonicalResponse(prepared, decoded);
+    return createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
+        service_tier: claudeServiceTier(result.usage as AnthropicUsageLike),
+        ...(options.include_original_response ? { original_response: result } : {}),
+    });
 }
 
 /**
@@ -1209,15 +1310,21 @@ export async function executeClaudeCompletion(
         provider,
     });
     const includeThoughts = model_options?.include_thoughts ?? false;
+    const conversation = prepareCanonicalClaudeProjection(canonicalState, options);
+    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'execute');
+    await assertAcceptedCanonicalRequest(
+        canonicalState,
+        { provider, protocol: CLAUDE_MESSAGES_PROTOCOL, model: options.model },
+        providerJsonValue(payload),
+    );
     if (canonicalState.accepted_response !== undefined) {
         return recoverClaudeCompletion(canonicalState, options, includeThoughts);
     }
-    const conversation = prepareCanonicalClaudeProjection(canonicalState, options);
-    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'execute');
     const prepared = await finalizeClaudePreparedRequest(
         { ...canonicalState, native_conversation: conversation },
         payload,
     );
+    await publishCanonicalPreparedRequest(prepared, options);
 
     const responseStream = await streamClaudeMessages(
         client,
@@ -1270,16 +1377,22 @@ export async function streamClaudeCompletion(
         provider,
     });
     const includeThoughts = model_options?.include_thoughts ?? false;
+    const conversation = prepareCanonicalClaudeProjection(canonicalState, options);
+    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'stream');
+    const streamingPayload: MessageStreamParams = { ...payload, stream: true };
+    await assertAcceptedCanonicalRequest(
+        canonicalState,
+        { provider, protocol: CLAUDE_MESSAGES_PROTOCOL, model: options.model },
+        providerJsonValue(streamingPayload),
+    );
     if (canonicalState.accepted_response !== undefined) {
         return recoveredClaudeStream(recoverClaudeCompletion(canonicalState, options, includeThoughts));
     }
-    const conversation = prepareCanonicalClaudeProjection(canonicalState, options);
-    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'stream');
     const prepared = await finalizeClaudePreparedRequest(
         { ...canonicalState, native_conversation: conversation },
-        payload,
+        streamingPayload as unknown as MessageCreateParamsBase,
     );
-    const streamingPayload: MessageStreamParams = { ...payload, stream: true };
+    await publishCanonicalPreparedRequest(prepared, options);
 
     const response_stream = await streamClaudeMessages(
         client,
@@ -1373,24 +1486,111 @@ export async function streamClaudeCompletion(
         return { result: [] } satisfies CompletionChunkObject;
     });
 
-    return {
+    async function computeDecodedFinalResponse() {
+        const finalMessage = await response_stream.finalMessage();
+        const finalResults = collectClaudeResults(finalMessage.content, includeThoughts);
+        const finalTools = collectClaudeTools(finalMessage.content);
+        const normalized =
+            !finalTools?.length && options.result_schema
+                ? normalizeCompletionResult(finalResults, options.result_schema)
+                : undefined;
+        const decoded = await decodeClaudeCanonicalResponse(
+            finalMessage,
+            prepared,
+            normalized?.status === 'valid' ? normalized.structured_output : undefined,
+        );
+        return { decoded, finalMessage, normalized };
+    }
+    let decodedFinalResponse: ReturnType<typeof computeDecodedFinalResponse> | undefined;
+    const decodeFinalResponse = () => {
+        decodedFinalResponse ??= computeDecodedFinalResponse();
+        return decodedFinalResponse;
+    };
+    let canonicalCompletion: Promise<CanonicalExecutionResponse> | undefined;
+    const finalizeCanonicalExecution = () => {
+        canonicalCompletion ??= (async () => {
+            const { decoded: rawDecoded, finalMessage, normalized } = await decodeFinalResponse();
+            const decoded =
+                normalized?.status === 'invalid'
+                    ? rejectDecodedStructuredOutput(rawDecoded, normalized.error)
+                    : rawDecoded;
+            const document = appendClaudeCanonicalResponse(prepared, decoded);
+            return createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
+                service_tier: claudeServiceTier(finalMessage.usage as AnthropicUsageLike),
+                ...(options.include_original_response ? { original_response: finalMessage } : {}),
+            });
+        })();
+        return canonicalCompletion;
+    };
+
+    const driverStream: DriverCompletionStream = {
         [Symbol.asyncIterator]: () => stream[Symbol.asyncIterator](),
         finalizeConversation: async () => {
-            const finalMessage = await response_stream.finalMessage();
-            const finalResults = collectClaudeResults(finalMessage.content, includeThoughts);
-            const finalTools = collectClaudeTools(finalMessage.content);
-            const normalized =
-                !finalTools?.length && options.result_schema
-                    ? normalizeCompletionResult(finalResults, options.result_schema)
-                    : undefined;
-            const decoded = await decodeClaudeCanonicalResponse(
-                finalMessage,
-                prepared,
-                normalized?.status === 'valid' ? normalized.structured_output : undefined,
-            );
+            const { decoded } = await decodeFinalResponse();
             return appendClaudeCanonicalResponse(prepared, decoded);
         },
     };
+    return Object.assign(driverStream, { finalizeCanonicalExecution });
+}
+
+/** Execute a streaming Claude Messages request into the canonical stream contract. */
+export async function streamCanonicalClaudeCompletion(
+    client: ClaudeMessagesClient,
+    prompt: ClaudePrompt,
+    options: ExecutionOptions,
+    logger?: Logger,
+    provider = 'anthropic',
+    transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
+): Promise<CanonicalExecutionStream> {
+    const abortController = new AbortController();
+    const forwardAbort = () => abortController.abort(transportOptions?.signal?.reason);
+    if (transportOptions?.signal?.aborted) forwardAbort();
+    else transportOptions?.signal?.addEventListener('abort', forwardAbort, { once: true });
+
+    const canonicalState = await prepareClaudeCanonicalState({
+        conversation: options.conversation,
+        prompt,
+        options,
+        provider,
+    });
+    if (canonicalState.accepted_response !== undefined) {
+        const conversation = prepareCanonicalClaudeProjection(canonicalState, options);
+        const { payload } = getClaudePayload(options, conversation, provider, 'stream');
+        await assertAcceptedCanonicalRequest(
+            canonicalState,
+            { provider, protocol: CLAUDE_MESSAGES_PROTOCOL, model: options.model },
+            providerJsonValue({ ...payload, stream: true }),
+        );
+        transportOptions?.signal?.removeEventListener('abort', forwardAbort);
+        if (options.include_original_response) {
+            throw new Error('An idempotently recovered Claude Messages response cannot reconstruct original_response');
+        }
+        return recoveredCanonicalClaudeStream(
+            await recoverCanonicalExecutionResponse(canonicalState, options, {
+                service_tier: canonicalClaudeServiceTier(canonicalState),
+            }),
+        );
+    }
+
+    let source: CanonicalFinalizingDriverStream;
+    try {
+        source = (await streamClaudeCompletion(client, prompt, options, logger, provider, {
+            ...transportOptions,
+            signal: abortController.signal,
+        })) as CanonicalFinalizingDriverStream;
+    } catch (error: unknown) {
+        transportOptions?.signal?.removeEventListener('abort', forwardAbort);
+        throw error;
+    }
+    if (typeof source.finalizeCanonicalExecution !== 'function') {
+        abortController.abort();
+        transportOptions?.signal?.removeEventListener('abort', forwardAbort);
+        throw new Error(`Claude Messages model ${options.model} did not provide canonical stream finalization`);
+    }
+    return canonicalExecutionStreamFromDriver(source, {
+        abort: () => abortController.abort(),
+        close: () => transportOptions?.signal?.removeEventListener('abort', forwardAbort),
+    });
 }
 
 // ============================================================================

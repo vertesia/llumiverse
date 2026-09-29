@@ -2,6 +2,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { AnthropicClaudeOptions } from '@llumiverse/common';
 import {
     type AIModel,
+    type CanonicalExecutionResponse,
+    type CanonicalExecutionStream,
     type Completion,
     type DriverCompletionStream,
     type EmbeddingsOptions,
@@ -21,10 +23,12 @@ import type { AnthropicDriverOptions } from '../driver-options.js';
 import {
     buildClaudeStreamingConversation,
     type ClaudePrompt,
+    executeCanonicalClaudeCompletion,
     executeClaudeCompletion,
     formatAnthropicLlumiverseError,
     formatClaudeDebugPrompt,
     formatClaudePrompt,
+    streamCanonicalClaudeCompletion,
     streamClaudeCompletion,
 } from '../shared/claude-messages.js';
 
@@ -75,6 +79,21 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
         );
     }
 
+    async requestCanonicalTextCompletion(
+        prompt: ClaudePrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        return executeCanonicalClaudeCompletion(
+            this.client,
+            prompt,
+            options,
+            this.logger,
+            this.provider,
+            this.getDriverRequestOptions(options, signal),
+        );
+    }
+
     async requestTextCompletionStream(
         prompt: ClaudePrompt,
         options: ExecutionOptions,
@@ -85,6 +104,21 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
             this.logger.debug({ options: options.model_options }, 'Unexpected option id');
         }
         return streamClaudeCompletion(
+            this.client,
+            prompt,
+            options,
+            this.logger,
+            this.provider,
+            this.getDriverRequestOptions(options, signal),
+        );
+    }
+
+    async requestCanonicalTextCompletionStream(
+        prompt: ClaudePrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionStream> {
+        return streamCanonicalClaudeCompletion(
             this.client,
             prompt,
             options,
