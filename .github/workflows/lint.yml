@@ -1,3 +1,4 @@
+# Temporary approval smoke test: workflow behavior is unchanged.
 name: (lint) Lint codebase
 
 on:
