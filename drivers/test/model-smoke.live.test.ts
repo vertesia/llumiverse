@@ -33,9 +33,9 @@ import {
     testSchema_animalDescription,
     testSchema_color,
 } from './samples.js';
-import { withRateLimitBackoff } from './utils.js';
+import { retryUnlessRateLimited, withRateLimitBackoff } from './utils.js';
 
-const TIMEOUT = 90 * 1000;
+const TIMEOUT = 60 * 1000;
 const QWEN_SMOKE_MODEL = 'qwen/qwen3.8-flash';
 
 interface TestDriver {
@@ -244,45 +244,50 @@ function getTestOptions(model: string): ExecutionOptions {
     };
 }
 
-describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
+// Drivers and their models run in parallel. The tests for one model stay in order (`concurrent: false`) so a
+// throttled model is never sent several requests at once.
+describe.concurrent.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
     let fetchedModels: AIModel[];
 
-    test(`${name}: list models`, { timeout: TIMEOUT, retry: 1 }, async () => {
+    test(`${name}: list models`, { timeout: TIMEOUT, retry: 1, concurrent: false }, async () => {
         const r = await driver.listModels();
         fetchedModels = r;
         console.log(r);
         expect(r.length).toBeGreaterThan(0);
     });
 
-    test.each(models)(`${name}: prompt generation for %s`, {}, async (model) => {
-        const p = await driver.createPrompt(testPrompt_color, { model });
-        expect(p).toBeDefined();
-    });
+    describe.each(models)('%s', (model) => {
+        test(`${name}: prompt generation for ${model}`, { concurrent: false }, async () => {
+            const p = await driver.createPrompt(testPrompt_color, { model });
+            expect(p).toBeDefined();
+        });
 
-    test.each(models)(`${name}: prompt generation for %s`, {}, async (model) => {
-        const p = await driver.createPrompt(testPrompt_color, { model, result_schema: testSchema_color });
-        expect(p).toBeDefined();
-    });
+        test(`${name}: prompt generation with schema for ${model}`, { concurrent: false }, async () => {
+            const p = await driver.createPrompt(testPrompt_color, { model, result_schema: testSchema_color });
+            expect(p).toBeDefined();
+        });
 
-    test.each(models)(`${name}: multimodal prompt generation for %s`, {}, async (model) => {
-        const p = await driver.createPrompt(testPrompt_describeImage, { model });
-        expect(p).toBeDefined();
-    });
+        test(`${name}: multimodal prompt generation for ${model}`, { concurrent: false }, async () => {
+            const p = await driver.createPrompt(testPrompt_describeImage, { model });
+            expect(p).toBeDefined();
+        });
 
-    test.each(models)(`${name}: execute prompt on %s`, { timeout: TIMEOUT, retry: 2 }, async (model) => {
-        const r = await withRateLimitBackoff(() => driver.execute(testPrompt_color, getTestOptions(model)));
-        console.log(`Result for execute ${model}`, JSON.stringify(r));
-        assertCompletionOk(r, model, driver);
-        assertProviderCostReported(r, driver);
-    });
-
-    test.each(models)(
-        `${name}: execute prompt with streaming and schema on %s`,
-        {
+        test(`${name}: execute prompt on ${model}`, {
             timeout: TIMEOUT,
-            retry: 2,
-        },
-        async (model) => {
+            retry: retryUnlessRateLimited(2),
+            concurrent: false,
+        }, async () => {
+            const r = await withRateLimitBackoff(() => driver.execute(testPrompt_color, getTestOptions(model)));
+            console.log(`Result for execute ${model}`, JSON.stringify(r));
+            assertCompletionOk(r, model, driver);
+            assertProviderCostReported(r, driver);
+        });
+
+        test(`${name}: execute prompt with streaming and schema on ${model}`, {
+            timeout: TIMEOUT,
+            retry: retryUnlessRateLimited(2),
+            concurrent: false,
+        }, async () => {
             const { r, out } = await withRateLimitBackoff(async () => {
                 const stream = await driver.stream(testPrompt_color, {
                     ...getTestOptions(model),
@@ -292,16 +297,13 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
             });
             console.log(`Result for streaming with schema ${model}`, JSON.stringify(out));
             assertProviderCostReported(r.completion as ExecutionResponse, driver);
-        },
-    );
+        });
 
-    test.each(models)(
-        `${name}: max_tokens at documented limit on %s`,
-        {
+        test(`${name}: max_tokens at documented limit on ${model}`, {
             timeout: TIMEOUT,
-            retry: 1,
-        },
-        async (model) => {
+            retry: retryUnlessRateLimited(1),
+            concurrent: false,
+        }, async () => {
             // Resolve the documented max_tokens limit: prefer provider-specific, fallback to provider-agnostic
             let limit: number | undefined;
             if (driver.provider === 'bedrock') {
@@ -328,16 +330,13 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
             // If the provider rejects our limit value, r.error will be set
             expect(r.error).toBeFalsy();
             expect(r.finish_reason).toBeTruthy();
-        },
-    );
+        });
 
-    test.each(models)(
-        `${name}: multimodal test - describe image with %s`,
-        {
+        test(`${name}: multimodal test - describe image with ${model}`, {
             timeout: TIMEOUT,
-            retry: 2,
-        },
-        async (model) => {
+            retry: retryUnlessRateLimited(2),
+            concurrent: false,
+        }, async () => {
             if (!fetchedModels) {
                 fetchedModels = await driver.listModels();
             }
@@ -360,6 +359,6 @@ describe.each(selectedDrivers)('Driver $name', ({ name, driver, models }) => {
             );
             console.log('Result', r);
             assertCompletionOk(r);
-        },
-    );
+        });
+    });
 });

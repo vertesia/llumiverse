@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { type CompletionResult, LlumiverseError } from '@llumiverse/common';
+import type { TestOptions } from 'vitest';
 
 const dataDir = join(dirname(new URL(import.meta.url).pathname), 'data');
 const dataFile = (file: string) => join(dataDir, file);
@@ -69,23 +70,36 @@ export function parseCompletionResults(result: CompletionResult[], separator: st
     }
 }
 
-const RATE_LIMIT_BACKOFF_MS = [5_000, 10_000, 20_000];
+const RATE_LIMIT_BACKOFF_MS = [3_000, 6_000, 12_000];
+const RATE_LIMIT_EXHAUSTED = 'Provider still rate limited after';
 
 /**
  * Run a live provider call, waiting and trying again each time the provider answers 429.
  * Vitest's `retry` re-runs a test immediately, and a throttled upstream answers that with another 429.
  */
 export async function withRateLimitBackoff<T>(call: () => Promise<T>): Promise<T> {
-    for (const delayMs of RATE_LIMIT_BACKOFF_MS) {
+    for (let attempt = 0; ; attempt++) {
         try {
             return await call();
         } catch (error: unknown) {
             if (!LlumiverseError.isLlumiverseError(error) || error.code !== 429) {
                 throw error;
             }
+            const delayMs = RATE_LIMIT_BACKOFF_MS[attempt];
+            if (delayMs === undefined) {
+                throw new Error(`${RATE_LIMIT_EXHAUSTED} ${attempt + 1} attempts: ${error.message}`, { cause: error });
+            }
             console.warn(`${error.message}; retrying in ${delayMs}ms`);
             await sleep(delayMs);
         }
     }
-    return await call();
+}
+
+/**
+ * Vitest retry settings for a test that calls a provider through `withRateLimitBackoff`. A test that failed because
+ * the provider stayed rate limited has already waited out every backoff step, so it is not retried.
+ * The condition is a RegExp on the message because Vitest drops a function condition before the test runs.
+ */
+export function retryUnlessRateLimited(count: number): TestOptions['retry'] {
+    return { count, condition: new RegExp(`^(?!${RATE_LIMIT_EXHAUSTED})`) };
 }
