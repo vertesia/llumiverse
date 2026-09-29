@@ -205,7 +205,7 @@ const selectedDrivers = selectLiveTestDrivers(drivers, {
 function getSmokeModelOptions(model: string) {
     // Keep the Qwen smoke focused on final output rather than spending its budget on reasoning.
     return model === QWEN_SMOKE_MODEL
-        ? { _option_id: 'openrouter-text' as const, effort: 'none' as const }
+        ? { _option_id: 'openai-text' as const, effort: 'none' as const }
         : { _option_id: 'text-fallback' as const };
 }
 
@@ -226,11 +226,7 @@ function getTestOptions(model: string): ExecutionOptions {
     return {
         model: model,
         model_options: {
-<<<<<<< HEAD
-            _option_id: 'text-fallback',
-=======
             ...getSmokeModelOptions(model),
->>>>>>> af8d8bc (fix: repair backport permissions and stabilize Qwen smoke (#703))
             max_tokens: 512,
             temperature: 0.3,
             ...(model === QWEN_SMOKE_MODEL ? {} : { top_k: 40 }),
