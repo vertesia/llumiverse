@@ -211,6 +211,17 @@ function assertNonemptyString(value: unknown, label: string): asserts value is s
     if (typeof value !== 'string' || value.length === 0) throw new TypeError(`${label} must be a nonempty string`);
 }
 
+function bedrockToolUseType(value: object, path: string): 'tool_use' | 'server_tool_use' | undefined {
+    const type = ownValue(value, 'type');
+    if (type === undefined) return undefined;
+    if (type !== 'tool_use' && type !== 'server_tool_use') {
+        const diagnostic =
+            typeof type === 'string' ? JSON.stringify(type.length > 80 ? `${type.slice(0, 80)}…` : type) : typeof type;
+        throw new TypeError(`Bedrock tool use type ${diagnostic} at ${path} is unsupported`);
+    }
+    return type;
+}
+
 /** Clone an AWS document value without interpreting any user-owned key names. */
 export function bedrockConverseJsonValue(value: unknown): JsonValue {
     if (value instanceof Uint8Array) return { _llumiverse_bedrock_bytes: Buffer.from(value).toString('base64') };
@@ -387,10 +398,11 @@ function assertContentBlock(block: unknown, role: Message['role'], path: string)
         if (role !== 'assistant') throw new TypeError(`Bedrock tool use ${path} requires an assistant message`);
         const toolUse = ownValue(block, 'toolUse');
         assertRecord(toolUse, `Bedrock tool use ${path}`);
-        assertAllowedKeys(toolUse, ['toolUseId', 'name', 'input'], `Bedrock tool use ${path}`);
+        assertAllowedKeys(toolUse, ['toolUseId', 'name', 'input', 'type'], `Bedrock tool use ${path}`);
         assertNonemptyString(ownValue(toolUse, 'toolUseId'), `Bedrock tool use ID ${path}`);
         assertNonemptyString(ownValue(toolUse, 'name'), `Bedrock tool name ${path}`);
         exactJsonValue(ownValue(toolUse, 'input'), `Bedrock tool input ${path}`);
+        bedrockToolUseType(toolUse, path);
         return;
     }
     if (role !== 'user') throw new TypeError(`Bedrock tool result ${path} requires a user message`);
@@ -685,13 +697,14 @@ async function toolCallBlock(
     assertNonemptyString(native.toolUseId, `Bedrock tool use ID ${path}`);
     assertNonemptyString(native.name, `Bedrock tool name ${path}`);
     const definition = definitions.find((candidate) => candidate.name === native.name);
+    const nativeType = bedrockToolUseType(native, path);
     return {
         id: await entityId('block', scope, path),
         type: 'tool_call',
         call_id: native.toolUseId,
         tool_name: native.name,
         ...(definition === undefined ? {} : { definition_id: definition.id }),
-        executor: 'application',
+        executor: nativeType === 'server_tool_use' ? 'provider' : 'application',
         arguments: { type: 'json', value: exactJsonValue(native.input, `Bedrock tool input ${path}`) },
         native_id: { protocol: BEDROCK_CONVERSE_PROTOCOL, scope: 'history', value: native.toolUseId },
     };
@@ -835,6 +848,8 @@ async function messageRecords(input: {
         const mappings: NativeItemMapping[] = [{ canonical_id: turnId, native_id: path, kind: 'turn' }];
         const replayEntries: BedrockReplayEntry[] = [];
         let hasProtectedReasoning = false;
+        let hasTypedToolUse = false;
+        let hasServerToolUse = false;
         for (let index = 0; index < nativeBlocks.length; index += 1) {
             const native = nativeBlocks[index];
             const blockPath = `${path}/content/${index}`;
@@ -843,6 +858,9 @@ async function messageRecords(input: {
                 block = await textBlock(input.scope, blockPath, native.text);
                 replayEntries.push({ kind: 'canonical', block_id: block.id, native: bedrockConverseJsonValue(native) });
             } else if ('toolUse' in native && native.toolUse !== undefined) {
+                const toolUseType = bedrockToolUseType(native.toolUse, blockPath);
+                hasTypedToolUse ||= toolUseType !== undefined;
+                hasServerToolUse ||= toolUseType === 'server_tool_use';
                 block = await toolCallBlock(
                     input.scope,
                     blockPath,
@@ -907,7 +925,8 @@ async function messageRecords(input: {
                 }
             }
         }
-        if (hasProtectedReasoning) {
+        if (hasProtectedReasoning || hasTypedToolUse) {
+            const hasProtectedReplay = hasProtectedReasoning || hasServerToolUse;
             const replayId = await entityId('replay', input.scope, path);
             blocks.push({
                 id: replayId,
@@ -922,21 +941,22 @@ async function messageRecords(input: {
                 },
                 payload: {
                     type: 'bedrock_converse_content_order',
-                    prefix: bedrockConverseJsonValue(input.prefix),
+                    ...(hasProtectedReplay ? { prefix: bedrockConverseJsonValue(input.prefix) } : {}),
                     entries: replayEntries,
                 } as unknown as JsonValue,
                 dependencies: {
-                    turn_ids: uniqueIds(input.prefix_dependencies.turn_ids, [turnId]),
+                    turn_ids: uniqueIds(hasProtectedReplay ? input.prefix_dependencies.turn_ids : [], [turnId]),
                     block_ids: uniqueIds(
-                        input.prefix_dependencies.block_ids,
+                        hasProtectedReplay ? input.prefix_dependencies.block_ids : [],
                         blocks.map((candidate) => candidate.id),
                     ),
                     call_ids: uniqueIds(
-                        input.prefix_dependencies.call_ids,
+                        hasProtectedReplay ? input.prefix_dependencies.call_ids : [],
                         blocks.flatMap((candidate) => (candidate.type === 'tool_call' ? [candidate.call_id] : [])),
                     ),
                     request_ids: [],
                 },
+                ...(hasProtectedReplay ? {} : { dependency_policy: 'discard_on_dependency_change' as const }),
             });
             mappings.push({ canonical_id: replayId, native_id: `${path}/content_order`, kind: 'block' });
         }
@@ -1237,8 +1257,22 @@ function bedrockReplay(
                 (ownValue(entry, 'kind') === 'reasoning' && ownValue(entry, 'signature') !== undefined)
             );
         });
+        const requiresServerToolUse = entries.some((entry) => {
+            if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return false;
+            const native = ownValue(entry, 'native');
+            if (typeof native !== 'object' || native === null || Array.isArray(native)) return false;
+            const toolUse = ownValue(native, 'toolUse');
+            if (typeof toolUse !== 'object' || toolUse === null || Array.isArray(toolUse)) return false;
+            return bedrockToolUseType(toolUse, replay.id) === 'server_tool_use';
+        });
+        if ((requiresSignedReasoning || requiresServerToolUse) && replay.dependency_policy !== undefined) {
+            throw new TypeError(`Bedrock replay block ${replay.id} cannot discard protected native evidence`);
+        }
         if (requiresSignedReasoning && prefix === undefined) {
             throw new TypeError(`Bedrock replay block ${replay.id} is missing signed prefix evidence`);
+        }
+        if (requiresServerToolUse && prefix === undefined) {
+            throw new TypeError(`Bedrock replay block ${replay.id} is missing protected server tool prefix evidence`);
         }
         if (
             requiresSignedReasoning &&
@@ -1316,6 +1350,9 @@ function compileBlock(
         if (block.arguments.type === 'invalid') {
             throw new TypeError(`Bedrock Converse cannot project invalid arguments for call ${block.call_id}`);
         }
+        if (block.executor === 'provider') {
+            throw new TypeError(`Bedrock provider call ${block.call_id} requires protected native replay evidence`);
+        }
         return {
             toolUse: {
                 toolUseId: block.call_id,
@@ -1343,6 +1380,46 @@ function structuredReplayText(entry: BedrockReplayStructuredJsonEntry, replayId:
     return text;
 }
 
+function preserveReplayToolUseType(
+    native: ContentBlock,
+    evidence: JsonValue,
+    replayId: string,
+    block: AgentContentBlock,
+): ContentBlock {
+    if (!('toolUse' in native) || native.toolUse === undefined) return native;
+    assertRecord(evidence, `Bedrock replay native block ${replayId}`);
+    const toolUseEvidence = ownValue(evidence, 'toolUse');
+    if (toolUseEvidence === undefined) return native;
+    assertRecord(toolUseEvidence, `Bedrock replay tool use ${replayId}`);
+    const type = bedrockToolUseType(toolUseEvidence, replayId);
+    if (block.type !== 'tool_call' || (block.executor === 'provider') !== (type === 'server_tool_use')) {
+        throw new TypeError(`Bedrock replay block ${replayId} no longer matches protected tool execution ownership`);
+    }
+    return type === undefined ? native : ({ toolUse: { ...native.toolUse, type } } as unknown as ContentBlock);
+}
+
+function compileReplayBlock(
+    block: UserContentBlock | AgentContentBlock,
+    document: ConversationDocument,
+    target?: { provider?: string; model?: string },
+): ContentBlock | undefined {
+    if (block.type !== 'tool_call' || block.executor !== 'provider') return compileBlock(block, document, target);
+    if (block.native_id?.protocol !== BEDROCK_CONVERSE_PROTOCOL) {
+        throw new TypeError(`Bedrock Converse cannot replay foreign provider call ${block.call_id}`);
+    }
+    if (block.arguments.type === 'invalid') {
+        throw new TypeError(`Bedrock Converse cannot replay invalid arguments for provider call ${block.call_id}`);
+    }
+    return {
+        toolUse: {
+            toolUseId: block.call_id,
+            name: block.tool_name,
+            input: toolArgumentsForModel(block.arguments),
+            type: 'server_tool_use',
+        },
+    };
+}
+
 function compileAgentContent(
     turn: Extract<ConversationTurn, { kind: 'agent' }>,
     document: ConversationDocument,
@@ -1363,7 +1440,15 @@ function compileAgentContent(
     const hasProtectedReasoning = replay.payload.entries.some(
         (entry) => entry.kind === 'redacted_reasoning' || (entry.kind === 'reasoning' && entry.signature !== undefined),
     );
-    if (hasProtectedReasoning) {
+    const hasProtectedServerToolUse = replay.payload.entries.some((entry) => {
+        if (entry.kind !== 'canonical') return false;
+        assertRecord(entry.native, `Bedrock replay native block ${replay.id}`);
+        const toolUse = ownValue(entry.native, 'toolUse');
+        if (toolUse === undefined) return false;
+        assertRecord(toolUse, `Bedrock replay tool use ${replay.id}`);
+        return bedrockToolUseType(toolUse, replay.id) === 'server_tool_use';
+    });
+    if (hasProtectedReasoning || hasProtectedServerToolUse) {
         if (replay.payload.prefix === undefined) {
             throw new TypeError(`Bedrock replay block ${replay.id} is missing signed prefix evidence`);
         }
@@ -1428,9 +1513,10 @@ function compileAgentContent(
                 block,
             };
         }
-        const native = compileBlock(block, document, target);
-        if (native === undefined)
+        const compiled = compileReplayBlock(block, document, target);
+        if (compiled === undefined)
             throw new TypeError(`Bedrock replay block ${replay.id} references excluded block ${block.id}`);
+        const native = preserveReplayToolUseType(compiled, entry.native, replay.id, block);
         assertExactReplayEvidence(native, entry.native, replay.id, `content block ${block.id}`);
         return { native, block };
     });

@@ -239,6 +239,88 @@ describe('Bedrock canonical driver lifecycle', () => {
         expect(streamed.completion?.accepted_output.turn.status).toBe('failed');
     });
 
+    it('normalizes structured output when the only tool use is provider-executed in sync and stream', async () => {
+        const converse = vi.fn(
+            async (): Promise<ConverseResponse> => ({
+                output: {
+                    message: {
+                        role: 'assistant',
+                        content: [
+                            {
+                                toolUse: {
+                                    toolUseId: 'sync-server-tool',
+                                    name: 'tool_search_tool_regex',
+                                    input: { query: 'answer' },
+                                    type: 'server_tool_use',
+                                },
+                            },
+                            { text: '{"answer":"Tokyo"}' },
+                        ],
+                    },
+                },
+                stopReason: 'end_turn',
+                usage: { inputTokens: 2, outputTokens: 2, totalTokens: 4 },
+                metrics: { latencyMs: 1 },
+            }),
+        );
+        const streamEvents: ConverseStreamOutput[] = [
+            {
+                contentBlockStart: {
+                    contentBlockIndex: 0,
+                    start: {
+                        toolUse: {
+                            toolUseId: 'stream-server-tool',
+                            name: 'tool_search_tool_regex',
+                            type: 'server_tool_use',
+                        },
+                    },
+                },
+            },
+            { contentBlockDelta: { contentBlockIndex: 0, delta: { toolUse: { input: '{"query":"answer"}' } } } },
+            { contentBlockStop: { contentBlockIndex: 0 } },
+            { contentBlockDelta: { contentBlockIndex: 1, delta: { text: '{"answer":"Osaka"}' } } },
+            { contentBlockStop: { contentBlockIndex: 1 } },
+            { messageStop: { stopReason: 'end_turn' } },
+            { metadata: { usage: { inputTokens: 2, outputTokens: 2, totalTokens: 4 }, metrics: { latencyMs: 1 } } },
+        ];
+        const converseStream = vi.fn(async () => ({
+            stream: (async function* () {
+                for (const event of streamEvents) yield event;
+            })(),
+            $metadata: { requestId: 'provider-tool-structured-stream' },
+        }));
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        Object.defineProperty(driver, 'canStream', { value: async () => true });
+        Object.defineProperty(driver, 'getExecutor', {
+            value: () => ({ converse, converseStream, destroy: vi.fn() }),
+        });
+
+        const sync = await driver.executeCanonical([{ role: PromptRole.user, content: 'Return JSON.' }], {
+            ...runtimeOptions({ flow: 'provider-tool-structured-sync', operation: 'generate' }),
+            result_schema: RESULT_SCHEMA,
+        });
+        expect(sync.accepted_output.turn.blocks).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({ type: 'json', value: { answer: 'Tokyo' } }),
+                expect.objectContaining({ type: 'tool_call', executor: 'provider' }),
+            ]),
+        );
+
+        const streamed = await driver.streamCanonical([{ role: PromptRole.user, content: 'Return JSON.' }], {
+            ...runtimeOptions({ flow: 'provider-tool-structured-stream', operation: 'generate' }),
+            result_schema: RESULT_SCHEMA,
+        });
+        for await (const _chunk of streamed) {
+            // Drain through terminal canonical normalization.
+        }
+        expect(streamed.completion?.accepted_output.turn.blocks).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({ type: 'json', value: { answer: 'Osaka' } }),
+                expect.objectContaining({ type: 'tool_call', executor: 'provider' }),
+            ]),
+        );
+    });
+
     it('normalizes public sync output canonically and recovers an accepted retry without another request', async () => {
         const converse = vi.fn(
             async (): Promise<ConverseResponse> => ({
@@ -561,7 +643,13 @@ describe('Bedrock canonical driver lifecycle', () => {
                     message: {
                         role: 'assistant',
                         content: [
-                            { toolUse: { toolUseId: 'native-call-17', name: 'lookup', input: { city: 'Tokyo' } } },
+                            {
+                                toolUse: {
+                                    toolUseId: 'native-call-17',
+                                    name: 'lookup',
+                                    input: { city: 'Tokyo' },
+                                },
+                            },
                         ],
                     },
                 },
@@ -640,6 +728,18 @@ describe('Bedrock canonical driver lifecycle', () => {
             ),
         ).toBe(true);
         expect((converse.mock.calls[1][0] as ConverseRequest).messages).toContainEqual({
+            role: 'assistant',
+            content: [
+                {
+                    toolUse: {
+                        toolUseId: 'native-call-17',
+                        name: 'lookup',
+                        input: { city: 'Tokyo' },
+                    },
+                },
+            ],
+        });
+        expect((converse.mock.calls[1][0] as ConverseRequest).messages).toContainEqual({
             role: 'user',
             content: [
                 {
@@ -661,12 +761,87 @@ describe('Bedrock canonical driver lifecycle', () => {
         });
     });
 
+    it('keeps server tool use provider-owned while exposing a following client tool call', async () => {
+        const converse = vi.fn(
+            async (): Promise<ConverseResponse> => ({
+                output: {
+                    message: {
+                        role: 'assistant',
+                        content: [
+                            {
+                                toolUse: {
+                                    toolUseId: 'server-search-1',
+                                    name: 'tool_search_tool_regex',
+                                    input: { query: 'lookup' },
+                                    type: 'server_tool_use',
+                                },
+                            },
+                            {
+                                toolUse: {
+                                    toolUseId: 'application-call-1',
+                                    name: 'lookup',
+                                    input: { city: 'Tokyo' },
+                                    type: 'tool_use',
+                                },
+                            } as unknown as ContentBlock,
+                        ],
+                    },
+                },
+                stopReason: 'tool_use',
+                usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
+                metrics: { latencyMs: 1 },
+            }),
+        );
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        Object.defineProperty(driver, 'getExecutor', { value: () => ({ converse, destroy: vi.fn() }) });
+
+        const completion = await driver.requestTextCompletion(
+            prompt([{ text: 'Find and call the lookup tool.' }]),
+            runtimeOptions({ flow: 'typed-tools', operation: 'first', tools: TOOLS }),
+        );
+        const document = parseConversationDocument(completion.conversation);
+        const calls = document.turns.flatMap((turn) =>
+            turn.blocks.flatMap((block) => (block.type === 'tool_call' ? [block] : [])),
+        );
+
+        expect(completion.tool_use).toEqual([
+            { id: 'application-call-1', tool_name: 'lookup', tool_input: { city: 'Tokyo' } },
+        ]);
+        expect(calls.map(({ call_id, executor }) => [call_id, executor])).toEqual([
+            ['server-search-1', 'provider'],
+            ['application-call-1', 'application'],
+        ]);
+        expect(exportLegacyBedrockConverseConversation(document).messages).toContainEqual({
+            role: 'assistant',
+            content: [
+                {
+                    toolUse: {
+                        toolUseId: 'server-search-1',
+                        name: 'tool_search_tool_regex',
+                        input: { query: 'lookup' },
+                        type: 'server_tool_use',
+                    },
+                },
+                {
+                    toolUse: {
+                        toolUseId: 'application-call-1',
+                        name: 'lookup',
+                        input: { city: 'Tokyo' },
+                        type: 'tool_use',
+                    },
+                },
+            ],
+        });
+    });
+
     it('records streamed native tool identity and terminal generation receipt', async () => {
         const events: ConverseStreamOutput[] = [
             {
                 contentBlockStart: {
                     contentBlockIndex: 0,
-                    start: { toolUse: { toolUseId: 'stream-call-9', name: 'lookup' } },
+                    start: {
+                        toolUse: { toolUseId: 'stream-call-9', name: 'lookup' },
+                    },
                 },
             },
             { contentBlockDelta: { contentBlockIndex: 0, delta: { toolUse: { input: '{"city":"Osaka"}' } } } },
@@ -714,5 +889,17 @@ describe('Bedrock canonical driver lifecycle', () => {
                 expect.objectContaining({ kind: 'block' }),
             ]),
         );
+        expect(exportLegacyBedrockConverseConversation(document).messages).toContainEqual({
+            role: 'assistant',
+            content: [
+                {
+                    toolUse: {
+                        toolUseId: 'stream-call-9',
+                        name: 'lookup',
+                        input: { city: 'Osaka' },
+                    },
+                },
+            ],
+        });
     });
 });

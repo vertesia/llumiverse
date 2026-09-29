@@ -363,6 +363,7 @@ function collectBedrockNativeStreamBlock(blocks: Map<number, ContentBlock>, even
                 toolUseId: start.start.toolUse.toolUseId,
                 name: start.start.toolUse.name,
                 input: '' as unknown as JSONObject,
+                ...(start.start.toolUse.type === undefined ? {} : { type: start.start.toolUse.type }),
             },
         });
     } else if (start?.start) {
@@ -961,8 +962,10 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                 const blockIndex = result.contentBlockStart.contentBlockIndex ?? -1;
                 const id = toolUseStart.toolUseId ?? '';
                 const name = toolUseStart.name ?? '';
-                streamingToolBlocks?.set(blockIndex, { id, name });
-                tool_use = [{ id, tool_name: name, tool_input: '' }];
+                if (toolUseStart.type !== 'server_tool_use') {
+                    streamingToolBlocks?.set(blockIndex, { id, name });
+                    tool_use = [{ id, tool_name: name, tool_input: '' }];
+                }
             } else if (
                 result.contentBlockStart.start &&
                 'reasoningContent' in result.contentBlockStart.start &&
@@ -1312,7 +1315,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         let tool_use: ToolUse<unknown>[] | undefined;
         //Get tool requests, we check tool use regardless of finish reason, as you can hit length and still get a valid response.
         tool_use = res.output?.message?.content?.reduce((tools: ToolUse<unknown>[], c) => {
-            if (c.toolUse) {
+            if (c.toolUse && c.toolUse.type !== 'server_tool_use') {
                 tools.push({
                     tool_name: c.toolUse.name ?? '',
                     tool_input: c.toolUse.input,
@@ -1559,7 +1562,9 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                         }
                         const blocks = finalizeBedrockNativeBlocks(nativeBlocks);
                         const normalized =
-                            !blocks.some((block) => block.toolUse !== undefined) && options.result_schema
+                            !blocks.some(
+                                (block) => block.toolUse !== undefined && block.toolUse.type !== 'server_tool_use',
+                            ) && options.result_schema
                                 ? normalizeCompletionResult(
                                       bedrockAnswerResults({ role: 'assistant', content: blocks }),
                                       options.result_schema,

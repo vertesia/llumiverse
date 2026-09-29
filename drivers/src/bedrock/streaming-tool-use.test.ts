@@ -48,6 +48,29 @@ describe('BedrockDriver getExtractedStream — tool use', () => {
         expect(toolBlocks.get(1)).toEqual({ id: 'tool-abc', name: 'my_tool' });
     });
 
+    it('does not expose provider-executed server tool use as application tool_use', () => {
+        const chunk = driver.getExtractedStream(
+            {
+                contentBlockStart: {
+                    contentBlockIndex: 1,
+                    start: {
+                        toolUse: {
+                            toolUseId: 'server-tool-abc',
+                            name: 'tool_search_tool_regex',
+                            type: 'server_tool_use',
+                        },
+                    },
+                },
+            },
+            undefined,
+            undefined,
+            toolBlocks,
+        );
+
+        expect(chunk.tool_use).toBeUndefined();
+        expect(toolBlocks.has(1)).toBe(false);
+    });
+
     it('emits a delta tool_use chunk on contentBlockDelta', () => {
         toolBlocks.set(1, { id: 'tool-abc', name: 'my_tool' });
 

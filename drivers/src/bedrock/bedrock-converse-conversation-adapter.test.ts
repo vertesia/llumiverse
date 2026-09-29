@@ -101,6 +101,117 @@ describe('Bedrock Converse canonical adapter', () => {
         expect(results[1]?.blocks[0].content.map((block) => block.type)).toEqual(['text', 'json']);
     });
 
+    it('preserves explicit client and provider tool-use types without making provider calls executable', async () => {
+        const native = history([
+            { role: 'user', content: [{ text: 'Find and call the weather tool.' }] },
+            {
+                role: 'assistant',
+                content: [
+                    {
+                        toolUse: {
+                            toolUseId: 'server-search',
+                            name: 'tool_search_tool_regex',
+                            input: { query: 'weather' },
+                            type: 'server_tool_use',
+                        },
+                    },
+                    {
+                        toolUse: {
+                            toolUseId: 'client-weather',
+                            name: 'weather',
+                            input: { city: 'Tokyo' },
+                            // Accept the native client discriminator for compatibility even though the generated
+                            // SDK enum currently only declares server_tool_use.
+                            type: 'tool_use',
+                        },
+                    } as unknown as ContentBlock,
+                ],
+            },
+        ]);
+        const document = parseConversationDocument(
+            JSON.parse(JSON.stringify(await importHistory(native, 'typed-bedrock-tool-use'))),
+        );
+        const calls = document.turns.flatMap((turn) =>
+            turn.blocks.flatMap((block) => (block.type === 'tool_call' ? [block] : [])),
+        );
+
+        expect(calls.map(({ call_id, executor }) => [call_id, executor])).toEqual([
+            ['server-search', 'provider'],
+            ['client-weather', 'application'],
+        ]);
+        const replay = document.turns
+            .flatMap((turn) => (turn.kind === 'agent' ? turn.blocks : []))
+            .find((block) => block.type === 'native_replay');
+        expect(replay).toMatchObject({
+            dependencies: {
+                call_ids: expect.arrayContaining(['server-search', 'client-weather']),
+            },
+        });
+        expect(replay).not.toHaveProperty('dependency_policy');
+        expect(exportLegacyBedrockConverseConversation(document)).toEqual(native);
+
+        const withoutReplay = structuredClone(document);
+        const agent = withoutReplay.turns.find((turn) => turn.kind === 'agent');
+        if (agent?.kind !== 'agent') throw new Error('Expected agent turn');
+        agent.blocks = agent.blocks.filter((block) => block.type !== 'native_replay');
+        expect(() => compileBedrockConverseConversation(withoutReplay)).toThrow(
+            /provider call server-search requires protected native replay evidence/,
+        );
+
+        const changedProviderCall = structuredClone(document);
+        const providerCall = changedProviderCall.turns
+            .flatMap((turn) => (turn.kind === 'agent' ? turn.blocks : []))
+            .find((block) => block.type === 'tool_call' && block.executor === 'provider');
+        if (providerCall?.type !== 'tool_call' || providerCall.arguments.type !== 'json') {
+            throw new Error('Expected provider tool call');
+        }
+        providerCall.arguments.value = { query: 'different' };
+        expect(() => compileBedrockConverseConversation(changedProviderCall)).toThrow(
+            /no longer matches protected content block/,
+        );
+
+        for (const [callId, executor] of [
+            ['server-search', 'application'],
+            ['client-weather', 'provider'],
+        ] as const) {
+            const changedOwnership = structuredClone(document);
+            const call = changedOwnership.turns
+                .flatMap((turn) => (turn.kind === 'agent' ? turn.blocks : []))
+                .find((block) => block.type === 'tool_call' && block.call_id === callId);
+            if (call?.type !== 'tool_call') throw new Error(`Expected tool call ${callId}`);
+            call.executor = executor;
+            expect(() => compileBedrockConverseConversation(changedOwnership)).toThrow(
+                /no longer matches protected tool execution ownership/,
+            );
+        }
+
+        const discardableServerReplay = structuredClone(document);
+        const protectedReplay = discardableServerReplay.turns
+            .flatMap((turn) => (turn.kind === 'agent' ? turn.blocks : []))
+            .find((block) => block.type === 'native_replay');
+        if (protectedReplay?.type !== 'native_replay') throw new Error('Expected protected replay');
+        protectedReplay.dependency_policy = 'discard_on_dependency_change';
+        expect(() => compileBedrockConverseConversation(discardableServerReplay)).toThrow(
+            /cannot discard protected native evidence/,
+        );
+    });
+
+    it('accepts an own undefined tool-use type without inventing replay or changing execution ownership', async () => {
+        const toolUse = { toolUseId: 'sdk-call', name: 'weather', input: { city: 'Tokyo' }, type: undefined };
+        expect(Object.hasOwn(toolUse, 'type')).toBe(true);
+        const document = await importHistory(
+            history([{ role: 'assistant', content: [{ toolUse } as unknown as ContentBlock] }]),
+            'undefined-bedrock-tool-use-type',
+        );
+        const blocks = document.turns.flatMap((turn) => (turn.kind === 'agent' ? turn.blocks : []));
+
+        expect(blocks.find((block) => block.type === 'tool_call')).toMatchObject({
+            call_id: 'sdk-call',
+            executor: 'application',
+        });
+        expect(blocks.some((block) => block.type === 'native_replay')).toBe(false);
+    });
+
     it('projects the compact model view of canonical externalized tool arguments', async () => {
         const document = await importHistory(
             history([
@@ -564,5 +675,50 @@ describe('Bedrock Converse canonical adapter', () => {
                 'duplicate-call',
             ),
         ).rejects.toThrow(/duplicated/);
+        await expect(
+            importHistory(
+                {
+                    messages: [
+                        {
+                            role: 'assistant',
+                            content: [
+                                {
+                                    toolUse: {
+                                        toolUseId: 'unsupported-type',
+                                        name: 'lookup',
+                                        input: {},
+                                        type: 'unsupported_tool_use',
+                                    },
+                                },
+                            ],
+                        },
+                    ],
+                },
+                'unsupported-tool-use-type',
+            ),
+        ).rejects.toThrow(/tool use type .* unsupported/);
+        const oversizedType = 'x'.repeat(1_000);
+        const oversizedFailure = await importHistory(
+            {
+                messages: [
+                    {
+                        role: 'assistant',
+                        content: [
+                            {
+                                toolUse: {
+                                    toolUseId: 'oversized-type',
+                                    name: 'lookup',
+                                    input: {},
+                                    type: oversizedType,
+                                },
+                            },
+                        ],
+                    },
+                ],
+            },
+            'oversized-tool-use-type',
+        ).catch((error: unknown) => error);
+        expect(oversizedFailure).toBeInstanceOf(Error);
+        expect((oversizedFailure as Error).message).not.toContain(oversizedType);
     });
 });
