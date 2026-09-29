@@ -100,6 +100,7 @@ jobs:
           aws-region: us-east-1
 
       - name: Curated live provider smoke tests
+        timeout-minutes: 10
         env:
           TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
