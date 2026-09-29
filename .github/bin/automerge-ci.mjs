@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 
 // A successful workflow can contain only skipped tests. Inspect the latest
 // substantive run and require the jobs/steps declared by this repository.
-export function verifyWorkflow(runs, loadJobs, policy, { sha, branch, pr }) {
+export function verifyWorkflow(runs, loadJobs, policy, { sha, branch, pr, baseSha, baseBranch }) {
     const candidates = runs
         .filter(
             (run) =>
@@ -15,6 +15,12 @@ export function verifyWorkflow(runs, loadJobs, policy, { sha, branch, pr }) {
         )
         .sort((a, b) => b.id - a.id);
     for (const run of candidates) {
+        // Approval may require CI for the current base as well as the head.
+        // Validate even no-op runs before considering fallback to older CI.
+        if (baseSha || baseBranch) {
+            const testedPr = run.pull_requests.find((item) => item.number === pr);
+            if (testedPr.base?.sha !== baseSha || testedPr.base?.ref !== baseBranch) return false;
+        }
         const jobs = loadJobs(run.id);
         const noOp = policy.noOp;
         if (
@@ -70,10 +76,11 @@ export function ghPages(endpoint) {
 }
 
 export function main(env, pr, workflows, pages = ghPages) {
-    const { REPO: repo, HEAD_BRANCH: branch, HEAD_SHA: sha } = env;
+    const { REPO: repo, HEAD_BRANCH: branch, HEAD_SHA: sha, BASE_SHA: baseSha, BASE_BRANCH: baseBranch } = env;
     if (!repo || !branch || !sha || !Number.isSafeInteger(pr) || pr <= 0 || workflows.length === 0) {
         throw new Error('Missing repository, branch, commit, PR or workflows');
     }
+    if (Boolean(baseSha) !== Boolean(baseBranch)) throw new Error('Both base branch and commit are required');
     const policies = JSON.parse(readFileSync(new URL('./automerge-ci-policy.json', import.meta.url), 'utf8'));
     for (const workflow of workflows) {
         const policy = policies[workflow];
@@ -87,7 +94,7 @@ export function main(env, pr, workflows, pages = ghPages) {
             (id) =>
                 pages(`repos/${repo}/actions/runs/${id}/jobs?filter=latest&per_page=100`).flatMap((page) => page.jobs),
             policy,
-            { sha, branch, pr },
+            { sha, branch, pr, baseSha, baseBranch },
         );
         if (!passed) {
             console.log(`Required jobs have not passed in ${workflow} for ${sha}.`);

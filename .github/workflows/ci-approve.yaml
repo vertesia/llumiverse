@@ -1,0 +1,56 @@
+name: (ci) Approve tested pull requests
+
+on:
+  # zizmor: ignore[dangerous-triggers] Runs only trusted default-branch scripts; never executes PR code or artifacts.
+  workflow_run:
+    workflows: ["(test) Build and test", "(lint) Lint codebase"]
+    types: [completed]
+  # zizmor: ignore[dangerous-triggers] Withdraws this gate's approval on PR changes; checkout is pinned to the trusted workflow commit.
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited, ready_for_review, converted_to_draft, labeled, unlabeled, closed]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to reconcile (leave empty for all open PRs)"
+        type: string
+        required: false
+
+permissions: {}
+
+jobs:
+  approve:
+    name: Reconcile CI approvals
+    permissions:
+      contents: read # Read the trusted approval policy at the workflow commit.
+      actions: read # Inspect workflow runs, jobs and required test steps.
+      pull-requests: read # Read PR metadata, changed files and existing reviews.
+      statuses: write # Publish the approval gate status on the evaluated PR head.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-slim
+    environment: renovate-automerge
+    timeout-minutes: 15
+    # Serialize approval publishers, including pending runs.
+    concurrency:
+      group: ci-approve-${{ github.repository }}
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - name: Checkout trusted approval policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: .github/bin
+          persist-credentials: false
+          submodules: false
+      - name: Generate approval token
+        id: approval-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.APP_VERTESIA_RENOVATE_AUTOMERGE_CLIENT_ID }}
+          private-key: ${{ secrets.APP_VERTESIA_RENOVATE_AUTOMERGE_PEM }}
+          permission-pull-requests: write
+      - name: Reconcile approvals
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REVIEW_TOKEN: ${{ steps.approval-token.outputs.token }}
+        run: node .github/bin/ci-approve.mjs
