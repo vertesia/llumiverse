@@ -22,6 +22,12 @@ lint, build and test checks pass; otherwise it withdraws its approval. Draft and
 eligibility changes also trigger reassessment. Manual dispatch recovers missed
 events or API failures. There is no scheduled reconciliation or rerun-start handler.
 
+Because a CI completion is the only event that re-checks a finished head, its PR
+lookup queries open PRs by head branch (`head=<owner>:<branch>`) rather than paging
+through every open PR, and every read is retried twice (after 2s and 5s) on a 5xx
+or dropped connection. Writes are not retried: a write answered with a 5xx may
+already have been applied, and the next event reconciles it.
+
 During a same-commit rerun, an existing approval can remain until CI finishes.
 Runner queues can delay withdrawal after a push. A delayed push event preserves
 an approval already granted for the current commit. If the target branch advances

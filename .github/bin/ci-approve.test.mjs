@@ -7,8 +7,10 @@ import {
     CONTEXT,
     evaluate,
     githubApi,
+    isTransientApiError,
     MARKER,
     ownsReview,
+    READ_RETRY_DELAYS_MS,
     reconcile,
     requiresHuman,
     targets,
@@ -48,7 +50,11 @@ function fixture({ pulls = [pr], reviews = [], files = [] } = {}) {
         }),
         reviews: async () => structuredClone(stored),
         files: async () => files,
-        open: async () => pulls,
+        opened: [],
+        async open(branch) {
+            this.opened.push(branch);
+            return pulls;
+        },
         status: async (...args) => writes.push(['status', ...args]),
         dismiss: async (_number, id) => {
             writes.push(['dismiss', id]);
@@ -205,6 +211,7 @@ test('manual discovery excludes forks and unsupported bases', async () => {
         ],
     });
     assert.deepEqual(await targets(api, {}, 'workflow_dispatch'), [12]);
+    assert.deepEqual(api.opened, [undefined]);
 });
 
 test('workflow events resolve current PRs even when the event has no PR list or an old SHA', async () => {
@@ -224,6 +231,7 @@ test('workflow events resolve current PRs even when the event has no PR list or 
         ),
         [12],
     );
+    assert.deepEqual(api.opened, ['feature']);
     assert.deepEqual(
         await targets(
             api,
@@ -258,6 +266,81 @@ test('API transport paginates reviews and scopes approval writes to the App toke
     await api.approve(12, sha, 'review');
     assert.equal(calls[1].options.env.GH_TOKEN, 'app');
     assert.equal(JSON.parse(calls[1].options.input).commit_id, sha);
+});
+
+function ghFailure(stderr) {
+    return Object.assign(new Error('Command failed: gh api'), { status: 1, stderr });
+}
+
+function flakyApi(failures) {
+    const calls = [];
+    const sleeps = [];
+    const api = githubApi(
+        { GITHUB_REPOSITORY: 'vertesia/studio', GH_TOKEN: 'read', GH_REVIEW_TOKEN: 'app' },
+        (_cmd, args) => {
+            calls.push(args);
+            if (calls.length <= failures.length) throw failures[calls.length - 1];
+            return args.includes('--paginate') ? JSON.stringify([[pr]]) : JSON.stringify(approval);
+        },
+        (ms) => sleeps.push(ms),
+    );
+    return { api, calls, sleeps };
+}
+
+test('CI-completion discovery asks GitHub for the branch instead of listing every open PR', () => {
+    const { api, calls } = flakyApi([]);
+    api.open('feat/x#1');
+    assert.equal(calls[0][1], 'repos/vertesia/studio/pulls?state=open&head=vertesia:feat%2Fx%231&per_page=100');
+    api.open();
+    assert.equal(calls[1][1], 'repos/vertesia/studio/pulls?state=open&per_page=100');
+});
+
+test('a transient read failure is retried with backoff', () => {
+    const { api, calls, sleeps } = flakyApi([
+        ghFailure('gh: Server Error (HTTP 502)'),
+        ghFailure('error connecting to api.github.com'),
+    ]);
+    assert.deepEqual(api.open('feature'), [pr]);
+    assert.equal(calls.length, 3);
+    assert.deepEqual(sleeps, READ_RETRY_DELAYS_MS);
+});
+
+test('a read still failing after every retry surfaces the last error', () => {
+    const failures = Array.from({ length: READ_RETRY_DELAYS_MS.length + 1 }, () =>
+        ghFailure('gh: Server Error (HTTP 503)'),
+    );
+    const { api, calls } = flakyApi(failures);
+    assert.throws(
+        () => api.pr(12),
+        (error) => error === failures.at(-1),
+    );
+    assert.equal(calls.length, failures.length);
+});
+
+test('client errors and writes are not retried', () => {
+    const notFound = ghFailure('gh: Not Found (HTTP 404)');
+    const reads = flakyApi([notFound]);
+    assert.throws(
+        () => reads.api.pr(12),
+        (error) => error === notFound,
+    );
+    assert.equal(reads.calls.length, 1);
+
+    const serverError = ghFailure('gh: Server Error (HTTP 502)');
+    const writes = flakyApi([serverError]);
+    assert.throws(
+        () => writes.api.approve(12, sha, 'review'),
+        (error) => error === serverError,
+    );
+    assert.equal(writes.calls.length, 1);
+    assert.deepEqual(writes.sleeps, []);
+});
+
+test('only server errors and dropped connections count as transient', () => {
+    assert.equal(isTransientApiError(ghFailure('gh: Bad Gateway (HTTP 502)')), true);
+    assert.equal(isTransientApiError(ghFailure('Post "https://api.github.com/graphql": unexpected EOF')), true);
+    assert.equal(isTransientApiError(ghFailure('gh: Validation Failed (HTTP 422)')), false);
+    assert.equal(isTransientApiError(new Error('Missing GitHub token')), false);
 });
 
 test('workflow executes only trusted scripts and observes pushes and CI completion', () => {
