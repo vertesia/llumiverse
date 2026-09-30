@@ -4,8 +4,14 @@ import {
     type GenerateContentParameters,
     type GenerateContentResponse,
     type GoogleGenAI,
+    Language,
 } from '@google/genai';
-import { parseConversationDocument } from '@llumiverse/conversation';
+import {
+    type ConversationStreamEvent,
+    fingerprintJson,
+    parseConversationDocument,
+    resolveToolExecutionRequest,
+} from '@llumiverse/conversation';
 import { type ExecutionOptions, PromptRole } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import { VertexAIDriver } from '../index.js';
@@ -101,6 +107,20 @@ async function drain(stream: AsyncIterable<unknown>): Promise<void> {
     for await (const _chunk of stream) {
         // Drain provider or recovered output before finalizing its conversation.
     }
+}
+
+async function collectCanonicalEvents(
+    stream: AsyncIterable<ConversationStreamEvent>,
+): Promise<ConversationStreamEvent[]> {
+    const events: ConversationStreamEvent[] = [];
+    for await (const event of stream) events.push(event);
+    return events;
+}
+
+function acceptedOutputWithoutProviderTimestamps(value: unknown): unknown {
+    return JSON.parse(JSON.stringify(value), (key, item) =>
+        key === 'recorded_at' || key === 'completed_at' ? '<provider-completed-at>' : item,
+    );
 }
 
 function latestGeneratedJson(value: unknown): unknown {
@@ -377,6 +397,704 @@ describe('Gemini canonical lifecycle', () => {
         await stream.cancel();
         await expect(pending).resolves.toMatchObject({ done: true });
         expect(providerSignal?.aborted).toBe(true);
+        expect(stream.completion).toBeUndefined();
+    });
+
+    it('emits typed structured drafts at cumulative Gemini part positions and recovers without transport', async () => {
+        const generateStream = vi.fn<GenerateStream>(async () =>
+            (async function* () {
+                yield {
+                    candidates: [{ content: { role: 'model', parts: [{ text: '{"answer":' }] } }],
+                } as GenerateContentResponse;
+                yield response({
+                    id: 'response-typed-structured',
+                    content: { role: 'model', parts: [{ text: '"Tokyo"}' }] },
+                });
+            })(),
+        );
+        const driver = new TestGeminiDriver(async () => {
+            throw new Error('blocking transport not expected');
+        }, generateStream);
+        const segments = [{ role: PromptRole.user, content: 'Return JSON.' }];
+        const result_schema: NonNullable<ExecutionOptions['result_schema']> = {
+            type: 'object',
+            properties: { answer: { type: 'string' } },
+            required: ['answer'],
+            additionalProperties: false,
+        };
+        const firstOptions = {
+            ...runtimeOptions({
+                flow: 'typed-structured',
+                operation: 'generate',
+                attempt: 'first',
+                recorded_at: '2026-09-30T01:11:30.000Z',
+            }),
+            result_schema,
+        };
+        const typed = await driver.streamCanonicalEvents(segments, firstOptions, undefined, {
+            stream_id: 'stream:gemini:typed-structured',
+        });
+        const events = await collectCanonicalEvents(typed);
+
+        expect(events.filter((event) => event.type === 'draft_text_delta')).toMatchObject([
+            {
+                text: '{"answer":',
+                native_position: {
+                    protocol: GEMINI_GENERATE_CONTENT_PROTOCOL,
+                    path: ['candidates', 0, 'content', 'parts', 0],
+                },
+            },
+            { text: '"Tokyo"}' },
+        ]);
+        expect(events.at(-1)).toMatchObject({
+            type: 'response_accepted',
+            origin: 'live_transport',
+            reconciliations: [{ disposition: 'structured_output' }],
+        });
+        expect(typed.completion?.accepted_output.turn.blocks).toContainEqual(
+            expect.objectContaining({ type: 'json', value: { answer: 'Tokyo' } }),
+        );
+
+        const legacyDriver = new TestGeminiDriver(async () => {
+            throw new Error('blocking transport not expected');
+        }, generateStream);
+        const legacy = await legacyDriver.streamCanonical(segments, firstOptions);
+        await drain(legacy);
+        expect(acceptedOutputWithoutProviderTimestamps(legacy.completion?.accepted_output)).toEqual(
+            acceptedOutputWithoutProviderTimestamps(typed.completion?.accepted_output),
+        );
+
+        if (typed.completion === undefined) throw new Error('Expected typed Gemini completion');
+        const recovered = await driver.streamCanonicalEvents(
+            segments,
+            {
+                ...runtimeOptions({
+                    flow: 'typed-structured',
+                    operation: 'generate',
+                    attempt: 'retry',
+                    recorded_at: '2026-09-30T01:11:31.000Z',
+                    conversation: JSON.parse(JSON.stringify(typed.completion.conversation)),
+                }),
+                result_schema,
+            },
+            undefined,
+            { stream_id: 'stream:gemini:typed-structured:retry' },
+        );
+        expect(await collectCanonicalEvents(recovered)).toEqual([
+            expect.objectContaining({
+                type: 'response_accepted',
+                origin: 'accepted_recovery',
+                sequence: 0,
+            }),
+        ]);
+        expect(recovered.completion?.accepted_output).toEqual(typed.completion.accepted_output);
+        await expect(
+            driver.streamCanonicalEvents(
+                segments,
+                {
+                    ...runtimeOptions({
+                        flow: 'typed-structured',
+                        operation: 'generate',
+                        attempt: 'changed-options',
+                        recorded_at: '2026-09-30T01:11:32.000Z',
+                        conversation: JSON.parse(JSON.stringify(typed.completion.conversation)),
+                    }),
+                    result_schema,
+                    model_options: { _option_id: 'vertexai-gemini', temperature: 0.2 },
+                },
+                undefined,
+                { stream_id: 'stream:gemini:typed-structured:changed-options' },
+            ),
+        ).rejects.toThrow('incompatible request identity');
+        expect(generateStream).toHaveBeenCalledTimes(2);
+    });
+
+    it('accepts invalid required structured output as an explicit failed Gemini response', async () => {
+        const generateStream = vi.fn<GenerateStream>(async () =>
+            (async function* () {
+                yield response({
+                    id: 'response-typed-invalid-structured',
+                    content: { role: 'model', parts: [{ text: '{"wrong":42}' }] },
+                });
+            })(),
+        );
+        const driver = new TestGeminiDriver(async () => {
+            throw new Error('blocking transport not expected');
+        }, generateStream);
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Return JSON.' }],
+            {
+                ...runtimeOptions({
+                    flow: 'typed-invalid-structured',
+                    operation: 'generate',
+                    attempt: 'first',
+                    recorded_at: '2026-09-30T01:11:35.000Z',
+                }),
+                result_schema: {
+                    type: 'object',
+                    properties: { answer: { type: 'string' } },
+                    required: ['answer'],
+                    additionalProperties: false,
+                },
+            },
+            undefined,
+            { stream_id: 'stream:gemini:typed-invalid-structured' },
+        );
+        const events = await collectCanonicalEvents(stream);
+
+        expect(events.at(-1)?.type).toBe('response_accepted');
+        expect(stream.completion?.accepted_output.generation.status).toBe('failed');
+        expect(stream.completion?.accepted_output.turn).toMatchObject({
+            status: 'failed',
+            blocks: [expect.objectContaining({ type: 'text', text: '{"wrong":42}' })],
+        });
+    });
+
+    it.each([
+        ['with a provider message', 'Prompt blocked.'],
+        ['without a provider message', undefined],
+    ] as const)(
+        'accepts a candidate-less Gemini prompt block %s without fabricating a draft',
+        async (_label, message) => {
+            const terminal = {
+                responseId: `response-typed-blocked-${message === undefined ? 'empty' : 'message'}`,
+                modelVersion: 'gemini-2.5-pro-002',
+                candidates: [],
+                promptFeedback: {
+                    blockReason: 'BLOCKLIST',
+                    ...(message === undefined ? {} : { blockReasonMessage: message }),
+                },
+                usageMetadata: { promptTokenCount: 8, totalTokenCount: 8 },
+            } as unknown as GenerateContentResponse;
+            const generate = vi.fn<Generate>(async () => terminal);
+            const generateStream = vi.fn<GenerateStream>(async () =>
+                (async function* () {
+                    yield terminal;
+                })(),
+            );
+            const segments = [{ role: PromptRole.user, content: 'Blocked prompt.' }];
+            const options = runtimeOptions({
+                flow: `typed-blocked-${message === undefined ? 'empty' : 'message'}`,
+                operation: 'generate',
+                attempt: 'first',
+                recorded_at: '2026-09-30T01:11:36.000Z',
+            });
+            const sync = await new TestGeminiDriver(generate).executeCanonical(segments, options);
+            const streamDriver = new TestGeminiDriver(async () => {
+                throw new Error('blocking transport not expected');
+            }, generateStream);
+            const legacy = await streamDriver.streamCanonical(segments, options);
+            await drain(legacy);
+            const typed = await streamDriver.streamCanonicalEvents(segments, options, undefined, {
+                stream_id: `stream:gemini:typed-blocked-${message === undefined ? 'empty' : 'message'}`,
+            });
+            const events = await collectCanonicalEvents(typed);
+
+            expect(events.some((event) => event.type === 'draft_block_started')).toBe(false);
+            expect(events.at(-1)).toMatchObject({ type: 'response_accepted', reconciliations: [] });
+            expect(typed.completion?.accepted_output.turn.blocks).toEqual(
+                message === undefined ? [] : [expect.objectContaining({ type: 'text', text: message })],
+            );
+            expect(acceptedOutputWithoutProviderTimestamps(typed.completion?.accepted_output)).toEqual(
+                acceptedOutputWithoutProviderTimestamps(sync.accepted_output),
+            );
+            expect(acceptedOutputWithoutProviderTimestamps(legacy.completion?.accepted_output)).toEqual(
+                acceptedOutputWithoutProviderTimestamps(sync.accepted_output),
+            );
+            expect(generate).toHaveBeenCalledOnce();
+            expect(generateStream).toHaveBeenCalledTimes(2);
+        },
+    );
+
+    it('keeps max-token Gemini calls identically interrupted and non-executable across canonical APIs', async () => {
+        const terminal = response({
+            id: 'response-typed-cutoff-tool',
+            content: {
+                role: 'model',
+                parts: [{ functionCall: { name: 'lookup', args: { city: 'Tokyo' } } }],
+            },
+            finish_reason: FinishReason.MAX_TOKENS,
+        });
+        const streamTransport = vi.fn<GenerateStream>(async () =>
+            (async function* () {
+                yield terminal;
+            })(),
+        );
+        const segments = [{ role: PromptRole.user, content: 'Look up Tokyo.' }];
+        const options = {
+            ...runtimeOptions({
+                flow: 'typed-cutoff-tool',
+                operation: 'generate',
+                attempt: 'first',
+                recorded_at: '2026-09-30T01:11:37.000Z',
+            }),
+            tools: [{ name: 'lookup', input_schema: { type: 'object' as const } }],
+        } satisfies ExecutionOptions;
+
+        const syncDriver = new TestGeminiDriver(async () => terminal);
+        const sync = await syncDriver.executeCanonical(segments, options);
+        const legacyDriver = new TestGeminiDriver(async () => {
+            throw new Error('blocking transport not expected');
+        }, streamTransport);
+        const legacy = await legacyDriver.streamCanonical(segments, options);
+        await drain(legacy);
+        const typedDriver = new TestGeminiDriver(async () => {
+            throw new Error('blocking transport not expected');
+        }, streamTransport);
+        const typed = await typedDriver.streamCanonicalEvents(segments, options, undefined, {
+            stream_id: 'stream:gemini:typed-cutoff-tool',
+        });
+        const events = await collectCanonicalEvents(typed);
+        const call = typed.completion?.accepted_output.turn.blocks.find((block) => block.type === 'tool_call');
+
+        expect(call).toMatchObject({
+            type: 'tool_call',
+            executor: 'application',
+            arguments: { type: 'invalid', error: expect.stringContaining(FinishReason.MAX_TOKENS) },
+        });
+        expect(typed.completion?.accepted_output.turn.status).toBe('interrupted');
+        expect(typed.completion?.accepted_output.generation).toMatchObject({
+            status: 'cancelled',
+            finish_reason: 'length',
+        });
+        expect(events).toContainEqual(expect.objectContaining({ type: 'draft_block_finished', outcome: 'malformed' }));
+        expect(events).toContainEqual(expect.objectContaining({ type: 'draft_finished', outcome: 'interrupted' }));
+        expect(acceptedOutputWithoutProviderTimestamps(legacy.completion?.accepted_output)).toEqual(
+            acceptedOutputWithoutProviderTimestamps(sync.accepted_output),
+        );
+        expect(acceptedOutputWithoutProviderTimestamps(typed.completion?.accepted_output)).toEqual(
+            acceptedOutputWithoutProviderTimestamps(sync.accepted_output),
+        );
+
+        if (typed.completion === undefined || call?.type !== 'tool_call') {
+            throw new Error('Expected interrupted Gemini tool call');
+        }
+        const sourceTurn = typed.completion.conversation.turns.find(
+            (turn) => turn.id === typed.completion?.accepted_output.turn.id,
+        );
+        const sourceCall = sourceTurn?.blocks.find((block) => block.id === call.id);
+        if (sourceCall?.type !== 'tool_call') throw new Error('Expected retained interrupted Gemini tool call');
+        await expect(
+            resolveToolExecutionRequest(
+                typed.completion.conversation,
+                {
+                    conversation: {
+                        conversation_id: typed.completion.conversation.id,
+                        revision: typed.completion.conversation.revision,
+                    },
+                    turn_id: typed.completion.accepted_output.turn.id,
+                    block_id: sourceCall.id,
+                    call_id: sourceCall.call_id,
+                    call_fingerprint: await fingerprintJson(sourceCall),
+                },
+                async function* () {
+                    // Interrupted inline arguments must fail before asset resolution.
+                },
+            ),
+        ).rejects.toThrow(/invalid arguments/);
+    });
+
+    it('keeps Gemini thought signatures private while reconciling parallel native tool identities', async () => {
+        const generateStream = vi.fn<GenerateStream>(async () =>
+            (async function* () {
+                yield {
+                    candidates: [
+                        {
+                            content: {
+                                role: 'model',
+                                parts: [
+                                    { text: 'plan', thought: true, thoughtSignature: 'secret-reasoning-signature' },
+                                ],
+                            },
+                        },
+                    ],
+                } as GenerateContentResponse;
+                yield response({
+                    id: 'response-typed-tools',
+                    content: {
+                        role: 'model',
+                        parts: [
+                            {
+                                functionCall: { id: 'call-a', name: 'lookup', args: { city: 'Tokyo' } },
+                                thoughtSignature: 'secret-call-signature-a',
+                            },
+                            {
+                                functionCall: { id: 'call-b', name: 'lookup', args: { city: 'Paris' } },
+                                thoughtSignature: 'secret-call-signature-b',
+                            },
+                        ],
+                    },
+                });
+            })(),
+        );
+        const driver = new TestGeminiDriver(async () => {
+            throw new Error('blocking transport not expected');
+        }, generateStream);
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Look up both cities.' }],
+            {
+                ...runtimeOptions({
+                    flow: 'typed-tools',
+                    operation: 'generate',
+                    attempt: 'first',
+                    recorded_at: '2026-09-30T01:11:40.000Z',
+                }),
+                tools: [{ name: 'lookup', input_schema: { type: 'object', additionalProperties: true } }],
+            },
+            undefined,
+            { stream_id: 'stream:gemini:typed-tools' },
+        );
+        const events = await collectCanonicalEvents(stream);
+        const calls = stream.completion?.accepted_output.turn.blocks.filter((block) => block.type === 'tool_call');
+
+        expect(events.filter((event) => event.type === 'draft_tool_arguments_delta')).toMatchObject([
+            { arguments: { encoding: 'json_value_snapshot', value: { city: 'Tokyo' } } },
+            { arguments: { encoding: 'json_value_snapshot', value: { city: 'Paris' } } },
+        ]);
+        expect(calls).toMatchObject([
+            { call_id: 'call-a', tool_name: 'lookup', executor: 'application' },
+            { call_id: 'call-b', tool_name: 'lookup', executor: 'application' },
+        ]);
+        expect(JSON.stringify(events)).not.toContain('secret-reasoning-signature');
+        expect(JSON.stringify(events)).not.toContain('secret-call-signature');
+        expect(events.at(-1)?.type).toBe('response_accepted');
+    });
+
+    it('assigns distinct stable canonical identities to parallel ID-less same-name Gemini calls', async () => {
+        const generateStream = vi.fn<GenerateStream>(async () =>
+            (async function* () {
+                yield response({
+                    id: 'response-typed-idless-tools',
+                    content: {
+                        role: 'model',
+                        parts: [
+                            { functionCall: { name: 'lookup', args: { city: 'Tokyo' } } },
+                            { functionCall: { name: 'lookup', args: { city: 'Paris' } } },
+                        ],
+                    },
+                });
+            })(),
+        );
+        const driver = new TestGeminiDriver(async () => {
+            throw new Error('blocking transport not expected');
+        }, generateStream);
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Look up both cities.' }],
+            {
+                ...runtimeOptions({
+                    flow: 'typed-idless-tools',
+                    operation: 'generate',
+                    attempt: 'first',
+                    recorded_at: '2026-09-30T01:11:45.000Z',
+                }),
+                tools: [{ name: 'lookup', input_schema: { type: 'object', additionalProperties: true } }],
+            },
+            undefined,
+            { stream_id: 'stream:gemini:typed-idless-tools' },
+        );
+        const events = await collectCanonicalEvents(stream);
+        const starts = events.filter((event) => event.type === 'draft_block_started');
+        const calls = stream.completion?.accepted_output.turn.blocks.filter((block) => block.type === 'tool_call');
+
+        expect(calls).toHaveLength(2);
+        expect(calls?.[0]?.call_id).not.toBe(calls?.[1]?.call_id);
+        expect(starts.flatMap((event) => (event.block.type === 'tool_call' ? [event.block.call_id] : []))).toEqual(
+            calls?.map((call) => call.call_id),
+        );
+        expect(calls?.map((call) => call.arguments)).toEqual([
+            { type: 'json', value: { city: 'Tokyo' } },
+            { type: 'json', value: { city: 'Paris' } },
+        ]);
+        expect(events.at(-1)?.type).toBe('response_accepted');
+    });
+
+    it('rejects typed Gemini bounds and publication failures before opening provider transport', async () => {
+        const generateStream = vi.fn<GenerateStream>(async () => (async function* () {})());
+        const publish = vi.fn(async () => undefined);
+        const driver = new TestGeminiDriver(async () => {
+            throw new Error('blocking transport not expected');
+        }, generateStream);
+        const segments = [{ role: PromptRole.user, content: 'Answer.' }];
+
+        await expect(
+            driver.streamCanonicalEvents(
+                segments,
+                {
+                    ...runtimeOptions({
+                        flow: 'typed-invalid-open',
+                        operation: 'generate',
+                        attempt: 'first',
+                        recorded_at: '2026-09-30T01:11:50.000Z',
+                    }),
+                    on_canonical_request_prepared: publish,
+                },
+                undefined,
+                { stream_id: 'stream:gemini:typed-invalid-open', max_buffered_events: 0 },
+            ),
+        ).rejects.toThrow();
+        expect(publish).not.toHaveBeenCalled();
+        expect(generateStream).not.toHaveBeenCalled();
+
+        await expect(
+            driver.streamCanonicalEvents(
+                segments,
+                {
+                    ...runtimeOptions({
+                        flow: 'typed-barrier',
+                        operation: 'generate',
+                        attempt: 'first',
+                        recorded_at: '2026-09-30T01:11:51.000Z',
+                    }),
+                    on_canonical_request_prepared: async () => {
+                        throw new Error('durability barrier failed');
+                    },
+                },
+                undefined,
+                { stream_id: 'stream:gemini:typed-barrier' },
+            ),
+        ).rejects.toThrow('durability barrier failed');
+        expect(generateStream).not.toHaveBeenCalled();
+    });
+
+    it('retains the authoritative Gemini response when final event delivery exceeds its budget', async () => {
+        const generateStream = vi.fn<GenerateStream>(async () =>
+            (async function* () {
+                yield response({
+                    id: 'response-typed-delivery-budget',
+                    content: { role: 'model', parts: [{ text: 'authoritative text' }] },
+                });
+            })(),
+        );
+        const driver = new TestGeminiDriver(async () => {
+            throw new Error('blocking transport not expected');
+        }, generateStream);
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Answer.' }],
+            runtimeOptions({
+                flow: 'typed-delivery-budget',
+                operation: 'generate',
+                attempt: 'first',
+                recorded_at: '2026-09-30T01:11:51.500Z',
+            }),
+            undefined,
+            { stream_id: 'stream:gemini:typed-delivery-budget', max_events: 6 },
+        );
+        const events = await collectCanonicalEvents(stream);
+
+        expect(events.at(-1)).toMatchObject({
+            type: 'stream_terminated',
+            outcome: 'failed',
+            diagnostic: { code: 'CANONICAL_EVENT_DELIVERY_FAILED' },
+        });
+        expect(events.some((event) => event.type === 'response_accepted')).toBe(false);
+        expect(stream.completion?.accepted_output.turn.blocks).toContainEqual(
+            expect.objectContaining({ type: 'text', text: 'authoritative text' }),
+        );
+    });
+
+    it('accepts an omitted Gemini extension without inventing a display draft', async () => {
+        const generateStream = vi.fn<GenerateStream>(async () =>
+            (async function* () {
+                yield response({
+                    id: 'response-typed-extension',
+                    content: {
+                        role: 'model',
+                        parts: [{ executableCode: { language: Language.PYTHON, code: 'print(1)' } }],
+                    },
+                });
+            })(),
+        );
+        const driver = new TestGeminiDriver(async () => {
+            throw new Error('blocking transport not expected');
+        }, generateStream);
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Run code.' }],
+            runtimeOptions({
+                flow: 'typed-extension',
+                operation: 'generate',
+                attempt: 'first',
+                recorded_at: '2026-09-30T01:11:51.750Z',
+            }),
+            undefined,
+            { stream_id: 'stream:gemini:typed-extension' },
+        );
+        const events = await collectCanonicalEvents(stream);
+
+        expect(events.some((event) => event.type === 'draft_block_started')).toBe(false);
+        expect(events.at(-1)?.type).toBe('response_accepted');
+        expect(stream.completion?.accepted_output.turn.blocks).toEqual([]);
+        expect(stream.completion?.accepted_output.completeness).toMatchObject({
+            semantic_content: 'partial',
+            omitted_block_ids: expect.arrayContaining([expect.any(String)]),
+        });
+    });
+
+    it('aborts a pending typed Gemini read and emits one cancellation terminal', async () => {
+        let providerSignal: AbortSignal | undefined;
+        const generateStream = vi.fn<GenerateStream>(async (request) => {
+            providerSignal = request.config?.abortSignal;
+            return {
+                [Symbol.asyncIterator]() {
+                    let sent = false;
+                    return {
+                        next: async (): Promise<IteratorResult<GenerateContentResponse>> => {
+                            if (!sent) {
+                                sent = true;
+                                return {
+                                    done: false,
+                                    value: {
+                                        candidates: [{ content: { role: 'model', parts: [{ text: 'started' }] } }],
+                                    } as GenerateContentResponse,
+                                };
+                            }
+                            return new Promise((resolve) => {
+                                providerSignal?.addEventListener(
+                                    'abort',
+                                    () => resolve({ done: true, value: undefined }),
+                                    { once: true },
+                                );
+                            });
+                        },
+                        return: async () => ({ done: true, value: undefined }),
+                    };
+                },
+            };
+        });
+        const driver = new TestGeminiDriver(async () => {
+            throw new Error('blocking transport not expected');
+        }, generateStream);
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Wait.' }],
+            runtimeOptions({
+                flow: 'typed-cancel',
+                operation: 'generate',
+                attempt: 'first',
+                recorded_at: '2026-09-30T01:11:52.000Z',
+            }),
+            undefined,
+            { stream_id: 'stream:gemini:typed-cancel' },
+        );
+        const iterator = stream[Symbol.asyncIterator]();
+        await expect(iterator.next()).resolves.toMatchObject({ value: { type: 'draft_started' }, done: false });
+        await expect(iterator.next()).resolves.toMatchObject({ value: { type: 'draft_block_started' }, done: false });
+        await expect(iterator.next()).resolves.toMatchObject({ value: { type: 'draft_text_delta' }, done: false });
+
+        const terminal = await stream.cancel();
+
+        expect(providerSignal?.aborted).toBe(true);
+        expect(terminal).toMatchObject({ type: 'stream_terminated', outcome: 'cancelled' });
+        await expect(iterator.next()).resolves.toMatchObject({ value: terminal, done: false });
+        await expect(iterator.next()).resolves.toEqual({ value: undefined, done: true });
+        expect(stream.completion).toBeUndefined();
+    });
+
+    it.each([
+        ['transcription only', [], ['Hello', { text: 'Hello', speaker_label: 'A' }]],
+        ['ordinary text present', [{ text: 'Summary' }], ['Summary', { text: 'Hello', speaker_label: 'A' }]],
+    ] as const)('delivers %s through the finite typed audio path', async (_label, prefix, expected) => {
+        const nativeResponse = response({
+            id: `response-typed-${_label}`,
+            content: {
+                role: 'model',
+                parts: [
+                    ...prefix,
+                    {
+                        audioTranscription: {
+                            text: 'Hello',
+                            speakerLabel: 'A',
+                            words: [{ word: 'Hello', startOffset: '0s', endOffset: '1s' }],
+                        },
+                    },
+                ],
+            },
+        });
+        const generate = vi.fn<Generate>(async () => nativeResponse);
+        const driver = new TestGeminiDriver(generate);
+        const audio = {
+            name: 'recording.wav',
+            mime_type: 'audio/wav',
+            getStream: vi.fn(async () => new Blob(['audio']).stream()),
+            getURL: vi.fn(async () => 'https://example.test/recording.wav'),
+            getURI: vi.fn(async () => 'gs://bucket/recording.wav'),
+        };
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: '', files: [audio] }],
+            {
+                ...runtimeOptions({
+                    flow: `typed-audio-${_label}`,
+                    operation: 'generate',
+                    attempt: 'first',
+                    recorded_at: '2026-09-30T01:11:55.000Z',
+                }),
+                model: 'gemini-3.5-transcribe-preview',
+            },
+            undefined,
+            { stream_id: `stream:gemini:typed-audio-${_label}` },
+        );
+        const events = await collectCanonicalEvents(stream);
+        const blocks = stream.completion?.accepted_output.turn.blocks ?? [];
+
+        expect(events).toEqual([
+            expect.objectContaining({ type: 'response_accepted', origin: 'live_transport', sequence: 0 }),
+        ]);
+        expect(blocks.filter((block) => block.type === 'text').map((block) => block.text)).toEqual([expected[0]]);
+        expect(blocks.find((block) => block.type === 'json')).toMatchObject({
+            type: 'json',
+            value: expect.objectContaining(expected[1]),
+        });
+        expect(generate).toHaveBeenCalledOnce();
+        expect(audio.getStream).not.toHaveBeenCalled();
+    });
+
+    it('cancels finite typed Gemini audio before accepting a response', async () => {
+        let providerSignal: AbortSignal | undefined;
+        let transportOpened: (() => void) | undefined;
+        const opened = new Promise<void>((resolve) => {
+            transportOpened = resolve;
+        });
+        const generate = vi.fn<Generate>(async (request) => {
+            providerSignal = request.config?.abortSignal;
+            transportOpened?.();
+            return new Promise<GenerateContentResponse>((_resolve, reject) => {
+                providerSignal?.addEventListener(
+                    'abort',
+                    () => reject(providerSignal?.reason ?? new Error('aborted')),
+                    { once: true },
+                );
+            });
+        });
+        const driver = new TestGeminiDriver(generate);
+        const audio = {
+            name: 'recording.wav',
+            mime_type: 'audio/wav',
+            getStream: vi.fn(async () => new Blob(['audio']).stream()),
+            getURL: vi.fn(async () => 'https://example.test/recording.wav'),
+            getURI: vi.fn(async () => 'gs://bucket/recording.wav'),
+        };
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: '', files: [audio] }],
+            {
+                ...runtimeOptions({
+                    flow: 'typed-audio-cancel',
+                    operation: 'generate',
+                    attempt: 'first',
+                    recorded_at: '2026-09-30T01:11:56.000Z',
+                }),
+                model: 'gemini-3.5-transcribe-preview',
+            },
+            undefined,
+            { stream_id: 'stream:gemini:typed-audio-cancel' },
+        );
+        const iterator = stream[Symbol.asyncIterator]();
+        const pending = iterator.next();
+        await opened;
+
+        const terminal = await stream.cancel();
+
+        expect(providerSignal?.aborted).toBe(true);
+        expect(terminal).toMatchObject({ type: 'stream_terminated', outcome: 'cancelled' });
+        await expect(pending).resolves.toMatchObject({ value: terminal, done: false });
+        await expect(iterator.next()).resolves.toEqual({ value: undefined, done: true });
         expect(stream.completion).toBeUndefined();
     });
 

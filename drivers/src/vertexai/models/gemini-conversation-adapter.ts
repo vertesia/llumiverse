@@ -1,10 +1,11 @@
-import type {
-    Content,
-    FunctionResponsePart,
-    GenerateContentParameters,
-    GenerateContentResponse,
-    GenerateContentResponseUsageMetadata,
-    Part,
+import {
+    type Content,
+    FinishReason,
+    type FunctionResponsePart,
+    type GenerateContentParameters,
+    type GenerateContentResponse,
+    type GenerateContentResponseUsageMetadata,
+    type Part,
 } from '@google/genai';
 import {
     type AgentContentBlock,
@@ -14,6 +15,7 @@ import {
     type ContentBlock,
     type ConversationDocument,
     type ConversationTurn,
+    canonicalJsonContentString,
     type DecodedConversationResponse,
     deriveConversationId,
     type ExecutedGeneration,
@@ -1703,10 +1705,33 @@ export async function decodeGeminiCanonicalResponse(input: {
     });
     const received = records.turns[0];
     if (received?.kind !== 'agent') throw new Error('Gemini response did not decode to an agent turn');
+    const nativeFinishReason = input.response.candidates?.[0]?.finishReason;
+    const interrupted =
+        nativeFinishReason === FinishReason.MAX_TOKENS ||
+        (nativeFinishReason === undefined && input.finish_reason === 'length');
+    const effectiveFinishReason = interrupted ? 'length' : input.finish_reason;
+    const nativeToolInputs = (input.content.parts ?? []).flatMap((part) =>
+        part.functionCall === undefined
+            ? []
+            : [canonicalJsonContentString(providerJsonValue(part.functionCall.args ?? {}))],
+    );
+    let nativeToolInputIndex = 0;
+    const receivedBlocks: AgentContentBlock[] = received.blocks.map((block) =>
+        !interrupted || block.type !== 'tool_call'
+            ? block
+            : {
+                  ...block,
+                  arguments: {
+                      type: 'invalid',
+                      raw: nativeToolInputs[nativeToolInputIndex++] ?? '',
+                      error: `Gemini function call ended before completion (${nativeFinishReason})`,
+                  },
+              },
+    );
     const turn: ConversationTurn = {
         ...received,
         id: input.prepared.response_turn_id,
-        status: input.finish_reason === 'length' ? 'interrupted' : 'completed',
+        status: interrupted ? 'interrupted' : 'completed',
         timestamps: {
             recorded_at: runtime.recorded_at,
             ...(input.prepared.runtime.started_at === undefined
@@ -1716,6 +1741,7 @@ export async function decodeGeminiCanonicalResponse(input: {
         },
         provenance: { type: 'generated' },
         generation_id: input.prepared.generation_id,
+        blocks: receivedBlocks,
     };
     const finalTurn = {
         ...turn,
@@ -1743,10 +1769,10 @@ export async function decodeGeminiCanonicalResponse(input: {
             requested_model: input.prepared.requested_model,
             resolved_model: input.response.modelVersion ?? input.prepared.payload.model,
             provider_response_id: input.response.responseId,
-            finish_reason: input.finish_reason,
+            finish_reason: effectiveFinishReason,
             usage: geminiGenerationUsage(input.response.usageMetadata),
         })),
-        status: input.finish_reason === 'length' ? 'cancelled' : 'completed',
+        status: interrupted ? 'cancelled' : 'completed',
     };
     const decoded: DecodedConversationResponse = {
         turns: [finalTurn],

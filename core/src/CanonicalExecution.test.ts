@@ -762,6 +762,59 @@ describe('canonical typed execution stream', () => {
         ).rejects.toThrow();
     });
 
+    it('accepts mapped terminal-only blocks only when the live stream emitted no drafts', async () => {
+        const response = createCanonicalExecutionResponse(acceptedDocument(), 'response-operation');
+        const terminalBlock = {
+            id: 'terminal-only',
+            type: 'text' as const,
+            text: 'Prompt blocked.',
+            format: 'plain' as const,
+        };
+        response.accepted_output.turn.blocks = [terminalBlock];
+        const streamIdentity = { ...identity, stream_id: 'stream-terminal-only' };
+        const envelope = (sequence: number) => ({
+            format: CONVERSATION_FORMAT,
+            schema_version: CONVERSATION_SCHEMA_VERSION,
+            experimental_revision: CONVERSATION_EXPERIMENTAL_REVISION,
+            ...streamIdentity,
+            sequence,
+            event_id: `stream-terminal-only#${sequence}`,
+        });
+        const buildAccumulator = () => {
+            const accumulator = new ConversationStreamAccumulator(streamIdentity);
+            accumulator.append({ ...envelope(0), type: 'draft_started', origin: 'live_transport' });
+            accumulator.append({ ...envelope(1), type: 'draft_finished', outcome: 'completed' });
+            return accumulator;
+        };
+        const nativePosition = { protocol: 'test.protocol', path: ['promptFeedback', 'blockReasonMessage'] };
+        const decoded = {
+            turns: [{ id: 'agent-turn', status: 'completed', blocks: [terminalBlock] }],
+            generation: { id: 'generation', request_id: 'request', attempt_id: 'attempt', status: 'completed' },
+            stream_evidence: {
+                item_mappings: [{ canonical_id: terminalBlock.id, native_position: nativePosition, kind: 'block' }],
+                transformations: [],
+            },
+        } as unknown as Parameters<typeof finalizeCanonicalExecutionStreamResponse>[0]['decoded'];
+
+        await expect(
+            finalizeCanonicalExecutionStreamResponse({
+                accumulator: buildAccumulator(),
+                decoded,
+                response,
+                reconciliations: [],
+            }),
+        ).resolves.toMatchObject({ type: 'response_accepted', committed_block_ids: [terminalBlock.id] });
+
+        await expect(
+            finalizeCanonicalExecutionStreamResponse({
+                accumulator: buildAccumulator(),
+                decoded: { ...decoded, stream_evidence: { item_mappings: [], transformations: [] } },
+                response,
+                reconciliations: [],
+            }),
+        ).rejects.toThrow('has no native decode mapping');
+    });
+
     it('rejects final tool identity or executor changes from the cumulative native draft', async () => {
         const response = createCanonicalExecutionResponse(acceptedDocument(), 'response-operation');
         const acceptedCall = response.accepted_output.turn.blocks.find((block) => block.id === 'call-block');

@@ -21,11 +21,23 @@ import {
     ThinkingLevel,
     type Tool,
 } from '@google/genai';
-import { fingerprintJson, isConversationDocumentFormat, parseConversationDocument } from '@llumiverse/conversation';
+import {
+    canonicalJsonContentString,
+    createStructuredOutputTransformationProof,
+    type DecodedConversationResponse,
+    fingerprintJson,
+    isConversationDocumentFormat,
+    type JsonValue,
+    type NativeStreamPosition,
+    parseConversationDocument,
+    toolArgumentsForModel,
+} from '@llumiverse/conversation';
 import {
     type AIModel,
+    type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
     type CanonicalExecutionStream,
+    type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionChunkObject,
     type CompletionResult,
@@ -34,6 +46,7 @@ import {
     type DriverCompletionStream,
     type ExecutionOptions,
     type ExecutionTokenUsage,
+    FallbackCanonicalExecutionEventStream,
     FallbackCanonicalExecutionStream,
     isGeminiModelVersionGte,
     type JSONObject,
@@ -54,6 +67,7 @@ import {
     type VertexAIGeminiOptions,
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
+import { canonicalNativeExecutionEventStream } from '../../conversation/canonical-execution-event-stream.js';
 import {
     type CanonicalFinalizingDriverStream,
     canonicalExecutionStreamFromDriver,
@@ -73,7 +87,7 @@ import { truncateBinaryForDebug } from '../../shared/debug-prompt.js';
 import { createToolChoiceConfigurationError } from '../../shared/tool-choice-error.js';
 import type { GenerateContentPrompt, VertexAIDriver } from '../index.js';
 import type { ModelDefinition } from '../models.js';
-import { generateWithGeminiContextCache } from './gemini-context-cache.js';
+import { type GeminiContextCacheExecution, generateWithGeminiContextCache } from './gemini-context-cache.js';
 import {
     appendGeminiCanonicalResponse,
     compileGeminiConversation,
@@ -552,21 +566,91 @@ function recoveredCanonicalGeminiStream(response: CanonicalExecutionResponse): C
     });
 }
 
+function appendGeminiStreamPart(target: Part[], part: Part): number {
+    const previous = target.at(-1);
+    const canMergeText =
+        typeof part.text === 'string' &&
+        part.text.length > 0 &&
+        typeof previous?.text === 'string' &&
+        !previous.thoughtSignature &&
+        !part.thoughtSignature &&
+        !!previous.thought === !!part.thought;
+    if (canMergeText && previous) {
+        previous.text = (previous.text ?? '') + part.text;
+        return target.length - 1;
+    }
+    target.push(structuredClone(part));
+    return target.length - 1;
+}
+
 function appendGeminiStreamParts(target: Part[], incoming: Part[]): void {
-    for (const part of incoming) {
-        const previous = target.at(-1);
-        const canMergeText =
-            typeof part.text === 'string' &&
-            part.text.length > 0 &&
-            typeof previous?.text === 'string' &&
-            !previous.thoughtSignature &&
-            !part.thoughtSignature &&
-            !!previous.thought === !!part.thought;
-        if (canMergeText && previous) {
-            previous.text = (previous.text ?? '') + part.text;
-        } else {
-            target.push(structuredClone(part));
+    for (const part of incoming) appendGeminiStreamPart(target, part);
+}
+
+interface GeminiCanonicalDraft {
+    draft_block_id: string;
+    native_position: NativeStreamPosition;
+    kind: 'text' | 'reasoning' | 'tool_call' | 'image' | 'audio' | 'video' | 'document';
+    text: string;
+    tool_arguments?: JsonValue;
+}
+
+function geminiStreamPosition(partIndex: number, nativeItemId?: string): NativeStreamPosition {
+    return {
+        protocol: GEMINI_GENERATE_CONTENT_PROTOCOL,
+        path: ['candidates', 0, 'content', 'parts', partIndex],
+        ...(nativeItemId === undefined ? {} : { native_item_id: nativeItemId }),
+    };
+}
+
+function geminiPromptFeedbackPosition(): NativeStreamPosition {
+    return {
+        protocol: GEMINI_GENERATE_CONTENT_PROTOCOL,
+        path: ['promptFeedback', 'blockReasonMessage'],
+    };
+}
+
+function geminiSemanticBlocks(decoded: DecodedConversationResponse, turnId: string) {
+    const turn = decoded.turns.find((candidate) => candidate.id === turnId);
+    if (turn?.kind !== 'agent') throw new Error('Gemini stream decode has no generated agent turn');
+    return turn.blocks.filter(
+        (block) => block.type !== 'native_replay' && block.type !== 'extension' && block.type !== 'external_reference',
+    );
+}
+
+function geminiSemanticPositions(content: Content): NativeStreamPosition[] {
+    return (content.parts ?? []).flatMap((part, partIndex) => {
+        if (typeof part.text === 'string') {
+            return part.text.length === 0 ? [] : [geminiStreamPosition(partIndex)];
         }
+        if (part.functionCall !== undefined) {
+            return [geminiStreamPosition(partIndex, part.functionCall.id)];
+        }
+        if (part.inlineData !== undefined || part.fileData !== undefined) return [geminiStreamPosition(partIndex)];
+        return [];
+    });
+}
+
+function geminiDraftMediaKind(
+    mimeType: string | undefined,
+): Extract<GeminiCanonicalDraft['kind'], 'image' | 'audio' | 'video' | 'document'> {
+    if (mimeType?.startsWith('image/')) return 'image';
+    if (mimeType?.startsWith('audio/')) return 'audio';
+    if (mimeType?.startsWith('video/')) return 'video';
+    return 'document';
+}
+
+function assertGeminiToolDraftArguments(
+    draft: GeminiCanonicalDraft,
+    block: ReturnType<typeof geminiSemanticBlocks>[number],
+): void {
+    if (draft.kind !== 'tool_call' || block.type !== 'tool_call' || block.arguments.type === 'invalid') return;
+    if (draft.tool_arguments === undefined) return;
+    if (
+        canonicalJsonContentString(draft.tool_arguments) !==
+        canonicalJsonContentString(toolArgumentsForModel(block.arguments))
+    ) {
+        throw new Error('Gemini tool argument snapshot differs from its terminal function call');
     }
 }
 
@@ -1639,6 +1723,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         let streamedToolUseFound = false;
         let terminalResponse: GenerateContentResponse | undefined;
         let terminalCandidate: NonNullable<GenerateContentResponse['candidates']>[number] | undefined;
+        let terminalPromptFeedback: GenerateContentResponse['promptFeedback'] | undefined;
         let terminalFinishReason: string | undefined;
         let finalUsageMetadata: GenerateContentResponseUsageMetadata | undefined;
         const stream = asyncMap(response, async (item) => {
@@ -1657,6 +1742,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 if (candidate.finishReason !== undefined) {
                     terminalResponse = item;
                     terminalCandidate = candidate;
+                    terminalPromptFeedback = undefined;
                     terminalFinishReason = finish_reason;
                 }
                 if (candidate.content?.role === 'model') {
@@ -1693,6 +1779,12 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 }
             }
             //No normal output, returning block reason if it exists.
+            if (item.promptFeedback?.blockReason !== undefined) {
+                terminalResponse = item;
+                terminalCandidate = undefined;
+                terminalPromptFeedback = item.promptFeedback;
+                terminalFinishReason = item.promptFeedback.blockReason;
+            }
             return {
                 result: item.promptFeedback?.blockReasonMessage
                     ? [{ type: 'text' as const, value: item.promptFeedback.blockReasonMessage }]
@@ -1704,14 +1796,21 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         });
 
         async function computeDecodedFinalResponse() {
-            if (terminalResponse === undefined || terminalCandidate === undefined) {
+            if (
+                terminalResponse === undefined ||
+                (terminalCandidate === undefined && terminalPromptFeedback === undefined)
+            ) {
                 throw new Error('Gemini stream ended without a terminal finish reason');
             }
-            const content: Content = { role: 'model', parts: nativeParts };
+            const blockMessage = terminalPromptFeedback?.blockReasonMessage ?? '';
+            const content: Content =
+                terminalCandidate === undefined
+                    ? { role: 'model', parts: [{ text: blockMessage }] }
+                    : { role: 'model', parts: nativeParts };
             const finalResponse = {
                 ...terminalResponse,
                 ...(finalUsageMetadata === undefined ? {} : { usageMetadata: finalUsageMetadata }),
-                candidates: [{ ...terminalCandidate, content }],
+                ...(terminalCandidate === undefined ? {} : { candidates: [{ ...terminalCandidate, content }] }),
             } as GenerateContentResponse;
             const finalResults = extractCompletionResults(content, includeThoughts);
             const normalized =
@@ -1827,6 +1926,450 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
             abort: () => abortController.abort(),
             close: () => signal?.removeEventListener('abort', forwardAbort),
         });
+    }
+
+    async requestCanonicalTextCompletionEventStream(
+        driver: VertexAIDriver,
+        prompt: GenerateContentPrompt,
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        const requestedOptions = options;
+        const splits = options.model.split('/');
+        let region: string | undefined;
+        if (splits[0] === 'locations' && splits.length >= 2) region = splits[1];
+        const modelName = splits.at(-1) ?? options.model;
+
+        if (isFileAudioModel(modelName)) {
+            const runtime = resolveConversationRuntime(requestedOptions);
+            const document = isConversationDocumentFormat(requestedOptions.conversation)
+                ? parseConversationDocument(requestedOptions.conversation)
+                : undefined;
+            const accepted =
+                document === undefined ? undefined : acceptedCanonicalResponse(document, runtime.response_operation_id);
+            const state =
+                accepted === undefined
+                    ? await prepareGeminiCanonicalState({
+                          conversation: requestedOptions.conversation,
+                          prompt,
+                          options: requestedOptions,
+                          provider: geminiProvider(driver),
+                      })
+                    : undefined;
+            const identity = {
+                request_id: accepted?.generation.request_id ?? state?.runtime.request_id ?? runtime.request_id,
+                attempt_id: accepted?.generation.attempt_id ?? state?.runtime.attempt_id ?? runtime.attempt_id,
+                response_operation_id: runtime.response_operation_id,
+                generation_id:
+                    accepted?.generation.id ?? state?.generation_id ?? `${runtime.response_operation_id}:generation`,
+                draft_turn_id: accepted?.turn.id ?? state?.response_turn_id ?? `${runtime.response_operation_id}:turn`,
+            };
+            return new FallbackCanonicalExecutionEventStream(
+                identity,
+                (fallbackSignal) =>
+                    this.requestCanonicalTextCompletion(
+                        driver,
+                        prompt,
+                        requestedOptions,
+                        signal ? AbortSignal.any([signal, fallbackSignal]) : fallbackSignal,
+                    ),
+                { ...open, origin: accepted === undefined ? 'live_transport' : 'accepted_recovery' },
+            );
+        }
+
+        const transportOptions = { ...options, model: modelName };
+        const canonicalState = await prepareGeminiCanonicalState({
+            conversation: requestedOptions.conversation,
+            prompt,
+            options: requestedOptions,
+            provider: geminiProvider(driver),
+        });
+        if (transportOptions.model.includes('gemini-2.5-flash-image')) region = 'global';
+        const modelOptions = transportOptions.model_options as VertexAIGeminiOptions | undefined;
+        const includeThoughts = modelOptions?.include_thoughts !== false;
+        const canonicalPrompt = prepareCanonicalGeminiProjection(canonicalState, requestedOptions);
+        const payload = getGeminiPayload(transportOptions, canonicalPrompt, 'stream');
+        await assertAcceptedCanonicalRequest(
+            canonicalState,
+            {
+                provider: geminiProvider(driver),
+                protocol: GEMINI_GENERATE_CONTENT_PROTOCOL,
+                model: requestedOptions.model,
+            },
+            providerJsonValue(payload),
+        );
+        const accepted = canonicalState.accepted_response;
+        const identity = {
+            request_id: accepted?.generation.request_id ?? canonicalState.runtime.request_id,
+            attempt_id: accepted?.generation.attempt_id ?? canonicalState.runtime.attempt_id,
+            response_operation_id: canonicalState.runtime.response_operation_id,
+            generation_id: accepted?.generation.id ?? canonicalState.generation_id,
+            draft_turn_id: accepted?.turn.id ?? canonicalState.response_turn_id,
+        };
+        if (accepted !== undefined) {
+            if (requestedOptions.include_original_response) {
+                throw new Error('An idempotently recovered Gemini response cannot reconstruct original_response');
+            }
+            return new FallbackCanonicalExecutionEventStream(
+                identity,
+                () =>
+                    recoverCanonicalExecutionResponse(canonicalState, requestedOptions, {
+                        service_tier: canonicalGeminiServiceTier(canonicalState),
+                    }),
+                { ...open, origin: 'accepted_recovery' },
+            );
+        }
+
+        const prepared = await finalizeGeminiPreparedRequest(
+            { ...canonicalState, native_conversation: canonicalPrompt },
+            payload,
+        );
+        const abortController = new AbortController();
+        const forwardAbort = () => abortController.abort(signal?.reason);
+        payload.config = { ...payload.config, abortSignal: abortController.signal };
+        const client = driver.getGoogleGenAIClient(
+            region,
+            resolveVertexAIServiceTier(modelOptions),
+            transportOptions.httpTimeout,
+        );
+        const nativeParts: Part[] = [];
+        const drafts = new Map<string, GeminiCanonicalDraft>();
+        let streamedToolCallCount = 0;
+        let terminalResponse: GenerateContentResponse | undefined;
+        let terminalCandidate: NonNullable<GenerateContentResponse['candidates']>[number] | undefined;
+        let terminalPromptFeedback: GenerateContentResponse['promptFeedback'] | undefined;
+        let terminalFinishReason: string | undefined;
+        let finalUsageMetadata: GenerateContentResponseUsageMetadata | undefined;
+        let cacheExecution: GeminiContextCacheExecution<AsyncIterable<GenerateContentResponse>> | undefined;
+
+        const eventStream = canonicalNativeExecutionEventStream({
+            identity,
+            open,
+            openSource: async () => {
+                cacheExecution = await generateWithGeminiContextCache(
+                    driver,
+                    client,
+                    transportOptions,
+                    canonicalPrompt,
+                    payload,
+                    (request) => client.models.generateContentStream(request),
+                    region ?? driver.getVertexRegion?.() ?? 'global',
+                );
+                return cacheExecution.value;
+            },
+            map: async (item, writer) => {
+                if (item.usageMetadata !== undefined) finalUsageMetadata = item.usageMetadata;
+                if ((item.candidates?.length ?? 0) > 1) {
+                    throw new Error(
+                        `Gemini stream returned ${item.candidates?.length ?? 0} candidates; canonical ingestion requires one candidate`,
+                    );
+                }
+                const candidate = item.candidates?.[0];
+                if (candidate === undefined) {
+                    if (item.promptFeedback?.blockReason !== undefined) {
+                        terminalResponse = item;
+                        terminalCandidate = undefined;
+                        terminalPromptFeedback = item.promptFeedback;
+                        terminalFinishReason = item.promptFeedback.blockReason;
+                    }
+                    return;
+                }
+                assertSupportedGeminiFinishReason(candidate);
+                if (candidate.finishReason !== undefined) {
+                    terminalResponse = item;
+                    terminalCandidate = candidate;
+                    terminalPromptFeedback = undefined;
+                    terminalFinishReason = normalizeGeminiFinishReason(candidate.finishReason);
+                }
+                if (candidate.content?.role !== 'model') return;
+                for (const part of candidate.content.parts ?? []) {
+                    if (part.audioTranscription !== undefined) {
+                        throw new Error(
+                            'Gemini streaming transcription output requires the finite file-audio canonical path',
+                        );
+                    }
+                    const partIndex = appendGeminiStreamPart(nativeParts, part);
+                    const position = geminiStreamPosition(partIndex, part.functionCall?.id);
+                    const key = canonicalJsonContentString(position);
+                    if (typeof part.text === 'string') {
+                        if (part.text.length === 0) continue;
+                        let draft = drafts.get(key);
+                        if (draft === undefined) {
+                            draft = {
+                                draft_block_id: `${prepared.response_turn_id}:gemini:${partIndex}`,
+                                native_position: position,
+                                kind: part.thought ? 'reasoning' : 'text',
+                                text: '',
+                            };
+                            drafts.set(key, draft);
+                            await writer.startBlock({
+                                draft_block_id: draft.draft_block_id,
+                                native_position: position,
+                                block: part.thought ? { type: 'reasoning', visibility: 'display' } : { type: 'text' },
+                            });
+                        }
+                        draft.text += part.text;
+                        if (draft.kind === 'reasoning') {
+                            await writer.reasoning({
+                                draft_block_id: draft.draft_block_id,
+                                native_position: position,
+                                text: part.text,
+                            });
+                        } else {
+                            await writer.text({
+                                draft_block_id: draft.draft_block_id,
+                                native_position: position,
+                                text: part.text,
+                            });
+                        }
+                        continue;
+                    }
+                    if (part.functionCall !== undefined) {
+                        const call = (
+                            await geminiToolUsesFromContent(
+                                { role: 'model', parts: [part] },
+                                prepared.runtime.response_operation_id,
+                                streamedToolCallCount,
+                            )
+                        )?.[0];
+                        streamedToolCallCount += 1;
+                        if (call === undefined)
+                            throw new Error('Gemini stream function call has no canonical identity');
+                        const toolArguments = providerJsonValue(part.functionCall.args ?? {}) as JsonValue;
+                        const draft: GeminiCanonicalDraft = {
+                            draft_block_id: `${prepared.response_turn_id}:gemini:${partIndex}`,
+                            native_position: position,
+                            kind: 'tool_call',
+                            text: '',
+                            tool_arguments: toolArguments,
+                        };
+                        drafts.set(key, draft);
+                        await writer.startBlock({
+                            draft_block_id: draft.draft_block_id,
+                            native_position: position,
+                            block: {
+                                type: 'tool_call',
+                                executor: 'application',
+                                call_id: call.id,
+                                tool_name: call.tool_name,
+                            },
+                        });
+                        await writer.toolArgumentsSnapshot({
+                            draft_block_id: draft.draft_block_id,
+                            native_position: position,
+                            value: toolArguments,
+                        });
+                        continue;
+                    }
+                    const media = part.inlineData ?? part.fileData;
+                    if (media !== undefined) {
+                        const mediaKind = geminiDraftMediaKind(media.mimeType);
+                        const draft: GeminiCanonicalDraft = {
+                            draft_block_id: `${prepared.response_turn_id}:gemini:${partIndex}`,
+                            native_position: position,
+                            kind: mediaKind,
+                            text: '',
+                        };
+                        drafts.set(key, draft);
+                        await writer.startBlock({
+                            draft_block_id: draft.draft_block_id,
+                            native_position: position,
+                            block: { type: mediaKind, ...(media.mimeType ? { mime_type: media.mimeType } : {}) },
+                        });
+                    }
+                }
+            },
+            finalize: async () => {
+                if (
+                    terminalResponse === undefined ||
+                    (terminalCandidate === undefined && terminalPromptFeedback === undefined)
+                ) {
+                    throw new Error('Gemini stream ended without a terminal finish reason');
+                }
+                const blockedMessage = terminalPromptFeedback?.blockReasonMessage ?? '';
+                const content: Content =
+                    terminalCandidate === undefined
+                        ? { role: 'model', parts: [{ text: blockedMessage }] }
+                        : { role: 'model', parts: nativeParts };
+                const finalResponse = {
+                    ...terminalResponse,
+                    ...(finalUsageMetadata === undefined ? {} : { usageMetadata: finalUsageMetadata }),
+                    ...(terminalCandidate === undefined ? {} : { candidates: [{ ...terminalCandidate, content }] }),
+                } as GenerateContentResponse;
+                const toolUse = await geminiToolUsesFromContent(content, prepared.runtime.response_operation_id);
+                const finishReason = toolUse?.length ? 'tool_use' : terminalFinishReason;
+                const results = extractCompletionResults(content, includeThoughts);
+                const normalized =
+                    !toolUse?.length && requestedOptions.result_schema
+                        ? normalizeCompletionResult(
+                              results.length > 0 ? results : [{ type: 'text', value: '' }],
+                              requestedOptions.result_schema,
+                          )
+                        : undefined;
+                const rawDecoded = await decodeGeminiCanonicalResponse({
+                    response: finalResponse,
+                    content,
+                    prepared,
+                    finish_reason: finishReason,
+                });
+                let decoded =
+                    normalized?.status === 'valid'
+                        ? await decodeGeminiCanonicalResponse({
+                              response: finalResponse,
+                              content,
+                              prepared,
+                              finish_reason: finishReason,
+                              structured_output: normalized.structured_output,
+                          })
+                        : rawDecoded;
+                if (normalized?.status === 'invalid') {
+                    decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
+                }
+                const document = appendGeminiCanonicalResponse(prepared, decoded);
+                const serviceTier = normalizeVertexAIResolvedServiceTier(finalUsageMetadata?.trafficType);
+                const response = createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
+                    service_tier: serviceTier,
+                    ...(cacheExecution?.diagnostic === undefined
+                        ? {}
+                        : { prompt_cache_diagnostic: cacheExecution.diagnostic }),
+                    ...(requestedOptions.include_original_response ? { original_response: finalResponse } : {}),
+                });
+                return {
+                    decoded,
+                    response,
+                    prepare_reconciliation: async () => {
+                        const positions =
+                            terminalCandidate === undefined && blockedMessage.length > 0
+                                ? [geminiPromptFeedbackPosition()]
+                                : geminiSemanticPositions(content);
+                        const rawBlocks = geminiSemanticBlocks(rawDecoded, prepared.response_turn_id);
+                        if (rawBlocks.length !== positions.length) {
+                            throw new Error('Gemini stream decode does not match terminal native content positions');
+                        }
+                        const completeDrafts = positions.map((position) =>
+                            drafts.get(canonicalJsonContentString(position)),
+                        );
+                        const terminalOnly = terminalCandidate === undefined;
+                        if (!terminalOnly && completeDrafts.some((draft) => draft === undefined)) {
+                            throw new Error('Gemini terminal response has no matching native stream draft');
+                        }
+                        const orderedDrafts = completeDrafts as Array<GeminiCanonicalDraft | undefined>;
+                        for (const [index, block] of rawBlocks.entries()) {
+                            const draft = orderedDrafts[index];
+                            if (draft === undefined && terminalOnly) continue;
+                            if (draft === undefined) throw new Error('Gemini terminal response has no matching draft');
+                            assertGeminiToolDraftArguments(draft, block);
+                        }
+                        const itemMappings = rawBlocks.flatMap((block, index) => {
+                            const position = positions[index];
+                            if (position === undefined) return [];
+                            return [
+                                { canonical_id: block.id, native_position: position, kind: 'block' as const },
+                                ...(block.type === 'tool_call'
+                                    ? [
+                                          {
+                                              canonical_id: block.call_id,
+                                              native_position: position,
+                                              kind: 'call' as const,
+                                          },
+                                      ]
+                                    : []),
+                            ];
+                        });
+                        const transformations = [];
+                        const reconciliations = [];
+                        if (normalized?.status === 'valid') {
+                            const sources = rawBlocks.filter((block) => block.type === 'text');
+                            const result = geminiSemanticBlocks(decoded, prepared.response_turn_id).find(
+                                (block) => block.type === 'json',
+                            );
+                            if (sources.length === 0 || result?.type !== 'json') {
+                                throw new Error('Gemini structured stream is missing source or result blocks');
+                            }
+                            const proof = await createStructuredOutputTransformationProof({
+                                id: `${prepared.generation_id}:structured-output`,
+                                source_blocks: sources,
+                                result_block: result,
+                            });
+                            transformations.push(proof);
+                            const sourceDrafts = rawBlocks.flatMap((block, index) =>
+                                block.type === 'text' && orderedDrafts[index] !== undefined
+                                    ? [orderedDrafts[index]]
+                                    : [],
+                            );
+                            reconciliations.push({
+                                draft_block_ids: sourceDrafts.map((draft) => draft.draft_block_id),
+                                native_positions: sourceDrafts.map((draft) => draft.native_position),
+                                committed_block_ids: [result.id],
+                                disposition: 'structured_output' as const,
+                                transformation_id: proof.id,
+                            });
+                        }
+                        for (const [index, block] of rawBlocks.entries()) {
+                            if (normalized?.status === 'valid' && block.type === 'text') continue;
+                            const draft = orderedDrafts[index];
+                            if (draft === undefined && terminalOnly) continue;
+                            if (draft === undefined) throw new Error('Gemini direct reconciliation has no draft');
+                            reconciliations.push({
+                                draft_block_ids: [draft.draft_block_id],
+                                native_positions: [draft.native_position],
+                                committed_block_ids: [block.id],
+                                disposition: 'direct' as const,
+                            });
+                        }
+                        const decodedWithEvidence = {
+                            ...decoded,
+                            stream_evidence: { item_mappings: itemMappings, transformations },
+                        };
+                        return {
+                            decoded: decodedWithEvidence,
+                            reconciliations,
+                            deliver_final_events: async (writer) => {
+                                if (decodedWithEvidence.generation.usage !== undefined) {
+                                    await writer.usage(decodedWithEvidence.generation.usage);
+                                }
+                                for (const [index, block] of rawBlocks.entries()) {
+                                    const draft = orderedDrafts[index];
+                                    if (draft === undefined) continue;
+                                    await writer.finishBlock({
+                                        draft_block_id: draft.draft_block_id,
+                                        native_position: draft.native_position,
+                                        outcome:
+                                            block.type === 'tool_call' && block.arguments.type === 'invalid'
+                                                ? 'malformed'
+                                                : decodedWithEvidence.generation.status === 'cancelled'
+                                                  ? 'interrupted'
+                                                  : decodedWithEvidence.generation.status === 'failed'
+                                                    ? 'failed'
+                                                    : 'native_complete',
+                                    });
+                                }
+                                await writer.finish({
+                                    outcome:
+                                        decodedWithEvidence.generation.status === 'cancelled'
+                                            ? 'interrupted'
+                                            : decodedWithEvidence.generation.status === 'failed'
+                                              ? 'failed'
+                                              : 'completed',
+                                    finish_reason: decodedWithEvidence.generation.finish_reason,
+                                    ...(serviceTier === undefined ? {} : { service_tier: serviceTier }),
+                                });
+                            },
+                        };
+                    },
+                    ...(normalized?.status === 'valid' && requestedOptions.result_schema !== undefined
+                        ? { result_schema: requestedOptions.result_schema }
+                        : {}),
+                };
+            },
+            abort: () => abortController.abort(),
+            close: () => signal?.removeEventListener('abort', forwardAbort),
+        });
+        await publishCanonicalPreparedRequest(prepared, requestedOptions);
+        if (signal?.aborted) forwardAbort();
+        else signal?.addEventListener('abort', forwardAbort, { once: true });
+        return eventStream;
     }
 
     /**

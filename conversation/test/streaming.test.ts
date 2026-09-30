@@ -438,6 +438,50 @@ describe('ConversationStreamAccumulator', () => {
             'does not reconcile every',
         );
 
+        const zeroDraft = new ConversationStreamAccumulator(identity);
+        zeroDraft.append(event(0, { type: 'draft_started', origin: 'live_transport' }));
+        zeroDraft.append(event(1, { type: 'draft_finished', outcome: 'completed' }));
+        expect(() =>
+            zeroDraft.append(
+                event(2, {
+                    ...acceptedBody,
+                    committed_block_ids: ['terminal-only'],
+                    reconciliations: [],
+                }),
+            ),
+        ).not.toThrow();
+
+        const zeroDraftWithReconciliation = new ConversationStreamAccumulator({
+            ...identity,
+            stream_id: 'stream-zero-draft-reconciliation',
+        });
+        zeroDraftWithReconciliation.append(
+            event(0, { type: 'draft_started', origin: 'live_transport' }, zeroDraftWithReconciliation.identity),
+        );
+        zeroDraftWithReconciliation.append(
+            event(1, { type: 'draft_finished', outcome: 'completed' }, zeroDraftWithReconciliation.identity),
+        );
+        expect(() =>
+            zeroDraftWithReconciliation.append(
+                event(
+                    2,
+                    {
+                        ...acceptedBody,
+                        committed_block_ids: ['terminal-only'],
+                        reconciliations: [
+                            {
+                                draft_block_ids: ['missing-draft'],
+                                native_positions: [textPosition],
+                                committed_block_ids: [],
+                                disposition: 'replay_only',
+                            },
+                        ],
+                    },
+                    zeroDraftWithReconciliation.identity,
+                ),
+            ),
+        ).toThrow('Zero-draft response acceptance');
+
         const wrongPosition = new ConversationStreamAccumulator(identity);
         prefix(wrongPosition);
         expect(() =>

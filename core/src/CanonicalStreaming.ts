@@ -449,6 +449,28 @@ function assertAcceptedResponseMatchesDecode(
     }
 }
 
+function assertTerminalOnlyBlocksHaveDecodeMappings(
+    accumulator: ConversationStreamAccumulator,
+    decoded: DecodedConversationResponse,
+    response: CanonicalExecutionResponse,
+    reconciliations: readonly ConversationStreamReconciliation[],
+): void {
+    if (accumulator.draft_snapshot().length > 0 || response.accepted_output.turn.blocks.length === 0) return;
+    if (reconciliations.length > 0) {
+        throw new Error('Zero-draft stream finalization cannot introduce native draft reconciliations');
+    }
+    const mappedBlockIds = new Set(
+        decoded.stream_evidence?.item_mappings
+            .filter((mapping) => mapping.kind === 'block')
+            .map((mapping) => mapping.canonical_id) ?? [],
+    );
+    for (const block of response.accepted_output.turn.blocks) {
+        if (!mappedBlockIds.has(block.id)) {
+            throw new Error(`Terminal-only accepted block ${block.id} has no native decode mapping`);
+        }
+    }
+}
+
 export async function finalizeCanonicalExecutionStreamResponse(input: {
     accumulator: ConversationStreamAccumulator;
     decoded: DecodedConversationResponse;
@@ -459,6 +481,7 @@ export async function finalizeCanonicalExecutionStreamResponse(input: {
 }): Promise<Extract<ConversationStreamEvent, { type: 'response_accepted' }>> {
     await assertConversationStreamDecodeEvidence(input.decoded);
     assertAcceptedResponseMatchesDecode(input.decoded, input.response);
+    assertTerminalOnlyBlocksHaveDecodeMappings(input.accumulator, input.decoded, input.response, input.reconciliations);
     assertDirectDraftBinding(input.accumulator, input.decoded, input.reconciliations);
     await assertStructuredReconciliation(input.accumulator, input.decoded, input.reconciliations, input.result_schema);
     const event = acceptedEvent(

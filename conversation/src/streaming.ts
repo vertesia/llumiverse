@@ -366,6 +366,12 @@ export class ConversationStreamAccumulator {
         if (committedBlocks.size !== event.committed_block_ids.length) {
             throw new Error('Accepted response contains duplicate committed block IDs');
         }
+        if (this.drafts.size === 0) {
+            if (event.reconciliations.length > 0) {
+                throw new Error('Zero-draft response acceptance cannot introduce native draft reconciliations');
+            }
+            return;
+        }
         for (const reconciliation of event.reconciliations) {
             if (reconciliation.disposition === 'structured_output') {
                 if (reconciliation.transformation_id === undefined || reconciliation.committed_block_ids.length !== 1) {
