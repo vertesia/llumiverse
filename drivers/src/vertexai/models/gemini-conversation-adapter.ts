@@ -71,6 +71,7 @@ type ToolResultStatus = 'success' | 'error' | 'cancelled' | 'denied' | 'unknown'
 
 type GeminiPromptPart = Part & {
     _llumiverse_tool_result_status?: Exclude<ToolResultStatus, 'unknown'>;
+    _llumiverse_tool_result_text?: string;
 };
 
 interface GeminiReplaySemanticEntry {
@@ -84,10 +85,12 @@ interface GeminiReplaySemanticEntry {
         | 'audio_transcription_json'
         | 'asset'
         | 'tool_call'
+        | 'tool_result_text'
         | 'tool_result_json'
         | 'extension';
     asset_id?: string;
     response_part_index?: number;
+    source_text?: string;
 }
 
 interface GeminiReplayPayload {
@@ -194,9 +197,27 @@ export function isGeminiGenerateContentHistory(
     return historyContents(value) !== undefined;
 }
 
-function cleanPart(part: GeminiPromptPart): Part {
-    const { _llumiverse_tool_result_status: _status, ...cleaned } = part;
+export function cleanGeminiPromptPart(part: Part): Part {
+    const promptPart = part as GeminiPromptPart;
+    const {
+        _llumiverse_tool_result_status: _status,
+        _llumiverse_tool_result_text: _toolResultText,
+        ...cleaned
+    } = promptPart;
     return cleaned;
+}
+
+/** Convert the legacy string tool-result surface into Gemini's native response object. */
+export function formatGeminiFunctionResponse(response: string): JSONObject {
+    const trimmed = response.trim();
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+        try {
+            return JSON.parse(trimmed) as JSONObject;
+        } catch {
+            return { output: trimmed };
+        }
+    }
+    return { output: trimmed };
 }
 
 function mediaKind(mimeType: string): Asset['kind'] {
@@ -493,7 +514,9 @@ async function contentRecords(input: {
     const nativePath = input.authority ? 'system' : `contents/${input.content_index}`;
     const cleanContent: Content = {
         ...input.content,
-        ...(input.content.parts === undefined ? {} : { parts: input.content.parts.map((part) => cleanPart(part)) }),
+        ...(input.content.parts === undefined
+            ? {}
+            : { parts: input.content.parts.map((part) => cleanGeminiPromptPart(part)) }),
     };
     const functionResponses = (input.content.parts ?? []).flatMap((part, partIndex) =>
         part.functionResponse === undefined ? [] : [{ part: part as GeminiPromptPart, partIndex }],
@@ -515,7 +538,7 @@ async function contentRecords(input: {
             const matched = resolveToolResultCall(response, input.calls, input.unmatched_by_name);
             const { id: _responseId, ...responseWithoutId } = response;
             const normalizedPart = {
-                ...cleanPart(part),
+                ...cleanGeminiPromptPart(part),
                 functionResponse: {
                     ...responseWithoutId,
                     ...(matched.native_id === undefined ? {} : { id: matched.native_id }),
@@ -526,10 +549,33 @@ async function contentRecords(input: {
             const resultBlockId = await entityId('block', input.scope, input.content_index, 'tool_result', partIndex);
             const nested: NestedToolResultContentBlock[] = [];
             const semanticEntries: GeminiReplaySemanticEntry[] = [];
+            const legacyText = ownValue(part, '_llumiverse_tool_result_text');
+            if (legacyText !== undefined && typeof legacyText !== 'string') {
+                throw new TypeError(`Gemini ${nativePath} has an invalid legacy tool-result text carrier`);
+            }
+            if (legacyText !== undefined && response.response === undefined) {
+                throw new TypeError(`Gemini ${nativePath} legacy tool-result text has no native response`);
+            }
             if (response.response !== undefined) {
                 const blockId = await entityId('block', input.scope, input.content_index, partIndex, 'response');
-                nested.push({ id: blockId, type: 'json', value: providerJsonValue(response.response) });
-                semanticEntries.push({ block_id: blockId, part_index: partIndex, kind: 'tool_result_json' });
+                if (legacyText !== undefined) {
+                    if (
+                        stableJson(providerJsonValue(response.response)) !==
+                        stableJson(formatGeminiFunctionResponse(legacyText))
+                    ) {
+                        throw new TypeError(`Gemini ${nativePath} legacy tool-result text does not match its response`);
+                    }
+                    nested.push({ id: blockId, type: 'text', text: legacyText, format: 'plain' });
+                    semanticEntries.push({
+                        block_id: blockId,
+                        part_index: partIndex,
+                        kind: 'tool_result_text',
+                        source_text: legacyText,
+                    });
+                } else {
+                    nested.push({ id: blockId, type: 'json', value: providerJsonValue(response.response) });
+                    semanticEntries.push({ block_id: blockId, part_index: partIndex, kind: 'tool_result_json' });
+                }
                 mappings.push({
                     canonical_id: blockId,
                     native_id: `${nativePath}/parts/${partIndex}/functionResponse/response`,
@@ -641,7 +687,7 @@ async function contentRecords(input: {
     for (let partIndex = 0; partIndex < (input.content.parts?.length ?? 0); partIndex += 1) {
         const rawPart = input.content.parts?.[partIndex] as GeminiPromptPart | undefined;
         if (rawPart === undefined) continue;
-        const part = cleanPart(rawPart);
+        const part = cleanGeminiPromptPart(rawPart);
         const blockId = await entityId('block', input.scope, nativePath, partIndex);
         let mappedBlockId = blockId;
         if (typeof part.text === 'string' && part.text.length === 0 && input.content.role === 'model') {
@@ -1093,6 +1139,19 @@ function assertReplaySemantics(
             if (asset === undefined || mediaPart === undefined || !mediaPartMatchesAsset(mediaPart, asset, target)) {
                 throw new TypeError(`Gemini replay asset ${String(entry.asset_id)} no longer matches canonical data`);
             }
+        } else if (entry.kind === 'tool_result_text') {
+            if (
+                block.type !== 'text' ||
+                typeof entry.source_text !== 'string' ||
+                block.text !== entry.source_text ||
+                part.functionResponse === undefined ||
+                stableJson(part.functionResponse.response) !==
+                    stableJson(formatGeminiFunctionResponse(entry.source_text))
+            ) {
+                throw new TypeError(
+                    `Gemini replay tool-result text ${entry.block_id} no longer matches canonical data`,
+                );
+            }
         } else if (entry.kind === 'tool_result_json') {
             if (
                 block.type !== 'json' ||
@@ -1297,7 +1356,7 @@ function compiledBlockMappings(turn: ConversationTurn, nativeBase: string, partO
             const payload = rawReplayPayload(replay);
             for (const entry of payload.semantic_entries) {
                 const nativeId =
-                    entry.kind === 'tool_result_json'
+                    entry.kind === 'tool_result_json' || entry.kind === 'tool_result_text'
                         ? `${nativeBase}/parts/0/functionResponse/response`
                         : entry.kind === 'asset' && entry.response_part_index !== undefined
                           ? `${nativeBase}/parts/0/functionResponse/parts/${entry.response_part_index}`

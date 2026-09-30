@@ -260,6 +260,68 @@ describe('Bedrock canonical driver lifecycle', () => {
         expect(converseStream).toHaveBeenCalledTimes(2);
     });
 
+    it('resolves an empty-region global inference-profile ARN to native typed streaming', async () => {
+        const model = 'global.anthropic.typed-profile-v1:0';
+        const baseModel = 'anthropic.typed-profile-v1:0';
+        const getFoundationModel = vi.fn(async ({ modelIdentifier }: { modelIdentifier: string }) => {
+            if (modelIdentifier === baseModel) {
+                return { modelDetails: { responseStreamingSupported: true } };
+            }
+            throw new Error(`not a foundation model: ${modelIdentifier}`);
+        });
+        const getInferenceProfile = vi.fn(async () => ({
+            models: [{ modelArn: `arn:aws:bedrock:::foundation-model/${baseModel}` }],
+        }));
+        const getCustomModel = vi.fn(async () => {
+            throw new Error('not a custom model');
+        });
+        const converseStream = vi.fn(async () => ({
+            stream: (async function* () {
+                yield { messageStart: { role: 'assistant' as const } };
+                yield { contentBlockDelta: { contentBlockIndex: 0, delta: { text: 'Native profile stream.' } } };
+                yield { contentBlockStop: { contentBlockIndex: 0 } };
+                yield { messageStop: { stopReason: 'end_turn' as const } };
+                yield {
+                    metadata: {
+                        usage: { inputTokens: 2, outputTokens: 2, totalTokens: 4 },
+                        metrics: { latencyMs: 1 },
+                    },
+                };
+            })(),
+            $metadata: { requestId: 'typed-global-profile' },
+        }));
+        const publish = vi.fn(async () => undefined);
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        Object.defineProperty(driver, 'getService', {
+            value: () => ({ getFoundationModel, getInferenceProfile, getCustomModel }),
+        });
+        Object.defineProperty(driver, 'getExecutor', {
+            value: () => ({ converseStream, destroy: vi.fn() }),
+        });
+
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Use the global profile.' }],
+            {
+                ...runtimeOptions({ flow: 'typed-global-profile', operation: 'first', model }),
+                on_canonical_request_prepared: publish,
+            },
+            undefined,
+            { stream_id: 'stream:bedrock:typed-global-profile' },
+        );
+        const events = await collectCanonicalEvents(stream);
+
+        expect(events[0]).toMatchObject({ type: 'draft_started', sequence: 0 });
+        expect(events.at(-1)).toMatchObject({ type: 'response_accepted', origin: 'live_transport' });
+        expect(stream.completion?.accepted_output.turn.blocks).toContainEqual(
+            expect.objectContaining({ type: 'text', text: 'Native profile stream.' }),
+        );
+        expect(getInferenceProfile).toHaveBeenCalledOnce();
+        expect(getFoundationModel).toHaveBeenCalledTimes(2);
+        expect(getFoundationModel).toHaveBeenLastCalledWith({ modelIdentifier: baseModel }, undefined);
+        expect(publish).toHaveBeenCalledOnce();
+        expect(converseStream).toHaveBeenCalledOnce();
+    });
+
     it('accepts invalid required structured output as a failed typed Bedrock response', async () => {
         const events: ConverseStreamOutput[] = [
             { contentBlockDelta: { contentBlockIndex: 0, delta: { text: '{"wrong":true}' } } },

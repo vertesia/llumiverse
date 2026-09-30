@@ -177,6 +177,12 @@ enum BedrockModelType {
     Unknown = 'unknown',
 }
 
+function bedrockFoundationModelLookupId(model: string): string {
+    const emptyRegionArnMarker = ':bedrock:::foundation-model/';
+    const markerIndex = model.indexOf(emptyRegionArnMarker);
+    return markerIndex < 0 ? model : model.slice(markerIndex + emptyRegionArnMarker.length);
+}
+
 /** Of the cache-write tokens, those written with a one-hour lifetime (the rest used the five-minute default). */
 function oneHourCacheWriteTokens(usage: TokenUsage | undefined): number | undefined {
     const tokens = usage?.cacheDetails
@@ -1196,7 +1202,7 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
                     requestOptions,
                 );
                 canStream = await this.getCanStream(
-                    response.models?.[0].modelArn ?? '',
+                    bedrockFoundationModelLookupId(response.models?.[0].modelArn ?? ''),
                     BedrockModelType.FoundationModel,
                     signal,
                 );

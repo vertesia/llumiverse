@@ -1278,9 +1278,13 @@ describe('Gemini canonical lifecycle', () => {
             response: { error: 'not found' },
         });
         expect(JSON.stringify(requests[1])).not.toContain('_llumiverse_tool_result_status');
+        expect(JSON.stringify(requests[1])).not.toContain('_llumiverse_tool_result_text');
         const document = parseConversationDocument(second.conversation);
         const toolTurn = document.turns.find((turn) => turn.kind === 'tool');
         expect(toolTurn?.blocks[0]).toMatchObject({ call_id: 'native-call-1', status: 'error' });
+        expect(toolTurn?.blocks[0].content).toContainEqual(
+            expect.objectContaining({ type: 'text', text: '{"error":"not found"}' }),
+        );
         expect(Object.values(document.execution_receipts)).toContainEqual(
             expect.objectContaining({ call_id: 'native-call-1', status: 'error' }),
         );

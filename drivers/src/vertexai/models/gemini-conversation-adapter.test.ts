@@ -259,6 +259,76 @@ describe('Gemini canonical adapter', () => {
         expect(GEMINI_GENERATE_CONTENT_PROTOCOL).toBe('google.generate_content');
     });
 
+    it.each([
+        [
+            'plain text',
+            'IBM trades on the New York Stock Exchange (NYSE).',
+            { output: 'IBM trades on the New York Stock Exchange (NYSE).' },
+        ],
+        ['JSON-looking text', '{"exchange":"NYSE"}', { exchange: 'NYSE' }],
+    ])(
+        'preserves exact legacy %s tool-result text while projecting its native response',
+        async (_label, text, response) => {
+            const call: Content = {
+                role: 'model',
+                parts: [{ functionCall: { id: 'call-text', name: 'lookup', args: {} } }],
+            };
+            const result = {
+                functionResponse: { id: 'call-text', name: 'lookup', response },
+                _llumiverse_tool_result_text: text,
+            } satisfies Part & { _llumiverse_tool_result_text: string };
+            const conversation = legacyConversation([call]);
+            const prepared = await prepareGeminiCanonicalState({
+                conversation,
+                prompt: { contents: [{ role: 'user', parts: [result] }] },
+                options: options({ flow: `legacy-text-${_label}`, conversation }),
+                provider: 'vertexai',
+            });
+            const document = parseConversationDocument(prepared.document);
+            const toolTurn = document.turns.find((turn) => turn.kind === 'tool');
+            expect(toolTurn?.kind).toBe('tool');
+            if (toolTurn?.kind !== 'tool') throw new Error('missing tool turn');
+            expect(toolTurn.blocks[0].content).toContainEqual(expect.objectContaining({ type: 'text', text }));
+
+            const compiled = compileGeminiConversation(document, {
+                provider: 'vertexai',
+                model: 'gemini-2.5-pro',
+            }).conversation;
+            expect(compiled.contents.at(-1)?.parts?.[0].functionResponse?.response).toEqual(response);
+            expect(JSON.stringify(compiled)).not.toContain('_llumiverse_tool_result_text');
+        },
+    );
+
+    it('rejects a legacy tool-result text carrier that does not reproduce the native response', async () => {
+        const conversation = legacyConversation([
+            { role: 'model', parts: [{ functionCall: { id: 'call-text', name: 'lookup', args: {} } }] },
+        ]);
+        await expect(
+            prepareGeminiCanonicalState({
+                conversation,
+                prompt: {
+                    contents: [
+                        {
+                            role: 'user',
+                            parts: [
+                                {
+                                    functionResponse: {
+                                        id: 'call-text',
+                                        name: 'lookup',
+                                        response: { output: 'different' },
+                                    },
+                                    _llumiverse_tool_result_text: 'original',
+                                } as Part,
+                            ],
+                        },
+                    ],
+                },
+                options: options({ flow: 'legacy-text-tampered', conversation }),
+                provider: 'vertexai',
+            }),
+        ).rejects.toThrow(/legacy tool-result text does not match/);
+    });
+
     it('rejects explicit tool-result ids that are unknown or name a different tool', async () => {
         const conversation = legacyConversation([
             {

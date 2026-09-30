@@ -49,7 +49,6 @@ import {
     FallbackCanonicalExecutionEventStream,
     FallbackCanonicalExecutionStream,
     isGeminiModelVersionGte,
-    type JSONObject,
     LlumiverseError,
     type LlumiverseErrorContext,
     ModelType,
@@ -90,9 +89,11 @@ import type { ModelDefinition } from '../models.js';
 import { type GeminiContextCacheExecution, generateWithGeminiContextCache } from './gemini-context-cache.js';
 import {
     appendGeminiCanonicalResponse,
+    cleanGeminiPromptPart,
     compileGeminiConversation,
     decodeGeminiCanonicalResponse,
     finalizeGeminiPreparedRequest,
+    formatGeminiFunctionResponse,
     GEMINI_GENERATE_CONTENT_PROTOCOL,
     geminiToolUsesFromContent,
     type PreparedGeminiConversation,
@@ -235,14 +236,15 @@ function formatGeminiContentForDebug(content: Content): Content {
     return {
         ...content,
         parts: content.parts?.map((part) => {
-            if (!part.inlineData?.data) {
-                return part;
+            const cleaned = cleanGeminiPromptPart(part);
+            if (!cleaned.inlineData?.data) {
+                return cleaned;
             }
             return {
-                ...part,
+                ...cleaned,
                 inlineData: {
-                    ...part.inlineData,
-                    data: truncateBinaryForDebug(part.inlineData.data),
+                    ...cleaned.inlineData,
+                    data: truncateBinaryForDebug(cleaned.inlineData.data),
                 },
             } satisfies Part;
         }),
@@ -299,7 +301,12 @@ export function getGeminiPayload(
     // When no tools are provided but conversation contains functionCall/functionResponse parts
     // (e.g. checkpoint summary calls), convert them to text to avoid API errors.
     // Use a local variable to avoid mutating the caller's conversation object.
-    let payloadContents = mergeFunctionResponseContents(prompt.contents ?? []);
+    let payloadContents = mergeFunctionResponseContents(
+        (prompt.contents ?? []).map((content) => ({
+            ...content,
+            parts: content.parts?.map((part) => cleanGeminiPromptPart(part)),
+        })),
+    );
     if (!tools && payloadContents) {
         const hasToolParts = payloadContents.some((c) => c.parts?.some((p) => p.functionCall || p.functionResponse));
         if (hasToolParts) {
@@ -983,10 +990,11 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 // Build functionResponse part with optional thought_signature for Gemini thinking models
                 const functionResponsePart: Part & {
                     _llumiverse_tool_result_status?: NonNullable<PromptSegment['tool_result_status']>;
+                    _llumiverse_tool_result_text?: string;
                 } = {
                     functionResponse: {
                         id: msg.tool_use_id,
-                        response: formatFunctionResponse(msg.content || ''),
+                        response: formatGeminiFunctionResponse(msg.content ?? ''),
                         ...(responseParts.length > 0 && { parts: responseParts }),
                     },
                     // Include thought_signature if provided (required for Gemini 2.5+/3.0+ thinking models)
@@ -994,6 +1002,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                     ...(msg.tool_result_status === undefined
                         ? {}
                         : { _llumiverse_tool_result_status: msg.tool_result_status }),
+                    _llumiverse_tool_result_text: msg.content ?? '',
                 };
                 contents.push({
                     role: 'user',
@@ -2636,28 +2645,4 @@ async function fileToMediaPart(file: DataSource): Promise<GeminiMediaPart> {
         file.mime_type.startsWith('audio/') ? boundedAudioStream(source, 25_000_000) : source,
     );
     return { inlineData: { data, mimeType: file.mime_type } };
-}
-
-/**
- *
- * Gemini supports JSON output in the response. so we test if the response is a valid JSON object. otherwise we treat the response as a string.
- *
- * This is an excerpt from googleapis.github.io/python-genai:
- *
- * The function response in JSON object format.
- * Use “output” key to specify function output and “error” key to specify error details (if any).
- * If “output” and “error” keys are not specified, then whole “response” is treated as function output.
- * @see https://googleapis.github.io/python-genai/genai.html#genai.types.FunctionResponse
- */
-function formatFunctionResponse(response: string): JSONObject {
-    response = response.trim();
-    if (response.startsWith('{') && response.endsWith('}')) {
-        try {
-            return JSON.parse(response);
-        } catch {
-            return { output: response };
-        }
-    } else {
-        return { output: response };
-    }
 }

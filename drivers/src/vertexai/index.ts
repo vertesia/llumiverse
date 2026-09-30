@@ -40,7 +40,7 @@ import { generateVertexAiEmbeddings } from './embeddings/embed.js';
 
 export * from './embeddings/batch.js';
 
-import { ANTHROPIC_REGIONS, NON_GLOBAL_ANTHROPIC_MODELS } from './models/claude.js';
+import { NON_GLOBAL_ANTHROPIC_MODELS, resolveVertexAIAnthropicRegion } from './models/claude.js';
 import { formatGeminiDebugPrompt } from './models/gemini.js';
 import { type GeminiContextCacheCoordinationKey, GeminiContextCacheManager } from './models/gemini-context-cache.js';
 import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
@@ -327,13 +327,8 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         region: string = this.options.region,
         httpTimeout?: HttpTimeoutOptions,
     ): Promise<AnthropicVertex> {
-        // Extract region prefix and map if it exists in ANTHROPIC_REGIONS, otherwise use as-is
-        const getRegionPrefix = (r: string) => r.split('-')[0];
-        const regionPrefix = getRegionPrefix(region);
-        const mappedRegion = ANTHROPIC_REGIONS[regionPrefix] || region;
-
-        const defaultRegionPrefix = getRegionPrefix(this.options.region);
-        const defaultMappedRegion = ANTHROPIC_REGIONS[defaultRegionPrefix] || this.options.region;
+        const mappedRegion = resolveVertexAIAnthropicRegion(region);
+        const defaultMappedRegion = resolveVertexAIAnthropicRegion(this.options.region);
 
         // Get auth client to avoid version mismatch with GoogleAuth generic types
         const authClient = await this.getAuthClient();

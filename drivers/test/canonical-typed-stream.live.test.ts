@@ -7,7 +7,7 @@ import {
     type PromptSegment,
 } from '@llumiverse/core';
 import 'dotenv/config';
-import { describe, expect, test, vi } from 'vitest';
+import { describe, expect, test } from 'vitest';
 import { BedrockDriver, OpenAIDriver, VertexAIDriver } from '../src/index.js';
 import { OpenAIChatCompletionsDriver } from '../src/openai/openai_chat_completions.js';
 import { selectLiveTestDrivers } from './live-model-selection.js';
@@ -49,6 +49,28 @@ interface TypedLiveDriver {
 
 const liveDrivers: TypedLiveDriver[] = [];
 
+function countMethodCalls(target: object, key: PropertyKey): { calls(): number; restore(): void } {
+    const original = Reflect.get(target, key) as unknown;
+    if (typeof original !== 'function') throw new TypeError(`Expected ${String(key)} to be callable`);
+    const ownDescriptor = Object.getOwnPropertyDescriptor(target, key);
+    let count = 0;
+    Object.defineProperty(target, key, {
+        configurable: true,
+        writable: true,
+        value: function countedMethod(this: unknown, ...args: unknown[]) {
+            count += 1;
+            return Reflect.apply(original, this, args);
+        },
+    });
+    return {
+        calls: () => count,
+        restore: () => {
+            if (ownDescriptor === undefined) Reflect.deleteProperty(target, key);
+            else Object.defineProperty(target, key, ownDescriptor);
+        },
+    };
+}
+
 if (process.env.OPENAI_API_KEY) {
     liveDrivers.push({
         name: 'openai',
@@ -58,11 +80,11 @@ if (process.env.OPENAI_API_KEY) {
         option_id: 'openai-text',
         setup: async () => {
             const driver = new OpenAIDriver({ apiKey: process.env.OPENAI_API_KEY });
-            const transport = vi.spyOn(driver.service.responses, 'create');
+            const transport = countMethodCalls(driver.service.responses, 'create');
             return {
                 driver,
-                transportCalls: () => transport.mock.calls.length,
-                restore: () => transport.mockRestore(),
+                transportCalls: transport.calls,
+                restore: transport.restore,
             };
         },
     });
@@ -77,11 +99,11 @@ if (process.env.OPENAI_API_KEY) {
                 apiKey: process.env.OPENAI_API_KEY as string,
                 endpoint: 'https://api.openai.com/v1',
             });
-            const transport = vi.spyOn(driver.service.chat.completions, 'create');
+            const transport = countMethodCalls(driver.service.chat.completions, 'create');
             return {
                 driver,
-                transportCalls: () => transport.mock.calls.length,
-                restore: () => transport.mockRestore(),
+                transportCalls: transport.calls,
+                restore: transport.restore,
             };
         },
     });
@@ -100,11 +122,11 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
                 region: process.env.GOOGLE_REGION as string,
             });
             const client = await driver.getAnthropicClient();
-            const transport = vi.spyOn(client.messages, 'stream');
+            const transport = countMethodCalls(client.messages, 'stream');
             return {
                 driver,
-                transportCalls: () => transport.mock.calls.length,
-                restore: () => transport.mockRestore(),
+                transportCalls: transport.calls,
+                restore: transport.restore,
             };
         },
     });
@@ -120,11 +142,11 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
                 region: process.env.GOOGLE_REGION as string,
             });
             const client = driver.getGoogleGenAIClient();
-            const transport = vi.spyOn(client.models, 'generateContentStream');
+            const transport = countMethodCalls(client.models, 'generateContentStream');
             return {
                 driver,
-                transportCalls: () => transport.mock.calls.length,
-                restore: () => transport.mockRestore(),
+                transportCalls: transport.calls,
+                restore: transport.restore,
             };
         },
     });
@@ -140,11 +162,11 @@ if (process.env.BEDROCK_REGION) {
         setup: async () => {
             const driver = new BedrockDriver({ region: process.env.BEDROCK_REGION as string });
             const executor = driver.getExecutor();
-            const transport = vi.spyOn(executor, 'converseStream');
+            const transport = countMethodCalls(executor, 'converseStream');
             return {
                 driver,
-                transportCalls: () => transport.mock.calls.length,
-                restore: () => transport.mockRestore(),
+                transportCalls: transport.calls,
+                restore: transport.restore,
             };
         },
     });
@@ -215,6 +237,7 @@ async function collect(stream: CanonicalExecutionEventStream): Promise<Conversat
     return events;
 }
 
+// Closure-owned counters keep concurrent provider observations isolated from Vitest mock state.
 describe.concurrent.each(selectedDrivers)('$protocol canonical typed live stream', (live) => {
     test.each(live.models)(
         '$protocol accepts authoritative output and exact-retries without transport for %s',
@@ -224,7 +247,10 @@ describe.concurrent.each(selectedDrivers)('$protocol canonical typed live stream
             const streams: CanonicalExecutionEventStream[] = [];
             try {
                 const prompt = promptFor(live.coverage);
-                const publish = vi.fn(async () => undefined);
+                let publishCount = 0;
+                const publish = async () => {
+                    publishCount += 1;
+                };
                 const first = await transport.driver.streamCanonicalEvents(
                     prompt,
                     runtimeOptions(live, model, 'first', undefined, publish),
@@ -240,7 +266,7 @@ describe.concurrent.each(selectedDrivers)('$protocol canonical typed live stream
                     expect.objectContaining({ native_position: expect.objectContaining({ protocol: live.protocol }) }),
                 );
                 expect(first.completion).toBeDefined();
-                expect(publish).toHaveBeenCalledOnce();
+                expect(publishCount).toBe(1);
                 expect(transport.transportCalls()).toBe(1);
 
                 const acceptedBlocks = first.completion?.accepted_output.turn.blocks ?? [];
@@ -260,7 +286,10 @@ describe.concurrent.each(selectedDrivers)('$protocol canonical typed live stream
                 }
 
                 if (first.completion === undefined) throw new Error('Expected an accepted canonical response');
-                const retryPublish = vi.fn(async () => undefined);
+                let retryPublishCount = 0;
+                const retryPublish = async () => {
+                    retryPublishCount += 1;
+                };
                 const recovered = await transport.driver.streamCanonicalEvents(
                     prompt,
                     runtimeOptions(
@@ -280,7 +309,7 @@ describe.concurrent.each(selectedDrivers)('$protocol canonical typed live stream
                     expect.objectContaining({ type: 'response_accepted', sequence: 0, origin: 'accepted_recovery' }),
                 ]);
                 expect(recovered.completion?.accepted_output).toEqual(first.completion.accepted_output);
-                expect(retryPublish).not.toHaveBeenCalled();
+                expect(retryPublishCount).toBe(0);
                 expect(transport.transportCalls()).toBe(1);
             } finally {
                 await Promise.allSettled(

@@ -108,6 +108,7 @@ export interface PreparedClaudeConversation
         PreparedConversationRequest<MessageCreateParamsBase> {
     provider: string;
     requested_model: string;
+    target_options?: JsonObject;
     prior_native_message_count: number;
 }
 
@@ -1017,6 +1018,7 @@ export async function prepareClaudeCanonicalState(input: {
     prompt: ClaudePrompt;
     options: ExecutionOptions;
     provider: string;
+    target_options?: JsonObject;
 }): Promise<Omit<PreparedClaudeConversation, 'payload' | 'receipt' | 'diagnostics'>> {
     const runtime = resolveConversationRuntime(input.options);
     const toolDefinitions = await canonicalToolDefinitions(input.options.tools);
@@ -1116,6 +1118,7 @@ export async function prepareClaudeCanonicalState(input: {
         tool_definitions: appended.tool_definitions,
         provider: input.provider,
         requested_model: input.options.model,
+        ...(input.target_options === undefined ? {} : { target_options: input.target_options }),
         prior_native_message_count: priorNativeMessageCount,
         ...(acceptedResponse === undefined ? {} : { accepted_response: acceptedResponse }),
     };
@@ -1137,6 +1140,7 @@ export async function finalizeClaudePreparedRequest(
             protocol: CLAUDE_MESSAGES_PROTOCOL,
             model: state.requested_model,
             adapter_version: CLAUDE_MESSAGES_ADAPTER_VERSION,
+            ...(state.target_options === undefined ? {} : { options: state.target_options }),
         },
         providerJsonValue(payload),
         compiled.mappings,
@@ -1279,7 +1283,7 @@ export async function decodeClaudeCanonicalResponse(
             provider: prepared.provider,
             protocol: CLAUDE_MESSAGES_PROTOCOL,
             adapter_version: CLAUDE_MESSAGES_ADAPTER_VERSION,
-            requested_model: prepared.payload.model,
+            requested_model: prepared.requested_model,
             resolved_model: response.model,
             provider_response_id: response.id,
             finish_reason: response.stop_reason,

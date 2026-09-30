@@ -119,6 +119,24 @@ describe('debug prompt binary truncation', () => {
         expect(result.contents[0].parts?.[0].inlineData?.data).toBe(`cccccccccc${BINARY_TRUNCATED_MARKER}cccccccccc`);
     });
 
+    test('removes temporary Gemini legacy tool-result carriers', () => {
+        const prompt: GenerateContentPrompt = {
+            contents: [
+                {
+                    role: 'user',
+                    parts: [
+                        {
+                            functionResponse: { id: 'call-1', name: 'lookup', response: { output: 'result' } },
+                            _llumiverse_tool_result_text: 'result',
+                        } as NonNullable<Content['parts']>[number] & { _llumiverse_tool_result_text: string },
+                    ],
+                },
+            ],
+        };
+
+        expect(JSON.stringify(formatGeminiDebugPrompt(prompt))).not.toContain('_llumiverse_tool_result_text');
+    });
+
     test('truncates Vertex Imagen reference images', () => {
         const prompt: ImagenPrompt = {
             prompt: 'make an image',

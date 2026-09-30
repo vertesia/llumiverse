@@ -46,6 +46,7 @@ import {
     canonicalJsonContentString,
     createStructuredOutputTransformationProof,
     type DecodedConversationResponse,
+    type JsonObject,
     type JsonValue,
     type NativeStreamPosition,
     toolArgumentsForModel,
@@ -126,6 +127,11 @@ const RESULT_SCHEMA_INSTRUCTION_PREFIXES = [
     TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX,
     JSON_SCHEMA_INSTRUCTION_PREFIX,
 ] as const;
+
+export interface ClaudeTransportIdentity {
+    model: string;
+    target_options?: JsonObject;
+}
 
 export function isClaudePromptCacheEnabled(options: ExecutionOptions): boolean {
     const modelOptions = options.model_options as ClaudeBaseOptions | undefined;
@@ -800,8 +806,9 @@ export function getClaudePayload(
     prompt: ClaudePrompt,
     provider = 'anthropic',
     operation: 'execute' | 'stream' = 'stream',
+    transport?: ClaudeTransportIdentity,
 ): { payload: MessageCreateParamsBase; requestOptions: RequestOptions | undefined } {
-    const modelName = options.model;
+    const modelName = transport?.model ?? options.model;
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
 
     let requestOptions: RequestOptions | undefined;
@@ -1239,6 +1246,21 @@ function recoveredCanonicalClaudeStream(response: CanonicalExecutionResponse): C
     });
 }
 
+function assertClaudeAcceptedTargetOptions(
+    state: Pick<PreparedClaudeConversation, 'accepted_response' | 'runtime' | 'target_options'>,
+): void {
+    const accepted = state.accepted_response;
+    if (accepted === undefined) return;
+    if (
+        canonicalJsonContentString(accepted.generation.request_receipt.target.options ?? null) !==
+        canonicalJsonContentString(state.target_options ?? null)
+    ) {
+        throw new Error(
+            `Accepted response operation ${state.runtime.response_operation_id} has incompatible request routing`,
+        );
+    }
+}
+
 /** Execute Claude Messages directly into the canonical conversation response contract. */
 export async function executeCanonicalClaudeCompletion(
     client: ClaudeMessagesClient,
@@ -1247,20 +1269,23 @@ export async function executeCanonicalClaudeCompletion(
     logger?: Logger,
     provider = 'anthropic',
     transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
+    transport?: ClaudeTransportIdentity,
 ): Promise<CanonicalExecutionResponse> {
     const canonicalState = await prepareClaudeCanonicalState({
         conversation: options.conversation,
         prompt,
         options,
         provider,
+        ...(transport?.target_options === undefined ? {} : { target_options: transport.target_options }),
     });
     const conversation = prepareCanonicalClaudeProjection(canonicalState, options);
-    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'execute');
+    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'execute', transport);
     await assertAcceptedCanonicalRequest(
         canonicalState,
         { provider, protocol: CLAUDE_MESSAGES_PROTOCOL, model: options.model },
         providerJsonValue(payload),
     );
+    assertClaudeAcceptedTargetOptions(canonicalState);
     if (canonicalState.accepted_response !== undefined) {
         if (options.include_original_response) {
             throw new Error('An idempotently recovered Claude Messages response cannot reconstruct original_response');
@@ -1312,6 +1337,7 @@ export async function executeClaudeCompletion(
     logger?: Logger,
     provider = 'anthropic',
     transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
+    transport?: ClaudeTransportIdentity,
 ): Promise<Completion> {
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
     const canonicalState = await prepareClaudeCanonicalState({
@@ -1319,15 +1345,17 @@ export async function executeClaudeCompletion(
         prompt,
         options,
         provider,
+        ...(transport?.target_options === undefined ? {} : { target_options: transport.target_options }),
     });
     const includeThoughts = model_options?.include_thoughts ?? false;
     const conversation = prepareCanonicalClaudeProjection(canonicalState, options);
-    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'execute');
+    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'execute', transport);
     await assertAcceptedCanonicalRequest(
         canonicalState,
         { provider, protocol: CLAUDE_MESSAGES_PROTOCOL, model: options.model },
         providerJsonValue(payload),
     );
+    assertClaudeAcceptedTargetOptions(canonicalState);
     if (canonicalState.accepted_response !== undefined) {
         return recoverClaudeCompletion(canonicalState, options, includeThoughts);
     }
@@ -1379,6 +1407,7 @@ export async function streamClaudeCompletion(
     logger?: Logger,
     provider = 'anthropic',
     transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
+    transport?: ClaudeTransportIdentity,
 ): Promise<DriverCompletionStream> {
     const model_options = options.model_options as ClaudeBaseOptions | undefined;
     const canonicalState = await prepareClaudeCanonicalState({
@@ -1386,16 +1415,18 @@ export async function streamClaudeCompletion(
         prompt,
         options,
         provider,
+        ...(transport?.target_options === undefined ? {} : { target_options: transport.target_options }),
     });
     const includeThoughts = model_options?.include_thoughts ?? false;
     const conversation = prepareCanonicalClaudeProjection(canonicalState, options);
-    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'stream');
+    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'stream', transport);
     const streamingPayload: MessageStreamParams = { ...payload, stream: true };
     await assertAcceptedCanonicalRequest(
         canonicalState,
         { provider, protocol: CLAUDE_MESSAGES_PROTOCOL, model: options.model },
         providerJsonValue(streamingPayload),
     );
+    assertClaudeAcceptedTargetOptions(canonicalState);
     if (canonicalState.accepted_response !== undefined) {
         return recoveredClaudeStream(recoverClaudeCompletion(canonicalState, options, includeThoughts));
     }
@@ -1552,27 +1583,24 @@ export async function streamCanonicalClaudeCompletion(
     logger?: Logger,
     provider = 'anthropic',
     transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
+    transport?: ClaudeTransportIdentity,
 ): Promise<CanonicalExecutionStream> {
-    const abortController = new AbortController();
-    const forwardAbort = () => abortController.abort(transportOptions?.signal?.reason);
-    if (transportOptions?.signal?.aborted) forwardAbort();
-    else transportOptions?.signal?.addEventListener('abort', forwardAbort, { once: true });
-
     const canonicalState = await prepareClaudeCanonicalState({
         conversation: options.conversation,
         prompt,
         options,
         provider,
+        ...(transport?.target_options === undefined ? {} : { target_options: transport.target_options }),
     });
     if (canonicalState.accepted_response !== undefined) {
         const conversation = prepareCanonicalClaudeProjection(canonicalState, options);
-        const { payload } = getClaudePayload(options, conversation, provider, 'stream');
+        const { payload } = getClaudePayload(options, conversation, provider, 'stream', transport);
         await assertAcceptedCanonicalRequest(
             canonicalState,
             { provider, protocol: CLAUDE_MESSAGES_PROTOCOL, model: options.model },
             providerJsonValue({ ...payload, stream: true }),
         );
-        transportOptions?.signal?.removeEventListener('abort', forwardAbort);
+        assertClaudeAcceptedTargetOptions(canonicalState);
         if (options.include_original_response) {
             throw new Error('An idempotently recovered Claude Messages response cannot reconstruct original_response');
         }
@@ -1583,12 +1611,25 @@ export async function streamCanonicalClaudeCompletion(
         );
     }
 
+    const abortController = new AbortController();
+    const forwardAbort = () => abortController.abort(transportOptions?.signal?.reason);
+    if (transportOptions?.signal?.aborted) forwardAbort();
+    else transportOptions?.signal?.addEventListener('abort', forwardAbort, { once: true });
+
     let source: CanonicalFinalizingDriverStream;
     try {
-        source = (await streamClaudeCompletion(client, prompt, options, logger, provider, {
-            ...transportOptions,
-            signal: abortController.signal,
-        })) as CanonicalFinalizingDriverStream;
+        source = (await streamClaudeCompletion(
+            client,
+            prompt,
+            options,
+            logger,
+            provider,
+            {
+                ...transportOptions,
+                signal: abortController.signal,
+            },
+            transport,
+        )) as CanonicalFinalizingDriverStream;
     } catch (error: unknown) {
         transportOptions?.signal?.removeEventListener('abort', forwardAbort);
         throw error;
@@ -1675,6 +1716,7 @@ export async function streamCanonicalClaudeEvents(
     logger?: Logger,
     provider = 'anthropic',
     transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
+    transport?: ClaudeTransportIdentity,
 ): Promise<CanonicalExecutionEventStream> {
     const modelOptions = options.model_options as ClaudeBaseOptions | undefined;
     const includeThoughts = modelOptions?.include_thoughts ?? false;
@@ -1683,15 +1725,17 @@ export async function streamCanonicalClaudeEvents(
         prompt,
         options,
         provider,
+        ...(transport?.target_options === undefined ? {} : { target_options: transport.target_options }),
     });
     const conversation = prepareCanonicalClaudeProjection(canonicalState, options);
-    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'stream');
+    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'stream', transport);
     const streamingPayload: MessageStreamParams = { ...payload, stream: true };
     await assertAcceptedCanonicalRequest(
         canonicalState,
         { provider, protocol: CLAUDE_MESSAGES_PROTOCOL, model: options.model },
         providerJsonValue(streamingPayload),
     );
+    assertClaudeAcceptedTargetOptions(canonicalState);
     const acceptedResponse = canonicalState.accepted_response;
     const identity = {
         request_id: acceptedResponse?.generation.request_id ?? canonicalState.runtime.request_id,
