@@ -176,10 +176,10 @@ catalogs:
 
 overrides:
   google-auth-library: ^11.1.0
-  '@types/node': ^24.13.5
+  '@types/node': ^24.13.6
   vite: ^8.0.16
   brace-expansion@>=3.0.0 <5.0.8: 5.0.9
-  fast-uri@>=3.0.0 <3.1.6: 3.1.6
+  fast-uri@>=3.0.0 <3.1.7: 3.1.7
   nanoid@<3.3.17: 3.3.18
   postcss@<8.5.18: ^8.5.18
   protobufjs@<=7.6.4: 7.6.5
@@ -192,8 +192,8 @@ importers:
         specifier: 2.5.13
         version: 2.5.13
       turbo:
-        specifier: ^2.10.13
-        version: 2.11.2
+        specifier: ^2.11.3
+        version: 2.11.4
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -208,7 +208,7 @@ importers:
         version: 4.6.5
     devDependencies:
       '@types/node':
-        specifier: ^24.13.5
+        specifier: ^24.13.6
         version: 24.13.6
       rimraf:
         specifier: ^6.1.3
@@ -226,7 +226,7 @@ importers:
         specifier: workspace:*
         version: link:../common
       '@types/node':
-        specifier: ^24.13.5
+        specifier: ^24.13.6
         version: 24.13.6
       ajv:
         specifier: ^8.20.0
@@ -257,14 +257,14 @@ importers:
   drivers:
     dependencies:
       '@anthropic-ai/bedrock-sdk':
-        specifier: ^0.33.6
-        version: 0.33.7(zod@4.6.5)
+        specifier: ^0.34.0
+        version: 0.34.0(zod@4.6.5)
       '@anthropic-ai/sdk':
-        specifier: ^0.126.0
-        version: 0.126.0(zod@4.6.5)
+        specifier: ^0.129.0
+        version: 0.129.0(zod@4.6.5)
       '@anthropic-ai/vertex-sdk':
-        specifier: ^0.19.9
-        version: 0.19.10(zod@4.6.5)
+        specifier: ^0.20.0
+        version: 0.20.0(zod@4.6.5)
       '@aws-sdk/client-bedrock':
         specifier: ^3.1134.0
         version: 3.1136.0
@@ -323,14 +323,14 @@ importers:
         specifier: ^2.7.0
         version: 2.7.0(@opentelemetry/api@1.9.1)
       '@openrouter/sdk':
-        specifier: ^1.2.128
-        version: 1.3.6
+        specifier: ^1.3.19
+        version: 1.3.32
       '@vertesia/api-fetch-client':
         specifier: ^1.5.0
         version: 1.5.0
       eventsource:
-        specifier: ^5.1.1
-        version: 5.1.1
+        specifier: ^5.1.2
+        version: 5.1.2
       google-auth-library:
         specifier: ^11.1.0
         version: 11.1.0
@@ -338,7 +338,7 @@ importers:
         specifier: ^1.6.0
         version: 1.6.0
       lru-cache:
-        specifier: ^11.5.2
+        specifier: ^11.5.3
         version: 11.5.3
       node-web-stream-adapters:
         specifier: ^0.2.1
@@ -350,12 +350,12 @@ importers:
         specifier: ^1.4.0
         version: 1.4.0
       together-ai:
-        specifier: ^0.53.0
-        version: 0.53.0
+        specifier: ^0.55.0
+        version: 0.55.0
     devDependencies:
       dotenv:
-        specifier: ^17.4.2
-        version: 17.4.2
+        specifier: ^18.0.3
+        version: 18.0.4
       rimraf:
         specifier: ^6.1.3
         version: 6.1.3
@@ -375,8 +375,8 @@ importers:
         specifier: workspace:*
         version: link:../drivers
       dotenv:
-        specifier: ^17.4.2
-        version: 17.4.2
+        specifier: ^18.0.3
+        version: 18.0.4
     devDependencies:
       rimraf:
         specifier: ^6.1.3
@@ -387,11 +387,11 @@ importers:
 
 packages:
 
-  '@anthropic-ai/bedrock-sdk@0.33.7':
-    resolution: {integrity: sha512-KhjIqf7fo8vnyhW+tA+7YKS7zS5OxnII9AbJI7Ncr5KkaNkj32YzOWpY8YkyN+krkqARW2d8nYJJjZfwmsPkzg==}
+  '@anthropic-ai/bedrock-sdk@0.34.0':
+    resolution: {integrity: sha512-B7eWuX75B/CLpJnuP+qT/BD3J2Qw/ui7dRhWGuhDT8YAzw5Se48gRjiCEjWbuUvVw7D/4SPlfeN/Wh8GFfz6ew==}
 
-  '@anthropic-ai/sdk@0.126.0':
-    resolution: {integrity: sha512-VhiZl6rA/8uC+MgDaOhEcAWaIZ2tPnIY885jlZqxrGrutUW2nqCtophBtlsX0tk5kChBUjV/1NVjL3y0M4OwUg==}
+  '@anthropic-ai/sdk@0.129.0':
+    resolution: {integrity: sha512-MH7LB20kNpGLUpPTe2OG5XvL/KhX8HUO9XyBaFjgFk6TLS4Xjt0VPIuMKywe7POKKPslX+QxSlVok9e+8kG5Nw==}
     hasBin: true
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
@@ -399,8 +399,8 @@ packages:
       zod:
         optional: true
 
-  '@anthropic-ai/vertex-sdk@0.19.10':
-    resolution: {integrity: sha512-+wxc4aQmAjACfwS88qn+yUJ7lViXKv/qI/jSRjOZNB9MciIwt4X3vgsNQhuPTjem+ILk9So781/GmaMMG2qtZA==}
+  '@anthropic-ai/vertex-sdk@0.20.0':
+    resolution: {integrity: sha512-iLeaXJo3O4dC0yy6go9ow6RtrKaNmV7DO4r+N9tByME+iXFe0+skcbt3xjBp0cvKMwzMSR4pKWBFnHQZeM5kig==}
 
   '@aws-crypto/crc32@3.0.0':
     resolution: {integrity: sha512-IzSgsrxUcsrejQbPVilIKy16kAT52EwB6zSaI+M3xxIhKh5+aldEyvI+z6erM7TCLB2BJsFrtHjp6/4/sr+3dA==}
@@ -777,8 +777,8 @@ packages:
   '@nodable/entities@2.1.0':
     resolution: {integrity: sha512-nyT7T3nbMyBI/lvr6L5TyWbFJAI9FTgVRakNoBqCD+PmID8DzFrrNdLLtHMwMszOtqZa8PAOV24ZqDnQrhQINA==}
 
-  '@openrouter/sdk@1.3.6':
-    resolution: {integrity: sha512-1FIjO6f9MHVsa6bt01r9SNIXiJKZ7rK96MMC5KqF3J5sZNLtPDbltw5feha8FvrfXo+T7i2sMIydxlCcRRnsIA==}
+  '@openrouter/sdk@1.3.32':
+    resolution: {integrity: sha512-B6Y3KfevGNHdeohV+Qng+SyFcitFMTdWn0sLsCA+yUouyFPUJrgwDVuQFEueXIMgxtqmTAzHi7uL6N25IoHLnw==}
 
   '@opentelemetry/api@1.9.1':
     resolution: {integrity: sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q==}
@@ -1096,33 +1096,33 @@ packages:
   '@stablelib/base64@1.0.1':
     resolution: {integrity: sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ==}
 
-  '@turbo/darwin-64@2.11.2':
-    resolution: {integrity: sha512-0pGfE4Lpxrbd+6gUD9z025Tn4z9uMaSNZ3VX0H/hkUPZkjY5xrCa1NfTqocs09NM5NiYE3wEVcoYBadrhayRCA==}
+  '@turbo/darwin-64@2.11.4':
+    resolution: {integrity: sha512-fEmcQVa95k79tZjcay5b2A4cpR/VrlNUki4AN7EbA+32vj5C5rBUE1q3i2yOFxsB2n01sOlzIZ+s2p2zADCTig==}
     cpu: [x64]
     os: [darwin]
 
-  '@turbo/darwin-arm64@2.11.2':
-    resolution: {integrity: sha512-Ub7hTbu0bPSiW156ciuLCexG5/SfuZM/QWeBBh9o8P4XyKiZwKqubT6Y9DdJjdp4ZY2wS47Prdl06Xxzt0q6zw==}
+  '@turbo/darwin-arm64@2.11.4':
+    resolution: {integrity: sha512-SgXCVgBC1v+bdE6+KQGV6Kob7nBYo75zxzNFFuA4jLdM0J8lYamdTUoZSHLR0dy+kXVEYZqSC98CKqC17NG3Og==}
     cpu: [arm64]
     os: [darwin]
 
-  '@turbo/linux-64@2.11.2':
-    resolution: {integrity: sha512-8ipdmgmvSomfQ8E9afUsefO+BLO6QMW7srrHqMOCXD3BPX4FlYqqWAJY1GvbQotZMWKzNohdVkevrUYM6ZzYKA==}
+  '@turbo/linux-64@2.11.4':
+    resolution: {integrity: sha512-MWM7Au6NPJMBmHJAzFzQ/PACYNRpBOqnBkj+7csdR+YhJ+0XBg4Z64wFwLnGFDac0gc+YlasWOZ5t05bGs54aQ==}
     cpu: [x64]
     os: [android, linux]
 
-  '@turbo/linux-arm64@2.11.2':
-    resolution: {integrity: sha512-tsftYXAzgc+GdosqyRP8+Zzk2evJ8ej7Otal7/DU+6GVekVZ3kqM/z7zlGuF4TSHeetWxX04KN1I64LkmvYzgg==}
+  '@turbo/linux-arm64@2.11.4':
+    resolution: {integrity: sha512-rRVOh0UNlLbKPuf70FokqjahO/hCGgBmgvZcNXUPayn8Wk0zXIsVoNKpr0UQUhhR+KMiibvBKkVAGDViDFQHKA==}
     cpu: [arm64]
     os: [android, linux]
 
-  '@turbo/windows-64@2.11.2':
-    resolution: {integrity: sha512-p5LDVcGmC8W6FCrJPehr1t0ZvYqM8xvG3Va+LkwtDMK3Rl0NhSsJOYbYZVBfMbkm+9RKcCvekFCbSVtQ9Eyuqg==}
+  '@turbo/windows-64@2.11.4':
+    resolution: {integrity: sha512-COr+++1GwDg09XbJdm3sP1gEQApeV43UknYP9h82qet1tAGJrGQAxKVTMrf2JMsMw8MkJRnQj3gAVuQmV1kIyQ==}
     cpu: [x64]
     os: [win32]
 
-  '@turbo/windows-arm64@2.11.2':
-    resolution: {integrity: sha512-u0M3m1aXo9lpDM/2iQhxlGzgWjHFq/MC4TqHn1YAvxk8g1wGtzRB2QBx/SLqRChhPhC29mzaB8eLcxKh/pcM1g==}
+  '@turbo/windows-arm64@2.11.4':
+    resolution: {integrity: sha512-gh5lwDA2d4aBdLvTANhFsFEgxbBqKZ4m4dCyChw9GoX8b+Esk8H3p25Q+rlWCUVJ2o6Hne10ZTL0QSFfWD4gIA==}
     cpu: [arm64]
     os: [win32]
 
@@ -1390,9 +1390,10 @@ packages:
     resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
     engines: {node: '>=8'}
 
-  dotenv@17.4.2:
-    resolution: {integrity: sha512-nI4U3TottKAcAD9LLud4Cb7b2QztQMUEfHbvhTH09bqXTxnSie8WnjPALV/WMCrJZ6UV/qHJ6L03OqO3LcdYZw==}
+  dotenv@18.0.4:
+    resolution: {integrity: sha512-jGt9uI5BIxpVO15kvy+iEFqNAwxYClKWnkptLjSNPnFLC003Imd0ofr3aEVsbpHdSBdSsbcApNIlz4nbyGMwdA==}
     engines: {node: '>=12'}
+    hasBin: true
 
   duplexify@4.1.3:
     resolution: {integrity: sha512-M3BmBhwJRZsSx38lZyhE53Csddgzl5R7xGJNk7CVddZD6CcmwMCH8J+7AprIrQKH7TonKxaCjcv27Qmf+sQ+oA==}
@@ -1428,8 +1429,12 @@ packages:
     resolution: {integrity: sha512-+DHvQ1wLO//MK+1OZgcuXCbZFKgu3YjKPJt7n98rxX8vezL0ni+7s3ZQiM8bJkUEOk7MsuCycrPLj0FzUNf7Og==}
     engines: {node: '>=22.12'}
 
-  eventsource@5.1.1:
-    resolution: {integrity: sha512-onrlI7l612Ee3xnBqZNTq4djf6Fho/0yIpO/rYjRG/FzjMyPJquNx9SS3QyjglnVFxwxrube1XmX41zB+0Rdgw==}
+  eventsource-parser@4.1.1:
+    resolution: {integrity: sha512-zaWNqeSLeyzEAAt2Q6aDBRDRk/VnPmsKqvToyGvv6aahvLv71A4Jw7jG93Hckf11zXurbqgsffvpSgKPoeU1Qw==}
+    engines: {node: '>=22.12'}
+
+  eventsource@5.1.2:
+    resolution: {integrity: sha512-VJnwqqp+fOT3WDkjnUy49Zuyh48+kH0JdJApZkslrRQyx35zIZJeJYJl0+a+LrTzh5TFv6MdmXnBDv71UXFyWQ==}
     engines: {node: '>=22.12.0'}
 
   expect-type@1.4.0:
@@ -1445,8 +1450,8 @@ packages:
   fast-sha256@1.3.0:
     resolution: {integrity: sha512-n11RGP/lrWEFI/bWdygLxhI+pVeo1ZYIVwvvPkW7azl/rOy+F3HYRZ2K5zeE9mmkhQppyv9sQFx0JM9UabnpPQ==}
 
-  fast-uri@3.1.6:
-    resolution: {integrity: sha512-7Ical1vFEMr0onbVzEDIreM22I4khW+fzyQPwvAFWBp1iwdshSZRsL4jjRvPG9JP1uiqMHRto+YU6R2/CzDz5Q==}
+  fast-uri@3.1.7:
+    resolution: {integrity: sha512-dOvZVzjdZdz7phd9v6jCbwxrBW3fK6n8Rc0CtdmM4bumzMnxywBYhuph6J819RRw/ku+rLbelwfMunktuzVVHg==}
 
   fast-xml-builder@1.2.0:
     resolution: {integrity: sha512-00aAWieqff+ZJhsXA4g1g7M8k+7AYoMUUHF+/zFb5U6Uv/P0Vl4QZo84/IcufzYalLuEj9928bXN9PbbFzMF0Q==}
@@ -1912,8 +1917,8 @@ packages:
     resolution: {integrity: sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g==}
     engines: {node: '>=12.0.0'}
 
-  together-ai@0.53.0:
-    resolution: {integrity: sha512-6epQ/drAdCNQEHlFCODPo4AQOhZA/J5RK0cl6bxpCqYd76aJ8u50ImmagSXHITBceEgBDyo0d0uNgHdJ31ydVg==}
+  together-ai@0.55.0:
+    resolution: {integrity: sha512-0h4xOl50Qn8i5O1ml/A0gAJXzvLHz3uE14TVefaB3DXdn+78J/XB5O7rPscbIA2moJMbxOuJ8/jU+ah35gCLkA==}
     hasBin: true
 
   ts-algebra@2.0.0:
@@ -1925,8 +1930,8 @@ packages:
   tslib@2.8.1:
     resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
 
-  turbo@2.11.2:
-    resolution: {integrity: sha512-s0GhnWXlAAN+wb2GRMQxnZgFweRWTAceRWW/4Lk9iHj7QuLZMjDxQQqu+Xoh7Nckuy8UiSim520w6yqP2+ertw==}
+  turbo@2.11.4:
+    resolution: {integrity: sha512-nedZtJ2hjWpU/JBFq7Aj1GQBxQ56si+kIUmNZBUX35O35TIuhSBR6/u3yHHmk81U+RBdBcVjvLQ3/iOFzMwKsA==}
     hasBin: true
 
   typescript@7.0.2:
@@ -1949,7 +1954,7 @@ packages:
     engines: {node: ^20.19.0 || >=22.12.0}
     hasBin: true
     peerDependencies:
-      '@types/node': ^24.13.5
+      '@types/node': ^24.13.6
       '@vitejs/devtools': ^0.1.18
       esbuild: ^0.27.0 || ^0.28.0
       jiti: '>=1.21.0'
@@ -1994,7 +1999,7 @@ packages:
     peerDependencies:
       '@edge-runtime/vm': '*'
       '@opentelemetry/api': ^1.9.0
-      '@types/node': ^24.13.5
+      '@types/node': ^24.13.6
       '@vitest/browser-playwright': 5.0.1
       '@vitest/browser-preview': 5.0.1
       '@vitest/browser-webdriverio': ^5.0.0-beta.5 || >=5.0.0
@@ -2082,9 +2087,9 @@ packages:
 
 snapshots:
 
-  '@anthropic-ai/bedrock-sdk@0.33.7(zod@4.6.5)':
+  '@anthropic-ai/bedrock-sdk@0.34.0(zod@4.6.5)':
     dependencies:
-      '@anthropic-ai/sdk': 0.126.0(zod@4.6.5)
+      '@anthropic-ai/sdk': 0.129.0(zod@4.6.5)
       '@aws-crypto/sha256-js': 4.0.0
       '@aws-sdk/client-bedrock-runtime': 3.1136.0
       '@aws-sdk/credential-providers': 3.1136.0
@@ -2098,16 +2103,16 @@ snapshots:
     transitivePeerDependencies:
       - zod
 
-  '@anthropic-ai/sdk@0.126.0(zod@4.6.5)':
+  '@anthropic-ai/sdk@0.129.0(zod@4.6.5)':
     dependencies:
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.0.0
     optionalDependencies:
       zod: 4.6.5
 
-  '@anthropic-ai/vertex-sdk@0.19.10(zod@4.6.5)':
+  '@anthropic-ai/vertex-sdk@0.20.0(zod@4.6.5)':
     dependencies:
-      '@anthropic-ai/sdk': 0.126.0(zod@4.6.5)
+      '@anthropic-ai/sdk': 0.129.0(zod@4.6.5)
       google-auth-library: 11.1.0
     transitivePeerDependencies:
       - supports-color
@@ -2754,7 +2759,7 @@ snapshots:
 
   '@nodable/entities@2.1.0': {}
 
-  '@openrouter/sdk@1.3.6':
+  '@openrouter/sdk@1.3.32':
     dependencies:
       zod: 4.6.5
 
@@ -3092,22 +3097,22 @@ snapshots:
 
   '@stablelib/base64@1.0.1': {}
 
-  '@turbo/darwin-64@2.11.2':
+  '@turbo/darwin-64@2.11.4':
     optional: true
 
-  '@turbo/darwin-arm64@2.11.2':
+  '@turbo/darwin-arm64@2.11.4':
     optional: true
 
-  '@turbo/linux-64@2.11.2':
+  '@turbo/linux-64@2.11.4':
     optional: true
 
-  '@turbo/linux-arm64@2.11.2':
+  '@turbo/linux-arm64@2.11.4':
     optional: true
 
-  '@turbo/windows-64@2.11.2':
+  '@turbo/windows-64@2.11.4':
     optional: true
 
-  '@turbo/windows-arm64@2.11.2':
+  '@turbo/windows-arm64@2.11.4':
     optional: true
 
   '@tybys/wasm-util@0.10.2':
@@ -3234,7 +3239,7 @@ snapshots:
   ajv@8.20.0:
     dependencies:
       fast-deep-equal: 3.1.3
-      fast-uri: 3.1.6
+      fast-uri: 3.1.7
       json-schema-traverse: 1.0.0
       require-from-string: 2.0.2
 
@@ -3304,7 +3309,7 @@ snapshots:
 
   detect-libc@2.1.2: {}
 
-  dotenv@17.4.2: {}
+  dotenv@18.0.4: {}
 
   duplexify@4.1.3:
     dependencies:
@@ -3338,9 +3343,11 @@ snapshots:
 
   eventsource-parser@4.1.0: {}
 
-  eventsource@5.1.1:
+  eventsource-parser@4.1.1: {}
+
+  eventsource@5.1.2:
     dependencies:
-      eventsource-parser: 4.1.0
+      eventsource-parser: 4.1.1
 
   expect-type@1.4.0: {}
 
@@ -3350,7 +3357,7 @@ snapshots:
 
   fast-sha256@1.3.0: {}
 
-  fast-uri@3.1.6: {}
+  fast-uri@3.1.7: {}
 
   fast-xml-builder@1.2.0:
     dependencies:
@@ -3807,7 +3814,7 @@ snapshots:
       fdir: 6.5.0(picomatch@4.0.7)
       picomatch: 4.0.7
 
-  together-ai@0.53.0: {}
+  together-ai@0.55.0: {}
 
   ts-algebra@2.0.0: {}
 
@@ -3815,14 +3822,14 @@ snapshots:
 
   tslib@2.8.1: {}
 
-  turbo@2.11.2:
+  turbo@2.11.4:
     optionalDependencies:
-      '@turbo/darwin-64': 2.11.2
-      '@turbo/darwin-arm64': 2.11.2
-      '@turbo/linux-64': 2.11.2
-      '@turbo/linux-arm64': 2.11.2
-      '@turbo/windows-64': 2.11.2
-      '@turbo/windows-arm64': 2.11.2
+      '@turbo/darwin-64': 2.11.4
+      '@turbo/darwin-arm64': 2.11.4
+      '@turbo/linux-64': 2.11.4
+      '@turbo/linux-arm64': 2.11.4
+      '@turbo/windows-64': 2.11.4
+      '@turbo/windows-arm64': 2.11.4
 
   typescript@7.0.2:
     optionalDependencies:

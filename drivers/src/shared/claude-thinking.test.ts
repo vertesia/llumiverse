@@ -3,6 +3,43 @@ import { describe, expect, it } from 'vitest';
 import { resolveClaudeThinking } from './claude-thinking.js';
 
 describe('resolveClaudeThinking', () => {
+    it.each(['low', 'medium', 'high'] as const)('builds between-tools thinking at %s effort', (effort) => {
+        const resolved = resolveClaudeThinking('claude-sonnet-5-5', {
+            thinking_mode: 'between_tools',
+            effort,
+            include_thoughts: true,
+            thinking_budget_tokens: 8000,
+        });
+        expect(resolved.thinking).toEqual({ type: 'between_tools' });
+        expect(resolved.outputConfig).toEqual({ effort });
+        expect(resolved.hasSamplingRestriction).toBe(true);
+    });
+
+    it('leaves omitted effort at the provider default', () => {
+        expect(resolveClaudeThinking('claude-sonnet-5-5', { thinking_mode: 'between_tools' })).toMatchObject({
+            thinking: { type: 'between_tools' },
+            outputConfig: undefined,
+        });
+    });
+
+    it('keeps the default adaptive and allows explicitly switching back to it', () => {
+        for (const thinking_mode of [undefined, 'adaptive'] as const) {
+            expect(resolveClaudeThinking('claude-sonnet-5-5', { thinking_mode, include_thoughts: true })).toMatchObject(
+                { thinking: { type: 'adaptive', display: 'summarized' } },
+            );
+        }
+        expect(resolveClaudeThinking('claude-sonnet-5-5').thinking).toEqual({ type: 'adaptive', display: 'omitted' });
+    });
+
+    it('passes explicit modes and effort through for provider-side validation', () => {
+        expect(
+            resolveClaudeThinking('claude-sonnet-5-5', { thinking_mode: 'between_tools', effort: 'max' }),
+        ).toMatchObject({ thinking: { type: 'between_tools' }, outputConfig: { effort: 'max' } });
+        expect(resolveClaudeThinking('claude-sonnet-5', { thinking_mode: 'between_tools' }).thinking).toEqual({
+            type: 'between_tools',
+        });
+    });
+
     it('selects adaptive thinking with medium effort for Sonnet 4.6', () => {
         expect(resolveClaudeThinking('claude-sonnet-4-6', { effort: 'medium' })).toMatchObject({
             thinking: { type: 'adaptive', display: 'omitted' },
