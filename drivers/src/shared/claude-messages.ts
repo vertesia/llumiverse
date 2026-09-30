@@ -42,10 +42,19 @@ import {
     JSON_SCHEMA_INSTRUCTION_PREFIX,
     TOOL_AWARE_JSON_SCHEMA_INSTRUCTION_PREFIX,
 } from '@llumiverse/common';
-import { toolArgumentsForModel } from '@llumiverse/conversation';
 import {
+    canonicalJsonContentString,
+    createStructuredOutputTransformationProof,
+    type DecodedConversationResponse,
+    type JsonValue,
+    type NativeStreamPosition,
+    toolArgumentsForModel,
+} from '@llumiverse/conversation';
+import {
+    type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
     type CanonicalExecutionStream,
+    type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionChunkObject,
     type CompletionResult,
@@ -53,6 +62,7 @@ import {
     type DriverCompletionStream,
     type ExecutionOptions,
     type ExecutionTokenUsage,
+    FallbackCanonicalExecutionEventStream,
     getConversationMeta,
     incrementConversationTurn,
     isClaudeVersionGTE,
@@ -72,6 +82,7 @@ import {
     truncateLargeTextInConversation,
 } from '@llumiverse/core';
 import { asyncMap } from '@llumiverse/core/async';
+import { canonicalNativeExecutionEventStream } from '../conversation/canonical-execution-event-stream.js';
 import {
     type CanonicalFinalizingDriverStream,
     canonicalExecutionStreamFromDriver,
@@ -1591,6 +1602,398 @@ export async function streamCanonicalClaudeCompletion(
         abort: () => abortController.abort(),
         close: () => transportOptions?.signal?.removeEventListener('abort', forwardAbort),
     });
+}
+
+interface ClaudeCanonicalDraft {
+    draft_block_id: string;
+    native_position: NativeStreamPosition;
+    kind: 'text' | 'reasoning' | 'tool_call';
+    text: string;
+    tool_argument_fragments: string[];
+    tool_argument_snapshot?: JsonValue;
+}
+
+function claudeStreamPosition(index: number, nativeItemId?: string): NativeStreamPosition {
+    return {
+        protocol: CLAUDE_MESSAGES_PROTOCOL,
+        path: ['content', index],
+        ...(nativeItemId === undefined ? {} : { native_item_id: nativeItemId }),
+    };
+}
+
+function claudeSemanticBlocks(decoded: DecodedConversationResponse, turnId: string) {
+    const turn = decoded.turns.find((candidate) => candidate.id === turnId);
+    if (turn?.kind !== 'agent') throw new Error('Claude stream decode has no generated agent turn');
+    return turn.blocks.filter((block) => block.type !== 'native_replay');
+}
+
+function claudeSemanticPositions(message: Message): NativeStreamPosition[] {
+    return message.content.flatMap((block, index) => {
+        if (block.type === 'text' || block.type === 'thinking') return [claudeStreamPosition(index)];
+        if (block.type === 'tool_use') return [claudeStreamPosition(index, block.id)];
+        return [];
+    });
+}
+
+function isEmptyJsonObject(value: JsonValue): boolean {
+    return typeof value === 'object' && value !== null && !Array.isArray(value) && Object.keys(value).length === 0;
+}
+
+function assertClaudeToolDraftArguments(
+    draft: ClaudeCanonicalDraft,
+    block: ReturnType<typeof claudeSemanticBlocks>[number],
+) {
+    if (draft.kind !== 'tool_call' || block.type !== 'tool_call' || block.arguments.type === 'invalid') return;
+    const expected = canonicalJsonContentString(toolArgumentsForModel(block.arguments));
+    if (draft.tool_argument_snapshot !== undefined) {
+        if (canonicalJsonContentString(draft.tool_argument_snapshot) !== expected) {
+            throw new Error('Claude tool argument snapshot differs from its terminal tool input');
+        }
+        if (draft.tool_argument_fragments.length > 0) {
+            throw new Error('Claude tool stream mixes an initial argument snapshot with JSON fragments');
+        }
+        return;
+    }
+    if (draft.tool_argument_fragments.length === 0) return;
+    let streamed: JsonValue;
+    try {
+        streamed = providerJsonValue(JSON.parse(draft.tool_argument_fragments.join('')));
+    } catch {
+        throw new Error('Claude tool argument fragments do not form valid JSON');
+    }
+    if (canonicalJsonContentString(streamed) !== expected) {
+        throw new Error('Claude tool argument fragments differ from the terminal tool input');
+    }
+}
+
+/** Execute a Claude Messages stream as request-scoped canonical draft events. */
+export async function streamCanonicalClaudeEvents(
+    client: ClaudeMessagesClient,
+    prompt: ClaudePrompt,
+    options: ExecutionOptions,
+    open: CanonicalStreamOpenOptions,
+    logger?: Logger,
+    provider = 'anthropic',
+    transportOptions?: Pick<RequestOptions, 'signal' | 'timeout'>,
+): Promise<CanonicalExecutionEventStream> {
+    const modelOptions = options.model_options as ClaudeBaseOptions | undefined;
+    const includeThoughts = modelOptions?.include_thoughts ?? false;
+    const canonicalState = await prepareClaudeCanonicalState({
+        conversation: options.conversation,
+        prompt,
+        options,
+        provider,
+    });
+    const conversation = prepareCanonicalClaudeProjection(canonicalState, options);
+    const { payload, requestOptions } = getClaudePayload(options, conversation, provider, 'stream');
+    const streamingPayload: MessageStreamParams = { ...payload, stream: true };
+    await assertAcceptedCanonicalRequest(
+        canonicalState,
+        { provider, protocol: CLAUDE_MESSAGES_PROTOCOL, model: options.model },
+        providerJsonValue(streamingPayload),
+    );
+    const acceptedResponse = canonicalState.accepted_response;
+    const identity = {
+        request_id: acceptedResponse?.generation.request_id ?? canonicalState.runtime.request_id,
+        attempt_id: acceptedResponse?.generation.attempt_id ?? canonicalState.runtime.attempt_id,
+        response_operation_id: canonicalState.runtime.response_operation_id,
+        generation_id: acceptedResponse?.generation.id ?? canonicalState.generation_id,
+        draft_turn_id: acceptedResponse?.turn.id ?? canonicalState.response_turn_id,
+    };
+    if (acceptedResponse !== undefined) {
+        if (options.include_original_response) {
+            throw new Error('An idempotently recovered Claude Messages response cannot reconstruct original_response');
+        }
+        return new FallbackCanonicalExecutionEventStream(
+            identity,
+            () =>
+                recoverCanonicalExecutionResponse(canonicalState, options, {
+                    service_tier: canonicalClaudeServiceTier(canonicalState),
+                }),
+            { ...open, origin: 'accepted_recovery' },
+        );
+    }
+
+    const prepared = await finalizeClaudePreparedRequest(
+        { ...canonicalState, native_conversation: conversation },
+        streamingPayload as unknown as MessageCreateParamsBase,
+    );
+    const abortController = new AbortController();
+    const forwardAbort = () => abortController.abort(transportOptions?.signal?.reason);
+    let responseStream: ClaudeMessageStream | undefined;
+    const drafts = new Map<number, ClaudeCanonicalDraft>();
+
+    const eventStream = canonicalNativeExecutionEventStream({
+        identity,
+        open,
+        openSource: async () => {
+            responseStream = await streamClaudeMessages(
+                client,
+                streamingPayload,
+                transportOptions
+                    ? { ...requestOptions, ...transportOptions, signal: abortController.signal }
+                    : { ...requestOptions, signal: abortController.signal },
+            );
+            return responseStream;
+        },
+        map: async (event, writer) => {
+            if (event.type === 'content_block_start') {
+                const index = event.index;
+                const block = event.content_block;
+                if (block.type === 'text' || block.type === 'thinking' || block.type === 'tool_use') {
+                    const position = claudeStreamPosition(index, block.type === 'tool_use' ? block.id : undefined);
+                    const draft: ClaudeCanonicalDraft = {
+                        draft_block_id: `${prepared.response_turn_id}:claude:${index}`,
+                        native_position: position,
+                        kind:
+                            block.type === 'thinking' ? 'reasoning' : block.type === 'tool_use' ? 'tool_call' : 'text',
+                        text: '',
+                        tool_argument_fragments: [],
+                    };
+                    drafts.set(index, draft);
+                    await writer.startBlock({
+                        draft_block_id: draft.draft_block_id,
+                        native_position: position,
+                        block:
+                            block.type === 'thinking'
+                                ? { type: 'reasoning', visibility: 'display' }
+                                : block.type === 'tool_use'
+                                  ? {
+                                        type: 'tool_call',
+                                        executor: 'application',
+                                        call_id: block.id,
+                                        tool_name: block.name,
+                                    }
+                                  : { type: 'text' },
+                    });
+                    if (block.type === 'text' && block.text.length > 0) {
+                        draft.text = block.text;
+                        await writer.text({
+                            draft_block_id: draft.draft_block_id,
+                            native_position: position,
+                            text: block.text,
+                        });
+                    } else if (block.type === 'thinking' && block.thinking.length > 0) {
+                        draft.text = block.thinking;
+                        await writer.reasoning({
+                            draft_block_id: draft.draft_block_id,
+                            native_position: position,
+                            text: block.thinking,
+                        });
+                    } else if (block.type === 'tool_use') {
+                        const initialInput = providerJsonValue(block.input);
+                        if (!isEmptyJsonObject(initialInput)) {
+                            draft.tool_argument_snapshot = initialInput;
+                            await writer.toolArgumentsSnapshot({
+                                draft_block_id: draft.draft_block_id,
+                                native_position: position,
+                                value: initialInput,
+                            });
+                        }
+                    }
+                }
+            } else if (event.type === 'content_block_delta') {
+                const draft = drafts.get(event.index);
+                if (draft === undefined) {
+                    if (event.delta.type !== 'signature_delta') {
+                        throw new Error(`Claude stream delta has no draft at content index ${event.index}`);
+                    }
+                    return;
+                }
+                if (event.delta.type === 'text_delta') {
+                    draft.text += event.delta.text;
+                    await writer.text({
+                        draft_block_id: draft.draft_block_id,
+                        native_position: draft.native_position,
+                        text: event.delta.text,
+                    });
+                } else if (event.delta.type === 'thinking_delta') {
+                    draft.text += event.delta.thinking;
+                    await writer.reasoning({
+                        draft_block_id: draft.draft_block_id,
+                        native_position: draft.native_position,
+                        text: event.delta.thinking,
+                    });
+                } else if (event.delta.type === 'input_json_delta') {
+                    draft.text += event.delta.partial_json;
+                    draft.tool_argument_fragments.push(event.delta.partial_json);
+                    await writer.toolArgumentsFragment({
+                        draft_block_id: draft.draft_block_id,
+                        native_position: draft.native_position,
+                        fragment: event.delta.partial_json,
+                    });
+                }
+            } else if (event.type === 'message_delta') {
+                logClaudeTruncation(logger, event.delta.stop_reason, { provider, model: options.model });
+            }
+        },
+        finalize: async () => {
+            if (responseStream === undefined) throw new Error('Claude stream ended before transport initialization');
+            const finalMessage = await responseStream.finalMessage();
+            const finalResults = collectClaudeResults(finalMessage.content, includeThoughts);
+            const finalTools = collectClaudeTools(finalMessage.content);
+            const normalized =
+                !finalTools?.length && options.result_schema
+                    ? normalizeCompletionResult(finalResults, options.result_schema)
+                    : undefined;
+            const rawDecoded = await decodeClaudeCanonicalResponse(finalMessage, prepared);
+            let decoded =
+                normalized?.status === 'valid'
+                    ? await decodeClaudeCanonicalResponse(finalMessage, prepared, normalized.structured_output)
+                    : rawDecoded;
+            if (normalized?.status === 'invalid') {
+                decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
+            }
+            const document = appendClaudeCanonicalResponse(prepared, decoded);
+            const response = createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
+                service_tier: claudeServiceTier(finalMessage.usage as AnthropicUsageLike),
+                ...(options.include_original_response ? { original_response: finalMessage } : {}),
+            });
+            return {
+                decoded,
+                response,
+                prepare_reconciliation: async () => {
+                    const positions = claudeSemanticPositions(finalMessage);
+                    const rawBlocks = claudeSemanticBlocks(rawDecoded, prepared.response_turn_id);
+                    if (rawBlocks.length !== positions.length) {
+                        throw new Error('Claude stream decode does not match terminal native content positions');
+                    }
+                    const orderedDrafts = positions.map((position) =>
+                        [...drafts.values()].find(
+                            (draft) => JSON.stringify(draft.native_position) === JSON.stringify(position),
+                        ),
+                    );
+                    if (orderedDrafts.some((draft) => draft === undefined)) {
+                        throw new Error('Claude terminal response has no matching native stream draft');
+                    }
+                    const completeDrafts = orderedDrafts as ClaudeCanonicalDraft[];
+                    for (const [index, block] of rawBlocks.entries()) {
+                        const draft = completeDrafts[index];
+                        if (draft === undefined)
+                            throw new Error('Claude terminal response has no matching stream draft');
+                        assertClaudeToolDraftArguments(draft, block);
+                    }
+                    const itemMappings = rawBlocks.flatMap((block, index) => {
+                        const position = positions[index];
+                        if (position === undefined) return [];
+                        return [
+                            { canonical_id: block.id, native_position: position, kind: 'block' as const },
+                            ...(block.type === 'tool_call'
+                                ? [{ canonical_id: block.call_id, native_position: position, kind: 'call' as const }]
+                                : []),
+                        ];
+                    });
+                    const transformations = [];
+                    const reconciliations = [];
+                    if (normalized?.status === 'valid') {
+                        const sources = rawBlocks.filter((block) => block.type === 'text');
+                        const result = claudeSemanticBlocks(decoded, prepared.response_turn_id).find(
+                            (block) => block.type === 'json',
+                        );
+                        if (sources.length === 0 || result?.type !== 'json') {
+                            throw new Error('Claude structured stream is missing source or result blocks');
+                        }
+                        const proof = await createStructuredOutputTransformationProof({
+                            id: `${prepared.generation_id}:structured-output`,
+                            source_blocks: sources,
+                            result_block: result,
+                        });
+                        transformations.push(proof);
+                        const sourceDrafts = rawBlocks.flatMap((block, index) =>
+                            block.type === 'text' && completeDrafts[index] !== undefined ? [completeDrafts[index]] : [],
+                        );
+                        reconciliations.push({
+                            draft_block_ids: sourceDrafts.map((draft) => draft.draft_block_id),
+                            native_positions: sourceDrafts.map((draft) => draft.native_position),
+                            committed_block_ids: [result.id],
+                            disposition: 'structured_output' as const,
+                            transformation_id: proof.id,
+                        });
+                    }
+                    for (const [index, block] of rawBlocks.entries()) {
+                        if (normalized?.status === 'valid' && block.type === 'text') continue;
+                        const draft = completeDrafts[index];
+                        if (draft === undefined) throw new Error('Claude direct reconciliation has no draft');
+                        reconciliations.push({
+                            draft_block_ids: [draft.draft_block_id],
+                            native_positions: [draft.native_position],
+                            committed_block_ids: [block.id],
+                            disposition: 'direct' as const,
+                        });
+                    }
+                    const decodedWithEvidence = {
+                        ...decoded,
+                        stream_evidence: { item_mappings: itemMappings, transformations },
+                    };
+                    return {
+                        decoded: decodedWithEvidence,
+                        reconciliations,
+                        deliver_final_events: async (writer) => {
+                            if (decodedWithEvidence.generation.usage !== undefined) {
+                                await writer.usage(decodedWithEvidence.generation.usage);
+                            }
+                            for (const [index, block] of rawBlocks.entries()) {
+                                const draft = completeDrafts[index];
+                                if (draft === undefined) continue;
+                                if (
+                                    block.type === 'tool_call' &&
+                                    block.arguments.type !== 'invalid' &&
+                                    draft.tool_argument_fragments.length === 0 &&
+                                    draft.tool_argument_snapshot === undefined
+                                ) {
+                                    await writer.toolArgumentsSnapshot({
+                                        draft_block_id: draft.draft_block_id,
+                                        native_position: draft.native_position,
+                                        value: toolArgumentsForModel(block.arguments),
+                                    });
+                                }
+                                await writer.finishBlock({
+                                    draft_block_id: draft.draft_block_id,
+                                    native_position: draft.native_position,
+                                    outcome:
+                                        block.type === 'tool_call' && block.arguments.type === 'invalid'
+                                            ? 'malformed'
+                                            : decodedWithEvidence.generation.status === 'cancelled'
+                                              ? 'interrupted'
+                                              : decodedWithEvidence.generation.status === 'failed'
+                                                ? 'failed'
+                                                : 'native_complete',
+                                });
+                            }
+                            await writer.finish({
+                                outcome:
+                                    decodedWithEvidence.generation.status === 'cancelled'
+                                        ? 'interrupted'
+                                        : decodedWithEvidence.generation.status === 'failed'
+                                          ? 'failed'
+                                          : 'completed',
+                                finish_reason: decodedWithEvidence.generation.finish_reason,
+                                ...(claudeServiceTier(finalMessage.usage as AnthropicUsageLike) === undefined
+                                    ? {}
+                                    : {
+                                          service_tier: claudeServiceTier(
+                                              finalMessage.usage as AnthropicUsageLike,
+                                          ) as string,
+                                      }),
+                            });
+                        },
+                    };
+                },
+                ...(normalized?.status === 'valid' && options.result_schema !== undefined
+                    ? { result_schema: options.result_schema }
+                    : {}),
+            };
+        },
+        abort: () => {
+            abortController.abort();
+            responseStream?.abort();
+        },
+        close: () => transportOptions?.signal?.removeEventListener('abort', forwardAbort),
+    });
+    await publishCanonicalPreparedRequest(prepared, options);
+    if (transportOptions?.signal?.aborted) forwardAbort();
+    else transportOptions?.signal?.addEventListener('abort', forwardAbort, { once: true });
+    return eventStream;
 }
 
 // ============================================================================

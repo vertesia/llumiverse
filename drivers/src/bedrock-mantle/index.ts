@@ -2,8 +2,10 @@ import { AnthropicBedrockMantle, type BedrockMantleClientOptions } from '@anthro
 import { getTokenProvider } from '@aws/bedrock-token-generator';
 import {
     type AIModel,
+    type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
     type CanonicalExecutionStream,
+    type CanonicalStreamOpenOptions,
     type Completion,
     type DriverCompletionStream,
     type EmbeddingsOptions,
@@ -38,6 +40,7 @@ import {
     formatClaudeDebugPrompt,
     formatClaudePrompt,
     streamCanonicalClaudeCompletion,
+    streamCanonicalClaudeEvents,
     streamClaudeCompletion,
 } from '../shared/claude-messages.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
@@ -312,6 +315,43 @@ export class BedrockMantleDriver extends AbstractDriver<BedrockMantleDriverOptio
                     this.anthropicService,
                     requireClaudePrompt(prompt),
                     options,
+                    undefined,
+                    this.provider,
+                    this.getDriverRequestOptions(options, signal),
+                );
+            default:
+                throw new Error(`Unsupported Bedrock Mantle model: ${options.model}`);
+        }
+    }
+
+    requestCanonicalTextCompletionEventStream(
+        prompt: BedrockMantlePrompt,
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        switch (getBedrockMantleProtocol(options.model)) {
+            case 'responses':
+                return this.responsesDelegate.requestCanonicalTextCompletionEventStream(
+                    requireResponsesPrompt(prompt),
+                    options,
+                    signal,
+                    open,
+                );
+            case 'chat_completions':
+                return this.getChatCompletionsProtocol(options.model).requestCanonicalTextCompletionEventStream(
+                    this,
+                    requireChatCompletionsPrompt(prompt),
+                    options,
+                    signal,
+                    open,
+                );
+            case 'messages':
+                return streamCanonicalClaudeEvents(
+                    this.anthropicService,
+                    requireClaudePrompt(prompt),
+                    options,
+                    open,
                     undefined,
                     this.provider,
                     this.getDriverRequestOptions(options, signal),

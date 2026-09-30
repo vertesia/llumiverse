@@ -1,5 +1,7 @@
-import type { CompletionChunkObject, ExecutionOptions } from '@llumiverse/core';
-import { describe, expect, it } from 'vitest';
+import type { Message, RawMessageStreamEvent } from '@anthropic-ai/sdk/resources/messages.js';
+import type { ConversationStreamEvent } from '@llumiverse/conversation';
+import { type CompletionChunkObject, type ExecutionOptions, Providers } from '@llumiverse/core';
+import { describe, expect, it, vi } from 'vitest';
 import type { ClaudePrompt } from '../../shared/claude-messages.js';
 import type { VertexAIDriver } from '../index.js';
 import { ClaudeModelDefinition } from './claude.js';
@@ -20,7 +22,91 @@ async function collectChunks(stream: AsyncIterable<CompletionChunkObject>): Prom
     return chunks;
 }
 
+async function collectCanonicalEvents(
+    stream: AsyncIterable<ConversationStreamEvent>,
+): Promise<ConversationStreamEvent[]> {
+    const events: ConversationStreamEvent[] = [];
+    for await (const event of stream) events.push(event);
+    return events;
+}
+
 describe('ClaudeModelDefinition streaming spacing', () => {
+    it('delegates Vertex Claude typed streaming with Anthropic native positions', async () => {
+        const modelDef = new ClaudeModelDefinition('claude-sonnet-4-5');
+        const message = {
+            id: 'msg-vertex-typed',
+            type: 'message',
+            role: 'assistant',
+            model: 'claude-sonnet-4-5',
+            content: [{ type: 'text', text: 'Hello from Vertex.' }],
+            stop_reason: 'end_turn',
+            stop_sequence: null,
+            usage: { input_tokens: 2, output_tokens: 3 },
+        } as unknown as Message;
+        const events = [
+            {
+                type: 'content_block_start',
+                index: 0,
+                content_block: { type: 'text', text: '', citations: null },
+            },
+            {
+                type: 'content_block_delta',
+                index: 0,
+                delta: { type: 'text_delta', text: 'Hello from Vertex.' },
+            },
+            {
+                type: 'message_delta',
+                delta: { stop_reason: 'end_turn', stop_sequence: null },
+                usage: { output_tokens: 3 },
+            },
+        ] as RawMessageStreamEvent[];
+        const streamRequest = vi.fn(() => ({
+            async *[Symbol.asyncIterator]() {
+                for (const event of events) yield event;
+            },
+            finalMessage: async () => message,
+            abort() {},
+        }));
+        const driver = {
+            provider: Providers.vertexai,
+            logger: { warn: () => {}, info: () => {}, error: () => {} },
+            getAnthropicClient: async () => ({ messages: { stream: streamRequest } }),
+        } as unknown as VertexAIDriver;
+        const stream = await modelDef.requestCanonicalTextCompletionEventStream(
+            driver,
+            { messages: [{ role: 'user', content: [{ type: 'text', text: 'Say hello.' }] }] },
+            {
+                model: 'publishers/anthropic/models/claude-sonnet-4-5',
+                conversation_runtime: {
+                    conversation_id: 'conversation:vertex-typed',
+                    request_id: 'request:vertex-typed',
+                    attempt_id: 'attempt:vertex-typed',
+                    input_operation_id: 'input:vertex-typed',
+                    response_operation_id: 'response:vertex-typed',
+                    recorded_at: '2026-09-30T00:00:00.000Z',
+                },
+            },
+            undefined,
+            { stream_id: 'stream:vertex:claude:typed' },
+        );
+        const typedEvents = await collectCanonicalEvents(stream);
+
+        expect(typedEvents).toContainEqual(
+            expect.objectContaining({
+                type: 'draft_text_delta',
+                text: 'Hello from Vertex.',
+                native_position: { protocol: 'anthropic.messages', path: ['content', 0] },
+            }),
+        );
+        expect(typedEvents.at(-1)?.type).toBe('response_accepted');
+        expect(stream.completion?.accepted_output.generation).toMatchObject({
+            provider: Providers.vertexai,
+            protocol: 'anthropic.messages',
+            requested_model: 'claude-sonnet-4-5',
+        });
+        expect(streamRequest).toHaveBeenCalledOnce();
+    });
+
     it('does not leak deferred spacing when tool use follows thinking', async () => {
         const modelDef = new ClaudeModelDefinition('claude-sonnet-4-5');
         const driver = {

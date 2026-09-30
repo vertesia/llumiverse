@@ -2,7 +2,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources/messages.js';
 import { getTokenProvider } from '@aws/bedrock-token-generator';
 import type { AwsCredentialIdentity } from '@aws-sdk/types';
-import { parseConversationDocument } from '@llumiverse/conversation';
+import { type ConversationStreamEvent, parseConversationDocument } from '@llumiverse/conversation';
 import { getBedrockMantleProtocol, PromptRole, type PromptSegment, Providers } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,6 +17,14 @@ vi.mock('@aws/bedrock-token-generator', () => ({
 }));
 
 const promptSegments: PromptSegment[] = [{ role: PromptRole.user, content: 'hello' }];
+
+async function collectCanonicalEvents(
+    stream: AsyncIterable<ConversationStreamEvent>,
+): Promise<ConversationStreamEvent[]> {
+    const events: ConversationStreamEvent[] = [];
+    for await (const event of stream) events.push(event);
+    return events;
+}
 
 type ChatCreate = (
     params: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
@@ -332,6 +340,11 @@ describe('Bedrock Mantle model routing', () => {
         } satisfies Anthropic.Message;
         const events = [
             { type: 'message_start', message: { ...message, content: [], stop_reason: null } },
+            {
+                type: 'content_block_start',
+                index: 0,
+                content_block: { type: 'text', text: '', citations: null },
+            },
             { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'ok' } },
             {
                 type: 'message_delta',
@@ -366,7 +379,29 @@ describe('Bedrock Mantle model routing', () => {
             protocol: 'anthropic.messages',
             model,
         });
-        expect(messagesStream).toHaveBeenCalledOnce();
+
+        const typed = await driver.streamCanonicalEvents(
+            promptSegments,
+            canonicalOptions(model, 'mantle-messages-typed'),
+            undefined,
+            { stream_id: 'stream:mantle:messages:typed' },
+        );
+        const typedEvents = await collectCanonicalEvents(typed);
+        expect(typedEvents).toContainEqual(
+            expect.objectContaining({
+                type: 'draft_text_delta',
+                text: 'ok',
+                native_position: { protocol: 'anthropic.messages', path: ['content', 0] },
+            }),
+        );
+        expect(typedEvents.at(-1)?.type).toBe('response_accepted');
+        expect(typed.completion?.accepted_output.generation).toMatchObject({
+            provider: Providers.bedrock_mantle,
+            protocol: 'anthropic.messages',
+            requested_model: model,
+            status: 'completed',
+        });
+        expect(messagesStream).toHaveBeenCalledTimes(2);
     });
 
     it('formats Mantle prompts as OpenAI Responses input items', async () => {

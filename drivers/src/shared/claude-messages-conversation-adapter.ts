@@ -17,6 +17,7 @@ import {
     type ContentBlock,
     type ConversationDocument,
     type ConversationTurn,
+    canonicalJsonContentString,
     type DecodedConversationResponse,
     deriveConversationId,
     type ExecutedGeneration,
@@ -1224,10 +1225,28 @@ export async function decodeClaudeCanonicalResponse(
     });
     const received = records.turns[0];
     if (received?.kind !== 'agent') throw new Error('Claude Messages response did not decode to an agent turn');
-    const status =
-        response.stop_reason === 'max_tokens' || response.stop_reason === 'model_context_window_exceeded'
-            ? 'interrupted'
-            : 'completed';
+    const interrupted =
+        response.stop_reason === 'max_tokens' || response.stop_reason === 'model_context_window_exceeded';
+    const status = interrupted ? 'interrupted' : 'completed';
+    const nativeToolInputs = new Map(
+        response.content.flatMap((block) =>
+            block.type === 'tool_use'
+                ? [[block.id, canonicalJsonContentString(providerJsonValue(block.input))] as const]
+                : [],
+        ),
+    );
+    const receivedBlocks: AgentContentBlock[] = received.blocks.map((block) =>
+        !interrupted || block.type !== 'tool_call'
+            ? block
+            : {
+                  ...block,
+                  arguments: {
+                      type: 'invalid',
+                      raw: nativeToolInputs.get(block.call_id) ?? '',
+                      error: `Claude tool call ended before completion (${response.stop_reason})`,
+                  },
+              },
+    );
     const turn: ConversationTurn = {
         ...received,
         id: prepared.response_turn_id,
@@ -1239,7 +1258,7 @@ export async function decodeClaudeCanonicalResponse(
         },
         provenance: { type: 'generated' },
         generation_id: prepared.generation_id,
-        blocks: received.blocks.map((block) =>
+        blocks: receivedBlocks.map((block) =>
             block.type !== 'native_replay'
                 ? block
                 : {
@@ -1266,7 +1285,7 @@ export async function decodeClaudeCanonicalResponse(
             finish_reason: response.stop_reason,
             usage: claudeUsage(response.usage),
         })),
-        status: status === 'interrupted' ? 'cancelled' : 'completed',
+        status: interrupted ? 'cancelled' : 'completed',
     };
     const decoded: DecodedConversationResponse = {
         turns: [turn],

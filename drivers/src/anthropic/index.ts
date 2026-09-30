@@ -2,8 +2,10 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { AnthropicClaudeOptions } from '@llumiverse/common';
 import {
     type AIModel,
+    type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
     type CanonicalExecutionStream,
+    type CanonicalStreamOpenOptions,
     type Completion,
     type DriverCompletionStream,
     type EmbeddingsOptions,
@@ -29,6 +31,7 @@ import {
     formatClaudeDebugPrompt,
     formatClaudePrompt,
     streamCanonicalClaudeCompletion,
+    streamCanonicalClaudeEvents,
     streamClaudeCompletion,
 } from '../shared/claude-messages.js';
 
@@ -122,6 +125,23 @@ export class AnthropicDriver extends AbstractDriver<AnthropicDriverOptions, Clau
             this.client,
             prompt,
             options,
+            this.logger,
+            this.provider,
+            this.getDriverRequestOptions(options, signal),
+        );
+    }
+
+    async requestCanonicalTextCompletionEventStream(
+        prompt: ClaudePrompt,
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        return streamCanonicalClaudeEvents(
+            this.client,
+            prompt,
+            options,
+            open,
             this.logger,
             this.provider,
             this.getDriverRequestOptions(options, signal),
