@@ -17,6 +17,7 @@ import {
     type DecodedConversationResponse,
 } from '@llumiverse/conversation';
 import {
+    CanonicalAcceptedOutputRecovered,
     type CanonicalExecutionResponse,
     type CanonicalExecutionStream,
     canonicalExecutionPreview,
@@ -620,7 +621,12 @@ export class FallbackCanonicalExecutionEventStream implements CanonicalExecution
             this.accumulator.append(event);
             this.settled = true;
             await this.channel.terminate(event);
-        } catch (_error: unknown) {
+        } catch (error: unknown) {
+            if (CanonicalAcceptedOutputRecovered.is(error)) {
+                this.settled = true;
+                this.channel.fail(error);
+                return;
+            }
             if (!this.settled) {
                 try {
                     await this.settleTerminated('failed', this.completion === undefined ? 'execution' : 'delivery');

@@ -3,7 +3,9 @@ import type {
     AssetMediaMetadata,
     AssetStorage,
     ConversationAcceptedOutputFragment,
+    ConversationDocument,
     ConversationPreparedRequest,
+    ConversationPreparedRequestRecord,
     ConversationRuntimeContext,
 } from '@llumiverse/conversation';
 import type { z } from 'zod';
@@ -743,7 +745,17 @@ export interface ExecutionOptions extends ExecutionOptionsBase {
     load_recovered_canonical_output?: (identity: {
         conversation_id: string;
         response_operation_id: string;
-    }) => Promise<ConversationAcceptedOutputFragment | undefined>;
+        /** Exact finalized provider request. Present only at the pre-transport recovery boundary. */
+        prepared_request?: ConversationPreparedRequestRecord;
+    }) => Promise<
+        | ConversationAcceptedOutputFragment
+        | {
+              accepted_output: ConversationAcceptedOutputFragment;
+              /** Available only when the host retained and verified complete DEBUG history. */
+              conversation?: ConversationDocument;
+          }
+        | undefined
+    >;
     /**
      * Runtime-only durability barrier invoked after an adopted adapter has finalized its exact native
      * request and before provider transport begins. The callback must not resolve until the prepared

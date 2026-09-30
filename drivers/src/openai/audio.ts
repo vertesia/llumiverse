@@ -41,6 +41,7 @@ import { toStreamingFile } from 'openai';
 import {
     acceptedCanonicalResponse,
     appendCanonicalPrompt,
+    canonicalRecoveredOutputFragment,
     canonicalResponseIdentities,
     createExecutedGeneration,
     createRequestReceipt,
@@ -560,10 +561,12 @@ export async function executeOpenAIAudioCanonical(input: {
             appended.document,
             runtime.response_operation_id,
             {},
-            await input.options.load_recovered_canonical_output?.({
-                conversation_id: appended.document.id,
-                response_operation_id: runtime.response_operation_id,
-            }),
+            canonicalRecoveredOutputFragment(
+                await input.options.load_recovered_canonical_output?.({
+                    conversation_id: appended.document.id,
+                    response_operation_id: runtime.response_operation_id,
+                }),
+            ),
         );
     }
     if (retainedDocument !== undefined)

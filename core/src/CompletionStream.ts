@@ -281,12 +281,36 @@ export function leaseCanonicalExecutionStream(
     streamStartTimeoutMs = DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS,
     signal?: AbortSignal,
 ): CanonicalExecutionStream {
-    return new LeasedExecutionStream<string, CanonicalExecutionResponse, void>(
-        stream,
-        releaseOperation,
-        streamStartTimeoutMs,
-        signal,
-    );
+    return new LeasedCanonicalExecutionStream(stream, releaseOperation, streamStartTimeoutMs, signal);
+}
+
+class LeasedCanonicalExecutionStream implements CanonicalExecutionStream {
+    private readonly leased: LeasedExecutionStream<string, CanonicalExecutionResponse, void>;
+
+    constructor(
+        private readonly source: CanonicalExecutionStream,
+        releaseOperation: () => void,
+        streamStartTimeoutMs: number,
+        signal?: AbortSignal,
+    ) {
+        this.leased = new LeasedExecutionStream(source, releaseOperation, streamStartTimeoutMs, signal);
+    }
+
+    get completion(): CanonicalExecutionResponse | undefined {
+        return this.leased.completion;
+    }
+
+    get accepted_recovery(): CanonicalExecutionStream['accepted_recovery'] {
+        return this.source.accepted_recovery;
+    }
+
+    cancel(): Promise<void> {
+        return this.leased.cancel();
+    }
+
+    [Symbol.asyncIterator](): AsyncIterator<string> {
+        return this.leased[Symbol.asyncIterator]();
+    }
 }
 
 class LeasedCanonicalExecutionEventStream implements CanonicalExecutionEventStream {

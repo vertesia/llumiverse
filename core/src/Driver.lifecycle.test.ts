@@ -19,7 +19,7 @@ import {
     parseConversationDocument,
 } from '@llumiverse/conversation';
 import { describe, expect, it, vi } from 'vitest';
-import { createCanonicalExecutionResponse } from './CanonicalExecution.js';
+import { CanonicalAcceptedOutputRecovered, createCanonicalExecutionResponse } from './CanonicalExecution.js';
 import type {
     CanonicalExecutionEventStream,
     CanonicalStreamOpenOptions,
@@ -140,6 +140,15 @@ class FiniteCanonicalLifecycleTestDriver extends LifecycleTestDriver {
         this.canonicalCalls += 1;
         if (options.model !== 'test-model') throw new Error('changed request target');
         return createCanonicalExecutionResponse(parseConversationDocument(options.conversation), 'response-operation');
+    }
+}
+
+class RecoveredCanonicalLifecycleTestDriver extends CanonicalLifecycleTestDriver {
+    recovery: CanonicalAcceptedOutputRecovered | undefined;
+
+    override async _executeCanonical(): Promise<never> {
+        if (!this.recovery) throw new Error('missing accepted recovery fixture');
+        throw this.recovery;
     }
 }
 
@@ -307,6 +316,42 @@ function holdStreamCancellation(driver: OverriddenStreamDriver): () => void {
 }
 
 describe('AbstractDriver lifecycle', () => {
+    it('does not wrap a host accepted-output recovery as a provider failure', async () => {
+        const driver = new RecoveredCanonicalLifecycleTestDriver(vi.fn());
+        const response = createCanonicalExecutionResponse(acceptedFiniteDocument(), 'response-operation');
+        const recovery = new CanonicalAcceptedOutputRecovered({ accepted_output: response.accepted_output });
+        driver.recovery = recovery;
+
+        await expect(
+            driver.executeCanonical([], {
+                model: 'test-model',
+                conversation: createConversationDocument({ id: 'conversation:new', created_at: RECORDED_AT }),
+            }),
+        ).rejects.toBe(recovery);
+    });
+
+    it('preserves accepted recovery through the canonical stream lease and releases driver resources', async () => {
+        const cleanup = vi.fn();
+        const driver = new RecoveredCanonicalLifecycleTestDriver(cleanup);
+        driver.streaming = false;
+        const response = createCanonicalExecutionResponse(acceptedFiniteDocument(), 'response-operation');
+        const recovery = new CanonicalAcceptedOutputRecovered({ accepted_output: response.accepted_output });
+        driver.recovery = recovery;
+
+        const stream = await driver.streamCanonical([], {
+            model: 'test-model',
+            conversation: createConversationDocument({ id: 'conversation:new', created_at: RECORDED_AT }),
+        });
+        const chunks: string[] = [];
+        for await (const chunk of stream) chunks.push(chunk);
+
+        expect(chunks).toEqual([]);
+        expect(stream.completion).toBeUndefined();
+        expect(stream.accepted_recovery).toBe(recovery);
+        driver.destroy();
+        expect(cleanup).toHaveBeenCalledOnce();
+    });
+
     it('delivers a finite accepted retry under its retained identity and rejects a changed target', async () => {
         const driver = new FiniteCanonicalLifecycleTestDriver(vi.fn());
         driver.imageModel = true;

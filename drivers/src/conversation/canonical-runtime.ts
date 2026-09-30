@@ -3,6 +3,7 @@ import {
     type Asset,
     appendConversationRecords,
     type ContextEntry,
+    type ConversationAcceptedOutputFragment,
     type ConversationDocument,
     type ConversationPreparedRequest,
     ConversationRuntimeContextSchema,
@@ -26,9 +27,22 @@ import {
     type ResolvedConversationRuntimeContext,
     type ToolDefinition,
 } from '@llumiverse/conversation';
-import { type CanonicalExecutionResponse, createCanonicalExecutionResponse } from '@llumiverse/core';
+import {
+    CanonicalAcceptedOutputRecovered,
+    type CanonicalExecutionResponse,
+    createCanonicalExecutionResponse,
+} from '@llumiverse/core';
 
 export type { ResolvedConversationRuntimeContext } from '@llumiverse/conversation';
+
+type CanonicalRecoveredOutput = Awaited<ReturnType<NonNullable<ExecutionOptions['load_recovered_canonical_output']>>>;
+
+/** Project the host's optional DEBUG history wrapper to the exact accepted fragment adapters consume. */
+export function canonicalRecoveredOutputFragment(
+    recovered: CanonicalRecoveredOutput,
+): ConversationAcceptedOutputFragment | undefined {
+    return recovered === undefined ? undefined : 'accepted_output' in recovered ? recovered.accepted_output : recovered;
+}
 
 export interface CanonicalPromptRecords {
     turns: ConversationTurn[];
@@ -165,7 +179,6 @@ export async function publishCanonicalPreparedRequest(
     state: CanonicalPreparedState<unknown>,
     options: ExecutionOptions,
 ): Promise<ConversationPreparedRequest | undefined> {
-    if (options.on_canonical_request_prepared === undefined) return undefined;
     const prepared = await parseConversationPreparedRequest({
         document: state.document,
         record: {
@@ -176,7 +189,17 @@ export async function publishCanonicalPreparedRequest(
             response_turn_id: state.response_turn_id,
         },
     });
-    await options.on_canonical_request_prepared(prepared);
+    await options.on_canonical_request_prepared?.(prepared);
+    const recovered = await options.load_recovered_canonical_output?.({
+        conversation_id: prepared.document.id,
+        response_operation_id: prepared.record.runtime.response_operation_id,
+        prepared_request: prepared.record,
+    });
+    if (recovered !== undefined) {
+        throw new CanonicalAcceptedOutputRecovered(
+            'accepted_output' in recovered ? recovered : { accepted_output: recovered },
+        );
+    }
     return prepared;
 }
 
@@ -195,7 +218,7 @@ export async function recoverCanonicalExecutionResponse(
         state.document,
         state.runtime.response_operation_id,
         metadata,
-        recoveredOutput,
+        canonicalRecoveredOutputFragment(recoveredOutput),
     );
 }
 

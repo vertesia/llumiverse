@@ -31,9 +31,47 @@ export interface CanonicalExecutionResponse {
     original_response?: unknown;
 }
 
+/**
+ * Internal success control flow for a host-verified accepted output found after request preparation.
+ *
+ * Output-only retention is deliberately not a CanonicalExecutionResponse: it has no resumable history or
+ * provider-native replay. Hosts catch this signal at their execution boundary and project the accepted fragment
+ * without treating it as a provider failure.
+ */
+export class CanonicalAcceptedOutputRecovered extends Error {
+    readonly accepted_output: ConversationAcceptedOutputFragment;
+    readonly conversation?: ConversationDocument;
+
+    constructor(input: {
+        accepted_output: ConversationAcceptedOutputFragment;
+        conversation?: ConversationDocument;
+    }) {
+        super('A durably accepted canonical output was recovered before provider transport');
+        this.name = 'CanonicalAcceptedOutputRecovered';
+        if (input.conversation === undefined) {
+            this.accepted_output = parseAcceptedOutputFragment(input.accepted_output);
+            return;
+        }
+        const response = createCanonicalExecutionResponse(
+            input.conversation,
+            input.accepted_output.receipt.id,
+            {},
+            input.accepted_output,
+        );
+        this.accepted_output = response.accepted_output;
+        this.conversation = response.conversation;
+    }
+
+    static is(error: unknown): error is CanonicalAcceptedOutputRecovered {
+        return error instanceof CanonicalAcceptedOutputRecovered;
+    }
+}
+
 /** Live text is only a preview; completion carries the authoritative canonical records. */
 export interface CanonicalExecutionStream extends AsyncIterable<string> {
     completion: CanonicalExecutionResponse | undefined;
+    /** Host-verified accepted output recovered while a finite fallback attempted to start transport. */
+    readonly accepted_recovery?: CanonicalAcceptedOutputRecovered;
     cancel(): Promise<void>;
 }
 
@@ -120,6 +158,7 @@ export function canonicalExecutionPreview(response: CanonicalExecutionResponse, 
 /** Canonical sync fallback for model paths whose transport cannot stream. */
 export class FallbackCanonicalExecutionStream implements CanonicalExecutionStream {
     completion: CanonicalExecutionResponse | undefined;
+    accepted_recovery: CanonicalAcceptedOutputRecovered | undefined;
     private readonly abortController = new AbortController();
     private iteratorCreated = false;
 
@@ -138,7 +177,14 @@ export class FallbackCanonicalExecutionStream implements CanonicalExecutionStrea
         const self = this;
         return (async function* () {
             if (self.abortController.signal.aborted) return;
-            const completion = await self.execute(self.abortController.signal);
+            let completion: CanonicalExecutionResponse;
+            try {
+                completion = await self.execute(self.abortController.signal);
+            } catch (error) {
+                if (!CanonicalAcceptedOutputRecovered.is(error)) throw error;
+                self.accepted_recovery = error;
+                return;
+            }
             if (self.abortController.signal.aborted) return;
             self.completion = completion;
             const preview = canonicalExecutionPreview(completion, self.includeReasoning);
@@ -265,17 +311,15 @@ function bedrockOneHourCacheWriteTokens(response: CanonicalExecutionResponse): n
     return found ? total : undefined;
 }
 
-function legacyUsage(response: CanonicalExecutionResponse): ExecutionTokenUsage | undefined {
-    const fragment = response.accepted_output;
+function legacyUsage(
+    fragment: ConversationAcceptedOutputFragment,
+    response?: CanonicalExecutionResponse,
+): ExecutionTokenUsage | undefined {
     const usage = fragment.generation.usage;
     if (usage === undefined) return undefined;
-    const generation = Object.hasOwn(response.conversation.generations, fragment.generation.id)
-        ? response.conversation.generations[fragment.generation.id]
-        : undefined;
-    const providerCostUsd =
-        generation?.usage?.cost?.currency === 'USD' ? Number(generation.usage.cost.amount) : undefined;
-    const promptCacheWrite1h = bedrockOneHourCacheWriteTokens(response);
-    const isOpenAIImage = generation?.protocol === 'openai.images.generate';
+    const providerCostUsd = usage.cost?.currency === 'USD' ? Number(usage.cost.amount) : undefined;
+    const promptCacheWrite1h = response === undefined ? undefined : bedrockOneHourCacheWriteTokens(response);
+    const isOpenAIImage = fragment.generation.protocol === 'openai.images.generate';
     const resultImage = isOpenAIImage ? usage.output_tokens : undefined;
     const promptCached = isOpenAIImage ? undefined : usage.cache_read_tokens;
     const promptCacheWrite = isOpenAIImage ? undefined : usage.cache_write_tokens;
@@ -343,12 +387,24 @@ export function canonicalExecutionFailure(response: CanonicalExecutionResponse):
     return undefined;
 }
 
-/** Explicit compatibility projection used only by the old Completion/ToolUse API boundary. */
-export function legacyCompletionFromCanonicalExecution(
-    response: CanonicalExecutionResponse,
+function acceptedOutputFailure(fragment: ConversationAcceptedOutputFragment): ResultValidationError | undefined {
+    if (fragment.generation.status !== 'failed' && fragment.turn.status !== 'failed') return undefined;
+    return {
+        code: 'validation_error',
+        message: fragment.generation.finish_reason
+            ? `Canonical generation failed: ${fragment.generation.finish_reason}`
+            : 'Canonical generation failed; detailed metadata was not retained',
+    };
+}
+
+/**
+ * Project a verified output-only fragment to the old Completion API without inventing conversation history.
+ * The returned value intentionally omits `conversation`, native replay, and metadata-only diagnostics.
+ */
+function projectAcceptedOutput(
+    fragment: ConversationAcceptedOutputFragment,
     options: { include_reasoning?: boolean } = {},
 ): Completion {
-    const fragment = response.accepted_output;
     const providerFinishReason = legacyFinishReason(fragment, false);
     const toolUse = fragment.turn.blocks.flatMap((block): ToolUse<unknown>[] => {
         if (block.type !== 'tool_call' || block.executor !== 'application') return [];
@@ -390,13 +446,36 @@ export function legacyCompletionFromCanonicalExecution(
         const projected = legacyResult(block, fragment.assets, options.include_reasoning === true);
         return projected === undefined ? [] : [projected];
     });
-    const tokenUsage = legacyUsage(response);
-    const error = canonicalExecutionFailure(response);
+    const tokenUsage = legacyUsage(fragment);
+    const error = acceptedOutputFailure(fragment);
     return {
         result,
         ...(toolUse.length === 0 ? {} : { tool_use: toolUse }),
         ...(tokenUsage === undefined ? {} : { token_usage: tokenUsage }),
         finish_reason: legacyFinishReason(fragment, toolUse.length > 0),
+        ...(error === undefined ? {} : { error }),
+    };
+}
+
+export function legacyCompletionFromAcceptedOutput(
+    fragmentInput: ConversationAcceptedOutputFragment,
+    options: { include_reasoning?: boolean } = {},
+): Completion {
+    return projectAcceptedOutput(parseAcceptedOutputFragment(fragmentInput), options);
+}
+
+/** Explicit compatibility projection used only by the old Completion/ToolUse API boundary. */
+export function legacyCompletionFromCanonicalExecution(
+    response: CanonicalExecutionResponse,
+    options: { include_reasoning?: boolean } = {},
+): Completion {
+    const projected = projectAcceptedOutput(response.accepted_output, options);
+    const { token_usage: _projectedTokenUsage, error: _projectedError, ...base } = projected;
+    const tokenUsage = legacyUsage(response.accepted_output, response);
+    const error = canonicalExecutionFailure(response);
+    return {
+        ...base,
+        ...(tokenUsage === undefined ? {} : { token_usage: tokenUsage }),
         ...(error === undefined ? {} : { error }),
         ...(response.execution_time === undefined ? {} : { execution_time: response.execution_time }),
         ...(response.chunks === undefined ? {} : { chunks: response.chunks }),

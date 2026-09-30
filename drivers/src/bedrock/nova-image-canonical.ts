@@ -27,6 +27,7 @@ import {
     acceptedCanonicalResponse,
     appendCanonicalPrompt,
     assertAcceptedCanonicalRequest,
+    canonicalRecoveredOutputFragment,
     canonicalResponseIdentities,
     createExecutedGeneration,
     createRequestReceipt,
@@ -428,10 +429,12 @@ export async function executeNovaCanvasCanonical(input: {
             document,
             runtime.response_operation_id,
             {},
-            await input.options.load_recovered_canonical_output?.({
-                conversation_id: document.id,
-                response_operation_id: runtime.response_operation_id,
-            }),
+            canonicalRecoveredOutputFragment(
+                await input.options.load_recovered_canonical_output?.({
+                    conversation_id: document.id,
+                    response_operation_id: runtime.response_operation_id,
+                }),
+            ),
         );
     }
     const receipt = await createRequestReceipt(

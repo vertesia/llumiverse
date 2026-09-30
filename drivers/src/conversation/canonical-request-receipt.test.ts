@@ -2,6 +2,7 @@ import {
     type AssetStorage,
     type ConversationDocument,
     createConversationDocument,
+    deriveConversationId,
     externalizeToolCallArguments,
     inlineAssetContentIntegrity,
     type NativeItemMapping,
@@ -13,6 +14,7 @@ import {
     type CanonicalPreparedState,
     createExecutedGeneration,
     createRequestReceipt,
+    publishCanonicalPreparedRequest,
     type ResolvedConversationRuntimeContext,
 } from './canonical-runtime.js';
 
@@ -74,6 +76,37 @@ async function receipt(doc: ConversationDocument, mappings: NativeItemMapping[] 
 }
 
 describe('canonical request receipt binding', () => {
+    it('checks accepted recovery only after the exact prepared request is durably published', async () => {
+        const doc = document();
+        const requestReceipt = await receipt(doc);
+        const state: CanonicalPreparedState<{ messages: never[] }> = {
+            document: doc,
+            native_conversation: { messages: [] },
+            receipt: requestReceipt,
+            runtime,
+            generation_id: await deriveConversationId('generation', runtime.request_id, runtime.attempt_id),
+            response_turn_id: await deriveConversationId('turn', runtime.response_operation_id, 'response', '0'),
+            tool_definitions: [],
+        };
+        const calls: string[] = [];
+        const prepared = await publishCanonicalPreparedRequest(state, {
+            model: 'model',
+            on_canonical_request_prepared: async (candidate) => {
+                calls.push('persist');
+                expect(candidate.record.runtime).toEqual(runtime);
+            },
+            load_recovered_canonical_output: async (identity) => {
+                calls.push('recover');
+                expect(identity.prepared_request?.runtime).toEqual(runtime);
+                expect(identity.prepared_request?.request_receipt).toEqual(requestReceipt);
+                return undefined;
+            },
+        });
+
+        expect(calls).toEqual(['persist', 'recover']);
+        expect(prepared?.record.request_receipt).toEqual(requestReceipt);
+    });
+
     it('fingerprints edited selected content even when its IDs and context revision are unchanged', async () => {
         const before = document();
         const after = structuredClone(before);

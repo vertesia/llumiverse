@@ -12,9 +12,11 @@ import {
 } from '@llumiverse/conversation';
 import { describe, expect, it } from 'vitest';
 import {
+    CanonicalAcceptedOutputRecovered,
     type CanonicalExecutionResponse,
     createCanonicalExecutionResponse,
     FallbackCanonicalExecutionStream,
+    legacyCompletionFromAcceptedOutput,
     legacyCompletionFromCanonicalExecution,
 } from './CanonicalExecution.js';
 import {
@@ -373,6 +375,36 @@ describe('canonical execution response', () => {
         for await (const chunk of visible) visiblePreview += chunk;
         expect(visiblePreview).toBe('answerwhy{"ok":true}');
     });
+
+    it('projects output-only recovery without inventing conversation history or native replay', () => {
+        const response = createCanonicalExecutionResponse(acceptedDocument(), 'response-operation');
+
+        expect(legacyCompletionFromAcceptedOutput(response.accepted_output, { include_reasoning: true })).toEqual(
+            expect.objectContaining({
+                result: expect.arrayContaining([
+                    expect.objectContaining({ type: 'text', value: 'answer' }),
+                    expect.objectContaining({ type: 'thoughts', value: 'why' }),
+                ]),
+                token_usage: expect.objectContaining({ prompt: 5, result: 3 }),
+            }),
+        );
+        expect(legacyCompletionFromAcceptedOutput(response.accepted_output)).not.toHaveProperty('conversation');
+    });
+
+    it('retains accepted recovery as finite-stream success control flow without a failed completion', async () => {
+        const response = createCanonicalExecutionResponse(acceptedDocument(), 'response-operation');
+        const recovery = new CanonicalAcceptedOutputRecovered({ accepted_output: response.accepted_output });
+        const stream = new FallbackCanonicalExecutionStream(async () => {
+            throw recovery;
+        });
+
+        const chunks: string[] = [];
+        for await (const chunk of stream) chunks.push(chunk);
+
+        expect(chunks).toEqual([]);
+        expect(stream.completion).toBeUndefined();
+        expect(stream.accepted_recovery).toBe(recovery);
+    });
 });
 
 describe('canonical typed execution stream', () => {
@@ -407,6 +439,28 @@ describe('canonical typed execution stream', () => {
         ]);
         expect(stream.completion).toBe(response);
         expect(stream.terminal_event).toEqual(events[0]);
+    });
+
+    it('propagates accepted recovery without synthesizing a failed terminal', async () => {
+        const response = createCanonicalExecutionResponse(acceptedDocument(), 'response-operation');
+        const recovery = new CanonicalAcceptedOutputRecovered({ accepted_output: response.accepted_output });
+        const stream = new FallbackCanonicalExecutionEventStream(
+            identity,
+            async () => {
+                throw recovery;
+            },
+            { stream_id: 'stream-recovery' },
+        );
+
+        const events: ConversationStreamEvent[] = [];
+        await expect(
+            (async () => {
+                for await (const event of stream) events.push(event);
+            })(),
+        ).rejects.toBe(recovery);
+        await expect(stream.closed).resolves.toBeUndefined();
+        expect(events).toEqual([]);
+        expect(stream.terminal_event).toBeUndefined();
     });
 
     it('uses a distinct delivery stream for accepted-response recovery', async () => {

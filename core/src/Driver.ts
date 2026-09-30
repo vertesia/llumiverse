@@ -34,6 +34,7 @@ import {
 } from '@llumiverse/conversation';
 import type { Agent } from 'undici';
 import {
+    CanonicalAcceptedOutputRecovered,
     type CanonicalExecutionResponse,
     type CanonicalExecutionStream,
     createCanonicalExecutionResponse,
@@ -488,6 +489,7 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         }
         const prompt = await this.createPrompt(segments, options);
         return await this._executeCanonical(prompt, options, signal).catch((error: unknown) => {
+            if (CanonicalAcceptedOutputRecovered.is(error)) throw error;
             if (LlumiverseError.isLlumiverseError(error)) throw error;
             throw this.formatLlumiverseError(error, {
                 provider: this.provider,
