@@ -122,7 +122,21 @@ import {
 } from './nova-image-canonical.js';
 import { formatNovaImageGenerationPayload, NovaImageGenerationTaskType } from './nova-image-payload.js';
 import { forceUploadFile } from './s3.js';
-import { formatTwelvelabsPegasusPrompt, type TwelvelabsPegasusRequest } from './twelvelabs.js';
+import {
+    formatTwelvelabsPegasusPrompt,
+    type TwelvelabsPegasusCanonicalPrompt,
+    type TwelvelabsPegasusRequest,
+    validateTwelvelabsPegasusCanonicalInput,
+} from './twelvelabs.js';
+import {
+    executeTwelvelabsPegasusCanonical,
+    streamTwelvelabsPegasusCanonical,
+    streamTwelvelabsPegasusCanonicalEvents,
+    type TwelvelabsPegasusInvokeRequest,
+    TwelvelabsPegasusNativeStreamAccumulator,
+    type TwelvelabsPegasusStreamEvent,
+    type TwelvelabsPegasusTransport,
+} from './twelvelabs-canonical.js';
 
 export type { BedrockDriverOptions } from '../driver-options.js';
 export type {
@@ -146,6 +160,9 @@ export {
 } from './bedrock-converse-conversation-adapter.js';
 
 const supportStreamingCache = new LRUCache<string, boolean>({ max: 4096 });
+const TWELVELABS_PEGASUS_CANONICAL_FORMAT = Symbol('twelvelabs.pegasus.canonical_format');
+const TWELVELABS_PEGASUS_MAX_INLINE_VIDEO_BYTES = 25 * 1024 * 1024;
+type PegasusCanonicalExecutionOptions = ExecutionOptions & { [TWELVELABS_PEGASUS_CANONICAL_FORMAT]?: true };
 
 type AwsSdkError = {
     name?: string;
@@ -774,7 +791,57 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
 
     protected override supportsCanonicalConversation(options: ExecutionOptions): boolean {
         if (this.isImageModel(options.model)) return this.supportsCanonicalImageGeneration(options);
-        return !options.model.includes('twelvelabs.pegasus');
+        return true;
+    }
+
+    override async executeCanonical(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        if (options.model.includes('twelvelabs.pegasus')) {
+            validateTwelvelabsPegasusCanonicalInput(segments, options);
+            return super.executeCanonical(
+                segments,
+                { ...options, [TWELVELABS_PEGASUS_CANONICAL_FORMAT]: true } as PegasusCanonicalExecutionOptions,
+                signal,
+            );
+        }
+        return super.executeCanonical(segments, options, signal);
+    }
+
+    override async streamCanonical(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionStream> {
+        if (options.model.includes('twelvelabs.pegasus')) {
+            validateTwelvelabsPegasusCanonicalInput(segments, options);
+            return super.streamCanonical(
+                segments,
+                { ...options, [TWELVELABS_PEGASUS_CANONICAL_FORMAT]: true } as PegasusCanonicalExecutionOptions,
+                signal,
+            );
+        }
+        return super.streamCanonical(segments, options, signal);
+    }
+
+    override async streamCanonicalEvents(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        if (options.model.includes('twelvelabs.pegasus')) {
+            validateTwelvelabsPegasusCanonicalInput(segments, options);
+            return super.streamCanonicalEvents(
+                segments,
+                { ...options, [TWELVELABS_PEGASUS_CANONICAL_FORMAT]: true } as PegasusCanonicalExecutionOptions,
+                signal,
+                open,
+            );
+        }
+        return super.streamCanonicalEvents(segments, options, signal, open);
     }
 
     protected override supportsCanonicalImageGeneration(options: ExecutionOptions): boolean {
@@ -836,6 +903,43 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         };
     }
 
+    private twelvelabsPegasusTransport(options: ExecutionOptions): TwelvelabsPegasusTransport {
+        return {
+            invoke: async (request: TwelvelabsPegasusInvokeRequest, signal?: AbortSignal) => {
+                const scope = this.getScopedExecutor(options);
+                try {
+                    return signal
+                        ? await scope.executor.invokeModel(request, { abortSignal: signal })
+                        : await scope.executor.invokeModel(request);
+                } finally {
+                    scope.close();
+                }
+            },
+            stream: async (request: TwelvelabsPegasusInvokeRequest, signal: AbortSignal) => {
+                const scope = this.getScopedExecutor(options);
+                try {
+                    const response = await scope.executor.invokeModelWithResponseStream(request, {
+                        abortSignal: signal,
+                    });
+                    if (response.body === undefined) throw new Error('[Bedrock] Stream not found in response');
+                    return {
+                        body: withBedrockRuntimeScope(
+                            response.body as AsyncIterable<TwelvelabsPegasusStreamEvent>,
+                            scope,
+                        ),
+                        ...(response.$metadata.requestId === undefined
+                            ? {}
+                            : { provider_response_id: response.$metadata.requestId }),
+                        ...(response.serviceTier === undefined ? {} : { service_tier: response.serviceTier }),
+                    };
+                } catch (error: unknown) {
+                    scope.close();
+                    throw error;
+                }
+            },
+        };
+    }
+
     getService(region: string = this.options.region) {
         if (!this._service || this._service_region !== region) {
             this._service = new Bedrock({
@@ -853,7 +957,13 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             return await formatNovaPrompt(segments, opts.result_schema);
         }
         if (opts.model.includes('twelvelabs.pegasus')) {
-            return await formatTwelvelabsPegasusPrompt(segments, opts);
+            return await formatTwelvelabsPegasusPrompt(
+                segments,
+                opts,
+                (opts as PegasusCanonicalExecutionOptions)[TWELVELABS_PEGASUS_CANONICAL_FORMAT] === true
+                    ? { max_video_bytes: TWELVELABS_PEGASUS_MAX_INLINE_VIDEO_BYTES }
+                    : {},
+            );
         }
         return await formatConversePrompt(segments, opts);
     }
@@ -1250,10 +1360,8 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
     }
 
     protected async canStream(options: ExecutionOptions, signal?: AbortSignal): Promise<boolean> {
-        // // TwelveLabs Pegasus supports streaming according to the documentation
-        // if (options.model.includes("twelvelabs.pegasus")) {
-        //     return true;
-        // }
+        // Pegasus supports InvokeModelWithResponseStream for both foundation-model and inference-profile selectors.
+        if (options.model.includes('twelvelabs.pegasus')) return true;
 
         let canStream = supportStreamingCache.get(options.model);
         if (canStream == null) {
@@ -1393,7 +1501,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionResponse> {
         if (options.model.includes('twelvelabs.pegasus')) {
-            throw new Error(`Bedrock model ${options.model} does not support canonical execution`);
+            return executeTwelvelabsPegasusCanonical({
+                provider: this.provider,
+                region: this.options.region,
+                prompt: prompt as TwelvelabsPegasusCanonicalPrompt,
+                options,
+                signal,
+                transport: this.twelvelabsPegasusTransport(options),
+            });
         }
 
         const conversePrompt = prompt as ConverseRequest;
@@ -1545,52 +1660,21 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             if (!res.body) {
                 throw new Error('[Bedrock] Stream not found in response');
             }
-
-            const stream = transformAsyncIterator(res.body, (chunk) => {
-                if (chunk.chunk?.bytes) {
-                    const decoder = new TextDecoder();
-                    const body = decoder.decode(chunk.chunk.bytes);
-
-                    try {
-                        const result = JSON.parse(body);
-
-                        // Extract streaming response according to TwelveLabs Pegasus format
-                        let finishReason: string | undefined;
-                        if (result.finishReason) {
-                            switch (result.finishReason) {
-                                case 'stop':
-                                    finishReason = 'stop';
-                                    break;
-                                case 'length':
-                                    finishReason = 'length';
-                                    break;
-                                default:
-                                    finishReason = result.finishReason;
-                            }
-                        }
-
-                        return {
-                            result:
-                                result.delta || result.message
-                                    ? [{ type: 'text' as const, value: result.delta || result.message || '' }]
-                                    : [],
-                            finish_reason: finishReason,
-                            service_tier: res.serviceTier,
-                        } satisfies CompletionChunkObject;
-                    } catch {
-                        // If JSON parsing fails, return empty chunk
-                        return {
-                            result: [],
-                            service_tier: res.serviceTier,
-                        } satisfies CompletionChunkObject;
-                    }
+            const accumulator = new TwelvelabsPegasusNativeStreamAccumulator();
+            const stream = (async function* (): AsyncIterable<CompletionChunkObject> {
+                for await (const event of res.body as AsyncIterable<TwelvelabsPegasusStreamEvent>) {
+                    const chunk = accumulator.accept(event);
+                    yield {
+                        result: chunk.fragment.length === 0 ? [] : [{ type: 'text', value: chunk.fragment }],
+                        finish_reason: chunk.finish_reason,
+                        service_tier: res.serviceTier,
+                    };
                 }
-
-                return {
-                    result: [],
+                accumulator.response({
+                    provider_response_id: res.$metadata?.requestId,
                     service_tier: res.serviceTier,
-                } satisfies CompletionChunkObject;
-            });
+                });
+            })();
             return withBedrockRuntimeScope(stream, executorScope);
         } catch (err) {
             executorScope.close();
@@ -1747,7 +1831,14 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionStream> {
         if (options.model.includes('twelvelabs.pegasus')) {
-            throw new Error(`Bedrock model ${options.model} does not support canonical streaming`);
+            return streamTwelvelabsPegasusCanonical({
+                provider: this.provider,
+                region: this.options.region,
+                prompt: prompt as TwelvelabsPegasusCanonicalPrompt,
+                options,
+                signal,
+                transport: this.twelvelabsPegasusTransport(options),
+            });
         }
         const abortController = new AbortController();
         const forwardAbort = () => abortController.abort(signal?.reason);
@@ -1784,7 +1875,15 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
         open: CanonicalStreamOpenOptions,
     ): Promise<CanonicalExecutionEventStream> {
         if (options.model.includes('twelvelabs.pegasus')) {
-            throw new Error(`Bedrock model ${options.model} does not support canonical event streaming`);
+            return streamTwelvelabsPegasusCanonicalEvents({
+                provider: this.provider,
+                region: this.options.region,
+                prompt: prompt as TwelvelabsPegasusCanonicalPrompt,
+                options,
+                signal,
+                open,
+                transport: this.twelvelabsPegasusTransport(options),
+            });
         }
         const conversePrompt = prompt as ConverseRequest;
         const canonicalState = await prepareBedrockConverseCanonicalState({
