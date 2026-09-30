@@ -27,11 +27,16 @@ import {
     type TrainingOptions,
     type TrainingPromptOptions,
 } from '@llumiverse/common';
-import { deriveConversationId, isConversationDocumentFormat } from '@llumiverse/conversation';
+import {
+    deriveConversationId,
+    isConversationDocumentFormat,
+    parseConversationDocument,
+} from '@llumiverse/conversation';
 import type { Agent } from 'undici';
 import {
     type CanonicalExecutionResponse,
     type CanonicalExecutionStream,
+    createCanonicalExecutionResponse,
     FallbackCanonicalExecutionStream,
     legacyCompletionFromCanonicalExecution,
 } from './CanonicalExecution.js';
@@ -682,27 +687,38 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         signal?.throwIfAborted();
         const prompt = await this.createPrompt(segments, options);
         signal?.throwIfAborted();
-        const [generationId, responseTurnId] = await Promise.all([
-            deriveConversationId('generation', runtime.request_id, runtime.attempt_id),
-            deriveConversationId('turn', runtime.response_operation_id, 'response', '0'),
-        ]);
-        const identity = {
-            request_id: runtime.request_id,
-            attempt_id: runtime.attempt_id,
-            response_operation_id: runtime.response_operation_id,
-            generation_id: generationId,
-            draft_turn_id: responseTurnId,
-        };
         if (this.isImageModel(options.model) || !(await this.canStream(options, signal))) {
+            const retainedDocument = isConversationDocumentFormat(options.conversation)
+                ? parseConversationDocument(options.conversation)
+                : undefined;
+            const retainedResponse =
+                retainedDocument !== undefined &&
+                Object.hasOwn(retainedDocument.operation_receipts, runtime.response_operation_id)
+                    ? createCanonicalExecutionResponse(retainedDocument, runtime.response_operation_id)
+                    : undefined;
+            const [generationId, responseTurnId] =
+                retainedResponse === undefined
+                    ? await Promise.all([
+                          deriveConversationId('generation', runtime.request_id, runtime.attempt_id),
+                          deriveConversationId('turn', runtime.response_operation_id, 'response', '0'),
+                      ])
+                    : [retainedResponse.accepted_output.generation.id, retainedResponse.accepted_output.turn.id];
+            const identityGeneration = retainedResponse?.accepted_output.generation;
             return new FallbackCanonicalExecutionEventStream(
-                identity,
+                {
+                    request_id: identityGeneration?.request_id ?? runtime.request_id,
+                    attempt_id: identityGeneration?.attempt_id ?? runtime.attempt_id,
+                    response_operation_id: runtime.response_operation_id,
+                    generation_id: generationId,
+                    draft_turn_id: responseTurnId,
+                },
                 (fallbackSignal) =>
                     this._executeCanonical(
                         prompt,
                         options,
                         signal ? AbortSignal.any([signal, fallbackSignal]) : fallbackSignal,
                     ),
-                open,
+                { ...open, ...(retainedResponse === undefined ? {} : { origin: 'accepted_recovery' as const }) },
             );
         }
         return await this.requestCanonicalTextCompletionEventStream(prompt, options, signal, open);

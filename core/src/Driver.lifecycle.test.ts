@@ -13,8 +13,13 @@ import {
     PromptRole,
     type PromptSegment,
 } from '@llumiverse/common';
-import { createConversationDocument } from '@llumiverse/conversation';
+import {
+    appendConversationRecords,
+    createConversationDocument,
+    parseConversationDocument,
+} from '@llumiverse/conversation';
 import { describe, expect, it, vi } from 'vitest';
+import { createCanonicalExecutionResponse } from './CanonicalExecution.js';
 import type {
     CanonicalExecutionEventStream,
     CanonicalStreamOpenOptions,
@@ -117,6 +122,27 @@ class CanonicalLifecycleTestDriver extends LifecycleTestDriver {
     }
 }
 
+class FiniteCanonicalLifecycleTestDriver extends LifecycleTestDriver {
+    canonicalCalls = 0;
+
+    protected override supportsCanonicalConversation(_options: ExecutionOptions): boolean {
+        return true;
+    }
+
+    protected override supportsCanonicalImageGeneration(_options: ExecutionOptions): boolean {
+        return true;
+    }
+
+    override async requestCanonicalImageGeneration(
+        _prompt: string,
+        options: ExecutionOptions,
+    ): Promise<ReturnType<typeof createCanonicalExecutionResponse>> {
+        this.canonicalCalls += 1;
+        if (options.model !== 'test-model') throw new Error('changed request target');
+        return createCanonicalExecutionResponse(parseConversationDocument(options.conversation), 'response-operation');
+    }
+}
+
 class OverriddenStreamDriver extends LifecycleTestDriver {
     readonly cancelStream = vi.fn().mockResolvedValue(undefined);
 
@@ -207,6 +233,67 @@ class OverriddenCanonicalEventStreamDriver extends CanonicalLifecycleTestDriver 
 const segments = [{ role: PromptRole.user, content: 'hello' }];
 const options = { model: 'test-model' };
 const canonicalStreamOpen = { stream_id: 'stream:lifecycle' };
+const RECORDED_AT = '2026-09-30T00:00:00.000Z';
+
+function acceptedFiniteDocument() {
+    const initial = createConversationDocument({ id: 'conversation:finite', created_at: RECORDED_AT });
+    const requestReceipt = {
+        id: 'request-receipt',
+        request_id: 'request:original',
+        attempt_id: 'attempt:original',
+        source: { conversation_id: initial.id, revision: initial.revision },
+        context_fingerprint: 'sha256:context',
+        tool_set_fingerprint: 'sha256:tools',
+        request_fingerprint: 'sha256:request',
+        target: {
+            provider: 'lifecycle-test',
+            protocol: 'test.finite',
+            model: 'test-model',
+            adapter_version: 'test',
+        },
+        tool_definition_ids: [],
+        asset_versions: [],
+        item_mappings: [],
+        recorded_at: RECORDED_AT,
+    };
+    const generation = {
+        id: 'generation:original',
+        record_source: 'executed' as const,
+        request_id: 'request:original',
+        attempt_id: 'attempt:original',
+        purpose: 'interaction',
+        requested_model: 'test-model',
+        provider: 'lifecycle-test',
+        protocol: 'test.finite',
+        adapter_version: 'test',
+        status: 'completed' as const,
+        finish_reason: 'stop',
+        timestamps: { recorded_at: RECORDED_AT, completed_at: RECORDED_AT },
+        source: { conversation_id: initial.id, revision: initial.revision },
+        request_receipt: requestReceipt,
+    };
+    const turn = {
+        id: 'turn:original',
+        kind: 'agent' as const,
+        authority: 'ordinary' as const,
+        blocks: [{ id: 'block:original', type: 'text' as const, text: 'accepted', format: 'plain' as const }],
+        status: 'completed' as const,
+        timestamps: { recorded_at: RECORDED_AT, completed_at: RECORDED_AT },
+        provenance: { type: 'generated' as const },
+        model_visibility: 'include' as const,
+        generation_id: generation.id,
+    };
+    return appendConversationRecords(
+        initial,
+        { turns: [turn], generations: [generation] },
+        {
+            expected_revision: initial.revision,
+            operation_id: 'response-operation',
+            payload_fingerprint: 'sha256:response',
+            recorded_at: RECORDED_AT,
+        },
+    ).document;
+}
 
 function holdStreamCancellation(driver: OverriddenStreamDriver): () => void {
     let release!: () => void;
@@ -220,6 +307,50 @@ function holdStreamCancellation(driver: OverriddenStreamDriver): () => void {
 }
 
 describe('AbstractDriver lifecycle', () => {
+    it('delivers a finite accepted retry under its retained identity and rejects a changed target', async () => {
+        const driver = new FiniteCanonicalLifecycleTestDriver(vi.fn());
+        driver.imageModel = true;
+        driver.streaming = false;
+        const conversation = acceptedFiniteDocument();
+        const recoveredOptions: ExecutionOptions = {
+            model: 'test-model',
+            conversation,
+            conversation_runtime: {
+                conversation_id: conversation.id,
+                request_id: 'request:retry',
+                attempt_id: 'attempt:retry',
+                input_operation_id: 'input-operation',
+                response_operation_id: 'response-operation',
+                recorded_at: RECORDED_AT,
+            },
+        };
+        const recovered = await driver.streamCanonicalEvents(segments, recoveredOptions, undefined, {
+            stream_id: 'stream:finite:retry',
+        });
+        const recoveredEvents = [];
+        for await (const event of recovered) recoveredEvents.push(event);
+        expect(recoveredEvents).toEqual([
+            expect.objectContaining({
+                type: 'response_accepted',
+                origin: 'accepted_recovery',
+                request_id: 'request:original',
+                attempt_id: 'attempt:original',
+            }),
+        ]);
+
+        const changed = await driver.streamCanonicalEvents(
+            segments,
+            { ...recoveredOptions, model: 'changed-model' },
+            undefined,
+            { stream_id: 'stream:finite:changed-target' },
+        );
+        const changedEvents = [];
+        for await (const event of changed) changedEvents.push(event);
+        expect(changedEvents).toEqual([expect.objectContaining({ type: 'stream_terminated', outcome: 'failed' })]);
+        expect(changedEvents.some((event) => event.type === 'response_accepted')).toBe(false);
+        expect(driver.canonicalCalls).toBe(2);
+    });
+
     it('rejects canonical input on unadopted drivers before invoking provider methods', async () => {
         const driver = new LifecycleTestDriver(vi.fn());
         const conversation = createConversationDocument({

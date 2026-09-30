@@ -1,7 +1,6 @@
 import {
     type AgentContentBlock,
     type Asset,
-    type AssetStorage,
     appendDecodedConversationResponse,
     createTextBlock,
     createUserTurn,
@@ -36,16 +35,19 @@ import {
     publishCanonicalPreparedRequest,
     resolveConversationRuntime,
 } from '../conversation/canonical-runtime.js';
+import {
+    detectGeneratedImageMimeType,
+    generatedImageContentHash,
+    generatedImageStorage,
+    maximumGeneratedImageOutputBytes,
+    verifiedBase64GeneratedImage,
+} from '../shared/generated-image.js';
 
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 
 const OPENAI_IMAGES_PROTOCOL = 'openai.images.generate';
 const OPENAI_IMAGES_ADAPTER_VERSION = '2026-09-30.canonical.1';
-const MAX_GENERATED_IMAGE_BYTES = 50_000_000;
-const MAX_INLINE_GENERATED_IMAGE_BYTES = 8_000_000;
 const MAX_GENERATED_IMAGE_CHUNKS = 8_192;
-const MAX_CANONICAL_JSON_BYTES = 32 * 1024 * 1024;
-const CANONICAL_RESPONSE_JSON_RESERVE_BYTES = 1024 * 1024;
 const SUPPORTED_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 
 interface DecodedImage {
@@ -137,46 +139,6 @@ function effectiveImageOptions(request: OpenAI.Images.ImageGenerateParamsNonStre
     return providerJsonValue(options) as JsonObject;
 }
 
-function isBase64Alphabet(code: number): boolean {
-    return (
-        (code >= 0x41 && code <= 0x5a) ||
-        (code >= 0x61 && code <= 0x7a) ||
-        (code >= 0x30 && code <= 0x39) ||
-        code === 0x2b ||
-        code === 0x2f
-    );
-}
-
-function strictBase64(value: string, maximumBytes: number): Uint8Array {
-    const maximumEncodedLength = Math.ceil(maximumBytes / 3) * 4;
-    if (value.length === 0 || value.length > maximumEncodedLength || value.length % 4 !== 0) {
-        throw new Error('OpenAI image response contains malformed base64 data');
-    }
-    let padding = 0;
-    if (value.endsWith('==')) padding = 2;
-    else if (value.endsWith('=')) padding = 1;
-    for (let index = 0; index < value.length - padding; index += 1) {
-        if (!isBase64Alphabet(value.charCodeAt(index))) {
-            throw new Error('OpenAI image response contains malformed base64 data');
-        }
-    }
-    for (let index = value.length - padding; index < value.length; index += 1) {
-        if (value.charCodeAt(index) !== 0x3d) throw new Error('OpenAI image response contains malformed base64 data');
-    }
-    const bytes = new Uint8Array(Buffer.from(value, 'base64'));
-    if (bytes.byteLength === 0 || bytes.byteLength > maximumBytes || Buffer.from(bytes).toString('base64') !== value) {
-        throw new Error('OpenAI image response contains malformed base64 data');
-    }
-    return bytes;
-}
-
-async function sha256Bytes(bytes: Uint8Array): Promise<string> {
-    const copy = new Uint8Array(bytes.byteLength);
-    copy.set(bytes);
-    const digest = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', copy));
-    return `sha256:${Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
-}
-
 async function readBoundedImageResponse(response: Response, maximumBytes: number, signal?: AbortSignal) {
     if (!response.ok) throw new Error(`OpenAI generated image download failed with status ${response.status}`);
     const mimeType = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
@@ -226,44 +188,11 @@ async function readBoundedImageResponse(response: Response, maximumBytes: number
         bytes.set(chunk, offset);
         offset += chunk.byteLength;
     }
-    const detectedMimeType = detectImageMimeType(bytes);
+    const detectedMimeType = detectGeneratedImageMimeType(bytes, 'OpenAI');
     if (detectedMimeType !== mimeType) {
         throw new Error(`OpenAI generated image MIME type ${mimeType} does not match its bytes`);
     }
     return { bytes, mime_type: detectedMimeType };
-}
-
-function detectImageMimeType(bytes: Uint8Array): string {
-    if (
-        bytes.byteLength >= 8 &&
-        bytes[0] === 0x89 &&
-        bytes[1] === 0x50 &&
-        bytes[2] === 0x4e &&
-        bytes[3] === 0x47 &&
-        bytes[4] === 0x0d &&
-        bytes[5] === 0x0a &&
-        bytes[6] === 0x1a &&
-        bytes[7] === 0x0a
-    ) {
-        return 'image/png';
-    }
-    if (bytes.byteLength >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
-        return 'image/jpeg';
-    }
-    if (
-        bytes.byteLength >= 12 &&
-        bytes[0] === 0x52 &&
-        bytes[1] === 0x49 &&
-        bytes[2] === 0x46 &&
-        bytes[3] === 0x46 &&
-        bytes[8] === 0x57 &&
-        bytes[9] === 0x45 &&
-        bytes[10] === 0x42 &&
-        bytes[11] === 0x50
-    ) {
-        return 'image/webp';
-    }
-    throw new Error('OpenAI generated image bytes have an unsupported format');
 }
 
 async function decodeImage(
@@ -274,9 +203,12 @@ async function decodeImage(
 ): Promise<DecodedImage> {
     let bytes: Uint8Array;
     let mimeType: string;
+    let contentHash: string;
     if (image.b64_json !== undefined) {
-        bytes = strictBase64(image.b64_json, maximumBytes);
-        mimeType = detectImageMimeType(bytes);
+        const verified = await verifiedBase64GeneratedImage(image.b64_json, maximumBytes, 'OpenAI');
+        bytes = verified.bytes;
+        mimeType = verified.mime_type;
+        contentHash = verified.content_hash;
     } else if (image.url !== undefined) {
         const url = new URL(image.url);
         if (url.protocol !== 'https:' && url.protocol !== 'http:') {
@@ -285,6 +217,7 @@ async function decodeImage(
         const decoded = await readBoundedImageResponse(await fetchImage(url, { signal }), maximumBytes, signal);
         bytes = decoded.bytes;
         mimeType = decoded.mime_type;
+        contentHash = await generatedImageContentHash(bytes);
     } else {
         throw new Error('OpenAI image response item contains neither base64 data nor a URL');
     }
@@ -294,52 +227,10 @@ async function decodeImage(
     return {
         bytes,
         mime_type: mimeType,
-        content_hash: await sha256Bytes(bytes),
+        content_hash: contentHash,
         ...(image.revised_prompt === undefined ? {} : { revised_prompt: image.revised_prompt }),
         ...(image.url === undefined ? {} : { source_url: image.url }),
     };
-}
-
-async function imageStorage(
-    decoded: DecodedImage,
-    options: ExecutionOptions,
-    signal?: AbortSignal,
-): Promise<AssetStorage> {
-    if (options.store_generated_asset === undefined) {
-        if (decoded.bytes.byteLength > MAX_INLINE_GENERATED_IMAGE_BYTES) {
-            throw new Error(
-                `OpenAI generated image exceeds the ${MAX_INLINE_GENERATED_IMAGE_BYTES} byte inline asset limit`,
-            );
-        }
-        return { type: 'inline_base64', data: Buffer.from(decoded.bytes).toString('base64') };
-    }
-    const source = new ReadableStream<Uint8Array>({
-        start(controller) {
-            controller.enqueue(decoded.bytes.slice());
-            controller.close();
-        },
-    });
-    const stored = await options.store_generated_asset(source, { kind: 'image', mime_type: decoded.mime_type }, signal);
-    signal?.throwIfAborted();
-    if (stored.byte_length !== decoded.bytes.byteLength || stored.content_hash !== decoded.content_hash) {
-        throw new Error('Generated asset storage did not preserve the exact OpenAI image bytes');
-    }
-    if (stored.storage.type !== 'external') {
-        throw new Error('Generated asset storage must return external canonical storage');
-    }
-    return stored.storage;
-}
-
-function maximumImageOutputBytes(document: unknown, options: ExecutionOptions): number {
-    if (options.store_generated_asset !== undefined) return MAX_GENERATED_IMAGE_BYTES;
-    const currentBytes = new TextEncoder().encode(JSON.stringify(document)).byteLength;
-    const remainingJsonBytes = MAX_CANONICAL_JSON_BYTES - currentBytes - CANONICAL_RESPONSE_JSON_RESERVE_BYTES;
-    const remainingDecodedBytes = Math.floor((remainingJsonBytes * 3) / 4);
-    const maximum = Math.min(MAX_INLINE_GENERATED_IMAGE_BYTES, remainingDecodedBytes);
-    if (maximum <= 0) {
-        throw new Error('Canonical conversation has no safe capacity for inline generated image output');
-    }
-    return maximum;
 }
 
 export function mapOpenAIImagesUsage(
@@ -483,7 +374,7 @@ export async function executeOpenAIImageCanonical(input: {
         appended.tool_definitions,
     );
     const identities = await canonicalResponseIdentities(runtime);
-    const maximumBytes = maximumImageOutputBytes(document, input.options);
+    const maximumBytes = maximumGeneratedImageOutputBytes(document, input.options);
     await publishCanonicalPreparedRequest(
         {
             document,
@@ -534,7 +425,7 @@ export async function executeOpenAIImageCanonical(input: {
             id: assetId,
             kind: 'image',
             mime_type: decoded.mime_type,
-            storage: await imageStorage(decoded, input.options, input.signal),
+            storage: await generatedImageStorage(decoded, input.options, 'OpenAI', input.signal),
             provenance: {
                 type: 'generated',
                 generation_id: identities.generation_id,

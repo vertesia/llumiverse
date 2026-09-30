@@ -43,7 +43,13 @@ export * from './embeddings/batch.js';
 import { NON_GLOBAL_ANTHROPIC_MODELS, resolveVertexAIAnthropicRegion } from './models/claude.js';
 import { formatGeminiDebugPrompt } from './models/gemini.js';
 import { type GeminiContextCacheCoordinationKey, GeminiContextCacheManager } from './models/gemini-context-cache.js';
-import { formatImagenDebugPrompt, ImagenModelDefinition, type ImagenPrompt } from './models/imagen.js';
+import {
+    executeImagenCanonical,
+    formatImagenDebugPrompt,
+    ImagenModelDefinition,
+    type ImagenPrompt,
+    validateImagenCanonicalInput,
+} from './models/imagen.js';
 import { GEMINI_OMNI_VIDEO_MODELS, isGeminiOmniVideoModel, type OmniVideoPrompt } from './models/omni-video.js';
 import { getModelDefinition, trimModelName } from './models.js';
 import { getListedVertexOpenMaaSModels } from './open-maas-models.js';
@@ -113,7 +119,16 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
     provider = VertexAIDriver.PROVIDER;
 
     protected supportsCanonicalConversation(options: ExecutionOptions): boolean {
+        if (this.isImageModel(options.model)) return this.supportsCanonicalImageGeneration(options);
         return getModelDefinition(options.model).canonical_conversation_supported === true;
+    }
+
+    protected override supportsCanonicalImageGeneration(_options: ExecutionOptions): boolean {
+        return true;
+    }
+
+    protected override validateCanonicalImageInput(segments: PromptSegment[], options: ExecutionOptions): void {
+        validateImagenCanonicalInput(segments, options);
     }
 
     aiplatform: v1beta1.ModelServiceClient | undefined;
@@ -737,6 +752,14 @@ export class VertexAIDriver extends AbstractDriver<VertexAIDriverOptions, Vertex
         const splits = _options.model.split('/');
         const modelName = trimModelName(splits[splits.length - 1]);
         return new ImagenModelDefinition(modelName).requestImageGeneration(this, _prompt, _options, signal);
+    }
+
+    override async requestCanonicalImageGeneration(
+        prompt: ImagenPrompt,
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        return executeImagenCanonical({ driver: this, prompt, options, signal });
     }
 
     async getGenAIModelsArray(client: GoogleGenAI): Promise<Model[]> {
