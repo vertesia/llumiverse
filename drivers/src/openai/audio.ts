@@ -22,13 +22,16 @@ import {
 } from '@llumiverse/conversation';
 import {
     type AudioResult,
+    type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
+    type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionResult,
     createCanonicalExecutionResponse,
     type DataSource,
     type ExecutionOptions,
     type ExecutionResponse,
+    FallbackCanonicalExecutionEventStream,
     type PromptSegment,
     Providers,
     readStreamAsBase64,
@@ -164,6 +167,64 @@ function validateOpenAIAudioInput(segments: PromptSegment[], model: string): Val
         if (!text || text.length > 4096) throw new Error('Speech synthesis requires 1–4096 characters');
     }
     return { task, files, text };
+}
+
+function validateOpenAIAudioCanonicalInput(segments: PromptSegment[], options: ExecutionOptions) {
+    const runtime = resolveConversationRuntime(options);
+    const retainedDocument = isConversationDocumentFormat(options.conversation)
+        ? parseConversationDocument(options.conversation)
+        : undefined;
+    if (options.conversation !== undefined && retainedDocument === undefined) {
+        throw new Error('File audio operations do not accept legacy conversation input');
+    }
+    if (
+        retainedDocument !== undefined &&
+        options.conversation_runtime?.conversation_id !== undefined &&
+        retainedDocument.id !== runtime.conversation_id
+    ) {
+        throw new Error('conversation_runtime.conversation_id does not match the canonical document');
+    }
+    if (options.tools?.length || options.result_schema || options.format) {
+        throw new Error('File audio operations do not accept tools, result schemas, or custom formatting');
+    }
+    const validated = validateOpenAIAudioInput(segments, options.model);
+    return { runtime, retainedDocument, validated };
+}
+
+/** Finite typed-event projection for canonical OpenAI file-audio execution. */
+export async function streamOpenAIAudioCanonicalEvents(input: {
+    segments: PromptSegment[];
+    options: ExecutionOptions;
+    signal?: AbortSignal;
+    open: CanonicalStreamOpenOptions;
+    execute: (signal: AbortSignal) => Promise<CanonicalExecutionResponse>;
+}): Promise<CanonicalExecutionEventStream> {
+    if (input.options.conversation_runtime === undefined) {
+        throw new Error('Canonical typed streaming requires conversation_runtime');
+    }
+    if (input.options.conversation_runtime.materialized_input !== undefined && input.segments.length > 0) {
+        throw new Error('A materialized canonical input requires an empty new prompt');
+    }
+    input.signal?.throwIfAborted();
+    const { runtime, retainedDocument } = validateOpenAIAudioCanonicalInput(input.segments, input.options);
+    const accepted =
+        retainedDocument === undefined
+            ? undefined
+            : acceptedCanonicalResponse(retainedDocument, runtime.response_operation_id);
+    const identities = await canonicalResponseIdentities(runtime);
+    const identity = {
+        request_id: accepted?.generation.request_id ?? runtime.request_id,
+        attempt_id: accepted?.generation.attempt_id ?? runtime.attempt_id,
+        response_operation_id: runtime.response_operation_id,
+        generation_id: accepted?.generation.id ?? identities.generation_id,
+        draft_turn_id: accepted?.turn.id ?? identities.response_turn_id,
+    };
+    return new FallbackCanonicalExecutionEventStream(
+        identity,
+        (fallbackSignal) =>
+            input.execute(input.signal ? AbortSignal.any([input.signal, fallbackSignal]) : fallbackSignal),
+        { ...input.open, ...(accepted === undefined ? {} : { origin: 'accepted_recovery' as const }) },
+    );
 }
 
 export async function executeOpenAIAudioNative(
@@ -401,24 +462,8 @@ export async function executeOpenAIAudioCanonical(input: {
     request_model?: string;
     request_options?: { signal?: AbortSignal; timeout?: number };
 }): Promise<CanonicalExecutionResponse> {
-    const runtime = resolveConversationRuntime(input.options);
-    const retainedDocument = isConversationDocumentFormat(input.options.conversation)
-        ? parseConversationDocument(input.options.conversation)
-        : undefined;
-    if (input.options.conversation !== undefined && retainedDocument === undefined) {
-        throw new Error('File audio operations do not accept legacy conversation input');
-    }
-    if (
-        retainedDocument !== undefined &&
-        input.options.conversation_runtime?.conversation_id !== undefined &&
-        retainedDocument.id !== runtime.conversation_id
-    ) {
-        throw new Error('conversation_runtime.conversation_id does not match the canonical document');
-    }
-    if (input.options.tools?.length || input.options.result_schema || input.options.format) {
-        throw new Error('File audio operations do not accept tools, result schemas, or custom formatting');
-    }
-    const { task } = validateOpenAIAudioInput(input.segments, input.options.model);
+    const { runtime, retainedDocument, validated } = validateOpenAIAudioCanonicalInput(input.segments, input.options);
+    const { task } = validated;
     const loadedFiles = await Promise.all(
         input.segments
             .flatMap((segment) => segment.files ?? [])

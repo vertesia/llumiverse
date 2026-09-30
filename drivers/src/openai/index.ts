@@ -74,7 +74,12 @@ import {
 import { rejectDecodedStructuredOutput } from '../conversation/structured-output.js';
 import { resolveModelListingMetadata } from '../shared/model-listing.js';
 import { createToolChoiceConfigurationError } from '../shared/tool-choice-error.js';
-import { executeOpenAIAudioCanonical, executeOpenAIAudioRequest, openAIAudioTask } from './audio.js';
+import {
+    executeOpenAIAudioCanonical,
+    executeOpenAIAudioRequest,
+    openAIAudioTask,
+    streamOpenAIAudioCanonicalEvents,
+} from './audio.js';
 import { mergeOpenAIExtraBody, type OpenAIExtraBody } from './extra_body.js';
 import {
     executeOpenAIImageCanonical,
@@ -1362,6 +1367,24 @@ export abstract class OpenAIResponsesDriverBase extends OpenAICompatibleDriverBa
                 signal ? AbortSignal.any([signal, fallbackSignal]) : fallbackSignal,
             ),
         );
+    }
+
+    override async streamCanonicalEvents(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        if (!this.isFileAudioModel(options.model)) {
+            return super.streamCanonicalEvents(segments, options, signal, open);
+        }
+        return streamOpenAIAudioCanonicalEvents({
+            segments,
+            options,
+            signal,
+            open,
+            execute: (streamSignal) => this.executeCanonical(segments, options, streamSignal),
+        });
     }
 
     constructor(opts: OpenAIResponsesDriverBaseOptions) {

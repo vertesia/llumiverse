@@ -13,8 +13,10 @@ import type {
 import ModelClient, { isUnexpected } from '@azure-rest/ai-inference';
 import {
     type AIModel,
+    type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
     type CanonicalExecutionStream,
+    type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionStream,
     type DriverCompletionStream,
@@ -248,6 +250,25 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
         return super.streamCanonical(segments, options, signal);
     }
 
+    override async streamCanonicalEvents(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        if (options.conversation_runtime === undefined) {
+            throw new Error('Canonical typed streaming requires conversation_runtime');
+        }
+        signal?.throwIfAborted();
+        if (
+            openAIAudioTask(options.model) &&
+            (await this.isOpenAIDeployment(options.model, signal, options.httpTimeout))
+        ) {
+            return this.getOpenAIProtocolDriver().streamCanonicalEvents(segments, options, signal, open);
+        }
+        return super.streamCanonicalEvents(segments, options, signal, open);
+    }
+
     OPENAI_API_VERSION = '2025-01-01-preview';
     INFERENCE_API_VERSION = '2024-05-01-preview';
 
@@ -359,6 +380,28 @@ export class AzureFoundryDriver extends AbstractDriver<AzureFoundryDriverOptions
             toAzureFoundryChatPrompt(prompt),
             toAzureFoundryChatOptions(options),
             signal,
+        );
+    }
+
+    override async requestCanonicalTextCompletionEventStream(
+        prompt: ResponseInputItem[],
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        if (await this.isOpenAIDeployment(options.model, signal, options.httpTimeout)) {
+            return this.getOpenAIProtocolDriver().requestCanonicalTextCompletionEventStream(
+                prompt,
+                options,
+                signal,
+                open,
+            );
+        }
+        return this.inferenceProtocolDriver.requestCanonicalTextCompletionEventStream(
+            toAzureFoundryChatPrompt(prompt),
+            toAzureFoundryChatOptions(options),
+            signal,
+            open,
         );
     }
 

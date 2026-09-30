@@ -72,6 +72,7 @@ import {
     executeOpenAIAudioRequest,
     openAIAudioTask,
     openAIInputAudioPart,
+    streamOpenAIAudioCanonicalEvents,
 } from './audio.js';
 import { getOpenAIExtraBody, mergeOpenAIExtraBody } from './extra_body.js';
 import { OpenAICompatibleDriverBase } from './openai_compatible.js';
@@ -2472,6 +2473,24 @@ export class OpenAIChatCompletionsDriver extends OpenAIChatCompletionsDriverBase
                 signal ? AbortSignal.any([signal, fallbackSignal]) : fallbackSignal,
             ),
         );
+    }
+
+    override async streamCanonicalEvents(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        if (!openAIAudioTask(options.model)) {
+            return super.streamCanonicalEvents(segments, options, signal, open);
+        }
+        return streamOpenAIAudioCanonicalEvents({
+            segments,
+            options,
+            signal,
+            open,
+            execute: (streamSignal) => this.executeCanonical(segments, options, streamSignal),
+        });
     }
 
     constructor(options: OpenAIChatCompletionsDriverConfig) {

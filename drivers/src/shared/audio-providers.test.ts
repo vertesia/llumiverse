@@ -1,5 +1,5 @@
 import { FinishReason, GenerateContentResponse, GoogleGenAI } from '@google/genai';
-import { parseConversationDocument } from '@llumiverse/conversation';
+import { type ConversationStreamEvent, parseConversationDocument } from '@llumiverse/conversation';
 import { type DataSource, type ExecutionOptions, PromptRole } from '@llumiverse/core';
 import OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
@@ -55,6 +55,12 @@ function chatResponse(model: string, audio?: Pick<OpenAI.Chat.Completions.ChatCo
             },
         ],
     };
+}
+
+async function collectCanonicalEvents(stream: AsyncIterable<ConversationStreamEvent>) {
+    const events: ConversationStreamEvent[] = [];
+    for await (const event of stream) events.push(event);
+    return events;
 }
 
 describe('primary provider file audio', () => {
@@ -131,12 +137,281 @@ describe('primary provider file audio', () => {
         expect(stream.completion?.accepted_output.assets[streamedAudio.asset_id]?.media).toMatchObject({
             container: 'mp3',
         });
-        expect(create).toHaveBeenCalledTimes(3);
+        const runtime = {
+            conversation_id: 'conversation:foundry-speech-typed',
+            request_id: 'request:foundry-speech-typed',
+            attempt_id: 'attempt:foundry-speech-typed:first',
+            input_operation_id: 'input:foundry-speech-typed',
+            response_operation_id: 'response:foundry-speech-typed',
+            recorded_at: '2026-09-29T01:02:00.000Z',
+        };
+        const publish = vi.fn(async () => undefined);
+        const typed = await driver.streamCanonicalEvents(
+            prompt,
+            {
+                model: 'speech-deployment::gpt-4o-mini-tts',
+                store_audio: store,
+                conversation_runtime: runtime,
+                on_canonical_request_prepared: publish,
+            },
+            undefined,
+            { stream_id: 'stream:foundry:speech:first' },
+        );
+        expect(await collectCanonicalEvents(typed)).toEqual([
+            expect.objectContaining({
+                type: 'response_accepted',
+                origin: 'live_transport',
+                stream_id: 'stream:foundry:speech:first',
+            }),
+        ]);
+        const retry = await driver.streamCanonicalEvents(
+            prompt,
+            {
+                model: 'speech-deployment::gpt-4o-mini-tts',
+                store_audio: store,
+                conversation: JSON.parse(JSON.stringify(typed.completion?.conversation)),
+                conversation_runtime: {
+                    ...runtime,
+                    attempt_id: 'attempt:foundry-speech-typed:retry',
+                    recorded_at: '2026-09-29T01:03:00.000Z',
+                },
+                on_canonical_request_prepared: publish,
+            },
+            undefined,
+            { stream_id: 'stream:foundry:speech:retry' },
+        );
+        expect(await collectCanonicalEvents(retry)).toEqual([
+            expect.objectContaining({
+                type: 'response_accepted',
+                origin: 'accepted_recovery',
+                stream_id: 'stream:foundry:speech:retry',
+            }),
+        ]);
+        expect(retry.completion?.accepted_output).toEqual(typed.completion?.accepted_output);
+        expect(publish).toHaveBeenCalledOnce();
+        const mismatched = await driver.streamCanonicalEvents(
+            prompt,
+            {
+                model: 'speech-deployment::gpt-4o-mini-tts',
+                model_options: { _option_id: 'openai-speech', voice: 'echo' },
+                store_audio: store,
+                conversation: typed.completion?.conversation,
+                conversation_runtime: runtime,
+                on_canonical_request_prepared: publish,
+            },
+            undefined,
+            { stream_id: 'stream:foundry:speech:mismatch' },
+        );
+        expect(await collectCanonicalEvents(mismatched)).toEqual([
+            expect.objectContaining({ type: 'stream_terminated', outcome: 'failed' }),
+        ]);
+        expect(create).toHaveBeenCalledTimes(4);
         expect(create.mock.calls.map(([request]) => request.model)).toEqual([
             'speech-deployment',
             'speech-deployment',
             'speech-deployment',
+            'speech-deployment',
         ]);
+    });
+
+    it.each(['responses', 'chat'] as const)(
+        'reaches finite typed OpenAI speech execution through the public %s driver',
+        async (protocol) => {
+            const driver =
+                protocol === 'responses'
+                    ? new OpenAIDriver({ apiKey: 'test' })
+                    : new OpenAIChatCompletionsDriver({ apiKey: 'test', endpoint: 'https://example.test/v1' });
+            const create = vi
+                .spyOn(driver.service.audio.speech, 'create')
+                .mockImplementation(() => Promise.resolve(new Response(bytes)) as never);
+            const publish = vi.fn(async () => undefined);
+            const stream = await driver.streamCanonicalEvents(
+                prompt,
+                {
+                    model: 'gpt-4o-mini-tts',
+                    store_audio: store,
+                    conversation_runtime: {
+                        conversation_id: `conversation:openai-speech-${protocol}`,
+                        request_id: `request:openai-speech-${protocol}`,
+                        attempt_id: `attempt:openai-speech-${protocol}`,
+                        input_operation_id: `input:openai-speech-${protocol}`,
+                        response_operation_id: `response:openai-speech-${protocol}`,
+                        recorded_at: '2026-09-29T01:04:00.000Z',
+                    },
+                    on_canonical_request_prepared: publish,
+                },
+                undefined,
+                { stream_id: `stream:openai:speech:${protocol}` },
+            );
+
+            expect(await collectCanonicalEvents(stream)).toEqual([
+                expect.objectContaining({
+                    type: 'response_accepted',
+                    origin: 'live_transport',
+                    stream_id: `stream:openai:speech:${protocol}`,
+                }),
+            ]);
+            expect(stream.completion?.accepted_output.turn.blocks).toContainEqual(
+                expect.objectContaining({ type: 'audio' }),
+            );
+            expect(publish).toHaveBeenCalledOnce();
+            expect(create).toHaveBeenCalledOnce();
+        },
+    );
+
+    it.each(['responses', 'chat'] as const)(
+        'requires explicit runtime identity before opening a typed %s audio stream',
+        async (protocol) => {
+            const driver =
+                protocol === 'responses'
+                    ? new OpenAIDriver({ apiKey: 'test' })
+                    : new OpenAIChatCompletionsDriver({ apiKey: 'test', endpoint: 'https://example.test/v1' });
+            const create = vi.spyOn(driver.service.audio.speech, 'create');
+
+            await expect(
+                driver.streamCanonicalEvents(prompt, { model: 'gpt-4o-mini-tts', store_audio: store }, undefined, {
+                    stream_id: `stream:audio:no-runtime:${protocol}`,
+                }),
+            ).rejects.toThrow('Canonical typed streaming requires conversation_runtime');
+            expect(create).not.toHaveBeenCalled();
+        },
+    );
+
+    it.each(['responses', 'chat'] as const)(
+        'rejects an already cancelled typed %s audio stream before returning a producer',
+        async (protocol) => {
+            const driver =
+                protocol === 'responses'
+                    ? new OpenAIDriver({ apiKey: 'test' })
+                    : new OpenAIChatCompletionsDriver({ apiKey: 'test', endpoint: 'https://example.test/v1' });
+            const create = vi.spyOn(driver.service.audio.speech, 'create');
+            const options: ExecutionOptions = {
+                model: 'gpt-4o-mini-tts',
+                store_audio: store,
+                conversation_runtime: {
+                    request_id: `request:audio:aborted:${protocol}`,
+                    attempt_id: `attempt:audio:aborted:${protocol}`,
+                    input_operation_id: `input:audio:aborted:${protocol}`,
+                    response_operation_id: `response:audio:aborted:${protocol}`,
+                    recorded_at: '2026-09-29T01:08:00.000Z',
+                },
+            };
+
+            await expect(
+                driver.streamCanonicalEvents(
+                    prompt,
+                    options,
+                    AbortSignal.abort(new Error('cancelled before audio open')),
+                    { stream_id: `stream:audio:aborted:${protocol}` },
+                ),
+            ).rejects.toThrow('cancelled before audio open');
+            expect(create).not.toHaveBeenCalled();
+        },
+    );
+
+    it('fails finite typed audio at the prepared-request barrier before opening transport', async () => {
+        const driver = new OpenAIDriver({ apiKey: 'test' });
+        const create = vi
+            .spyOn(driver.service.audio.speech, 'create')
+            .mockImplementation(() => Promise.resolve(new Response(bytes)) as never);
+        const stream = await driver.streamCanonicalEvents(
+            prompt,
+            {
+                model: 'gpt-4o-mini-tts',
+                store_audio: store,
+                conversation_runtime: {
+                    conversation_id: 'conversation:openai-speech-barrier',
+                    request_id: 'request:openai-speech-barrier',
+                    attempt_id: 'attempt:openai-speech-barrier',
+                    input_operation_id: 'input:openai-speech-barrier',
+                    response_operation_id: 'response:openai-speech-barrier',
+                    recorded_at: '2026-09-29T01:05:00.000Z',
+                },
+                on_canonical_request_prepared: async () => {
+                    throw new Error('publication rejected');
+                },
+            },
+            undefined,
+            { stream_id: 'stream:openai:speech:barrier' },
+        );
+
+        expect(await collectCanonicalEvents(stream)).toEqual([
+            expect.objectContaining({ type: 'stream_terminated', outcome: 'failed' }),
+        ]);
+        expect(create).not.toHaveBeenCalled();
+    });
+
+    it('rejects unsupported finite typed audio input before transport', async () => {
+        const driver = new OpenAIDriver({ apiKey: 'test' });
+        const create = vi.spyOn(driver.service.audio.speech, 'create');
+
+        await expect(
+            driver.streamCanonicalEvents(
+                prompt,
+                {
+                    model: 'gpt-4o-mini-tts',
+                    store_audio: store,
+                    tools: [{ name: 'unexpected', input_schema: { type: 'object' } }],
+                    conversation_runtime: {
+                        conversation_id: 'conversation:openai-speech-unsupported',
+                        request_id: 'request:openai-speech-unsupported',
+                        attempt_id: 'attempt:openai-speech-unsupported',
+                        input_operation_id: 'input:openai-speech-unsupported',
+                        response_operation_id: 'response:openai-speech-unsupported',
+                        recorded_at: '2026-09-29T01:06:00.000Z',
+                    },
+                },
+                undefined,
+                { stream_id: 'stream:openai:speech:unsupported' },
+            ),
+        ).rejects.toThrow('do not accept tools');
+        expect(create).not.toHaveBeenCalled();
+    });
+
+    it('settles typed audio cancellation while retaining transport ownership until the request settles', async () => {
+        const driver = new OpenAIDriver({ apiKey: 'test' });
+        let resolveTransport!: (response: Response) => void;
+        const create = vi.spyOn(driver.service.audio.speech, 'create').mockImplementation(
+            () =>
+                new Promise<Response>((resolve) => {
+                    resolveTransport = resolve;
+                }) as never,
+        );
+        const stream = await driver.streamCanonicalEvents(
+            prompt,
+            {
+                model: 'gpt-4o-mini-tts',
+                store_audio: store,
+                conversation_runtime: {
+                    conversation_id: 'conversation:openai-speech-cancel',
+                    request_id: 'request:openai-speech-cancel',
+                    attempt_id: 'attempt:openai-speech-cancel',
+                    input_operation_id: 'input:openai-speech-cancel',
+                    response_operation_id: 'response:openai-speech-cancel',
+                    recorded_at: '2026-09-29T01:07:00.000Z',
+                },
+            },
+            undefined,
+            { stream_id: 'stream:openai:speech:cancel' },
+        );
+        const pending = stream[Symbol.asyncIterator]().next();
+        await vi.waitFor(() => expect(create).toHaveBeenCalledOnce());
+
+        const terminal = await stream.cancel();
+        expect(terminal).toMatchObject({ type: 'stream_terminated', outcome: 'cancelled' });
+        await expect(pending).resolves.toMatchObject({ value: terminal });
+        let closed = false;
+        void stream.closed.then(() => {
+            closed = true;
+        });
+        await Promise.resolve();
+        expect(closed).toBe(false);
+
+        resolveTransport(new Response(bytes));
+        await stream.closed;
+        expect(closed).toBe(true);
+        expect(stream.terminal_event).toEqual(terminal);
+        expect(stream.completion).toBeUndefined();
     });
 
     it.each([
