@@ -10,7 +10,7 @@ on:
     # Covers the push/PR CI workflows on main and the active release branches. Automerge
     # workflows notify through their own notify-failure job. PR bookkeeping workflows are not
     # CI, and the post-merge cherry-pick runs on a closed PR the notifier cannot resolve.
-    workflows: ["(test) Build and test", "(lint) Lint codebase", "(security) Zizmor", "(sync) preview -> main"]
+    workflows: ["(test) Build and test", "(lint) Lint codebase", "(security) Zizmor"]
     types: [completed]
     branches: ["backport-*", "sync-composableai-*", "sync-llumiverse-*", "main", "release/**"]
   workflow_call:
