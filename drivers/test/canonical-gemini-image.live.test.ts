@@ -11,7 +11,7 @@ import { VertexAIDriver } from '../src/index.js';
 import { selectLiveTestDrivers } from './live-model-selection.js';
 
 const TIMEOUT = 180_000;
-const MODEL = 'publishers/google/models/imagen-3.0-generate-002';
+const MODEL = 'publishers/google/models/gemini-2.5-flash-image';
 const IMAGE_OUTPUT_MODALITY = 'image' as NonNullable<ExecutionOptions['output_modality']>;
 const PROMPT: PromptSegment[] = [
     {
@@ -20,13 +20,13 @@ const PROMPT: PromptSegment[] = [
     },
 ];
 
-interface ImagenLiveDriver {
+interface GeminiImageLiveDriver {
     name: string;
     models: string[];
     setup(): Promise<{
         driver: VertexAIDriver;
-        region: string;
-        predictCalls(): number;
+        generateCalls(): number;
+        streamCalls(): number;
         restore(): void;
     }>;
 }
@@ -53,7 +53,7 @@ function countMethodCalls(target: object, key: PropertyKey): { calls(): number; 
     };
 }
 
-const liveDrivers: ImagenLiveDriver[] = [];
+const liveDrivers: GeminiImageLiveDriver[] = [];
 if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
     liveDrivers.push({
         name: 'google-vertex',
@@ -64,13 +64,22 @@ if (process.env.GOOGLE_PROJECT_ID && process.env.GOOGLE_REGION) {
                 project: process.env.GOOGLE_PROJECT_ID as string,
                 region,
             });
-            const client = await driver.getImagenClient();
-            const transport = countMethodCalls(client, 'predict');
-            return { driver, region, predictCalls: transport.calls, restore: transport.restore };
+            const client = driver.getGoogleGenAIClient('global');
+            const generate = countMethodCalls(client.models, 'generateContent');
+            const stream = countMethodCalls(client.models, 'generateContentStream');
+            return {
+                driver,
+                generateCalls: generate.calls,
+                streamCalls: stream.calls,
+                restore: () => {
+                    stream.restore();
+                    generate.restore();
+                },
+            };
         },
     });
 } else {
-    console.warn('Canonical Imagen live coverage is skipped: GOOGLE_PROJECT_ID or GOOGLE_REGION is not set');
+    console.warn('Canonical Gemini image live coverage is skipped: GOOGLE_PROJECT_ID or GOOGLE_REGION is not set');
 }
 
 const selectedDrivers = selectLiveTestDrivers(liveDrivers, {
@@ -84,19 +93,18 @@ function options(model: string, attempt: string, conversation?: ConversationDocu
         ...(conversation === undefined ? {} : { conversation }),
         output_modality: IMAGE_OUTPUT_MODALITY,
         model_options: {
-            _option_id: 'vertexai-imagen',
-            number_of_images: 1,
-            image_file_type: 'image/jpeg',
-            jpeg_compression_quality: 60,
-            aspect_ratio: '1:1',
-            enhance_prompt: false,
+            _option_id: 'vertexai-gemini',
+            image_size: '1K',
+            image_aspect_ratio: '1:1',
+            output_mime_type: 'image/jpeg',
+            output_compression_quality: 60,
         },
         conversation_runtime: {
-            conversation_id: 'live:canonical:vertex-imagen',
-            request_id: 'live:canonical:vertex-imagen:request',
-            attempt_id: `live:canonical:vertex-imagen:attempt:${attempt}`,
-            input_operation_id: 'live:canonical:vertex-imagen:input',
-            response_operation_id: 'live:canonical:vertex-imagen:response',
+            conversation_id: 'live:canonical:vertex-gemini-image',
+            request_id: 'live:canonical:vertex-gemini-image:request',
+            attempt_id: `live:canonical:vertex-gemini-image:attempt:${attempt}`,
+            input_operation_id: 'live:canonical:vertex-gemini-image:input',
+            response_operation_id: 'live:canonical:vertex-gemini-image:response',
             recorded_at: '2026-09-30T00:00:00.000Z',
             started_at: '2026-09-30T00:00:00.000Z',
             completed_at: '2026-09-30T00:00:00.000Z',
@@ -117,7 +125,7 @@ async function contentHash(bytes: Uint8Array): Promise<string> {
     return `sha256:${Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
 }
 
-describe.each(selectedDrivers)('Canonical Imagen live execution', (live) => {
+describe.each(selectedDrivers)('Canonical Gemini image live execution', (live) => {
     test.each(live.models)(
         'persists verified output and exact-retries through typed streaming without another prediction for %s',
         { timeout: TIMEOUT, retry: 1 },
@@ -135,20 +143,20 @@ describe.each(selectedDrivers)('Canonical Imagen live execution', (live) => {
                 });
 
                 expect(firstPublishCount).toBe(1);
-                expect(transport.predictCalls()).toBe(1);
-                expect(first.accepted_output.turn.blocks).toEqual([
+                expect(transport.generateCalls()).toBe(1);
+                expect(transport.streamCalls()).toBe(0);
+                expect(first.accepted_output.turn.blocks).toContainEqual(
                     expect.objectContaining({ type: 'image', asset_id: expect.any(String) }),
-                ]);
+                );
                 expect(first.accepted_output.generation).toMatchObject({
-                    protocol: 'google.vertex.imagen.predict',
+                    protocol: 'google.generate_content',
                     requested_model: model,
                     status: 'completed',
                     request_receipt: {
                         target: {
                             provider: 'vertexai',
-                            protocol: 'google.vertex.imagen.predict',
+                            protocol: 'google.generate_content',
                             model,
-                            options: { location: transport.region },
                         },
                     },
                 });
@@ -162,7 +170,7 @@ describe.each(selectedDrivers)('Canonical Imagen live execution', (live) => {
                     content_hash: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
                     storage: { type: 'inline_base64', data: expect.any(String) },
                 });
-                if (asset.storage.type !== 'inline_base64') throw new Error('Expected inline Imagen live asset');
+                if (asset.storage.type !== 'inline_base64') throw new Error('Expected inline Gemini image asset');
                 const imageBytes = new Uint8Array(Buffer.from(asset.storage.data, 'base64'));
                 expect(imageBytes).toHaveLength(asset.byte_length ?? -1);
                 expect(asset.content_hash).toBe(await contentHash(imageBytes));
@@ -177,7 +185,7 @@ describe.each(selectedDrivers)('Canonical Imagen live execution', (live) => {
                         },
                     },
                     undefined,
-                    { stream_id: 'live:canonical:vertex-imagen:retry' },
+                    { stream_id: 'live:canonical:vertex-gemini-image:retry' },
                 );
                 const events = await collect(retryStream);
 
@@ -186,7 +194,8 @@ describe.each(selectedDrivers)('Canonical Imagen live execution', (live) => {
                 ]);
                 expect(retryStream.completion?.accepted_output).toEqual(first.accepted_output);
                 expect(retryPublishCount).toBe(0);
-                expect(transport.predictCalls()).toBe(1);
+                expect(transport.generateCalls()).toBe(1);
+                expect(transport.streamCalls()).toBe(0);
             } finally {
                 if (retryStream !== undefined) {
                     try {
