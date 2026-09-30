@@ -6,10 +6,18 @@ on:
     types: [opened, converted_to_draft]
   # zizmor: ignore[dangerous-triggers] Reads failed run metadata; checkout is always the default branch.
   workflow_run:
-    workflows: ["*"]
+    # Explicit on purpose: "*" also started a run for every automation workflow completion.
+    # Covers the push/PR CI workflows on main and the active release branches. Automerge
+    # workflows notify through their own notify-failure job. PR bookkeeping workflows are not
+    # CI, and the post-merge cherry-pick runs on a closed PR the notifier cannot resolve.
+    workflows: ["(test) Build and test", "(lint) Lint codebase", "(security) Zizmor", "(sync) preview -> main"]
     types: [completed]
     branches: ["backport-*", "sync-composableai-*", "sync-llumiverse-*", "main", "release/**"]
   workflow_call:
+    secrets:
+      APP_VERTESIA_SUBMODULE_SYNC_PEM:
+        description: Resolved from the submodule-sync environment in the notification job.
+        required: false
     outputs:
       notification_requested:
         description: A recipient was resolved; callers must also require workflow success.
