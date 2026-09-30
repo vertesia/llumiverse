@@ -152,6 +152,9 @@ describe.each(selectedDrivers)('Canonical Gemini image live execution', (live) =
                     protocol: 'google.generate_content',
                     requested_model: model,
                     status: 'completed',
+                });
+                expect(first.accepted_output.generation).not.toHaveProperty('request_receipt');
+                expect(first.conversation.generations[first.accepted_output.generation.id]).toMatchObject({
                     request_receipt: {
                         target: {
                             provider: 'vertexai',
