@@ -12,6 +12,7 @@ import {
     type ContentBlock,
     type ConverseRequest,
     type ConverseResponse,
+    type ConverseStreamCommandOutput,
     type ConverseStreamOutput,
     type InferenceConfiguration,
     type InvokeModelCommandOutput,
@@ -22,14 +23,25 @@ import {
     type ToolResultContentBlock,
 } from '@aws-sdk/client-bedrock-runtime';
 import { S3Client } from '@aws-sdk/client-s3';
-import { isConversationDocumentFormat } from '@llumiverse/conversation';
+import {
+    CONVERSATION_STREAM_MAX_TOTAL_BYTES,
+    canonicalJsonContentString,
+    createStructuredOutputTransformationProof,
+    type DecodedConversationResponse,
+    isConversationDocumentFormat,
+    type JsonValue,
+    type NativeStreamPosition,
+    toolArgumentsForModel,
+} from '@llumiverse/conversation';
 import {
     type AIModel,
     type BedrockClaudeOptions,
     type BedrockGptOssOptions,
     type BedrockPalmyraOptions,
+    type CanonicalExecutionEventStream,
     type CanonicalExecutionResponse,
     type CanonicalExecutionStream,
+    type CanonicalStreamOpenOptions,
     type Completion,
     type CompletionChunkObject,
     type CompletionResult,
@@ -41,6 +53,7 @@ import {
     type EmbeddingsResult,
     type ExecutionOptions,
     type ExecutionTokenUsage,
+    FallbackCanonicalExecutionEventStream,
     getConversationMeta,
     getMaxTokensLimitBedrock,
     type HttpTimeoutOptions,
@@ -72,6 +85,7 @@ import { AbstractDriver } from '@llumiverse/core/driver';
 import { formatNovaPrompt, type NovaMessagesPrompt } from '@llumiverse/core/formatters';
 import { mergeDriverHttpTimeoutOptions, resolveDriverHttpTimeouts } from '@llumiverse/core/http-agent';
 import { LRUCache } from 'lru-cache';
+import { canonicalNativeExecutionEventStream } from '../conversation/canonical-execution-event-stream.js';
 import {
     assertAcceptedCanonicalRequest,
     publishCanonicalPreparedRequest,
@@ -416,21 +430,114 @@ function collectBedrockNativeStreamBlock(blocks: Map<number, ContentBlock>, even
     }
 }
 
-function finalizeBedrockNativeBlocks(blocks: Map<number, ContentBlock>): ContentBlock[] {
+function finalizeBedrockNativeBlockEntries(blocks: Map<number, ContentBlock>): Array<[number, ContentBlock]> {
     return [...blocks.entries()]
         .sort(([left], [right]) => left - right)
-        .flatMap(([, block]) => {
+        .flatMap(([index, block]): Array<[number, ContentBlock]> => {
             if ('toolUse' in block && block.toolUse && typeof block.toolUse.input === 'string') {
                 try {
-                    return [{ toolUse: { ...block.toolUse, input: JSON.parse(block.toolUse.input) as JSONObject } }];
+                    return [
+                        [
+                            index,
+                            { toolUse: { ...block.toolUse, input: JSON.parse(block.toolUse.input) as JSONObject } },
+                        ],
+                    ];
                 } catch {
                     // Invalid streamed JSON is not a complete tool call. Do not put it in native
                     // replay, where it would require a tool_result the workflow cannot produce.
                     return [];
                 }
             }
-            return [block];
+            return [[index, block]];
         });
+}
+
+function finalizeBedrockNativeBlocks(blocks: Map<number, ContentBlock>): ContentBlock[] {
+    return finalizeBedrockNativeBlockEntries(blocks).map(([, block]) => block);
+}
+
+const BEDROCK_STREAM_EXCEPTION_KEYS = [
+    'modelStreamErrorException',
+    'internalServerException',
+    'validationException',
+    'throttlingException',
+    'serviceUnavailableException',
+] as const;
+
+function assertBedrockConverseStreamEvent(event: ConverseStreamOutput, messageStopped: boolean): void {
+    const exception = BEDROCK_STREAM_EXCEPTION_KEYS.find((key) => event[key] !== undefined);
+    if (exception !== undefined) {
+        throw new Error(`Bedrock Converse stream emitted ${exception}`);
+    }
+    if (event.$unknown !== undefined) {
+        throw new Error('Bedrock Converse stream emitted an unsupported event');
+    }
+    if (
+        messageStopped &&
+        (event.messageStart !== undefined ||
+            event.contentBlockStart !== undefined ||
+            event.contentBlockDelta !== undefined ||
+            event.contentBlockStop !== undefined ||
+            event.messageStop !== undefined)
+    ) {
+        throw new Error('Bedrock Converse stream emitted content after its terminal message stop');
+    }
+}
+
+function bedrockConverseStreamEventBytes(event: ConverseStreamOutput): number {
+    const serialized = canonicalJsonContentString(bedrockConverseJsonValue(event));
+    return new TextEncoder().encode(serialized).byteLength;
+}
+
+interface BedrockCanonicalDraft {
+    draft_block_id: string;
+    native_position: NativeStreamPosition;
+    kind: 'text' | 'reasoning' | 'tool_call';
+    text: string;
+    tool_argument_fragments: string[];
+}
+
+function bedrockStreamPosition(index: number, nativeItemId?: string): NativeStreamPosition {
+    return {
+        protocol: 'aws.bedrock.converse',
+        path: ['output', 'message', 'content', index],
+        ...(nativeItemId === undefined ? {} : { native_item_id: nativeItemId }),
+    };
+}
+
+function bedrockSemanticBlocks(decoded: DecodedConversationResponse, turnId: string) {
+    const turn = decoded.turns.find((candidate) => candidate.id === turnId);
+    if (turn?.kind !== 'agent') throw new Error('Bedrock Converse stream decode has no generated agent turn');
+    return turn.blocks.filter((block) => block.type !== 'native_replay');
+}
+
+function bedrockEntryHasSemanticBlock(block: ContentBlock): boolean {
+    if (block.reasoningContent?.redactedContent !== undefined) return false;
+    return (
+        block.text !== undefined ||
+        block.toolUse !== undefined ||
+        block.reasoningContent?.reasoningText !== undefined ||
+        block.image !== undefined ||
+        block.audio !== undefined ||
+        block.video !== undefined ||
+        block.document !== undefined
+    );
+}
+
+function assertBedrockToolDraftArguments(
+    draft: BedrockCanonicalDraft,
+    block: ReturnType<typeof bedrockSemanticBlocks>[number],
+): void {
+    if (draft.kind !== 'tool_call' || block.type !== 'tool_call' || block.arguments.type === 'invalid') return;
+    let streamed: JsonValue;
+    try {
+        streamed = bedrockConverseJsonValue(JSON.parse(draft.tool_argument_fragments.join('')));
+    } catch {
+        throw new Error('Bedrock Converse tool argument fragments do not form valid JSON');
+    }
+    if (canonicalJsonContentString(streamed) !== canonicalJsonContentString(toolArgumentsForModel(block.arguments))) {
+        throw new Error('Bedrock Converse tool argument fragments differ from the terminal tool input');
+    }
 }
 
 function withBedrockRuntimeScope<T>(iterable: AsyncIterable<T>, scope: BedrockRuntimeExecutorScope): AsyncIterable<T> {
@@ -1648,6 +1755,434 @@ export class BedrockDriver extends AbstractDriver<BedrockDriverOptions, BedrockP
             () => abortController.abort(),
             () => signal?.removeEventListener('abort', forwardAbort),
         );
+    }
+
+    async requestCanonicalTextCompletionEventStream(
+        prompt: BedrockPrompt,
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        if (options.model.includes('twelvelabs.pegasus')) {
+            throw new Error(`Bedrock model ${options.model} does not support canonical event streaming`);
+        }
+        const conversePrompt = prompt as ConverseRequest;
+        const canonicalState = await prepareBedrockConverseCanonicalState({
+            conversation: isConversationDocumentFormat(options.conversation)
+                ? options.conversation
+                : deserializeBinaryFromStorage(options.conversation),
+            prompt: conversePrompt,
+            options,
+            provider: this.provider,
+        });
+        const conversation: ConverseRequest = { ...canonicalState.native_conversation, modelId: options.model };
+        const payload = this.preparePayload(conversation, options);
+        await assertAcceptedCanonicalRequest(
+            canonicalState,
+            { provider: this.provider, protocol: 'aws.bedrock.converse', model: options.model },
+            bedrockConverseJsonValue(payload),
+        );
+        const accepted = canonicalState.accepted_response;
+        const identity = {
+            request_id: accepted?.generation.request_id ?? canonicalState.runtime.request_id,
+            attempt_id: accepted?.generation.attempt_id ?? canonicalState.runtime.attempt_id,
+            response_operation_id: canonicalState.runtime.response_operation_id,
+            generation_id: accepted?.generation.id ?? canonicalState.generation_id,
+            draft_turn_id: accepted?.turn.id ?? canonicalState.response_turn_id,
+        };
+        if (accepted !== undefined) {
+            if (options.include_original_response) {
+                throw new Error(
+                    'An idempotently recovered Bedrock Converse response cannot reconstruct original_response',
+                );
+            }
+            return new FallbackCanonicalExecutionEventStream(
+                identity,
+                () => recoverCanonicalExecutionResponse(canonicalState, options),
+                { ...open, origin: 'accepted_recovery' },
+            );
+        }
+
+        const prepared = await finalizeBedrockConversePreparedRequest(
+            { ...canonicalState, native_conversation: conversation },
+            payload,
+        );
+        const abortController = new AbortController();
+        const forwardAbort = () => abortController.abort(signal?.reason);
+        const nativeBlocks = new Map<number, ContentBlock>();
+        const drafts = new Map<number, BedrockCanonicalDraft>();
+        let outputRole: Message['role'] | undefined;
+        let stopReason: ConverseResponse['stopReason'];
+        let usage: ConverseResponse['usage'];
+        let metrics: ConverseResponse['metrics'];
+        let additionalModelResponseFields: ConverseResponse['additionalModelResponseFields'];
+        let trace: ConverseResponse['trace'];
+        let performanceConfig: ConverseResponse['performanceConfig'];
+        let serviceTier: ConverseResponse['serviceTier'];
+        let streamResponse: ConverseStreamCommandOutput | undefined;
+        let executorScope: BedrockRuntimeExecutorScope | undefined;
+        let messageStopped = false;
+        let nativeContentBytes = 0;
+        const maxNativeContentBytes = open.max_total_bytes ?? CONVERSATION_STREAM_MAX_TOTAL_BYTES;
+
+        const eventStream = canonicalNativeExecutionEventStream({
+            identity,
+            open,
+            openSource: async () => {
+                const scope = this.getScopedExecutor(options);
+                executorScope = scope;
+                try {
+                    streamResponse = await scope.executor.converseStream(
+                        { ...payload },
+                        { abortSignal: abortController.signal },
+                    );
+                } catch (error: unknown) {
+                    scope.close();
+                    executorScope = undefined;
+                    throw error;
+                }
+                if (streamResponse.stream === undefined) {
+                    throw new Error('[Bedrock] Stream not found in response');
+                }
+                return streamResponse.stream;
+            },
+            map: async (event, writer) => {
+                assertBedrockConverseStreamEvent(event, messageStopped);
+                const eventBytes = bedrockConverseStreamEventBytes(event);
+                if (eventBytes > maxNativeContentBytes - nativeContentBytes) {
+                    throw new Error('Bedrock Converse native stream content exceeds max_total_bytes');
+                }
+                nativeContentBytes += eventBytes;
+                collectBedrockNativeStreamBlock(nativeBlocks, event);
+                if (event.messageStart !== undefined) outputRole = event.messageStart.role;
+                if (event.contentBlockStart !== undefined) {
+                    const index = event.contentBlockStart.contentBlockIndex ?? -1;
+                    const start = event.contentBlockStart.start;
+                    if (start?.toolUse !== undefined) {
+                        if (drafts.has(index)) throw new Error(`Bedrock Converse duplicate content block ${index}`);
+                        const executor = start.toolUse.type === 'server_tool_use' ? 'provider' : 'application';
+                        const position = bedrockStreamPosition(index, start.toolUse.toolUseId);
+                        const draft: BedrockCanonicalDraft = {
+                            draft_block_id: `${prepared.response_turn_id}:bedrock:${index}`,
+                            native_position: position,
+                            kind: 'tool_call',
+                            text: '',
+                            tool_argument_fragments: [],
+                        };
+                        drafts.set(index, draft);
+                        await writer.startBlock({
+                            draft_block_id: draft.draft_block_id,
+                            native_position: position,
+                            block: {
+                                type: 'tool_call',
+                                executor,
+                                call_id: start.toolUse.toolUseId,
+                                tool_name: start.toolUse.name,
+                            },
+                        });
+                    } else if (start !== undefined) {
+                        const startType = Object.keys(start).find(
+                            (key) =>
+                                key !== '$unknown' && (start as unknown as Record<string, unknown>)[key] !== undefined,
+                        );
+                        if (startType !== 'reasoningContent') {
+                            throw new Error(
+                                `Bedrock Converse typed stream does not support ${startType ?? 'unknown'} blocks`,
+                            );
+                        }
+                    }
+                }
+                if (event.contentBlockDelta !== undefined) {
+                    const index = event.contentBlockDelta.contentBlockIndex ?? -1;
+                    const delta = event.contentBlockDelta.delta;
+                    if (delta?.text !== undefined) {
+                        let draft = drafts.get(index);
+                        if (draft === undefined) {
+                            const position = bedrockStreamPosition(index);
+                            draft = {
+                                draft_block_id: `${prepared.response_turn_id}:bedrock:${index}`,
+                                native_position: position,
+                                kind: 'text',
+                                text: '',
+                                tool_argument_fragments: [],
+                            };
+                            drafts.set(index, draft);
+                            await writer.startBlock({
+                                draft_block_id: draft.draft_block_id,
+                                native_position: position,
+                                block: { type: 'text' },
+                            });
+                        }
+                        if (draft.kind !== 'text')
+                            throw new Error(`Bedrock Converse content block ${index} changed kind`);
+                        draft.text += delta.text;
+                        await writer.text({
+                            draft_block_id: draft.draft_block_id,
+                            native_position: draft.native_position,
+                            text: delta.text,
+                        });
+                    } else if (delta?.toolUse?.input !== undefined) {
+                        const draft = drafts.get(index);
+                        if (draft?.kind !== 'tool_call') {
+                            throw new Error(`Bedrock Converse tool delta has no draft at content index ${index}`);
+                        }
+                        draft.tool_argument_fragments.push(delta.toolUse.input);
+                        await writer.toolArgumentsFragment({
+                            draft_block_id: draft.draft_block_id,
+                            native_position: draft.native_position,
+                            fragment: delta.toolUse.input,
+                        });
+                    } else if (delta?.reasoningContent !== undefined) {
+                        if (delta.reasoningContent.text !== undefined) {
+                            let draft = drafts.get(index);
+                            if (draft === undefined) {
+                                const position = bedrockStreamPosition(index);
+                                draft = {
+                                    draft_block_id: `${prepared.response_turn_id}:bedrock:${index}`,
+                                    native_position: position,
+                                    kind: 'reasoning',
+                                    text: '',
+                                    tool_argument_fragments: [],
+                                };
+                                drafts.set(index, draft);
+                                await writer.startBlock({
+                                    draft_block_id: draft.draft_block_id,
+                                    native_position: position,
+                                    block: { type: 'reasoning', visibility: 'display' },
+                                });
+                            }
+                            if (draft.kind !== 'reasoning') {
+                                throw new Error(`Bedrock Converse content block ${index} changed kind`);
+                            }
+                            draft.text += delta.reasoningContent.text;
+                            await writer.reasoning({
+                                draft_block_id: draft.draft_block_id,
+                                native_position: draft.native_position,
+                                text: delta.reasoningContent.text,
+                            });
+                        }
+                    } else if (delta !== undefined) {
+                        const deltaType = Object.keys(delta).find(
+                            (key) =>
+                                key !== '$unknown' && (delta as unknown as Record<string, unknown>)[key] !== undefined,
+                        );
+                        throw new Error(
+                            `Bedrock Converse typed stream does not support ${deltaType ?? 'unknown'} deltas`,
+                        );
+                    }
+                }
+                if (event.messageStop !== undefined) {
+                    stopReason = event.messageStop.stopReason;
+                    additionalModelResponseFields = event.messageStop.additionalModelResponseFields;
+                    messageStopped = true;
+                }
+                if (event.metadata !== undefined) {
+                    usage = event.metadata.usage;
+                    metrics = event.metadata.metrics;
+                    trace = event.metadata.trace;
+                    performanceConfig = event.metadata.performanceConfig;
+                    serviceTier = event.metadata.serviceTier;
+                }
+            },
+            finalize: async () => {
+                if (stopReason === undefined) {
+                    throw new Error('Bedrock Converse stream ended without a terminal stop reason');
+                }
+                const entries = finalizeBedrockNativeBlockEntries(nativeBlocks);
+                if (entries.length === 0) {
+                    throw new Error('Bedrock Converse stream ended without decodable content');
+                }
+                const blocks = entries.map(([, block]) => block);
+                const terminalResponse = {
+                    output: { message: { role: outputRole ?? ('assistant' as const), content: blocks } },
+                    stopReason,
+                    ...(usage === undefined ? {} : { usage }),
+                    ...(metrics === undefined ? {} : { metrics }),
+                    ...(additionalModelResponseFields === undefined ? {} : { additionalModelResponseFields }),
+                    ...(trace === undefined ? {} : { trace }),
+                    ...(performanceConfig === undefined ? {} : { performanceConfig }),
+                    ...(serviceTier === undefined ? {} : { serviceTier }),
+                    ...(streamResponse?.$metadata === undefined ? {} : { $metadata: streamResponse.$metadata }),
+                } as ConverseResponse;
+                const hasApplicationTool = blocks.some(
+                    (block) => block.toolUse !== undefined && block.toolUse.type !== 'server_tool_use',
+                );
+                const normalized =
+                    !hasApplicationTool && options.result_schema
+                        ? normalizeCompletionResult(
+                              bedrockAnswerResults(terminalResponse.output?.message),
+                              options.result_schema,
+                          )
+                        : undefined;
+                const rawDecoded = await decodeBedrockConverseCanonicalResponse(terminalResponse, prepared);
+                let decoded =
+                    normalized?.status === 'valid'
+                        ? await decodeBedrockConverseCanonicalResponse(
+                              terminalResponse,
+                              prepared,
+                              normalized.structured_output,
+                          )
+                        : rawDecoded;
+                if (normalized?.status === 'invalid') {
+                    decoded = rejectDecodedStructuredOutput(decoded, normalized.error);
+                }
+                const document = appendBedrockConverseCanonicalResponse(prepared, decoded);
+                const response = createCanonicalExecutionResponse(document, prepared.runtime.response_operation_id, {
+                    ...(serviceTier?.type === undefined ? {} : { service_tier: serviceTier.type }),
+                    ...(options.include_original_response ? { original_response: terminalResponse } : {}),
+                });
+                return {
+                    decoded,
+                    response,
+                    prepare_reconciliation: async () => {
+                        const semanticEntries = entries.filter(([, block]) => bedrockEntryHasSemanticBlock(block));
+                        const positions = semanticEntries.map(([index, block]) =>
+                            bedrockStreamPosition(index, block.toolUse?.toolUseId),
+                        );
+                        const rawBlocks = bedrockSemanticBlocks(rawDecoded, prepared.response_turn_id);
+                        if (rawBlocks.length !== positions.length) {
+                            throw new Error(
+                                'Bedrock Converse stream decode does not match terminal native content positions',
+                            );
+                        }
+                        const orderedDrafts = semanticEntries.map(([index]) => drafts.get(index));
+                        const matchedDraftIds = new Set<string>();
+                        for (const [index, block] of rawBlocks.entries()) {
+                            const draft = orderedDrafts[index];
+                            if (draft === undefined) continue;
+                            matchedDraftIds.add(draft.draft_block_id);
+                            assertBedrockToolDraftArguments(draft, block);
+                        }
+                        const itemMappings = rawBlocks.flatMap((block, index) => {
+                            const position = positions[index];
+                            if (position === undefined) return [];
+                            return [
+                                { canonical_id: block.id, native_position: position, kind: 'block' as const },
+                                ...(block.type === 'tool_call'
+                                    ? [
+                                          {
+                                              canonical_id: block.call_id,
+                                              native_position: position,
+                                              kind: 'call' as const,
+                                          },
+                                      ]
+                                    : []),
+                            ];
+                        });
+                        const transformations = [];
+                        const reconciliations = [];
+                        if (normalized?.status === 'valid') {
+                            const sources = rawBlocks.filter((block) => block.type === 'text');
+                            const result = bedrockSemanticBlocks(decoded, prepared.response_turn_id).find(
+                                (block) => block.type === 'json',
+                            );
+                            if (sources.length === 0 || result?.type !== 'json') {
+                                throw new Error('Bedrock structured stream is missing source or result blocks');
+                            }
+                            const proof = await createStructuredOutputTransformationProof({
+                                id: `${prepared.generation_id}:structured-output`,
+                                source_blocks: sources,
+                                result_block: result,
+                            });
+                            transformations.push(proof);
+                            const sourceDrafts = rawBlocks.flatMap((block, index) =>
+                                block.type === 'text' && orderedDrafts[index] !== undefined
+                                    ? [orderedDrafts[index]]
+                                    : [],
+                            );
+                            reconciliations.push({
+                                draft_block_ids: sourceDrafts.map((draft) => draft.draft_block_id),
+                                native_positions: sourceDrafts.map((draft) => draft.native_position),
+                                committed_block_ids: [result.id],
+                                disposition: 'structured_output' as const,
+                                transformation_id: proof.id,
+                            });
+                        }
+                        for (const [index, block] of rawBlocks.entries()) {
+                            if (normalized?.status === 'valid' && block.type === 'text') continue;
+                            const draft = orderedDrafts[index];
+                            if (draft === undefined) continue;
+                            reconciliations.push({
+                                draft_block_ids: [draft.draft_block_id],
+                                native_positions: [draft.native_position],
+                                committed_block_ids: [block.id],
+                                disposition: 'direct' as const,
+                            });
+                        }
+                        for (const draft of drafts.values()) {
+                            if (matchedDraftIds.has(draft.draft_block_id)) continue;
+                            if (draft.kind !== 'tool_call') {
+                                throw new Error(
+                                    `Bedrock terminal response omitted non-tool draft ${draft.draft_block_id}`,
+                                );
+                            }
+                            reconciliations.push({
+                                draft_block_ids: [draft.draft_block_id],
+                                native_positions: [draft.native_position],
+                                committed_block_ids: [],
+                                disposition: 'omitted_invalid' as const,
+                            });
+                        }
+                        const decodedWithEvidence = {
+                            ...decoded,
+                            stream_evidence: { item_mappings: itemMappings, transformations },
+                        };
+                        return {
+                            decoded: decodedWithEvidence,
+                            reconciliations,
+                            deliver_final_events: async (writer) => {
+                                if (decodedWithEvidence.generation.usage !== undefined) {
+                                    await writer.usage(decodedWithEvidence.generation.usage);
+                                }
+                                for (const draft of drafts.values()) {
+                                    const rawBlock = rawBlocks.find(
+                                        (_block, index) =>
+                                            orderedDrafts[index]?.draft_block_id === draft.draft_block_id,
+                                    );
+                                    await writer.finishBlock({
+                                        draft_block_id: draft.draft_block_id,
+                                        native_position: draft.native_position,
+                                        outcome:
+                                            rawBlock?.type === 'tool_call' && rawBlock.arguments.type === 'invalid'
+                                                ? 'malformed'
+                                                : rawBlock === undefined
+                                                  ? 'malformed'
+                                                  : decodedWithEvidence.generation.status === 'cancelled'
+                                                    ? 'interrupted'
+                                                    : decodedWithEvidence.generation.status === 'failed'
+                                                      ? 'failed'
+                                                      : 'native_complete',
+                                    });
+                                }
+                                await writer.finish({
+                                    outcome:
+                                        decodedWithEvidence.generation.status === 'cancelled'
+                                            ? 'interrupted'
+                                            : decodedWithEvidence.generation.status === 'failed'
+                                              ? 'failed'
+                                              : 'completed',
+                                    finish_reason: decodedWithEvidence.generation.finish_reason,
+                                    ...(serviceTier?.type === undefined ? {} : { service_tier: serviceTier.type }),
+                                });
+                            },
+                        };
+                    },
+                    ...(normalized?.status === 'valid' && options.result_schema !== undefined
+                        ? { result_schema: options.result_schema }
+                        : {}),
+                };
+            },
+            abort: () => abortController.abort(),
+            close: () => {
+                signal?.removeEventListener('abort', forwardAbort);
+                executorScope?.close();
+                executorScope = undefined;
+            },
+        });
+        await publishCanonicalPreparedRequest(prepared, options);
+        if (signal?.aborted) forwardAbort();
+        else signal?.addEventListener('abort', forwardAbort, { once: true });
+        return eventStream;
     }
 
     preparePayload(prompt: ConverseRequest, options: ExecutionOptions) {

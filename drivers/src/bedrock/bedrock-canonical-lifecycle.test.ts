@@ -4,7 +4,12 @@ import type {
     ConverseResponse,
     ConverseStreamOutput,
 } from '@aws-sdk/client-bedrock-runtime';
-import { parseConversationDocument } from '@llumiverse/conversation';
+import {
+    type ConversationStreamEvent,
+    fingerprintJson,
+    parseConversationDocument,
+    resolveToolExecutionRequest,
+} from '@llumiverse/conversation';
 import { type ExecutionOptions, PromptRole } from '@llumiverse/core';
 import { describe, expect, it, vi } from 'vitest';
 import { BedrockDriver, exportLegacyBedrockConverseConversation } from './index.js';
@@ -46,6 +51,14 @@ function runtimeOptions(input: {
 
 function prompt(content: NonNullable<ConverseRequest['messages']>[number]['content']): ConverseRequest {
     return { modelId: MODEL, messages: [{ role: 'user', content }] };
+}
+
+async function collectCanonicalEvents(
+    stream: AsyncIterable<ConversationStreamEvent>,
+): Promise<ConversationStreamEvent[]> {
+    const events: ConversationStreamEvent[] = [];
+    for await (const event of stream) events.push(event);
+    return events;
 }
 
 describe('Bedrock canonical driver lifecycle', () => {
@@ -144,6 +157,579 @@ describe('Bedrock canonical driver lifecycle', () => {
         expect(stream.completion?.service_tier).toBe('priority');
         expect(stream.completion?.chunks).toBe(2);
         expect(stream.completion).not.toHaveProperty('prompt');
+    });
+
+    it('emits typed structured drafts and recovers the accepted Bedrock response without transport', async () => {
+        const events: ConverseStreamOutput[] = [
+            { messageStart: { role: 'assistant' } },
+            { contentBlockDelta: { contentBlockIndex: 0, delta: { text: '{"answer":' } } },
+            { contentBlockDelta: { contentBlockIndex: 0, delta: { text: '"Osaka"}' } } },
+            { contentBlockStop: { contentBlockIndex: 0 } },
+            { messageStop: { stopReason: 'end_turn' } },
+            {
+                metadata: {
+                    usage: { inputTokens: 5, outputTokens: 2, totalTokens: 7 },
+                    metrics: { latencyMs: 1 },
+                    serviceTier: { type: 'priority' },
+                },
+            },
+        ];
+        const converseStream = vi.fn(async () => ({
+            stream: (async function* () {
+                for (const event of events) yield event;
+            })(),
+            $metadata: { requestId: 'typed-structured-response' },
+        }));
+        const destroy = vi.fn();
+        const publish = vi.fn(async () => undefined);
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        Object.defineProperty(driver, 'canStream', { value: async () => true });
+        Object.defineProperty(driver, 'getExecutor', {
+            value: () => ({ converseStream, destroy }),
+        });
+        const segments = [{ role: PromptRole.user, content: 'Return JSON.' }];
+        const firstOptions = {
+            ...runtimeOptions({ flow: 'typed-structured', operation: 'first', attempt: 'first' }),
+            result_schema: RESULT_SCHEMA,
+            on_canonical_request_prepared: publish,
+        };
+        const stream = await driver.streamCanonicalEvents(segments, firstOptions, undefined, {
+            stream_id: 'stream:bedrock:typed-structured',
+        });
+        const typedEvents = await collectCanonicalEvents(stream);
+
+        expect(typedEvents.filter((event) => event.type === 'draft_text_delta')).toMatchObject([
+            {
+                text: '{"answer":',
+                native_position: {
+                    protocol: 'aws.bedrock.converse',
+                    path: ['output', 'message', 'content', 0],
+                },
+            },
+            { text: '"Osaka"}' },
+        ]);
+        expect(typedEvents.at(-1)).toMatchObject({
+            type: 'response_accepted',
+            origin: 'live_transport',
+            reconciliations: [{ disposition: 'structured_output' }],
+        });
+        expect(stream.completion?.accepted_output.turn.blocks).toContainEqual(
+            expect.objectContaining({ type: 'json', value: { answer: 'Osaka' } }),
+        );
+        expect(stream.completion?.accepted_output.generation).toMatchObject({
+            provider_response_id: 'typed-structured-response',
+            usage: { input_tokens: 5, output_tokens: 2, total_tokens: 7 },
+        });
+        expect(stream.completion?.service_tier).toBe('priority');
+        expect(publish).toHaveBeenCalledOnce();
+
+        if (stream.completion === undefined) throw new Error('Expected accepted Bedrock typed completion');
+        const recoveredPublish = vi.fn(async () => undefined);
+        const recovered = await driver.streamCanonicalEvents(
+            segments,
+            {
+                ...runtimeOptions({
+                    flow: 'typed-structured',
+                    operation: 'first',
+                    attempt: 'retry',
+                    conversation: JSON.parse(JSON.stringify(stream.completion.conversation)),
+                }),
+                result_schema: RESULT_SCHEMA,
+                on_canonical_request_prepared: recoveredPublish,
+            },
+            undefined,
+            { stream_id: 'stream:bedrock:typed-structured:retry' },
+        );
+        expect(await collectCanonicalEvents(recovered)).toEqual([
+            expect.objectContaining({ type: 'response_accepted', origin: 'accepted_recovery', sequence: 0 }),
+        ]);
+        expect(recovered.completion?.accepted_output).toEqual(stream.completion.accepted_output);
+        expect(converseStream).toHaveBeenCalledOnce();
+        expect(recoveredPublish).not.toHaveBeenCalled();
+
+        const legacyDriver = new BedrockDriver({ region: 'us-east-1' });
+        Object.defineProperty(legacyDriver, 'canStream', { value: async () => true });
+        Object.defineProperty(legacyDriver, 'getExecutor', {
+            value: () => ({ converseStream, destroy: vi.fn() }),
+        });
+        const legacy = await legacyDriver.streamCanonical(segments, firstOptions);
+        for await (const _chunk of legacy) {
+            // Drain the compatibility stream through authoritative canonical acceptance.
+        }
+        expect(legacy.completion?.accepted_output).toEqual(stream.completion.accepted_output);
+        expect(converseStream).toHaveBeenCalledTimes(2);
+    });
+
+    it('accepts invalid required structured output as a failed typed Bedrock response', async () => {
+        const events: ConverseStreamOutput[] = [
+            { contentBlockDelta: { contentBlockIndex: 0, delta: { text: '{"wrong":true}' } } },
+            { messageStop: { stopReason: 'end_turn' } },
+            { metadata: { usage: { inputTokens: 2, outputTokens: 2, totalTokens: 4 }, metrics: { latencyMs: 1 } } },
+        ];
+        const converseStream = vi.fn(async () => ({
+            stream: (async function* () {
+                for (const event of events) yield event;
+            })(),
+            $metadata: { requestId: 'typed-invalid-structured-response' },
+        }));
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        Object.defineProperty(driver, 'canStream', { value: async () => true });
+        Object.defineProperty(driver, 'getExecutor', {
+            value: () => ({ converseStream, destroy: vi.fn() }),
+        });
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Return JSON.' }],
+            {
+                ...runtimeOptions({ flow: 'typed-invalid-structured', operation: 'first' }),
+                result_schema: RESULT_SCHEMA,
+            },
+            undefined,
+            { stream_id: 'stream:bedrock:typed-invalid-structured' },
+        );
+        const typedEvents = await collectCanonicalEvents(stream);
+
+        expect(typedEvents.at(-1)?.type).toBe('response_accepted');
+        expect(stream.completion?.accepted_output.generation.status).toBe('failed');
+        expect(stream.completion?.accepted_output.turn).toMatchObject({
+            status: 'failed',
+            blocks: [expect.objectContaining({ type: 'text', text: '{"wrong":true}' })],
+        });
+    });
+
+    it('retains an accepted typed Bedrock response when final event delivery exceeds its budget', async () => {
+        const events: ConverseStreamOutput[] = [
+            { contentBlockDelta: { contentBlockIndex: 0, delta: { text: 'authoritative answer' } } },
+            { messageStop: { stopReason: 'end_turn' } },
+            { metadata: { usage: { inputTokens: 2, outputTokens: 2, totalTokens: 4 }, metrics: { latencyMs: 1 } } },
+        ];
+        const converseStream = vi.fn(async () => ({
+            stream: (async function* () {
+                for (const event of events) yield event;
+            })(),
+            $metadata: { requestId: 'typed-delivery-budget-response' },
+        }));
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        Object.defineProperty(driver, 'canStream', { value: async () => true });
+        Object.defineProperty(driver, 'getExecutor', {
+            value: () => ({ converseStream, destroy: vi.fn() }),
+        });
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Answer.' }],
+            runtimeOptions({ flow: 'typed-delivery-budget', operation: 'first' }),
+            undefined,
+            { stream_id: 'stream:bedrock:typed-delivery-budget', max_events: 6 },
+        );
+        const typedEvents = await collectCanonicalEvents(stream);
+
+        expect(typedEvents.at(-1)).toMatchObject({
+            type: 'stream_terminated',
+            outcome: 'failed',
+            diagnostic: { code: 'CANONICAL_EVENT_DELIVERY_FAILED' },
+        });
+        expect(typedEvents.some((event) => event.type === 'response_accepted')).toBe(false);
+        expect(stream.completion?.accepted_output.turn.blocks).toContainEqual(
+            expect.objectContaining({ type: 'text', text: 'authoritative answer' }),
+        );
+    });
+
+    it('keeps reasoning signatures private and distinguishes provider and application tools in typed events', async () => {
+        const events: ConverseStreamOutput[] = [
+            { contentBlockDelta: { contentBlockIndex: 0, delta: { reasoningContent: { text: 'private plan' } } } },
+            {
+                contentBlockDelta: {
+                    contentBlockIndex: 0,
+                    delta: { reasoningContent: { signature: 'secret-signature' } },
+                },
+            },
+            {
+                contentBlockStart: {
+                    contentBlockIndex: 1,
+                    start: {
+                        toolUse: {
+                            toolUseId: 'server-tool-1',
+                            name: 'tool_search_tool_regex',
+                            type: 'server_tool_use',
+                        },
+                    },
+                },
+            },
+            { contentBlockDelta: { contentBlockIndex: 1, delta: { toolUse: { input: '{"query":"lookup"}' } } } },
+            { contentBlockStop: { contentBlockIndex: 1 } },
+            {
+                contentBlockStart: {
+                    contentBlockIndex: 2,
+                    start: { toolUse: { toolUseId: 'application-tool-1', name: 'lookup' } },
+                },
+            },
+            { contentBlockDelta: { contentBlockIndex: 2, delta: { toolUse: { input: '{"city":"Tokyo"}' } } } },
+            { contentBlockStop: { contentBlockIndex: 2 } },
+            { messageStop: { stopReason: 'tool_use' } },
+            { metadata: { usage: { inputTokens: 3, outputTokens: 3, totalTokens: 6 }, metrics: { latencyMs: 1 } } },
+        ];
+        const converseStream = vi.fn(async () => ({
+            stream: (async function* () {
+                for (const event of events) yield event;
+            })(),
+            $metadata: { requestId: 'typed-tools-response' },
+        }));
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        Object.defineProperty(driver, 'canStream', { value: async () => true });
+        Object.defineProperty(driver, 'getExecutor', {
+            value: () => ({ converseStream, destroy: vi.fn() }),
+        });
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Find and call.' }],
+            runtimeOptions({ flow: 'typed-tools', operation: 'first', tools: TOOLS }),
+            undefined,
+            { stream_id: 'stream:bedrock:typed-tools' },
+        );
+        const typedEvents = await collectCanonicalEvents(stream);
+        const calls = stream.completion?.accepted_output.turn.blocks.filter((block) => block.type === 'tool_call');
+
+        expect(typedEvents.filter((event) => event.type === 'draft_reasoning_delta')).toMatchObject([
+            { text: 'private plan' },
+        ]);
+        expect(JSON.stringify(typedEvents)).not.toContain('secret-signature');
+        expect(calls).toMatchObject([
+            { call_id: 'server-tool-1', executor: 'provider', tool_name: 'tool_search_tool_regex' },
+            { call_id: 'application-tool-1', executor: 'application', tool_name: 'lookup' },
+        ]);
+        expect(typedEvents.at(-1)?.type).toBe('response_accepted');
+
+        if (stream.completion === undefined || calls?.[0]?.type !== 'tool_call') {
+            throw new Error('Expected provider-owned Bedrock call');
+        }
+        const providerCall = stream.completion.conversation.turns
+            .flatMap((turn) => (turn.kind === 'agent' ? turn.blocks : []))
+            .find((block) => block.type === 'tool_call' && block.call_id === calls[0]?.call_id);
+        if (providerCall?.type !== 'tool_call') throw new Error('Expected retained provider-owned Bedrock call');
+        await expect(
+            resolveToolExecutionRequest(
+                stream.completion.conversation,
+                {
+                    conversation: {
+                        conversation_id: stream.completion.conversation.id,
+                        revision: stream.completion.conversation.revision,
+                    },
+                    turn_id: stream.completion.accepted_output.turn.id,
+                    block_id: providerCall.id,
+                    call_id: providerCall.call_id,
+                    call_fingerprint: await fingerprintJson(providerCall),
+                },
+                async function* () {
+                    // Provider-owned calls must reject before asset resolution.
+                },
+            ),
+        ).rejects.toThrow(/not authorized for application execution/);
+    });
+
+    it('marks an incomplete typed tool draft omitted while retaining the authoritative cutoff text', async () => {
+        const events: ConverseStreamOutput[] = [
+            {
+                contentBlockStart: {
+                    contentBlockIndex: 0,
+                    start: { toolUse: { toolUseId: 'partial-tool', name: 'lookup' } },
+                },
+            },
+            { contentBlockDelta: { contentBlockIndex: 0, delta: { toolUse: { input: '{"city":' } } } },
+            { contentBlockStop: { contentBlockIndex: 0 } },
+            { contentBlockDelta: { contentBlockIndex: 1, delta: { text: 'Partial answer.' } } },
+            { contentBlockStop: { contentBlockIndex: 1 } },
+            { messageStop: { stopReason: 'max_tokens' } },
+            { metadata: { usage: { inputTokens: 2, outputTokens: 2, totalTokens: 4 }, metrics: { latencyMs: 1 } } },
+        ];
+        const converseStream = vi.fn(async () => ({
+            stream: (async function* () {
+                for (const event of events) yield event;
+            })(),
+            $metadata: { requestId: 'typed-partial-tool-response' },
+        }));
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        Object.defineProperty(driver, 'canStream', { value: async () => true });
+        Object.defineProperty(driver, 'getExecutor', {
+            value: () => ({ converseStream, destroy: vi.fn() }),
+        });
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Try lookup.' }],
+            runtimeOptions({ flow: 'typed-partial-tool', operation: 'first', tools: TOOLS }),
+            undefined,
+            { stream_id: 'stream:bedrock:typed-partial-tool' },
+        );
+        const typedEvents = await collectCanonicalEvents(stream);
+        const accepted = typedEvents.at(-1);
+
+        expect(accepted).toMatchObject({
+            type: 'response_accepted',
+            reconciliations: expect.arrayContaining([expect.objectContaining({ disposition: 'omitted_invalid' })]),
+        });
+        expect(typedEvents).toContainEqual(
+            expect.objectContaining({ type: 'draft_block_finished', outcome: 'malformed' }),
+        );
+        expect(typedEvents).toContainEqual(expect.objectContaining({ type: 'draft_finished', outcome: 'interrupted' }));
+        expect(stream.completion?.accepted_output.turn).toMatchObject({
+            status: 'interrupted',
+            blocks: [expect.objectContaining({ type: 'text', text: 'Partial answer.' })],
+        });
+        expect(stream.completion?.accepted_output.generation).toMatchObject({
+            status: 'cancelled',
+            finish_reason: 'max_tokens',
+        });
+    });
+
+    it.each([
+        'modelStreamErrorException',
+        'internalServerException',
+        'validationException',
+        'throttlingException',
+        'serviceUnavailableException',
+    ] as const)('fails a typed Bedrock stream on %s without accepting its collected prefix', async (exceptionKey) => {
+        const exceptionEvent = { [exceptionKey]: { message: 'provider failure' } } as unknown as ConverseStreamOutput;
+        const events: ConverseStreamOutput[] = [
+            { contentBlockDelta: { contentBlockIndex: 0, delta: { text: 'Unaccepted prefix.' } } },
+            ...(exceptionKey === 'modelStreamErrorException'
+                ? ([{ messageStop: { stopReason: 'end_turn' } }] as ConverseStreamOutput[])
+                : []),
+            exceptionEvent,
+        ];
+        const converseStream = vi.fn(async () => ({
+            stream: (async function* () {
+                for (const event of events) yield event;
+            })(),
+        }));
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        Object.defineProperty(driver, 'canStream', { value: async () => true });
+        Object.defineProperty(driver, 'getExecutor', {
+            value: () => ({ converseStream, destroy: vi.fn() }),
+        });
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Answer.' }],
+            runtimeOptions({ flow: `typed-${exceptionKey}`, operation: 'first' }),
+            undefined,
+            { stream_id: `stream:bedrock:${exceptionKey}` },
+        );
+
+        const typedEvents = await collectCanonicalEvents(stream);
+
+        expect(typedEvents.at(-1)).toMatchObject({ type: 'stream_terminated', outcome: 'failed' });
+        expect(typedEvents.some((event) => event.type === 'response_accepted')).toBe(false);
+        expect(stream.completion).toBeUndefined();
+    });
+
+    it.each([
+        {
+            label: 'a malformed-only tool result',
+            events: [
+                {
+                    contentBlockStart: {
+                        contentBlockIndex: 0,
+                        start: { toolUse: { toolUseId: 'malformed-only', name: 'lookup' } },
+                    },
+                },
+                { contentBlockDelta: { contentBlockIndex: 0, delta: { toolUse: { input: '{"city":' } } } },
+                { contentBlockStop: { contentBlockIndex: 0 } },
+                { messageStop: { stopReason: 'max_tokens' } },
+            ] satisfies ConverseStreamOutput[],
+        },
+        {
+            label: 'a stop with no content',
+            events: [{ messageStop: { stopReason: 'end_turn' } }] satisfies ConverseStreamOutput[],
+        },
+    ])('rejects $label instead of fabricating an empty accepted block', async ({ label, events }) => {
+        const converseStream = vi.fn(async () => ({
+            stream: (async function* () {
+                for (const event of events) yield event;
+            })(),
+        }));
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        Object.defineProperty(driver, 'canStream', { value: async () => true });
+        Object.defineProperty(driver, 'getExecutor', {
+            value: () => ({ converseStream, destroy: vi.fn() }),
+        });
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Answer.' }],
+            runtimeOptions({ flow: `typed-empty-${label}`, operation: 'first', tools: TOOLS }),
+            undefined,
+            { stream_id: `stream:bedrock:empty:${label}` },
+        );
+
+        const typedEvents = await collectCanonicalEvents(stream);
+
+        expect(typedEvents.at(-1)).toMatchObject({ type: 'stream_terminated', outcome: 'failed' });
+        expect(typedEvents.some((event) => event.type === 'response_accepted')).toBe(false);
+        expect(stream.completion).toBeUndefined();
+    });
+
+    it.each([
+        {
+            label: 'content after message stop',
+            trailing: { contentBlockDelta: { contentBlockIndex: 0, delta: { text: ' mutated' } } },
+        },
+        {
+            label: 'a conflicting second message stop',
+            trailing: { messageStop: { stopReason: 'max_tokens' } },
+        },
+    ] satisfies Array<{ label: string; trailing: ConverseStreamOutput }>)(
+        'rejects $label',
+        async ({ label, trailing }) => {
+            const events: ConverseStreamOutput[] = [
+                { contentBlockDelta: { contentBlockIndex: 0, delta: { text: 'Stable prefix.' } } },
+                { messageStop: { stopReason: 'end_turn' } },
+                trailing,
+            ];
+            const converseStream = vi.fn(async () => ({
+                stream: (async function* () {
+                    for (const event of events) yield event;
+                })(),
+            }));
+            const driver = new BedrockDriver({ region: 'us-east-1' });
+            Object.defineProperty(driver, 'canStream', { value: async () => true });
+            Object.defineProperty(driver, 'getExecutor', {
+                value: () => ({ converseStream, destroy: vi.fn() }),
+            });
+            const stream = await driver.streamCanonicalEvents(
+                [{ role: PromptRole.user, content: 'Answer.' }],
+                runtimeOptions({ flow: `typed-order-${label}`, operation: 'first' }),
+                undefined,
+                { stream_id: `stream:bedrock:order:${label}` },
+            );
+
+            const typedEvents = await collectCanonicalEvents(stream);
+
+            expect(typedEvents.at(-1)).toMatchObject({ type: 'stream_terminated', outcome: 'failed' });
+            expect(stream.completion).toBeUndefined();
+        },
+    );
+
+    it('bounds replay-only Bedrock reasoning signature accumulation', async () => {
+        const events: ConverseStreamOutput[] = [
+            { contentBlockDelta: { contentBlockIndex: 0, delta: { reasoningContent: { text: 'Visible.' } } } },
+            {
+                contentBlockDelta: {
+                    contentBlockIndex: 0,
+                    delta: { reasoningContent: { signature: 's'.repeat(8_192) } },
+                },
+            },
+            { messageStop: { stopReason: 'end_turn' } },
+        ];
+        const converseStream = vi.fn(async () => ({
+            stream: (async function* () {
+                for (const event of events) yield event;
+            })(),
+        }));
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        Object.defineProperty(driver, 'canStream', { value: async () => true });
+        Object.defineProperty(driver, 'getExecutor', {
+            value: () => ({ converseStream, destroy: vi.fn() }),
+        });
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Think.' }],
+            runtimeOptions({ flow: 'typed-hidden-budget', operation: 'first' }),
+            undefined,
+            { stream_id: 'stream:bedrock:hidden-budget', max_total_bytes: 4_096 },
+        );
+
+        const typedEvents = await collectCanonicalEvents(stream);
+
+        expect(typedEvents.at(-1)).toMatchObject({ type: 'stream_terminated', outcome: 'failed' });
+        expect(stream.completion).toBeUndefined();
+        expect(JSON.stringify(typedEvents)).not.toContain('ssssssss');
+    });
+
+    it('rejects typed Bedrock bounds and publication failures before transport', async () => {
+        const converseStream = vi.fn(async () => ({ stream: (async function* () {})() }));
+        const publish = vi.fn(async () => undefined);
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        Object.defineProperty(driver, 'canStream', { value: async () => true });
+        Object.defineProperty(driver, 'getExecutor', {
+            value: () => ({ converseStream, destroy: vi.fn() }),
+        });
+        const segments = [{ role: PromptRole.user, content: 'Answer.' }];
+
+        await expect(
+            driver.streamCanonicalEvents(
+                segments,
+                {
+                    ...runtimeOptions({ flow: 'typed-invalid-open', operation: 'first' }),
+                    on_canonical_request_prepared: publish,
+                },
+                undefined,
+                { stream_id: 'stream:bedrock:typed-invalid-open', max_buffered_events: 0 },
+            ),
+        ).rejects.toThrow();
+        expect(publish).not.toHaveBeenCalled();
+        expect(converseStream).not.toHaveBeenCalled();
+
+        await expect(
+            driver.streamCanonicalEvents(
+                segments,
+                {
+                    ...runtimeOptions({ flow: 'typed-barrier', operation: 'first' }),
+                    on_canonical_request_prepared: async () => {
+                        throw new Error('durability barrier failed');
+                    },
+                },
+                undefined,
+                { stream_id: 'stream:bedrock:typed-barrier' },
+            ),
+        ).rejects.toThrow('durability barrier failed');
+        expect(converseStream).not.toHaveBeenCalled();
+    });
+
+    it('aborts a pending typed Bedrock read and emits one cancellation terminal', async () => {
+        let providerSignal: AbortSignal | undefined;
+        let readStarted: (() => void) | undefined;
+        const started = new Promise<void>((resolve) => {
+            readStarted = resolve;
+        });
+        const destroy = vi.fn();
+        const converseStream = vi.fn(
+            async (_request: ConverseRequest, requestOptions?: { abortSignal?: AbortSignal }) => {
+                providerSignal = requestOptions?.abortSignal;
+                return {
+                    stream: {
+                        [Symbol.asyncIterator]() {
+                            return {
+                                next: () => {
+                                    readStarted?.();
+                                    return new Promise<IteratorResult<ConverseStreamOutput>>((resolve) => {
+                                        providerSignal?.addEventListener(
+                                            'abort',
+                                            () => resolve({ done: true, value: undefined }),
+                                            { once: true },
+                                        );
+                                    });
+                                },
+                                return: async () => ({ done: true, value: undefined }),
+                            };
+                        },
+                    },
+                    $metadata: { requestId: 'typed-pending-stream' },
+                };
+            },
+        );
+        const driver = new BedrockDriver({ region: 'us-east-1' });
+        Object.defineProperty(driver, 'canStream', { value: async () => true });
+        Object.defineProperty(driver, 'getExecutor', {
+            value: () => ({ converseStream, destroy }),
+        });
+        const stream = await driver.streamCanonicalEvents(
+            [{ role: PromptRole.user, content: 'Wait.' }],
+            runtimeOptions({ flow: 'typed-cancel', operation: 'first' }),
+            undefined,
+            { stream_id: 'stream:bedrock:typed-cancel' },
+        );
+        const iterator = stream[Symbol.asyncIterator]();
+        await expect(iterator.next()).resolves.toMatchObject({ value: { type: 'draft_started' }, done: false });
+        const pending = iterator.next();
+        await started;
+
+        const terminal = await stream.cancel();
+
+        expect(providerSignal?.aborted).toBe(true);
+        expect(terminal).toMatchObject({ type: 'stream_terminated', outcome: 'cancelled' });
+        await expect(pending).resolves.toMatchObject({ value: terminal, done: false });
+        await expect(iterator.next()).resolves.toEqual({ value: undefined, done: true });
+        expect(stream.completion).toBeUndefined();
     });
 
     it('aborts a pending native read before unwinding canonical stream cancellation', async () => {
