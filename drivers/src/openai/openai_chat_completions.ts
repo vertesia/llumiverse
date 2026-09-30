@@ -1,6 +1,8 @@
 import {
     createStructuredOutputTransformationProof,
     type DecodedConversationResponse,
+    type JsonObject,
+    type JsonValue,
     type NativeStreamPosition,
 } from '@llumiverse/conversation';
 import {
@@ -103,6 +105,13 @@ export type OpenAIChatCompletionsContentPart =
 export type OpenAIChatCompletionsToolCall = OpenAI.Chat.ChatCompletionMessageFunctionToolCall;
 export type OpenAIChatCompletionsToolDefinition = OpenAI.Chat.ChatCompletionTool;
 
+export type OpenAIChatProviderReplay = JsonObject & {
+    provider: string;
+    protocol: string;
+    adapter_version: string;
+    payload: JsonValue;
+};
+
 export type OpenAIChatCompletionsMessage = {
     role: string;
     content?: string | null | OpenAIChatCompletionsContentPart[];
@@ -120,6 +129,8 @@ export type OpenAIChatCompletionsMessage = {
     /** Provider-native reasoning fields used by OpenAI-compatible APIs for replay. */
     reasoning_content?: string | null;
     reasoning?: string | null;
+    /** Provider-scoped opaque replay. Never serialized by the OpenAI transport. */
+    provider_replay?: OpenAIChatProviderReplay;
 };
 
 export type OpenAIChatCompletionsRequestMessage = {
@@ -129,6 +140,7 @@ export type OpenAIChatCompletionsRequestMessage = {
     tool_calls?: OpenAIChatCompletionsToolCall[];
     reasoning_content?: string | null;
     reasoning?: string | null;
+    provider_replay?: OpenAIChatProviderReplay;
 };
 
 export type OpenAIChatCompletionsPayload = Omit<
@@ -142,7 +154,10 @@ export type OpenAIChatCompletionsPayload = Omit<
     extra_body?: Record<string, unknown>;
 };
 
-type OpenAIChatCompletionsUsage = ChatCompletionsUsage;
+type OpenAIChatCompletionsUsage = ChatCompletionsUsage & {
+    /** Provider-native usage retained when this compatibility protocol normalizes field names. */
+    provider_usage?: JsonValue;
+};
 type OpenAIChatCompletionsResponseMessage = Omit<
     Partial<OpenAI.Chat.ChatCompletionMessage>,
     'content' | 'tool_calls'
@@ -151,6 +166,7 @@ type OpenAIChatCompletionsResponseMessage = Omit<
     content?: string | null | OpenAIChatCompletionsContentPart[];
     reasoning_content?: string | null;
     reasoning?: string | null;
+    provider_replay?: OpenAIChatProviderReplay;
     tool_calls?: OpenAI.Chat.ChatCompletionMessageToolCall[];
 };
 type OpenAIChatCompletionsResponseChoice = Omit<
@@ -172,6 +188,7 @@ type OpenAIChatCompletionsStreamChoiceDelta = {
     content?: string | null | OpenAIChatCompletionsContentPart[];
     reasoning_content?: string | null;
     reasoning?: string | null;
+    provider_replay?: OpenAIChatProviderReplay;
     tool_calls?: Array<{
         index?: number;
         id?: string;
@@ -1096,6 +1113,11 @@ function recoveredOpenAIStream(
     });
 }
 
+interface OpenAIChatRequestBinding {
+    payload: JsonValue;
+    target_options?: JsonObject;
+}
+
 export abstract class OpenAIChatCompletionsProtocol<DriverT> {
     protected readonly options: OpenAIChatCompletionsProtocolOptions;
 
@@ -1249,10 +1271,11 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
         const conversation = prepareCanonicalOpenAIProjection(canonicalState, options);
         const payload = this.buildPayload(conversation, options, false, provider);
+        const requestBinding = this.requestBinding(payload, options, provider);
         await assertAcceptedCanonicalRequest(
             canonicalState,
             { provider, protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL, model: options.model },
-            providerJsonValue(payload),
+            requestBinding.payload,
         );
         if (canonicalState.accepted_response !== undefined) {
             if (options.include_original_response) {
@@ -1265,6 +1288,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         const prepared = await finalizeOpenAIChatPreparedRequest(
             { ...canonicalState, native_conversation: conversation },
             payload,
+            requestBinding,
         );
         await publishCanonicalPreparedRequest(prepared, options);
         const result = await this.postChatCompletion(driver, payload, options, signal);
@@ -1321,10 +1345,11 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
         const conversation = prepareCanonicalOpenAIProjection(canonicalState, options);
         const payload = this.buildPayload(conversation, options, false, provider);
+        const requestBinding = this.requestBinding(payload, options, provider);
         await assertAcceptedCanonicalRequest(
             canonicalState,
             { provider, protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL, model: options.model },
-            providerJsonValue(payload),
+            requestBinding.payload,
         );
         if (canonicalState.accepted_response !== undefined) {
             return recoverOpenAICompletion(canonicalState, options, includeThoughts);
@@ -1332,6 +1357,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         const prepared = await finalizeOpenAIChatPreparedRequest(
             { ...canonicalState, native_conversation: conversation },
             payload,
+            requestBinding,
         );
         await publishCanonicalPreparedRequest(prepared, options);
         const result = await this.postChatCompletion(driver, payload, options, signal);
@@ -1386,10 +1412,11 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
         const conversation = prepareCanonicalOpenAIProjection(canonicalState, options);
         const payload = this.buildPayload(conversation, options, true, provider);
+        const requestBinding = this.requestBinding(payload, options, provider);
         await assertAcceptedCanonicalRequest(
             canonicalState,
             { provider, protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL, model: options.model },
-            providerJsonValue(payload),
+            requestBinding.payload,
         );
         if (canonicalState.accepted_response !== undefined) {
             const canonical = await recoverCanonicalExecutionResponse(canonicalState, options);
@@ -1401,6 +1428,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         const prepared = await finalizeOpenAIChatPreparedRequest(
             { ...canonicalState, native_conversation: conversation },
             payload,
+            requestBinding,
         );
         await publishCanonicalPreparedRequest(prepared, options);
         const responseStream = await this.postChatCompletionStream(driver, payload, options, signal);
@@ -1409,6 +1437,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         let nativeContent = '';
         let nativeReasoningContent: string | undefined;
         let nativeReasoning: string | undefined;
+        let nativeProviderReplay: OpenAIChatProviderReplay | undefined;
         let responseId: string | undefined;
         let responseObject: string | undefined;
         let responseCreated: number | undefined;
@@ -1442,6 +1471,8 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             } else if (choice?.finish_reason) {
                 chunkResults.push(...projector.push('', true));
             }
+
+            if (delta?.provider_replay !== undefined) nativeProviderReplay = structuredClone(delta.provider_replay);
 
             if (typeof delta?.reasoning_content === 'string') {
                 nativeReasoningContent = (nativeReasoningContent ?? '') + delta.reasoning_content;
@@ -1501,6 +1532,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                     content: nativeContent || null,
                     ...(nativeReasoningContent !== undefined && { reasoning_content: nativeReasoningContent }),
                     ...(nativeReasoning !== undefined && { reasoning: nativeReasoning }),
+                    ...(nativeProviderReplay !== undefined && { provider_replay: nativeProviderReplay }),
                     ...(nativeToolCalls.size > 0 && {
                         tool_calls: [...nativeToolCalls.entries()]
                             .sort(([left], [right]) => left - right)
@@ -1605,10 +1637,11 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
             (options.model_options as TextFallbackOptions & { include_thoughts?: boolean })?.include_thoughts !== false;
         const conversation = prepareCanonicalOpenAIProjection(canonicalState, options);
         const payload = this.buildPayload(conversation, options, true, provider);
+        const requestBinding = this.requestBinding(payload, options, provider);
         await assertAcceptedCanonicalRequest(
             canonicalState,
             { provider, protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL, model: options.model },
-            providerJsonValue(payload),
+            requestBinding.payload,
         );
         const acceptedResponse = canonicalState.accepted_response;
         const identity = {
@@ -1628,6 +1661,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         const prepared = await finalizeOpenAIChatPreparedRequest(
             { ...canonicalState, native_conversation: conversation },
             payload,
+            requestBinding,
         );
 
         const abortController = new AbortController();
@@ -1637,6 +1671,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         let nativeReasoningContent: string | undefined;
         let reasoningContentDraft: OpenAIChatCanonicalDraft | undefined;
         let nativeReasoning: string | undefined;
+        let nativeProviderReplay: OpenAIChatProviderReplay | undefined;
         let reasoningDraft: OpenAIChatCanonicalDraft | undefined;
         let responseId: string | undefined;
         let responseObject: string | undefined;
@@ -1695,6 +1730,10 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                         native_position: contentDraft.native_position,
                         text: content,
                     });
+                }
+
+                if (delta?.provider_replay !== undefined) {
+                    nativeProviderReplay = structuredClone(delta.provider_replay);
                 }
 
                 if (typeof delta?.reasoning_content === 'string' && delta.reasoning_content.length > 0) {
@@ -1810,6 +1849,7 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
                     content: nativeContent || null,
                     ...(nativeReasoningContent === undefined ? {} : { reasoning_content: nativeReasoningContent }),
                     ...(nativeReasoning === undefined ? {} : { reasoning: nativeReasoning }),
+                    ...(nativeProviderReplay === undefined ? {} : { provider_replay: nativeProviderReplay }),
                     ...(nativeToolCalls.size === 0
                         ? {}
                         : {
@@ -2042,6 +2082,14 @@ export abstract class OpenAIChatCompletionsProtocol<DriverT> {
         return this.options.modelName ?? options.model;
     }
 
+    protected requestBinding(
+        payload: OpenAIChatCompletionsPayload,
+        _options: ExecutionOptions,
+        _provider: string,
+    ): OpenAIChatRequestBinding {
+        return { payload: providerJsonValue(payload) };
+    }
+
     protected abstract postChatCompletion(
         driver: DriverT,
         payload: OpenAIChatCompletionsPayload,
@@ -2139,7 +2187,10 @@ class DriverChatCompletionsProtocol extends OpenAIChatCompletionsProtocol<OpenAI
     }
 }
 
-function toOpenAISDKMessage(message: OpenAIChatCompletionsRequestMessage): OpenAI.Chat.ChatCompletionMessageParam {
+/** @internal Convert only portable OpenAI fields; provider-scoped replay is intentionally omitted. */
+export function toOpenAISDKMessage(
+    message: OpenAIChatCompletionsRequestMessage,
+): OpenAI.Chat.ChatCompletionMessageParam {
     const textParts = Array.isArray(message.content)
         ? message.content.filter((part): part is OpenAIChatCompletionsTextPart => part.type === 'text')
         : undefined;

@@ -59,6 +59,7 @@ import type {
     OpenAIChatCompletionsPayload,
     OpenAIChatCompletionsPrompt,
     OpenAIChatCompletionsResponse,
+    OpenAIChatProviderReplay,
 } from './openai_chat_completions.js';
 
 export const OPENAI_CHAT_COMPLETIONS_PROTOCOL = 'openai.chat.completions' as const;
@@ -70,6 +71,7 @@ type OpenAIReplayPayload = JsonObject & {
     type: 'openai_chat_assistant_fields';
     reasoning_content?: string | null;
     reasoning?: string | null;
+    provider_replay?: OpenAIChatProviderReplay;
     tool_arguments?: Array<{ call_id: string; raw: string }>;
     structured_output?: JsonObject & {
         evidence: JsonObject;
@@ -107,6 +109,16 @@ function isOpenAIContentPart(value: unknown): value is OpenAIChatCompletionsCont
     const detail = ownValue(imageUrl, 'detail');
     return (
         typeof url === 'string' && (detail === undefined || detail === 'auto' || detail === 'low' || detail === 'high')
+    );
+}
+
+function isOpenAIProviderReplay(value: unknown): value is OpenAIChatProviderReplay {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+    return (
+        typeof ownValue(value, 'provider') === 'string' &&
+        typeof ownValue(value, 'protocol') === 'string' &&
+        typeof ownValue(value, 'adapter_version') === 'string' &&
+        preflightJsonInput(ownValue(value, 'payload')).success
     );
 }
 
@@ -153,6 +165,8 @@ function isOpenAIMessage(value: unknown): value is OpenAIChatCompletionsMessage 
     }
     const toolCalls = ownValue(value, 'tool_calls');
     if (toolCalls !== undefined && !(Array.isArray(toolCalls) && toolCalls.every(isOpenAIToolCall))) return false;
+    const providerReplay = ownValue(value, 'provider_replay');
+    if (providerReplay !== undefined && !isOpenAIProviderReplay(providerReplay)) return false;
     return role !== 'tool' || typeof toolCallId === 'string';
 }
 
@@ -224,11 +238,18 @@ function isNestedToolResultContentBlock(block: AgentContentBlock): block is Nest
 }
 
 function reasoningReplayPayload(message: OpenAIChatCompletionsMessage): OpenAIReplayPayload | undefined {
-    if (message.reasoning_content === undefined && message.reasoning === undefined) return undefined;
+    if (
+        message.reasoning_content === undefined &&
+        message.reasoning === undefined &&
+        message.provider_replay === undefined
+    ) {
+        return undefined;
+    }
     return {
         type: 'openai_chat_assistant_fields',
         ...(message.reasoning_content === undefined ? {} : { reasoning_content: message.reasoning_content }),
         ...(message.reasoning === undefined ? {} : { reasoning: message.reasoning }),
+        ...(message.provider_replay === undefined ? {} : { provider_replay: message.provider_replay }),
     };
 }
 
@@ -447,7 +468,13 @@ async function messageRecords(input: {
         const replay = reasoningReplayPayload(message);
         if (replay !== undefined) {
             const blockId = await entityId('replay', scope, messageIndex, 'reasoning');
-            const dependencyBlocks = blocks.filter((block) => block.type === 'reasoning').map((block) => block.id);
+            const dependencyBlocks = blocks
+                .filter(
+                    (block) =>
+                        block.type === 'reasoning' ||
+                        (replay.provider_replay !== undefined && block.type !== 'native_replay'),
+                )
+                .map((block) => block.id);
             blocks.push({
                 id: blockId,
                 type: 'native_replay',
@@ -653,6 +680,7 @@ function blockReplay(
     if (matching.length === 0) return undefined;
     let reasoningContent: OpenAIReplayPayload['reasoning_content'];
     let reasoning: OpenAIReplayPayload['reasoning'];
+    let providerReplay: OpenAIReplayPayload['provider_replay'];
     let structuredOutput: OpenAIReplayPayload['structured_output'];
     const toolArguments = new Map<string, string>();
     for (const replay of matching) {
@@ -681,6 +709,15 @@ function blockReplay(
         if (payload.reasoning !== undefined) {
             if (reasoning !== undefined) throw new TypeError(`OpenAI Chat reasoning replay is duplicated`);
             reasoning = payload.reasoning;
+        }
+        if (payload.provider_replay !== undefined) {
+            if (providerReplay !== undefined) throw new TypeError(`OpenAI Chat provider replay is duplicated`);
+            if (target?.provider !== undefined && payload.provider_replay.provider !== target.provider) {
+                throw new TypeError(
+                    `OpenAI Chat provider replay for ${payload.provider_replay.provider} cannot be projected to ${target.provider}`,
+                );
+            }
+            providerReplay = structuredClone(payload.provider_replay);
         }
         if (payload.structured_output !== undefined) {
             if (structuredOutput !== undefined) throw new TypeError(`OpenAI Chat structured replay is duplicated`);
@@ -717,6 +754,7 @@ function blockReplay(
         type: 'openai_chat_assistant_fields',
         ...(reasoningContent === undefined ? {} : { reasoning_content: reasoningContent }),
         ...(reasoning === undefined ? {} : { reasoning }),
+        ...(providerReplay === undefined ? {} : { provider_replay: providerReplay }),
         ...(structuredOutput === undefined ? {} : { structured_output: structuredOutput }),
         ...(toolArguments.size === 0
             ? {}
@@ -879,6 +917,7 @@ function compileTurn(
         if (calls.length > 0) message.tool_calls = calls;
         if (replay?.reasoning_content !== undefined) message.reasoning_content = replay.reasoning_content;
         if (replay?.reasoning !== undefined) message.reasoning = replay.reasoning;
+        if (replay?.provider_replay !== undefined) message.provider_replay = replay.provider_replay;
         if (replay === undefined) {
             const reasoning = turn.blocks
                 .filter((block) => block.type === 'reasoning')
@@ -1029,6 +1068,7 @@ export async function prepareOpenAIChatCanonicalState(input: {
 export async function finalizeOpenAIChatPreparedRequest(
     state: Omit<PreparedOpenAIChatConversation, 'payload' | 'receipt' | 'diagnostics'>,
     payload: OpenAIChatCompletionsPayload,
+    binding: { payload: JsonValue; target_options?: JsonObject } = { payload: providerJsonValue(payload) },
 ): Promise<PreparedOpenAIChatConversation> {
     const compiled = compileOpenAIChatCompletionsConversation(state.document, {
         provider: state.provider,
@@ -1042,8 +1082,9 @@ export async function finalizeOpenAIChatPreparedRequest(
             protocol: OPENAI_CHAT_COMPLETIONS_PROTOCOL,
             model: state.requested_model,
             adapter_version: OPENAI_CHAT_COMPLETIONS_ADAPTER_VERSION,
+            ...(binding.target_options === undefined ? {} : { options: binding.target_options }),
         },
-        providerJsonValue(payload),
+        binding.payload,
         compiled.mappings,
         state.tool_definitions,
     );
@@ -1141,6 +1182,7 @@ export async function decodeOpenAIChatCanonicalResponse(
             content: choice.message.content,
             reasoning_content: choice.message.reasoning_content,
             reasoning: choice.message.reasoning,
+            provider_replay: choice.message.provider_replay,
             tool_calls: choice.message.tool_calls?.flatMap((call) => (call.type === 'function' ? [call] : [])),
         },
         message_index: 0,

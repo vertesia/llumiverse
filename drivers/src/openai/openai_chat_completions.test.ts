@@ -1997,7 +1997,10 @@ describe('OpenAIChatCompletionsProtocol', () => {
                 recorded_at: '2026-09-11T00:02:00.000Z',
                 started_at: '2026-09-11T00:02:00.000Z',
             } as NonNullable<ExecutionOptions['conversation_runtime']>,
-            load_recovered_canonical_output: async () => first.accepted_output,
+            load_recovered_canonical_output: async (request) => {
+                expect(request).not.toHaveProperty('prepared_request');
+                return first.accepted_output;
+            },
         });
 
         expect(retry.conversation).toEqual(externalized.document);
@@ -2018,6 +2021,7 @@ describe('OpenAIChatCompletionsProtocol', () => {
             call_id: 'call-write',
             arguments: { type: 'externalized_json', exact_arguments_hash: prepared.exact_arguments_hash },
         });
+
         expect(driver.payloads).toHaveLength(1);
     });
 
