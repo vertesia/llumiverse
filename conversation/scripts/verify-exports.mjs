@@ -6,6 +6,7 @@ const root = await import('@llumiverse/conversation');
 const schemas = await import('@llumiverse/conversation/schemas');
 const jsonSchemas = await import('@llumiverse/conversation/json-schema');
 const outputRuntime = await import('@llumiverse/conversation/output-runtime');
+const streamingRuntime = await import('@llumiverse/conversation/streaming-runtime');
 
 assert.equal(typeof root.validateConversationDocument, 'function');
 assert.equal(typeof root.createConversationDocument, 'function');
@@ -18,6 +19,8 @@ assert.equal(jsonSchemas.ConversationStreamEventJsonSchema.$schema, 'https://jso
 assert.equal(jsonSchemas.ConversationStreamCursorJsonSchema.$schema, 'https://json-schema.org/draft/2020-12/schema');
 assert.equal(jsonSchemas.ConversationStreamIdentityJsonSchema.$schema, 'https://json-schema.org/draft/2020-12/schema');
 assert.equal(typeof outputRuntime.cloneSemanticallyValidAcceptedOutputFragment, 'function');
+assert.equal(typeof streamingRuntime.ConversationStreamAccumulatorRuntime, 'function');
+assert.equal(typeof streamingRuntime.preflightJsonInput, 'function');
 
 const compiler = spawnSync('pnpm', ['exec', 'tsc', '-p', 'test-fixtures/tsconfig.json'], {
     cwd: new URL('..', import.meta.url),

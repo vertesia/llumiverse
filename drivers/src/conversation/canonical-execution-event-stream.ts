@@ -104,6 +104,15 @@ function nextTask(): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+    let resolvePromise: ((value: T) => void) | undefined;
+    const promise = new Promise<T>((resolve) => {
+        resolvePromise = resolve;
+    });
+    if (resolvePromise === undefined) throw new Error('Failed to create deferred promise');
+    return { promise, resolve: resolvePromise };
+}
+
 export class CanonicalNativeStreamWriter {
     constructor(
         private readonly accumulator: ConversationStreamAccumulator,
@@ -212,18 +221,23 @@ export class CanonicalNativeStreamWriter {
 /** One-consumer native stream that emits canonical drafts before accepting the authoritative terminal decode. */
 export class CanonicalNativeExecutionEventStream<NativeEvent> implements CanonicalExecutionEventStream {
     completion: CanonicalExecutionResponse | undefined;
+    readonly closed: Promise<void>;
     private readonly accumulator: ConversationStreamAccumulator;
     private readonly channel: CanonicalStreamEventChannel;
+    private readonly closeDeferred = deferred<void>();
     private readonly writer: CanonicalNativeStreamWriter;
     private opening: Promise<AsyncIterable<NativeEvent> | undefined> | undefined;
     private iterator: AsyncIterator<NativeEvent> | undefined;
     private iteratorCleanup: Promise<void> | undefined;
+    private runCompletion: Promise<void> | undefined;
     private started = false;
     private settled = false;
     private settlement: Promise<CanonicalStreamTerminalEvent> | undefined;
     private closing: Promise<void> | undefined;
+    private cleanup: Promise<void> | undefined;
 
     constructor(private readonly options: CanonicalNativeEventStreamOptions<NativeEvent>) {
+        this.closed = this.closeDeferred.promise;
         if ((options.open.retained_events?.length ?? 0) > 0 || options.open.resume_after !== undefined) {
             throw new Error('A fresh provider transport cannot resume a retained canonical stream');
         }
@@ -269,10 +283,12 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
     [Symbol.asyncIterator](): AsyncIterator<ConversationStreamEvent> {
         if (!this.started) {
             this.started = true;
-            void this.run().catch((error: unknown) => {
-                this.settled = true;
-                this.channel.fail(error);
-            });
+            if (!this.settled) {
+                this.runCompletion = this.run().catch((error: unknown) => {
+                    this.settled = true;
+                    this.channel.fail(error);
+                });
+            }
         }
         return this.channel[Symbol.asyncIterator]();
     }
@@ -334,6 +350,7 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
             reject = rejectPromise;
         });
         this.settlement = settlement;
+        this.startCleanup();
         void this.acceptInternal(finalized).then(resolve, reject);
         return settlement;
     }
@@ -342,7 +359,6 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
         finalized: ReconciledCanonicalNativeStreamFinalization,
     ): Promise<CanonicalStreamTerminalEvent> {
         try {
-            await this.closeOnce();
             const accepted = await finalizeCanonicalExecutionStreamResponse({
                 accumulator: this.accumulator,
                 decoded: finalized.decoded,
@@ -375,6 +391,12 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
             reject = rejectPromise;
         });
         this.settlement = settlement;
+        try {
+            this.options.abort();
+        } catch {
+            // The bounded terminal still settles while cleanup retains transport ownership.
+        }
+        this.startCleanup();
         void this.terminateInternal(outcome, failureKind).then(resolve, reject);
         return settlement;
     }
@@ -383,20 +405,6 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
         outcome: 'cancelled' | 'failed',
         failureKind: 'provider' | 'delivery',
     ): Promise<CanonicalStreamTerminalEvent> {
-        try {
-            this.options.abort();
-        } catch {
-            // The bounded terminal still settles after cleanup attempts finish.
-        }
-        try {
-            await this.cleanupIterator();
-        } finally {
-            try {
-                await this.closeOnce();
-            } catch {
-                // Provider cleanup errors do not replace the claimed bounded terminal.
-            }
-        }
         const terminal = this.appendTerminal(outcome, failureKind);
         await this.channel.terminate(terminal);
         return terminal;
@@ -413,6 +421,20 @@ export class CanonicalNativeExecutionEventStream<NativeEvent> implements Canonic
     private closeOnce(): Promise<void> {
         this.closing ??= Promise.resolve().then(() => this.options.close());
         return this.closing;
+    }
+
+    private startCleanup(): void {
+        if (this.cleanup !== undefined) return;
+        this.cleanup = Promise.allSettled([this.cleanupIterator(), this.closeOnce()]).then(() => undefined);
+        const runCompletion = this.runCompletion;
+        void Promise.allSettled(runCompletion === undefined ? [this.cleanup] : [this.cleanup, runCompletion]).then(
+            () => {
+                this.closeDeferred.resolve();
+            },
+        );
+        void this.cleanup.catch(() => {
+            // Promise.allSettled keeps cleanup non-rejecting; retain a defensive handler.
+        });
     }
 
     private cleanupIterator(): Promise<void> {

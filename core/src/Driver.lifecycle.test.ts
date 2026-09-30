@@ -164,6 +164,8 @@ class OverriddenCanonicalEventStreamDriver extends CanonicalLifecycleTestDriver 
         .fn<() => Promise<CanonicalStreamTerminalEvent>>()
         .mockResolvedValue(canonicalTerminal);
     releaseIteratorReturn?: () => void;
+    releaseClosed?: () => void;
+    holdClosed = false;
     private releaseRead?: () => void;
 
     override async streamCanonicalEvents(
@@ -173,9 +175,15 @@ class OverriddenCanonicalEventStreamDriver extends CanonicalLifecycleTestDriver 
         _open: CanonicalStreamOpenOptions,
     ): Promise<CanonicalExecutionEventStream> {
         const driver = this;
+        const closed = this.holdClosed
+            ? new Promise<void>((resolve) => {
+                  this.releaseClosed = resolve;
+              })
+            : Promise.resolve();
         return {
             completion: undefined,
             terminal_event: undefined,
+            closed,
             cancel: this.cancelEventStream,
             [Symbol.asyncIterator]() {
                 return {
@@ -561,6 +569,7 @@ describe('AbstractDriver lifecycle', () => {
     it('holds a typed canonical stream lease through pending iterator cancellation cleanup', async () => {
         const cleanup = vi.fn();
         const driver = new OverriddenCanonicalEventStreamDriver(cleanup);
+        driver.holdClosed = true;
         const stream = await driver.streamCanonicalEvents(segments, options, undefined, canonicalStreamOpen);
         const read = stream[Symbol.asyncIterator]().next();
         driver.destroy();
@@ -568,12 +577,13 @@ describe('AbstractDriver lifecycle', () => {
         const cancellation = stream.cancel();
         await vi.waitFor(() => expect(driver.cancelEventStream).toHaveBeenCalledOnce());
         await vi.waitFor(() => expect(driver.releaseIteratorReturn).toBeTypeOf('function'));
-        expect(cleanup).not.toHaveBeenCalled();
-
-        driver.releaseIteratorReturn?.();
         await expect(cancellation).resolves.toBe(canonicalTerminal);
         await expect(read).resolves.toEqual({ done: true, value: undefined });
-        expect(cleanup).toHaveBeenCalledOnce();
+        expect(cleanup).not.toHaveBeenCalled();
+
+        driver.releaseClosed?.();
+        await vi.waitFor(() => expect(cleanup).toHaveBeenCalledOnce());
+        driver.releaseIteratorReturn?.();
     });
 
     it('reads the typed canonical stream abort signal from the third argument', async () => {
@@ -586,7 +596,7 @@ describe('AbstractDriver lifecycle', () => {
         controller.abort();
 
         await vi.waitFor(() => expect(driver.cancelEventStream).toHaveBeenCalledOnce());
-        expect(cleanup).toHaveBeenCalledOnce();
+        await vi.waitFor(() => expect(cleanup).toHaveBeenCalledOnce());
     });
 
     it('cancels and releases an unused typed canonical stream after its start timeout', async () => {

@@ -128,18 +128,26 @@ class LeasedExecutionStream<EventT, CompletionT, CancellationT>
     private readonly lease: CompletionStreamLease;
     private abort?: () => void;
     private cancellation?: Promise<CancellationT>;
+    private releaseScheduled = false;
 
     constructor(
         private readonly stream: LeasableExecutionStream<EventT, CompletionT, CancellationT>,
         releaseOperation: () => void,
         streamStartTimeoutMs: number,
         private readonly signal?: AbortSignal,
+        private readonly releaseBarrier?: Promise<void>,
+        private readonly awaitIteratorReturn = true,
     ) {
         this.lease = new CompletionStreamLease(releaseOperation, streamStartTimeoutMs, async () => {
             try {
                 await this.cancel();
             } catch {
                 /* stream cleanup best-effort */
+            }
+            try {
+                await this.releaseBarrier;
+            } catch {
+                /* a malformed stream cleanup barrier must not reject the expiry task */
             }
         });
         if (this.signal) {
@@ -217,7 +225,15 @@ class LeasedExecutionStream<EventT, CompletionT, CancellationT>
     private async cancelInternal(pending: boolean): Promise<CancellationT> {
         try {
             const result = await this.stream.cancel();
-            if (!pending) await this.activeIterator?.return?.();
+            if (!pending) {
+                const iteratorReturn = this.activeIterator?.return?.();
+                if (this.awaitIteratorReturn) await iteratorReturn;
+                else {
+                    void iteratorReturn?.catch(() => {
+                        /* typed stream cleanup remains owned by its closed promise */
+                    });
+                }
+            }
             return result;
         } finally {
             this.activeIterator = undefined;
@@ -227,7 +243,16 @@ class LeasedExecutionStream<EventT, CompletionT, CancellationT>
 
     private releaseLease(): void {
         this.removeAbortListener();
-        this.lease.release();
+        if (this.releaseBarrier === undefined) {
+            this.lease.release();
+            return;
+        }
+        if (this.releaseScheduled) return;
+        this.releaseScheduled = true;
+        void this.releaseBarrier.then(
+            () => this.lease.release(),
+            () => this.lease.release(),
+        );
     }
 
     private removeAbortListener(): void {
@@ -277,7 +302,14 @@ class LeasedCanonicalExecutionEventStream implements CanonicalExecutionEventStre
         streamStartTimeoutMs: number,
         signal?: AbortSignal,
     ) {
-        this.leased = new LeasedExecutionStream(source, releaseOperation, streamStartTimeoutMs, signal);
+        this.leased = new LeasedExecutionStream(
+            source,
+            releaseOperation,
+            streamStartTimeoutMs,
+            signal,
+            source.closed,
+            false,
+        );
     }
 
     get completion(): CanonicalExecutionResponse | undefined {
@@ -286,6 +318,10 @@ class LeasedCanonicalExecutionEventStream implements CanonicalExecutionEventStre
 
     get terminal_event(): CanonicalStreamTerminalEvent | undefined {
         return this.source.terminal_event;
+    }
+
+    get closed(): Promise<void> {
+        return this.source.closed;
     }
 
     cancel(): Promise<CanonicalStreamTerminalEvent> {

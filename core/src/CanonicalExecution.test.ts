@@ -12,6 +12,7 @@ import {
 } from '@llumiverse/conversation';
 import { describe, expect, it } from 'vitest';
 import {
+    type CanonicalExecutionResponse,
     createCanonicalExecutionResponse,
     FallbackCanonicalExecutionStream,
     legacyCompletionFromCanonicalExecution,
@@ -484,6 +485,46 @@ describe('canonical typed execution stream', () => {
         const terminal = await stream.cancel();
         expect(terminal).toMatchObject({ type: 'stream_terminated', outcome: 'cancelled' });
         await expect(pending).resolves.toEqual({ value: terminal, done: false });
+        let closed = false;
+        void stream.closed.then(() => {
+            closed = true;
+        });
+        await Promise.resolve();
+        expect(closed).toBe(false);
+    });
+
+    it('retains a finite response that resolves after cancellation without emitting acceptance', async () => {
+        const response = createCanonicalExecutionResponse(acceptedDocument(), 'response-operation');
+        let resolveResponse!: (value: CanonicalExecutionResponse) => void;
+        let executionStarted!: () => void;
+        const started = new Promise<void>((resolve) => {
+            executionStarted = resolve;
+        });
+        const stream = new FallbackCanonicalExecutionEventStream(
+            identity,
+            async () => {
+                executionStarted();
+                return new Promise<CanonicalExecutionResponse>((resolve) => {
+                    resolveResponse = resolve;
+                });
+            },
+            { stream_id: 'stream-late-finite-response' },
+        );
+        const iterator = stream[Symbol.asyncIterator]();
+        const pending = iterator.next();
+        await started;
+
+        const terminal = await stream.cancel();
+        await expect(pending).resolves.toEqual({ value: terminal, done: false });
+        expect(stream.completion).toBeUndefined();
+
+        resolveResponse(response);
+        await stream.closed;
+
+        expect(stream.completion).toBe(response);
+        expect(stream.terminal_event).toEqual(terminal);
+        expect(terminal).toMatchObject({ type: 'stream_terminated', outcome: 'cancelled' });
+        await expect(iterator.next()).resolves.toEqual({ value: undefined, done: true });
     });
 
     it('rejects impossible terminal budgets before execution and fails bounded oversized acceptance', async () => {

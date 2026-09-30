@@ -167,7 +167,7 @@ async function emitText(text: string, writer: CanonicalNativeStreamWriter) {
 }
 
 describe('canonical native execution event stream', () => {
-    it('waits for provider cleanup before delivering accepted response', async () => {
+    it('delivers accepted response while retaining ownership through provider cleanup', async () => {
         let releaseClose!: () => void;
         const close = vi.fn(
             () =>
@@ -199,17 +199,23 @@ describe('canonical native execution event stream', () => {
             close,
         });
         const events: string[] = [];
+        let closed = false;
+        void stream.closed.then(() => {
+            closed = true;
+        });
         const consumption = (async () => {
             for await (const event of stream) events.push(event.type);
         })();
 
         await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
-        expect(events).not.toContain('response_accepted');
+        await vi.waitFor(() => expect(events.at(-1)).toBe('response_accepted'));
+        expect(closed).toBe(false);
         releaseClose();
-        await consumption;
+        await Promise.all([consumption, stream.closed]);
 
         expect(events.at(-1)).toBe('response_accepted');
         expect(stream.completion).toBeDefined();
+        expect(closed).toBe(true);
     });
 
     it('preserves a blocked event before cancellation terminal without a sequence gap', async () => {
@@ -244,8 +250,7 @@ describe('canonical native execution event stream', () => {
         await blockingMap;
         const cancellation = stream.cancel();
         await vi.waitFor(() => expect(releaseClose).toBeTypeOf('function'));
-        releaseClose();
-        await cancellation;
+        await expect(cancellation).resolves.toMatchObject({ outcome: 'cancelled' });
 
         const events: ConversationStreamEvent[] = [];
         while (true) {
@@ -259,6 +264,8 @@ describe('canonical native execution event stream', () => {
             'draft_block_started',
             'stream_terminated',
         ]);
+        releaseClose();
+        await stream.closed;
     });
 
     it('does not open a provider transport when cancelled from draft_started', async () => {
@@ -283,7 +290,7 @@ describe('canonical native execution event stream', () => {
         });
     });
 
-    it('awaits and cleans a late provider handle before terminal delivery and lease release', async () => {
+    it('delivers cancellation before a late provider handle while retaining cleanup ownership', async () => {
         let openingStarted!: () => void;
         const started = new Promise<void>((resolve) => {
             openingStarted = resolve;
@@ -318,17 +325,144 @@ describe('canonical native execution event stream', () => {
         const terminalRead = iterator.next();
         const cancellation = stream.cancel();
         await Promise.resolve();
-        expect(close).not.toHaveBeenCalled();
-        expect(stream.terminal_event).toBeUndefined();
-
-        resolveSource(lateSource);
+        expect(close).toHaveBeenCalledOnce();
         await expect(terminalRead).resolves.toMatchObject({
             value: { type: 'stream_terminated', outcome: 'cancelled' },
             done: false,
         });
         await expect(cancellation).resolves.toMatchObject({ outcome: 'cancelled' });
+        let closed = false;
+        void stream.closed.then(() => {
+            closed = true;
+        });
+        await Promise.resolve();
+        expect(closed).toBe(false);
+
+        resolveSource(lateSource);
+        await stream.closed;
         expect(iteratorReturn).toHaveBeenCalledOnce();
         expect(close).toHaveBeenCalledOnce();
+        expect(closed).toBe(true);
+    });
+
+    it('settles cancellation while a provider open never resolves and retains cleanup ownership', async () => {
+        let openingStarted!: () => void;
+        const started = new Promise<void>((resolve) => {
+            openingStarted = resolve;
+        });
+        const close = vi.fn();
+        const stream = canonicalNativeExecutionEventStream({
+            identity,
+            open: { stream_id: 'stream:never-open' },
+            openSource: () => {
+                openingStarted();
+                return new Promise<AsyncIterable<string>>(() => undefined);
+            },
+            map: vi.fn(),
+            finalize: vi.fn(),
+            abort: vi.fn(),
+            close,
+        });
+        const iterator = stream[Symbol.asyncIterator]();
+        await expect(iterator.next()).resolves.toMatchObject({ value: { type: 'draft_started' }, done: false });
+        await started;
+
+        const terminalRead = iterator.next();
+        await expect(stream.cancel()).resolves.toMatchObject({ outcome: 'cancelled' });
+        await expect(terminalRead).resolves.toMatchObject({
+            value: { type: 'stream_terminated', outcome: 'cancelled' },
+            done: false,
+        });
+        expect(close).toHaveBeenCalledOnce();
+        let closed = false;
+        void stream.closed.then(() => {
+            closed = true;
+        });
+        await Promise.resolve();
+        expect(closed).toBe(false);
+    });
+
+    it('settles cancellation while iterator return never resolves and retains cleanup ownership', async () => {
+        let nextStarted!: () => void;
+        const started = new Promise<void>((resolve) => {
+            nextStarted = resolve;
+        });
+        const close = vi.fn();
+        const stream = canonicalNativeExecutionEventStream({
+            identity,
+            open: { stream_id: 'stream:never-return' },
+            openSource: () => ({
+                [Symbol.asyncIterator]() {
+                    return {
+                        next: () => {
+                            nextStarted();
+                            return new Promise<IteratorResult<string>>(() => undefined);
+                        },
+                        return: () => new Promise<IteratorResult<string>>(() => undefined),
+                    };
+                },
+            }),
+            map: vi.fn(),
+            finalize: vi.fn(),
+            abort: vi.fn(),
+            close,
+        });
+        const iterator = stream[Symbol.asyncIterator]();
+        await expect(iterator.next()).resolves.toMatchObject({ value: { type: 'draft_started' }, done: false });
+        await started;
+
+        await expect(stream.cancel()).resolves.toMatchObject({ outcome: 'cancelled' });
+        await expect(iterator.next()).resolves.toMatchObject({
+            value: { type: 'stream_terminated', outcome: 'cancelled' },
+            done: false,
+        });
+        expect(close).toHaveBeenCalledOnce();
+        let closed = false;
+        void stream.closed.then(() => {
+            closed = true;
+        });
+        await Promise.resolve();
+        expect(closed).toBe(false);
+    });
+
+    it('settles cancellation while provider close never resolves and retains cleanup ownership', async () => {
+        let nextStarted!: () => void;
+        const started = new Promise<void>((resolve) => {
+            nextStarted = resolve;
+        });
+        const iteratorReturn = vi.fn(async () => ({ value: undefined, done: true }) as IteratorResult<string>);
+        const stream = canonicalNativeExecutionEventStream({
+            identity,
+            open: { stream_id: 'stream:never-close' },
+            openSource: () => ({
+                [Symbol.asyncIterator]() {
+                    return {
+                        next: () => {
+                            nextStarted();
+                            return new Promise<IteratorResult<string>>(() => undefined);
+                        },
+                        return: iteratorReturn,
+                    };
+                },
+            }),
+            map: vi.fn(),
+            finalize: vi.fn(),
+            abort: vi.fn(),
+            close: () => new Promise<void>(() => undefined),
+        });
+        const iterator = stream[Symbol.asyncIterator]();
+        await expect(iterator.next()).resolves.toMatchObject({ value: { type: 'draft_started' }, done: false });
+        await started;
+
+        await expect(iterator.return?.()).resolves.toEqual({ value: undefined, done: true });
+        expect(stream.terminal_event).toMatchObject({ type: 'stream_terminated', outcome: 'cancelled' });
+        await vi.waitFor(() => expect(iteratorReturn).toHaveBeenCalledOnce());
+        let closed = false;
+        void stream.closed.then(() => {
+            closed = true;
+        });
+        await Promise.resolve();
+        expect(closed).toBe(false);
     });
 
     it('retains a finalized canonical response when reconciliation fails', async () => {
@@ -388,7 +522,7 @@ describe('canonical native execution event stream', () => {
         expect(openSource).not.toHaveBeenCalled();
     });
 
-    it('waits for delayed cleanup on provider failure before delivering its terminal', async () => {
+    it('delivers provider failure while retaining ownership through delayed cleanup', async () => {
         let releaseClose!: () => void;
         const close = vi.fn(
             () =>
@@ -420,14 +554,21 @@ describe('canonical native execution event stream', () => {
         })();
 
         await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
-        expect(events.map((event) => event.type)).toEqual(['draft_started']);
-        releaseClose();
         await consumption;
-
         expect(events.at(-1)).toMatchObject({
             type: 'stream_terminated',
             diagnostic: { code: 'PROVIDER_STREAM_FAILED' },
         });
+        let closed = false;
+        void stream.closed.then(() => {
+            closed = true;
+        });
+        await Promise.resolve();
+        expect(closed).toBe(false);
+        releaseClose();
+        await stream.closed;
+
+        expect(closed).toBe(true);
         expect(JSON.stringify(events)).not.toContain('private provider failure');
     });
 
@@ -472,6 +613,12 @@ describe('canonical native execution event stream', () => {
             done: false,
         });
         await expect(iterator.next()).resolves.toEqual({ value: undefined, done: true });
+        let closed = false;
+        void stream.closed.then(() => {
+            closed = true;
+        });
+        await Promise.resolve();
+        expect(closed).toBe(false);
     });
 
     it('retains a response that finishes decoding after cancellation won the terminal race', async () => {
@@ -504,6 +651,7 @@ describe('canonical native execution event stream', () => {
         await expect(stream.cancel()).resolves.toMatchObject({ type: 'stream_terminated', outcome: 'cancelled' });
         releaseFinalize();
         await vi.waitFor(() => expect(stream.completion).toBe(response));
+        await stream.closed;
 
         await expect(iterator.next()).resolves.toMatchObject({ value: { type: 'stream_terminated' }, done: false });
         await expect(iterator.next()).resolves.toEqual({ value: undefined, done: true });
@@ -545,8 +693,6 @@ describe('canonical native execution event stream', () => {
         await vi.waitFor(() => expect(iteratorReturn).toHaveBeenCalledOnce());
 
         const cancellation = stream.cancel();
-        expect(stream.terminal_event).toBeUndefined();
-        releaseReturn();
         const [read, cancelled] = await Promise.all([terminalRead, cancellation]);
 
         expect(read).toMatchObject({ value: { type: 'stream_terminated', outcome: 'failed' }, done: false });
@@ -554,6 +700,15 @@ describe('canonical native execution event stream', () => {
         expect(abort).toHaveBeenCalledOnce();
         expect(iteratorReturn).toHaveBeenCalledOnce();
         expect(close).toHaveBeenCalledOnce();
+        let closed = false;
+        void stream.closed.then(() => {
+            closed = true;
+        });
+        await Promise.resolve();
+        expect(closed).toBe(false);
+        releaseReturn();
+        await stream.closed;
+        expect(closed).toBe(true);
         await expect(iterator.next()).resolves.toEqual({ value: undefined, done: true });
     });
 
@@ -580,6 +735,7 @@ describe('canonical native execution event stream', () => {
         expect(reentrant).toBe(cancellation);
         await expect(reentrant).resolves.toBe(terminal);
         expect(abort).toHaveBeenCalledOnce();
+        await stream.closed;
         expect(close).toHaveBeenCalledOnce();
         const iterator = stream[Symbol.asyncIterator]();
         await expect(iterator.next()).resolves.toMatchObject({ value: terminal, done: false });
@@ -625,7 +781,6 @@ describe('canonical native execution event stream', () => {
         await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
 
         const cancellation = stream.cancel();
-        releaseClose();
         const terminal = await cancellation;
         await consumption;
 
@@ -633,5 +788,14 @@ describe('canonical native execution event stream', () => {
         expect(events.at(-1)).toBe(terminal);
         expect(abort).not.toHaveBeenCalled();
         expect(close).toHaveBeenCalledOnce();
+        let closed = false;
+        void stream.closed.then(() => {
+            closed = true;
+        });
+        await Promise.resolve();
+        expect(closed).toBe(false);
+        releaseClose();
+        await stream.closed;
+        expect(closed).toBe(true);
     });
 });

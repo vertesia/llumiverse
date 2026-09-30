@@ -29,6 +29,10 @@
             "types": "./lib/output-runtime.d.ts",
             "default": "./lib/output-runtime.js"
         },
+        "./streaming-runtime": {
+            "types": "./lib/streaming-runtime.d.ts",
+            "default": "./lib/streaming-runtime.js"
+        },
         "./package.json": "./package.json"
     },
     "scripts": {

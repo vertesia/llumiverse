@@ -41,6 +41,8 @@ export interface CanonicalStreamOpenOptions
 export interface CanonicalExecutionEventStream extends AsyncIterable<ConversationStreamEvent> {
     readonly completion: CanonicalExecutionResponse | undefined;
     readonly terminal_event: CanonicalStreamTerminalEvent | undefined;
+    /** Fulfills after provider execution and owned transport cleanup have finished. */
+    readonly closed: Promise<void>;
     cancel(): Promise<CanonicalStreamTerminalEvent>;
 }
 
@@ -503,9 +505,11 @@ export interface FallbackCanonicalExecutionEventStreamOptions extends CanonicalS
 /** Finite typed delivery for a canonical sync response. It never reconstructs native draft events from preview text. */
 export class FallbackCanonicalExecutionEventStream implements CanonicalExecutionEventStream {
     completion: CanonicalExecutionResponse | undefined;
+    readonly closed: Promise<void>;
     private readonly abortController = new AbortController();
     private readonly accumulator: ConversationStreamAccumulator;
     private readonly channel: CanonicalStreamEventChannel;
+    private readonly closeDeferred = deferred<void>();
     private readonly replayEvents: readonly ConversationStreamEvent[];
     private readonly retainedDelivery: boolean;
     private started = false;
@@ -516,6 +520,7 @@ export class FallbackCanonicalExecutionEventStream implements CanonicalExecution
         private readonly execute: (signal: AbortSignal) => Promise<CanonicalExecutionResponse>,
         private readonly options: FallbackCanonicalExecutionEventStreamOptions,
     ) {
+        this.closed = this.closeDeferred.promise;
         const streamIdentity = { ...identity, stream_id: options.stream_id };
         this.retainedDelivery = options.retained_events !== undefined;
         const maxEventBytes = options.max_event_bytes ?? CONVERSATION_STREAM_MAX_EVENT_BYTES;
@@ -569,10 +574,13 @@ export class FallbackCanonicalExecutionEventStream implements CanonicalExecution
             } else {
                 await this.channel.terminate(terminal);
             }
+            if (!this.started) this.closeDeferred.resolve();
             return terminal;
         }
         this.abortController.abort();
-        return this.settleTerminated('cancelled');
+        const cancelled = await this.settleTerminated('cancelled');
+        if (!this.started) this.closeDeferred.resolve();
+        return cancelled;
     }
 
     [Symbol.asyncIterator](): AsyncIterator<ConversationStreamEvent> {
@@ -598,7 +606,10 @@ export class FallbackCanonicalExecutionEventStream implements CanonicalExecution
             }
             if (this.abortController.signal.aborted) return;
             const response = await this.execute(this.abortController.signal);
-            if (this.abortController.signal.aborted || this.settled) return;
+            if (this.abortController.signal.aborted || this.settled) {
+                this.completion = response;
+                return;
+            }
             const event = acceptedEvent(
                 this.accumulator.identity,
                 this.accumulator.next_sequence,
@@ -618,6 +629,8 @@ export class FallbackCanonicalExecutionEventStream implements CanonicalExecution
                     this.channel.fail(settlementError);
                 }
             }
+        } finally {
+            this.closeDeferred.resolve();
         }
     }
 
