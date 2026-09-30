@@ -52,20 +52,21 @@ function countMethodCalls(target: object, key: PropertyKey): { calls(): number; 
     };
 }
 
-const liveDrivers: XAIImageLiveDriver[] = [];
-if (process.env.XAI_API_KEY) {
-    liveDrivers.push({
+const liveDrivers: XAIImageLiveDriver[] = [
+    {
         name: 'xai',
         models: [MODEL],
         setup: () => {
-            const driver = new xAIDriver({ apiKey: process.env.XAI_API_KEY as string });
+            const apiKey = process.env.XAI_API_KEY;
+            if (!apiKey) {
+                throw new Error('Canonical xAI image live coverage requires XAI_API_KEY');
+            }
+            const driver = new xAIDriver({ apiKey });
             const invoke = countMethodCalls(driver.xai_service, 'post');
             return { driver, invokeCalls: invoke.calls, restore: invoke.restore };
         },
-    });
-} else {
-    console.warn('Canonical xAI image live coverage is skipped: XAI_API_KEY is not set');
-}
+    },
+];
 
 const selectedDrivers = selectLiveTestDrivers(liveDrivers, {
     providers: process.env.LLUMIVERSE_LIVE_PROVIDERS,

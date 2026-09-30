@@ -2,6 +2,9 @@ import {
     type AgentContentBlock,
     type Asset,
     appendDecodedConversationResponse,
+    buildConversationTurn,
+    type ConversationTurn,
+    createProgramTurn,
     createTextBlock,
     createUserTurn,
     deriveConversationId,
@@ -10,7 +13,9 @@ import {
     isConversationDocumentFormat,
     type JsonObject,
     type JsonValue,
+    type NativeItemMapping,
     parseConversationDocument,
+    type TextBlock,
 } from '@llumiverse/conversation';
 import {
     type CanonicalExecutionResponse,
@@ -45,7 +50,7 @@ import {
 type ResponseInputItem = OpenAI.Responses.ResponseInputItem;
 
 const OPENAI_IMAGES_PROTOCOL = 'openai.images.generate';
-const OPENAI_IMAGES_ADAPTER_VERSION = '2026-09-30.canonical.1';
+const OPENAI_IMAGES_ADAPTER_VERSION = '2026-09-30.canonical.2';
 
 interface DecodedImage {
     bytes: Uint8Array;
@@ -58,8 +63,15 @@ interface DecodedImage {
 function imagePromptText(prompt: ResponseInputItem[]): string {
     const text: string[] = [];
     for (const item of prompt) {
-        if (!('role' in item) || item.role !== 'user' || !('content' in item)) {
-            throw new Error('OpenAI standalone image generation supports user text input only');
+        if (
+            !('role' in item) ||
+            (item.role !== 'system' &&
+                item.role !== 'developer' &&
+                item.role !== 'user' &&
+                item.role !== 'assistant') ||
+            !('content' in item)
+        ) {
+            throw new Error('OpenAI standalone image generation received an unsupported prompt item');
         }
         if (typeof item.content === 'string') {
             if (item.content.trim().length > 0) text.push(item.content);
@@ -74,7 +86,7 @@ function imagePromptText(prompt: ResponseInputItem[]): string {
         }
     }
     const value = text.join('\n').trim();
-    if (value.length === 0) throw new Error('OpenAI standalone image generation requires nonempty user text');
+    if (value.length === 0) throw new Error('OpenAI standalone image generation requires nonempty text input');
     return value;
 }
 
@@ -88,18 +100,90 @@ export function validateOpenAICanonicalImageInput(segments: PromptSegment[], opt
     if (options.conversation_runtime?.materialized_input !== undefined) {
         throw new Error('OpenAI standalone image generation does not support materialized conversation input');
     }
-    if (segments.length === 0) throw new Error('OpenAI standalone image generation requires user text');
+    if (segments.length === 0) throw new Error('OpenAI standalone image generation requires text input');
+    let hasText = false;
     for (const segment of segments) {
-        if (segment.role !== PromptRole.user) {
+        if (
+            segment.role !== PromptRole.system &&
+            segment.role !== PromptRole.safety &&
+            segment.role !== PromptRole.user &&
+            segment.role !== PromptRole.assistant
+        ) {
             throw new Error(`OpenAI standalone image generation does not support ${segment.role} input`);
         }
-        if ((segment.files?.length ?? 0) > 0) {
-            throw new Error('OpenAI standalone image generation does not support input files');
-        }
-        if (segment.content.trim().length === 0) {
-            throw new Error('OpenAI standalone image generation requires nonempty user text');
+        if (segment.content.trim().length > 0) hasText = true;
+        for (const file of segment.files ?? []) {
+            if (!file.mime_type.startsWith('text/')) {
+                throw new Error(
+                    `OpenAI standalone image generation does not support ${file.mime_type || 'untyped'} input files`,
+                );
+            }
+            hasText = true;
         }
     }
+    if (!hasText) throw new Error('OpenAI standalone image generation requires nonempty text input');
+}
+
+async function imagePromptRecords(
+    prompt: ResponseInputItem[],
+    runtime: ReturnType<typeof resolveConversationRuntime>,
+): Promise<{ turns: ConversationTurn[]; mappings: NativeItemMapping[] }> {
+    const turns: ConversationTurn[] = [];
+    const mappings: NativeItemMapping[] = [];
+    let textIndex = 0;
+    for (let itemIndex = 0; itemIndex < prompt.length; itemIndex += 1) {
+        const item = prompt[itemIndex];
+        if (!('role' in item) || !('content' in item)) {
+            throw new Error(`OpenAI standalone image prompt item ${itemIndex} is unsupported`);
+        }
+        const parts =
+            typeof item.content === 'string'
+                ? [{ type: 'input_text' as const, text: item.content }]
+                : Array.isArray(item.content)
+                  ? item.content
+                  : [];
+        const blocks: TextBlock[] = [];
+        for (let partIndex = 0; partIndex < parts.length; partIndex += 1) {
+            const part = parts[partIndex];
+            if (part.type !== 'input_text') {
+                throw new Error('OpenAI standalone image generation does not support input media');
+            }
+            if (part.text.trim().length === 0) continue;
+            const block = createTextBlock({
+                id: await deriveConversationId(
+                    'block',
+                    runtime.input_operation_id,
+                    String(itemIndex),
+                    String(partIndex),
+                ),
+                text: part.text,
+                format: 'plain',
+            });
+            blocks.push(block);
+            mappings.push({ canonical_id: block.id, native_id: `prompt/parts/${textIndex}`, kind: 'block' });
+            textIndex += 1;
+        }
+        if (blocks.length === 0) continue;
+        const turnId = await deriveConversationId('turn', runtime.input_operation_id, String(itemIndex));
+        const common = {
+            id: turnId,
+            authority: 'ordinary' as const,
+            model_visibility: 'include' as const,
+            status: 'completed' as const,
+            timestamps: { recorded_at: runtime.recorded_at },
+            provenance: { type: 'received' as const },
+            blocks,
+        };
+        const turn =
+            item.role === 'system' || item.role === 'developer'
+                ? createProgramTurn({ ...common, authority: item.role })
+                : item.role === 'assistant'
+                  ? buildConversationTurn({ ...common, kind: 'agent' })
+                  : createUserTurn(common);
+        turns.push(turn);
+        mappings.push({ canonical_id: turn.id, native_id: `source/items/${itemIndex}`, kind: 'turn' });
+    }
+    return { turns, mappings };
 }
 
 export function openAIImageRequest(
@@ -229,7 +313,6 @@ export async function executeOpenAIImageCanonical(input: {
     request_options?: { signal?: AbortSignal; timeout?: number };
     signal?: AbortSignal;
 }): Promise<CanonicalExecutionResponse> {
-    const promptText = imagePromptText(input.prompt);
     const request = openAIImageRequest(input.prompt, input.options);
     const requestJson = providerJsonValue(request);
     const runtime = resolveConversationRuntime(input.options);
@@ -250,36 +333,42 @@ export async function executeOpenAIImageCanonical(input: {
         throw new Error('conversation_runtime.conversation_id does not match the canonical document');
     }
     const acceptedBefore = acceptedCanonicalResponse(document, runtime.response_operation_id);
-    const turnId = await deriveConversationId('turn', runtime.input_operation_id, 'image-prompt');
-    const blockId = await deriveConversationId('block', runtime.input_operation_id, 'image-prompt');
+    if (
+        acceptedBefore !== undefined &&
+        (acceptedBefore.generation.adapter_version !== OPENAI_IMAGES_ADAPTER_VERSION ||
+            acceptedBefore.generation.request_receipt?.target.adapter_version !== OPENAI_IMAGES_ADAPTER_VERSION)
+    ) {
+        throw new Error(
+            `Accepted OpenAI image response operation ${runtime.response_operation_id} uses unsupported adapter version ${acceptedBefore.generation.adapter_version}`,
+        );
+    }
+    const promptRecords = await imagePromptRecords(input.prompt, runtime);
     if (
         document.turns.length > 0 &&
         acceptedBefore === undefined &&
-        (Object.keys(document.generations).length > 0 || document.turns.some((turn) => turn.id !== turnId))
+        (Object.keys(document.generations).length > 0 ||
+            document.turns.some((turn) => !promptRecords.turns.some((record) => record.id === turn.id)))
     ) {
         throw new Error('OpenAI standalone image generation does not support conversation continuation');
     }
-    const turn = createUserTurn({
-        id: turnId,
-        authority: 'ordinary',
-        model_visibility: 'include',
-        status: 'completed',
-        timestamps: { recorded_at: runtime.recorded_at },
-        provenance: { type: 'received' },
-        blocks: [createTextBlock({ id: blockId, text: promptText, format: 'plain' })],
-    });
-    const contextEntryId = await deriveConversationId('context', runtime.input_operation_id, 'image-prompt');
+    const contextEntries = await Promise.all(
+        promptRecords.turns.map(async (turn, index) => ({
+            id: await deriveConversationId('context', runtime.input_operation_id, String(index)),
+            type: 'source_turn' as const,
+            turn_id: turn.id,
+        })),
+    );
     const appended = await appendCanonicalPrompt(
         document,
         {
-            turns: [turn],
+            turns: promptRecords.turns,
             assets: [],
-            context_entries: [{ id: contextEntryId, type: 'source_turn', turn_id: turn.id }],
-            item_mappings: [],
+            context_entries: contextEntries,
+            item_mappings: promptRecords.mappings,
         },
         { ...runtime, conversation_id: document.id },
         undefined,
-        { prompt: promptText },
+        providerJsonValue(input.prompt),
     );
     document = appended.document;
     const accepted = acceptedCanonicalResponse(document, runtime.response_operation_id);
@@ -313,10 +402,7 @@ export async function executeOpenAIImageCanonical(input: {
             options: effectiveImageOptions(request),
         },
         requestJson,
-        [
-            { canonical_id: turn.id, native_id: 'prompt', kind: 'turn' },
-            { canonical_id: blockId, native_id: 'prompt/text', kind: 'block' },
-        ],
+        promptRecords.mappings,
         appended.tool_definitions,
     );
     const identities = await canonicalResponseIdentities(runtime);

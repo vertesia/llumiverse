@@ -5,7 +5,7 @@ import {
     createUserTurn,
     parseConversationDocument,
 } from '@llumiverse/conversation';
-import { type ExecutionOptions, PromptRole, Providers } from '@llumiverse/core';
+import { Base64DataSource, type ExecutionOptions, PromptRole, Providers } from '@llumiverse/core';
 import type OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 import { OpenAIResponsesDriverBase } from './index.js';
@@ -142,6 +142,22 @@ describe('OpenAI standalone image canonical lifecycle', () => {
         expect(generate).toHaveBeenCalledOnce();
         expect(publish).toHaveBeenCalledOnce();
 
+        const priorAdapter = JSON.parse(JSON.stringify(first.conversation));
+        const priorGeneration = priorAdapter.generations[first.accepted_output.generation.id];
+        priorGeneration.adapter_version = '2026-09-30.canonical.1';
+        priorGeneration.request_receipt.target.adapter_version = '2026-09-30.canonical.1';
+        await expect(
+            driver.executeCanonical(segments, {
+                ...options,
+                conversation: priorAdapter,
+            }),
+        ).rejects.toThrow(/unsupported adapter version 2026-09-30.canonical.1/);
+        await expect(
+            driver.executeCanonical([{ role: PromptRole.system, content: 'Draw two small icons.' }], {
+                ...options,
+                conversation: first.conversation,
+            }),
+        ).rejects.toThrow();
         await expect(
             driver.executeCanonical([{ role: PromptRole.user, content: 'Draw a changed icon.' }], {
                 ...options,
@@ -162,6 +178,79 @@ describe('OpenAI standalone image canonical lifecycle', () => {
             }),
         ).rejects.toThrow('incompatible request identity');
         expect(generate).toHaveBeenCalledOnce();
+    });
+
+    it('preserves privileged and assistant prompt authority plus text attachments across public execution', async () => {
+        const segments = [
+            { role: PromptRole.system, content: 'Use a restrained geometric style.' },
+            { role: PromptRole.safety, content: 'Do not include words.' },
+            { role: PromptRole.assistant, content: 'The earlier result used circles.' },
+            {
+                role: PromptRole.user,
+                content: 'Draw the next version.',
+                files: [new Base64DataSource('notes.txt', 'text/plain', 'VXNlIGJsdWUu')],
+            },
+        ];
+        const expectedPrompt = [
+            'Use a restrained geometric style.',
+            'DO NOT IGNORE - IMPORTANT: Do not include words.',
+            'The earlier result used circles.',
+            'Use blue.',
+            'Draw the next version.',
+        ].join('\n');
+        const generate = vi.fn(async (_request: unknown) => imageResponse([{ b64_json: pngA }]));
+        const driver = new ImageDriver(generate);
+        const response = await driver.executeCanonical(segments, runtime('authority'));
+
+        expect(generate.mock.calls[0]?.[0]).toMatchObject({ prompt: expectedPrompt });
+        expect(response.conversation.turns).toEqual([
+            expect.objectContaining({
+                kind: 'program',
+                authority: 'system',
+                provenance: { type: 'received' },
+                blocks: [expect.objectContaining({ type: 'text', text: 'Use a restrained geometric style.' })],
+            }),
+            expect.objectContaining({
+                kind: 'program',
+                authority: 'system',
+                provenance: { type: 'received' },
+                blocks: [
+                    expect.objectContaining({
+                        type: 'text',
+                        text: 'DO NOT IGNORE - IMPORTANT: Do not include words.',
+                    }),
+                ],
+            }),
+            expect.objectContaining({
+                kind: 'agent',
+                authority: 'ordinary',
+                provenance: { type: 'received' },
+                blocks: [expect.objectContaining({ type: 'text', text: 'The earlier result used circles.' })],
+            }),
+            expect.objectContaining({
+                kind: 'user',
+                authority: 'ordinary',
+                provenance: { type: 'received' },
+                blocks: [
+                    expect.objectContaining({ type: 'text', text: 'Use blue.' }),
+                    expect.objectContaining({ type: 'text', text: 'Draw the next version.' }),
+                ],
+            }),
+            expect.objectContaining({ kind: 'agent', provenance: { type: 'generated' } }),
+        ]);
+        const receivedTurnIds = response.conversation.turns
+            .filter((turn) => turn.provenance.type === 'received')
+            .map((turn) => turn.id);
+        expect(receivedTurnIds).toHaveLength(4);
+        expect(response.conversation.context.entries).toEqual(
+            expect.arrayContaining(receivedTurnIds.map((turnId) => expect.objectContaining({ turn_id: turnId }))),
+        );
+
+        const legacyGenerate = vi.fn(async (_request: unknown) => imageResponse([{ b64_json: pngA }]));
+        const legacy = new ImageDriver(legacyGenerate);
+        const completion = await legacy.execute(segments, runtime('legacy-authority'));
+        expect(completion.result).toEqual([{ type: 'image', value: `data:image/png;base64,${pngA}` }]);
+        expect(legacyGenerate.mock.calls[0]?.[0]).toMatchObject({ prompt: expectedPrompt });
     });
 
     it('provides finite canonical streaming and projects legacy image usage from canonical authority', async () => {
@@ -460,10 +549,10 @@ describe('OpenAI standalone image canonical lifecycle', () => {
                 ],
                 runtime('file'),
             ),
-        ).rejects.toThrow('does not support input files');
+        ).rejects.toThrow('does not support image/png input files');
         await expect(
-            driver.executeCanonical([{ role: PromptRole.system, content: 'Draw.' }], runtime('role')),
-        ).rejects.toThrow('does not support system input');
+            driver.executeCanonical([{ role: PromptRole.negative, content: 'Draw.' }], runtime('role')),
+        ).rejects.toThrow('does not support negative input');
         await expect(
             driver.executeCanonical([{ role: PromptRole.user, content: 'Draw.' }], {
                 ...runtime('tools'),
