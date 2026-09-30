@@ -15,7 +15,12 @@ import {
 } from '@llumiverse/common';
 import { createConversationDocument } from '@llumiverse/conversation';
 import { describe, expect, it, vi } from 'vitest';
-import { DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS } from './CompletionStream.js';
+import type {
+    CanonicalExecutionEventStream,
+    CanonicalStreamOpenOptions,
+    CanonicalStreamTerminalEvent,
+} from './CanonicalStreaming.js';
+import { DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS, leaseCompletionStream } from './CompletionStream.js';
 import { AbstractDriver } from './Driver.js';
 
 class LifecycleTestDriver extends AbstractDriver<DriverOptions, string> {
@@ -152,8 +157,48 @@ class ThrowingIteratorDriver extends LifecycleTestDriver {
     }
 }
 
+const canonicalTerminal = { type: 'stream_terminated' } as CanonicalStreamTerminalEvent;
+
+class OverriddenCanonicalEventStreamDriver extends CanonicalLifecycleTestDriver {
+    readonly cancelEventStream = vi
+        .fn<() => Promise<CanonicalStreamTerminalEvent>>()
+        .mockResolvedValue(canonicalTerminal);
+    releaseIteratorReturn?: () => void;
+    private releaseRead?: () => void;
+
+    override async streamCanonicalEvents(
+        _segments: PromptSegment[],
+        _options: ExecutionOptions,
+        _signal: AbortSignal | undefined,
+        _open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        const driver = this;
+        return {
+            completion: undefined,
+            terminal_event: undefined,
+            cancel: this.cancelEventStream,
+            [Symbol.asyncIterator]() {
+                return {
+                    next: () =>
+                        new Promise<IteratorResult<never>>((resolve) => {
+                            driver.releaseRead = () => resolve({ done: true, value: undefined });
+                        }),
+                    return: async () => {
+                        driver.releaseRead?.();
+                        await new Promise<void>((resolve) => {
+                            driver.releaseIteratorReturn = resolve;
+                        });
+                        return { done: true, value: undefined };
+                    },
+                };
+            },
+        };
+    }
+}
+
 const segments = [{ role: PromptRole.user, content: 'hello' }];
 const options = { model: 'test-model' };
+const canonicalStreamOpen = { stream_id: 'stream:lifecycle' };
 
 function holdStreamCancellation(driver: OverriddenStreamDriver): () => void {
     let release!: () => void;
@@ -396,6 +441,51 @@ describe('AbstractDriver lifecycle', () => {
         }
     });
 
+    it('releases a direct stream lease exactly once when its start timeout expires', async () => {
+        vi.useFakeTimers();
+        try {
+            const release = vi.fn();
+            const cancel = vi.fn().mockResolvedValue(undefined);
+            const source: CompletionStream<string> = {
+                completion: undefined,
+                cancel,
+                async *[Symbol.asyncIterator]() {},
+            };
+            const stream = leaseCompletionStream(source, release, 100);
+
+            await vi.advanceTimersByTimeAsync(101);
+            await stream.cancel();
+
+            expect(cancel).toHaveBeenCalledOnce();
+            expect(release).toHaveBeenCalledOnce();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('claims direct stream cancellation before a source cancellation callback can reenter', async () => {
+        const release = vi.fn();
+        let reentrant: Promise<void> | undefined;
+        let stream!: CompletionStream<string>;
+        const cancel = vi.fn(async () => {
+            reentrant = stream.cancel();
+        });
+        const source: CompletionStream<string> = {
+            completion: undefined,
+            cancel,
+            async *[Symbol.asyncIterator]() {},
+        };
+        stream = leaseCompletionStream(source, release, 10_000);
+
+        const cancellation = stream.cancel();
+        await cancellation;
+
+        expect(reentrant).toBe(cancellation);
+        await expect(reentrant).resolves.toBeUndefined();
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(release).toHaveBeenCalledOnce();
+    });
+
     it('keeps the default abandoned-stream lease beyond the request boundary', async () => {
         expect(DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS).toBe(900_000);
 
@@ -466,6 +556,54 @@ describe('AbstractDriver lifecycle', () => {
 
         expect(driver.completionSignal?.aborted).toBe(true);
         await expect(read).resolves.toEqual({ done: true, value: undefined });
+    });
+
+    it('holds a typed canonical stream lease through pending iterator cancellation cleanup', async () => {
+        const cleanup = vi.fn();
+        const driver = new OverriddenCanonicalEventStreamDriver(cleanup);
+        const stream = await driver.streamCanonicalEvents(segments, options, undefined, canonicalStreamOpen);
+        const read = stream[Symbol.asyncIterator]().next();
+        driver.destroy();
+
+        const cancellation = stream.cancel();
+        await vi.waitFor(() => expect(driver.cancelEventStream).toHaveBeenCalledOnce());
+        await vi.waitFor(() => expect(driver.releaseIteratorReturn).toBeTypeOf('function'));
+        expect(cleanup).not.toHaveBeenCalled();
+
+        driver.releaseIteratorReturn?.();
+        await expect(cancellation).resolves.toBe(canonicalTerminal);
+        await expect(read).resolves.toEqual({ done: true, value: undefined });
+        expect(cleanup).toHaveBeenCalledOnce();
+    });
+
+    it('reads the typed canonical stream abort signal from the third argument', async () => {
+        const cleanup = vi.fn();
+        const driver = new OverriddenCanonicalEventStreamDriver(cleanup);
+        const controller = new AbortController();
+        await driver.streamCanonicalEvents(segments, options, controller.signal, canonicalStreamOpen);
+        driver.destroy();
+
+        controller.abort();
+
+        await vi.waitFor(() => expect(driver.cancelEventStream).toHaveBeenCalledOnce());
+        expect(cleanup).toHaveBeenCalledOnce();
+    });
+
+    it('cancels and releases an unused typed canonical stream after its start timeout', async () => {
+        vi.useFakeTimers();
+        try {
+            const cleanup = vi.fn();
+            const driver = new OverriddenCanonicalEventStreamDriver(cleanup, { streamStartTimeoutMs: 100 });
+            await driver.streamCanonicalEvents(segments, options, undefined, canonicalStreamOpen);
+            driver.destroy();
+
+            await vi.advanceTimersByTimeAsync(101);
+
+            expect(driver.cancelEventStream).toHaveBeenCalledOnce();
+            expect(cleanup).toHaveBeenCalledOnce();
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('cancels stream creation before a provider stream exists', async () => {

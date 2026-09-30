@@ -76,7 +76,7 @@ function boundedQueueSize(value: number | undefined): number {
  */
 export class CanonicalStreamEventChannel implements AsyncIterable<ConversationStreamEvent> {
     private readonly buffered: ConversationStreamEvent[] = [];
-    private readonly blockedProducers: Array<Deferred<void>> = [];
+    private readonly blockedProducers: Array<{ event: ConversationStreamEvent; completion: Deferred<void> }> = [];
     private pendingConsumer: Deferred<IteratorResult<ConversationStreamEvent>> | undefined;
     private terminal: CanonicalStreamTerminalEvent | undefined;
     private terminalDelivered = false;
@@ -106,13 +106,17 @@ export class CanonicalStreamEventChannel implements AsyncIterable<ConversationSt
             consumer.resolve({ value: event, done: false });
             return;
         }
-        while (this.buffered.length >= this.maxBufferedEvents) {
-            const producer = deferred<void>();
-            this.blockedProducers.push(producer);
-            await producer.promise;
-            if (this.terminal !== undefined || this.closed) {
-                throw new Error('Canonical stream event channel is terminated');
+        if (this.buffered.length >= this.maxBufferedEvents) {
+            // Native producers are deliberately single-threaded. Keeping one blocked event bounds retained
+            // delivery memory to max_buffered_events + one event + one terminal while allowing cancellation
+            // to preserve the already-assigned sequence without waiting for a consumer.
+            if (this.blockedProducers.length >= 1) {
+                throw new Error('Canonical stream event channel supports one blocked producer');
             }
+            const completion = deferred<void>();
+            this.blockedProducers.push({ event, completion });
+            await completion.promise;
+            return;
         }
         this.buffered.push(event);
     }
@@ -127,7 +131,8 @@ export class CanonicalStreamEventChannel implements AsyncIterable<ConversationSt
         this.terminal = event;
         this.closed = true;
         for (const producer of this.blockedProducers.splice(0)) {
-            producer.reject(new Error('Canonical stream event channel is terminated'));
+            this.buffered.push(producer.event);
+            producer.completion.resolve(undefined);
         }
         if (this.pendingConsumer !== undefined && this.buffered.length === 0) {
             const consumer = this.pendingConsumer;
@@ -143,7 +148,7 @@ export class CanonicalStreamEventChannel implements AsyncIterable<ConversationSt
         if (this.terminal !== undefined) return;
         this.closed = true;
         for (const producer of this.blockedProducers.splice(0)) {
-            producer.reject(new Error('Canonical stream event channel is closed'));
+            producer.completion.reject(new Error('Canonical stream event channel is closed'));
         }
         if (this.pendingConsumer !== undefined && this.buffered.length === 0) {
             const consumer = this.pendingConsumer;
@@ -158,7 +163,7 @@ export class CanonicalStreamEventChannel implements AsyncIterable<ConversationSt
         this.closed = true;
         this.buffered.splice(0);
         for (const producer of this.blockedProducers.splice(0)) {
-            producer.reject(new Error('Canonical stream event delivery was abandoned'));
+            producer.completion.reject(new Error('Canonical stream event delivery was abandoned'));
         }
         if (this.pendingConsumer !== undefined) {
             const consumer = this.pendingConsumer;
@@ -172,7 +177,7 @@ export class CanonicalStreamEventChannel implements AsyncIterable<ConversationSt
         this.failure = error;
         this.closed = true;
         this.buffered.splice(0);
-        for (const producer of this.blockedProducers.splice(0)) producer.reject(error);
+        for (const producer of this.blockedProducers.splice(0)) producer.completion.reject(error);
         if (this.pendingConsumer !== undefined) {
             const consumer = this.pendingConsumer;
             this.pendingConsumer = undefined;
@@ -195,7 +200,11 @@ export class CanonicalStreamEventChannel implements AsyncIterable<ConversationSt
     private async next(): Promise<IteratorResult<ConversationStreamEvent>> {
         const event = this.buffered.shift();
         if (event !== undefined) {
-            this.blockedProducers.shift()?.resolve(undefined);
+            const producer = this.blockedProducers.shift();
+            if (producer !== undefined) {
+                this.buffered.push(producer.event);
+                producer.completion.resolve(undefined);
+            }
             if (event.type === 'response_accepted' || event.type === 'stream_terminated') this.terminalDelivered = true;
             return { value: event, done: false };
         }

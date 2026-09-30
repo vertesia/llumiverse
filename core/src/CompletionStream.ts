@@ -10,7 +10,9 @@ import {
     LlumiverseError,
     type ToolUse,
 } from '@llumiverse/common';
+import type { ConversationStreamEvent } from '@llumiverse/conversation';
 import type { CanonicalExecutionResponse, CanonicalExecutionStream } from './CanonicalExecution.js';
+import type { CanonicalExecutionEventStream, CanonicalStreamTerminalEvent } from './CanonicalStreaming.js';
 import { stripAudioFromCompletion, stripAudioPayloads } from './conversation-utils.js';
 import type { AbstractDriver } from './Driver.js';
 import { DEFAULT_DRIVER_REQUEST_TIMEOUT_MS } from './http-agent.js';
@@ -25,6 +27,7 @@ export const DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS = DEFAULT_DRIVER_REQUEST
 class CompletionStreamLease {
     private cancelled = false;
     private expired = false;
+    private released = false;
     private started = false;
     private readonly timer: ReturnType<typeof setTimeout>;
 
@@ -35,7 +38,7 @@ class CompletionStreamLease {
     ) {
         this.timer = setTimeout(() => {
             this.expired = true;
-            void expire().finally(this.releaseOperation);
+            void expire().finally(() => this.release());
         }, startTimeoutMs);
         this.timer.unref?.();
     }
@@ -52,6 +55,8 @@ class CompletionStreamLease {
     }
 
     release(): void {
+        if (this.released) return;
+        this.released = true;
         clearTimeout(this.timer);
         this.releaseOperation();
     }
@@ -110,20 +115,22 @@ abstract class ManagedCompletionStream<PromptT> implements CompletionStream<Prom
     }
 }
 
-interface LeasableExecutionStream<CompletionT> extends AsyncIterable<string> {
+interface LeasableExecutionStream<EventT, CompletionT, CancellationT> extends AsyncIterable<EventT> {
     completion: CompletionT | undefined;
-    cancel(): Promise<void>;
+    cancel(): Promise<CancellationT>;
 }
 
-class LeasedExecutionStream<CompletionT> implements LeasableExecutionStream<CompletionT> {
-    private activeIterator?: AsyncIterator<string>;
+class LeasedExecutionStream<EventT, CompletionT, CancellationT>
+    implements LeasableExecutionStream<EventT, CompletionT, CancellationT>
+{
+    private activeIterator?: AsyncIterator<EventT>;
     private iteratorCreated = false;
     private readonly lease: CompletionStreamLease;
     private abort?: () => void;
-    private cancellation?: Promise<void>;
+    private cancellation?: Promise<CancellationT>;
 
     constructor(
-        private readonly stream: LeasableExecutionStream<CompletionT>,
+        private readonly stream: LeasableExecutionStream<EventT, CompletionT, CancellationT>,
         releaseOperation: () => void,
         streamStartTimeoutMs: number,
         private readonly signal?: AbortSignal,
@@ -150,12 +157,12 @@ class LeasedExecutionStream<CompletionT> implements LeasableExecutionStream<Comp
         return this.stream.completion;
     }
 
-    [Symbol.asyncIterator](): AsyncIterator<string> {
+    [Symbol.asyncIterator](): AsyncIterator<EventT> {
         if (this.iteratorCreated) {
             throw new Error('Completion stream can only be consumed once');
         }
         this.iteratorCreated = true;
-        let iterator: AsyncIterator<string>;
+        let iterator: AsyncIterator<EventT>;
         try {
             iterator = this.stream[Symbol.asyncIterator]();
         } catch (error: unknown) {
@@ -174,10 +181,10 @@ class LeasedExecutionStream<CompletionT> implements LeasableExecutionStream<Comp
                 }
                 try {
                     const result = await iterator.next();
-                    if (result.done) this.releaseLease();
+                    if (result.done && !this.cancellation) this.releaseLease();
                     return result;
                 } catch (error: unknown) {
-                    this.releaseLease();
+                    if (!this.cancellation) this.releaseLease();
                     throw error;
                 }
             },
@@ -192,18 +199,26 @@ class LeasedExecutionStream<CompletionT> implements LeasableExecutionStream<Comp
         };
     }
 
-    cancel(): Promise<void> {
+    cancel(): Promise<CancellationT> {
         if (!this.cancellation) {
-            this.cancellation = this.cancelInternal();
+            const pending = this.lease.cancelPending();
+            let resolve!: (result: CancellationT) => void;
+            let reject!: (error: unknown) => void;
+            const cancellation = new Promise<CancellationT>((resolvePromise, rejectPromise) => {
+                resolve = resolvePromise;
+                reject = rejectPromise;
+            });
+            this.cancellation = cancellation;
+            void this.cancelInternal(pending).then(resolve, reject);
         }
         return this.cancellation;
     }
 
-    private async cancelInternal(): Promise<void> {
-        const pending = this.lease.cancelPending();
+    private async cancelInternal(pending: boolean): Promise<CancellationT> {
         try {
-            await this.stream.cancel();
+            const result = await this.stream.cancel();
             if (!pending) await this.activeIterator?.return?.();
+            return result;
         } finally {
             this.activeIterator = undefined;
             this.releaseLease();
@@ -227,7 +242,12 @@ export function leaseCompletionStream<PromptT>(
     streamStartTimeoutMs = DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS,
     signal?: AbortSignal,
 ): CompletionStream<PromptT> {
-    return new LeasedExecutionStream(stream, releaseOperation, streamStartTimeoutMs, signal);
+    return new LeasedExecutionStream<string, ExecutionResponse<PromptT>, void>(
+        stream,
+        releaseOperation,
+        streamStartTimeoutMs,
+        signal,
+    );
 }
 
 export function leaseCanonicalExecutionStream(
@@ -236,12 +256,54 @@ export function leaseCanonicalExecutionStream(
     streamStartTimeoutMs = DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS,
     signal?: AbortSignal,
 ): CanonicalExecutionStream {
-    return new LeasedExecutionStream<CanonicalExecutionResponse>(
+    return new LeasedExecutionStream<string, CanonicalExecutionResponse, void>(
         stream,
         releaseOperation,
         streamStartTimeoutMs,
         signal,
     );
+}
+
+class LeasedCanonicalExecutionEventStream implements CanonicalExecutionEventStream {
+    private readonly leased: LeasedExecutionStream<
+        ConversationStreamEvent,
+        CanonicalExecutionResponse,
+        CanonicalStreamTerminalEvent
+    >;
+
+    constructor(
+        private readonly source: CanonicalExecutionEventStream,
+        releaseOperation: () => void,
+        streamStartTimeoutMs: number,
+        signal?: AbortSignal,
+    ) {
+        this.leased = new LeasedExecutionStream(source, releaseOperation, streamStartTimeoutMs, signal);
+    }
+
+    get completion(): CanonicalExecutionResponse | undefined {
+        return this.leased.completion;
+    }
+
+    get terminal_event(): CanonicalStreamTerminalEvent | undefined {
+        return this.source.terminal_event;
+    }
+
+    cancel(): Promise<CanonicalStreamTerminalEvent> {
+        return this.leased.cancel();
+    }
+
+    [Symbol.asyncIterator](): AsyncIterator<ConversationStreamEvent> {
+        return this.leased[Symbol.asyncIterator]();
+    }
+}
+
+export function leaseCanonicalExecutionEventStream(
+    stream: CanonicalExecutionEventStream,
+    releaseOperation: () => void,
+    streamStartTimeoutMs = DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS,
+    signal?: AbortSignal,
+): CanonicalExecutionEventStream {
+    return new LeasedCanonicalExecutionEventStream(stream, releaseOperation, streamStartTimeoutMs, signal);
 }
 
 export function finalizeStreamingToolUse(

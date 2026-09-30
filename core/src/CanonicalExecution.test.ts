@@ -525,21 +525,20 @@ describe('canonical typed execution stream', () => {
         expect(bounded.completion).toBe(response);
     });
 
-    it('does not let an unread full buffer delay or follow the terminal event', async () => {
+    it('preserves an already-blocked event before a terminal without waiting for buffer capacity', async () => {
         const channel = new CanonicalStreamEventChannel(1);
         const first = streamEvent(0, { type: 'draft_started', origin: 'live_transport' });
         const blockedEvent = streamEvent(1, { type: 'draft_started', origin: 'live_transport' });
         const terminal = streamEvent(2, { type: 'stream_terminated', outcome: 'cancelled' });
         await channel.emit(first);
         const blocked = channel.emit(blockedEvent);
-        const blockedAssertion = expect(blocked).rejects.toThrow('terminated');
 
         await channel.terminate(terminal as Extract<ConversationStreamEvent, { type: 'stream_terminated' }>);
-        await blockedAssertion;
+        await expect(blocked).resolves.toBeUndefined();
         const received: ConversationStreamEvent[] = [];
         for await (const event of channel) received.push(event);
 
-        expect(received).toEqual([first, terminal]);
+        expect(received).toEqual([first, blockedEvent, terminal]);
         await expect(channel.emit(blockedEvent)).rejects.toThrow('terminated');
     });
 

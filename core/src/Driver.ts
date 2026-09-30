@@ -27,7 +27,7 @@ import {
     type TrainingOptions,
     type TrainingPromptOptions,
 } from '@llumiverse/common';
-import { isConversationDocumentFormat } from '@llumiverse/conversation';
+import { deriveConversationId, isConversationDocumentFormat } from '@llumiverse/conversation';
 import type { Agent } from 'undici';
 import {
     type CanonicalExecutionResponse,
@@ -36,9 +36,15 @@ import {
     legacyCompletionFromCanonicalExecution,
 } from './CanonicalExecution.js';
 import {
+    type CanonicalExecutionEventStream,
+    type CanonicalStreamOpenOptions,
+    FallbackCanonicalExecutionEventStream,
+} from './CanonicalStreaming.js';
+import {
     DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS,
     DefaultCompletionStream,
     FallbackCompletionStream,
+    leaseCanonicalExecutionEventStream,
     leaseCanonicalExecutionStream,
     leaseCompletionStream,
 } from './CompletionStream.js';
@@ -105,6 +111,13 @@ export interface Driver<PromptT = unknown> {
         signal?: AbortSignal,
     ): Promise<CanonicalExecutionStream>;
 
+    streamCanonicalEvents(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream>;
+
     /** Report whether this concrete provider/model path can produce canonical execution authority. */
     supportsCanonicalExecution(options: ExecutionOptions): Promise<boolean>;
 
@@ -147,6 +160,7 @@ const lifecycleGuardedOperationNames = [
     'executeCanonical',
     'stream',
     'streamCanonical',
+    'streamCanonicalEvents',
     'supportsCanonicalExecution',
     'startTraining',
     'cancelTraining',
@@ -233,17 +247,22 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
             Object.defineProperty(this, name, {
                 configurable: false,
                 value:
-                    name === 'stream' || name === 'streamCanonical'
+                    name === 'stream' || name === 'streamCanonical' || name === 'streamCanonicalEvents'
                         ? (...args: unknown[]) =>
                               name === 'stream'
                                   ? this.runStreamOperation(
                                         () => operation.apply(this, args) as Promise<CompletionStream<PromptT>>,
                                         args[2] as AbortSignal | undefined,
                                     )
-                                  : this.runCanonicalStreamOperation(
-                                        () => operation.apply(this, args) as Promise<CanonicalExecutionStream>,
-                                        args[2] as AbortSignal | undefined,
-                                    )
+                                  : name === 'streamCanonical'
+                                    ? this.runCanonicalStreamOperation(
+                                          () => operation.apply(this, args) as Promise<CanonicalExecutionStream>,
+                                          args[2] as AbortSignal | undefined,
+                                      )
+                                    : this.runCanonicalEventStreamOperation(
+                                          () => operation.apply(this, args) as Promise<CanonicalExecutionEventStream>,
+                                          args[2] as AbortSignal | undefined,
+                                      )
                         : (...args: unknown[]) => this.runOperation(() => operation.apply(this, args)),
                 writable: false,
             });
@@ -288,6 +307,25 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         try {
             const stream = await this.runInHttpContext(operation);
             return leaseCanonicalExecutionStream(
+                stream,
+                release,
+                this.options.streamStartTimeoutMs ?? DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS,
+                signal,
+            );
+        } catch (error: unknown) {
+            release();
+            throw error;
+        }
+    }
+
+    private async runCanonicalEventStreamOperation(
+        operation: () => Promise<CanonicalExecutionEventStream>,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionEventStream> {
+        const release = this.acquireOperationLease();
+        try {
+            const stream = await this.runInHttpContext(operation);
+            return leaseCanonicalExecutionEventStream(
                 stream,
                 release,
                 this.options.streamStartTimeoutMs ?? DEFAULT_COMPLETION_STREAM_START_TIMEOUT_MS,
@@ -619,6 +657,57 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         return await this.requestCanonicalTextCompletionStream(prompt, options, signal);
     }
 
+    async streamCanonicalEvents(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        this.assertConversationInputSupported(options);
+        if (options.conversation_runtime?.materialized_input !== undefined && segments.length > 0) {
+            throw new Error('A materialized canonical input requires an empty new prompt');
+        }
+        const runtime = options.conversation_runtime;
+        if (runtime === undefined) {
+            throw new Error('Canonical typed streaming requires conversation_runtime');
+        }
+        if (this.isImageModel(options.model)) {
+            if (!this.supportsCanonicalImageGeneration(options)) {
+                throw new Error(
+                    `Provider ${this.provider} model ${options.model} does not support canonical typed streaming`,
+                );
+            }
+            this.validateCanonicalImageInput(segments, options);
+        }
+        signal?.throwIfAborted();
+        const prompt = await this.createPrompt(segments, options);
+        signal?.throwIfAborted();
+        const [generationId, responseTurnId] = await Promise.all([
+            deriveConversationId('generation', runtime.request_id, runtime.attempt_id),
+            deriveConversationId('turn', runtime.response_operation_id, 'response', '0'),
+        ]);
+        const identity = {
+            request_id: runtime.request_id,
+            attempt_id: runtime.attempt_id,
+            response_operation_id: runtime.response_operation_id,
+            generation_id: generationId,
+            draft_turn_id: responseTurnId,
+        };
+        if (this.isImageModel(options.model) || !(await this.canStream(options, signal))) {
+            return new FallbackCanonicalExecutionEventStream(
+                identity,
+                (fallbackSignal) =>
+                    this._executeCanonical(
+                        prompt,
+                        options,
+                        signal ? AbortSignal.any([signal, fallbackSignal]) : fallbackSignal,
+                    ),
+                open,
+            );
+        }
+        return await this.requestCanonicalTextCompletionEventStream(prompt, options, signal, open);
+    }
+
     /**
      * Override this method to provide a custom prompt formatter
      * @param segments
@@ -795,6 +884,15 @@ export abstract class AbstractDriver<OptionsT extends DriverOptions = DriverOpti
         _signal?: AbortSignal,
     ): Promise<CanonicalExecutionStream> {
         throw new Error(`Provider ${this.provider} model ${options.model} does not support canonical streaming`);
+    }
+
+    async requestCanonicalTextCompletionEventStream(
+        _prompt: PromptT,
+        options: ExecutionOptions,
+        _signal: AbortSignal | undefined,
+        _open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        throw new Error(`Provider ${this.provider} model ${options.model} does not support canonical typed streaming`);
     }
 
     async requestCanonicalImageGeneration(
