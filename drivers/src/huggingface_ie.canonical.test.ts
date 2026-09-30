@@ -90,6 +90,48 @@ async function collect(stream: CanonicalExecutionEventStream): Promise<Conversat
 }
 
 describe('Hugging Face IE canonical lifecycle', () => {
+    it('preserves legacy prompt formatting while canonical entrypoints reject unsupported contributions', async () => {
+        const { driver, executor } = setup();
+        const getStream = vi.fn(async () => new ReadableStream());
+        const segments = [
+            { role: PromptRole.system, content: 'System context.' },
+            {
+                role: PromptRole.user,
+                content: 'Question.',
+                files: [
+                    {
+                        name: 'ignored.txt',
+                        mime_type: 'text/plain',
+                        getStream,
+                        getURL: async () => 'https://example.test/ignored.txt',
+                        getURI: async () => 'artifact://ignored',
+                    },
+                ],
+            },
+            { role: PromptRole.assistant, content: 'Earlier answer.' },
+            { role: PromptRole.tool, content: 'Legacy ignored tool result.' },
+            { role: PromptRole.negative, content: 'Legacy ignored negative prompt.' },
+            { role: PromptRole.mask, content: 'Legacy ignored mask.' },
+            { role: PromptRole.safety, content: 'Safety rule.' },
+        ];
+
+        await driver.execute(segments, options('legacy-formatting'));
+        expect(executor.textGeneration).toHaveBeenCalledWith({
+            inputs: [
+                'CONTEXT: System context.',
+                'USER: Question.\nASSISTANT: Earlier answer.',
+                'IMPORTANT: Safety rule.',
+            ].join('\n'),
+            parameters: { max_new_tokens: 64, temperature: 0.2 },
+        });
+        expect(getStream).not.toHaveBeenCalled();
+
+        await expect(driver.executeCanonical(segments, options('canonical-formatting'))).rejects.toThrow(
+            /does not support media input/,
+        );
+        expect(executor.textGeneration).toHaveBeenCalledOnce();
+    });
+
     it('binds the concrete endpoint and exact request, then JSON-recovers without another inference', async () => {
         const { driver, executor, target } = setup();
         const textGeneration = vi.mocked(executor.textGeneration);

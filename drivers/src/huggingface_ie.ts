@@ -10,7 +10,6 @@ import {
     type DriverCompletionStream,
     type EmbeddingsResult,
     type ExecutionOptions,
-    type PromptOptions,
     type PromptSegment,
     type TextFallbackOptions,
 } from '@llumiverse/core';
@@ -83,14 +82,41 @@ export class HuggingFaceIEDriver extends AbstractDriver<HuggingFaceIEDriverOptio
         return true;
     }
 
-    protected override async formatPrompt(segments: PromptSegment[], options: PromptOptions): Promise<string> {
+    private validateCanonicalPromptSegments(segments: PromptSegment[]): void {
         for (const segment of segments) {
             if (segment.files?.length) throw new TypeError('Hugging Face text generation does not support media input');
             if (segment.role === 'tool' || segment.role === 'negative' || segment.role === 'mask') {
                 throw new TypeError(`Hugging Face text generation does not support ${segment.role} prompt segments`);
             }
         }
-        return super.formatPrompt(segments, options);
+    }
+
+    override executeCanonical(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionResponse> {
+        this.validateCanonicalPromptSegments(segments);
+        return super.executeCanonical(segments, options, signal);
+    }
+
+    override streamCanonical(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal?: AbortSignal,
+    ): Promise<CanonicalExecutionStream> {
+        this.validateCanonicalPromptSegments(segments);
+        return super.streamCanonical(segments, options, signal);
+    }
+
+    override streamCanonicalEvents(
+        segments: PromptSegment[],
+        options: ExecutionOptions,
+        signal: AbortSignal | undefined,
+        open: CanonicalStreamOpenOptions,
+    ): Promise<CanonicalExecutionEventStream> {
+        this.validateCanonicalPromptSegments(segments);
+        return super.streamCanonicalEvents(segments, options, signal, open);
     }
 
     async requestCanonicalTextCompletion(
