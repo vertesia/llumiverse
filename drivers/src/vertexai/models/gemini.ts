@@ -862,7 +862,6 @@ function geminiFileAudioRequest(
     prompt: GenerateContentPrompt,
     options: ExecutionOptions,
     modelName: string,
-    signal?: AbortSignal,
 ): {
     model_options: VertexAIGeminiOptions | undefined;
     payload: GenerateContentParameters;
@@ -887,7 +886,6 @@ function geminiFileAudioRequest(
                   customVocabulary: modelOptions?.transcription_vocabulary,
               },
           };
-    if (signal) config.abortSignal = signal;
     const contents = speech
         ? [
               {
@@ -900,6 +898,18 @@ function geminiFileAudioRequest(
           ]
         : prompt.contents;
     return { model_options: modelOptions, payload: { model: modelName, contents, config }, speech };
+}
+
+function geminiFileAudioTransportRequest(
+    payload: GenerateContentParameters,
+    signal: AbortSignal | undefined,
+): GenerateContentParameters {
+    if (signal === undefined) return payload;
+    signal.throwIfAborted();
+    // AbortSignal is SDK transport state, not provider JSON. Keep it out of the exact request
+    // fingerprint. Experimental receipts that included abortSignal:{} remain incompatible rather
+    // than being silently relabeled as a signal-free request.
+    return { ...payload, config: { ...payload.config, abortSignal: signal } };
 }
 
 export class GeminiModelDefinition implements ModelDefinition<GenerateContentPrompt> {
@@ -1134,7 +1144,7 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
         if (splits[0] === 'locations' && splits.length >= 2) region = splits[1];
         const modelName = splits[splits.length - 1];
         const fileAudioRequest = isFileAudioModel(modelName)
-            ? geminiFileAudioRequest(prompt, requestedOptions, modelName, signal)
+            ? geminiFileAudioRequest(prompt, requestedOptions, modelName)
             : undefined;
         if (isFileAudioModel(modelName) && isConversationDocumentFormat(requestedOptions.conversation)) {
             const document = parseConversationDocument(requestedOptions.conversation);
@@ -1192,13 +1202,13 @@ export class GeminiModelDefinition implements ModelDefinition<GenerateContentPro
                 transportOptions.httpTimeout,
             );
             const canonicalPrompt = prepareCanonicalGeminiProjection(canonicalState, requestedOptions);
-            const { payload, speech } = geminiFileAudioRequest(canonicalPrompt, requestedOptions, modelName, signal);
+            const { payload, speech } = geminiFileAudioRequest(canonicalPrompt, requestedOptions, modelName);
             const prepared = await finalizeGeminiPreparedRequest(
                 { ...canonicalState, native_conversation: canonicalPrompt },
                 payload,
             );
             await publishCanonicalPreparedRequest(prepared, requestedOptions);
-            const response = await client.models.generateContent(payload);
+            const response = await client.models.generateContent(geminiFileAudioTransportRequest(payload, signal));
             const candidate = response.candidates?.[0];
             if (candidate?.content === undefined) throw new Error('Audio model returned no candidate content');
             const persistedAudio: Array<{

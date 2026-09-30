@@ -1,5 +1,5 @@
 import { FinishReason, GenerateContentResponse, GoogleGenAI } from '@google/genai';
-import { type ConversationStreamEvent, parseConversationDocument } from '@llumiverse/conversation';
+import { type ConversationStreamEvent, fingerprintJson, parseConversationDocument } from '@llumiverse/conversation';
 import { type DataSource, type ExecutionOptions, isCanonicalAcceptedRecovery, PromptRole } from '@llumiverse/core';
 import OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
@@ -870,6 +870,28 @@ describe('primary provider file audio', () => {
             expect(isCanonicalAcceptedRecovery(retry)).toBe(true);
             expect(generate).toHaveBeenCalledOnce();
 
+            const typedRetryController = new AbortController();
+            const recoveredStream = await driver.streamCanonicalEvents(
+                prompt,
+                {
+                    model: 'gemini-3.1-flash-tts-preview',
+                    store_audio: store,
+                    conversation: JSON.parse(JSON.stringify(first.conversation)),
+                    conversation_runtime: {
+                        ...runtime,
+                        attempt_id: 'attempt:gemini-audio:typed-retry',
+                        recorded_at: '2026-09-29T01:02:00.000Z',
+                    },
+                },
+                typedRetryController.signal,
+                { stream_id: `stream:gemini-audio:${changed}:retry` },
+            );
+            expect(await collectCanonicalEvents(recoveredStream)).toEqual([
+                expect.objectContaining({ type: 'response_accepted', origin: 'accepted_recovery' }),
+            ]);
+            expect(isCanonicalAcceptedRecovery(recoveredStream.completion)).toBe(true);
+            expect(generate).toHaveBeenCalledOnce();
+
             await expect(
                 driver.executeCanonical(prompt, {
                     model: 'gemini-3.1-flash-tts-preview',
@@ -908,6 +930,119 @@ describe('primary provider file audio', () => {
             expect(generate).toHaveBeenCalledOnce();
         },
     );
+
+    it('exact-recovers Gemini file audio from typed to sync with transport signals excluded from identity', async () => {
+        const driver = new VertexAIDriver({ project: 'test', region: 'global' });
+        const client = new GoogleGenAI({ apiKey: 'test' });
+        const response = new GenerateContentResponse();
+        response.responseId = 'gemini-audio-cross-projection';
+        response.modelVersion = 'gemini-3.1-flash-tts-preview';
+        response.candidates = [
+            {
+                finishReason: FinishReason.STOP,
+                content: { parts: [{ inlineData: { mimeType: 'audio/L16;codec=pcm;rate=24000', data: base64 } }] },
+            },
+        ];
+        const generate = vi.spyOn(client.models, 'generateContent').mockResolvedValue(response);
+        vi.spyOn(driver, 'getGoogleGenAIClient').mockReturnValue(client);
+        const publish = vi.fn(async () => undefined);
+        const runtime = {
+            conversation_id: 'conversation:gemini-audio-cross-projection',
+            request_id: 'request:gemini-audio-cross-projection',
+            attempt_id: 'attempt:gemini-audio-cross-projection:first',
+            input_operation_id: 'input:gemini-audio-cross-projection',
+            response_operation_id: 'response:gemini-audio-cross-projection',
+            recorded_at: '2026-09-29T02:00:00.000Z',
+        };
+        const firstController = new AbortController();
+        const first = await driver.streamCanonicalEvents(
+            prompt,
+            {
+                model: 'gemini-3.1-flash-tts-preview',
+                store_audio: store,
+                conversation_runtime: runtime,
+                on_canonical_request_prepared: publish,
+            },
+            firstController.signal,
+            { stream_id: 'stream:gemini-audio-cross-projection:first' },
+        );
+        expect(await collectCanonicalEvents(first)).toEqual([
+            expect.objectContaining({ type: 'response_accepted', origin: 'live_transport' }),
+        ]);
+        expect(isCanonicalAcceptedRecovery(first.completion)).toBe(false);
+        if (first.completion === undefined) throw new Error('Expected accepted Gemini audio response');
+
+        const retry = await driver.executeCanonical(prompt, {
+            model: 'gemini-3.1-flash-tts-preview',
+            store_audio: store,
+            conversation: JSON.parse(JSON.stringify(first.completion.conversation)),
+            conversation_runtime: {
+                ...runtime,
+                attempt_id: 'attempt:gemini-audio-cross-projection:retry',
+                recorded_at: '2026-09-29T02:01:00.000Z',
+            },
+            on_canonical_request_prepared: publish,
+        });
+        expect(retry.accepted_output).toEqual(first.completion.accepted_output);
+        expect(isCanonicalAcceptedRecovery(retry)).toBe(true);
+        expect(generate).toHaveBeenCalledOnce();
+        expect(store).toHaveBeenCalledOnce();
+        expect(publish).toHaveBeenCalledOnce();
+
+        const legacySignalBound = JSON.parse(JSON.stringify(first.completion.conversation));
+        const generation = legacySignalBound.generations[first.completion.accepted_output.generation.id];
+        const dispatchedPayload = JSON.parse(JSON.stringify(generate.mock.calls[0]?.[0]));
+        expect(dispatchedPayload.config.abortSignal).toEqual({});
+        generation.request_receipt.request_fingerprint = await fingerprintJson(dispatchedPayload);
+        await expect(
+            driver.executeCanonical(prompt, {
+                model: 'gemini-3.1-flash-tts-preview',
+                store_audio: store,
+                conversation: legacySignalBound,
+                conversation_runtime: {
+                    ...runtime,
+                    attempt_id: 'attempt:gemini-audio-cross-projection:legacy-signal',
+                    recorded_at: '2026-09-29T02:01:30.000Z',
+                },
+                on_canonical_request_prepared: publish,
+            }),
+        ).rejects.toThrow('incompatible request identity');
+        expect(generate).toHaveBeenCalledOnce();
+        expect(store).toHaveBeenCalledOnce();
+        expect(publish).toHaveBeenCalledOnce();
+    });
+
+    it('does not dispatch Gemini file audio when cancellation wins during the prepared barrier', async () => {
+        const driver = new VertexAIDriver({ project: 'test', region: 'global' });
+        const client = new GoogleGenAI({ apiKey: 'test' });
+        const generate = vi.spyOn(client.models, 'generateContent');
+        vi.spyOn(driver, 'getGoogleGenAIClient').mockReturnValue(client);
+        const controller = new AbortController();
+        const publish = vi.fn(async () => controller.abort(new Error('cancel before Gemini dispatch')));
+
+        await expect(
+            driver.executeCanonical(
+                prompt,
+                {
+                    model: 'gemini-3.1-flash-tts-preview',
+                    store_audio: store,
+                    conversation_runtime: {
+                        conversation_id: 'conversation:gemini-audio-barrier-cancel',
+                        request_id: 'request:gemini-audio-barrier-cancel',
+                        attempt_id: 'attempt:gemini-audio-barrier-cancel',
+                        input_operation_id: 'input:gemini-audio-barrier-cancel',
+                        response_operation_id: 'response:gemini-audio-barrier-cancel',
+                        recorded_at: '2026-09-29T02:02:00.000Z',
+                    },
+                    on_canonical_request_prepared: publish,
+                },
+                controller.signal,
+            ),
+        ).rejects.toThrow('cancel before Gemini dispatch');
+        expect(publish).toHaveBeenCalledOnce();
+        expect(generate).not.toHaveBeenCalled();
+        expect(store).not.toHaveBeenCalled();
+    });
 
     it('passes Vertex GCS transcription as fileData and returns transcript metadata', async () => {
         const driver = new VertexAIDriver({ project: 'test', region: 'global' });
